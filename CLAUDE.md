@@ -2395,8 +2395,11 @@ repo that receives this file via the `@stable` sync.
     deletes a branch and never closes anything the chain did not open.
 - **The fingerprint rule.** A failure is its stop id plus a fingerprint:
   the SHA-1 (first 12 hex characters) of the normalised failing check
-  names, finding ids, follow-up issue numbers, and validation class and
-  status (`.claude/scripts/escalation_ledger.py fingerprint`). The judge
+  names, finding ids, follow-up issue numbers, validation class and
+  status, and the PR the stop is about (required for `intervention-cap`
+  and `fix-check-defective`, so two PRs that fail the same way never
+  share a fingerprint) (`.claude/scripts/escalation_ledger.py
+  fingerprint`). The judge
   never picks a choice already recorded for the same stop and fingerprint
   (`escalation_ledger.py allowed`); `close` is always available. A
   different failure starts with the full menu.

@@ -81,6 +81,26 @@ def test_judge_menu_and_ledger_calls(judge):
 	assert "never a fix for one" in judge
 
 
+def test_judge_fingerprint_names_the_pr(judge):
+	assert "and `pr`, the number of the PR the stop is about" in judge
+	assert "always give `pr` for `intervention-cap` (the blocked PR) and `fix-check-defective` (the fix PR)" in judge
+	assert "Two PRs that fail the same way are two failures." in judge
+	# `close` stays available, so the invariant is about `budget` and `descope` only.
+	assert "never pick `budget` or `descope` twice for the same failure (`close` stays available)" in judge
+	assert "never pick a choice already used for the same failure" not in judge
+	assert "never gets the same choice twice" not in judge
+
+
+def test_every_choice_reaches_the_report_step(judge):
+	# Step 8 used to end the turn, so step 9's permission prompt report and
+	# report never ran after a choice.
+	hand_on = judge[judge.index("8. **Hand on.**"):judge.index("9. **Report**")]
+	assert "end the turn" not in hand_on.lower()
+	assert hand_on.count("Continue with step 9.") == 2
+	report = judge[judge.index("9. **Report**"):judge.index("## Never")]
+	assert "Then end the turn." in report
+
+
 def test_judge_close_path(judge):
 	close = judge[judge.index("**`close`** → close the project yourself"):judge.index("9. **Report**")]
 	assert "`state_reason: not_planned`" in close
@@ -251,6 +271,7 @@ def test_claude_md_section_28g():
 		assert f"`{stop}`" in section, stop
 	assert "`close` is always available" in section
 	assert "never picks a choice already recorded for the same stop and fingerprint" in section
+	assert "and the PR the stop is about (required for `intervention-cap` and `fix-check-defective`" in section
 	assert "never skips, waives, or marks passed a security pass or a validation run" in section
 	assert "never merges past a failing required check" in section
 	assert "The operator approved these closes in advance (Q4: A)" in section

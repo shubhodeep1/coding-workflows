@@ -901,7 +901,9 @@ and the source issue closed as not planned). It records an `ES-<n>` line
 in the log's `## Escalations` section, posts
 `<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fp> choice=<choice> -->`,
 and hands the checker the next stage through another escalation wait. It
-never repeats a choice for the same fingerprint, never skips or waives a
+never repeats `budget` or `descope` for the same fingerprint (`close`
+stays available; the fingerprint of `intervention-cap` and
+`fix-check-defective` includes the PR number), never skips or waives a
 security or validation pass, never merges, and sends a `PushNotification`
 only for `close`. Human-only stops (Q8: ask-first operations, no
 claude-code-remote tools, a depth-limit refusal) are never judged.

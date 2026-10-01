@@ -1,7 +1,7 @@
 """Contract for `.claude/scripts/escalation_ledger.py`, the escalation judge's
 ledger (CLAUDE.md §28.G, plan `retire-master-session` phase 1).
 
-The judge must never pick the same choice twice for the same failure, and
+The judge must never pick `budget` or `descope` twice for the same failure, and
 `close` must always stay available. These tests read the
 `workflow-templates/.claude/` twin, which the phase edits first (twin-first);
 `.claude/` catches up through the `[claude-twin-sync]` copy, which the parity
@@ -107,6 +107,36 @@ def test_fingerprint_cli_accepts_json_and_file(tmp_path, capsys):
 )
 def test_bad_fingerprint_arguments_exit_1(capsys, argv):
 	code, out = _run(capsys, *argv)
+	assert code == 1 and "error" in out
+
+
+def test_fingerprint_separates_prs_that_fail_the_same_way():
+	# Review round 1 on head 95ee0a8: without the PR number, two PRs with the
+	# same failing check shared a fingerprint, so one PR's `budget` and
+	# `descope` left the other with only `close`.
+	a = ledger.fingerprint("intervention-cap", {"checks": ["ci / tests"], "pr": 12})
+	b = ledger.fingerprint("intervention-cap", {"checks": ["ci / tests"], "pr": 13})
+	assert a != b
+	# `12`, `"12"` and `"#12"` name the same PR.
+	assert a == ledger.fingerprint("intervention-cap", {"checks": ["ci / tests"], "pr": "#12"})
+	assert a == ledger.fingerprint("intervention-cap", {"checks": ["ci / tests"], "pr": " 12 "})
+
+
+@pytest.mark.parametrize("stop", ledger.PR_SCOPED_STOP_IDS)
+def test_pr_scoped_stops_require_the_pr(capsys, stop):
+	code, out = _run(capsys, "fingerprint", "--stop", stop, "--evidence", '{"checks": ["lint"]}')
+	assert code == 1 and "'pr'" in out["error"]
+	code, out = _run(capsys, "fingerprint", "--stop", stop, "--evidence", '{"checks": ["lint"], "pr": 7}')
+	assert code == 0 and out["fingerprint"] == ledger.fingerprint(stop, {"checks": ["lint"], "pr": "7"})
+
+
+def test_project_scoped_stops_take_an_optional_pr():
+	assert ledger.fingerprint("security-cap", {"issues": [5]}) != ledger.fingerprint("security-cap", {"issues": [5], "pr": 9})
+
+
+@pytest.mark.parametrize("bad", ['"abc"', "0", '"#"', "true", "[12]", '"12a"', '""'])
+def test_malformed_pr_is_refused(capsys, bad):
+	code, out = _run(capsys, "fingerprint", "--stop", "intervention-cap", "--evidence", f'{{"pr": {bad}}}')
 	assert code == 1 and "error" in out
 
 
