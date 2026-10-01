@@ -15,7 +15,7 @@ The review rounds changed the listing after this plan was written. The sections 
 - Statuses (AD-12, supersedes AD-6): all five non-terminal statuses, `requested`, `pending`, `queued`, `waiting`, `in_progress`.
 - Order (AD-13): the five statuses, then `requested`, `pending`, `queued`, `waiting` once more, so a run that changes status once while the listing is read is seen whichever way it moves (`waiting` can follow `in_progress`).
 - Paging (AD-8, supersedes AD-7): each follow-up query is bounded by `created=<=<oldest created_at read>` (rounded up to a whole second, AD-9) instead of an offset page; a status is complete when one response holds its whole `total_count`.
-- Malformed pages (AD-10, AD-11): a run with no numeric id, no non-empty path, or no non-empty status, or a `total_count` that is not a whole number, makes the listing incomplete; every run an active-status query returns counts as active.
+- Malformed pages (AD-10, AD-11): a run with no numeric id, no non-empty path, or no non-empty status, a `total_count` that is not a whole number, or a `workflow_runs` that is missing, null, or not an array (review round 5), makes the listing incomplete; every run an active-status query returns counts as active.
 - API calls: normally 9 per release invocation with a queued PR, 0 with none.
 
 ## Context

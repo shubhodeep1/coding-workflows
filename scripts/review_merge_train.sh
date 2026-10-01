@@ -472,10 +472,13 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            A run created after the first query was issued is outside the
 #            listing, as it is for any single snapshot.
 # Incomplete: a page that failed after gh_retry, a malformed page (including
-#            a total_count that is not a whole number, a run with no numeric
-#            id, no non-empty path, or no non-empty status, which the listing
-#            can neither deduplicate nor classify, and a missing or malformed
-#            created_at on a page that needs a next query), a short page
+#            a total_count that is not a whole number, a workflow_runs that
+#            is missing, null, or not an array, which the projection passes
+#            through for the type check to reject (PR #5451 review round 5),
+#            a run with no numeric id, no non-empty path, or no non-empty
+#            status, which the listing can neither deduplicate nor classify,
+#            and a missing or malformed created_at on a page that needs a
+#            next query), a short page
 #            before its total_count (the listing shifted while it was read),
 #            more runs than 10 queries read or a query that adds no new run
 #            (more than 100 runs created in one second), or a failed key
@@ -499,7 +502,7 @@ _mt_inflight_review_branches()
 				__mt_runs_query="${__mt_runs_query}&created=%3C%3D${__mt_runs_created_bound}"
 			fi
 			if ! __mt_runs_page_json="$(gh_retry gh api -X GET "${__mt_runs_query}" \
-				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {id: .id, status: .status, event: .event, head_branch: .head_branch, display_title: .display_title, path: .path, created_at: .created_at}]}' \
+				--jq '{total_count: .total_count, workflow_runs: (.workflow_runs | if type == "array" then [.[] | select(type == "object") | {id: .id, status: .status, event: .event, head_branch: .head_branch, display_title: .display_title, path: .path, created_at: .created_at}] else . end)}' \
 				2>/dev/null)"; then
 				__mt_runs_reason="page_failed"
 				break 2

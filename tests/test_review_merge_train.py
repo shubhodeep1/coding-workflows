@@ -65,6 +65,8 @@ path="${endpoint%%\?*}"
 # total_count. actions_runs_switch_at (a call number, counting every
 # actions/runs call from 1) serves actions_runs_after_switch.json from that
 # call on: a run changed status between two status queries.
+# runs_raw_page.json, when present, is served as is for every actions/runs
+# call (a response whose shape the listing must validate itself).
 if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
   if [ -f "${FAKE_GH_DIR}/fail_runs_get" ] || [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
   run_call=1
@@ -84,6 +86,8 @@ if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
   done
   if [ -f "${FAKE_GH_DIR}/malformed_runs" ]; then
     page_json='{"workflow_runs":[]}'
+  elif [ -f "${FAKE_GH_DIR}/runs_raw_page.json" ]; then
+    page_json="$(cat "${FAKE_GH_DIR}/runs_raw_page.json")"
   else
     runs_source='{"workflow_runs":[]}'
     [ -f "${FAKE_GH_DIR}/actions_runs.json" ] && runs_source="$(cat "${FAKE_GH_DIR}/actions_runs.json")"
@@ -1058,6 +1062,38 @@ def test_release_leaves_pr_queued_on_fractional_total_count(tmp_path: Path) -> N
 	assert "reason=malformed_page status=in_progress page=1" in result.stderr
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("workflow_runs", ["missing", None, {}, "runs"])
+def test_release_leaves_pr_queued_when_workflow_runs_is_not_an_array(tmp_path: Path, workflow_runs: object) -> None:
+	"""PR #5451 review round 5: a missing, null, or non-array workflow_runs is malformed.
+
+	Defaulting it to [] made a page with total_count 0 look like a complete,
+	empty listing, so the queued PR was released without a real listing.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	page: dict = {"total_count": 0}
+	if workflow_runs != "missing":
+		page["workflow_runs"] = workflow_runs
+	(fixtures / "runs_raw_page.json").write_text(json.dumps(page), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=requested page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_accepts_empty_workflow_runs_array(tmp_path: Path) -> None:
+	"""An explicit empty workflow_runs with total_count 0 is a complete listing."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "runs_raw_page.json").write_text(json.dumps({"total_count": 0, "workflow_runs": []}), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert log_text.count("actions/runs") == 9
 
 
 def test_release_skips_run_listing_when_nothing_queued(tmp_path: Path) -> None:
