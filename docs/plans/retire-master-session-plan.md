@@ -162,7 +162,7 @@ At most 10 actions run per wake. `wake` and `requeue` come first, then `judge`, 
 - **`.claude/hooks/**`** (edit, add, delete, rename) and **`settings.local.json`**: always `loosen` (Q9: A).
 - **`.claude/scripts/**`** (a guard path since #5609, added 2026-10-01): always `loosen`, because Q3: A does not cover scripts and a script sync merges only by the repository owner.
 
-`claude_twin_sync.py` calls the classifier for each guard path in a sync. When every guard change is `tighten`, the PR follows the non-guard auto-merge rule (every check green, `lint` present, `--match-head-commit`). Otherwise it keeps `ai:claude-sync-approval` and the owner-approval status, as #4785 ships. Every decision is logged as `CLAUDE_GUARD_CLASSIFY path=<p> verdict=<tighten|loosen> reason=<r>`.
+`claude_twin_sync.py` calls the classifier for each guard path in a sync. When every guard change is `tighten`, the PR follows the non-guard auto-merge rule (every check green, `lint` present, `--match-head-commit`). Otherwise it keeps `ai:claude-sync-approval` and the owner-approval status, as #4785 ships. A sync that lists any conflict still goes to the owner, whatever the classifier says, because `plan_sync` sets `needs_owner` for conflicts as well as guard paths (noted 2026-10-01, #5609). Every decision is logged as `CLAUDE_GUARD_CLASSIFY path=<p> verdict=<tighten|loosen> reason=<r>`.
 
 **Alerts, retiring the poller, runbook (phase 4).**
 - Document the alert policy (Q12) in CLAUDE.md §28.G and §26, `agents.md` and the README.
