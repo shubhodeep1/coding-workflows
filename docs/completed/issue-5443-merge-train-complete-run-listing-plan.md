@@ -8,6 +8,16 @@ Security pass: skip (ai:security: automation-produced issue)
 
 The merge train's `release` subcommand decides whether a queued PR already has an active review run by reading one page of the newest 100 workflow runs and matching each run's `path` against `(^|/)(review_autofix|internal-review|ai-review)\.ya?ml$`. A path that ends in an `@<ref>` suffix (`…/ai-review.yml@refs/heads/main`) fails that match, a run older than the newest 100 is never seen, and a failed lookup releases anyway. In each case the train can release the PR and dispatch a second review beside a pending one (security finding `merge-train-drops-ref-suffixed-run-paths`, medium). This plan strips the `@<ref>` suffix before the match, lists every active run page by page, and leaves queued PRs queued when that listing is incomplete.
 
+## As shipped
+
+The review rounds changed the listing after this plan was written. The sections below keep the original text, with an "As shipped" note where it no longer matches the code; the auto-decisions are in the progress log (`docs/implement-plan/issue-5443-merge-train-complete-run-listing.md`).
+
+- Statuses (AD-12, supersedes AD-6): all five non-terminal statuses, `requested`, `pending`, `queued`, `waiting`, `in_progress`.
+- Order (AD-13): the five statuses, then `requested`, `pending`, `queued`, `waiting` once more, so a run that changes status once while the listing is read is seen whichever way it moves (`waiting` can follow `in_progress`).
+- Paging (AD-8, supersedes AD-7): each follow-up query is bounded by `created=<=<oldest created_at read>` (rounded up to a whole second, AD-9) instead of an offset page; a status is complete when one response holds its whole `total_count`.
+- Malformed pages (AD-10, AD-11): a run with no numeric id, no non-empty path, or no non-empty status, or a `total_count` that is not a whole number, makes the listing incomplete; every run an active-status query returns counts as active.
+- API calls: normally 9 per release invocation with a queued PR, 0 with none.
+
 ## Context
 
 - Issue #5443 was filed by `.github/workflows/security-audit.yml` (tracker #3576) against `scripts/review_merge_train.sh:413` on the `claude/implement-plan-issue-4701-review-dispatch-default-branch` project branch. Its `Integration branch:` line names that branch, so this project is built on it.
@@ -20,7 +30,7 @@ The merge train's `release` subcommand decides whether a queued PR already has a
 ## Goals
 
 - A run whose `path` ends in `@<ref>` (`.github/workflows/ai-review.yml@refs/heads/main`, `owner/repo/.github/workflows/internal-review.yml@refs/heads/main`) matches the review-workflow regex exactly as the same path without the suffix does.
-- The active-run listing reads every run in each active status (`pending`, `queued`, `in_progress`, the three the filter already keeps), page by page (100 per page) until the distinct runs read reach the listing's `total_count`, at most 10 pages per status.
+- The active-run listing reads every run in each active status (`pending`, `queued`, `in_progress`, the three the filter already keeps), page by page (100 per page) until the distinct runs read reach the listing's `total_count`, at most 10 pages per status. As shipped: five statuses read in two passes (AD-12, AD-13), with created_at-bounded follow-up queries instead of pages (AD-8).
 - The listing is **incomplete** when a page fails after `gh_retry`, a page is malformed, a short page arrives before `total_count` is reached (the listing shifted), or more runs exist than 10 pages hold. Each case logs one structured line (§8): `MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|filter_failed> status=<s> page=<p> read=<n> total=<n>`.
 - On an incomplete listing `release` leaves every queued PR queued for that invocation (no marker retirement, no label removal, no dispatch), logs `MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=<N> action=leave_queued` per PR, and the next close event or poll tick retries.
 - The listing is read only once per `release` invocation, and only when at least one `ai:merge-queued` PR passes the base filter. A tick with no queued PR makes no `actions/runs` call.
@@ -30,7 +40,7 @@ The merge train's `release` subcommand decides whether a queued PR already has a
 
 - The `gate` subcommand. It never dispatches and never reads workflow runs.
 - The same path regex in `scripts/gh_helpers.sh` (`autofix_retrigger_has_inflight_peer`, `autofix_changes_lost_head_retry_consumed`). Those are branch-scoped listings in the review workflow's own retrigger path, not the merge train the finding names (AD-5). Recorded under Notes for a separate issue.
-- Adding the `waiting` / `requested` statuses to what counts as active (AD-6).
+- Adding the `waiting` / `requested` statuses to what counts as active (AD-6). As shipped: both are read (AD-12 supersedes AD-6).
 - A cross-invocation cache of the listing; each release invocation reads live state.
 
 ## Constraints
@@ -38,14 +48,14 @@ The merge train's `release` subcommand decides whether a queued PR already has a
 - §5: only `_mt_inflight_review_branches`, its caller in `_mt_release`, the file header's API-budget and fail-open text, the tests, the README row that describes `release`, and one changelog fragment change.
 - §6: no identifier is renamed or removed. `_mt_inflight_review_branches` keeps its name, takes no arguments, and still prints one sorted key per line (`<head branch>` or `pr:<N>`); it returns 1 on an incomplete listing, as it already did on a failed call. Existing log keys (`MERGE_TRAIN_RELEASE_ACTIVE`, `MERGE_TRAIN_RELEASED`, …) keep their names and fields. The new log keys (`MERGE_TRAIN_RUNS_LISTING`, `MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE`) and the new locals are checked against the file for collisions.
 - §8: every incomplete listing is logged once with its reason, and each queued PR it holds back is logged.
-- §15: one `GET actions/runs?status=<s>&per_page=100&page=<p>` per page per status: 3 calls per release invocation in the normal case (one page each), issued only when a queued PR is evaluated. Today every invocation makes 1 call whether or not anything is queued, so ticks with an empty queue drop from 1 call to 0. The function comment documents input, output, return codes, call budget, and failure behaviour. REST only.
+- §15: one `GET actions/runs?status=<s>&per_page=100&page=<p>` per page per status: 3 calls per release invocation in the normal case (one page each), issued only when a queued PR is evaluated (as shipped: 9 calls, AD-12 and AD-13). Today every invocation makes 1 call whether or not anything is queued, so ticks with an empty queue drop from 1 call to 0. The function comment documents input, output, return codes, call budget, and failure behaviour. REST only.
 - §9: tabs, opening braces on a new line for the new function body, matching the file's existing style.
 - §20: one `changelog.d/` fragment (`security`).
 - §12/§19: phase and fix PRs use `Refs #5443`; the base is not the default branch, so the final PR also uses `Refs #5443` and the final-merge stage closes the issue explicitly.
 
 ## Approach
 
-`_mt_inflight_review_branches` reads the three active statuses in lifecycle order (`pending`, `queued`, `in_progress`), so a run that moves forward between two queries is seen in at least one of them:
+`_mt_inflight_review_branches` reads the three active statuses in lifecycle order (`pending`, `queued`, `in_progress`), so a run that moves forward between two queries is seen in at least one of them (as shipped: five statuses, then all but `in_progress` again, AD-12 and AD-13; follow-up queries add `&created=<=<oldest created_at read>` with `page=1`, AD-8):
 
 ```
 gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?status=<s>&per_page=100&page=<p>" \
@@ -93,8 +103,8 @@ Phase 1:
 ## Risks & Mitigations
 
 - A burst of more than 1,000 active runs in one status keeps the listing incomplete and holds every queued PR. — ACCEPTED: the train only ever delays a review (its documented contract), and the hold lifts on the first invocation whose listing completes.
-- Runs change status while the three queries run. — Queried in lifecycle order so a forward move is seen at least once; a run created after the snapshot was already outside the previous design's snapshot too, and the label-removal claim still prevents two releases racing.
-- Extra API calls on busy ticks. — Lazy fetch: 0 calls when nothing is queued (previously 1), 3 when something is.
+- Runs change status while the three queries run. — Queried in lifecycle order so a forward move is seen at least once (as shipped: a second pass covers a run that changes status once in either direction, AD-13); a run created after the snapshot was already outside the previous design's snapshot too, and the label-removal claim still prevents two releases racing.
+- Extra API calls on busy ticks. — Lazy fetch: 0 calls when nothing is queued (previously 1), 3 when something is (as shipped: 9).
 
 ## Rollout
 

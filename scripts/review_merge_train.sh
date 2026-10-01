@@ -51,8 +51,9 @@
 #   release: 1 list call (open PRs, all bases, 100 per page) + the active-run
 #            listing that prevents dispatch beside an active review (one
 #            `actions/runs?status=<s>` call per 100 runs for each of
-#            requested, pending, queued, waiting, in_progress, follow-ups
-#            bounded by created_at, at most 10 each — normally 5 calls — read once,
+#            requested, pending, queued, waiting, in_progress, then requested,
+#            pending, queued, waiting again, follow-ups bounded by created_at,
+#            at most 10 each — normally 9 calls — read once,
 #            only when a queued PR passes the base filter; see
 #            _mt_inflight_review_branches) + files calls
 #            as above, cached per PR for the run; each unblocked queued PR adds
@@ -436,21 +437,29 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            must not release on it, and the next invocation retries.
 # API calls: one `GET actions/runs?status=<s>&per_page=100&page=1` for each
 #            non-terminal status, requested, pending, queued, waiting,
-#            in_progress, read in that (lifecycle) order so a run that moves
-#            forward between two queries is seen in at least one of them
-#            (PR #5451 review round 3: `requested` is a new run's state before
-#            it is queued; `waiting` is only reached through a deployment
-#            environment, which the review workflows do not use, and is read
-#            so a wrapper that adds one is still covered). The repo's other
+#            in_progress (PR #5451 review round 3: `requested` is a new run's
+#            state before it is queued; `waiting` is only reached through a
+#            deployment environment, which the review workflows do not use,
+#            and is read so a wrapper that adds one is still covered), then
+#            requested, pending, queued, waiting once more. The repo's other
 #            active-run guards count the same five statuses
 #            (scripts/apply_analysis_on_main.sh, scripts/auto_release_stable.sh).
+#            Order (PR #5451 review round 4): the queries run one after
+#            another, so a run that leaves a status after that status was
+#            read and enters one that was read before it is in neither
+#            result. `waiting` can follow `in_progress` (a later job reaching
+#            a deployment environment) and precede `queued` or `in_progress`,
+#            so no single pass covers every move. The second pass reads every
+#            status again after the first read of every other status, so a
+#            run that changes status at most once while the listing is read
+#            is returned by some query, whichever way it moves.
 #            A status is complete when one response holds
 #            every run its query matched (workflow_runs reaches total_count).
 #            Otherwise the next query adds `&created=<=<oldest created_at
 #            read>` and asks again, at most 10 queries ("pages") per status.
 #            A created_at with fractional seconds is rounded up to the next
 #            whole second, so the inclusive bound still covers that run.
-#            Normally 5 calls, one per status. REST only (CLAUDE.md §15).
+#            Normally 9 calls, one per status query. REST only (CLAUDE.md §15).
 # Keyset:    the listing is filtered by status and sorted by created_at,
 #            newest first (checked live on 2026-09-30), so offset pages
 #            (`page=2`, …) skip a run whenever runs above it leave the status
@@ -478,7 +487,7 @@ _mt_inflight_review_branches()
 	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0 __mt_runs_read_before=0
 	local __mt_runs_query="" __mt_runs_created_bound=""
 	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys=""
-	for __mt_runs_status in requested pending queued waiting in_progress; do
+	for __mt_runs_status in requested pending queued waiting in_progress requested pending queued waiting; do
 		__mt_runs_page=1
 		__mt_runs_total=0
 		__mt_runs_read=0

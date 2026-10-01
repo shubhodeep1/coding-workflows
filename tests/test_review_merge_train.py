@@ -62,9 +62,14 @@ path="${endpoint%%\?*}"
 # report more runs than it holds. A run's listed_status, when set, is the
 # status query that returns it, whatever its own status field says.
 # fail_runs_get fails the call; malformed_runs returns an object with no
-# total_count.
+# total_count. actions_runs_switch_at (a call number, counting every
+# actions/runs call from 1) serves actions_runs_after_switch.json from that
+# call on: a run changed status between two status queries.
 if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
   if [ -f "${FAKE_GH_DIR}/fail_runs_get" ] || [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
+  run_call=1
+  [ -f "${FAKE_GH_DIR}/runs_call_count" ] && run_call=$(( $(cat "${FAKE_GH_DIR}/runs_call_count") + 1 ))
+  printf '%s' "${run_call}" > "${FAKE_GH_DIR}/runs_call_count"
   query=""
   [[ "${endpoint}" == *\?* ]] && query="${endpoint#*\?}"
   run_status=""; run_page=1; run_per_page=30; run_created_max=""
@@ -87,6 +92,9 @@ if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
     # two reads.
     if { [ "${run_page}" -gt 1 ] || [ -n "${run_created_max}" ]; } && [ -f "${FAKE_GH_DIR}/actions_runs_after_page1.json" ]; then
       runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_page1.json")"
+    fi
+    if [ -f "${FAKE_GH_DIR}/actions_runs_switch_at" ] && [ "${run_call}" -ge "$(cat "${FAKE_GH_DIR}/actions_runs_switch_at")" ]; then
+      runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_switch.json")"
     fi
     page_json="$(printf '%s' "${runs_source}" | jq -c --arg st "${run_status}" --arg cm "${run_created_max}" --argjson pg "${run_page}" --argjson pp "${run_per_page}" '
       ((.workflow_runs // []) | map(select($st == "" or (.listed_status // .status) == $st))
@@ -664,17 +672,57 @@ def test_release_ignores_ref_suffixed_runs_of_other_workflows(tmp_path: Path) ->
 	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
 
 
+RUNS_STATUS_ORDER = (
+	"requested", "pending", "queued", "waiting", "in_progress",
+	"requested", "pending", "queued", "waiting",
+)
+
+
 def test_release_queries_each_active_status_in_lifecycle_order(tmp_path: Path) -> None:
+	"""PR #5451 review round 4 (AD-13): the five statuses, then all but the last once more."""
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
 	runs_calls = [line for line in log_text.splitlines() if "actions/runs" in line]
-	assert len(runs_calls) == 5, runs_calls
-	for call, status in zip(runs_calls, ("requested", "pending", "queued", "waiting", "in_progress")):
+	assert len(runs_calls) == len(RUNS_STATUS_ORDER), runs_calls
+	for call, status in zip(runs_calls, RUNS_STATUS_ORDER):
 		assert f"actions/runs?status={status}&per_page=100&page=1" in call
 		assert "-X GET" in call
 	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+@pytest.mark.parametrize(("before", "after"), [
+	("in_progress", "waiting"),
+	("waiting", "in_progress"),
+	("waiting", "queued"),
+	("queued", "in_progress"),
+	("requested", "queued"),
+])
+def test_release_holds_pr_for_review_run_that_changes_status_mid_listing(tmp_path: Path, before: str, after: str) -> None:
+	"""PR #5451 review round 4 (AD-13): a run that changes status once while the
+	statuses are read is still seen, whichever two queries the change falls between.
+
+	With the five statuses read once in lifecycle order, a run moving from
+	in_progress back to waiting (a later job reaching a deployment environment)
+	after the waiting query and before the in_progress query was in neither result.
+	"""
+	for switch_at in range(2, len(RUNS_STATUS_ORDER) + 1):
+		case_dir = tmp_path / f"switch-{switch_at}"
+		case_dir.mkdir()
+		bin_dir, fixtures, log = _install_fake_gh(case_dir)
+		_queued_pr_4077(fixtures)
+		run = {"id": 5000, "head_branch": "ai/issue-4064", "event": "pull_request",
+			"path": ".github/workflows/internal-review.yml", "created_at": _run_created_at(0)}
+		_write_runs(fixtures, [dict(run, status=before)])
+		(fixtures / "actions_runs_after_switch.json").write_text(
+			json.dumps({"workflow_runs": [dict(run, status=after)]}), encoding="utf-8")
+		(fixtures / "actions_runs_switch_at").write_text(str(switch_at), encoding="utf-8")
+		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log)
+		assert result.returncode == 0, (switch_at, result.stderr)
+		assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (switch_at, result.stderr)
+		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout, (switch_at, result.stdout)
+		assert "gh workflow run" not in log_text, switch_at
 
 
 @pytest.mark.parametrize("status", ["requested", "waiting"])
