@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5816
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01SLmbVzcitKU2aiKHq634QY   (triggers in the round-5 stage report)
+- Check-in: checker session_01SLmbVzcitKU2aiKHq634QY   (triggers in the intervention-1 stage report)
 - Last updated: 2026-10-01
-- Last note: review round 5 on PR #5816: both prompt-echo filters (`captured_path_error=` and the tail) now strip NUL and CR from the rendered prompt as well as from stderr, so an echoed line of a CRLF project spec is dropped instead of printed (and can no longer set `provider=`).
+- Last note: intervention 1 on PR #5816: the review run on 22c5180 (run 36833543772) skipped the reviewer panel because the PR had 5 consecutive `[claude-autofix]` commits (MAX_AUTOFIX_ITERATIONS 5) and labelled it `ai:review-blocked`; no finding was open. This `[claude-intervention]` commit ends the autofix run so the round-5 fix gets reviewed.
 
 ## Phases
-1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 5; interventions: 0
+1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 5; interventions: 1 (2026-10-01: autofix-iteration cap reached on 22c5180 with the reviewers skipped; `[claude-intervention]` commit to re-run review, label removed)
 
 ## Conformance
 
@@ -43,6 +43,7 @@
 - [source:intervention] When a change adds a stronger mask for one log source, apply it to every line printed from that source, including older diagnostics that run first (`captured_path_error=`): the first unmasked print leaks the secret no matter what the later output masks. (files: scripts/security_audit.sh)
 - [source:intervention] An early diagnostic that prints lines from the same source as a filtered tail needs every filter the tail applies, not only its masks: prompt-echo exclusion too, or an echoed spec line matching the diagnostic's own pattern prints first. (files: scripts/security_audit.sh)
 - [source:intervention] When an exact-line filter (`grep -vxF -f <patterns>`) compares a normalised stream against a pattern file, normalise the pattern file the same way (`-f <(tr -d '\000\r' < file)`): stripping CR from only one side lets every line of a CRLF input escape the match. (files: scripts/security_audit.sh)
+- [source:intervention] In Claude-fixer mode the review run on the head carrying the `MAX_AUTOFIX_ITERATIONS`-th consecutive `[claude-autofix]` commit skips the reviewer panel and labels the PR `ai:review-blocked`, so that round's fix is never reviewed; a `[claude-intervention]` commit (with the log update) ends the run and gets it reviewed. (files: .github/workflows/review_autofix.yml)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude from #5785; base branch main; security pass: run (`security_pass_skip.py`: no skip label).
