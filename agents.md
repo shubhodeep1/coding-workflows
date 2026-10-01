@@ -2181,6 +2181,14 @@ depend on it.
   a bounded scope-feedback retry only after the pre-attempt state is restored
   and verified; an unsafe restore fails closed. Consumer repos retain the
   previous path, and the final `check_resolver_diff.sh` commit gate is unchanged.
+  The model itself runs on a private copy of the captured merge index
+  (`GIT_INDEX_FILE=${RUNTIME_DIR}/resolver_model_index`, refreshed before every
+  attempt by `_resolver_model_index_prepare`), so a `git add` of the file it
+  resolved no longer changes the real index that both scope guards require to
+  stay unchanged (#5627). The script stages the accepted resolution itself; a
+  model that bypasses the copy still fails closed. Because OpenCode's snapshot
+  tracking runs git with the inherited environment, the resolver's own OpenCode
+  config sets `snapshot: false`. Both changes apply to the source repo only.
 
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
 - `.github/workflows/review_autofix.yml` stages required and main-primary helpers from the verified reusable-workflow SHA; PR-head copies are review data, not runtime code. `render_prompt.py`, `review_conflict_resolve.sh` and their dependencies ship with that same workflow commit. Embedded PR-diff template syntax is still handled by `render_prompt.sh` with `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` after assembly, while static templates retain strict validation. Optional support missing from that commit skips the feature; required support fails closed. The model catalog comes from the same commit as the reviewer roster, never from a PR branch or a separately resolved main snapshot.
