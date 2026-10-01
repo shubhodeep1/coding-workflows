@@ -1498,11 +1498,13 @@ read. It never counts as a review of the PR, a newer one that did not succeed
 returns `review_superseded` whatever PR its run name names, and an
 `internal-review.yml` one still running keeps the PR waiting
 (`review_active`). On the head branch only a `pull_request` run whose head
-is in this repository counts as a review of the PR: a `push` run of
-`internal-review.yml` (its no-PR route, which concludes `success` when the
-branch already has a PR) or a fork's run listed under the same branch name
-never clears a failed review, and a newer one that did not succeed returns
-`review_superseded`.
+is in this repository and whose `pull_requests` lists this PR alone counts
+as a review of the PR: a `push` run of `internal-review.yml` (its no-PR
+route, which concludes `success` when the branch already has a PR), a
+fork's run listed under the same branch name, or a run that may be a
+sibling PR's (one head branch can have PRs into different bases, and GitHub
+lists every open PR on that head in each run) never clears a failed review,
+and a newer one that did not succeed returns `review_superseded`.
 A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read
 (`pending_checks_failed`), repeated every hour until a push, a base change,

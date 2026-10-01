@@ -1091,11 +1091,15 @@ reviews, comments, and conflicts stay a direct §12 request.
   `review_superseded` whatever PR its run name names, and an
   `internal-review.yml` one still running returns `review_active`. With no
   default branch known, no run name binds. On the head branch only a
-  `pull_request` run whose `head_repository` is this repository
-  (`_is_this_repo_pull_request_run()`) is a bound review; every other
-  head-branch run of a review workflow (a `push` run, the no-PR route of
-  `internal-review.yml` that concludes `success` once the branch has a PR;
-  a head-branch dispatch; a fork's run under the same branch name) is
+  `pull_request` run whose `head_repository` is this repository and whose
+  `pull_requests` lists this PR alone (`_is_this_repo_pull_request_run()`)
+  is a bound review; every other head-branch run of a review workflow (a
+  `push` run, the no-PR route of `internal-review.yml` that concludes
+  `success` once the branch has a PR; a head-branch dispatch; a fork's run
+  under the same branch name; a `pull_request` run whose `pull_requests`
+  is absent, malformed, or lists another PR or more than one, which may be
+  a sibling PR's on the same head branch, since GitHub lists every open PR
+  whose head matches) is
   untrusted: never a bound review, and a newer one that did not conclude
   `success` returns `review_superseded`. Every dispatch, from whichever
   listing, and every such head-branch run goes through the one rule in

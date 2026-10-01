@@ -447,12 +447,17 @@ def test_default_branch_review_run_needs_the_full_dispatch_binding(fake_gh, labe
 # ---- a newer review of the PR (issue #5148) ----
 
 def _run(run_id: int, *, workflow: str = "internal-review.yml", status: str = "completed", conclusion: str | None = "success",
-	head_branch: str = REF, event: str = "pull_request", title: str = "t", head_repository: str | None = REPO) -> dict:
+	head_branch: str = REF, event: str = "pull_request", title: str = "t", head_repository: str | None = REPO,
+	pull_requests: tuple[int, ...] | None = (PR,)) -> dict:
+	# GitHub fills a run's `pull_requests` with every open PR whose head
+	# matches the run, whatever its event; None leaves the field out.
 	run = {"id": run_id, "path": f".github/workflows/{workflow}", "status": status,
 		"conclusion": conclusion if status == "completed" else None, "head_branch": head_branch, "event": event,
 		"display_title": title, "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
 	if head_repository is not None:
 		run["head_repository"] = {"full_name": head_repository}
+	if pull_requests is not None:
+		run["pull_requests"] = [{"number": pr_number, "head": {"ref": head_branch}} for pr_number in pull_requests]
 	return run
 
 
@@ -665,6 +670,22 @@ def test_an_active_review_defers_a_dry_run_too(fake_gh):
 		[_run(RUN_ID + 1, conclusion="failure"), _run(RUN_ID + 2, head_repository=None)], {}),
 	("a failed fork pull_request run under the same branch name",
 		[_run(RUN_ID + 1, workflow="ai-review.yml", conclusion="failure", head_repository="someone/fork")], {}),
+	# PR #5929 review round 1 after intervention 1: one head branch can have
+	# PRs into different bases, and GitHub lists every open PR whose head
+	# matches in each run's `pull_requests`, so a pull_request run is a review
+	# of this PR only when it lists this PR alone.
+	("a successful sibling PR's pull_request run on the same head branch after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _run(RUN_ID + 2, pull_requests=(7,))], {}),
+	("a successful pull_request run listing this PR and a sibling after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _run(RUN_ID + 2, pull_requests=(PR, 7))], {}),
+	("a successful pull_request run listing no PR after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _run(RUN_ID + 2, pull_requests=())], {}),
+	("a successful pull_request run with no pull_requests field after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _run(RUN_ID + 2, pull_requests=None)], {}),
+	("a failed pull_request run listing this PR and a sibling",
+		[_run(RUN_ID + 1, workflow="ai-review.yml", conclusion="failure", pull_requests=(7, PR))], {}),
+	("a failed sibling PR's pull_request run on the same head branch",
+		[_run(RUN_ID + 1, conclusion="failure", pull_requests=(7,))], {}),
 ])
 def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -742,6 +763,9 @@ def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, bran
 		[_run(RUN_ID + 1, workflow="ci.yml", event="push", conclusion="failure")], {}),
 	("a newer successful fork pull_request run under the same branch name",
 		[_run(RUN_ID + 1, head_repository="someone/fork")], {}),
+	("a newer successful pull_request run listing this PR and a sibling",
+		[_run(RUN_ID + 1, pull_requests=(PR, 7))], {}),
+	("an older failed sibling PR's pull_request run", [_run(RUN_ID - 1, conclusion="failure", pull_requests=(7,))], {}),
 ])
 def test_settled_reviews_let_the_merge_through(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -798,15 +822,52 @@ def test_one_rule_classifies_every_review_dispatch(trusted, names_this_pr, names
 	("a pull_request_target run", {"event": "pull_request_target"}, False),
 	("a fork's pull_request run", {"head_repository": "someone/fork"}, False),
 	("a pull_request run with no head repository", {"head_repository": None}, False),
+	# PR #5929 review round 1 after intervention 1: bound to this PR alone.
+	("a sibling PR's pull_request run", {"pull_requests": (7,)}, False),
+	("a pull_request run listing this PR and a sibling", {"pull_requests": (PR, 7)}, False),
+	("a pull_request run listing this PR twice", {"pull_requests": (PR, PR)}, False),
+	("a pull_request run listing no PR", {"pull_requests": ()}, False),
+	("a pull_request run with no pull_requests field", {"pull_requests": None}, False),
 ])
 def test_only_a_pull_request_run_of_this_repo_is_a_head_branch_review(label, overrides, expected):
-	assert pending_checks._is_this_repo_pull_request_run(_run(RUN_ID + 1, **overrides), REPO) is expected, label
+	assert pending_checks._is_this_repo_pull_request_run(_run(RUN_ID + 1, **overrides), REPO, PR) is expected, label
 
 
 def test_a_malformed_head_repository_is_not_trusted():
 	run = _run(RUN_ID + 1)
 	run["head_repository"] = REPO
-	assert pending_checks._is_this_repo_pull_request_run(run, REPO) is False
+	assert pending_checks._is_this_repo_pull_request_run(run, REPO, PR) is False
+
+
+@pytest.mark.parametrize("label, pull_requests", [
+	("not a list", {"number": PR}),
+	("a list of numbers", [PR]),
+	("an entry with a string number", [{"number": str(PR)}]),
+	("an entry with a boolean number", [{"number": True}]),
+	("an entry with no number", [{"head": {"ref": REF}}]),
+	("a null entry", [None]),
+])
+def test_malformed_pull_requests_metadata_is_not_trusted(label, pull_requests):
+	run = _run(RUN_ID + 1)
+	run["pull_requests"] = pull_requests
+	assert pending_checks._is_this_repo_pull_request_run(run, REPO, PR) is False, label
+	# PR 1 must not pass through `True == 1` either.
+	assert pending_checks._is_this_repo_pull_request_run(run, REPO, 1) is False, label
+
+
+def test_a_sibling_prs_successful_review_cannot_mask_a_failed_one_and_names_why(fake_gh):
+	# PR #5929 review round 1 after intervention 1: the sibling's success is
+	# ignored, so this PR's failed review is still the latest bound review.
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		branch_runs=[_run(RUN_ID + 2, pull_requests=(7,)), _run(RUN_ID + 1, conclusion="failure")])
+	result = _evaluate(dry_run=True)
+	assert result["state"] == "review_superseded", result
+	assert f"the latest review run of this PR, {RUN_ID + 1}" in result["reason"]
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		branch_runs=[_run(RUN_ID + 1, conclusion="failure", pull_requests=(PR, 7))])
+	result = _evaluate(dry_run=True)
+	assert result["state"] == "review_superseded", result
+	assert "a pull_request run whose pull_requests does not list this PR alone" in result["reason"]
 
 
 def test_a_successful_push_run_cannot_mask_a_failed_review_and_names_its_event(fake_gh):
