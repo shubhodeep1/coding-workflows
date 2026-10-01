@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:333 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When descope is chosen for `fix-check-defective`, the procedure resumes the stage that stopped after the revert PR merges, but that stage checks the original fix PR's unchanged diff and returns `FIX-DEFECTIVE` again.\n  WHY: The revert PR does not alter the original fix PR's historical diff, so the same failure is re-escalated after descope has been used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"It never picks the same choice twice for the same failure fingerprint\" and the descope choice should make \"the failing part leave the project through a reviewed revert PR.\"\n  expected_change_site: workflow-templates/.claude/commands/implement-plan-claude.md, the `descope` bullet in the \"Escalations\" section\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The `descope` bullet (line 333) says \"with the stage that stopped as the next stage on merge\" for non-intervention-cap stops, including `fix-check-defective`. But the fix check (line 66) audits the original fix PR's historical diff, which a revert PR does not change. No special-case handling for `fix-check-defective` descope exists (unlike `budget`, which gets a dedicated fix-PR path at line 332). The descope therefore cannot resolve a fix-check-defective failure \u2014 it re-triggers the same FIX-DEFECTIVE verdict.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/commands/implement-plan-claude.md | severity=high | confidence=4\n  PROBLEM: When descope is chosen for fix-check-defective, the descope stage opens a revert PR that removes the de-scoped part from the base branch, and after the revert PR merges, the stage that stopped (conformance 3/3 -- fix check) runs again. The fix-check at line 66 re-runs scope fix-check against the original fix PR, which has not changed.\n  WHY: A fix-check-defective escalation that gets a descope grant from the judge will reach the fix-check again with an unchanged fix PR against a modified base branch, causing the same condition to fire again and wasting the descope choice.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:333 | severity=high | confidence=5\n  PROBLEM: When the escalation judge selects descope for fix-check-defective, the procedure resumes the stage that stopped (conformance 3/3 \u2014 fix check) as the next stage after the revert PR merges. However, conformance 3/3 \u2014 fix check audits the diff of the original fix PR (--scope fix-check #<fix PR>), which remains unchanged on GitHub despite the revert PR.\n  WHY: verify-activation.md in fix-check scope inspects only the diff of the specified fix PR rather than the base branch. Because merging a revert PR onto the base branch does not alter the historical diff of the original fix PR, running fix-check again against that PR will re-evaluate the same diff and return FIX-DEFECTIVE once more.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:333; the fix-check scope is defined in workflow-templates/.claude/commands/verify-activation.md:18 | severity=high | confidence=5\n  PROBLEM: The `descope` path for `fix-check-defective` resumes the stage that stopped after its revert PR merges. That stage runs `fix-check` against the original fix PR.\n  WHY: `fix-check` audits only the named PR\u2019s diff and opens no fix PR. Reverting that change in a separate PR does not alter the original PR\u2019s diff, so the resumed check reports `FIX-DEFECTIVE` again instead of progressing with the de-scoped project.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/implement-plan-claude.md | severity=high | confidence=5\n  PROBLEM: For `fix-check-defective`, a `descope` opens a revert PR that removes the de-scoped part from the base branch. After the revert PR merges, \"the stage that stopped\" (`conformance 3/3 \u2014 fix check`) runs again, but the fix check is scoped to the original fix PR's diff (`--scope fix-check #<fix PR>`), which the revert PR does not change.\n  WHY: The fix check procedure (`verify-activation.md --scope fix-check #<fix PR>`) audits only the named PR's diff. A revert PR branched from the base branch removes code from the base, not from the original fix PR. The fix PR's diff remains unchanged, so the check finds the same unresolved findings and re-fires `fix-check-defective`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/implement-plan-claude.md | severity=high | confidence=5\n  PROBLEM: For `fix-check-defective`, `descope` opens a revert PR and sets the next stage on merge to \"the stage that stopped\" (`conformance 3/3 \u2014 fix check`). The fix check (line 66) runs `scope fix-check #<fix PR>` against the original third-run fix PR's diff. A revert PR does not change that historical diff, so the fix check returns FIX-DEFECTIVE again, re-escalating with the same fingerprint.\n  WHY: The fix check audits a PR's historical diff (the changes it introduced), not the current state of the base branch. Reverting the fix PR's changes via a separate revert PR removes the code from the project but does not alter the original fix PR's diff.\n- Requirement: The PR description states \"It never picks the same choice twice for the same failure fingerprint\" and the descope choice should make \"the failing part leave the project through a reviewed revert PR.\"\n  Expected change site: workflow-templates/.claude/commands/implement-plan-claude.md, the `descope` bullet in the \"Escalations\" section\n  Evidence of absence: The `descope` bullet (line 333) says \"with the stage that stopped as the next stage on merge\" for non-intervention-cap stops, including `fix-check-defective`. But the fix check (line 66) audits the original fix PR's historical diff, which a revert PR does not change. No special-case handling for `fix-check-defective` descope exists (unlike `budget`, which gets a dedicated fix-PR path at line 332). The descope therefore cannot resolve a fix-check-defective failure \u2014 it re-triggers the same FIX-DEFECTIVE verdict.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "05d770b7c5e5e238087b3fe9b37cdecc8d8f6eb02eb1701d8658c42460e8d5fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36890052538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36890052538",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001163635_edf49d02c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36890052538"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T16:36:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
