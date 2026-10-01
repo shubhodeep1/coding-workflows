@@ -940,8 +940,11 @@ def decide_duplicate_close(
 		reasons.append(f"#{target_number} author {_untrusted_author(target)} is not an owner, member, or collaborator")
 	fix_number = fix_pr.get("number")
 	merged = bool(fix_pr.get("merged_at"))
-	# A fork PR, or one by an account without write access, is no verified fix,
-	# and only such a PR's title, body, and branch name bind it to the target.
+	# Issue #5809: only a same-repository PR whose `author_association` is in
+	# FIX_CLAIM_TRUSTED_ASSOCIATIONS (OWNER, MEMBER, COLLABORATOR) counts as a
+	# verified fix; a fork PR or one by any other author does not. That is a trust
+	# policy, not a write-permission check. The title, body, and branch-name
+	# reference checked below binds a PR to the target only when it passes both.
 	head_repo = _repo_full_name(fix_pr.get("head"))
 	base_repo_name = _repo_full_name(fix_pr.get("base"))
 	if not head_repo or not base_repo_name or head_repo.casefold() != base_repo_name.casefold():
