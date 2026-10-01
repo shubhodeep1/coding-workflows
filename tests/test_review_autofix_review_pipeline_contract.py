@@ -1248,7 +1248,7 @@ def _run_review_tier_harness(
 			"REVIEW_TIER_LITE_MAX_LOC": "50",
 			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.7-plus",
 			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna",
 			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
@@ -2702,7 +2702,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -2763,7 +2763,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -4210,7 +4210,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert code_lite_result["REVIEW_TIER_REASON"] == "code_<=50_loc_unprotected"
 	assert code_lite_result["active_models"] == ["qwen/qwen3.7-plus"]
 
-	# A small diff under a protected path never drops below three reviewers.
+	# A small diff under a protected path never drops below four reviewers.
 	standard_result = _run_review_tier_harness(diff_text=standard_diff)
 	assert standard_result["REVIEW_TIER"] == "standard"
 	assert standard_result["REVIEW_TIER_REASON"] == "protected_path_<=50_loc"
@@ -4219,6 +4219,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert standard_result["active_models"] == [
 		"minimax/minimax-m3",
 		"deepseek/deepseek-v4-pro",
+		"qwen/qwen3.7-plus",
 		"openai/gpt-6-luna",
 	]
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
@@ -4228,7 +4229,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert workflow_result["REVIEW_TIER"] == "standard"
 	assert workflow_result["REVIEW_TIER_SCOPE"] == ".github/workflows/"
 
-	# Protected instruction files are Markdown but still get three reviewers.
+	# Protected instruction files are Markdown but still get four reviewers.
 	protected_doc_result = _run_review_tier_harness(diff_text=protected_doc_diff)
 	assert protected_doc_result["REVIEW_TIER"] == "standard"
 	assert protected_doc_result["REVIEW_TIER_REASON"] == "protected_path_<=50_loc"
@@ -4365,8 +4366,8 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 		standard_result = pick(standard_diff, pr_number)
 		assert standard_result["REVIEW_TIER"] == "standard"
 		assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
-		assert standard_result["active_models"] == expected(pr_number, 3)
-		assert len(set(standard_result["active_models"])) == 3
+		assert standard_result["active_models"] == expected(pr_number, 4)
+		assert len(set(standard_result["active_models"])) == 4
 		assert set(standard_result["active_models"]) <= set(reviewer_models)
 		standard_picks.add(tuple(standard_result["active_models"]))
 
@@ -4384,7 +4385,7 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 		unset_env=("REVIEW_TIER_LITE_REVIEWER_SLUG", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS"),
 	)
 	assert unset_env_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
-	assert unset_env_result["active_models"] == expected("4242", 3)
+	assert unset_env_result["active_models"] == expected("4242", 4)
 
 	# A broken pick (sha256sum failing) fails open to the full panel instead of
 	# running the tier with fewer reviewers than it asked for.
@@ -4421,6 +4422,83 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 	)
 	assert pinned_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
 	assert pinned_result["active_models"] == ["z-ai/glm-5.2"]
+
+
+def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_models() -> None:
+	"""Reduced tiers leave out the two most expensive panel models by default."""
+	reviewer_models = _workflow_reviewer_models()
+	expensive = {"google/gemini-3.8-flash", "z-ai/glm-5.2"}
+	default_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
+	assert expensive <= set(reviewer_models)
+	assert set(default_standard) <= set(reviewer_models)
+	assert set(default_standard) == set(reviewer_models) - expensive
+
+	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	default_line = (
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '"
+		+ ",".join(default_standard)
+		+ "' }}"
+	)
+	assert workflow_text.count(default_line) == 2
+
+	lite_diff = _numbered_code_diff({"src/app.py": 5})
+	standard_diff = _numbered_code_diff({"src/app.py": 120})
+	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(default_standard)}
+
+	def expected_lite(pr_number: str, pool: list[str]) -> list[str]:
+		return [min(pool, key=lambda model: hashlib.sha256(f"{pr_number}:{model}".encode("utf-8")).hexdigest())]
+
+	lite_picks: set[str] = set()
+	for pr_number in [str(n) for n in range(1, 41)]:
+		lite_result = _run_review_tier_harness(diff_text=lite_diff, extra_env={**defaults, "PR_NUMBER": pr_number})
+		assert lite_result["REVIEW_TIER"] == "lite"
+		assert lite_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_lite"
+		assert lite_result["active_models"] == expected_lite(pr_number, default_standard)
+		assert not set(lite_result["active_models"]) & expensive
+		lite_picks.update(lite_result["active_models"])
+	# Lite spreads across the standard list rather than always one model.
+	assert lite_picks == set(default_standard)
+
+	# Standard runs exactly the four configured reviewers, in the given order.
+	standard_result = _run_review_tier_harness(diff_text=standard_diff, extra_env={**defaults, "PR_NUMBER": "77"})
+	assert standard_result["REVIEW_TIER"] == "standard"
+	assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
+	assert standard_result["active_models"] == default_standard
+
+	# The full panel still runs every model, the expensive ones included.
+	full_result = _run_review_tier_harness(
+		diff_text=_numbered_code_diff({"src/app.py": 150, "lib/util.py": 60}),
+		extra_env={**defaults, "PR_NUMBER": "77"},
+	)
+	assert full_result["REVIEW_TIER"] == "full"
+	assert full_result["active_models"] == reviewer_models
+
+	# A standard list with an unknown slug: lite draws from the full panel and
+	# says so, while standard itself fails open to the full panel as before.
+	bad_standard = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "qwen/qwen3.7-plus,unknown/model"}
+	bad_lite = _run_review_tier_harness(diff_text=lite_diff, extra_env={**bad_standard, "PR_NUMBER": "4242"})
+	assert bad_lite["REVIEW_TIER"] == "lite"
+	assert bad_lite["active_models"] == expected_lite("4242", reviewer_models)
+	assert "Unknown review-tier model 'unknown/model' in REVIEW_TIER_STANDARD_REVIEWER_SLUGS" in bad_lite["stderr"]
+
+	# Duplicate slugs in the standard list do not skew the lite pick.
+	dup_lite = _run_review_tier_harness(
+		diff_text=lite_diff,
+		extra_env={
+			"REVIEW_TIER_LITE_REVIEWER_SLUG": "",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "qwen/qwen3.7-plus,qwen/qwen3.7-plus",
+			"PR_NUMBER": "9",
+		},
+	)
+	assert dup_lite["active_models"] == ["qwen/qwen3.7-plus"]
+
+	# A pinned lite slug still wins over the standard pool.
+	pinned_lite = _run_review_tier_harness(
+		diff_text=lite_diff,
+		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "z-ai/glm-5.2", "PR_NUMBER": "9"},
+	)
+	assert pinned_lite["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_lite"
+	assert pinned_lite["active_models"] == ["z-ai/glm-5.2"]
 
 
 def test_review_tier_protected_paths_match_deterministic_skip_gate() -> None:
@@ -7712,6 +7790,7 @@ def main() -> int:
 	test_reviewer_and_consolidator_slop_scan_context_is_wired()
 	test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides()
 	test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables()
+	test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_models()
 	test_review_tier_protected_paths_match_deterministic_skip_gate()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
 	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path()

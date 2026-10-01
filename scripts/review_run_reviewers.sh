@@ -1608,10 +1608,15 @@ resolve_review_tier_active_models() {
   local model
   local invalid_model=""
   local random_count=0
+  local pool_model
+  local pool_invalid_model=""
   local -A live_models_map=()
   local -A resolved_models_seen=()
+  local -A pool_models_seen=()
   local -a live_models=()
   local -a resolved_models=()
+  local -a pick_pool_models=()
+  local -a standard_pool_models=()
 
   REVIEW_TIER_ACTIVE_MODELS_SOURCE="full"
 
@@ -1634,7 +1639,7 @@ resolve_review_tier_active_models() {
       ;;
     standard)
       selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}"
-      random_count=3
+      random_count=4
       ;;
     *)
       reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
@@ -1643,18 +1648,43 @@ resolve_review_tier_active_models() {
       ;;
   esac
 
-  # An empty slug variable (the default) draws the tier's reviewers from the
-  # whole live panel, seeded by the PR number. A repo that sets the variable
-  # keeps exactly the reviewers it names (validated below).
+  # An empty slug variable draws the tier's reviewers at random, seeded by the
+  # PR number. A repo that sets the variable keeps exactly the reviewers it
+  # names (validated below).
   if [ -z "$(normalize_reviewer_model_list "${selected_raw}")" ]; then
+    # Pool for the random pick: the whole live panel, except that an unpinned
+    # lite tier draws from the standard tier's reviewer list when that list is
+    # set and every slug in it is on the panel. With the defaults, lite then
+    # never picks a model the standard tier leaves out (the most expensive
+    # ones). A standard list naming an unknown slug falls back to the panel.
+    pick_pool_models=("${live_models[@]}")
+    if [ "${tier}" = "lite" ] && [ -n "$(normalize_reviewer_model_list "${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}")" ]; then
+      while IFS= read -r pool_model; do
+        [ -z "${pool_model}" ] && continue
+        if [ -z "${live_models_map["${pool_model}"]:-}" ]; then
+          pool_invalid_model="${pool_model}"
+          break
+        fi
+        if [ -n "${pool_models_seen["${pool_model}"]:-}" ]; then
+          continue
+        fi
+        standard_pool_models+=("${pool_model}")
+        pool_models_seen["${pool_model}"]=1
+      done <<< "$(normalize_reviewer_model_list "${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}")"
+      if [ -n "${pool_invalid_model}" ]; then
+        echo "::warning::Unknown review-tier model '${pool_invalid_model}' in REVIEW_TIER_STANDARD_REVIEWER_SLUGS. The lite tier draws its reviewer from the full panel instead." >&2
+      elif [ "${#standard_pool_models[@]}" -gt 0 ]; then
+        pick_pool_models=("${standard_pool_models[@]}")
+      fi
+    fi
     while IFS= read -r model; do
       [ -z "${model}" ] && continue
       resolved_models+=("${model}")
-    done < <(reviewer_pick_seeded_models "${random_count}" "${PR_NUMBER:-0}" "${live_models[@]}")
+    done < <(reviewer_pick_seeded_models "${random_count}" "${PR_NUMBER:-0}" "${pick_pool_models[@]}")
     # A broken pick (e.g. no sha256sum) must never leave the tier with fewer
     # reviewers than asked for: fail open to the full panel.
-    if [ "${random_count}" -gt "${#live_models[@]}" ]; then
-      random_count="${#live_models[@]}"
+    if [ "${random_count}" -gt "${#pick_pool_models[@]}" ]; then
+      random_count="${#pick_pool_models[@]}"
     fi
     if [ "${#resolved_models[@]}" -ne "${random_count}" ]; then
       echo "::warning::Review tier ${tier} random reviewer pick returned ${#resolved_models[@]} of ${random_count} models. Failing open to full reviewer set." >&2
@@ -1781,7 +1811,7 @@ classify_review_tier() {
         case "${paths_state}" in
           available)
             # lite (one reviewer): any diff up to lite_loc that touches no
-            # protected path. standard (three reviewers): any diff up to
+            # protected path. standard (four reviewers): any diff up to
             # standard_loc, in any folder, including small protected diffs.
             if [ "${protected}" != "true" ] && [ "${REVIEW_TIER_LOC}" -le "${lite_loc}" ]; then
               REVIEW_TIER="lite"
