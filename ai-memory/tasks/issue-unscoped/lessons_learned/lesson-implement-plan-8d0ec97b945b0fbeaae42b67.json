@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T02:41:23Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-open bootstrap that runs untrusted code \"while no trusted commit carries X\" must also stop a reviewed change from removing X later, or the bootstrap reopens; make the trusted copy refuse a range that deletes, renames, or replaces X.",
+  "phase": "implement_plan",
+  "pr_number": 5653,
+  "record_id": "lesson-implement-plan-8d0ec97b945b0fbeaae42b67",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5608-run-twin-guard-from-base",
+    "file:scripts/claude_twin_sync.py",
+    "file:.github/workflows/ci.yml"
+  ]
+}

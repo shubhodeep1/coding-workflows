@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T02:41:23Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a security fix keeps a bootstrap fallback to the untrusted copy, write down who can reach that fallback and which event ends it, in the docs and the changelog, so reviewers do not read the fallback as an open hole.",
+  "phase": "implement_plan",
+  "pr_number": 5653,
+  "record_id": "lesson-implement-plan-84f0323d3428a6c232a88940",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5608-run-twin-guard-from-base",
+    "file:agents.md",
+    "file:.github/workflows/ci.yml"
+  ]
+}
