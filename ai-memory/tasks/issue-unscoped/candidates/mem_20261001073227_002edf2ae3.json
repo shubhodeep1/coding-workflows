@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.85,
+  "details": "Merged changes repeatedly touched process isolation, sandboxing, validation target-ref checks, and review-fixer handoffs. When modifying workflows that execute repository-controlled or otherwise untrusted code, preserve explicit input validation and process isolation, and cover the boundary with focused tests.",
+  "fingerprint": "52b58bd9a922ea17f5db957abd5a19acdee1478d0e77a384dcda1a7fce8b58d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36830311551",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36830311551",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4563",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4564",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4566",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4577",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4595",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4569",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4570",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4574",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4578",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4600"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261001073227_002edf2ae3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Treat validation and review-fixer processes as trust boundaries.",
+  "timestamps": {
+    "created_at": "2026-10-01T07:32:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
