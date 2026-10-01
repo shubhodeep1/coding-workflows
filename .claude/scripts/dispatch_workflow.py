@@ -285,7 +285,7 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 				"ref": ref,
 				"ambiguous": True,
 				"candidate_run_ids": [run["id"] for run in fresh],
-				"error": f"dispatched, but {len(fresh)} new {workflow} runs dispatched from {ref} appeared and GitHub returned no run id; confirm which candidate ran this dispatch's inputs (target ref and audited commit) before using its verdict, and never dispatch again",
+				"error": f"dispatched, but {len(fresh)} new {workflow} runs dispatched from {ref} appeared and GitHub returned no run id; confirm which candidate ran this dispatch's inputs (target ref and audited commit) before using its verdict, and do not dispatch again while any candidate could still be this dispatch's run",
 			}
 		if fresh:
 			run = fresh[0]
