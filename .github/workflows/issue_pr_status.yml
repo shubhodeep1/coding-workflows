@@ -432,22 +432,27 @@ jobs:
           # alone does not prove <T> is an orchestrator project, so <T> is
           # queued only when it is an issue (not a pull request) carrying
           # `ai:orchestrator-tracking`; a failed read skips it (fail closed:
-          # a missed record only leaves the project out of AI memory).
+          # a missed record only leaves the project out of AI memory). When
+          # the PR also links <T>, the classification below already reads its
+          # labels, so the loop's tracking-issue branch decides <T> instead.
           #
           # §15: one REST read, issued only on a merge that passed the event
-          # gate below (once per orchestrator project). Audited existing
-          # calls: <T> is not a linked issue, so neither the
-          # closingIssuesReferences query nor the batched classification
-          # lookup carries it. An alias for <T> in the first query would turn
-          # a missing <T> into a payload error that sends every real closing
-          # reference to the per-issue REST fallback, and adding <T> to the
-          # batch would feed it into the label/close loop.
+          # gate below (once per orchestrator project) and only when <T> is
+          # not a linked issue. Audited existing calls: an unlinked <T> is in
+          # neither the closingIssuesReferences query nor the batched
+          # classification lookup. An alias for <T> in the first query would
+          # turn a missing <T> into a payload error that sends every real
+          # closing reference to the per-issue REST fallback, and adding <T>
+          # to the batch would feed it into the label/close loop.
           COMPLETION_PR_TRACKING_ISSUE=""
           if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" = "${DEFAULT_BRANCH_NAME}" ] \
             && [ -n "${PR_HEAD_REPO_FULL_NAME:-}" ] && [ "${PR_HEAD_REPO_FULL_NAME}" = "${REPOSITORY}" ]; then
             COMPLETION_PR_TRACKING_ISSUE="$(printf '%s\n' "${PR_HEAD_REF:-}" | sed -nE 's#^orchestrator/project-([1-9][0-9]*)$#\1#p' | head -n1)"
           fi
-          if [ -n "${COMPLETION_PR_TRACKING_ISSUE}" ]; then
+          if [ -n "${COMPLETION_PR_TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBERS}" ] \
+            && printf '%s\n' "${ISSUE_NUMBERS}" | grep -qxF "${COMPLETION_PR_TRACKING_ISSUE}"; then
+            echo "PR #${PR_NUMBER} merged ${PR_HEAD_REF} from ${REPOSITORY} into ${DEFAULT_BRANCH_NAME}; #${COMPLETION_PR_TRACKING_ISSUE} is a linked issue, so its classification decides its lineage finalization (no extra read)."
+          elif [ -n "${COMPLETION_PR_TRACKING_ISSUE}" ]; then
             COMPLETION_PR_TRACKER_VERIFIED="$(gh_retry gh api "repos/${REPOSITORY}/issues/${COMPLETION_PR_TRACKING_ISSUE}" \
               --jq '(.pull_request == null) and (([.labels[]?.name] | index("ai:orchestrator-tracking")) != null)' \
               2>/dev/null || echo 'error')"
@@ -631,11 +636,20 @@ jobs:
               # tracking issue. Head ref, head repository, base, and merged
               # flag all come from the event payload (no API call, §15).
               # An unmerged close never qualifies, so this also covers the
-              # #5617 unmerged-close rule for tracking issues.
+              # #5617 unmerged-close rule for tracking issues. An issue that
+              # is in this skip list only because both classification lookups
+              # failed is not a verified tracking issue, so the head shape
+              # alone never finalizes it (fail closed).
               if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" = "${DEFAULT_BRANCH_NAME}" ] \
                 && [ -n "${PR_HEAD_REPO_FULL_NAME:-}" ] && [ "${PR_HEAD_REPO_FULL_NAME}" = "${REPOSITORY}" ] \
                 && [ "${PR_HEAD_REF:-}" = "orchestrator/project-${issue_number}" ]; then
-                LINEAGE_FINALIZE_ISSUE_NUMBERS+="${issue_number}"$'\n'
+                if [ -n "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" ] \
+                  && printf '%s\n' "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" | grep -qxF "${issue_number}"; then
+                  echo "::warning::PR #${PR_NUMBER} merged ${PR_HEAD_REF} from ${REPOSITORY} into ${DEFAULT_BRANCH_NAME}, but issue #${issue_number} could not be classified, so it is not verified as an ai:orchestrator-tracking issue; skipping its lineage finalization."
+                else
+                  LINEAGE_FINALIZE_ISSUE_NUMBERS+="${issue_number}"$'\n'
+                  echo "PR #${PR_NUMBER} is orchestrator project #${issue_number}'s completion PR (${PR_HEAD_REF} from ${REPOSITORY} merged into ${DEFAULT_BRANCH_NAME}); queuing tracking issue #${issue_number}'s lineage finalization."
+                fi
               elif [ -n "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" ] \
                 && printf '%s\n' "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" | grep -qxF "${issue_number}"; then
                 echo "Issue #${issue_number} could not be classified and PR #${PR_NUMBER} is not its completion PR (merged ${PR_MERGED}, base ${PR_BASE_REF}, head ${PR_HEAD_REF:-none}, head repo ${PR_HEAD_REPO_FULL_NAME:-none}); skipping its lineage finalization."

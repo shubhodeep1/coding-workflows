@@ -106,10 +106,12 @@ if len(args) >= 2 and args[0] == "api" and args[1].startswith("repos/") and "/is
 	# caller's own --jq filter with jq, as gh does, so the test exercises the
 	# workflow's label transform instead of a pre-flattened payload.
 	import subprocess
+	num = args[1].rsplit("/", 1)[1]
+	state.setdefault("rest_reads", []).append(int(num))
+	save()
 	if state.get("orch_rest_fail"):
 		print("rest unavailable", file=sys.stderr)
 		sys.exit(1)
-	num = args[1].rsplit("/", 1)[1]
 	if num not in state["issues"]:
 		# gh's real message, which gh_retry treats as permanent (no retry).
 		print("gh: Not Found (HTTP 404)", file=sys.stderr)
@@ -183,6 +185,7 @@ def _run_step(
 			},
 			"closing_refs": list(closing_refs or []),
 			"closed": [],
+			"rest_reads": [],
 			"orch_graphql_fail": orch_graphql_fail,
 			"orch_rest_fail": orch_rest_fail,
 		}), encoding="utf-8")
@@ -230,6 +233,7 @@ def _run_step(
 		return {
 			"stdout": result.stdout,
 			"closed": state["closed"],
+			"rest_reads": state["rest_reads"],
 			"labels": labels,
 			"env": _parse_github_env(github_env.read_text(encoding="utf-8")),
 		}
@@ -838,6 +842,73 @@ def test_completion_pr_head_needs_a_tracking_issue() -> None:
 		assert lineage["finalized"] == [], (description, lineage)
 
 
+def test_unclassified_linked_issue_on_completion_head_is_not_finalized() -> None:
+	"""Review round 3 on the final PR #5632: an issue linked by a merged
+	same-repository `orchestrator/project-<n>` head into the default branch,
+	whose classification lookups both failed, sits in the tracking skip list
+	without proof that it is a tracking issue. The head shape alone must not
+	finalize it, whether it is really a standalone issue or a tracker: it is
+	left unlabelled, open, and unfinalized (fail closed), with a warning."""
+	for labels, description in (
+		(["ai:claude"], "standalone issue"),
+		(["ai:orchestrator-tracking"], "tracking issue"),
+	):
+		gate = _run_step(
+			issues={10: {"body": "Linked issue.", "labels": labels}},
+			pr_base_ref="main",
+			pr_body="Fixes #10\n",
+			pr_head_ref="orchestrator/project-10",
+			orch_graphql_fail=True,
+			orch_rest_fail=True,
+		)
+		assert gate["labels"] == [] and gate["closed"] == [], (description, gate)
+		assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [10], (description, gate["env"])
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], (description, gate["env"])
+		assert (
+			f"::warning::PR #4748 merged orchestrator/project-10 from {REPOSITORY} into main, but issue #10 "
+			"could not be classified, so it is not verified as an ai:orchestrator-tracking issue; "
+			"skipping its lineage finalization."
+		) in gate["stdout"], (description, gate["stdout"])
+		assert "queuing tracking issue #10" not in gate["stdout"], (description, gate["stdout"])
+		# Only the per-issue REST fallback reads #10 (gh_retry repeats the
+		# failed read); the head-derived path leaves a linked tracker to that
+		# classification, so its failed-read warning never appears.
+		assert set(gate["rest_reads"]) == {10}, (description, gate["rest_reads"])
+		assert "Could not verify that #10" not in gate["stdout"], (description, gate["stdout"])
+		assert "#10 is a linked issue, so its classification decides" in gate["stdout"], (description, gate["stdout"])
+		lineage = _run_lineage_step(gate["env"])
+		assert lineage["finalized"] == [], (description, lineage)
+
+
+def test_completion_pr_linked_tracker_is_read_once() -> None:
+	"""Review round 3 on the final PR #5632 (§15): when the completion PR also
+	links its tracker, the classification lookups already read the tracker's
+	labels, so the head-derived path issues no REST read of its own. A body
+	with only `Refs #<T>` still costs exactly one read."""
+	cases = [
+		# (body, closing refs, expected REST reads, description)
+		(LINKED_COMPLETION_PR_BODY, [5], [], "closing reference (payload classification)"),
+		(LINKED_COMPLETION_PR_BODY, [], [], "body link (batched GraphQL classification)"),
+		(COMPLETION_PR_BODY, [], [5], "production Refs body (head-derived read)"),
+	]
+	for body, closing_refs, expected_reads, description in cases:
+		gate = _run_step(
+			issues={5: {"body": TRACKING_BODY, "labels": ["ai:orchestrator-tracking"]}},
+			pr_base_ref="main",
+			pr_body=body,
+			closing_refs=closing_refs,
+			pr_head_ref="orchestrator/project-5",
+		)
+		assert gate["rest_reads"] == expected_reads, (description, gate["rest_reads"])
+		assert gate["labels"] == [] and gate["closed"] == [], (description, gate)
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [5], (description, gate["env"])
+		if expected_reads == []:
+			assert (
+				f"PR #4748 merged orchestrator/project-5 from {REPOSITORY} into main; #5 is a linked issue, "
+				"so its classification decides its lineage finalization (no extra read)."
+			) in gate["stdout"], (description, gate["stdout"])
+
+
 def test_tracking_issue_lineage_skipped_for_non_completion_prs() -> None:
 	"""The #5619 finding: any other PR that links a tracking issue leaves its
 	lineage alone, whatever it merged into, and so does an unmerged close."""
@@ -946,13 +1017,15 @@ def test_unclassified_issue_lineage_needs_its_completion_pr() -> None:
 	"""Issue #5619: an issue whose classification lookups both failed may be a
 	tracking issue, so it follows the completion-PR rule. A default-branch
 	merge from another head and an unmerged close (even of its own automation
-	PR, #5617) no longer finalize it; a
-	merge of `orchestrator/project-<n>` into the default branch does."""
+	PR, #5617) no longer finalize it. Review round 3 on the final PR #5632:
+	a merge of `orchestrator/project-<n>` into the default branch does not
+	finalize it either, because nothing verified that it is a tracking issue
+	(see test_unclassified_linked_issue_on_completion_head_is_not_finalized)."""
 	cases = [
 		("main", "claude/some-feature", True, []),
 		("feature/unrelated", "claude/some-feature", False, []),
 		("feature/unrelated", "ai/issue-10", False, []),
-		("main", "orchestrator/project-10", True, [(10, "merged")]),
+		("main", "orchestrator/project-10", True, []),
 	]
 	for base, head, merged, expected in cases:
 		gate = _run_step(
@@ -966,7 +1039,9 @@ def test_unclassified_issue_lineage_needs_its_completion_pr() -> None:
 		)
 		assert gate["labels"] == [] and gate["closed"] == [], (base, head, gate)
 		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [num for num, _ in expected], (base, head, gate["env"])
-		if not expected:
+		if head == "orchestrator/project-10":
+			assert "issue #10 could not be classified, so it is not verified as an ai:orchestrator-tracking issue" in gate["stdout"], gate["stdout"]
+		elif not expected:
 			assert "Issue #10 could not be classified and PR #4748 is not its completion PR" in gate["stdout"], gate["stdout"]
 		lineage = _run_lineage_step(gate["env"], pr_merged=merged)
 		assert lineage["finalized"] == expected, (base, head, lineage)
@@ -1212,6 +1287,8 @@ if __name__ == "__main__":
 	test_tracking_issue_completion_pr_finalizes_lineage()
 	test_completion_pr_head_alone_never_finalizes_unverified_prs()
 	test_completion_pr_head_needs_a_tracking_issue()
+	test_unclassified_linked_issue_on_completion_head_is_not_finalized()
+	test_completion_pr_linked_tracker_is_read_once()
 	test_tracking_issue_lineage_skipped_for_non_completion_prs()
 	test_tracking_issue_completion_pr_uses_the_payload_default_branch()
 	test_no_linked_issue_exports_an_empty_lineage_list()
