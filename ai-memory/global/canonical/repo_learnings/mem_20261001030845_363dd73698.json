@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Keep validation-harness changes aligned across renderer inputs, generated workflow templates, and contract tests.",
   "timestamps": {
     "created_at": "2026-10-01T03:08:45Z",
