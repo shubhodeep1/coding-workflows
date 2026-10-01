@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2691-2771 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Untrusted `new_output_paths` values can contain shell metacharacters and are used as associative-array subscripts, which reviewers report can execute command substitutions or cause subscript errors.\n  WHY: The path validation reportedly permits these characters before subscript evaluation; two reviewers dispute the command-injection claim as a false positive.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_rb_judge.sh | severity=critical | confidence=5\n  PROBLEM: Untrusted model output in `new_output_paths` can contain shell metacharacters and is used as an associative-array subscript; the reviewer reports possible command execution and syntax errors.\n  WHY: The validation reportedly permits command-substitution syntax and unescaped closing brackets or quotes before associative-array lookup.\n  File: scripts/review_rb_judge.sh\n  Line or code reference: lines 2731 and 2771\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh | severity=critical | confidence=4\n  PROBLEM: `new_output_paths` accepts printable ASCII containing `$()`, and the path is then used as an associative-array subscript.\n  WHY: A crafted judge output such as `$(touch /tmp/pwned).json` reportedly executes when the value is used at the cited lines.\n  File: scripts/review_rb_judge.sh\n  Line or code reference: Lines 2691, 2731, 2771; `_rb_valid_repo_relative_path` at lines 2447-2459.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh | severity=critical | confidence=5\n  PROBLEM: `new_output_paths` accepts printable ASCII including shell metacharacters, and paths reach associative-array subscripts.\n  WHY: The reviewer reports that a malicious or prompt-injected judge response can execute a command during duplicate-check or assignment.\n  File: scripts/review_rb_judge.sh\n  Line or code reference: 2691 (jq filter), 2731 and 2771 (associative array subscript usage)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b2467d2311532d1f7b52feb8101b6db6697b107591865837e338c8195e64019c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5970,
+    "run_id": "36838416476",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36838416476",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001092610_cbb5a67a04",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5970,
+    "run_id": "36838416476"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T09:26:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
