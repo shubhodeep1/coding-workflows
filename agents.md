@@ -1337,7 +1337,9 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   fails (`cmp` exit 2+, a read error), nothing changes for that file and the
   warning says so rather than reporting a difference; a guard in the
   `.claude/` tree with no twin counts as a differing twin (installed when the
-  consumer lacks it, kept when it has it). Each case logs a
+  consumer lacks it, kept when it has it; a symlink there is installed as its
+  target's content when it resolves to a regular file, and installs nothing
+  otherwise). Each case logs a
   `::warning::claude-guard-sync: …` line. Non-guard files still come from the
   twin. `/seed-repo` follows the same rule. The shell pattern must list the
   same paths as `GUARD_PATH_PREFIXES` / `GUARD_PATH_FILES`, and

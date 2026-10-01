@@ -331,12 +331,13 @@ def _run_claude_sync(
 	extra_path: str | None = None,
 	twin_symlinks: dict[str, str] | None = None,
 	local_symlinks: dict[str, str] | None = None,
+	reviewed_symlinks: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], str, dict[str, str]]:
 	"""Run the real claude_sync step body against a fake stable checkout.
 
-	``extra_path`` is prepended to PATH (for stub commands). ``twin_symlinks``
-	and ``local_symlinks`` map a twin or consumer path to the symlink target
-	written there. Returns the consumer .claude/ tree afterwards (a symlink as
+	``extra_path`` is prepended to PATH (for stub commands). ``twin_symlinks``,
+	``local_symlinks``, and ``reviewed_symlinks`` map a twin, consumer, or
+	stable .claude/ path to the symlink target written there. Returns the consumer .claude/ tree afterwards (a symlink as
 	``symlink:<target>``), the step's stdout, and its outputs.
 	"""
 	with tempfile.TemporaryDirectory() as tmp:
@@ -346,7 +347,11 @@ def _run_claude_sync(
 		# The sparse checkout always has workflow-templates/, even when it
 		# carries no .claude/ twin tree.
 		(upstream / "workflow-templates").mkdir(parents=True)
-		for base, links in ((upstream / "workflow-templates" / ".claude", twin_symlinks), (consumer / ".claude", local_symlinks)):
+		for base, links in (
+			(upstream / "workflow-templates" / ".claude", twin_symlinks),
+			(consumer / ".claude", local_symlinks),
+			(upstream / ".claude", reviewed_symlinks),
+		):
 			for rel, target in (links or {}).items():
 				link = base / rel
 				link.parent.mkdir(parents=True, exist_ok=True)
@@ -568,6 +573,40 @@ def test_claude_sync_keeps_a_dangling_consumer_symlink_at_a_differing_guard() ->
 	assert outputs["claude_changed"] == "1"
 
 
+def test_claude_sync_installs_a_symlinked_reviewed_guard_without_a_regular_twin() -> None:
+	"""A symlink in the stable .claude/ tree is a guard the reviewed pass must see; one that is not a regular file is skipped with a warning (PR #5654 review)."""
+	twins = {"hooks/real.py": "reviewed hook\n"}
+	reviewed = {"hooks/real.py": "reviewed hook\n", "hooks/lib/target.py": "reviewed lib\n"}
+	reviewed_symlinks = {
+		"hooks/linked.py": "real.py",
+		"hooks/both_linked.py": "real.py",
+		"hooks/dangling.py": "missing_target.py",
+		"hooks/dir_link": "lib",
+	}
+	tree, stdout, outputs = _run_claude_sync(
+		twins,
+		reviewed,
+		{},
+		twin_symlinks={"hooks/both_linked.py": "real.py"},
+		reviewed_symlinks=reviewed_symlinks,
+	)
+	# The consumer gets the dereferenced content as a regular file.
+	assert tree["hooks/linked.py"] == "reviewed hook\n"
+	assert tree["hooks/both_linked.py"] == "reviewed hook\n"
+	for rel in ("hooks/linked.py", "hooks/both_linked.py"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); installed the .claude/ copy." in stdout
+	# A dangling link or a link to a directory installs nothing and never aborts the step.
+	assert "hooks/dangling.py" not in tree
+	assert "hooks/dir_link" not in tree
+	assert not any(rel.startswith("hooks/dir_link/") for rel in tree)
+	for rel in ("hooks/dangling.py", "hooks/dir_link"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} in the stable .claude/ tree is a symlink that does not resolve to a regular file; nothing installed." in stdout
+	# hooks/real.py (twin loop) and hooks/lib/target.py (no twin) as before.
+	assert tree["hooks/real.py"] == "reviewed hook\n"
+	assert tree["hooks/lib/target.py"] == "reviewed lib\n"
+	assert outputs["claude_changed"] == "4"
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -590,6 +629,7 @@ def main() -> int:
 	test_claude_sync_without_any_claude_tree_changes_nothing()
 	test_claude_sync_symlink_guard_twin_is_handled_by_the_reviewed_pass()
 	test_claude_sync_keeps_a_dangling_consumer_symlink_at_a_differing_guard()
+	test_claude_sync_installs_a_symlinked_reviewed_guard_without_a_regular_twin()
 	return 0
 
 
