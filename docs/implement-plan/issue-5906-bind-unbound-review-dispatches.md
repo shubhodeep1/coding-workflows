@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5929
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_016uEWHbfeYumDLuXt13ZaAp   safety net and hand-back re-armed by the review round 2 stage (ids in its report)
+- Check-in: checker session_016uEWHbfeYumDLuXt13ZaAp   safety net and hand-back re-armed by the review round 3 stage (ids in its report)
 - Last updated: 2026-10-01
-- Last note: review round 2 on PR #5929: 1 finding fixed (a review dispatched on the head branch entered the bound reviews through the head-branch listing), its task gap covered by tests; waiting on round 3.
+- Last note: review round 3 on PR #5929: 2 findings fixed (the head-branch guard skipped `review_rb_judge_dispatch.yml`, and its docstring named only `FIXER_WORKFLOW_PATHS`), its task gap covered by tests; waiting on round 4.
 
 ## Phases
-1. [ ] Phase 1 — bind review dispatches to their PR and count their failures   — PR #5929 open (waiting); review rounds: 2; interventions: 0
+1. [ ] Phase 1 — bind review dispatches to their PR and count their failures   — PR #5929 open (waiting); review rounds: 3; interventions: 0
    - `run-name` `<workflow name> [pr:<pr_number>]` on `workflow_dispatch` in `.github/workflows/review_autofix.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/ai-review.yml`, `workflow-templates/review_rb_judge_dispatch.yml`
    - `check_review_runs()` in `scripts/claude_fixer_pending_checks.py`: a newer completed dispatch titled for the PR joins the bound reviews; a newer unsuccessful one with no PR binding returns `review_superseded`
    - Tests: the audit's scenario, every new path, the run-name wiring; existing #4900 / #5147 / #5148 suites green
@@ -45,6 +45,7 @@
 ## Lessons
 - [source:intervention] A workflow run's `display_title` (its `run-name`) is only trustworthy on a run from the default branch: a `workflow_dispatch` on any other ref runs that ref's workflow file, so any PR binding read from a title must also check `head_branch` against the default branch. (files: scripts/claude_fixer_pending_checks.py, .claude/scripts/check_in_status.py)
 - [source:intervention] An `actions/runs?branch=<head>` listing also returns `workflow_dispatch` runs started with that branch as their ref, which ran the branch's own workflow file with any inputs; a trust rule applied to dispatch listings must also be applied (by `event`) wherever a branch listing is read. (files: scripts/claude_fixer_pending_checks.py)
+- [source:intervention] A rule meant to cover every review workflow must not reuse a list built for another purpose: `check_in_status.FIXER_WORKFLOW_PATHS` lacks the judge wrapper `review_rb_judge_dispatch.yml`, so a guard over review dispatches checks it together with `UNBOUND_DISPATCH_REVIEW_WORKFLOWS`. (files: scripts/claude_fixer_pending_checks.py, .claude/scripts/check_in_status.py)
 
 ## Notes
 - Issue mode; session `session_01YEZ7MVKkvpsMYW3kkWx4by` (started by the Claude issue pickup routine `PR dispatch: #5906`).

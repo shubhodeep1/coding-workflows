@@ -511,10 +511,11 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int,
 	UNBOUND_DISPATCH_REVIEW_WORKFLOWS dispatch whose run name names no PR
 	(a wrapper that predates the run name) or a dispatch titled for this
 	PR from any ref but `default_branch`, whose workflow file, and so its
-	run name, the default branch does not vouch for, or a
-	`check_in_status.FIXER_WORKFLOW_PATHS` dispatch on the head branch
-	itself, whatever PR its run name names (fail closed: it may have been a
-	review of this PR; PR #5929 review rounds 1 and 2). Such a
+	run name, the default branch does not vouch for, or a dispatch of any
+	`check_in_status.FIXER_WORKFLOW_PATHS` or
+	UNBOUND_DISPATCH_REVIEW_WORKFLOWS entry on the head branch itself,
+	whatever PR its run name names (fail closed: it may have been a review
+	of this PR; PR #5929 review rounds 1 to 3). Such a
 	dispatch never counts as a bound review, so a successful one is
 	ignored rather than trusted. A dispatch titled for another PR never
 	counts once completed. The id filter is required: the marker's
@@ -545,9 +546,12 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int,
 	# that branch as its ref. It ran the branch's workflow file with whatever
 	# PR it was given, so it binds to this PR no more than its run name does
 	# (PR #5929 review round 2): never a bound review; a newer one that did
-	# not succeed may have been a review of this PR, so it blocks.
+	# not succeed may have been a review of this PR, so it blocks. Every review
+	# workflow counts, the judge wrapper included, which FIXER_WORKFLOW_PATHS
+	# lacks (PR #5929 review round 3).
 	unbindable_failures.extend(run for run in branch_runs if run.get("event") == "workflow_dispatch"
-		and _run_path(run) in check_in_status.FIXER_WORKFLOW_PATHS and run.get("status") == "completed"
+		and _run_path(run) in (*check_in_status.FIXER_WORKFLOW_PATHS, *UNBOUND_DISPATCH_REVIEW_WORKFLOWS)
+		and run.get("status") == "completed"
 		and run["id"] > marker_run_id and not _is_default_branch_run(run, default_branch)
 		and run.get("conclusion") != "success")
 	# Finished dispatches of the unbound review workflows newer than the

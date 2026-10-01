@@ -613,6 +613,18 @@ def test_an_active_review_defers_a_dry_run_too(fake_gh):
 	("a failed head-branch dispatch, then a successful pull_request review",
 		[_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch=REF), _run(RUN_ID + 6)],
 		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch=REF)]}),
+	# PR #5929 review round 3: the judge wrapper is a review workflow too,
+	# though check_in_status.FIXER_WORKFLOW_PATHS does not list it.
+	("a failed review_rb_judge_dispatch.yml dispatch on the head branch titled for another PR",
+		[_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure", head_branch=REF)],
+		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure",
+			head_branch=REF)]}),
+	("a failed review_rb_judge_dispatch.yml dispatch on the head branch (head-branch listing only)",
+		[_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="cancelled", head_branch=REF)], {}),
+	("a failed review_rb_judge_dispatch.yml dispatch on the head branch, then a successful pull_request review",
+		[_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure", head_branch=REF), _run(RUN_ID + 6)],
+		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure",
+			head_branch=REF)]}),
 ])
 def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -674,6 +686,14 @@ def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, bran
 	("an older failed review dispatch on the head branch",
 		[_titled(RUN_ID - 3, "review_autofix.yml", conclusion="failure", head_branch=REF)],
 		{"review_autofix.yml": [_titled(RUN_ID - 3, "review_autofix.yml", conclusion="failure", head_branch=REF)]}),
+	# PR #5929 review round 3: the same for the judge wrapper.
+	("a newer successful review_rb_judge_dispatch.yml dispatch on the head branch",
+		[_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, head_branch=REF)],
+		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, head_branch=REF)]}),
+	("an older failed review_rb_judge_dispatch.yml dispatch on the head branch",
+		[_titled(RUN_ID - 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure", head_branch=REF)],
+		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID - 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure",
+			head_branch=REF)]}),
 ])
 def test_settled_reviews_let_the_merge_through(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
