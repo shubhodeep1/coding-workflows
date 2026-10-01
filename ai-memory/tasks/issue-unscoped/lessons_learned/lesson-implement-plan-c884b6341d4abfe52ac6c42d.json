@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:19:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A check that reads \"the branch before the merge\" from `HEAD^1` needs every merge feeding it to use `--no-ff`: a plain `git merge` fast-forwards when it can, and `HEAD^1` is then the parent of the last upstream commit, which misses a change in an earlier one. Prove it by running the documented command on a fast-forwardable branch in a scratch repository.",
+  "phase": "implement_plan",
+  "pr_number": 5511,
+  "record_id": "lesson-implement-plan-c884b6341d4abfe52ac6c42d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5259-restart-after-settings-sync",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:tests/test_claude_asset_sync_command.py"
+  ]
+}

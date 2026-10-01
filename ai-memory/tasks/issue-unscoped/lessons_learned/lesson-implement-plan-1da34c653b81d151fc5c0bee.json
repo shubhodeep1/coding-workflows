@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:19:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A hook that must observe a settings change cannot rely on `ConfigChange` alone: Claude Code runs it with the hooks loaded before the change, so a checkout whose settings lack the hook never records the next change. Design load checks for the transition from un-wired settings.",
+  "phase": "implement_plan",
+  "pr_number": 5511,
+  "record_id": "lesson-implement-plan-1da34c653b81d151fc5c0bee",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5259-restart-after-settings-sync",
+    "file:.claude/hooks/settings_load_recorder.py",
+    "file:.claude/scripts/loaded_settings_check.py"
+  ]
+}

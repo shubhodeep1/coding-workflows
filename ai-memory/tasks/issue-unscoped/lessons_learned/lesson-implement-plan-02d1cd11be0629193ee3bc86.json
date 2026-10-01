@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:19:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A check that gates work after a merge must run before a conflicted merge is resolved, not after its commit: during an unfinished merge `HEAD` is still the pre-merge tip and the cleanly merged files are on disk, so `--before HEAD` checks the same state that `HEAD^1` checks after the commit.",
+  "phase": "implement_plan",
+  "pr_number": 5511,
+  "record_id": "lesson-implement-plan-02d1cd11be0629193ee3bc86",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5259-restart-after-settings-sync",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:.claude/commands/fix-claude-pr.md"
+  ]
+}

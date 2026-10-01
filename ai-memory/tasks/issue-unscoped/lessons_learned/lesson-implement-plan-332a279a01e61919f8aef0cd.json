@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T10:19:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A review re-run dispatched with `workflow_dispatch` from the default branch attaches its check runs to that branch's commit, not to the PR head, so a check that failed on the head (an outage, a cap) stays red there; only a new head or a re-run of that job clears it.",
+  "phase": "implement_plan",
+  "pr_number": 5511,
+  "record_id": "lesson-implement-plan-332a279a01e61919f8aef0cd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5259-restart-after-settings-sync",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

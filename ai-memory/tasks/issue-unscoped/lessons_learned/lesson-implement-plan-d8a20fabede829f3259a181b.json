@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T10:19:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Decode subprocess output of a UTF-8 file (`git show <rev>:settings.json`) with an explicit `encoding=\"utf-8\"`, never `text=True` alone: `text=True` uses the locale encoding, so under `LC_ALL=C` with UTF-8 mode off a valid UTF-8 file fails to decode.",
+  "phase": "implement_plan",
+  "pr_number": 5511,
+  "record_id": "lesson-implement-plan-d8a20fabede829f3259a181b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5259-restart-after-settings-sync",
+    "file:.claude/scripts/loaded_settings_check.py"
+  ]
+}

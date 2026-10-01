@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:19:03Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-closed check that reports a cause-specific reason must pick that reason on every early-return path, above all \"no record\": the case the reason was written for usually never wrote a record, so a test that seeds a record exercises the wrong branch.",
+  "phase": "implement_plan",
+  "pr_number": 5511,
+  "record_id": "lesson-implement-plan-8163950b3a71adb18a0cfeaa",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5259-restart-after-settings-sync",
+    "file:.claude/scripts/loaded_settings_check.py",
+    "file:tests/test_settings_load_recorder.py"
+  ]
+}
