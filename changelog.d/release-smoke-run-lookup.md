@@ -5,7 +5,7 @@ Three of the four release-gate runs on 2026-09-28 and 2026-09-29 failed in the E
 
 | The numbers that matter | Value |
 | --- | --- |
-| Run lookup pages read | 1 when page 1 matches, at most 5 (500 runs) |
+| Run lookup pages read | 1 when page 1 matches, at most 10 (1,000 runs) per run-ID capture |
 | Phase 7 listing attempts before `lookup_failed` | 3, 5 s apart |
 | Failed gate runs traced to these bugs | 36374918973, 36389883126, 36504041362 |
 
@@ -13,4 +13,4 @@ What this means for operators: a `@stable` promotion or the daily promote cycle 
 
 ### For contributors
 
-The paged lookup is `find_latest_scoped_run_field` in `scripts/comprehensive_test_and_release_gh_api.sh`, used by the three `capture_run_id` definitions and the Plan wait's `latest_scoped_run_field`; all three phases now pass the smoke issue's `ISSUE_TITLE`, and each wait step stops with `clarify_failed`, `plan_failed` or `implement_failed` when that title is empty instead of dropping the filter. The Phase 7 retry is the step-local `phase7_list_cancel_runs`. `tests/test_release_smoke_run_lookup.py` covers both and runs in its own `ci.yml` step.
+The paged lookup is `find_latest_scoped_run_field` in `scripts/comprehensive_test_and_release_gh_api.sh`, used by the three `capture_run_id` definitions and the Plan wait's `latest_scoped_run_field`; all three phases now pass the smoke issue's `ISSUE_TITLE`, and each wait step stops with `run_id_missing` (Clarify, Implement) or `plan_failed` (Plan) when that title is empty instead of dropping the filter. The release gate's captures pass a 10-page cap and get exit 2 when every page up to it was full, so that walk is not retried; the default cap stays 5. The Phase 7 retry is the step-local `phase7_list_cancel_runs`. `tests/test_release_smoke_run_lookup.py` covers both and runs in its own `ci.yml` step.
