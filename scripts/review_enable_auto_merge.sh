@@ -329,15 +329,27 @@ fi
 # on this exact head; a merge GitHub refuses now (checks or reviews still
 # required, head moved, conflict) enrolls nothing and waits for the next
 # review run. The gate job cancels any enrollment left on a claude/* PR.
+# The merge is the REST `PUT pulls/{n}/merge` with `sha`, not `gh pr merge`:
+# on a base with a merge queue, `gh pr merge` without `--auto` still enables
+# auto-merge or queues the PR, and the queue merges it later without the
+# gate. The REST call only merges or refuses (405/409/422). After a refusal,
+# one `pulls/{n}` read counts a merge whose response was lost (a retry of an
+# already merged PR is refused too).
 if [[ "${_orch_pr_head_ref}" == claude/* ]]; then
 	echo "Merging claude/* PR #${PR_NUMBER} synchronously (no auto-merge enrollment)..."
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=squash_sync"
-	if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${INITIAL_HEAD_SHA}"; then
+	_claude_sync_merged="false"
+	if gh_retry gh api -X PUT "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/merge" -f merge_method=squash -f sha="${INITIAL_HEAD_SHA}" >/dev/null; then
+		_claude_sync_merged="true"
+	elif [ "$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '"\(.merged == true) \(.head.sha // "")"' 2>/dev/null || echo "")" = "true ${INITIAL_HEAD_SHA}" ]; then
+		_claude_sync_merged="true"
+	fi
+	if [ "${_claude_sync_merged}" = "true" ]; then
 		record_auto_merge_ready_labels_allowed "true"
 		echo "PR #${PR_NUMBER} merged at reviewed head ${INITIAL_HEAD_SHA}."
 	else
 		echo "AUTOFIX_AUTO_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} reason=merge_not_ready"
-		echo "::warning::GitHub refused the synchronous merge of claude/* PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}'); required checks or reviews may still be pending. No auto-merge was enrolled, so no later merge can skip the hold gate. The next review run (a push or a dispatch) re-checks the gate and merges."
+		echo "::warning::GitHub refused the synchronous merge of claude/* PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}'); required checks or reviews may still be pending, or the base requires a merge queue. No auto-merge was enrolled, so no later merge can skip the hold gate. The next review run (a push or a dispatch) re-checks the gate and merges."
 	fi
 	exit 0
 fi

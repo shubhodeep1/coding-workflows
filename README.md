@@ -1484,13 +1484,16 @@ cannot complete refuses too (fail closed). A refusal logs
 and a pass logs `AUTOFIX_MERGE_HOLD_GATE … action=allow`. The next push
 (the `[claude-twin-sync]` copy, or the fixer resuming) starts a new review
 run that re-checks it. After a pass the workflow merges the `claude/*` PR
-**synchronously** (`gh pr merge --squash --match-head-commit`, logged as
-`action=squash_sync`) instead of enrolling it in auto-merge (issue #5565): an
-enrollment would merge later, once pending required checks passed, without
-checking the gate again. If GitHub cannot merge yet (required checks or
-reviews still pending), nothing is enrolled, the run logs
-`AUTOFIX_AUTO_MERGE_SKIPPED … reason=merge_not_ready`, and the next review
-run tries again. Every review run also cancels an auto-merge enrollment it
+**synchronously** (the REST `PUT pulls/{n}/merge` with `merge_method=squash`
+and `sha=<reviewed head>`, logged as `action=squash_sync`) instead of
+enrolling it in auto-merge (issue #5565): an enrollment would merge later,
+once pending required checks passed, without checking the gate again. It is
+not `gh pr merge`, which enables auto-merge or queues the PR on a base with a
+merge queue even without `--auto`. If GitHub cannot merge yet (required
+checks or reviews still pending, or a merge queue required), nothing is
+enrolled, the run logs `AUTOFIX_AUTO_MERGE_SKIPPED … reason=merge_not_ready`,
+and the next review run tries again. After a refusal, one `pulls/{n}` read
+counts a merge whose response was lost. Every review run also cancels an auto-merge enrollment it
 finds on an open `claude/*` PR (made before this change, or by hand), with
 up to 3 attempts, and logs `AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=<n>
 head_sha=<sha> result=disabled|failed`, so a push never inherits an armed

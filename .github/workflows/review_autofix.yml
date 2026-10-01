@@ -2028,15 +2028,24 @@ jobs:
           elif [[ "${PR_HEAD_REF}" == claude/* ]]; then
             # Synchronous merge right after the hold gate, never an auto-merge
             # enrollment that could outlive a later hold or push (issue #5565;
-            # see scripts/review_enable_auto_merge.sh).
+            # see scripts/review_enable_auto_merge.sh). REST, not `gh pr
+            # merge`, which enables auto-merge or queues the PR on a
+            # merge-queue base even when not asked to; one `pulls/{n}` read
+            # after a refusal counts a merge whose response was lost.
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash_sync"
-            if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${PR_HEAD_SHA}"; then
+            det_skip_sync_merged="false"
+            if gh_retry gh api -X PUT "repos/${REPOSITORY}/pulls/${PR_NUMBER}/merge" -f merge_method=squash -f sha="${PR_HEAD_SHA}" >/dev/null; then
+              det_skip_sync_merged="true"
+            elif [ "$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '"\(.merged == true) \(.head.sha // "")"' 2>/dev/null || echo "")" = "true ${PR_HEAD_SHA}" ]; then
+              det_skip_sync_merged="true"
+            fi
+            if [ "${det_skip_sync_merged}" = "true" ]; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="MERGED (claude/* synchronous merge)"
             else
               auto_merge_summary="REFUSED (merge_not_ready: GitHub refused the synchronous claude/* merge)"
               echo "AUTOFIX_AUTO_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} reason=merge_not_ready"
-              echo "::warning::GitHub refused the synchronous merge of claude/* PR #${PR_NUMBER}; required checks or reviews may still be pending. No auto-merge was enrolled. The next review run re-checks the gate and merges."
+              echo "::warning::GitHub refused the synchronous merge of claude/* PR #${PR_NUMBER}; required checks or reviews may still be pending, or the base requires a merge queue. No auto-merge was enrolled. The next review run re-checks the gate and merges."
             fi
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."

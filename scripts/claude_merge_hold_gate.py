@@ -11,11 +11,12 @@ claims, the PR merged at once, and the twin sync landed on a merged branch
 (§21; PR #5301, PR #5182). `review_autofix.yml` therefore runs this gate
 immediately before every merge enablement a `claude/*` PR can reach:
 `scripts/review_enable_auto_merge.sh` and the `deterministic-skip-merge` job.
-Both merge an allowed `claude/*` head synchronously (`gh pr merge --squash
---match-head-commit`, never `--auto`), because an auto-merge enrollment
-would merge later without running this gate again (issue #5565). A future
-merge path (the pending-checks merge of #4900) must call it too, and merge
-the same way.
+Both merge an allowed `claude/*` head synchronously (the REST
+`PUT pulls/{n}/merge` with `sha`, never `gh pr merge`, which enrolls or
+queues the PR on a merge-queue base even without `--auto`), because an
+auto-merge enrollment would merge later without running this gate again
+(issue #5565). A future merge path (the pending-checks merge of #4900) must
+call it too, and merge the same way.
 
 Usage:
 

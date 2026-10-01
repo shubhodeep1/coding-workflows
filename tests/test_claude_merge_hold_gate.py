@@ -85,7 +85,16 @@ FAKE_GH = textwrap.dedent(
 			sys.stderr.write("X Pull request is not mergeable: the base branch policy prohibits the merge.\\n")
 			sys.exit(1)
 		sys.exit(0)
+	if args[:3] == ["api", "-X", "PUT"] and args[3].endswith("/merge"):
+		if os.environ.get("FAKE_GH_MERGE_FAIL"):
+			sys.stderr.write("HTTP 405: Pull Request is not mergeable (https://api.github.com/%s)\\n" % args[3])
+			sys.exit(1)
+		sys.stdout.write(json.dumps({"merged": True, "sha": "e" * 40}))
+		sys.exit(0)
 	if args[:2] == ["api", "graphql"]:
+		sys.exit(0)
+	if args[:1] == ["api"] and "--jq" in args and ".merged == true" in args[args.index("--jq") + 1]:
+		sys.stdout.write(os.environ.get("FAKE_GH_MERGED_AT", "false " + "a" * 40))
 		sys.exit(0)
 	if args[:1] == ["api"] and "--jq" in args and args[args.index("--jq") + 1] == ".auto_merge == null":
 		sys.stdout.write("true" if os.environ.get("FAKE_GH_AUTO_MERGE_GONE") else "false")
@@ -305,8 +314,18 @@ def test_bad_arguments_fail_closed(tmp_path, argv):
 # --- scripts/review_enable_auto_merge.sh -----------------------------------
 
 
-SYNC_MERGE = ["pr", "merge", "42", "--repo", REPO, "--squash", "--match-head-commit", HEAD]
+# Issue #5565 round 3: the REST merge, never `gh pr merge`, which enables
+# auto-merge or queues the PR on a merge-queue base even without `--auto`.
+SYNC_MERGE = ["api", "-X", "PUT", f"repos/{REPO}/pulls/42/merge", "-f", "merge_method=squash", "-f", f"sha={HEAD}"]
 AUTO_MERGE = ["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]
+
+
+def _is_merge_call(call):
+	return call[:2] == ["pr", "merge"] or (call[:3] == ["api", "-X", "PUT"] and call[3].endswith("/merge"))
+
+
+def _merged_rechecks(tmp_path):
+	return [call for call in _calls(tmp_path) if "--jq" in call and ".merged == true" in call[call.index("--jq") + 1]]
 
 
 def _run_helper(tmp_path, fixture, gate_script=GATE, extra_env=None):
@@ -318,7 +337,7 @@ def _run_helper(tmp_path, fixture, gate_script=GATE, extra_env=None):
 		**(extra_env or {}),
 	})
 	proc = subprocess.run(["bash", str(AUTO_MERGE_HELPER)], cwd=str(tmp_path), env=env, capture_output=True, text=True, check=False)
-	merges = [call for call in _calls(tmp_path) if call[:2] == ["pr", "merge"]]
+	merges = [call for call in _calls(tmp_path) if _is_merge_call(call)]
 	labels_env = (tmp_path / "github_env.txt").read_text(encoding="utf-8").splitlines()
 	return proc, merges, labels_env
 
@@ -355,8 +374,38 @@ def test_helper_refused_sync_merge_enrolls_nothing(tmp_path):
 	proc, merges, labels_env = _run_helper(tmp_path, _fixture(), extra_env={"FAKE_GH_MERGE_FAIL": "1"})
 	assert proc.returncode == 0, proc.stderr
 	assert merges == [SYNC_MERGE]
+	assert len(_merged_rechecks(tmp_path)) == 1
 	assert f"AUTOFIX_AUTO_MERGE_SKIPPED pr=42 head_sha={HEAD} reason=merge_not_ready" in proc.stdout, proc.stdout
 	assert labels_env == ["AUTO_MERGE_READY_LABELS_ALLOWED=false"]
+
+
+def test_helper_counts_a_lost_merge_response_as_merged(tmp_path):
+	# The merge landed but the response was lost; the retry is refused because
+	# the PR is already merged. The one re-read sees it merged at this head.
+	proc, merges, labels_env = _run_helper(tmp_path, _fixture(), extra_env={
+		"FAKE_GH_MERGE_FAIL": "1", "FAKE_GH_MERGED_AT": f"true {HEAD}"})
+	assert proc.returncode == 0, proc.stderr
+	assert merges == [SYNC_MERGE]
+	assert "reason=merge_not_ready" not in proc.stdout, proc.stdout
+	assert labels_env[-1] == "AUTO_MERGE_READY_LABELS_ALLOWED=true"
+
+
+def test_helper_does_not_count_a_merge_at_another_head(tmp_path):
+	proc, _, labels_env = _run_helper(tmp_path, _fixture(), extra_env={
+		"FAKE_GH_MERGE_FAIL": "1", "FAKE_GH_MERGED_AT": f"true {OLD_HEAD}"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTOFIX_AUTO_MERGE_SKIPPED pr=42 head_sha={HEAD} reason=merge_not_ready" in proc.stdout, proc.stdout
+	assert labels_env == ["AUTO_MERGE_READY_LABELS_ALLOWED=false"]
+
+
+def test_helper_never_runs_gh_pr_merge_for_a_claude_head(tmp_path):
+	# On a merge-queue base `gh pr merge` enrolls auto-merge or queues the PR
+	# even without --auto, so the claude/* path must not call it at all.
+	for env in ({}, {"FAKE_GH_MERGE_FAIL": "1"}):
+		run_dir = tmp_path / str(len(env))
+		run_dir.mkdir()
+		_run_helper(run_dir, _fixture(), extra_env=env)
+		assert not [call for call in _calls(run_dir) if call[:2] == ["pr", "merge"]]
 
 
 def test_helper_never_runs_the_gate_for_other_heads(tmp_path):
@@ -376,12 +425,13 @@ def test_helper_gate_runs_before_every_merge_call():
 	text = AUTO_MERGE_HELPER.read_text(encoding="utf-8")
 	gate_at = text.index('"${_hold_gate_script}" --repo')
 	assert gate_at < text.index("gh_retry gh pr merge"), "the hold gate must precede every merge call"
+	assert gate_at < text.index("gh_retry gh api -X PUT"), "the hold gate must precede the claude/* merge"
 	assert text.index("no longer points at reviewed head") < gate_at, "the gate runs after the head freshness check"
 
 
 def test_helper_claude_branch_exits_before_the_auto_merge_tail():
 	text = AUTO_MERGE_HELPER.read_text(encoding="utf-8")
-	sync_at = text.index('--repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${INITIAL_HEAD_SHA}"')
+	sync_at = text.index('gh api -X PUT "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/merge" -f merge_method=squash -f sha="${INITIAL_HEAD_SHA}"')
 	claude_branch_at = text.rindex('if [[ "${_orch_pr_head_ref}" == claude/* ]]; then', 0, sync_at)
 	tail_at = text.index('--repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit')
 	assert text.index('"${_hold_gate_script}" --repo') < claude_branch_at < sync_at < tail_at
@@ -425,6 +475,7 @@ def test_deterministic_skip_runs_the_gate_before_every_merge_call():
 	branch = 'elif [[ "${PR_HEAD_REF}" == claude/* ]] && ! merge_hold_gate_allows; then'
 	assert branch in run
 	assert run.index(branch) < run.index("gh_retry gh pr merge"), "the hold gate branch must precede every merge call"
+	assert run.index(branch) < run.index("gh_retry gh api -X PUT"), "the hold gate branch must precede the claude/* merge"
 	assert ".codex-workflow-src/scripts/claude_merge_hold_gate.py" in run
 	assert "AUTOFIX_AUTO_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA}" in run
 
@@ -443,7 +494,7 @@ def _run_deterministic_skip_step(tmp_path, fixture, head_ref="claude/implement-p
 		**(extra_env or {}),
 	})
 	proc = subprocess.run(["bash", "-c", run], cwd=str(tmp_path), env=env, capture_output=True, text=True, check=False)
-	return proc, [call for call in _calls(tmp_path) if call[:2] == ["pr", "merge"]]
+	return proc, [call for call in _calls(tmp_path) if _is_merge_call(call)]
 
 
 def test_deterministic_skip_refuses_a_held_claude_head(tmp_path):
@@ -473,8 +524,22 @@ def test_deterministic_skip_refused_sync_merge_enrolls_nothing(tmp_path):
 	assert merges and all(merge == SYNC_MERGE for merge in merges), merges
 	assert f"AUTOFIX_AUTO_MERGE_SKIPPED pr=42 head_sha={HEAD} reason=merge_not_ready" in proc.stdout, proc.stdout
 	assert "REFUSED (merge_not_ready" in (tmp_path / "summary.md").read_text(encoding="utf-8")
+	assert len(_merged_rechecks(tmp_path)) == 1
 	label_calls = [call for call in _calls(tmp_path) if "/labels" in " ".join(call)]
 	assert label_calls == [], "a refused merge must not add ai:review-skipped or ai:ready-to-merge"
+	assert not [call for call in _calls(tmp_path) if call[:2] == ["pr", "merge"]]
+
+
+def test_deterministic_skip_counts_a_lost_merge_response_as_merged(tmp_path):
+	(tmp_path / "bin").mkdir(exist_ok=True)
+	(tmp_path / "bin" / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(tmp_path / "bin" / "sleep").chmod(0o755)
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(), extra_env={
+		"FAKE_GH_MERGE_FAIL": "1", "FAKE_GH_MERGED_AT": f"true {HEAD}"})
+	assert proc.returncode == 0, proc.stderr
+	assert merges and all(merge == SYNC_MERGE for merge in merges), merges
+	assert "reason=merge_not_ready" not in proc.stdout, proc.stdout
+	assert "MERGED (claude/* synchronous merge)" in (tmp_path / "summary.md").read_text(encoding="utf-8")
 
 
 def test_deterministic_skip_keeps_auto_merge_for_other_heads(tmp_path):
@@ -590,8 +655,9 @@ def test_claude_heads_never_reach_an_auto_merge_enrollment_in_the_deterministic_
 	sync_branch = 'elif [[ "${PR_HEAD_REF}" == claude/* ]]; then'
 	assert run.index('elif [[ "${PR_HEAD_REF}" == claude/* ]] && ! merge_hold_gate_allows; then') < run.index(sync_branch)
 	branch = run[run.index(sync_branch):run.index("\nelse\n", run.index(sync_branch))]
-	assert '--squash --match-head-commit "${PR_HEAD_SHA}"' in branch
+	assert 'gh api -X PUT "repos/${REPOSITORY}/pulls/${PR_NUMBER}/merge" -f merge_method=squash -f sha="${PR_HEAD_SHA}"' in branch
 	assert "--auto" not in branch
+	assert "gh_retry gh pr merge" not in branch
 
 
 def test_cancel_log_key_is_a_registered_stable_prefix():
