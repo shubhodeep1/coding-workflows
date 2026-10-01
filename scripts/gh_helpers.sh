@@ -1677,6 +1677,15 @@ PY
 # `)`:
 #   [one](https://github.com/owner/repo/issues/1?q=1),[two](https://github.com/owner/repo/issues/2)
 #   yields 1 and 2.
+# The same holds for an issue path inside any other URL: when the text
+# before it in the same run (after a Markdown `](`) holds `://`, `?`,
+# or `#`, or ends with `/`, the path is part of that URL and never a
+# link, so https://example.com/?next=owner/repo/issues/2,
+# https://example.com/#see-owner/repo/issues/2, and
+# https://example.com/owner/repo/issues/2 yield nothing. Inside a
+# Markdown link destination a backslash-escaped character (`\)`, `\(`,
+# `\#`) is part of the URL, as GitHub reads it, so
+# [c](https://github.com/owner/repo/issues/1?q=a\)b#c) yields nothing.
 # A closing keyword counts unless it sits inside such a URL, and the
 # match before it never hides it ("Fixes #1 fixes #2" yields 1 and 2).
 #
@@ -1700,6 +1709,7 @@ extract_repo_scoped_issue_refs_from_text()
 	printf '%s' "${_text}" | python3 -c '
 import bisect
 import re
+import string
 import sys
 
 repository = sys.argv[1]
@@ -1722,22 +1732,36 @@ while True:
 		break
 	host = host_prefix.search(text, max(0, match.start() - 32), match.start())
 	url_start = host.start() if host else match.start()
+	lead_start = url_start
+	while lead_start > pos and not (text[lead_start - 1].isspace() or text[lead_start - 1] in "<>"):
+		lead_start -= 1
+	destination_open = text.rfind("](", lead_start, url_start)
+	if destination_open >= 0:
+		lead_start = destination_open + 2
+	lead = text[lead_start:url_start]
+	embedded = "://" in lead or "?" in lead or "#" in lead or lead.endswith("/")
+	if embedded:
+		url_start = lead_start
 	markdown_destination = text[max(0, url_start - 2):url_start] == "]("
 	depth = 0
-	stop = match.end()
+	stop = url_start
 	while stop < len(text):
 		char = text[stop]
-		if char.isspace() or char in "<>":
+		if stop >= match.end() and (char.isspace() or char in "<>"):
 			break
+		if markdown_destination and char == "\\" and stop + 1 < len(text) and text[stop + 1] in string.punctuation:
+			stop += 2
+			continue
 		if markdown_destination and char == "(":
 			depth += 1
 		elif markdown_destination and char == ")":
-			if depth == 0:
+			if depth > 0:
+				depth -= 1
+			elif stop >= match.end():
 				break
-			depth -= 1
 		stop += 1
 	tail = text[match.end():stop]
-	if not word_char.match(tail) and "#" not in tail:
+	if not embedded and not word_char.match(tail) and "#" not in tail:
 		found.add(int(match.group(1)))
 	url_starts.append(url_start)
 	url_stops.append(stop)

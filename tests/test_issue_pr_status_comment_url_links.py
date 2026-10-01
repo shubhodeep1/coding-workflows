@@ -170,6 +170,51 @@ def test_issue_path_inside_a_url_query_or_fragment_is_not_a_link() -> None:
 	assert _extract(f"[c]({url}/1?next={path}/2), and {url}/3") == [1, 3]
 
 
+def test_issue_path_inside_another_hosts_url_is_not_a_link() -> None:
+	"""An issue path in the query, fragment, or path of a URL on another host
+	belongs to that URL, not to this repository (round 2 review after
+	intervention 1 on PR #5825)."""
+	url = f"https://github.com/{REPOSITORY}/issues"
+	path = f"{REPOSITORY}/issues"
+	for text in (
+		f"https://example.com/?next={path}/42",
+		f"https://example.com/#see-{path}/43",
+		f"https://example.com/{path}/44",
+		f"example.com/?next={path}/45",
+		f"example.com/{path}/46",
+		f"https://example.com/?u={url}/47",
+		f"[c](https://example.com/?next={path}/48)",
+		f"[c](https://example.com/?q=(a){path}/49)",
+		f'<a href="https://example.com/?next={path}/50">x</a>',
+	):
+		assert _extract(text) == [], text
+	# Plain wrappers and Markdown link text before the URL still link.
+	assert _extract(f"[why?]({url}/5)") == [5]
+	assert _extract(f"[see #1]({url}/6)") == [6]
+	assert _extract(f"**{path}/7**") == [7]
+	assert _extract(f'<a href="{url}/8">x</a>') == [8]
+	assert _extract(f"Refs:{url}/9") == [9]
+	assert _extract(f"[a](https://example.com/x),[b]({url}/10)") == [10]
+	assert _extract(f"[a](https://example.com/?x=1), {url}/11") == [11]
+
+
+def test_escaped_parenthesis_stays_inside_a_markdown_destination() -> None:
+	"""A backslash-escaped `)` is part of a Markdown link destination, so a
+	fragment after it still drops the link (round 2 review after intervention
+	1 on PR #5825)."""
+	for text in (
+		f"[c](https://github.com/{REPOSITORY}/issues/12?q=a\\)b#issuecomment-1)",
+		f"[c](github.com/{REPOSITORY}/issues/13?q=a\\)b#issuecomment-1)",
+		f"[c](https://github.com/{REPOSITORY}/issues/15?q=a\\#c)",
+	):
+		assert _extract(text) == [], text
+	assert _extract(f"[c](https://github.com/{REPOSITORY}/issues/16?q=a\\)b)") == [16]
+	# An escaped `(` opens no group, so the destination ends at the next `)`
+	# and the `#c)` after it is plain text.
+	assert _extract(f"[c](https://github.com/{REPOSITORY}/issues/14?q=a\\(b)#c)") == [14]
+	assert _extract(f"[c](https://github.com/{REPOSITORY}/issues/17?q=\\(a), Fixes #18") == [17, 18]
+
+
 def test_closing_keyword_after_a_link_or_keyword_still_links() -> None:
 	"""A closing keyword right after another match is not hidden by it; one
 	inside a URL is not a closing keyword."""
@@ -295,6 +340,8 @@ if __name__ == "__main__":
 	test_fragment_after_parentheses_in_the_tail_is_not_a_link()
 	test_adjacent_issue_links_each_count_on_their_own()
 	test_issue_path_inside_a_url_query_or_fragment_is_not_a_link()
+	test_issue_path_inside_another_hosts_url_is_not_a_link()
+	test_escaped_parenthesis_stays_inside_a_markdown_destination()
 	test_closing_keyword_after_a_link_or_keyword_still_links()
 	test_bare_urls_paths_and_closing_keywords_still_link()
 	test_mixed_text_keeps_only_the_real_links()
