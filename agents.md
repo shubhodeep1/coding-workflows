@@ -1170,7 +1170,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   `filed-state.json` next to the logs keeps a later run in the same session
   from filing the same occurrences again. No cap on open issues. Issue text
   masks token-like strings, removes heredoc bodies, and truncates commands to
-  2,000 characters. In consumer repos it only reports.
+  2,000 characters. The shape, the tool name, and each prompt reason are
+  written as one line (`<!--` escaped) inside a code span longer than any
+  backtick run in them, in the issue body and in both kinds of "Seen again"
+  comment, so a backtick in a logged command word cannot close the span
+  (issue #5810). In consumer repos it only reports.
 - **Command class (issue #4867).** A pattern that is an inline-interpreter
   write (`python3 -` heredoc or `python3 -c` whose program writes a file, or
   `sed -i`, `perl -i`, `ruby -i`, `awk -i inplace`; the #4858 definition) is
