@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T20:07:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A review round whose fix is the `MAX_AUTOFIX_ITERATIONS`-th consecutive `[claude-autofix]` commit is labelled `ai:review-blocked` without that head ever being reviewed; when no finding is left open, the intervention only has to record the round in a `[claude-intervention]` commit, which restarts the count and gets the head reviewed.",
+  "phase": "implement_plan",
+  "pr_number": 5893,
+  "record_id": "lesson-implement-plan-061654149861da315da6991f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-fixer-unattended-convergence",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

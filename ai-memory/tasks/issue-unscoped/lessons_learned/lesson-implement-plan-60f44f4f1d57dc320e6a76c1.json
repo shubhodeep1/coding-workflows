@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T20:07:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When one trust set (comment `author_association` values) is enforced in both a Python helper and a workflow-step jq filter, add a test that parses the jq `IN(...)` list and compares it to the Python constant, so an edit to one side cannot silently widen the other.",
+  "phase": "implement_plan",
+  "pr_number": 5893,
+  "record_id": "lesson-implement-plan-60f44f4f1d57dc320e6a76c1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-fixer-unattended-convergence",
+    "file:scripts/review_claude_fixer_judge.py",
+    "file:scripts/review_autofix_step_claude_fixer_judge.sh"
+  ]
+}

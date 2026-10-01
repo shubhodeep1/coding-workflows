@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T20:07:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A janitor or matcher that selects sessions by title must be checked against the live session list after every title-convention change on main (#4943 put `#<issue> \u00b7 PR #<pr> \u2014 ` in front of stage and issue titles); a plan-time pattern silently matched 5 of 100 live sessions.",
+  "phase": "implement_plan",
+  "pr_number": 5893,
+  "record_id": "lesson-implement-plan-c23de99540330ca73787ae5d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:claude-fixer-unattended-convergence",
+    "file:.claude/scripts/stale_sessions.py"
+  ]
+}

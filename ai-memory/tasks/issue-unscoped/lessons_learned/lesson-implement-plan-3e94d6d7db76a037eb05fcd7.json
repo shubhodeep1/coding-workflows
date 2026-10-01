@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T20:07:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Text a model returns must be collapsed to one line before it goes into a comment that carries a marker the workflow later parses, or the model can add a forged marker line.",
+  "phase": "implement_plan",
+  "pr_number": 5893,
+  "record_id": "lesson-implement-plan-3e94d6d7db76a037eb05fcd7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:claude-fixer-unattended-convergence",
+    "file:scripts/review_claude_fixer_judge.py"
+  ]
+}

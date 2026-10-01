@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-10-01T20:07:34Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Collapse model text with `\" \".join(text.split())`, not `.replace(\"\\n\", \" \")`: `str.splitlines()` also splits on `\\r`, `\\x0b`, `\\x0c`, `\\x1c`\u2013`\\x1e`, `\\x85`, `",
+  "phase": "implement_plan",
+  "pr_number": 5893,
+  "record_id": "lesson-implement-plan-2d8a15d799bfa29a70d17843",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-fixer-unattended-convergence"
+  ]
+}
