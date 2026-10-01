@@ -713,7 +713,7 @@ a new value, add it to the appropriate overrides file with a
 | implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` |
 | implement-diagnose | `openai/gpt-6-sol` | `high` | `low` |
 | review autofix editor | `openai/gpt-6-sol` | `high` (smoke: `medium`) | `low` |
-| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`, `x-ai/grok-4.20`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
+| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` |
 | review consolidator | `openai/gpt-6-sol` | `high` | `low` |
 | conflict resolver | `openai/gpt-6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` |
@@ -751,9 +751,10 @@ the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
 `openai/gpt-6-sol` in `scripts/codex_model_catalog.json`. Third-party
 reviewer models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
-`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
-`qwen/qwen3.7-plus`, `x-ai/grok-4.20`)
-carry `support_verbosity = false` in the catalog — codex CLI logs
+`deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`,
+`qwen/qwen3.7-plus`) carry `support_verbosity = false` in the catalog
+(the `openai/gpt-6-luna` reviewer slot supports it, with catalog default
+`low`) — codex CLI logs
 `model_verbosity is set but ignored as the model does not support verbosity`
 and continues; the value is operationally moot for those rows. The
 historical `high` value across every layer was a workaround for the
@@ -767,8 +768,8 @@ implement callsites, since those are the original 11151 reproducers).
 
 Every editor / consolidator / resolver phase now defaults to `openai/gpt-6-sol`.
 Reviewer fan-out remains driven by the `REVIEWER_MODELS` roster in
-`.github/workflows/review_autofix.yml` (currently the third-party models
-listed in the table above). The previous legacy editor split (patch-heavy
+`.github/workflows/review_autofix.yml` (currently the models listed in the
+table above). The previous legacy editor split (patch-heavy
 phases on a separate older slug) was retired after the announce-without-emit
 regression (openai/codex#11151) drove repeat no-edit failures. The
 2026-05-07 ablation suite then identified the underlying root cause as
@@ -776,10 +777,10 @@ regression (openai/codex#11151) drove repeat no-edit failures. The
 the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
 `function`).
 
-The reviewer-only multi-model run (claude-branch-review) uses third-party
-models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
-`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
-`qwen/qwen3.7-plus`, `x-ai/grok-4.20`) plus
+The reviewer-only multi-model run (claude-branch-review) uses the same
+reviewer models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
+`deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`,
+`qwen/qwen3.7-plus`, `openai/gpt-6-luna`) plus
 `unattended_system_instructions.md` as system context.
 
 ---
@@ -835,7 +836,7 @@ diff instead of a fourth audit, blocking only when the fix itself is
 defective), a security or validation read, the completion PR, the
 final merge, a `/verify-activation — scope activation` cycle, the
 `/deploy-activate` hand-off) runs in its own fresh session titled
-`implement-plan <slug> — <stage>`, which archives the previous stage session
+`#<issue> · PR #<pr> — implement-plan <slug> — <stage>`, which archives the previous stage session
 unless it is waiting on the user; a finished stage session is not woken to
 continue, because the gap between check-ins outlives the prompt cache and a
 wake would re-send the whole history at full price. The one exception is the
@@ -849,7 +850,16 @@ itself. A scheduled Routine fire creates no session, so the hand-back adds
 no parent link, and it leaves the project checker running for the next
 wait. Merged PRs, review rounds, finished runs, and resolved issue lists
 still start a fresh stage session, and a failed hand-back falls back to a
-fresh `… — blocked PR` stage session. New projects work on a
+fresh `… — blocked PR` stage session. Titles lead with the numbers (issue #4886):
+`#<issue> · ` when the project has a source issue, then the PR the session works
+on, else the project's final PR (the checker is
+`#<issue> · PR #<final> — implement-plan <slug> — checker`). A stage renames
+itself when it opens a PR. The checker reuse check and the zombie-checker cleanup
+match any title that contains `implement-plan <slug> — checker`, so older and
+hand-renamed checkers still match. Issue sessions start as
+`#<N> · issue <repo>#<N> — implement`, a fresh `/fix-claude-pr` session adds
+`#<I> · ` when its head is `claude/implement-plan-issue-<I>-…`, and
+`PR #<n> status check-in` titles and Routine names are unchanged. New projects work on a
 project branch `claude/implement-plan-<slug>` with a draft final PR into the
 default branch (the orchestrator's `orchestrator/project-<N>` equivalent):
 phase and fix PRs target it, security (`security-audit.yml` `ref` input) and
@@ -961,8 +971,10 @@ reviews, comments, and conflicts stay a direct §12 request.
   handed to …`), the session is not archived, and it is not the fixer's
   own; otherwise it skips and says so in one line. "Archived" is reported
   only after `archive_session` returned success. `/implement-plan-claude`
-  applies the same check (title `implement-plan <slug> — checker`) before
-  it archives its project checker, and its checker renames and archives no
+  applies the same check before it archives its project checker, except
+  that the title must contain `implement-plan <slug> — checker` (with or
+  without a `#<issue> · PR #<pr> — ` prefix, issue #4886) rather than
+  equal it, and its checker renames and archives no
   existing session (its one `archive_session` call is the cleanup of a
   stage session it just created whose start trigger failed).
 - Delivered or gone (CLAUDE.md §26.C step 5): a `SUCCEEDED` hand-back
@@ -1080,11 +1092,22 @@ reviews, comments, and conflicts stay a direct §12 request.
   (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
   every `gh api` write that is not a §23.B routine write to the local
   repository (routine includes dispatching the six workflows allowed as
-  `gh workflow run <file> *`, kept equal by a test), allows reads and
+  `gh workflow run <file> *`, kept equal by a test) and for every call with
+  a file-backed `-F`/`--field` value (`@<file>` or `@-`) or `--input` on any
+  method, endpoint, or repository, GraphQL included, because `gh` reads that
+  file and sends it (issue #4619; `-f` values are literal, so post bodies
+  through the GitHub MCP tools or an inline `-f body=...`). It also prompts
+  for an `-F` word the shell could rewrite into `@<file>` (`$`, a backtick,
+  `~`, or a glob character in it) and for any command that uses ANSI-C
+  quoting (`$'...'`), an unquoted `#` comment, or brace expansion, which
+  Bash parses unlike the guard. It allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
   to the allow list or the Auto-mode classifier beside anything else (loops,
-  `python3`, `$VAR`, file redirects). It fails closed (asks) on an unreadable payload or an
+  `python3`, `$VAR`, file redirects). A call that passes one of jq's own
+  command-line options to `--jq` (`--arg`, `-r`, `-c`; `gh api` has none) is
+  denied with a reason that says how to fix it, so the session corrects the
+  command instead of waiting at a prompt (#4891). It fails closed (asks) on an unreadable payload or an
   internal error; `tests/test_gh_api_write_guard.py` has its own `ci.yml`
   step and `workflow-templates/.claude/hooks/` holds a byte-identical copy.
   Do not re-add `gh api` ask rules: an ask rule prompts even when a hook
@@ -1317,7 +1340,15 @@ committing the corresponding file:
   sourced or executed. Any other changed or deleted path rejects the entire
   replay as an isolation/transfer failure, stopping validation even for
   nonfatal hooks. An explicit `validate.yml` `target_ref` requires exactly one open
-  trusted-author same-repo project PR targeting the default branch; checkout
+  trusted-author same-repo project PR targeting the default branch, a
+  `claude/implement-plan-*` project branch whose own single open trusted
+  same-repo PR targets the default branch (one level of stacking), or `stable`
+  for a `claude/implement-plan-issue-<n>-*` head whose issue `<n>` is a
+  verified workflow-heal issue: `ai:workflow-heal`, authored by an `OWNER` User
+  or `github-actions[bot]`, the `workflow-failure-heal:fp=` marker line,
+  `stable` as its Integration/Target branch line, the label applied only by the
+  author within 120 s of creation (every events page read), and the same
+  author as the target PR (issue #4791); any other base is refused. Checkout
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.
 
@@ -1505,7 +1536,20 @@ ID. The validated block is placed ahead of the review-blocked footer
 (`REISSUE_ORCHESTRATOR_METADATA_CARRIED` / `_ABSENT`), and its spot-fix
 `files_touched` allowlist unions the judge's cited files with the closed PR's
 changed files that still exist at its head (`REISSUE_FILES_TOUCHED_UNION`,
-fail-open on a failed `pulls/<n>/files` listing).
+fail-open on a failed `pulls/<n>/files` listing), then with the new files the
+judge declares in `new_output_paths` (`REISSUE_FILES_TOUCHED_NEW_OUTPUTS`).
+A declared path is kept only when it passes the path validator, is
+printable ASCII with no leading or trailing space (the scope guard trims
+entries and splits lines on Unicode separators), carries no
+glob character or trailing `/`, has no `.git` segment (any depth or
+letter case), does not exist at the
+closed head (a failed lookup there skips it too), and ends in a segment with
+a file extension (`no_extension` otherwise: the scope guard lets a bare entry
+cover everything beneath it, so a new directory-shaped path would exempt a
+new subtree); at most 10 are read,
+and a rejected one is skipped, never a fallback to `redo`. Incident: #4664's
+reissue needed a new changelog fragment and four new fixtures that neither
+source could list (heal #4665).
 Before that block is appended, canonical tracking-issue, integration-branch,
 and local-ID lines are removed from the judge-generated issue prose, so only
 the PR-base-validated block can supply successor-adoption lineage. Incident:
@@ -1703,6 +1747,7 @@ and shipped:
 - `REISSUE_BASELINE_DISCARDED`
 - `REISSUE_MODE`
 - `REISSUE_FILES_TOUCHED_UNION`
+- `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
 - `REISSUE_ORCHESTRATOR_METADATA_CARRIED`
 - `REISSUE_ORCHESTRATOR_METADATA_ABSENT`
 - `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
@@ -1908,6 +1953,7 @@ LOG_PREFIX.name=REISSUE_BASELINE_PRESERVED
 LOG_PREFIX.name=REISSUE_BASELINE_DISCARDED
 LOG_PREFIX.name=REISSUE_MODE
 LOG_PREFIX.name=REISSUE_FILES_TOUCHED_UNION
+LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_CARRIED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_ABSENT
 LOG_PREFIX.name=FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1
@@ -2129,7 +2175,7 @@ depend on it.
 - The review-autofix reviewer pass remains model-diversity-first. The consolidator's seven lenses are this repo's equivalent of Cloudflare's seven specialised review sub-agents; the pipeline does not run one fixed model per lens.
 - Additive Phase M note: `prompts/review-consolidator.txt` now appends an eighth `DOCS COVERAGE (DIATAXIS)` lens after those original seven. The first seven lens names and order stay byte-for-byte stable; the new lens is advisory-only (`SEVERITY: low`, normally `CLASSIFICATION: nice-to-have`), is grounded in reviewer evidence plus touched files for user-visible changes, and names only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates (or `Docs coverage: complete` when already covered).
 - Reviewer prompts now carry explicit anti-rules in both `prompts/review-reviewer-checklist.txt` (`WHAT NOT TO FLAG` under each lens) and the shared `COMMON ANTI-RULES` block rendered by `scripts/review_run_reviewers.sh`.
-- `scripts/review_run_reviewers.sh` also carries an additive, default-off Phase I `lite | standard | full` review-tier resolver. `lite` requires the existing doc-only path set plus `REVIEW_TIER_LITE_MAX_LOC`; `standard` requires one allowed top-level directory (`scripts/`, `prompts/`, `.github/workflows/`, or `tests/`) plus `REVIEW_TIER_STANDARD_MAX_LOC`; `full` is the force-review and fail-open tier. When enabled, `lite` uses one configured reviewer slug, `standard` uses a configured reviewer subset, `full` keeps the full live roster, `AUTOFIX_SKIP_*` fast paths stay authoritative, `[force-review]` / `force-review` still force full review, and `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator.
+- `scripts/review_run_reviewers.sh` also carries the `lite | standard | full` review-tier resolver, on by default (`REVIEW_TIER_RESOLVER_ENABLED=true`). `lite` (1 reviewer) is any diff of at most `REVIEW_TIER_LITE_MAX_LOC` lines that touches no protected path; `standard` (4 reviewers) is any diff of at most `REVIEW_TIER_STANDARD_MAX_LOC` lines in any folder, including small protected diffs; `full` is everything larger plus the force-review and fail-open tier. Protected paths are the deterministic skip gate's list (`PROTECTED_SKIP_SUPPRESSED` in `review_autofix.yml`), checked on both sides of renames; `tests/test_review_autofix_review_pipeline_contract.py` keeps the two lists identical. `standard` runs the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list, by default the four cheapest panel models (`minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna`), so `google/gemini-3.8-flash` and `z-ai/glm-5.2` run only on the full panel. With `REVIEW_TIER_LITE_REVIEWER_SLUG` empty (the default), `lite` draws its reviewer from that standard list (from `REVIEWER_MODELS` when the list is empty or names a slug not on the panel) by the lowest `sha256("<PR number>:<model>")`, so a PR keeps the same reviewer across rounds and reruns; an empty standard list draws four reviewers from `REVIEWER_MODELS` the same way. Set either variable to pin reviewers. `AUTOFIX_SKIP_*` fast paths stay authoritative, `[force-review]` / `force-review` still force full review, a full panel forced by the risk-tier resolver below (`REVIEWER_RISK_TIER_FORCED_FULL`) is kept (`reason=risk_tier_forced_full`), a random pick that returns too few reviewers fails open to the full panel (`reason=random_reviewer_pick_failed`), and `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator.
 - `scripts/review_run_reviewers.sh` can classify a PR into `trivial | lite | full` reviewer tiers from reviewer-visible diff LOC/file counts, with `REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX` forcing `full` on sensitive paths. Default tier fan-out follows the live `REVIEWER_MODELS` order from `.github/workflows/review_autofix.yml`: trivial = first reviewer, lite = first two reviewers, full = the complete configured set.
 - `scripts/review_filter_uninteresting_files.sh` strips low-signal lock/generated/minified paths before reviewer fan-out and emits `REVIEWER_FILTER_SKIP: <path> <reason>` for each skipped file. Default exemptions remain `db/contracts/**`, `**/migrations/**`, and `**/migrate/**`.
 - `.github/workflows/review_autofix.yml` now runs a fail-open local slop-scan preflight (gated by `SLOP_SCAN_ENABLED`, default `true`) on PR-changed `scripts/*.py`, `scripts/*.sh`, and `validation/**/*.sh` Python heredocs. It writes `.ai/slop_scan/findings.json`, feeds that JSON to reviewer and consolidator prompts as advisory untrusted context, and removes the runtime artifact before commit-producing steps so it cannot leak into staged changes.
@@ -2138,7 +2184,8 @@ depend on it.
 - When `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED=true`, `scripts/review_consolidate.sh` feeds that helper JSON into the consolidator prompt as advisory untrusted context. This is the Lens 7 companion to the separate advisory comment path controlled by `AGENTS_MD_MATERIALITY_ENABLED`. Lens 7 (`NAMING / BACKWARD COMPATIBILITY`) may then emit a default-`high` `AGENTS.md materiality` finding when operator-visible structural changes leave root `agents.md` unchanged, but downgrades or omits it when equivalent touched docs already cover the behavior.
 - The deterministic review skip requires a complete paginated `/pulls/{n}/files` list for both small-diff and doc-only candidates, matched against the existing PR-details `changed_files` count. Missing/malformed/empty/partial responses and GitHub's 3,000-file ceiling route to review. Both names of a rename are checked; nested or case-variant agent instructions and automation paths (`.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`) plus root build/dependency/lint config suppress skip independently of `AGENTS_MD_MATERIALITY_ENABLED`. Benign docs and small code changes still qualify when evidence is complete; the head-bound merge check remains in place.
 - `REVIEW_LEDGER_REREVIEW_ENABLED` gates consolidator-side suppression of repeated `accepted-residual` / `won't-fix` findings from the existing review ledger and the review-blocked judge's ledger-fed prior-round decision input. `scripts/review_rb_judge.sh` renders that `=== BEGIN PRIOR ROUND DECISIONS ===` block via `render_review_rb_prior_round_decisions_file`, and `prompts/mode-judge-review-blocked.txt` treats it as advisory history rather than fresh reviewer evidence.
-- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The live-roster mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview`, `minimax/minimax-m3 -> minimax/minimax-m2.5`, `qwen/qwen3.7-plus -> qwen/qwen3.6-plus`, `x-ai/grok-4.20 -> x-ai/grok-4.3`, and `z-ai/glm-5.2 -> z-ai/glm-5.3-flashx`; the three new failback targets for Gemini, Grok, and GLM keep 1M+ token windows because reviewer prompts regularly exceed 250K tokens. It also retains retired-roster / operator-override mappings `moonshotai/kimi-k3 -> moonshotai/kimi-k2.7-code`, `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus`, and `x-ai/grok-4.6 -> x-ai/grok-4.20` (the former `x-ai/grok-4.20 -> x-ai/grok-4.1-fast` entry was dropped because OpenRouter no longer serves that slug). Every live reviewer is mapped; `REVIEWER_FAILBACK_UNMAPPED` still governs any operator-supplied slug without a chain entry.
+- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The live-roster mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `google/gemini-3.8-flash -> google/gemini-3.1-flash-lite`, `minimax/minimax-m3 -> minimax/minimax-m2.5`, `openai/gpt-6-luna -> openai/gpt-5.6-luna`, `qwen/qwen3.7-plus -> qwen/qwen3.6-plus`, and `z-ai/glm-5.2 -> z-ai/glm-5.3-flashx`; the Gemini, GPT, Qwen, and GLM failback targets keep 1M+ token windows because reviewer prompts regularly exceed 250K tokens, while the DeepSeek (`deepseek/deepseek-v3.2`, 128K) and MiniMax (`minimax/minimax-m2.5`, 200K) targets have smaller windows than the largest reviewer prompts. It also retains retired-roster / operator-override mappings `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview`, `moonshotai/kimi-k3 -> moonshotai/kimi-k2.7-code`, `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus`, `x-ai/grok-4.20 -> x-ai/grok-4.3`, and `x-ai/grok-4.6 -> x-ai/grok-4.20` (the former `x-ai/grok-4.20 -> x-ai/grok-4.1-fast` entry was dropped because OpenRouter no longer serves that slug). Every live reviewer is mapped; `REVIEWER_FAILBACK_UNMAPPED` still governs any operator-supplied slug without a chain entry.
+- Reviewer loop guards (`scripts/review_run_reviewers.sh` watchdog, review panel only; the judge, consolidator, consensus summariser, and smoke reviewer-role callers are not capped). Every 10 s poll reads the attempt's OpenCode `--format json` event stream. `REVIEWER_MAX_STEPS` (default `120`): once an attempt starts more than that many turns (`step_start` events), the watchdog kills it (`wd_reason=max_steps`, log line `killed by watchdog ... (turn limit N ...); not retried.`) and the slot fails as a non-retryable failure with no cheaper-reasoning retry and no failback; a fast loop may overshoot by the turns that start within one poll. `REVIEWER_TOOL_REPEAT_LIMIT` (default `10`, minimum `2`): once the last N completed tool calls are identical (same tool and same JSON input, so paged `read` calls with different offsets never match), the watchdog kills the attempt (`wd_reason=tool_repeat`) and it follows the normal retryable path (class `tool_repeat`: cheaper reasoning, then failback). Invalid values fall back to the defaults with a `::warning::`. OpenCode's own agent `steps` setting is not used: in 1.18.23 it only injects a "maximum steps reached" instruction and keeps offering tools, so a looping model continues. Background: `x-ai/grok-4.20` reviewer passes looped on one repeated tool call for 2,205 / 1,468 / 234 turns (runs 35949371968, 36483245451, 36522631293) while real passes peaked at 101 turns; it left the default roster on 2026-09-29.
 - `scripts/cost_audit.py` now parses additive review telemetry fields `cache_hit_rate`, `wall_clock_p50_ms`, `wall_clock_p99_ms`, `break_glass_count`, and `context_budget_warn_count`. `CONTEXT_BUDGET_WARN` is emitted pre-flight from review / consolidator / judge paths when a prompt exceeds the configured per-model context threshold.
 - `scripts/codex_heartbeat.sh` wraps long-running `codex exec` calls in reviewer, consolidator, review-blocked judge, conflict-resolver, and validate/self-heal paths, emitting `CODEX_HEARTBEAT: phase=<phase> elapsed_secs=<n>` during silent periods.
 - `REVIEW_APPROVAL_RUBRIC_ENABLED` lets the review-blocked judge emit logical `review_state` values (`APPROVE`, `APPROVE_WITH_COMMENTS`, `COMMENT`, `REQUEST_CHANGES`) that `scripts/post_review_comment.sh --review-state` maps to outbound PR reviews. With `REVIEW_BREAK_GLASS_ENABLED`, a human comment anchored as `@codex break-glass` downgrades only the outbound `REQUEST_CHANGES` event to comment-only and logs `BREAK_GLASS`, while preserving the judge's written review body.
@@ -2181,11 +2228,14 @@ depend on it.
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | Age past which a still-`queued` review run stops suppressing a sweep dispatch (wedged-run recovery). `in_progress` runs are never discounted; `0` disables the cutoff. |
-| `REVIEW_TIER_RESOLVER_ENABLED` | `false` | Enable the additive Phase I `lite \| standard \| full` review-tier resolver. While `false`, existing reviewer routing is unchanged. |
-| `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for `lite` review-tier resolution. `lite` also requires the existing doc-only path set. |
-| `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.7-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
-| `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for `standard` review-tier resolution. `standard` also requires changes confined to one allowed top-level directory. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
+| `CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS` | `300` | `internal-review.yml` push route only: when a `claude/**` push finds no open PR, re-check every 60s for up to this many seconds and skip the no-PR reviewer run once a PR appears (its `pull_request` run reviews the same commit). `0` restores the single lookup; values outside 0-3600 fall back to `300` with a warning; a failed lookup counts as no PR and the review runs when the window ends. Logs `RESOLVE_CLAUDE_BRANCH_PR_WAIT` / `RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED` (the latter with gh's error text as `error="..."`: one line, at most 200 characters). |
+| `REVIEW_TIER_RESOLVER_ENABLED` | `true` | Size-based `lite \| standard \| full` review tiers (1, 4, or all reviewers). Set to `false` to turn them off: the full panel then runs unless `REVIEWER_RISK_TIER_ENABLED` is also on, whose selection (which can be smaller) then stands. |
+| `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the one-reviewer `lite` tier. Any file type qualifies unless the diff touches a protected path, which goes to `standard`. |
+| `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Empty draws one reviewer from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list (from `REVIEWER_MODELS` when that list is empty or names a slug not on the panel), seeded by the PR number; a set slug pins it. Unknown or unavailable slugs fail open to `full`. |
+| `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the four-reviewer `standard` tier, in any folder. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | The `standard` tier's reviewers and the unpinned `lite` pool: the four cheapest panel models, leaving `google/gemini-3.8-flash` and `z-ai/glm-5.2` to the full panel. An empty value reaching the script (an empty repo variable falls back to this default) draws four reviewers from `REVIEWER_MODELS`, seeded by the PR number. Unknown or unavailable slugs fail open to `full`. |
+| `REVIEWER_MAX_STEPS` | `120` | Hard turn cap per review-panel reviewer attempt, enforced by the `scripts/review_run_reviewers.sh` watchdog from OpenCode `step_start` events. An attempt that starts more turns is killed and the slot fails without a retry or failback. Invalid values fall back to `120` with a warning. |
+| `REVIEWER_TOOL_REPEAT_LIMIT` | `10` | Consecutive identical tool calls (same tool and same input) that end a review-panel reviewer attempt as a retryable `tool_repeat` failure (cheaper reasoning, then failback). Minimum `2`; invalid values fall back to `10` with a warning. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
 | `REVIEWER_RISK_TIER_TRIVIAL_LOC` | `10` | Trivial-tier LOC threshold. |
 | `REVIEWER_RISK_TIER_TRIVIAL_FILES` | `20` | Trivial-tier changed-file threshold. |
@@ -2223,6 +2273,14 @@ depend on it.
   a bounded scope-feedback retry only after the pre-attempt state is restored
   and verified; an unsafe restore fails closed. Consumer repos retain the
   previous path, and the final `check_resolver_diff.sh` commit gate is unchanged.
+  The model itself runs on a private copy of the captured merge index
+  (`GIT_INDEX_FILE=${RUNTIME_DIR}/resolver_model_index`, refreshed before every
+  attempt by `_resolver_model_index_prepare`), so a `git add` of the file it
+  resolved no longer changes the real index that both scope guards require to
+  stay unchanged (#5627). The script stages the accepted resolution itself; a
+  model that bypasses the copy still fails closed. Because OpenCode's snapshot
+  tracking runs git with the inherited environment, the resolver's own OpenCode
+  config sets `snapshot: false`. Both changes apply to the source repo only.
 
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
 - `.github/workflows/review_autofix.yml` stages required and main-primary helpers from the verified reusable-workflow SHA; PR-head copies are review data, not runtime code. `render_prompt.py`, `review_conflict_resolve.sh` and their dependencies ship with that same workflow commit. Embedded PR-diff template syntax is still handled by `render_prompt.sh` with `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` after assembly, while static templates retain strict validation. Optional support missing from that commit skips the feature; required support fails closed. The model catalog comes from the same commit as the reviewer roster, never from a PR branch or a separately resolved main snapshot.

@@ -144,7 +144,8 @@ def test_settings_restart_hands_the_work_to_a_fresh_session_once(commands):
 	assert "post a hold claim" in restart
 	# This command: same stage, fresh session, marked as a restart.
 	assert "[two-step start](#two-step-start)" in restart
-	assert "`implement-plan <slug> — <stage> — settings restart`" in restart
+	# Session titles (issue #4886): every session this command creates leads with the numbers.
+	assert "`<numbers>implement-plan <slug> — <stage> — settings restart`" in restart
 	assert "`Asset-sync restart: <this session's id>`" in restart
 	assert "`Previous stage session:` = this session's id" in restart
 	# /fix-claude-pr: fresh fixer that looks past this session's claim.
