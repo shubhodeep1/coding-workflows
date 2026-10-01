@@ -1157,9 +1157,11 @@ reviews, comments, and conflicts stay a direct §12 request.
     an audited commit (`SECURITY_AUDIT_TARGET … ..<sha>`, validate's
     `HEAD commit:`) equal to the project head that stage found on origin,
     for every match type. A read-result stage runs no sync merge, not even a
-    clean one, so no unaudited commit lands between that check and the
-    verdict; the next stage syncs. They wait for every recorded candidate,
-    count every matching run, and re-dispatch once on a mismatch.
+    clean one (the next stage syncs), and re-reads the project head with
+    `git ls-remote` before it uses a clean verdict: a head that moved since
+    the check (a PR merged into the project branch) counts as a mismatch.
+    They wait for every recorded candidate, count every matching run, and
+    re-dispatch once per cycle on a mismatch.
     A failed pre-dispatch run-list read no longer cancels the dispatch: with
     a returned id the result is exact, and without one it is exit 2 with
     `dispatched: true` and no polling, since every recent run would look new.

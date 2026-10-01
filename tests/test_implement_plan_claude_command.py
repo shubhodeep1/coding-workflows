@@ -443,7 +443,8 @@ def test_step_9_requires_the_project_branch_and_the_pre_sync_head():
 	assert "that `<sha>` must be the pre-sync head step 2 recorded" in step
 	assert "This check applies to every recorded run, a `dispatch_response` match included." in step
 	assert "A run that audited another commit of the project branch never counts (issue #5841" in step
-	assert "This stage runs no step 2 sync, so no commit lands on the project branch between this check and the verdict it allows." in step
+	assert "This stage runs no step 2 sync, so it never moves the project branch itself; a PR that merges into the project branch while the stage runs is caught by the head re-check before a clean pass is used (below)." in step
+	assert "so no commit lands on the project branch between this check and the verdict it allows" not in step
 	assert "A step 2 sync that needed a conflict resolution" not in step
 	# The old first-match rule is gone.
 	assert "check each of them in order" not in step
@@ -480,7 +481,7 @@ def test_dispatch_helper_section_names_the_same_ref_filter_and_commit_check():
 # or every stage would treat a repeated mismatch as the first one.
 def test_steps_9_and_10_carry_the_re_dispatch_marker_into_the_next_stage():
 	step_2 = _step_twin("2. **Pick the mode", "3. **Build the phase checklist")
-	assert "A `… — read result — re-dispatched` stage (step 9) is a read-result stage too." in step_2
+	assert "A `… — read result — re-dispatched` stage (steps 9–10) is a read-result stage too." in step_2
 	step_9 = _step_twin("9. **Security pass", "10. **Runtime validation")
 	assert "never dispatch again from this stage" in step_9
 	assert "the re-dispatching stage names the next stage `security-pass <k>/5 — read result — re-dispatched`, which the checker copies into the `— resume.` block's `Stage:` line" in step_9
@@ -491,5 +492,17 @@ def test_steps_9_and_10_carry_the_re_dispatch_marker_into_the_next_stage():
 	assert "re-dispatch once in this cycle, naming the next stage `validation <k>/3 — read result — re-dispatched`" in step_10
 	assert "a mismatch in a stage whose `Stage:` line ends with `— re-dispatched` is the second one and is `Status: BLOCKED`" in step_10
 	helper = _step_twin("### Dispatch helper", "### Comment helper")
-	assert "Never dispatch again while a candidate could still be this dispatch's run; only a read-result stage that found every candidate completed and none matching re-dispatches, once (step 9)." in helper
+	assert "Never dispatch again while a candidate could still be this dispatch's run; only a read-result stage that found every candidate completed and none matching, or a project head that moved before a clean verdict was used, re-dispatches, once per cycle (steps 9–10)." in helper
 	assert "(never dispatch again)" not in helper
+
+
+# PR #5860 review round 1 (head 630dd6c): the pre-sync head is sampled once,
+# and a PR can merge into the project branch while the read-result stage
+# runs, so a clean verdict is re-checked against the remote head before use.
+def test_clean_verdicts_re_check_the_project_head_before_use():
+	step_9 = _step_twin("9. **Security pass", "10. **Runtime validation")
+	assert "the pass is clean. In project mode, first re-check the project head: run `git ls-remote --heads origin claude/implement-plan-<slug>` again, right before going on." in step_9
+	assert "When it no longer prints the pre-sync head, a PR merged into the project branch after the check, so this verdict does not cover the current code: treat it as a mismatch" in step_9
+	assert "the pass is clean; go to step 10." not in step_9
+	step_10 = _step_twin("10. **Runtime validation", "11. **Completion PR")
+	assert "**`status=pass`** → in project mode, first re-check the project head as in step 9's clean pass: a head that moved since the pre-sync head is a mismatch, handled as in step 9 with the `validation <k>/3 — read result — re-dispatched` name." in step_10
