@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T04:28:33Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A name-shape check cannot tell a new file from a new directory when the consumer gives a bare allowlist entry prefix scope (`files_touched_scope_guard.py` matches `entry` and `entry/**`): any extension rule both drops real files (`Dockerfile`) and admits dotted directories (`conf.d`). Decide the fail-safe direction explicitly and document the residual, or add exact-match syntax to the consumer.",
+  "phase": "implement_plan",
+  "pr_number": 4667,
+  "record_id": "lesson-implement-plan-1a6a7f048dc63ab7051d5851",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4665-reissue-new-output-paths",
+    "file:scripts/review_rb_judge.sh",
+    "file:scripts/files_touched_scope_guard.py"
+  ]
+}
