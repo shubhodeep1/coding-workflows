@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5899
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5899-flag-allowlisted-classifier-denials   Final PR: #5913 draft
-- Status: IN_PROGRESS
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5918: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project branch opened; phase 1 starting (twin-first)
+- Last note: phase PR #5918 opened twin-first; hold claim posted; twin-sync blocker on #5899 (ai:claude-blocked) — awaiting [claude-twin-sync] copy and /reclarify
 
 ## Phases
-1. [ ] Phase 1 — report allowlisted denials and document the sync merge — protected paths: .claude/scripts/permission_prompts.py
+1. [ ] Phase 1 — report allowlisted denials and document the sync merge — PR #5918 open (twin sync pending); review rounds: 0; interventions: 0 — protected paths: .claude/scripts/permission_prompts.py
    - [x] twin `workflow-templates/.claude/scripts/permission_prompts.py`: `allow_rule_for`, `allow_rule` / `permission_modes` on patterns, report key, occurrence-block lines (twin sha256 f1a4aabbeb0c202ebcb3b335800bfaedbc6af818e6039000cbfdc93342b9ec01)
    - [x] `tests/test_permission_prompts.py`: matcher, grouping, body/comment, real-settings tests against the twin (78 passed; `test_template_parity` red until the twin sync)
    - [x] `CLAUDE.md` §23.B routine sync-merge bullet
