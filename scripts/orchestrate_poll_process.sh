@@ -10903,7 +10903,7 @@ comprehensive_forward_merge_pr_verified() {
 # Mirrors scripts/promote_main_cycle.sh: 0 when the path counts as code.
 comprehensive_cycle_is_code_path() {
   case "$1" in
-    CLAUDE.md|*/CLAUDE.md|.claude/*) return 0 ;;
+    CLAUDE.md|*/CLAUDE.md|.claude/*|*/.claude/*) return 0 ;;
   esac
   case "$1" in
     analysis/*|ai-memory/*|docs/*|tests/e2e_smoke_canary.txt|CHANGELOG.md|*.md) return 1 ;;

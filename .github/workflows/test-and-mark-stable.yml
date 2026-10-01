@@ -614,9 +614,8 @@ jobs:
         id: wait-clarify
         env:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
-          # ISSUE_TITLE scopes the run lookup to OUR issue's run (display_title
-          # equals the issue title for issues / issue_comment events). Release
-          # run 36374918973 recorded another issue's Clarify run without it.
+          # ISSUE_TITLE scopes the run-ID capture to OUR Clarify run via
+          # display_title (the issue title for issues / issue_comment runs).
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
         run: |
           set -euo pipefail
@@ -627,11 +626,12 @@ jobs:
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
 
-          # An empty title turns off the lookup's title filter and brings
-          # back the unscoped lookup of run 36374918973; fail like Plan does.
+          # The run-ID capture below matches runs by display_title, so an
+          # empty title is a missing input: fail before polling, as wait-plan
+          # does (PR #5035 review).
           if [ -z "${ISSUE_TITLE}" ]; then
             echo "::error::Missing issue title for Clarify run scoping"
-            echo "status=clarify_failed" >> "$GITHUB_OUTPUT"
+            echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
@@ -639,23 +639,69 @@ jobs:
 
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
-          # API, and pages past the first 100 runs (find_latest_scoped_run_field) in case of high concurrent
-          # workflow run volume on the target repo. Returns the run id on stdout
-          # (empty string if all attempts fail).
+          # API. Returns the run id on stdout (empty string if all attempts fail).
+          # Same rules as wait-plan's latest_scoped_run_field (issue #4723): only
+          # runs whose display_title is OUR issue title count, so a parallel smoke
+          # job's run is never taken, and the lookup walks pages of the created=>
+          # window (at most SCOPED_RUN_LOOKUP_MAX_PAGES, GitHub's 1,000-result
+          # ceiling), stopping at the first page with a match or a short page,
+          # because skipped issue_comment runs can push our run past page 1.
+          # A walk that read every page up to the cap is not retried.
+          SCOPED_RUN_LOOKUP_MAX_PAGES=10
           capture_run_id() {
             local name_re="$1"
             local result=""
             local _attempt
+            local scoped_lookup_page=1
+            local scoped_lookup_json=""
+            local scoped_lookup_count=""
+            local scoped_lookup_capped=0
             for _attempt in 1 2 3 4 5; do
-              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${{ steps.create-issue.outputs.created_after }}" "${name_re}" "${ISSUE_TITLE:-}" "id" || echo "")
-              if [ -n "$result" ] && [ "$result" != "null" ]; then
-                printf '%s' "$result"
-                return 0
+              scoped_lookup_page=1
+              scoped_lookup_capped=0
+              while [ "$scoped_lookup_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
+                scoped_lookup_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${scoped_lookup_page}&created=>${{ steps.create-issue.outputs.created_after }}" || echo "")
+                # gh_api_safe_print prints its ::error:: line to stdout on a failed
+                # read, so shape-check the page before trusting it.
+                if ! printf '%s' "$scoped_lookup_json" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1; then
+                  break
+                fi
+                result=$(printf '%s' "$scoped_lookup_json" \
+                  | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+                if [ -n "$result" ] && [ "$result" != "null" ]; then
+                  printf '%s' "$result"
+                  return 0
+                fi
+                scoped_lookup_count=$(printf '%s' "$scoped_lookup_json" | jq -r '.workflow_runs | length' 2>/dev/null || echo "")
+                if ! [[ "$scoped_lookup_count" =~ ^[0-9]+$ ]] || [ "$scoped_lookup_count" -lt 100 ]; then
+                  break
+                fi
+                if [ "$scoped_lookup_page" -eq "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; then
+                  scoped_lookup_capped=1
+                fi
+                scoped_lookup_page=$((scoped_lookup_page + 1))
+              done
+              if [ "$scoped_lookup_capped" -eq 1 ]; then
+                break
               fi
               sleep 2
             done
             printf ''
             return 0
+          }
+
+          # Success needs the issue-scoped run ID: without it the soft-error
+          # analyser is skipped and deep verification fails the release later
+          # with zero failed steps (issue #4723). Fail here instead.
+          require_scoped_run_id() {
+            local captured_scoped_run_id="$1"
+            local scoped_phase_name="$2"
+            if [[ "$captured_scoped_run_id" =~ ^[0-9]+$ ]]; then
+              return 0
+            fi
+            echo "::error::Issue #${ISSUE_NUMBER} completed ${scoped_phase_name} but no non-skipped ${scoped_phase_name} run titled '${ISSUE_TITLE}' was found in the first ${SCOPED_RUN_LOOKUP_MAX_PAGES} pages of runs — failing at ${scoped_phase_name} capture instead of reporting success without a run ID"
+            echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
+            exit 1
           }
 
           while true; do
@@ -689,6 +735,7 @@ jobs:
             if echo "$LABELS" | grep -qE 'ai:planning|ai:awaiting-approval'; then
               echo "✓ Clarify phase completed — issue moved to planning"
               CLARIFY_RUN_ID=$(capture_run_id "Clarif")
+              require_scoped_run_id "$CLARIFY_RUN_ID" "Clarify"
               echo "run_id=${CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -761,13 +808,83 @@ jobs:
             gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}"
           }
 
-          # Pages past the first 100 runs when needed; see
-          # find_latest_scoped_run_field in
-          # scripts/comprehensive_test_and_release_gh_api.sh.
+          # Page-aware variant of fetch_plan_runs_json. Every issue_comment in
+          # the repo creates a (mostly skipped) run, so by the time Plan labels
+          # the issue our Plan run can sit past the first 100 runs of the
+          # created=> window: run 36374918973 found it at index 96, then lost
+          # it seconds later and reported Plan success with an empty run ID
+          # (issue #4723). Capped at 10 pages, GitHub's 1,000-result ceiling
+          # for this list.
+          PLAN_RUN_LOOKUP_MAX_PAGES=10
+          fetch_plan_runs_page_json() {
+            gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=$1&created=>${{ steps.create-issue.outputs.created_after }}"
+          }
+
+          # Walks pages newest-first and returns the field of the newest
+          # matching run from the first page that holds a match, so the common
+          # case stays one API call. Stops at a short page (end of the window)
+          # or after the optional third argument's page count (default
+          # PLAN_RUN_LOOKUP_MAX_PAGES). Returns 1 when a page cannot be read,
+          # and 2 when every page up to the cap was full and none matched.
           latest_scoped_run_field() {
             local name_re="$1"
             local field="$2"
-            find_latest_scoped_run_field "${TEST_REPO}" "${{ steps.create-issue.outputs.created_after }}" "$name_re" "$ISSUE_TITLE" "$field"
+            local lookup_max_pages="${3:-$PLAN_RUN_LOOKUP_MAX_PAGES}"
+            local runs_json=""
+            local lookup_page=1
+            local page_value=""
+            local page_count=""
+            while [ "$lookup_page" -le "$lookup_max_pages" ]; do
+              runs_json=$(fetch_plan_runs_page_json "$lookup_page" || echo "")
+              [ -n "$runs_json" ] || return 1
+              # gh_api_safe_print echoes its "::error::gh api call failed"
+              # line to stdout, so a failed read arrives here as text, not as
+              # an empty string; without this check it ended the walk as a
+              # short page (PR #4730 conformance audit).
+              printf '%s' "$runs_json" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 || return 1
+              page_value=$(printf '%s' "$runs_json" \
+                | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" --arg field "$field" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .[$field] // empty' 2>/dev/null || echo "")
+              if [ -n "$page_value" ] && [ "$page_value" != "null" ]; then
+                printf '%s' "$page_value"
+                return 0
+              fi
+              page_count=$(printf '%s' "$runs_json" | jq -r '.workflow_runs | length' 2>/dev/null || echo "")
+              if ! [[ "$page_count" =~ ^[0-9]+$ ]] || [ "$page_count" -lt 100 ]; then
+                return 0
+              fi
+              lookup_page=$((lookup_page + 1))
+            done
+            return 2
+          }
+
+          # Both success exits need the issue-scoped Plan run ID: without it
+          # the soft-error analyser is skipped and deep verification fails the
+          # release later with zero failed steps. Fail here instead, where the
+          # cause is visible.
+          require_plan_run_id() {
+            local captured_plan_run_id="$1"
+            local plan_label="$2"
+            if [[ "$captured_plan_run_id" =~ ^[0-9]+$ ]]; then
+              return 0
+            fi
+            echo "::error::Issue #${ISSUE_NUMBER} reached ${plan_label} but no non-skipped Plan run titled '${ISSUE_TITLE}' was found in the first ${PLAN_RUN_LOOKUP_MAX_PAGES} pages of runs — failing at Plan capture instead of reporting success without a run ID"
+            echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
+
+          # The "unable to confirm concurrent Plan runs" retries `continue`
+          # before the loop's inactivity check, so they apply the limit
+          # themselves: a runs page that stays unreadable fails the step as a
+          # stall after PLAN_PHASE_TIMEOUT minutes instead of polling until the
+          # job's timeout-minutes (PR #4730 review). Rate limits already back
+          # off inside gh_api_safe.
+          fail_plan_confirm_retry_if_idle() {
+            local plan_confirm_idle=$(( $(date +%s) - LAST_ACTIVITY ))
+            if [ "$plan_confirm_idle" -ge "$INACTIVITY_LIMIT" ]; then
+              echo "::error::Plan phase stalled — no activity for ${PLAN_PHASE_TIMEOUT} minutes while concurrent Plan runs could not be confirmed"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
           }
 
           # Robust workflow run-ID capture — retries on empty results to ride out
@@ -780,12 +897,20 @@ jobs:
           capture_run_id() {
             local name_re="$1"
             local result=""
+            local plan_lookup_rc=0
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(latest_scoped_run_field "$name_re" "id" || echo "")
+              plan_lookup_rc=0
+              result=$(latest_scoped_run_field "$name_re" "id") || plan_lookup_rc=$?
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
                 return 0
+              fi
+              # Every page GitHub serves for this list was full and none held
+              # our run: a retry would repeat the same 10 reads (PR #4730
+              # review), so only a short or unreadable window is retried.
+              if [ "$plan_lookup_rc" -eq 2 ]; then
+                break
               fi
               sleep 2
             done
@@ -818,7 +943,10 @@ jobs:
             # high workflow-run volume; v1.13.5's smoke test broke when our
             # Plan run fell to position 51 in the unfiltered list and was
             # truncated off the per_page=50 response.
-            PLAN_RUN_STATUS=$(latest_scoped_run_field "Plan" "status" || echo "")
+            # One page only: this runs every POLL_INTERVAL and is an activity
+            # signal, so it keeps its single-call cost; the run-ID capture
+            # at the success exits pages further (issue #4723).
+            PLAN_RUN_STATUS=$(latest_scoped_run_field "Plan" "status" 1 || echo "")
             if [ -z "$PLAN_RUN_STATUS" ] || [ "$PLAN_RUN_STATUS" = "null" ]; then
               PLAN_RUN_STATUS="unknown"
             fi
@@ -838,6 +966,7 @@ jobs:
             if echo "$LABELS" | grep -q 'ai:awaiting-approval'; then
               echo "✓ Plan phase completed — awaiting approval"
               PLAN_RUN_ID=$(capture_run_id "Plan")
+              require_plan_run_id "$PLAN_RUN_ID" "ai:awaiting-approval"
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -847,6 +976,7 @@ jobs:
             if echo "$LABELS" | grep -q 'ai:implementing'; then
               echo "✓ Plan phase completed with auto-approval — already implementing"
               PLAN_RUN_ID=$(capture_run_id "Plan")
+              require_plan_run_id "$PLAN_RUN_ID" "ai:implementing"
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=auto_approved" >> "$GITHUB_OUTPUT"
               exit 0
@@ -878,6 +1008,7 @@ jobs:
               PLAN_RUNS_JSON=$(fetch_plan_runs_json || echo "")
               if ! _plan_runs_json_valid "$PLAN_RUNS_JSON"; then
                 echo "  ⏳ Unable to confirm concurrent Plan runs yet — retrying"
+                fail_plan_confirm_retry_if_idle
                 sleep "$POLL_INTERVAL"
                 continue
               fi
@@ -889,6 +1020,39 @@ jobs:
               unset _OTHER_ACTIVE_PLAN_RUNS
               if ! [[ "$OTHER_ACTIVE_PLAN_RUNS" =~ ^[0-9]+$ ]]; then
                 OTHER_ACTIVE_PLAN_RUNS=0
+              fi
+              # Page 1 holds only the newest 100 runs of the window. An older
+              # real Plan run that is still active can sit past it while
+              # skipped issue_comment runs pile up (the issue #4723 shape,
+              # PR #4730 review), so walk later pages of the same query with
+              # the same shape guard and page cap as the run-ID capture,
+              # stopping at the first page with an active run or a short page.
+              if [ "$OTHER_ACTIVE_PLAN_RUNS" -eq 0 ]; then
+                ACTIVE_WALK_PAGE=1
+                ACTIVE_WALK_PAGE_LEN=$(printf '%s' "$PLAN_RUNS_JSON" | jq -r '.workflow_runs | length' 2>/dev/null || echo "0")
+                ACTIVE_WALK_UNCONFIRMED=0
+                while [[ "$ACTIVE_WALK_PAGE_LEN" =~ ^[0-9]+$ ]] && [ "$ACTIVE_WALK_PAGE_LEN" -ge 100 ] \
+                  && [ "$ACTIVE_WALK_PAGE" -lt "$PLAN_RUN_LOOKUP_MAX_PAGES" ]; do
+                  ACTIVE_WALK_PAGE=$((ACTIVE_WALK_PAGE + 1))
+                  ACTIVE_WALK_PAGE_JSON=$(fetch_plan_runs_page_json "$ACTIVE_WALK_PAGE" || echo "")
+                  if ! _plan_runs_json_valid "$ACTIVE_WALK_PAGE_JSON"; then
+                    ACTIVE_WALK_UNCONFIRMED=1
+                    break
+                  fi
+                  ACTIVE_WALK_PAGE_COUNT=$(printf '%s' "$ACTIVE_WALK_PAGE_JSON" \
+                    | jq -r --arg title "${ISSUE_TITLE}" '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.display_title == $title) | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo "0")
+                  if [[ "$ACTIVE_WALK_PAGE_COUNT" =~ ^[0-9]+$ ]] && [ "$ACTIVE_WALK_PAGE_COUNT" -gt 0 ]; then
+                    OTHER_ACTIVE_PLAN_RUNS="$ACTIVE_WALK_PAGE_COUNT"
+                    break
+                  fi
+                  ACTIVE_WALK_PAGE_LEN=$(printf '%s' "$ACTIVE_WALK_PAGE_JSON" | jq -r '.workflow_runs | length' 2>/dev/null || echo "0")
+                done
+                if [ "$ACTIVE_WALK_UNCONFIRMED" -eq 1 ]; then
+                  echo "  ⏳ Unable to confirm concurrent Plan runs on page ${ACTIVE_WALK_PAGE} yet — retrying"
+                  fail_plan_confirm_retry_if_idle
+                  sleep "$POLL_INTERVAL"
+                  continue
+                fi
               fi
               if [ "$OTHER_ACTIVE_PLAN_RUNS" -gt 0 ]; then
                 echo "  ⏳ Found ${OTHER_ACTIVE_PLAN_RUNS} other active Plan run(s) — waiting for the real run to finish"
@@ -945,9 +1109,8 @@ jobs:
         id: wait-implement
         env:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
-          # ISSUE_TITLE scopes the run lookup to OUR issue's run (display_title
-          # equals the issue title for issues / issue_comment events). Release
-          # run 36374918973 recorded another issue's Clarify run without it.
+          # ISSUE_TITLE scopes the run-ID capture to OUR Implement run via
+          # display_title (the issue title for issues / issue_comment runs).
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
         run: |
           set -euo pipefail
@@ -965,11 +1128,12 @@ jobs:
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
 
-          # An empty title turns off the lookup's title filter and brings
-          # back the unscoped lookup of run 36374918973; fail like Plan does.
+          # The run-ID capture below matches runs by display_title, so an
+          # empty title is a missing input: fail before polling, as wait-plan
+          # does (PR #5035 review).
           if [ -z "${ISSUE_TITLE}" ]; then
             echo "::error::Missing issue title for Implement run scoping"
-            echo "status=implement_failed" >> "$GITHUB_OUTPUT"
+            echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
@@ -986,20 +1150,69 @@ jobs:
           # was skipped (plan auto-approved directly to ai:implementing).
           IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"
 
+          # Same rules as wait-plan's latest_scoped_run_field (issue #4723): only
+          # runs whose display_title is OUR issue title count, so a parallel smoke
+          # job's Implement run is never taken, and the lookup walks pages of the
+          # created=> window (at most SCOPED_RUN_LOOKUP_MAX_PAGES, GitHub's
+          # 1,000-result ceiling), stopping at the first page with a match or a
+          # short page. Run 36504041362 found no Implement run ID because ours sat
+          # at index 137 of the window when the PR appeared. A walk that read
+          # every page up to the cap is not retried.
+          SCOPED_RUN_LOOKUP_MAX_PAGES=10
           capture_run_id() {
             local name_re="$1"
             local result=""
             local _attempt
+            local scoped_lookup_page=1
+            local scoped_lookup_json=""
+            local scoped_lookup_count=""
+            local scoped_lookup_capped=0
             for _attempt in 1 2 3 4 5; do
-              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${IMPL_CREATED_AFTER}" "${name_re}" "${ISSUE_TITLE:-}" "id" || echo "")
-              if [ -n "$result" ] && [ "$result" != "null" ]; then
-                printf '%s' "$result"
-                return 0
+              scoped_lookup_page=1
+              scoped_lookup_capped=0
+              while [ "$scoped_lookup_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
+                scoped_lookup_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${scoped_lookup_page}&created=>${IMPL_CREATED_AFTER}" || echo "")
+                # gh_api_safe_print prints its ::error:: line to stdout on a failed
+                # read, so shape-check the page before trusting it.
+                if ! printf '%s' "$scoped_lookup_json" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1; then
+                  break
+                fi
+                result=$(printf '%s' "$scoped_lookup_json" \
+                  | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+                if [ -n "$result" ] && [ "$result" != "null" ]; then
+                  printf '%s' "$result"
+                  return 0
+                fi
+                scoped_lookup_count=$(printf '%s' "$scoped_lookup_json" | jq -r '.workflow_runs | length' 2>/dev/null || echo "")
+                if ! [[ "$scoped_lookup_count" =~ ^[0-9]+$ ]] || [ "$scoped_lookup_count" -lt 100 ]; then
+                  break
+                fi
+                if [ "$scoped_lookup_page" -eq "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; then
+                  scoped_lookup_capped=1
+                fi
+                scoped_lookup_page=$((scoped_lookup_page + 1))
+              done
+              if [ "$scoped_lookup_capped" -eq 1 ]; then
+                break
               fi
               sleep 2
             done
             printf ''
             return 0
+          }
+
+          # Success needs the issue-scoped run ID: without it the soft-error
+          # analyser is skipped and deep verification fails the release later
+          # with zero failed steps (issue #4723). Fail here instead.
+          require_scoped_run_id() {
+            local captured_scoped_run_id="$1"
+            local scoped_phase_name="$2"
+            if [[ "$captured_scoped_run_id" =~ ^[0-9]+$ ]]; then
+              return 0
+            fi
+            echo "::error::Issue #${ISSUE_NUMBER} completed ${scoped_phase_name} but no non-skipped ${scoped_phase_name} run titled '${ISSUE_TITLE}' was found in the first ${SCOPED_RUN_LOOKUP_MAX_PAGES} pages of runs — failing at ${scoped_phase_name} capture instead of reporting success without a run ID"
+            echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
+            exit 1
           }
 
           while true; do
@@ -1020,6 +1233,7 @@ jobs:
             if [ -n "$PR_NUMBER" ]; then
               echo "✓ Implementation PR #${PR_NUMBER} created"
               IMPL_RUN_ID=$(capture_run_id "Implement")
+              require_scoped_run_id "$IMPL_RUN_ID" "Implement"
               echo "run_id=${IMPL_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
@@ -4278,6 +4492,36 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_auto_release_stable.py tests/test_orchestrate_poll_promote_cycle.py tests/test_implement_blocked_verdict_terminalizes.py
+
+      # The @stable sync (update_workflows.yml) ships CLAUDE.md and
+      # workflow-templates/.claude/ (hooks, scripts, commands, settings.json)
+      # to every consumer together with the workflow wrappers, so the release
+      # gate runs the same Claude asset suites CI runs on every PR.
+      - name: Claude asset tests (CLAUDE.md, .claude hooks, scripts, commands)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_pr_merge_status_guard.py \
+            tests/test_pr_watch_guard.py \
+            tests/test_gh_api_write_guard.py \
+            tests/test_pr_check_in_reminder.py \
+            tests/test_check_in_status.py \
+            tests/test_stale_routines.py \
+            tests/test_dispatch_workflow.py \
+            tests/test_edit_comment.py \
+            tests/test_permission_prompts.py \
+            tests/test_check_in_status_hand_back.py \
+            tests/test_claude_pr_sweep.py \
+            tests/test_check_in_session_targeting.py \
+            tests/test_implement_plan_claude_command.py \
+            tests/test_session_titles.py \
+            tests/test_claude_issue_route.py \
+            tests/test_implement_issue_claude_command.py \
+            tests/test_security_pass_skip.py \
+            tests/test_claude_md_section_numbers.py \
+            tests/test_audit_plans_command.py \
+            tests/test_ingest_implement_plan_lessons.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
 
       - name: Prompt files integrity
         run: |
