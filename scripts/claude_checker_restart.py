@@ -20,7 +20,9 @@ Two subcommands, each printing one JSON object on stdout:
       untrusted-data envelope around the JSON is fine). Every page after the
       first also takes one `--triggers-cursor`, in the same order: the
       `cursor` that page was read with. The trigger listing is complete only
-      when the last file's `has_more` is false, every earlier file has
+      when every file carries a boolean `has_more` (a bare array or a page
+      without the field counts as incomplete), the last file's `has_more` is
+      false, every earlier file has
       `has_more` and a `next_cursor`, and each cursor is the `next_cursor` of
       the file before it, so a page left out between two others is caught;
       with more than 100 enabled Routines, one page never proves condition 1
@@ -294,10 +296,17 @@ def load_sessions(path: str) -> list[dict]:
 	return sessions
 
 
-def _load_trigger_page(path: str) -> tuple[list[dict], bool, str]:
-	"""Return (routines, has_more, next_cursor) for one saved `list_triggers` page."""
+def _load_trigger_page(path: str) -> tuple[list[dict], bool | None, str]:
+	"""Return (routines, has_more, next_cursor) for one saved `list_triggers` page.
+
+	`has_more` is None when the page carries no boolean `has_more` (a bare
+	array, or an object without the field). The API always sends it, so such
+	a page was cut or rebuilt and cannot show where the listing ends; the
+	callers treat it as incomplete.
+	"""
 	payload = _load_json_value(path)
-	has_more = bool(payload.get("has_more")) if isinstance(payload, dict) else False
+	raw_has_more = payload.get("has_more") if isinstance(payload, dict) else None
+	has_more = raw_has_more if isinstance(raw_has_more, bool) else None
 	next_cursor = payload.get("next_cursor") if isinstance(payload, dict) else ""
 	routines = payload.get("data") if isinstance(payload, dict) else payload
 	if not isinstance(routines, list) or any(not isinstance(item, dict) for item in routines):
@@ -306,9 +315,9 @@ def _load_trigger_page(path: str) -> tuple[list[dict], bool, str]:
 
 
 def load_triggers(path: str) -> tuple[list[dict], bool]:
-	"""Return (routines, has_more)."""
+	"""Return (routines, has_more); `has_more` is true unless the page says false."""
 	routines, has_more, _ = _load_trigger_page(path)
-	return routines, has_more
+	return routines, has_more is not False
 
 
 def load_trigger_pages(paths: list[str], cursors: list[str] | None = None, problems: list[str] | None = None) -> tuple[list[dict], bool]:
@@ -319,6 +328,8 @@ def load_trigger_pages(paths: list[str], cursors: list[str] | None = None, probl
 	joined (a repeated id is kept once). The returned `has_more` is false, a
 	complete listing, only when all of these hold:
 	  - at least one page was given;
+	  - every page carries a boolean `has_more` (a bare array, or a page
+	    without the field, cannot show where the listing ends);
 	  - every page but the last has `has_more` and a `next_cursor`, and the
 	    last page has no `has_more`;
 	  - there is exactly one cursor per page after the first, and each equals
@@ -343,7 +354,10 @@ def load_trigger_pages(paths: list[str], cursors: list[str] | None = None, probl
 	for index, path in enumerate(paths):
 		page, page_has_more, next_cursor = _load_trigger_page(path)
 		last = index == len(paths) - 1
-		if last:
+		if page_has_more is None:
+			complete = False
+			issues.append(f"list_triggers page {index + 1} of {len(paths)} has no has_more field, so it cannot show where the listing ends")
+		elif last:
 			if page_has_more:
 				complete = False
 		elif not page_has_more or not next_cursor:

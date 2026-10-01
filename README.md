@@ -1325,9 +1325,9 @@ logs are read over git. Every failed read or missing input keeps the checker.
 Condition 1 needs the whole list of enabled Routines, so step 1 reads up to 5
 `list_triggers` pages of 100 while a page has `has_more`, and step 3b passes
 each page to `scan`, with the `cursor` each later page was read with
-(`--triggers-cursor`). A listing whose last page still has `has_more`, or
-whose cursors do not join each page to the one before it (a page left out),
-restarts and re-queues nothing.
+(`--triggers-cursor`). A listing whose last page still has `has_more`, that
+holds a page without a `has_more` field, or whose cursors do not join each
+page to the one before it (a page left out), restarts and re-queues nothing.
 
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without

@@ -881,7 +881,9 @@ def test_the_harness_envelope_and_bare_shapes_load(tmp_path):
 		assert [raw["id"] for raw in restart.load_sessions(_write(tmp_path, "s.txt", text))] == [CHECKER]
 	routines, has_more = restart.load_triggers(_write(tmp_path, "t.txt", json.dumps({"data": [], "has_more": True})))
 	assert routines == [] and has_more is True
-	assert restart.load_triggers(_write(tmp_path, "t2.txt", "[]")) == ([], False)
+	# A bare array has no `has_more`, so it cannot show the listing ended (review round 1 on dd77257).
+	assert restart.load_triggers(_write(tmp_path, "t2.txt", "[]")) == ([], True)
+	assert restart.load_triggers(_write(tmp_path, "t3.txt", json.dumps({"data": [], "has_more": False}))) == ([], False)
 	with pytest.raises(ValueError):
 		restart.load_sessions(_write(tmp_path, "bad.txt", "no json here"))
 
@@ -936,6 +938,42 @@ def test_trigger_pages_with_a_page_left_out_between_two_others_are_incomplete(tm
 	# The pickup's 5-page cap (last page still has `has_more`) is incomplete without a problem entry.
 	problems = []
 	assert restart.load_trigger_pages([page1, page2], ["c1"], problems)[1] is True and problems == []
+
+
+def test_trigger_pages_without_a_has_more_field_are_incomplete(tmp_path):
+	# Review round 1 on PR #5755 head dd77257: a page with no `has_more` (a bare array, or an
+	# object without the field) used to default to false and read as a complete listing. The
+	# live API always sends `has_more` (its last page carries `"has_more": false`).
+	bare = _write(tmp_path, "bare.json", json.dumps([_trigger("trig_a", "a", "s1")]))
+	no_field = _write(tmp_path, "no_field.json", json.dumps({"data": [_trigger("trig_a", "a", "s1")]}))
+	not_bool = _write(tmp_path, "not_bool.json", json.dumps({"data": [_trigger("trig_a", "a", "s1")], "has_more": "false"}))
+	for path in (bare, no_field, not_bool):
+		problems = []
+		routines, has_more = restart.load_trigger_pages([path], None, problems)
+		assert [routine["id"] for routine in routines] == ["trig_a"] and has_more is True
+		assert problems == ["list_triggers page 1 of 1 has no has_more field, so it cannot show where the listing ends"]
+	# An earlier page without the field is reported once, not also as a page that ends the listing.
+	last = _write(tmp_path, "last.json", json.dumps({"data": [], "has_more": False}))
+	problems = []
+	assert restart.load_trigger_pages([no_field, last], [""], problems)[1] is True
+	assert problems == ["list_triggers page 1 of 2 has no has_more field, so it cannot show where the listing ends"]
+
+
+def test_cli_scan_keeps_the_checker_when_the_trigger_page_has_no_has_more(tmp_path, monkeypatch, no_api):
+	monkeypatch.setattr(restart, "scan_logs", lambda repo, errors: ({}, []))
+	dead = _checker("session_dead", slug="plan-y")
+	sessions = _write(tmp_path, "s.json", json.dumps({"ccr": {"data": [dead]}}))
+	bare = _write(tmp_path, "t.json", json.dumps([_trigger("trig_other", "other", "session_other")]))
+	state_path = str(tmp_path / "state.json")
+	out = []
+	monkeypatch.setattr("builtins.print", lambda text: out.append(json.loads(text)))
+	argv = ["scan", "--sessions-file", sessions, "--triggers-file", bare, "--repo", REPO, "--self", PICKUP, "--state-out", state_path]
+	assert restart.main(argv, now=NOW) == 0
+	assert out[-1]["triggers_complete"] is False
+	assert "list_triggers page 1 of 1 has no has_more field, so it cannot show where the listing ends" in out[-1]["errors"]
+	lookups = _write(tmp_path, "l.json", json.dumps({"session_dead": {"ccr": dead}}))
+	assert restart.main(["decide", "--state", state_path, "--lookup-file", lookups], now=NOW) == 0
+	assert out[-1]["restart"] == [] and out[-1]["skipped"][0]["reason"] == "triggers_page_incomplete"
 
 
 def test_cli_scan_joins_trigger_pages_so_a_page_two_binding_keeps_the_checker(tmp_path, monkeypatch, no_api):

@@ -287,8 +287,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     scan` reads the newest `list_sessions` page and every `list_triggers`
     page step 1 read (`limit: 100`, up to 5 pages, one `--triggers-file`
     each, plus one `--triggers-cursor` per later page; a listing whose last
-    page still has `has_more`, or whose cursors do not join up, restarts and
-    re-queues nothing). It also reads the open
+    page still has `has_more`, that holds a page without a `has_more` field,
+    or whose cursors do not join up, restarts and re-queues nothing). It also reads the open
     `ai:claude` issues (one REST call per 100) and their progress logs over git (one
     `git ls-remote` and one shallow `git fetch`), then prints at most 8
     `get_session` lookups. Those cover checkers named by pending safety nets
