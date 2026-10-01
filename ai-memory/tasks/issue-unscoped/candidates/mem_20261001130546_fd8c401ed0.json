@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:406-417, 516-525 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The root copy does not skip redirection tokens when locating the shell\u2019s `-c` command line, allowing the quoted command text, including a secret, into the command shape reported for a permission prompt.\n  WHY: The example command can expose `S3cretPass` in the report; severity is disputed because deepseek_deepseek-v4-pro concluded this path still masks credentials and is not a defect.\n- .claude/scripts/permission_prompts.py:187, 268 | severity=critical | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The URL-userinfo patterns fail to redact credentials when an unencoded `?` in the credential is followed by `=` or `&`.\n  WHY: For `curl https://user:pa?ss=x@host/path`, the source reports that the raw URL reaches `record_example()` output; severity is disputed because deepseek_deepseek-v4-pro described the URL `?`/`#` behavior as a documented design decision.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py:406-417, 516-525 | severity=critical | confidence=5\n  PROBLEM: The root copy does not scan past `\\x00`-marked redirection tokens when finding a shell\u2019s `-c` command line, and its shape handler can report the quoted command text, including `S3cretPass`.\n  WHY: For the example command, the raw URL? No: the raw command text is reported and exposes the credential.\n- .claude/scripts/permission_prompts.py:187, 268 | severity=critical | confidence=4\n  PROBLEM: Both URL-userinfo patterns fail to match credentials when an unencoded `?` in the credential is followed by `=` or `&`.\n  WHY: For example, `curl https://user:pa?ss=x@host/path` does not match either pattern, leaving the raw URL in `record_example()` output.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4adc2f82841a93f3132dafbd911f833effc4d3b17d36153834e4a0f2521d0822",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "36861577280",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36861577280",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001130546_fd8c401ed0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "36861577280"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T13:05:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
