@@ -5,7 +5,7 @@ Before this change, `/implement-plan-claude` review and blocked-PR stages and `/
 
 | The numbers that matter | Value |
 | --- | --- |
-| Drift checks per PR head | 2 (default branch, PR base) instead of 1 |
+| Drift checks per PR head | up to 2 (default branch always; PR base when it is not the default branch) instead of 1 |
 | GitHub API calls added | 0 (one more `git fetch` of the PR base, local `git diff`) |
 | Files changed | `implement-plan-claude.md` `### Claude-asset sync` steps 1–4, `fix-claude-pr.md` step 5 |
 

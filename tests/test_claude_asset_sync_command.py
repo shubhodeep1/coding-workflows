@@ -498,6 +498,11 @@ def test_failed_comparison_is_a_stop_not_drift():
 	fixer = _section(_flat(TWIN_DIR / "fix-claude-pr.md"), "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
 	assert "When one of its drift checks cannot compare at all (its step 2: an exit above 1, such as `no merge base`), stop the same way" in fixer
 	assert ".claude/ asset sync could not compare with <ref> — decision needed" in fixer
+	# PR #5280 final-merge review round 1 (head 36bdb20d315a): the fixer's
+	# project-base stop covers a failed comparison too, without listing paths.
+	assert "When its project-base check fails (exit 1: the synced project branch still lacks default-branch guard changes), stop the same way" in fixer
+	assert "When the project-base check cannot compare at all (an exit above 1, such as `no merge base`), it is the failed-comparison stop below, naming the project-base check and its error line instead of paths" in fixer
+	assert fixer.index("When the project-base check cannot compare at all") < fixer.index("When one of its drift checks cannot compare at all")
 
 
 def test_drift_check_without_a_merge_base_exits_above_1(tmp_path: Path):
