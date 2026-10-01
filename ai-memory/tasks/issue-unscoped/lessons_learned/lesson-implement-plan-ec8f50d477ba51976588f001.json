@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T01:46:45Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Poller test fixtures that model a merged PR must set `baseRefName`: the mock `pulls/<n>` payload returns an empty base otherwise, which any target-branch rule rightly rejects.",
+  "phase": "implement_plan",
+  "pr_number": 5646,
+  "record_id": "lesson-implement-plan-ec8f50d477ba51976588f001",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5618-reconcile-target-branch-merges",
+    "file:tests/test_orchestrate_poll_process.py"
+  ]
+}

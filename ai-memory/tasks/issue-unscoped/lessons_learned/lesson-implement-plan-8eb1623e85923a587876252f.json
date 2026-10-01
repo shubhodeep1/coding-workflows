@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T01:46:45Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A finding that names one path that marks an issue merged is rarely the only one: search for every writer of the terminal label and every producer of the wave-status merged signal (`ai:merged` adds, `--pr-states-json` builders), and gate them all with one shared predicate in the same change.",
+  "phase": "implement_plan",
+  "pr_number": 5646,
+  "record_id": "lesson-implement-plan-8eb1623e85923a587876252f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5618-reconcile-target-branch-merges",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}
