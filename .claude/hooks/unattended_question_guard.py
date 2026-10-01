@@ -65,11 +65,13 @@ marker's validated `<owner>/<repo>` and issue number:
   - POST repos/<repo>/issues/<N>/labels with `ai:claude-blocked`.
 Up to CAP_BLOCKER_ATTEMPTS attempts per hook run, backing off
 CAP_BLOCKER_BACKOFF_SECONDS, each call bounded by CAP_BLOCKER_CALL_TIMEOUT
-and the run by CAP_BLOCKER_BUDGET_SECONDS (inside the 30 s wiring timeout).
-A publish that still fails leaves `cap_blocker: pending` in the state file
-and is retried at the start of every later `Stop` in the session, question
-or not. Every publish outcome (`posted`, `exists`, `failed`, `invalid`)
-appends one `cap_blocker_*` line to the cap log; a call skipped because the
+and the run by CAP_BLOCKER_BUDGET_SECONDS (inside the 30 s wiring timeout):
+each call starts only when it can time out inside the budget.
+`cap_blocker: pending` is stored before the first call, so a publish that
+still fails, or a hook killed mid-publish, is retried at the start of every
+later `Stop` in the session, question or not. Every publish outcome
+(`posted`, `exists`, `failed`, `invalid`) appends one `cap_blocker_*` line
+to the cap log; a call skipped because the
 state already says `posted` makes no API call and writes no line. A failed
 publish never blocks the stop and never raises.
 
@@ -736,8 +738,9 @@ def publish_cap_blocker(
 	"already_posted" | "failed" | "invalid", "attempts": n, "error": str | None}.
 	API calls per attempt: one GET per 100 issue comments, at most one
 	comment POST, one label POST; at most CAP_BLOCKER_ATTEMPTS attempts within
-	CAP_BLOCKER_BUDGET_SECONDS. Fail open: never raises; a failure is stored
-	as `cap_blocker: pending` so the next `Stop` retries it.
+	CAP_BLOCKER_BUDGET_SECONDS, each call started only when it fits. Fail
+	open: never raises; `cap_blocker: pending` is stored before the first
+	call and stays on a failure, so the next `Stop` retries it.
 	"""
 	state = read_state(session, directory)
 	if state.get("cap_blocker") == CAP_BLOCKER_POSTED:
@@ -748,6 +751,9 @@ def publish_cap_blocker(
 		_write_state(session, directory, {"cap_blocker": CAP_BLOCKER_INVALID})
 		outcome = {"status": "invalid", "attempts": 0, "error": "marker has no valid <owner>/<repo> and issue"}
 	else:
+		# Stored before the first call, so a hook killed mid-publish (the 30 s
+		# wiring timeout) still leaves a retry for the next Stop.
+		_write_state(session, directory, {"cap_blocker": CAP_BLOCKER_PENDING, "cap_blocker_kind": kind})
 		outcome = _publish_attempts(repo, issue, cap_blocker_body(marker, session, kind, blocks), cap_blocker_marker(session), runner, sleep, clock)
 		if outcome["status"] in ("posted", "exists"):
 			_write_state(session, directory, {"cap_blocker": CAP_BLOCKER_POSTED})
@@ -795,14 +801,24 @@ def _publish_attempts(repo: str, issue: int, body: str, cap_marker: str, runner:
 	found_existing = False
 	error = None
 	attempts = 0
+
+	def call_fits(delay: float = 0.0) -> bool:
+		# An attempt makes up to three calls, so every call (not only every
+		# attempt) must fit: a call starts only when it can time out inside
+		# the budget, which keeps the hook inside the 30 s wiring timeout.
+		return clock() + delay + CAP_BLOCKER_CALL_TIMEOUT <= deadline
+
 	for attempt in range(CAP_BLOCKER_ATTEMPTS):
 		if attempt:
 			delay = CAP_BLOCKER_BACKOFF_SECONDS[min(attempt - 1, len(CAP_BLOCKER_BACKOFF_SECONDS) - 1)]
-			if clock() + delay + CAP_BLOCKER_CALL_TIMEOUT > deadline:
+			if not call_fits(delay):
 				break
 			sleep(delay)
 		attempts += 1
 		if not comment_done:
+			if not call_fits():
+				error = "the time budget ran out before reading the comments"
+				break
 			code, out, err = runner(["--paginate", f"{base}/comments?per_page=100", "--jq", CAP_BLOCKER_COMMENTS_JQ], CAP_BLOCKER_CALL_TIMEOUT)
 			if code != 0:
 				error = f"reading comments failed: {_gh_error(err, code)}"
@@ -810,11 +826,17 @@ def _publish_attempts(repo: str, issue: int, body: str, cap_marker: str, runner:
 			if _cap_blocker_on_issue(out, cap_marker):
 				comment_done = found_existing = True
 			else:
+				if not call_fits():
+					error = "the time budget ran out before posting the comment"
+					break
 				code, _out, err = runner([f"{base}/comments", "-f", f"body={body}"], CAP_BLOCKER_CALL_TIMEOUT)
 				if code != 0:
 					error = f"posting the comment failed: {_gh_error(err, code)}"
 					continue
 				comment_done = True
+		if not call_fits():
+			error = f"the time budget ran out before adding the {CAP_BLOCKER_LABEL} label"
+			break
 		code, _out, err = runner([f"{base}/labels", "-f", f"labels[]={CAP_BLOCKER_LABEL}"], CAP_BLOCKER_CALL_TIMEOUT)
 		if code != 0:
 			error = f"adding the {CAP_BLOCKER_LABEL} label failed: {_gh_error(err, code)}"
