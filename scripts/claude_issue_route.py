@@ -27,6 +27,10 @@ Shell drivers:
     claude-code-remote tools (issue #4525).
   * ``scripts/claude_issue_queue_watchdog.sh`` flags queue issues nobody picked
     up (``queue-stale``).
+  * A session too deep in the session lineage to create its own CLAUDE.md
+    §26 checker asks the pickup for one with a one-shot trigger; the pickup
+    parses that request with ``arm-check-in-request`` (CLAUDE.md §26.B step
+    1c).
 
 Queue binding (issue #4621): the creator of a queue issue says nothing about
 its current title and body, which anyone who can edit the issue can change.
@@ -97,7 +101,15 @@ QUEUE_STALE_LABEL = "ai:claude-issue-queue-stale"
 QUEUE_MARKER = "<!-- ai:claude-issue-queue:v1 -->"
 QUEUE_TITLE_PREFIX = "[claude-issue-queue] "
 QUEUE_TRUSTED_AUTHOR = "github-actions[bot]"
-QUEUE_PICKUP_LIMIT = 10
+QUEUE_PICKUP_LIMIT = 20
+# Per-wake start limit override for the pickup session (issue #4990): unset,
+# empty, or non-integer means QUEUE_PICKUP_LIMIT; an integer is clamped.
+QUEUE_PICKUP_LIMIT_ENV = "CLAUDE_ISSUE_PICKUP_LIMIT"
+QUEUE_PICKUP_LIMIT_MIN = 1
+QUEUE_PICKUP_LIMIT_MAX = 30
+# The pickup's wake kinds (issue #4990): an hourly wake (or the `start` drain)
+# that leaves work behind schedules one catch-up wake; a catch-up never does.
+QUEUE_WAKE_KINDS: tuple[str, ...] = ("hourly", "catch-up")
 QUEUE_STALE_HOURS_DEFAULT = 3.0
 
 # Issue types the clarify job-level `if:` already excludes on issue-open; a
@@ -692,11 +704,13 @@ def queue_pending(
 	trusted_author: str = QUEUE_TRUSTED_AUTHOR,
 	limit: int = QUEUE_PICKUP_LIMIT,
 	bindings: dict[str, Any] | None = None,
+	now: datetime | None = None,
 ) -> dict[str, Any]:
 	"""Turn the open queue issues into the pickup's work list.
 
 	Input: the JSON array from one ``GET repos/<self>/issues?labels=ai:claude-issue-queue&state=open``.
-	Output: ``{"pending": [...], "ignored": [...], "remaining": int, "deferred": int}``. Each
+	Output: ``{"pending": [...], "ignored": [...], "remaining": int, "deferred": int,
+	"limit": int, "oldest_waiting_minutes": int | None}``. Each
 	pending entry is one target issue (duplicates from ``/reclarify`` are
 	grouped, oldest queue issue first) with its fire text and the queue issues
 	to close, and ``item_type`` ``issue``; or one pull request to fix
@@ -705,6 +719,16 @@ def queue_pending(
 	payload, a mismatched title, or an unregistered repo are listed under
 	``ignored`` and never acted on. At most ``limit`` entries are returned;
 	``remaining`` counts the rest for the next wake.
+
+	Order (issue #4990): issue entries whose ``trigger`` is ``reclarify`` (a
+	project already in flight whose blocker was answered) come first, then
+	every other entry; each tier keeps queue order (oldest queue issue first).
+
+	``oldest_waiting_minutes`` (issue #4990) is the whole minutes from the
+	oldest ``created_at`` among the queue issues grouped into a target or
+	deferred by this read to ``now`` (default: the current UTC time), or
+	``None`` when there are none. Ignored items are left out: they stay open
+	for the watchdog and would pin the value.
 
 	``bindings`` (issue #4621) is the ``fetch_queue_bindings`` result. When
 	given, an item is kept only when ``queue_binding_verdict`` finds it bound
@@ -720,6 +744,12 @@ def queue_pending(
 	groups: dict[tuple[Any, ...], dict[str, Any]] = {}
 	ignored: list[dict[str, Any]] = []
 	deferred = 0
+	waiting_since: list[datetime] = []
+
+	def _waiting(item: dict[str, Any]) -> None:
+		created = _parse_timestamp(item.get("created_at"))
+		if created is not None:
+			waiting_since.append(created)
 
 	def _unbound(item_type: str, number: Any, title: Any, body: str, payload: str) -> str:
 		"""``""`` when the binding check passes (or is skipped), else the verdict."""
@@ -752,10 +782,12 @@ def queue_pending(
 			verdict = _unbound("pr_fix", number, issue.get("title"), body, match.group(1))
 			if verdict == QUEUE_BINDING_DEFERRED:
 				deferred += 1
+				_waiting(issue)
 				continue
 			if verdict:
 				ignored.append({"queue_issue": number, "reason": verdict})
 				continue
+			_waiting(issue)
 			key = (pr_fix["repo"].lower(), "pr", pr_fix["pr_number"])
 			queued = groups.get(key, {}).get("queue_issues", [])
 			groups[key] = {
@@ -779,10 +811,12 @@ def queue_pending(
 		verdict = _unbound("issue", number, issue.get("title"), body, match.group(1))
 		if verdict == QUEUE_BINDING_DEFERRED:
 			deferred += 1
+			_waiting(issue)
 			continue
 		if verdict:
 			ignored.append({"queue_issue": number, "reason": verdict})
 			continue
+		_waiting(issue)
 		key = (validated["repo"].lower(), validated["issue_number"])
 		entry = groups.get(key)
 		if entry is None:
@@ -790,13 +824,51 @@ def queue_pending(
 			groups[key] = entry
 		entry["queue_issues"].append({"number": number, "body": body})
 	ordered = list(groups.values())
+	# Resumes first (issue #4990). The sort is stable, so each tier keeps
+	# queue order.
+	ordered.sort(key=lambda entry: 0 if entry.get("item_type") == "issue" and entry.get("trigger") == "reclarify" else 1)
 	limit = max(int(limit), 0)
 	return {
 		"pending": ordered[:limit],
 		"ignored": ignored,
 		"remaining": max(len(ordered) - limit, 0) + deferred,
 		"deferred": deferred,
+		"limit": limit,
+		"oldest_waiting_minutes": _oldest_waiting_minutes(waiting_since, now),
 	}
+
+
+def _oldest_waiting_minutes(waiting_since: list[datetime], now: datetime | None) -> int | None:
+	"""Whole minutes from the oldest timestamp to ``now`` (never negative), or ``None``."""
+	if not waiting_since:
+		return None
+	moment = now or datetime.now(timezone.utc)
+	return max(int((moment - min(waiting_since)).total_seconds() // 60), 0)
+
+
+def resolve_pickup_limit(value: str | None) -> int:
+	"""The pickup's per-wake start limit from ``CLAUDE_ISSUE_PICKUP_LIMIT`` (issue #4990).
+
+	Unset, empty, or non-integer → ``QUEUE_PICKUP_LIMIT``. An integer is
+	clamped to ``QUEUE_PICKUP_LIMIT_MIN``..``QUEUE_PICKUP_LIMIT_MAX``. Fails
+	open: a bad value never stops the queue from draining.
+	"""
+	text = (value or "").strip()
+	try:
+		parsed = int(text)
+	except ValueError:
+		return QUEUE_PICKUP_LIMIT
+	return min(max(parsed, QUEUE_PICKUP_LIMIT_MIN), QUEUE_PICKUP_LIMIT_MAX)
+
+
+def catch_up_due(wake: str, remaining: int) -> bool:
+	"""True when this wake must schedule the pickup's one catch-up wake (issue #4990).
+
+	Only an ``hourly`` wake (the pickup's cron wake, or its ``start`` drain)
+	that leaves work for later schedules one; a ``catch-up`` wake never does,
+	so the pickup gets at most one extra wake per hourly wake.
+	"""
+	return wake == "hourly" and isinstance(remaining, int) and remaining > 0
 
 
 def queue_binding_run_ids(
@@ -809,7 +881,8 @@ def queue_binding_run_ids(
 	"""Producer run ids the pickup must fetch bindings for this wake.
 
 	Only the runs named by the queue issues of the first ``limit`` targets
-	(before the binding check) are returned, deduplicated in queue order, so
+	(before the binding check, in ``queue_pending`` order, so resumes come
+	first) are returned, deduplicated in that order, so
 	the reads per wake stay bounded. The pickup CLI passes
 	``QUEUE_BINDING_SCAN_FACTOR`` times its start limit, so a few items that
 	stay unbound cannot hold back a bound item behind them. Items of a later
@@ -962,6 +1035,51 @@ def queue_stale(
 	return stale
 
 
+# CLAUDE.md §26.B step 1c: the arguments a deep session sends the pickup.
+ARM_CHECK_IN_REQUEST_RE = re.compile(
+	r"^— arm-check-in (?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?P<pr>[1-9][0-9]{0,9}) "
+	r"for (?P<requester>session_[A-Za-z0-9]{10,64})$"
+)
+
+
+def parse_arm_check_in_request(text: str, allowed_repos: list[str]) -> dict[str, Any]:
+	"""Parse one ``— arm-check-in <owner>/<repo>#<n> for <session id>`` line.
+
+	Input: the pickup's ``$ARGUMENTS`` text and the allowed repositories
+	(``load_allowed_repos``). Output: the fixed fields the pickup uses to
+	create the checker and wake the requester; nothing in the output is copied
+	from the request except the validated slug, number, and session id.
+	Raises ValueError on anything else: more than one line, another format,
+	or an unregistered repository. Pure; no API calls.
+	"""
+	lines = [line.strip() for line in (text or "").strip().splitlines() if line.strip()]
+	if len(lines) != 1:
+		raise ValueError("expected exactly one arguments line")
+	match = ARM_CHECK_IN_REQUEST_RE.match(lines[0])
+	if not match:
+		raise ValueError("arguments are not '— arm-check-in <owner>/<repo>#<n> for session_<id>'")
+	repo = match.group("repo")
+	allowed = {slug.lower() for slug in allowed_repos if isinstance(slug, str)}
+	if repo.lower() not in allowed:
+		raise ValueError(f"repo not registered: {repo}")
+	number = int(match.group("pr"))
+	pr_url = f"https://github.com/{repo}/pull/{number}"
+	return {
+		"repo": repo,
+		"pr_number": number,
+		"pr_url": pr_url,
+		"source_url": f"https://github.com/{repo}",
+		"requester": match.group("requester"),
+		"checker_title": f"PR #{number} status check-in",
+		"ready_trigger_name": f"PR #{number} status check-in: checker ready",
+		"ready_prompt": (
+			f"CLAUDE.md §26.B step 1c: the Claude issue pickup created checker <checker id> "
+			f"for PR #{number} ({pr_url}). Continue with CLAUDE.md §26.B steps 3–4 for that "
+			f"checker in this session."
+		),
+	}
+
+
 def _read_json(path: str) -> Any:
 	return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -1030,6 +1148,25 @@ def _cmd_queue_issue(args: argparse.Namespace) -> int:
 def _cmd_pr_fix_queue_issue(args: argparse.Namespace) -> int:
 	try:
 		print(json.dumps(build_pr_fix_queue_issue(args.repo, args.pr, args.head, args.kind, args.claim, args.run_url)))
+	except ValueError as exc:
+		print(str(exc), file=sys.stderr)
+		return 2
+	return 0
+
+
+def _cmd_arm_check_in_request(args: argparse.Namespace) -> int:
+	try:
+		# ValueError covers UnicodeDecodeError and a path with a NUL byte.
+		text = Path(args.arguments_file).read_text(encoding="utf-8")
+	except (OSError, ValueError) as exc:
+		print(f"cannot read arguments file: {exc}", file=sys.stderr)
+		return 2
+	try:
+		# load_allowed_repos already maps an unreadable or malformed registry
+		# to the self repo only, so the only error this block raises today is
+		# parse_arm_check_in_request's ValueError, which ends in exit 2.
+		allowed = load_allowed_repos(Path(args.registry), args.self_repo)
+		print(json.dumps(parse_arm_check_in_request(text, allowed)))
 	except ValueError as exc:
 		print(str(exc), file=sys.stderr)
 		return 2
@@ -1114,7 +1251,7 @@ def fetch_queue_bindings(
 
 	Input: the queue repository and the run ids from ``queue_binding_run_ids``
 	(the runs named by the first ``QUEUE_BINDING_SCAN_FACTOR`` × limit
-	targets, 30 by default). Output:
+	targets, 60 at the default limit of 20). Output:
 	``{"repo": repo, "runs": {"<run id>": record}}`` for ``queue_pending``,
 	where a record is ``{"state": "ok", "item_type", "items"}`` or
 	``{"state": "pending" | "missing" | "untrusted" | "unavailable", "reason"}``.
@@ -1245,13 +1382,22 @@ def _cmd_queue_pending(args: argparse.Namespace) -> int:
 		print("issues JSON is not an array", file=sys.stderr)
 		return 2
 	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
+	# An explicit --limit wins; otherwise CLAUDE_ISSUE_PICKUP_LIMIT, default
+	# QUEUE_PICKUP_LIMIT (issue #4990).
+	limit = args.limit if args.limit is not None else resolve_pickup_limit(os.environ.get(QUEUE_PICKUP_LIMIT_ENV))
+	now = None
+	if args.now:
+		now = _parse_timestamp(args.now)
+		if now is None:
+			print(f"invalid --now: {args.now!r}", file=sys.stderr)
+			return 2
 	# The binding check always runs (issue #4621): fetched for --fetch-repo,
 	# read from --bindings-json otherwise. Without either, no run is known and
 	# every item is deferred, so nothing unverified is ever started. The run
 	# window is wider than the start limit (QUEUE_BINDING_SCAN_FACTOR), so
 	# stuck unbound items cannot defer every bound item behind them.
 	if args.fetch_repo:
-		scan_limit = max(args.limit, 0) * QUEUE_BINDING_SCAN_FACTOR
+		scan_limit = max(limit, 0) * QUEUE_BINDING_SCAN_FACTOR
 		run_ids = queue_binding_run_ids(issues, allowed, queue_repo, args.trusted_author, scan_limit)
 		bindings = fetch_queue_bindings(queue_repo, run_ids, args.default_branch)
 	elif args.bindings_json:
@@ -1261,7 +1407,9 @@ def _cmd_queue_pending(args: argparse.Namespace) -> int:
 			return 2
 	else:
 		bindings = {"repo": queue_repo, "runs": {}}
-	print(json.dumps(queue_pending(issues, allowed, args.trusted_author, args.limit, bindings=bindings)))
+	result = queue_pending(issues, allowed, args.trusted_author, limit, bindings=bindings, now=now)
+	result["catch_up_due"] = catch_up_due(args.wake, result["remaining"])
+	print(json.dumps(result))
 	return 0
 
 
@@ -1351,9 +1499,11 @@ def main(argv: list[str] | None = None) -> int:
 	p_pending.add_argument("--registry", required=True)
 	p_pending.add_argument("--self-repo", default=DEFAULT_UPSTREAM_REPO)
 	p_pending.add_argument("--trusted-author", default=QUEUE_TRUSTED_AUTHOR)
-	p_pending.add_argument("--limit", type=int, default=QUEUE_PICKUP_LIMIT)
+	p_pending.add_argument("--limit", type=int, default=None, help=f"targets to start this wake (default: {QUEUE_PICKUP_LIMIT_ENV}, else {QUEUE_PICKUP_LIMIT})")
 	p_pending.add_argument("--bindings-json", default="", help="binding records (fetch_queue_bindings output) for --issues-json mode")
 	p_pending.add_argument("--default-branch", default="", help="skip the default-branch read of --fetch-repo")
+	p_pending.add_argument("--wake", choices=QUEUE_WAKE_KINDS, default="hourly", help="the pickup wake reading the queue; decides catch_up_due")
+	p_pending.add_argument("--now", default="", help="reference time for oldest_waiting_minutes (default: now)")
 	p_pending.set_defaults(func=_cmd_queue_pending)
 
 	p_bind = sub.add_parser("add-queue-binding", help="record a queue issue in this run's binding file (issue #4621)")
@@ -1370,6 +1520,12 @@ def main(argv: list[str] | None = None) -> int:
 	p_stale.add_argument("--now", default="")
 	p_stale.add_argument("--trusted-author", default=QUEUE_TRUSTED_AUTHOR)
 	p_stale.set_defaults(func=_cmd_queue_stale)
+
+	p_arm = sub.add_parser("arm-check-in-request", help="parse a pickup — arm-check-in request (CLAUDE.md §26.B step 1c)")
+	p_arm.add_argument("--arguments-file", required=True)
+	p_arm.add_argument("--registry", required=True)
+	p_arm.add_argument("--self-repo", default=DEFAULT_UPSTREAM_REPO)
+	p_arm.set_defaults(func=_cmd_arm_check_in_request)
 
 	args = parser.parse_args(argv)
 	return args.func(args)

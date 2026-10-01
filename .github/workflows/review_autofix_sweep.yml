@@ -13,13 +13,28 @@ name: "Internal: AI Review Autofix Sweep"
 #     still gets a verification rerun every cycle.
 #   - Mirrors `_dispatch_review_for_conflicts` in
 #     `scripts/orchestrate_poll_process.sh:7830` so the new sweep behaves
-#     consistently with the orchestrator's existing dispatch path.
+#     consistently with the orchestrator's existing dispatch path, except for
+#     the ref (below).
+#
+# Dispatch ref (security, issue #4618):
+#   - The sweep always dispatches from the default branch and passes only a
+#     validated PR number as data. Dispatching `--ref <PR head branch>` ran the
+#     unmerged branch's copy of internal-review.yml with `secrets: inherit`
+#     and write permissions, so anyone who could push a same-repo branch could
+#     have the scheduled sweep run workflow code no review had approved.
+#     review_autofix.yml checks out the PR head from the PR's metadata either
+#     way, and both concurrency groups are keyed by PR number, not by ref.
+#   - Because a default-branch run's head_branch no longer names the PR,
+#     internal-review.yml names every dispatched run
+#     `Internal: AI Review & Autofix [pr:<N>]`, and the snapshot below keys
+#     those runs by `pr:<N>` (see dedupe_key) instead of by head branch.
 #
 # Concurrency safety:
 #   - Per-PR preflight reuses the `_has_active_autofix_run` pattern
 #     (orchestrate_poll_process.sh:7792-7814): if any in_progress, queued, or
 #     pending run already exists on `internal-review.yml` / `review_autofix.yml`
-#     for the PR's head ref, skip the dispatch. In-progress and pending runs
+#     for the PR's head ref, or a dispatched run is named for the PR, skip the
+#     dispatch. In-progress and pending runs
 #     are never age-discounted; only queued runs may expire. This collapses the
 #     dispatch-vs-synchronize parallel-write window from "indefinite" to
 #     "GitHub API visibility delay" (~few seconds).
@@ -105,7 +120,6 @@ jobs:
             | jq -s '(add // []) | map(select(.draft == false) | {
               number,
               head_ref: .head.ref,
-              head_repo: (.head.repo.full_name // ""),
               title: (.title // ""),
               body: (.body // "")
             })')"
@@ -180,6 +194,23 @@ jobs:
                     and (.status // "") == "queued"
                     and (created_epoch != null)
                     and (created_epoch <= $cutoff);
+                  # A dispatched run is keyed by the PR its run name carries
+                  # (internal-review.yml run-name, issue #4618): the sweep
+                  # dispatches from the default branch, so head_branch would
+                  # name the default branch, not the PR. Only
+                  # workflow_dispatch runs qualify, so a PR titled like the
+                  # marker cannot claim another PR key. Git refs cannot
+                  # contain ":", so a "pr:<N>" key never collides with a
+                  # branch key. Everything else stays keyed by head branch.
+                  def dispatch_pr:
+                    if (.event // "") == "workflow_dispatch" then
+                      ((.display_title // "")
+                        | [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string]
+                        | first // "")
+                    else "" end;
+                  def dedupe_key:
+                    dispatch_pr as $pr
+                    | if $pr != "" then "pr:\($pr)" else .head_branch end;
                   [
                     .[]
                     | .workflow_runs[]?
@@ -191,12 +222,12 @@ jobs:
                   | map(max_by(if (.status // "") == "in_progress" then 1 else 0 end))
                   | {
                       active: (
-                        reduce (.[] | select(is_stale_queued | not) | .head_branch) as $head_ref ({};
+                        reduce (.[] | select(is_stale_queued | not) | dedupe_key) as $head_ref ({};
                           .[$head_ref] = ((.[$head_ref] // 0) + 1)
                         )
                       ),
                       stale: (
-                        reduce (.[] | select(is_stale_queued) | "\(.head_branch)\t\(.id)\t\(created_epoch)") as $entry ([];
+                        reduce (.[] | select(is_stale_queued) | "\(dedupe_key)\t\(.id)\t\(created_epoch)") as $entry ([];
                           . + [$entry]
                         )
                       )
@@ -233,9 +264,16 @@ jobs:
           for row in "${rows[@]}"; do
             pr_number="$(printf '%s' "${row}" | jq -r '.number')"
             head_ref="$(printf '%s' "${row}" | jq -r '.head_ref')"
-            head_repo="$(printf '%s' "${row}" | jq -r '.head_repo')"
             pr_title="$(printf '%s' "${row}" | jq -r '.title')"
             pr_body="$(printf '%s' "${row}" | jq -r '.body')"
+
+            # The PR number is the only PR data the dispatch carries
+            # (issue #4618), so accept nothing but a positive integer.
+            if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::warning::AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=invalid_pr_number head_ref=${head_ref}"
+              failures=$((failures + 1))
+              continue
+            fi
 
             if [ -n "${HEAD_REF_FILTER}" ] && ! printf '%s' "${head_ref}" | grep -qF "${HEAD_REF_FILTER}"; then
               skipped_filter=$((skipped_filter + 1))
@@ -253,16 +291,19 @@ jobs:
 
             # Preflight (mirrors scripts/orchestrate_poll_process.sh:7792-7814).
             # Skip when a review run is already in_progress, queued, or pending
-            # for this branch on either workflow. In-progress and pending runs
-            # always suppress dispatch; only queued runs can age out.
+            # for this branch on either workflow, or a dispatched run is named
+            # for this PR (the `pr:<N>` key, issue #4618). In-progress and
+            # pending runs always suppress dispatch; only queued runs can age out.
             active=0
             for wf in internal-review.yml review_autofix.yml; do
-              count="${active_review_runs["${wf}:${head_ref}"]:-0}"
-              if [ "${count:-0}" -gt 0 ]; then
-                echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=active_run workflow=${wf} count=${count} head_ref=${head_ref}"
-                active=1
-                break
-              fi
+              for dedupe_ref in "${head_ref}" "pr:${pr_number}"; do
+                count="${active_review_runs["${wf}:${dedupe_ref}"]:-0}"
+                if [ "${count:-0}" -gt 0 ]; then
+                  echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=active_run workflow=${wf} count=${count} head_ref=${head_ref}"
+                  active=1
+                  break 2
+                fi
+              done
             done
             if [ "${active}" -eq 1 ]; then
               skipped_active=$((skipped_active + 1))
@@ -281,23 +322,18 @@ jobs:
             # `ALLOW_WORKFLOW_EDITS` repo variable matches
             # `_dispatch_review_for_conflicts`
             # (orchestrate_poll_process.sh:7862-7868).
-            # Dispatch on the PR's head branch for same-repo PRs so the
-            # resulting run is keyed to that branch. Head-branch keying is
-            # what makes the run visible to the active-run guards (this
-            # sweep's snapshot and the orchestrator poller's
-            # _has_active_autofix_run both look runs up by head branch) —
-            # a default-branch-keyed run is invisible to them and gets
-            # duplicate-dispatched, as in the PR #3895 incident. It also
-            # matches _dispatch_review_for_conflicts, which already
-            # dispatches --ref <head_ref>. Fork PRs keep the default-branch
-            # dispatch: their head ref does not exist in this repo, so
-            # --ref would fail outright.
+            # Always dispatch from the default branch (no --ref), so the run
+            # executes the reviewed internal-review.yml, never a copy an
+            # unmerged branch carries (issue #4618; the same-repo head-ref
+            # dispatch this replaces let any pushable branch run its own
+            # workflow code with the sweep's secrets). The run is still
+            # visible to the active-run guards: internal-review.yml names it
+            # `Internal: AI Review & Autofix [pr:<N>]`, which this sweep's
+            # snapshot and the poller's _has_active_autofix_run match by PR,
+            # so the PR #3895 duplicate-dispatch loop stays closed.
             dispatch_args=(--repo "${REPOSITORY}"
               -f "pr_number=${pr_number}"
               -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS}")
-            if [ "${head_repo}" = "${REPOSITORY}" ] && [ -n "${head_ref}" ]; then
-              dispatch_args+=(--ref "${head_ref}")
-            fi
             if gh workflow run internal-review.yml "${dispatch_args[@]}" >/dev/null 2>&1; then
               echo "AUTOFIX_SWEEP_DISPATCH pr=#${pr_number} head_ref=${head_ref}"
               dispatched=$((dispatched + 1))

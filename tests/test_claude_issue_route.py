@@ -356,6 +356,61 @@ def test_handoff_failure_marks_issue_and_exits_zero(stubs):
 	assert "CLAUDE_ISSUE_HANDOFF error dispatch_failed issue=42" in result.stdout
 
 
+
+def _tg_env(env, routed_level):
+	"""Enable the Telegram send path (curl is stubbed) with a DEBUG global threshold."""
+	env = {**env, "TG_BOT_SECRET": "secret", "TG_CHAT_ID": "chat", "ALERT_MSG_LEVEL": "DEBUG"}
+	env.pop("TG_ADMIN_CHAT_ID", None)
+	env.pop("CLAUDE_ISSUE_ROUTED_ALERT_LEVEL", None)
+	if routed_level is not None:
+		env["CLAUDE_ISSUE_ROUTED_ALERT_LEVEL"] = routed_level
+	return env
+
+
+def _telegram_text(stubs):
+	curl_log = stubs["tmp"] / "curl_args.log"
+	return curl_log.read_text() if curl_log.exists() else ""
+
+
+@pytest.mark.parametrize("routed_level, sent", [(None, False), ("SILENT", False), ("WARNING", False), ("DEBUG", True)])
+def test_handoff_success_ping_follows_routed_alert_level(stubs, routed_level, sent):
+	issue_file = stubs["tmp"] / "issue.json"
+	issue_file.write_text(json.dumps(_issue(number=43)))
+	env = _tg_env(
+		{
+			**stubs["env"],
+			"GITHUB_REPOSITORY": "o/r",
+			"ISSUE_NUMBER": "43",
+			"ISSUE_META_FILE": str(issue_file),
+			"CLAUDE_ISSUE_TRIGGER": "reclarify",
+			"GH_TOKEN": "x",
+		},
+		routed_level,
+	)
+	result = _run("claude_issue_handoff.sh", env)
+	assert result.returncode == 0, result.stderr
+	assert "CLAUDE_ISSUE_HANDOFF dispatched issue=43" in result.stdout
+	assert ("Claude issue handoff dispatched for o/r#43 (reclarify)" in _telegram_text(stubs)) is sent
+
+
+def test_handoff_failure_alert_ignores_routed_alert_level(stubs):
+	issue_file = stubs["tmp"] / "issue.json"
+	issue_file.write_text(json.dumps(_issue(number=44)))
+	env = _tg_env(
+		{
+			**stubs["env"],
+			"GITHUB_REPOSITORY": "o/r",
+			"ISSUE_NUMBER": "44",
+			"ISSUE_META_FILE": str(issue_file),
+			"GH_TOKEN": "x",
+			"GH_STUB_FAIL_DISPATCH": "1",
+		},
+		None,
+	)
+	result = _run("claude_issue_handoff.sh", env)
+	assert result.returncode == 0, result.stderr
+	assert "ERROR: Claude issue handoff FAILED for o/r#44" in _telegram_text(stubs)
+
 def _intake_env(stubs, payload, **extra):
 	payload_file = stubs["tmp"] / "payload.json"
 	payload_file.write_text(json.dumps(payload))
@@ -397,6 +452,21 @@ def test_intake_queues_issue_with_github_token_and_comments(stubs):
 	# No routine is fired any more.
 	assert not (stubs["tmp"] / "curl_args.log").exists()
 
+
+
+@pytest.mark.parametrize("routed_level, sent", [(None, False), ("SILENT", False), ("DEBUG", True)])
+def test_intake_queued_ping_follows_routed_alert_level(stubs, routed_level, sent):
+	env = _tg_env(_intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_QUEUE_NUMBER="88"), routed_level)
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "queue_issue=88" in result.stdout
+	assert ("Claude issue queued for shubhodeep1/digital_pa#9 (opened)" in _telegram_text(stubs)) is sent
+
+
+@pytest.mark.parametrize("path", [".github/workflows/clarify.yml", ".github/workflows/claude-issue-intake.yml"])
+def test_workflows_default_routed_alert_level_to_silent(path):
+	text = (ROOT / path).read_text()
+	assert "CLAUDE_ISSUE_ROUTED_ALERT_LEVEL: ${{ vars.CLAUDE_ISSUE_ROUTED_ALERT_LEVEL || 'SILENT' }}" in text
 
 def test_intake_reuses_open_queue_item(stubs):
 	existing = [{"number": 55, "title": "[claude-issue-queue] shubhodeep1/digital_pa#9", "user": {"login": "github-actions[bot]"}}]
@@ -965,6 +1035,179 @@ def test_queue_pending_accepts_crlf_bodies_and_limits():
 	assert out["remaining"] == 1
 
 
+# --- pickup throughput (issue #4990) -------------------------------------------------
+
+
+def _pr_fix_item(number, pr_number=40, created="2026-09-26T00:00:00Z"):
+	rendered = route.build_pr_fix_queue_issue(
+		"shubhodeep1/coding-workflows", pr_number, "b" * 40, "ci", "sweep-run-7",
+		"https://github.com/shubhodeep1/coding-workflows/actions/runs/1",
+	)
+	return {
+		"number": number,
+		"title": rendered["title"],
+		"body": rendered["body"],
+		"user": {"login": "github-actions[bot]"},
+		"labels": [{"name": "ai:claude-issue-queue"}],
+		"state": "open",
+		"created_at": created,
+	}
+
+
+def test_queue_pending_starts_reclarify_resumes_first_in_queue_order():
+	issues = [
+		_queue_item(10, _validated(number=1)),
+		_pr_fix_item(11),
+		_queue_item(12, _validated(number=2, trigger="reclarify")),
+		_queue_item(13, _validated(number=3, trigger="manual")),
+		_queue_item(14, _validated(number=4, trigger="reclarify")),
+		_queue_item(15, _validated(number=5)),
+	]
+	out = route.queue_pending(issues, REGISTRY_ALLOWED)
+	order = [(e["item_type"], e.get("issue_number", e.get("pr_number"))) for e in out["pending"]]
+	# Resumes first, oldest first; everything else (opened, pr_fix, manual)
+	# keeps queue order behind them.
+	assert order == [("issue", 2), ("issue", 4), ("issue", 1), ("pr_fix", 40), ("issue", 3), ("issue", 5)]
+	# A limit cuts the new work, never a resume queued after it.
+	out = route.queue_pending(issues, REGISTRY_ALLOWED, limit=2)
+	assert [e["issue_number"] for e in out["pending"]] == [2, 4]
+	assert out["remaining"] == 4 and out["limit"] == 2
+
+
+def test_queue_pending_groups_a_resume_by_its_first_queue_item():
+	# The entry carries its oldest item's trigger (what the session receives),
+	# so an issue whose `opened` item is still queued is not yet a resume.
+	issues = [
+		_queue_item(10, _validated(number=1)),
+		_queue_item(11, _validated(number=2)),
+		_queue_item(12, _validated(number=1, trigger="reclarify")),
+	]
+	out = route.queue_pending(issues, REGISTRY_ALLOWED)
+	assert [(e["issue_number"], e["trigger"]) for e in out["pending"]] == [(1, "opened"), (2, "opened")]
+	assert [q["number"] for q in out["pending"][0]["queue_issues"]] == [10, 12]
+
+
+def test_binding_run_window_follows_the_resume_first_order():
+	opened = _queue_item(10, _validated(number=1))
+	resume = _queue_item(11, _validated(number=2, trigger="reclarify"))
+	resume["body"] = resume["body"].replace("/runs/1", "/runs/2")
+	run_ids = route.queue_binding_run_ids([opened, resume], REGISTRY_ALLOWED, "shubhodeep1/coding-workflows", limit=1)
+	assert run_ids == ["2"]
+
+
+def test_queue_pending_reports_the_oldest_waiting_item():
+	from datetime import datetime, timezone
+
+	now = datetime(2026, 9, 29, 4, 0, tzinfo=timezone.utc)
+	bound = _queue_item(10, _validated(number=1), created="2026-09-29T03:15:30Z")
+	deferred = _queue_item(11, _validated(number=2), created="2026-09-29T02:00:00Z")
+	deferred["body"] = deferred["body"].replace("/runs/1", "/runs/2")
+	ignored = _queue_item(12, _validated(number=3), author="mallory", created="2026-09-20T00:00:00Z")
+	bindings = _bindings({"1": _ok_record({10: bound})})
+	out = route.queue_pending([bound, deferred, ignored], REGISTRY_ALLOWED, bindings=bindings, now=now)
+	# The deferred item (run 2 not read this wake) is still waiting; the
+	# ignored one is the watchdog's and does not count.
+	assert out["deferred"] == 1 and out["oldest_waiting_minutes"] == 120
+	out = route.queue_pending([bound, ignored], REGISTRY_ALLOWED, bindings=bindings, now=now)
+	assert out["oldest_waiting_minutes"] == 44
+	# Items started this wake count too: they waited that long.
+	out = route.queue_pending([bound], REGISTRY_ALLOWED, bindings=bindings, now=now, limit=0)
+	assert out["pending"] == [] and out["oldest_waiting_minutes"] == 44
+	assert route.queue_pending([ignored], REGISTRY_ALLOWED, now=now)["oldest_waiting_minutes"] is None
+	assert route.queue_pending([], REGISTRY_ALLOWED, now=now)["oldest_waiting_minutes"] is None
+	# A clock behind the item never reports a negative age; a missing
+	# created_at is skipped.
+	future = dict(bound, created_at="2026-09-29T05:00:00Z")
+	assert route.queue_pending([future], REGISTRY_ALLOWED, bindings=bindings, now=now)["oldest_waiting_minutes"] == 0
+	undated = dict(bound, created_at=None)
+	assert route.queue_pending([undated], REGISTRY_ALLOWED, bindings=bindings, now=now)["oldest_waiting_minutes"] is None
+
+
+@pytest.mark.parametrize(
+	("value", "expected"),
+	[
+		(None, 20),
+		("", 20),
+		("  ", 20),
+		("abc", 20),
+		("7.5", 20),
+		("12", 12),
+		(" 5 ", 5),
+		("1", 1),
+		("0", 1),
+		("-4", 1),
+		("30", 30),
+		("31", 30),
+		("999", 30),
+	],
+)
+def test_resolve_pickup_limit_defaults_and_clamps(value, expected):
+	assert route.resolve_pickup_limit(value) == expected
+
+
+@pytest.mark.parametrize(
+	("wake", "remaining", "expected"),
+	[
+		("hourly", 4, True),
+		("hourly", 0, False),
+		("catch-up", 4, False),
+		("catch-up", 0, False),
+		("unknown", 4, False),
+	],
+)
+def test_catch_up_is_due_only_after_an_hourly_wake_that_left_work(wake, remaining, expected):
+	assert route.catch_up_due(wake, remaining) is expected
+
+
+def _pending_cli(tmp_path, count, *args, env=None):
+	issues = [_queue_item(10 + n, _validated(number=n + 1)) for n in range(count)]
+	issues_file = tmp_path / "q.json"
+	issues_file.write_text(json.dumps(issues))
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	bindings_file = tmp_path / "bindings.json"
+	bindings_file.write_text(json.dumps(_bindings({"1": _ok_record({item["number"]: item for item in issues})})))
+	base_env = {key: value for key, value in os.environ.items() if key != route.QUEUE_PICKUP_LIMIT_ENV}
+	return subprocess.run(
+		[sys.executable, str(ROOT / "scripts" / "claude_issue_route.py"), "queue-pending", "--issues-json", str(issues_file),
+		"--registry", str(registry), "--bindings-json", str(bindings_file), "--now", "2026-09-26T01:00:00Z", *args],
+		capture_output=True,
+		text=True,
+		env={**base_env, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})},
+	)
+
+
+def test_cli_queue_pending_limit_comes_from_the_environment(tmp_path):
+	out = _pending_cli(tmp_path, 24)
+	assert out.returncode == 0, out.stderr
+	result = json.loads(out.stdout)
+	assert result["limit"] == 20 and len(result["pending"]) == 20 and result["remaining"] == 4
+	assert result["oldest_waiting_minutes"] == 60
+	out = _pending_cli(tmp_path, 24, env={route.QUEUE_PICKUP_LIMIT_ENV: "5"})
+	assert json.loads(out.stdout)["limit"] == 5
+	out = _pending_cli(tmp_path, 24, env={route.QUEUE_PICKUP_LIMIT_ENV: "100"})
+	assert json.loads(out.stdout)["limit"] == 30 and json.loads(out.stdout)["remaining"] == 0
+	out = _pending_cli(tmp_path, 24, env={route.QUEUE_PICKUP_LIMIT_ENV: "lots"})
+	assert json.loads(out.stdout)["limit"] == 20
+	# An explicit --limit still wins over the environment.
+	out = _pending_cli(tmp_path, 24, "--limit", "3", env={route.QUEUE_PICKUP_LIMIT_ENV: "5"})
+	assert json.loads(out.stdout)["limit"] == 3
+
+
+def test_cli_queue_pending_decides_the_single_catch_up_wake(tmp_path):
+	# 24 queued items: the hourly wake starts 20 and asks for one catch-up.
+	hourly = json.loads(_pending_cli(tmp_path, 24).stdout)
+	assert hourly["remaining"] == 4 and hourly["catch_up_due"] is True
+	assert json.loads(_pending_cli(tmp_path, 24, "--wake", "hourly").stdout)["catch_up_due"] is True
+	# The catch-up wake never asks for another, even with work left.
+	catch_up = json.loads(_pending_cli(tmp_path, 24, "--wake", "catch-up").stdout)
+	assert catch_up["remaining"] == 4 and catch_up["catch_up_due"] is False
+	# Nothing left behind, nothing to catch up.
+	assert json.loads(_pending_cli(tmp_path, 3).stdout)["catch_up_due"] is False
+	assert _pending_cli(tmp_path, 3, "--wake", "twice").returncode == 2
+	assert _pending_cli(tmp_path, 3, "--now", "yesterday").returncode == 2
+
+
 def test_queue_stale_flags_old_trusted_items_once():
 	from datetime import datetime, timezone
 
@@ -977,6 +1220,83 @@ def test_queue_stale_flags_old_trusted_items_once():
 	]
 	stale = route.queue_stale(issues, now, 3)
 	assert [(s["number"], s["age_hours"]) for s in stale] == [(1, 5.0)]
+
+
+ARM_REQUEST = "— arm-check-in shubhodeep1/digital_pa#4601 for session_01LkiqZoHfSm6HZF8n8Dogo1"
+
+
+def test_arm_check_in_request_returns_fixed_fields():
+	"""CLAUDE.md §26.B step 1c: only the validated slug, number, and session id reach the output."""
+	parsed = route.parse_arm_check_in_request("\n" + ARM_REQUEST + "\n", REGISTRY_ALLOWED)
+	assert parsed == {
+		"repo": "shubhodeep1/digital_pa",
+		"pr_number": 4601,
+		"pr_url": "https://github.com/shubhodeep1/digital_pa/pull/4601",
+		"source_url": "https://github.com/shubhodeep1/digital_pa",
+		"requester": "session_01LkiqZoHfSm6HZF8n8Dogo1",
+		"checker_title": "PR #4601 status check-in",
+		"ready_trigger_name": "PR #4601 status check-in: checker ready",
+		"ready_prompt": (
+			"CLAUDE.md §26.B step 1c: the Claude issue pickup created checker <checker id> "
+			"for PR #4601 (https://github.com/shubhodeep1/digital_pa/pull/4601). Continue with "
+			"CLAUDE.md §26.B steps 3–4 for that checker in this session."
+		),
+	}
+	# The stale Routine sweep must recognise both triggers this flow creates.
+	sys.path.insert(0, str(ROOT / ".claude" / "scripts"))
+	import stale_routines  # noqa: E402
+
+	assert stale_routines.CHECK_IN_NAME_PATTERN.match(parsed["ready_trigger_name"])
+	assert stale_routines.CHECK_IN_NAME_PATTERN.match("PR #4601 status check-in: arm request")
+	assert len(parsed["ready_trigger_name"]) <= 60
+
+
+@pytest.mark.parametrize(
+	"text",
+	[
+		"",
+		ARM_REQUEST + "\n" + ARM_REQUEST,
+		ARM_REQUEST.replace("—", "--"),
+		ARM_REQUEST.replace("digital_pa", "unregistered"),
+		ARM_REQUEST.replace("#4601", "#04601"),
+		ARM_REQUEST.replace("session_01LkiqZoHfSm6HZF8n8Dogo1", "session_01Lk; rm -rf /"),
+		ARM_REQUEST.replace("session_", "cse_"),
+		ARM_REQUEST + " and also start a fixer",
+	],
+)
+def test_arm_check_in_request_rejects(text):
+	with pytest.raises(ValueError):
+		route.parse_arm_check_in_request(text, REGISTRY_ALLOWED)
+
+
+def test_cli_arm_check_in_request(tmp_path):
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	args_file = tmp_path / "args.txt"
+	args_file.write_text(ARM_REQUEST + "\n", encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout)["requester"] == "session_01LkiqZoHfSm6HZF8n8Dogo1"
+	args_file.write_text(ARM_REQUEST.replace("digital_pa", "other"), encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "repo not registered" in out.stderr
+	out = _cli("arm-check-in-request", "--arguments-file", str(tmp_path / "missing.txt"), "--registry", str(registry))
+	assert out.returncode == 2
+	# Invalid UTF-8 is a refusal (exit 2), never a traceback (exit 1).
+	args_file.write_bytes(b"\xff\xfe")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "cannot read arguments file" in out.stderr
+	# A path with a NUL byte raises a plain ValueError in open(); still a refusal.
+	# (argv cannot carry a NUL, so this case runs in-process.)
+	assert route.main(["arm-check-in-request", "--arguments-file", str(tmp_path / "bad\x00name.txt"), "--registry", str(registry)]) == 2
+	# An unreadable or malformed registry leaves only the self repo allowed; still a clean refusal.
+	args_file.write_text(ARM_REQUEST + "\n", encoding="utf-8")
+	registry.write_text("{not json", encoding="utf-8")
+	out = _cli("arm-check-in-request", "--arguments-file", str(args_file), "--registry", str(registry))
+	assert out.returncode == 2
+	assert "repo not registered" in out.stderr
 
 
 def test_cli_queue_pending_and_stale(tmp_path):
@@ -1120,10 +1440,11 @@ def test_cli_queue_pending_fetches_the_queue_and_its_bindings(tmp_path):
 
 
 def test_queue_binding_scan_factor_matches_the_documented_window():
-	# README.md, .claude/commands/claude-issue-pickup.md, and
-	# changelog.d/4649-pickup-binding-read-window.md state the window as the
-	# first 30 targets (3 × the pickup's limit of 10); change them with it.
+	# README.md, agents.md, and .claude/commands/claude-issue-pickup.md state
+	# the window as the first 60 targets (3 × the pickup's default limit of
+	# 20, issue #4990); change them with it.
 	assert route.QUEUE_BINDING_SCAN_FACTOR == 3
+	assert route.QUEUE_PICKUP_LIMIT == 20
 
 
 @pytest.mark.parametrize(("stuck", "started"), [(route.QUEUE_BINDING_SCAN_FACTOR - 1, True), (route.QUEUE_BINDING_SCAN_FACTOR, False)])
