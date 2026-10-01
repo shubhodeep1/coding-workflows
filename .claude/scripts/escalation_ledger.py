@@ -44,6 +44,12 @@ Subcommands:
   allowed --log <path> --stop <id> --fingerprint <fp>
       Parse `## Escalations` and print the choices not yet used for that
       stop and fingerprint, in the order budget, descope, close.
+  grants --log <path> --stop <id> --fingerprint <fp>
+      Print how many extra rounds the judge granted that stop and
+      fingerprint: the number of `budget` and `descope` entries for the
+      pair. A capped stage adds it to its cap before it takes the
+      escalation stop, so a grant raises the cap for that failure only and
+      a different failure with the same stop id gets none.
   record --log <path> --stop <id> --fingerprint <fp> --choice <c> (--why <text> | --why-file <path>) [--evidence <json> | --evidence-file <path>] [--date YYYY-MM-DD]
       Print the `ES-<n>` line to append, with `n` one more than the highest
       id in the log. It never writes a file: the session adds the line to
@@ -271,6 +277,15 @@ def allowed_choices(entries: list[dict], stop: str, fp: str) -> list[str]:
 	return [choice for choice in CHOICES if choice == "close" or choice not in used]
 
 
+def granted_rounds(entries: list[dict], stop: str, fp: str) -> int:
+	"""Extra rounds granted to one failure: its `budget` and `descope` entries."""
+	return sum(
+		1
+		for entry in entries
+		if entry["stop"] == stop and entry["fingerprint"] == fp and entry["choice"] in ("budget", "descope")
+	)
+
+
 def record_line(
 	entries: list[dict], stop: str, fp: str, choice: str, why: str, date: str, evidence: object = None
 ) -> dict:
@@ -354,6 +369,10 @@ def build_parser() -> argparse.ArgumentParser:
 	allowed_cmd.add_argument("--log", required=True)
 	allowed_cmd.add_argument("--stop", required=True)
 	allowed_cmd.add_argument("--fingerprint", required=True)
+	grants_cmd = sub.add_parser("grants", help="print the extra rounds granted to this failure")
+	grants_cmd.add_argument("--log", required=True)
+	grants_cmd.add_argument("--stop", required=True)
+	grants_cmd.add_argument("--fingerprint", required=True)
 	record_cmd = sub.add_parser("record", help="print the ES-<n> line to append to the log")
 	record_cmd.add_argument("--log", required=True)
 	record_cmd.add_argument("--stop", required=True)
@@ -381,6 +400,8 @@ def run(argv: list[str] | None = None, today: dt.date | None = None) -> dict:
 			"allowed": allowed_choices(entries, stop, fp),
 			"used": used_choices(entries, stop, fp),
 		}
+	if args.command == "grants":
+		return {"stop": stop, "fingerprint": fp, "grants": granted_rounds(entries, stop, fp)}
 	date = args.date or (today or dt.datetime.now(dt.timezone.utc).date()).isoformat()
 	return record_line(entries, stop, fp, args.choice, _load_why(args), date, _load_evidence(args, required=False))
 
