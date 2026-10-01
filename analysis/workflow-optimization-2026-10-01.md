@@ -188,3 +188,46 @@ The scanned workflow/script files contain no `TODO`, `FIXME`, or `HACK` markers.
 | Code modularization | ~8–12 proposed, including helpers and contract tests | Large |
 | Expression size reduction | ~4–6 proposed, including staging registries | Medium |
 | Medium/Low fixes | ~5 proposed | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-01)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` authorizes implementation without further review. `NEEDS_VERIFICATION` requires the stated checks first. `RISKY_SKIP` identifies apparent redundancy that must not be auto-implemented because a safety constraint may depend on the separate calls.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — RISKY_SKIP.** **Calls:** `scripts/orchestrate_poll_process.sh:13935-13936` and `scripts/orchestrate_poll_process.sh:21640-21641`. **Count:** two reads per reissue path → one per path; four → two if both paths execute once. **Endpoint:** `GET /repos/{repo}/issues/{issue_number}`. **Evidence:** Each pair separately reads `.title` and `.body` for the same issue, with no intervening issue mutation. **Proposed fix:** In each reissue path, fetch one issue object and extract both fields locally; retain the existing empty-value behavior on lookup failure. These are additional sites, distinct from API-001. **Safety rationale:** Both paths are in `orchestrate_poll_process.sh`, including stall recovery, which requires `RISKY_SKIP` even though each pair targets the same endpoint. **Downstream signal:** Do not auto-implement; manually test partial API failure and issue edits during reissue before changing either path.
+
+- **MERGE-002 — RISKY_SKIP.** **Calls:** `.github/workflows/clarify.yml:587` and `.github/workflows/clarify.yml:589-604`. **Count:** two logical reads when semantic caching is enabled → one on a successful full-history fetch; retain the bounded read as a failure fallback. **Endpoint:** `GET /repos/{repo}/issues/{issue_number}/comments`. **Evidence:** The step fetches the first 50 ascending comments for prompt context, then paginates the same ascending thread with `per_page=100` for cache history. **Proposed fix:** On successful full-history collection, derive the bounded first-50 artifact from that response; if collection fails, perform the legacy bounded fetch and preserve cache bypass. **Safety rationale:** The second call paginates, and the two calls use different page sizes and failure behavior. **Downstream signal:** Do not auto-implement; manually verify ordering, page boundaries, empty threads, and both failure paths against the current artifacts.
+
+- **MERGE-003 — RISKY_SKIP.** **Calls:** `scripts/review_merge_train.sh:257-261` and `scripts/review_merge_train.sh:275-290` (body read at line 283; callers at lines 354-387 and 464-486). **Count:** marker upsert with an existing comment: one paginated listing plus one comment read → one paginated listing on a validated hit. **Endpoints:** `GET /repos/{repo}/issues/{pr}/comments` and `GET /repos/{repo}/issues/comments/{id}`. **Evidence:** `_mt_find_marker_comment_id` filters comment objects down to an ID; `_mt_upsert_comment` then fetches that comment’s body to decide whether to patch. **Proposed fix:** Have the marker lookup return the selected ID and body together, retaining a fresh-read fallback wherever the body is absent or freshness is required. **Safety rationale:** The listing paginates, and the release caller dispatches a workflow before upserting; reusing an earlier body could change race behavior. **Downstream signal:** Do not auto-implement; manually review pagination and concurrent comment edits separately for gate and release callers.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — NEEDS_VERIFICATION.** **Calls:** `.github/workflows/orchestrate_clarify_respond.yml:77-78,93-97` and `scripts/resolve_integration_ref.sh:51-53,72-91`, invoked at `.github/workflows/orchestrate_clarify_respond.yml:172-179`. **Count:** two early issue reads plus up to two resolver reads → two early reads on cache hits, with legacy resolver reads on misses. **Endpoint:** `GET /repos/{repo}/issues/{issue_number}` for the child and, when present, tracking issue. **Evidence:** The metadata gate saves both full payloads to `ISSUE_PAYLOAD_FILE` and `TRACKING_PAYLOAD_FILE`; `resolve_ref` requests their bodies again. The later context step already validates issue numbers before reusing those files at `.github/workflows/orchestrate_clarify_respond.yml:486-512`. **Proposed fix:** Extend `resolve_integration_ref.sh::get_issue_body` to accept the validated payload files, match each payload’s issue number, and fall back to its existing live read on a miss; leave `branch_exists` live. **Safety rationale:** Reuse crosses workflow steps, and static reading cannot prove that an issue body cannot change before ref resolution. **Downstream signal:** Verify both tracking-number parsers select the same issue, test missing/corrupt caches, and establish whether an intervening body edit must alter the resolved ref before implementing.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — Its cited reads are in standalone stall recovery; the additional reissue sites are covered by MERGE-001.
+- API-002: RISKY_SKIP — Post-mutation label refresh in the poller must retain its freshness and fallback guarantees.
+- API-003: NEEDS_VERIFICATION — Search ordering, trusted authorship, and the comment window need parity checks before GraphQL batching.
+- API-004: RISKY_SKIP — The proposed change affects retry and backoff loops, not a removable duplicate read.
+
+### Summary Counts
+
+*Counts cover new findings only; Deep Audit cross-references are excluded.*
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | REUSE-001 |
+| RISKY_SKIP | 3 | MERGE-001, MERGE-002, MERGE-003 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
