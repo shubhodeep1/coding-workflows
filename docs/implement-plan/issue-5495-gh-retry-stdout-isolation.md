@@ -16,7 +16,7 @@
 ## Phases
 1. [ ] Phase 1 — buffer `gh_retry` stdout per attempt so only the successful attempt's output reaches the caller
    - [x] `scripts/gh_helpers.sh` `gh_retry` (`:452-521`; buffer `:461-472`, drop warning `:475-478`): per-attempt stdout buffer, replay on success, drop + byte-count warning on failure, mktemp guard
-   - [x] `tests/test_gh_retry_stdout_isolation.py` [new] (8 tests; 7 of 8 failed before the fix): fake-`gh` cases (rate-limited ×2 then success to a file and to `$(…)`, permanent failure, exhausted retries, first-try success, dropped-bytes warning, temp-file cleanup); fails on the old `gh_retry`
+   - [x] `tests/test_gh_retry_stdout_isolation.py` [new] (16 tests: 8 for `gh_retry`, 7 of which failed before the fix, plus 4 cases for each of the two inline `review_autofix.yml` wrappers added in review round 1): fake-`gh` cases (rate-limited ×2 then success to a file and to `$(…)`, permanent failure, exhausted retries, first-try success, dropped-bytes warning, temp-file cleanup); fails on the old `gh_retry`
    - [x] `.github/workflows/ci.yml`: register the new test in the gh_helpers step
    - [x] `changelog.d/5495-gh-retry-stdout-isolation.md` [new] (`fixed`)
    - [x] `README.md` / `agents.md`: `gh_retry` stdout contract

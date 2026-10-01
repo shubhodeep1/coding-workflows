@@ -31,23 +31,23 @@ The other wrappers in `scripts/gh_helpers.sh` were audited (see AD-1):
 - A failure that never succeeds (permanent, or retries exhausted) writes nothing to stdout and returns 1, as it does today.
 - Return codes, the retry and rate-limit logic (attempt count, backoff, `/rate_limit` wait, Telegram alert, circuit breaker), and the existing stderr lines stay the same.
 - No call-site changes.
+- The two inline `gh_retry()` copies in `.github/workflows/review_autofix.yml` (the "Dispatch standalone validate for orchestrator short-circuit issues" fallback and the deterministic-skip-merge step) buffer stdout the same way (AD-3, changed to B in review round 1).
 
 ## Non-goals
 
-- The inline `gh_retry()` copies in `.github/workflows/review_autofix.yml` ("Dispatch standalone validate for orchestrator short-circuit issues" fallback, and the deterministic-skip-merge step). They have their own retry loop and are not `scripts/gh_helpers.sh` (AD-3).
 - The `GH_PAT` hourly budget that caused the rate limit (a separate §15 question, per the issue).
 - Changing `gh_retry_to_file`, `gh_api_json_to_file`, `_safe_gh_jq`, or `curl_gh_api` (AD-1).
 - Rate-limit detection from stdout: detection keeps reading stderr only.
 
 ## Constraints
 
-- §5 minimal change: only `gh_retry`'s body changes; the other helpers stay as they are.
+- §5 minimal change: only `gh_retry`'s body and the two inline `gh_retry()` copies in `review_autofix.yml` change; the other helpers stay as they are.
 - §6 naming immutability: no identifier is renamed. The new local variables (`stdout_file`, `_gh_retry_stdout_bytes`, `_gh_retry_replay_rc`) are local to `gh_retry` and collide with nothing it uses (checked against the function and the file's globals).
 - §8: the dropped output is reported as a structured warning line (byte count, attempt), not silently lost.
 - §9: tabs, opening braces on a new line; YAML stays 2-space.
 - §15: no new GitHub API calls. The fix issues exactly the calls the old code did.
 - §20: a `changelog.d/` fragment (`fixed`), since workflow and script behaviour changes.
-- §27: no workflow file grows beyond a one-line test registration in `ci.yml` (60,168 bytes).
+- §27: `ci.yml` grows by a one-line test registration (60,284 bytes), and `review_autofix.yml` by the two inline wrappers' buffering (+2,420 bytes, to 457,648), under the 480,000-byte split guard.
 
 ## Approach
 
@@ -65,7 +65,7 @@ Alternatives considered: fixing each caller by switching to `gh_retry_to_file` (
 Single phase. Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: the fix is one function body plus its test, changelog fragment, and doc notes, and none of these is useful merged alone.
 
 1. **Phase 1 — buffer `gh_retry` stdout per attempt.**
-   - Files: `scripts/gh_helpers.sh`, `tests/test_gh_retry_stdout_isolation.py` [new], `.github/workflows/ci.yml`, `changelog.d/5495-gh-retry-stdout-isolation.md` [new], `README.md`, `agents.md`.
+   - Files: `scripts/gh_helpers.sh`, `tests/test_gh_retry_stdout_isolation.py` [new], `.github/workflows/ci.yml`, `.github/workflows/review_autofix.yml` (review round 1, AD-3), `changelog.d/5495-gh-retry-stdout-isolation.md` [new], `README.md`, `agents.md`.
    - Done when: the new test passes and fails against the old `gh_retry`; `tests/test_gh_helpers_parse_reset_header.py`, `tests/test_gh_helpers_list_runs_method.py`, and `tests/test_workflow_gh_retry_fallback_contract.py` still pass; `bash -n scripts/gh_helpers.sh` is clean; `shellcheck` reports nothing new; `yamllint` passes on `ci.yml`.
    - Rollback: revert the phase PR. Callers are unchanged, so a revert restores the old output behaviour exactly.
 
@@ -83,19 +83,21 @@ Single phase. Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: the 
 3. `.github/workflows/ci.yml` — add the new test file to the "Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)" step and its comment.
 4. `changelog.d/5495-gh-retry-stdout-isolation.md` [new] — `fixed` fragment per §20.
 5. `README.md` "GitHub API rate-limit admin alert" section — one paragraph on the `gh_retry` stdout contract. `agents.md` "Operational lessons" — extend the `gh_retry` bullet (§7).
+6. `.github/workflows/review_autofix.yml` (added in review round 1, AD-3) — both inline `gh_retry()` copies buffer each attempt's stdout in a `mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX"` file, print only the successful attempt's, and emit the same `::error::` (mktemp failure) and `::warning::  gh_retry: dropped …` lines as `scripts/gh_helpers.sh`. `tests/test_gh_retry_stdout_isolation.py` extracts each wrapper from the workflow and runs it with a fake `gh` (capture after failures, exhausted retries, first-try success, mktemp failure).
 
 ## Files & Modules
 
 - `scripts/gh_helpers.sh`
 - `tests/test_gh_retry_stdout_isolation.py` [new]
 - `.github/workflows/ci.yml`
+- `.github/workflows/review_autofix.yml`
 - `changelog.d/5495-gh-retry-stdout-isolation.md` [new]
 - `README.md`
 - `agents.md`
 
 ## Tests
 
-- Unit (new): `tests/test_gh_retry_stdout_isolation.py`, run by the `ci.yml` step above. It is shown to fail on the pre-fix `gh_retry` (the capture and file cases get the error bodies) before the fix is applied.
+- Unit (new): `tests/test_gh_retry_stdout_isolation.py` (16 tests: 8 for `gh_retry`, and 4 cases for each of the two inline `review_autofix.yml` wrappers), run by the `ci.yml` step above. It is shown to fail on the pre-fix `gh_retry` (the capture and file cases get the error bodies) before the fix is applied.
 - Regression (existing): `tests/test_gh_helpers_parse_reset_header.py`, `tests/test_gh_helpers_list_runs_method.py`, `tests/test_workflow_gh_retry_fallback_contract.py`, and the pytest files that source `scripts/gh_helpers.sh` through a fake `gh` (`tests/test_review_merge_train.py`, `tests/test_orchestrate_poll_process.py`, and others found by grep).
 - Static: `bash -n`, `shellcheck scripts/gh_helpers.sh` (no new findings), `yamllint .github/workflows/ci.yml`.
 
@@ -114,7 +116,7 @@ Ships to consumer repos on the next `@stable` sync through `scripts/gh_helpers.s
 
 - AD-1 [plan, 2026-09-30] Which wrappers in `scripts/gh_helpers.sh` change? — Picked: A — only `gh_retry`; `gh_retry_to_file`, `gh_api_json_to_file`, `_safe_gh_jq`, and `curl_gh_api` are audited and left unchanged. Alternatives: B — also truncate `gh_retry_to_file`'s output file on final failure. Why: those four already keep failed attempts out of a successful result, and callers print `gh_retry_to_file`'s last error body from the file as a diagnostic (`orchestrate_poll_process.sh:2279`, `:2615`, `:2624`), which B would remove. Applied in: phase 1 PR. Status: pending review
 - AD-2 [plan, 2026-09-30] What happens to a failed attempt's stdout? — Picked: A — drop it, and print one `::warning::` line with its byte count and the attempt number. Alternatives: B — drop it silently; C — copy the escaped body to stderr. Why: keeps a §8 diagnostic without putting response text on stderr, where four `orchestrate_poll_process.sh` callers grep for `not found` / `protected` to pick a branch; gh already prints the error message on stderr. Applied in: phase 1 PR. Status: pending review
-- AD-3 [plan, 2026-09-30] Should the inline `gh_retry()` copies in `.github/workflows/review_autofix.yml`, which have the same leak, be fixed here? — Picked: A — no; record them in the log's `## Notes` and the progress comment as a candidate follow-up issue. Alternatives: B — fix them in this PR. Why: the issue scopes the fix to `scripts/gh_helpers.sh` (§5), and those copies live in a workflow near the §27 size guard. Applied in: no code change. Status: pending review
+- AD-3 [plan, 2026-09-30] Should the inline `gh_retry()` copies in `.github/workflows/review_autofix.yml`, which have the same leak, be fixed here? — Picked: A — no; record them in the log's `## Notes` and the progress comment as a candidate follow-up issue. Alternatives: B — fix them in this PR. Why: the issue scopes the fix to `scripts/gh_helpers.sh` (§5), and those copies live in a workflow near the §27 size guard. Applied in: PR #5509. Status: changed to B (2026-10-01, PR #5509): review round 1 flagged the inline copies as a task gap of #5495, so both now buffer stdout like `gh_retry`
 - AD-4 [plan, 2026-09-30] What if the successful attempt's buffered output cannot be written to the caller (for example, the reader closed the pipe)? — Picked: A — return `cat`'s non-zero status, without re-running the command. Alternatives: B — return 0 anyway. Why: the caller did not get the output, so success would be false; and re-running a command that already succeeded could repeat a write. Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-09-30] What if the stdout temp file cannot be created? — Picked: A — print `::error::`, remove the stderr temp file, and return 1 without running the command. Alternatives: B — run unbuffered (the old behaviour). Why: matches the existing stderr `mktemp` guard in the same function and in `gh_retry_to_file` / `gh_api_json_to_file`; B would silently bring back the corruption. Applied in: phase 1 PR. Status: pending review
 - AD-6 [plan, 2026-09-30] What form should the test take? — Picked: A — a pytest file that drives `bash` with a fake `gh`, run in the existing `ci.yml` gh_helpers step. Alternatives: B — a standalone `tests/*.sh` script. Why: matches `tests/test_gh_helpers_parse_reset_header.py` and the CI step that already runs it. Applied in: phase 1 PR. Status: pending review
@@ -122,7 +124,7 @@ Ships to consumer repos on the next `@stable` sync through `scripts/gh_helpers.s
 ## Notes
 
 - `security_pass_skip.py` → `{"skip": false, "reason": "no skip label"}`, so the security pass runs.
-- Follow-up candidate (AD-3): the inline `gh_retry()` fallbacks in `.github/workflows/review_autofix.yml` still let failed attempts' stdout through to their `$(…)` captures.
+- AD-3 follow-up closed in PR #5509: the two inline `gh_retry()` fallbacks in `.github/workflows/review_autofix.yml` now buffer each attempt's stdout like `gh_retry`, so no follow-up issue is needed.
 
 ## References
 
