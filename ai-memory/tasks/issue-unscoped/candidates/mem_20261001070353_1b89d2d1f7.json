@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_judge.py:214 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_8-flash]\n  PROBLEM: The `fix_description` field is not collapsed to a single line before storage.\n  WHY: Model-provided newlines could disrupt commit formatting or inject unintended structure into the prompt; severity is high based on the source rating MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description finding 3 \u2014 \"the docstring promised a per-run cache that does not exist\" \u2014 fixed by \"Docstring corrected (2fb3613).\"\n  expected_change_site: scripts/review_claude_fixer_judge.py, line 54.\n  confidence=[5]\n  flagged_by: [google_gemini-3_8-flash]\n  EVIDENCE: Line 54 of scripts/review_claude_fixer_judge.py still reads: \"evidence verifier (3 REST reads per run, at most `--max` runs, cached per run)\". The evidence helper's docstring at scripts/review_claude_fixer_evidence.py lines 64-66 was corrected in this PR to state \"Nothing is cached: each `verify` call reads its own run\", but the corresponding caller docstring in `scripts/review_claude_fixer_judge.py` remains misleadingly updated.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_claude_fixer_judge.py:214 | severity=high | confidence=4\n  PROBLEM: The `fix_description` field is stored without being collapsed to a single line, unlike the `justification` field at line 213.\n  WHY: Model-provided content in `fix_description` (which flows into commit messages and prompt context) could contain control characters like newlines, which may disrupt commit formatting or inject unintended structure into the prompt, whereas `justification` is correctly sanitized with `_one_line()`.\n\n- Requirement: PR description finding 3 \u2014 \"the docstring promised a per-run cache that does not exist\" \u2014 fixed by \"Docstring corrected (2fb3613).\"\n  Expected change site: scripts/review_claude_fixer_judge.py, line 54.\n  Evidence of absence: Line 54 of scripts/review_claude_fixer_judge.py still reads: \"evidence verifier (3 REST reads per run, at most `--max` runs, cached per run)\". The evidence helper's docstring at scripts/review_claude_fixer_evidence.py lines 64-66 was corrected in this PR to state \"Nothing is cached: each `verify` call reads its own run\", but the corresponding caller docstring in `scripts/review_claude_fixer_judge.py` remains misleadingly updated.\n  Severity: NIT\n  Issue confidence: 5\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Reviewer openai/gpt-6-luna failed after non-retryable error on attempt 2 (cheaper reasoning medium).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Reviewer z-ai/glm-5.2 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cbdb604b80c5167157097bbdd449c2b94501e377d1d82427615d621914cd6ef9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5893,
+    "run_id": "36824174914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36824174914",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001070353_1b89d2d1f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5893,
+    "run_id": "36824174914"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T07:03:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
