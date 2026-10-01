@@ -3009,7 +3009,8 @@ Two automations take the operator out of that loop by default:
   only after it has been proven end to end, in this order:
   1. a code change on `main` since the `stable` tag (non-code paths do not count: `analysis/`,
      `ai-memory/`, `docs/`, `CHANGELOG.md`, the E2E canary file and every `*.md`, where any
-     `CLAUDE.md` and anything under `.claude/` still count because consumers receive them), and
+     `CLAUDE.md` and anything under a `.claude/` directory, including the
+     `workflow-templates/.claude/` twin, still count because consumers receive them), and
      none of: a cycle already in flight, a previous cycle job still running, the same tip already
      covered by an earlier cycle or by `PROMOTE_CYCLE_MAX_ATTEMPTS` failed ticks, fewer than
      `PROMOTE_CYCLE_MIN_DOCS` analysis docs;
