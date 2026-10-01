@@ -18,7 +18,8 @@ command it works out the effective HTTP method the way `gh` does (`-X` /
 otherwise) and classifies the call:
 
   read     — GET / HEAD to any REST endpoint, or a GraphQL query that is not a
-             mutation. Never prompted by this hook.
+             mutation, with no file-backed field and no `--input`. Never
+             prompted by this hook.
   routine  — a CLAUDE.md §23.B write to the repository of the local checkout
              (or the `{owner}/{repo}` placeholders): create a PR, edit a PR's
              or issue's title/body, add or edit an issue/PR comment, reply to a
@@ -28,15 +29,34 @@ otherwise) and classifies the call:
              Each endpoint carries a field allowlist, so a `state` change
              (closing a PR or issue) is not routine. Never prompted by this
              hook.
-  write    — everything else, and any call the guard cannot read (unknown flag,
+  write    — everything else, including every call with a file-backed
+             `-F`/`--field` value (`@<file>`, or `@-` for stdin: `gh` reads
+             it and sends its contents) or with `--input`, whatever the
+             method, endpoint, or repository (issue #4619; `-f`/`--raw-field`
+             values are sent literally and read no file). A `-F` word the
+             shell could rewrite into one (`$`, a backtick, `~`, or a glob
+             character in it, e.g. `-F body=$'@f'`) counts too, and any call the
+             guard cannot read (unknown flag,
              missing or extra endpoint, a method-override header, or `gh api`
-             that could run hidden: inside a `$(...)` / backtick word, handed
+             that could run hidden: inside a backtick or double-quoted `$(...)`
+             substitution Bash would run (single-quoted text is data), handed
              to an executor such as `bash -c`, `sudo`, `xargs`, `python3`, or
              in a heredoc fed to one). Forces the permission prompt, in every
              permission mode. `gh api` text handed to any other command
              (`git commit -m`, `grep`, `echo`) is data and is ignored.
 
 Decision for the whole Bash call (a hook decides once per tool call):
+  - any call whose `-q` / `--jq` value is one of jq's own command-line
+    options (matches `^--?[A-Za-z]`: `--arg`, `-r`, `--raw-output`, `-c`)
+    → `permissionDecision: deny`, with a reason that says how to fix the
+    command. `gh api` has no such flags, so the call could never work; a
+    deny runs nothing and needs no human (#4891). It wins over ask and
+    allow, and is checked after the unparseable-command and hidden-call
+    asks, which are unchanged;
+  - the command (heredoc bodies aside) uses ANSI-C quoting (`$'...'`), an
+    unquoted `#` comment, or brace expansion (`{a,b}`, `{a..b}`): Bash
+    expands or parses these unlike the tokenizer, so a word could become a
+    hidden flag or command → `permissionDecision: ask` (issue #4619);
   - any `write` → `permissionDecision: ask`;
   - every call is `read` or `routine` and the command contains nothing else
     but safe helpers: items joined by `;` / `&&`, each a `gh api` call
@@ -78,6 +98,7 @@ SETTINGS_MATCHER = "Bash"
 
 DECISION_ASK = "ask"
 DECISION_ALLOW = "allow"
+DECISION_DENY = "deny"
 
 KIND_READ = "read"
 KIND_ROUTINE = "routine"
@@ -136,12 +157,27 @@ _BOOL_FLAGS = frozenset(
 )
 _SHORT_VALUE_FLAGS = frozenset(flag for flag in _VALUE_FLAGS if len(flag) == 2)
 
+# A `-q` / `--jq` value that is one of jq's own command-line options
+# (`--arg`, `-r`, `--raw-output`, `-c`, ...), not a jq program. `gh api` has no
+# such flags, so the call can never work (#4891). A program that starts with
+# `-` but not a letter (`-.size`, `-1`) is valid and does not match.
+_JQ_CLI_OPTION_RE = re.compile(r"^--?[A-Za-z]")
+
 _READ_METHODS = frozenset({"GET", "HEAD"})
 _KNOWN_METHODS = frozenset({"GET", "HEAD", "POST", "PATCH", "PUT", "DELETE"})
 
 # Headers that cannot change what a request does. Anything else (for example
 # `X-HTTP-Method-Override`) makes the call a write.
 _SAFE_HEADER_RE = re.compile(r"^\s*(accept|x-github-api-version)\s*:", re.IGNORECASE)
+
+# Characters that let Bash rewrite an `-F`/`--field` word before `gh` reads it:
+# parameter, command, arithmetic, and ANSI-C expansion (`$`, backtick), tilde,
+# and globs. Any of them can turn a value into `@<file>` that the tokenizer
+# never shows starting with `@` (`-F body=$'@f'`, `-F body=$F`, a glob such as
+# `'body'[=]@f` matching a file named `body=@f`). The tokenizer has already
+# removed the quotes, so a quoted literal matches too; that only prompts, and
+# plain strings belong in `-f` (issue #4619).
+_FIELD_EXPANSION_CHARS_RE = re.compile(r"[$`~*?\[\]]")
 
 _NUM = r"[0-9]+"
 # CLAUDE.md §23.B routine writes: (method, path under repos/<owner>/<repo>/,
@@ -248,6 +284,14 @@ class Unreadable(Exception):
 	"""A `gh api` call whose effect the guard cannot determine."""
 
 
+class MalformedJq(Unreadable):
+	"""A `gh api` call that passes a jq command-line option to `-q`/`--jq`."""
+
+	def __init__(self, value: str):
+		super().__init__(f"`--jq` value `{value}` is a jq command-line option, not a jq program")
+		self.value = value
+
+
 def strip_heredoc_bodies(command: str) -> tuple[str, list[tuple[str, bool, str]]]:
 	"""Split heredoc bodies out of a command.
 
@@ -341,11 +385,119 @@ def gh_api_invocations(segments: list[list[str]]) -> list[list[str]]:
 	return invocations
 
 
-def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool, str]]) -> bool:
+def substitution_bodies(command: str) -> list[str]:
+	"""Return the bodies of the command substitutions Bash would run inside one word.
+
+	Covers backtick substitutions anywhere outside single quotes and `$(...)`
+	inside double quotes; the tokenizer keeps both inside a single token, so
+	their commands never reach a segment of their own. An unquoted `$(...)` is
+	left out because the tokenizer already splits it into its own segments.
+	Single-quoted text is data: Bash expands nothing in it. An unterminated
+	substitution runs to the end of the command, so it still counts.
+	"""
+	bodies: list[str] = []
+	single_quoted = False
+	double_quoted = False
+	index = 0
+	length = len(command)
+	while index < length:
+		character = command[index]
+		if character == "\\" and not single_quoted:
+			index += 2
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+			index += 1
+			continue
+		if single_quoted:
+			index += 1
+			continue
+		if character == '"':
+			double_quoted = not double_quoted
+			index += 1
+			continue
+		if character == "`":
+			end = index + 1
+			while end < length and command[end] != "`":
+				end += 2 if command[end] == "\\" else 1
+			bodies.append(command[index + 1 : end])
+			index = end + 1
+			continue
+		if double_quoted and command.startswith("$(", index):
+			# Bash parses the body as a fresh command, so quotes inside it
+			# are its own: a quoted ")" does not close the substitution.
+			depth = 1
+			end = index + 2
+			inner_single = False
+			inner_double = False
+			while end < length and depth:
+				inner = command[end]
+				if inner == "\\" and not inner_single:
+					end += 2
+					continue
+				if inner == "`" and not inner_single:
+					# A nested backtick substitution is its own command: a
+					# ")" or quote inside it does not touch the outer body.
+					end += 1
+					while end < length and command[end] != "`":
+						end += 2 if command[end] == "\\" else 1
+					end += 1
+					continue
+				if inner == "'" and not inner_double:
+					inner_single = not inner_single
+				elif inner == '"' and not inner_single:
+					inner_double = not inner_double
+				elif not inner_single and not inner_double:
+					if inner == "(":
+						depth += 1
+					elif inner == ")":
+						depth -= 1
+				end += 1
+			bodies.append(command[index + 2 : end - 1 if depth == 0 else length])
+			index = end
+			continue
+		index += 1
+	return bodies
+
+
+def _outside_single_quotes(command: str) -> tuple[str, bool]:
+	"""Split out what Bash reads outside single quotes.
+
+	Returns the command with every single-quoted span removed, and whether an
+	unescaped backtick or `$(` (a substitution Bash would run) appears outside
+	single quotes. An escaped backtick or `\\$(` is text, not a substitution.
+	"""
+	kept: list[str] = []
+	has_substitution = False
+	single_quoted = False
+	double_quoted = False
+	index = 0
+	while index < len(command):
+		character = command[index]
+		if character == "\\" and not single_quoted:
+			kept.append(command[index : index + 2])
+			index += 2
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif character == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		elif not single_quoted and (character == "`" or command.startswith("$(", index)):
+			has_substitution = True
+		if not single_quoted and character != "'":
+			kept.append(character)
+		index += 1
+	return "".join(kept), has_substitution
+
+
+def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool, str]], command: str | None = None) -> bool:
 	"""True when a `gh api` call could run without being a direct invocation.
 
-	Counts as hidden: `gh api` inside a `$(...)` or backtick substitution
-	within one word; `gh api` text passed to an executor command (`bash -c`,
+	Counts as hidden: `gh api` inside a substitution Bash would run within one
+	word (`substitution_bodies(command)`), and, as a backstop, any token
+	holding `$(` or a backtick next to `gh api` when `command` has a real
+	substitution and a `gh api` outside single quotes (without `command`,
+	that token reading always applies); `gh api` text passed to an executor command (`bash -c`,
 	`sudo`, `xargs`, `python3 -c`, ...) or to a command word that is itself an
 	expansion; `gh api` words behind any other prefix; and a heredoc body
 	that mentions `gh api` when it feeds an executor or, with an unquoted
@@ -359,6 +511,17 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 			return True
 		if not quoted and re.search(r"\$\(|`", body):
 			return True
+	if command is not None and any(_RAW_GH_API_RE.search(body) for body in substitution_bodies(command)):
+		return True
+	# Backstop for the body scanner: the older token reading still applies
+	# whenever the command holds a real substitution (an unescaped backtick
+	# or `$(` outside single quotes) and a `gh api` outside single quotes,
+	# where Bash could run it. A scanner miss therefore still asks.
+	if command is None:
+		token_substitution_check = True
+	else:
+		outside_text, has_real_substitution = _outside_single_quotes(command)
+		token_substitution_check = has_real_substitution and bool(_RAW_GH_API_RE.search(outside_text))
 	for tokens in segments:
 		index = _command_word_index(tokens)
 		if index >= len(tokens):
@@ -367,7 +530,8 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 		direct = index + 1 < len(tokens) and _is_gh(command_word) and tokens[index + 1] == "api"
 		executor = os.path.basename(command_word) in _EXECUTOR_COMMANDS or command_word.startswith("$")
 		for position, token in enumerate(tokens):
-			if _RAW_GH_API_RE.search(token) and ("$(" in token or "`" in token or executor):
+			substitution_word = token_substitution_check and ("$(" in token or "`" in token)
+			if _RAW_GH_API_RE.search(token) and (substitution_word or executor):
 				return True
 			if (
 				not direct
@@ -423,6 +587,8 @@ def parse_gh_api_args(args: list[str]) -> dict:
 			parsed["headers"].append(value)
 		elif role == "input":
 			parsed["input"] = value
+		elif role == "jq" and _JQ_CLI_OPTION_RE.match(value):
+			raise MalformedJq(value)
 	if len(parsed["endpoints"]) != 1:
 		raise Unreadable(f"expected one endpoint, found {len(parsed['endpoints'])}")
 	if parsed["method"] is None:
@@ -542,6 +708,88 @@ def _has_unsafe_shell_syntax(command: str) -> bool:
 	return single_quoted or double_quoted or escaped
 
 
+def _brace_expansion_at(command: str, start: int) -> bool:
+	"""True when the unquoted `{` at `start` opens a Bash brace expansion.
+
+	A brace expansion is `{...}` inside one word with an unquoted `,` or `..`
+	at its own depth. Quoted text inside it (whitespace included) stays part of
+	the word, which the regex in `_has_unsafe_shell_syntax` misses:
+	`-F{'q=1','x=@/tmp/a b'}` becomes two `-F` words. Unquoted whitespace or a
+	shell metacharacter ends the word first (`{ cmd; }` is a group).
+	"""
+	depth = 0
+	separator_seen = False
+	single_quoted = False
+	double_quoted = False
+	index = start
+	length = len(command)
+	while index < length:
+		character = command[index]
+		if character == "\\" and not single_quoted:
+			index += 2
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif character == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		elif not single_quoted and not double_quoted:
+			if character in " \t\r\n;&|<>()":
+				return False
+			if character == "{":
+				depth += 1
+			elif character == "}":
+				depth -= 1
+				if depth == 0:
+					return separator_seen
+			elif depth == 1 and (character == "," or command.startswith("..", index)):
+				separator_seen = True
+		index += 1
+	return False
+
+
+def _shell_rewrite_hazard(command: str) -> str:
+	"""Name a construct Bash expands or parses unlike `shell_segments`, or "".
+
+	Each one can hide a flag or a whole command from the guard, so a command
+	with `gh api` text and one of them asks (issue #4619):
+	  - ANSI-C quoting (`$'...'`): Bash reads `\\'` inside it as a quote
+	    character, the tokenizer as the end of the quote;
+	  - an unquoted `#` that starts a word: Bash ignores the rest of the line,
+	    the tokenizer keeps it, so a quote in the comment can swallow the next
+	    line into one harmless-looking token;
+	  - brace expansion (`{a,b}`, `{a..b}`): one word becomes several, so
+	    `{x,-Fbody=@f}` adds a file-backed `-F` flag.
+	The `$'` check ignores quoting on purpose, since quoting is what the
+	tokenizer gets wrong there. Pass the command with heredoc bodies removed.
+	"""
+	if "$'" in command:
+		return "ANSI-C quoting ($'...')"
+	single_quoted = False
+	double_quoted = False
+	escaped = False
+	previous = " "
+	for index, character in enumerate(command):
+		if escaped:
+			escaped = False
+			previous = character
+			continue
+		if character == "\\" and not single_quoted:
+			escaped = True
+			previous = character
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif character == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		elif not single_quoted and not double_quoted:
+			if character == "#" and previous in " \t\r\n;&|()<>":
+				return "a shell comment (#)"
+			if character == "{" and _brace_expansion_at(command, index):
+				return "brace expansion ({a,b} or {a..b})"
+		previous = character
+	return ""
+
+
 def _is_safe_standalone(words: list[str]) -> bool:
 	name, args = words[0], words[1:]
 	if name == "cd":
@@ -610,6 +858,32 @@ def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 	for header in parsed["headers"]:
 		if not _SAFE_HEADER_RE.match(header):
 			return KIND_WRITE, f"{description} with header `{header.split(':', 1)[0].strip()}`"
+	# A file-backed `-F`/`--field` value (`@<file>`, or `@-` for stdin) and
+	# `--input` make `gh` read local data and send it, on every method and
+	# endpoint, GraphQL included (issue #4619). Checked before the GraphQL and
+	# read-method branches so a GET or a GraphQL variable cannot carry a file.
+	# `-f`/`--raw-field` values are sent literally, so `@` there reads nothing.
+	# A field word the shell could rewrite (`_FIELD_EXPANSION_CHARS_RE`) could
+	# become file-backed after the guard has looked, so it counts as one.
+	file_backed_keys = []
+	expandable_keys = []
+	for field_role, field_key, field_value in parsed["fields"]:
+		if field_role != "field":
+			continue
+		if field_value.startswith("@"):
+			file_backed_keys.append(field_key)
+		elif _FIELD_EXPANSION_CHARS_RE.search(f"{field_key}={field_value}"):
+			expandable_keys.append(field_key)
+	if file_backed_keys:
+		named_fields = ", ".join(f"`-F {key}=@...`" for key in file_backed_keys)
+		if len(file_backed_keys) == 1:
+			return KIND_WRITE, f"{description} with file-backed field {named_fields} (gh reads a local file)"
+		return KIND_WRITE, f"{description} with file-backed fields {named_fields} (gh reads local files)"
+	if expandable_keys:
+		named_fields = ", ".join(f"`-F {key}=...`" for key in expandable_keys)
+		return KIND_WRITE, f"{description} with field {named_fields} that the shell could expand into a file-backed `@<file>` value"
+	if parsed["input"] is not None:
+		return KIND_WRITE, f"{description} with --input"
 	path = endpoint.lstrip("/")
 	if path.split("?", 1)[0] == "graphql":
 		query_values = [value for _role, key, value in parsed["fields"] if key == "query"]
@@ -624,8 +898,6 @@ def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 		return KIND_WRITE, f"GraphQL call {endpoint} (mutation, file, or expanded query)"
 	if method in _READ_METHODS:
 		return KIND_READ, description
-	if parsed["input"] is not None:
-		return KIND_WRITE, f"{description} with --input"
 	if re.search(r"[?#$`\s]|\.\.", path):
 		return KIND_WRITE, description
 	match = re.match(r"^repos/([^/]+)/([^/]+)/(.+)$", path)
@@ -648,8 +920,8 @@ def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 def evaluate(payload: dict) -> tuple[str | None, str]:
 	"""Decide the permission outcome for one PreToolUse payload.
 
-	Returns `(decision, reason)`: decision is "ask", "allow", or None (no
-	decision; the normal permission flow applies).
+	Returns `(decision, reason)`: decision is "deny", "ask", "allow", or None
+	(no decision; the normal permission flow applies).
 	"""
 	if payload.get("tool_name", "Bash") != "Bash":
 		return None, ""
@@ -664,7 +936,7 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	except ValueError:
 		return DECISION_ASK, "gh api guard (CLAUDE.md §23.H): the command could not be parsed, so its gh api call is treated as a write."
 	invocations = gh_api_invocations(segments)
-	if has_hidden_gh_api(segments, heredocs):
+	if has_hidden_gh_api(segments, heredocs, stripped_command):
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): a gh api call could run hidden inside a $(...) or backtick word, "
 			"an executor (bash -c, sudo, xargs, python3, ...), or a heredoc fed to one, so it is treated as a "
@@ -682,11 +954,34 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		return slug_cache[0]
 
 	results: list[tuple[str, str]] = []
+	malformed_jq_values: list[str] = []
 	for args in invocations:
 		try:
 			results.append(classify(parse_gh_api_args(args), command, repo_slug_lookup))
+		except MalformedJq as exc:
+			malformed_jq_values.append(exc.value)
 		except Unreadable as exc:
 			results.append((KIND_WRITE, f"unreadable call ({exc})"))
+
+	if malformed_jq_values:
+		# A deny runs nothing, so it is narrower than the ask it replaces, and
+		# the session can fix the command in the same turn instead of waiting
+		# at a prompt nobody answers (#4891). It wins over ask and allow.
+		got = ", ".join(f'"{value}"' for value in malformed_jq_values)
+		return DECISION_DENY, (
+			"gh api guard (CLAUDE.md §23.H): gh api --jq takes a jq program, not jq's command-line options "
+			f"(got {got}). gh api has no --arg, -r, or -c: put the value into the jq program itself, or pipe "
+			"the output to jq with its own options. A program that starts with a minus sign goes in "
+			"parentheses, e.g. --jq '(-length)'. Nothing ran."
+		)
+
+	hazard = _shell_rewrite_hazard(stripped_command)
+	if hazard:
+		return DECISION_ASK, (
+			f"gh api guard (CLAUDE.md §23.H): the command uses {hazard}, which Bash expands or parses differently "
+			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
+			"Write the command without it."
+		)
 
 	writes = [description for kind, description in results if kind == KIND_WRITE]
 	if writes:

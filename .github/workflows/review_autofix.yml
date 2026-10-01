@@ -118,9 +118,9 @@ env:
     minimax/minimax-m3
     z-ai/glm-5.2
     deepseek/deepseek-v4-pro
-    google/gemini-3.1-flash-lite
+    google/gemini-3.8-flash
     qwen/qwen3.7-plus
-    x-ai/grok-4.20
+    openai/gpt-6-luna
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   # Capacity-fallback editor (autofix) model. On the final editor attempt
   # scripts/review_apply_fixes.sh switches --model to this slug, which sits in
@@ -130,10 +130,17 @@ env:
   # slug (or clear it) to disable the switch. Inherited by review_apply_fixes.sh
   # via the step environment.
   MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.6-sol' }}
-  # Defaults to xhigh. The reviewer slots are non-GPT models, so they are
-  # outside the gpt-6-sol `high` default. Override per-repo via vars.THINKING_LEVEL_REVIEWER; the smoke
+  # Defaults to xhigh. The reviewer slots (including the openai/gpt-6-luna
+  # slot) sit outside the gpt-6-sol editor `high` default. Override per-repo via vars.THINKING_LEVEL_REVIEWER; the smoke
   # path forces `low` separately in the "Detect smoke test" step.
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
+  # Reviewer loop guards (scripts/review_run_reviewers.sh watchdog), review
+  # panel only: an attempt that starts more than REVIEWER_MAX_STEPS OpenCode
+  # turns is stopped and the slot fails without a retry; a run of
+  # REVIEWER_TOOL_REPEAT_LIMIT identical consecutive tool calls (same tool +
+  # same input) ends the attempt as a retryable `tool_repeat` failure.
+  REVIEWER_MAX_STEPS: ${{ vars.REVIEWER_MAX_STEPS || '120' }}
+  REVIEWER_TOOL_REPEAT_LIMIT: ${{ vars.REVIEWER_TOOL_REPEAT_LIMIT || '10' }}
   REVIEWER_VERBOSITY: ${{ vars.VERBOSITY_REVIEWER || 'low' }}
   # Pass-2 diff-size gate (review_run_reviewers.sh): by default, small diffs
   # run a shallower second-pass review than large diffs while preserving the
@@ -149,7 +156,7 @@ env:
   REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
   REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}
   REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}
+  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna' }}
   REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
   REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
   REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -716,6 +723,22 @@ jobs:
             fi
           }
 
+          # True (exit 0) when a workflow-issued Claude hand-off (findings or
+          # pre-review conflict) exists for the current head. Shared by the
+          # claude_fixer_awaiting_session dispatch skip and the pending
+          # hand-off guard on the deterministic skip, so a change to the
+          # hand-off comment format is a single edit. The caller must have
+          # run gate_fetch_marker_comments and checked for state "ok"; the
+          # predicate reads that cached file and issues no API call.
+          gate_claude_handoff_on_head()
+          {
+            jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
+                any(.[]; .author_login == $author and
+                  ((.body // "") | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n")) and
+                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->$"))))
+              ' "${gate_marker_comments_file}" >/dev/null 2>&1
+          }
+
           # ----- Claude-fixer mode (every PR-backed claude/* head) -----
           # Claude PRs (/implement-plan-claude stages, and any session's PR
           # under CLAUDE.md §26) keep the reviewer panel but hand the fixes to
@@ -799,11 +822,7 @@ jobs:
             && [ "${claude_fixer_force_review}" != "true" ] \
             && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
             gate_fetch_marker_comments
-            if [ "${gate_marker_fetch_state}" = "ok" ] && jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
-                any(.[]; .author_login == $author and
-                  ((.body // "") | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n")) and
-                  ((.body // "") | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $head + " round=[0-9]+ -->$"))))
-              ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
+            if [ "${gate_marker_fetch_state}" = "ok" ] && gate_claude_handoff_on_head; then
               SHOULD_RUN="false"
               SKIP_REASON="claude_fixer_awaiting_session"
               echo "AUTOFIX_GATE_SKIP reason=claude_fixer_awaiting_session pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
@@ -1094,9 +1113,14 @@ jobs:
           # `deterministic-skip-merge` sibling job, which preserves the
           # ai:ready-to-merge + auto-merge tail of the normal review path.
           # See header env-block comment for full semantics.
+          # Claude-fixer PRs (claude/* heads) take the same doc-only and
+          # small-diff routes as every other PR. Only an accepted
+          # claude_fixer_converged_head dispatch (CLAUDE_FIXER_VERIFY) is
+          # excluded: #4453 requires that verdict to be followed by a fresh
+          # reviewer-panel run, never by a skip straight to auto-merge.
           DETERMINISTIC_SKIP="false"
           DET_SKIP_REASON=""
-          if [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER}" != "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+          if [ "${SHOULD_RUN}" = "true" ] && [ "${CLAUDE_FIXER_VERIFY}" != "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             FORCE_REVIEW="false"
             if printf "%s" "${PR_TITLE}" | grep -Fq "[force-review]"; then
               FORCE_REVIEW="true"
@@ -1452,17 +1476,43 @@ jobs:
                 fi
               fi
 
-              if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
+              # Claude-fixer PRs: a workflow hand-off already issued for this
+              # head means reviewers posted findings the owning session has
+              # not answered. reopened / ready_for_review events arrive on the
+              # same head, so without this check they would skip straight past
+              # those findings to auto-merge. Run the review instead (the
+              # pre-#4609 behaviour). Evaluated only when every other check
+              # still allows the skip; the lookup is gate_fetch_marker_comments
+              # (shared, at most one GET /user plus one paginated comments
+              # call), and a failed lookup also runs the review (fail closed).
+              CLAUDE_HANDOFF_SKIP_SUPPRESSED="false"
+              if [ "${candidate_skip}" = "true" ] && [ "${CLAUDE_FIXER}" = "true" ] \
+                && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
                 && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ] \
                 && [ "${FILES_SKIP_SUPPRESSED}" != "true" ] \
                 && [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ]; then
+                gate_fetch_marker_comments
+                if [ "${gate_marker_fetch_state}" != "ok" ] || ! [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+                  CLAUDE_HANDOFF_SKIP_SUPPRESSED="true"
+                  echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified pr=${PR_NUMBER} fetch_state=${gate_marker_fetch_state} head_sha=${pr_head_sha_gate:-unknown} candidate=${candidate_skip_reason}"
+                elif gate_claude_handoff_on_head; then
+                  CLAUDE_HANDOFF_SKIP_SUPPRESSED="true"
+                  echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_pending_handoff pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} candidate=${candidate_skip_reason}"
+                fi
+              fi
+
+              if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${FILES_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${CLAUDE_HANDOFF_SKIP_SUPPRESSED}" != "true" ]; then
                 DETERMINISTIC_SKIP="true"
                 DET_SKIP_REASON="${candidate_skip_reason}"
                 SHOULD_RUN="false"
                 SKIP_REASON="deterministic_skip_${candidate_skip_reason}"
               fi
 
-              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-unavailable} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED} files_suppressed=${FILES_SKIP_SUPPRESSED} protected_suppressed=${PROTECTED_SKIP_SUPPRESSED}"
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-unavailable} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED} files_suppressed=${FILES_SKIP_SUPPRESSED} protected_suppressed=${PROTECTED_SKIP_SUPPRESSED} claude_handoff_suppressed=${CLAUDE_HANDOFF_SKIP_SUPPRESSED}"
             fi
           fi
 
@@ -1470,7 +1520,8 @@ jobs:
           # doc-only / small-diff skip path are mutually exclusive: without a
           # PR, there is nowhere to apply deterministic skip labeling /
           # auto-merge. PR-backed claude/** branches are not in this mode and
-          # follow the same deterministic-skip behavior as other PRs.
+          # follow the same deterministic-skip behavior as other PRs (except
+          # an accepted claude_fixer_converged_head dispatch, see above).
           if [ "${CLAUDE_BRANCH_REVIEW}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]; then
             echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_branch_review pr=${PR_NUMBER} prior_det_skip_reason=${DET_SKIP_REASON}"
             DETERMINISTIC_SKIP="false"
@@ -2290,7 +2341,7 @@ jobs:
       REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
       REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}
       REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}
+      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna' }}
       REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
       REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
       REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -7160,7 +7211,12 @@ jobs:
           ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           MSG="PR autofix failed"
           MSG+=$'\n'
-          MSG+="PR: ${PR_URL}"
+          if [ -n "${PR_NUMBER:-}" ]; then
+            MSG+="PR: ${PR_URL}"
+          else
+            # No-PR claude-branch-review path: there is no PR to link.
+            MSG+="Branch: ${TARGET_BRANCH:-${HEAD_REF_OVERRIDE_INPUT:-unknown}} (no PR)"
+          fi
           if [ -n "${ISSUE_NUM}" ]; then
             MSG+=$'\n'
             MSG+="Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
@@ -7253,7 +7309,9 @@ jobs:
             # was the upstream cause of an empty editor turn.
             # pr_check_runs_context.txt and reviewer_consensus.txt let
             # us reconstruct what context the editor saw without re-
-            # fetching from the API.
+            # fetching from the API. summariser_{pass1,review}.log hold
+            # each consensus-summariser attempt's stderr tail (issue
+            # #4653: exit 0 with empty stdout had no uploaded trace).
             for f in editor_summary.txt editor_prompt.txt editor_prompt_body.txt \
                      pr_editor_comment.txt reviewer_consensus.txt \
                      reviewer_prompt.txt reviewer_prompt_body.txt \
@@ -7270,7 +7328,8 @@ jobs:
                      last_run_diff_stat.txt \
                      symbol_diff_summary.txt \
                      floor_tags.txt review_issues.txt ledger_status.txt \
-                     consolidator_raw.txt parser_stats.txt; do
+                     consolidator_raw.txt parser_stats.txt \
+                     summariser_pass1.log summariser_review.log; do
               [ -f "${RUNTIME_DIR}/${f}" ] && \
                 cp -f "${RUNTIME_DIR}/${f}" "${STAGE_DIR}/runtime/${f}" || true
             done

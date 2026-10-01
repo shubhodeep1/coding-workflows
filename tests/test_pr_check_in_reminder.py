@@ -160,6 +160,10 @@ def test_evaluate_reminds_after_pr_write_tools(tool_name):
 	assert "writes the action-needed report" in context
 	assert "Never use fire_trigger for the hand-back" in context
 	assert "stale_routines.py" in context
+	# The checker routes on the verdict's `action`, never on `state` (#4596).
+	assert "route on its action field only, never on state" in context
+	for action in ("action wait", "action hand_back_fixer", "action hand_back_all"):
+		assert action in context
 
 
 @pytest.mark.parametrize("command", PUSH_COMMANDS)
