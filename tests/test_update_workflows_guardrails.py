@@ -329,16 +329,25 @@ def _run_claude_sync(
 	reviewed: dict[str, str],
 	local: dict[str, str],
 	extra_path: str | None = None,
+	twin_symlinks: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], str, dict[str, str]]:
 	"""Run the real claude_sync step body against a fake stable checkout.
 
-	``extra_path`` is prepended to PATH (for stub commands). Returns the consumer
+	``extra_path`` is prepended to PATH (for stub commands). ``twin_symlinks``
+	maps a twin path to the symlink target written there. Returns the consumer
 	.claude/ tree afterwards, the step's stdout, and its outputs.
 	"""
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		upstream = root / "upstream"
 		consumer = root / "consumer"
+		# The sparse checkout always has workflow-templates/, even when it
+		# carries no .claude/ twin tree.
+		(upstream / "workflow-templates").mkdir(parents=True)
+		for rel, target in (twin_symlinks or {}).items():
+			link = upstream / "workflow-templates" / ".claude" / rel
+			link.parent.mkdir(parents=True, exist_ok=True)
+			link.symlink_to(target)
 		for base, files in ((upstream / "workflow-templates" / ".claude", twins), (upstream / ".claude", reviewed), (consumer / ".claude", local)):
 			for rel, body in files.items():
 				path = base / rel
@@ -478,18 +487,59 @@ def test_claude_sync_installs_reviewed_guard_whose_twin_is_missing() -> None:
 	assert tree["hooks/lib/twin_deleted_nested.py"] == "reviewed nested hook\n"
 	assert tree["settings.local.json"] == "{\"reviewed\": true}\n"
 	for rel in ("hooks/twin_deleted.py", "hooks/lib/twin_deleted_nested.py", "settings.local.json"):
-		assert f"::warning::claude-guard-sync: .claude/{rel} has no workflow-templates twin on stable (owner sync pending); installed the .claude/ copy." in stdout
+		assert f"::warning::claude-guard-sync: .claude/{rel} has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); installed the .claude/ copy." in stdout
 	# The consumer has it: kept, with a warning.
 	assert tree["hooks/twin_deleted_local.py"] == "consumer hook\n"
-	assert "::warning::claude-guard-sync: .claude/hooks/twin_deleted_local.py has no workflow-templates twin on stable (owner sync pending); kept the existing file." in stdout
+	assert "::warning::claude-guard-sync: .claude/hooks/twin_deleted_local.py has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); kept the existing file." in stdout
 	# Non-guard .claude/ files still come from the twin tree only.
 	assert tree["commands/foo.md"] == "twin command\n"
 	assert "commands/only_reviewed.md" not in tree
 	# A guard with a twin is handled once, by the twin loop.
-	assert "hooks/kept.py has no workflow-templates twin" not in stdout
+	assert "hooks/kept.py has no regular-file workflow-templates twin" not in stdout
 	assert outputs["claude_changed"] == "5"
 	changed = [line for line in stdout.splitlines() if "installed the .claude/ copy" in line]
 	assert len(changed) == 3
+
+
+def test_claude_sync_checks_reviewed_guards_without_a_twin_tree() -> None:
+	"""No workflow-templates/.claude/ at the stable commit still runs the reviewed-guard pass (PR #5654 review)."""
+	reviewed = {
+		"commands/foo.md": "not a guard\n",
+		"hooks/only_reviewed.py": "reviewed hook\n",
+		"hooks/only_reviewed_local.py": "reviewed hook 2\n",
+		"settings.json": "{\"reviewed\": true}\n",
+	}
+	local = {"hooks/only_reviewed_local.py": "consumer hook\n"}
+	tree, stdout, outputs = _run_claude_sync({}, reviewed, local)
+	assert "Upstream has no workflow-templates/.claude/ at this ref" in stdout
+	assert tree["hooks/only_reviewed.py"] == "reviewed hook\n"
+	assert tree["settings.json"] == "{\"reviewed\": true}\n"
+	assert tree["hooks/only_reviewed_local.py"] == "consumer hook\n"
+	assert "commands/foo.md" not in tree
+	assert "::warning::claude-guard-sync: .claude/hooks/only_reviewed_local.py has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); kept the existing file." in stdout
+	assert outputs["claude_changed"] == "2"
+	assert outputs["claude_has_changes"] == "true"
+
+
+def test_claude_sync_without_any_claude_tree_changes_nothing() -> None:
+	"""Neither tree at the stable commit: no file is written and the outputs stay zero."""
+	tree, stdout, outputs = _run_claude_sync({}, {}, {"skills/private.md": "consumer-local\n"})
+	assert tree == {"skills/private.md": "consumer-local\n"}
+	assert "::warning::" not in stdout
+	assert outputs["claude_changed"] == "0"
+	assert outputs["claude_has_changes"] == "false"
+
+
+def test_claude_sync_symlink_guard_twin_is_handled_by_the_reviewed_pass() -> None:
+	"""`find -type f` never lists a symlink twin, so the reviewed pass handles it once, and its warning names the symlink case."""
+	twins = {"hooks/real.py": "reviewed hook\n"}
+	reviewed = {"hooks/real.py": "reviewed hook\n", "hooks/linked.py": "reviewed linked hook\n"}
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, {}, twin_symlinks={"hooks/linked.py": "real.py"})
+	assert tree["hooks/linked.py"] == "reviewed linked hook\n"
+	assert tree["hooks/real.py"] == "reviewed hook\n"
+	assert stdout.count(".claude/hooks/linked.py") == 1
+	assert "::warning::claude-guard-sync: .claude/hooks/linked.py has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); installed the .claude/ copy." in stdout
+	assert outputs["claude_changed"] == "2"
 
 
 def main() -> int:
@@ -510,6 +560,9 @@ def main() -> int:
 	test_claude_sync_with_matching_guards_behaves_as_before()
 	test_claude_sync_guard_compare_error_is_not_reported_as_a_difference()
 	test_claude_sync_installs_reviewed_guard_whose_twin_is_missing()
+	test_claude_sync_checks_reviewed_guards_without_a_twin_tree()
+	test_claude_sync_without_any_claude_tree_changes_nothing()
+	test_claude_sync_symlink_guard_twin_is_handled_by_the_reviewed_pass()
 	return 0
 
 

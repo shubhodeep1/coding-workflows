@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5654
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01A5rLUxqZWzzL1obW7dTcMW   safety net trig_01FgYaw1wg6vqty65HXDenAy   hand-back trig_01LdeyTCo8d7G8hD5x9sKPpt
+- Check-in: checker session_01A5rLUxqZWzzL1obW7dTcMW   (safety net and hand-back re-armed each stage; ids in the stage report)
 - Last updated: 2026-10-01
-- Last note: review round 4 (workflow round 1) on head a6f5895: the consensus finding (a guard in `.claude/` with no twin is never installed) is valid; fixed per AD-11 in one `[claude-autofix]` commit, with a test that fails on the old step.
+- Last note: review round 5 (workflow round 2) on head d20fe44: both findings valid (the early exit skipped the reviewed-guard pass with no twin tree; the no-twin warning did not name the symlink case), fixed in one `[claude-autofix]` commit after a `[claude-merge-resolve]` merge of the synced project branch (agents.md conflict).
 
 ## Phases
-1. [ ] Phase 1 — guard assets from the `.claude/` tree at consumer sync and seed (edits the twin `workflow-templates/.claude/commands/seed-repo.md` only; protected paths: none)   — PR #5654 open (waiting); review rounds: 4; interventions: 0
+1. [ ] Phase 1 — guard assets from the `.claude/` tree at consumer sync and seed (edits the twin `workflow-templates/.claude/commands/seed-repo.md` only; protected paths: none)   — PR #5654 open (waiting); review rounds: 5; interventions: 0
 
 ## Conformance
 
@@ -45,6 +45,7 @@
 - [source:intervention] In a POSIX shell `case` pattern `*` also matches `/`, so `hooks/*` covers nested paths; pin shell-vs-Python path rules with a test that runs the pattern through `bash` and `sh` against the Python classifier, not just a string match (files: .github/workflows/update_workflows.yml, tests/test_update_workflows_guardrails.py)
 - [source:intervention] `! cmp -s a b` treats a read error (exit 2) like a difference; capture the status (`cmp -s a b || st=$?`) and branch on 1 vs 2+, and test the error path with a stub `cmp` on PATH, since root in CI can read chmod-000 files (files: .github/workflows/update_workflows.yml, tests/test_update_workflows_guardrails.py)
 - [source:intervention] A sync that picks a reviewed source per file must also enumerate the reviewed tree: a loop driven only by the unreviewed tree cannot see the reviewed files that tree lost (files: .github/workflows/update_workflows.yml, workflow-templates/.claude/commands/seed-repo.md)
+- [source:intervention] When a step gains a second pass over a different tree, re-check every early `exit 0` above it: an exit keyed on the first tree's absence silently skips the second pass; guard the first loop instead, and test the step with the first tree missing (files: .github/workflows/update_workflows.yml, tests/test_update_workflows_guardrails.py)
 
 ## Notes
 - Security pass: skip (`security_pass_skip.py` → `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`).
@@ -57,3 +58,5 @@
 - 2026-09-30 18:06–20:35Z: three review runs on head 4d85fe2 (36750314659, 36760218666, 36766420075) failed in `Run reviewer models` with OpenRouter `Insufficient credits`; the fingerprint cap labelled the PR `ai:review-blocked`, and catch-all fixer session_01NMcUjX2WRgsQt2WyVxMeaJ posted a `hold` claim (comment 5921646426). The owner topped up credits, removed the label, and commented /reclarify; the review sweep re-dispatched review (run 36794117965).
 - Review round 3 (2026-10-01, head 4d85fe2, run 36794117965): 5 of 6 reviewers reported nothing; the one finding (gpt-6-luna, `review_autofix.yml:4375`) restates the stale failed `review / codex-agent` check of outage run 36750314659 and names no defect in this PR's diff. Rejected (reply on the PR). Closed by a new head per AD-10.
 - Review round 4 (2026-10-01, head a6f5895, run 36796481442, workflow round 1): consensus finding and task gap on `update_workflows.yml` / `seed-repo.md:16` (guard in `.claude/` with no twin) valid and fixed (AD-11); every reviewer reported the same gap, no other findings.
+- 2026-10-01: stage step 2 merged the issue base (#5608's twin-guard change) into the project branch as 601088f; that made `agents.md` conflict with PR #5654, resolved keeping both sides (`[claude-merge-resolve]`).
+- Review round 5 (2026-10-01, head d20fe44, run 36803632805, workflow round 2): consensus finding `update_workflows.yml:243-246` (the `exit 0` on a missing twin tree skips the reviewed-guard pass) valid, fixed by guarding only the twin loop; consensus NIT `update_workflows.yml:303` (a symlink twin gets the "no twin" warning) valid as wording only, since `find -type f` never lists a symlink and the reviewed pass is the right handler, fixed by naming the symlink case in the warning; the task gap (no test without a twin tree) closed with three new behavioural tests.
