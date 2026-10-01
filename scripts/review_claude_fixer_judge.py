@@ -51,8 +51,8 @@ everything that decides what happens to the PR lives here so it can be tested:
 	``merge_with_followup``.
 
 API budget (CLAUDE.md §15): only ``prior-rulings`` calls the API, through the
-evidence verifier (3 REST reads per run, at most ``--max`` runs, cached per
-run). Everything else is local.
+evidence verifier (3 REST reads per run, at most ``--max`` runs, each run id
+verified once per call; nothing is cached). Everything else is local.
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 			"claim": finding["claim"],
 			"ruling": str(entry["ruling"]).strip().lower() if entry else "upheld",
 			"category": category,
-			"reason": (str((entry or {}).get("reason") or "").strip() or "no ruling returned; counted as upheld")[:600],
+			"reason": (_one_line((entry or {}).get("reason")) or "no ruling returned; counted as upheld")[:600],
 		})
 	upheld = [ruling for ruling in rulings if ruling["ruling"] == "upheld"]
 	result: dict[str, Any] = {
@@ -334,7 +334,7 @@ def verdict_body(result: dict[str, Any], *, head: str, round_number: int, run_id
 	]
 	for ruling in result["rulings"]:
 		location = f"{ruling['file']}:{ruling['line']}" if ruling["file"] else "(no location)"
-		reason = ruling["reason"].replace("|", "\\|").replace("\n", " ")
+		reason = _one_line(ruling["reason"]).replace("|", "\\|")
 		lines.append(f"| {ruling['finding']} | `{location}` | {ruling['ruling']} | {ruling['category']} | {reason} |")
 	lines.append("")
 	lines.append({
