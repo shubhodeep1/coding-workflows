@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Preserve trust boundaries when validation or fixer workflows run repository-controlled processes.",
   "timestamps": {
     "created_at": "2026-10-01T01:14:13Z",
