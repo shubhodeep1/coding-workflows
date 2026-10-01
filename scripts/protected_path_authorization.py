@@ -284,13 +284,16 @@ def evaluate_pr(
 	malformed = malformed_file_entries(files)
 	truncated = not files_complete or (isinstance(changed, int) and changed > len(files)) or malformed > 0
 	result["paths"] = paths[:PATHS_IN_OUTPUT]
-	if not paths and not truncated:
-		# An unprotected merge runs exactly as before (§5); a head SHA is
-		# only needed to bind and authorize a protected one.
-		result.update({"decision": "allow", "protected": False, "reason": "no protected-equivalent path changed"})
-		return result
+	unprotected = not paths and not truncated
+	# Every merge the gate allows is bound to this head, an unprotected one
+	# included (the wrapper adds `--match-head-commit` when the call has
+	# none), so without a well-formed head SHA nothing is allowed.
 	if not isinstance(head, str) or not SHA_RE.fullmatch(head):
+		result["protected"] = not unprotected
 		result["reason"] = "PR head SHA is unavailable"
+		return result
+	if unprotected:
+		result.update({"decision": "allow", "protected": False, "reason": "no protected-equivalent path changed"})
 		return result
 	if comments is None:
 		result["reason"] = "comments were not read"
@@ -348,7 +351,7 @@ def check_pr(
 
 	With `disable_auto_merge`, a blocked call also turns off a pending
 	auto-merge when the PR's current head is protected and not authorized
-	(no owner comment, or no readable head SHA). GitHub keeps auto-merge
+	(no owner comment), or has no readable head SHA. GitHub keeps auto-merge
 	enabled when someone with write access pushes, so an auto-merge enabled on
 	an earlier, unprotected head would otherwise land this unauthorized one.
 	A call bound to an older head (`expected_head`) is still refused for the

@@ -1158,8 +1158,9 @@ reviews, comments, and conflicts stay a direct §12 request.
     - A call without `--match-head-commit` gets the head the check read, for
       unprotected and authorized PRs alike. A push between the check and the
       merge then fails the merge instead of landing a protected path
-      unchecked. An unprotected call that already names a head, or whose
-      head is not a 40-hex SHA, runs unchanged.
+      unchecked. An unprotected call that already names a head runs
+      unchanged. A PR whose head is not a 40-hex SHA is refused, protected
+      or not, because its merge could not be bound to the checked head.
     - Otherwise it returns 3 without merging. It posts one comment per head
       (marker `<!-- ai:protected-path-authorization:v1 head=<sha> -->`) and
       logs `PROTECTED_PATH_GATE pr=… decision=block … auto_merge=…`.

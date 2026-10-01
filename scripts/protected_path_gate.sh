@@ -17,7 +17,8 @@
 #     `workflow-templates/.claude/**`, tests/test_claude_template_parity.py,
 #     and the gate's own two files) runs the command unchanged, except that a
 #     call without `--match-head-commit` gets the head the check read, so a
-#     push between the check and the merge cannot slip a protected path in;
+#     push between the check and the merge cannot slip a protected path in
+#     (a PR whose head SHA cannot be read is refused, protected or not);
 #   - a protected PR runs only when the repository owner authorized its
 #     current head with an `/authorize-protected-paths <sha>` comment; the
 #     command then gets `--match-head-commit <sha>` when it has none, so a
@@ -132,10 +133,15 @@ protected_path_guarded_merge()
 			_ppg_cmd+=(--match-head-commit "${_ppg_authorized_head}")
 		fi
 		echo "PROTECTED_PATH_GATE pr=${_ppg_pr} head=${_ppg_authorized_head} decision=allow protected=true reason=${_ppg_reason}" >&2
-	elif [ -z "${_ppg_head}" ] && [[ "${_ppg_authorized_head}" =~ ^[0-9a-f]{40}$ ]]; then
+	elif [ -z "${_ppg_head}" ]; then
 		# Bind an unprotected merge to the head whose files were checked, so a
 		# push that adds a protected path between the check and the merge
-		# fails the merge instead of riding on this decision.
+		# fails the merge instead of riding on this decision. Without that
+		# head the merge cannot be bound, so it is refused (fail closed).
+		if ! [[ "${_ppg_authorized_head}" =~ ^[0-9a-f]{40}$ ]]; then
+			echo "PROTECTED_PATH_GATE pr=${_ppg_pr} head=unknown decision=block reason=checked_head_missing" >&2
+			return 3
+		fi
 		_ppg_cmd+=(--match-head-commit "${_ppg_authorized_head}")
 	fi
 	"${_ppg_cmd[@]}"

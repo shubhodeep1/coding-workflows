@@ -247,8 +247,14 @@ def test_head_mismatch_and_missing_head_block():
 	# A protected PR needs a real head to bind and authorize.
 	assert ppa.evaluate_pr(_pr(head=""), protected, True, [_comment()])["decision"] == "block"
 	assert ppa.evaluate_pr({"number": 7}, protected, True, [_comment()])["decision"] == "block"
-	# An unprotected PR merges as before, whatever its head looks like.
-	assert ppa.evaluate_pr(_pr(head="sha910"), files, True, None)["decision"] == "allow"
+	# Review round 2 on PR #4973 (after intervention 1): an unprotected merge
+	# is bound to the checked head too, so a placeholder or missing head
+	# blocks it instead of letting the wrapper run the merge unbound.
+	for pr in (_pr(head="sha910"), _pr(head=""), {"number": 7}):
+		decision = ppa.evaluate_pr(pr, files, True, None)
+		assert decision["decision"] == "block", pr
+		assert decision["protected"] is False and decision["reason"] == "PR head SHA is unavailable"
+	assert ppa.evaluate_pr(_pr(), files, True, None)["decision"] == "allow"
 
 
 def test_approval_of_an_older_head_does_not_carry_over():
@@ -373,6 +379,18 @@ def test_check_pr_turns_off_auto_merge_when_a_protected_head_sha_is_unreadable()
 	assert decision["decision"] == "block" and decision["reason"] == "PR head SHA is unavailable"
 	assert decision["auto_merge"] == "disabled" and disabled == ["PR_node7"]
 	assert not any("comments" in read for read in fake.reads)
+
+
+def test_check_pr_turns_off_auto_merge_when_an_unprotected_head_sha_is_unreadable():
+	# The merge cannot be bound to a head it cannot read, so a pending
+	# auto-merge is not left to land whatever head arrives.
+	fake = _FakeGitHub(_auto_merge_pr(head="sha910"), [{"filename": "README.md"}], [])
+	disabled = []
+	decision = ppa.check_pr("o/r", 7, get=fake.get, post=fake.post, disable_auto_merge=True, disable=disabled.append)
+	assert decision["decision"] == "block" and decision["protected"] is False
+	assert decision["reason"] == "PR head SHA is unavailable"
+	assert decision["auto_merge"] == "disabled" and disabled == ["PR_node7"]
+	assert not any("comments" in read for read in fake.reads) and fake.posts == []
 
 
 def test_check_pr_still_blocks_when_turning_auto_merge_off_fails():
@@ -958,19 +976,36 @@ def _run_gate(tmp_path, decision_json, checker_rc, merge_call):
 
 
 def test_gate_passes_unprotected_merges_through_unchanged(tmp_path):
-	# No well-formed head in the decision (placeholder SHAs in orchestrator
-	# fakes): nothing to bind, so the call runs exactly as written.
+	# A call that already names its head is bound by the caller, so an
+	# unprotected merge runs exactly as written.
 	proc, merges, checks = _run_gate(
 		tmp_path,
-		{"decision": "allow", "protected": False, "head": "sha910"},
+		{"decision": "allow", "protected": False, "head": HEAD},
 		0,
-		'protected_path_guarded_merge fake_merge gh pr merge 42 --repo o/r --squash --auto',
+		f'protected_path_guarded_merge fake_merge gh pr merge 42 --repo o/r --squash --auto --match-head-commit {HEAD}',
 	)
 	assert "rc=0" in proc.stdout, proc.stderr
-	assert merges == [["gh", "pr", "merge", "42", "--repo", "o/r", "--squash", "--auto"]] * 2
+	assert merges == [["gh", "pr", "merge", "42", "--repo", "o/r", "--squash", "--auto", "--match-head-commit", HEAD]] * 2
 	assert len(checks) == 1, "the second identical call must reuse the cached decision"
 	assert checks[0][:5] == ["pr", "--repo", "o/r", "--pr", "42"]
 	assert "--post-instructions" in checks[0] and "--disable-auto-merge" in checks[0]
+
+
+@pytest.mark.parametrize("head", ["sha910", ""])
+def test_gate_refuses_an_unprotected_merge_it_cannot_bind(tmp_path, head):
+	# Review round 2 on PR #4973 (after intervention 1): without a 40-hex
+	# checked head the wrapper cannot add --match-head-commit, so a push
+	# between the check and the merge would land unchecked; refuse instead.
+	decision_json = {"decision": "allow", "protected": False}
+	if head:
+		decision_json["head"] = head
+	proc, merges, _checks = _run_gate(
+		tmp_path, decision_json, 0,
+		'protected_path_guarded_merge fake_merge gh pr merge 42 --repo o/r --squash --auto',
+	)
+	assert "rc=3" in proc.stdout, proc.stderr
+	assert merges == []
+	assert "PROTECTED_PATH_GATE pr=42 head=unknown decision=block reason=checked_head_missing" in proc.stderr
 
 
 def test_gate_binds_an_unprotected_merge_to_the_checked_head(tmp_path):
