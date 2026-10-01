@@ -1,0 +1,47 @@
+# Implement-Plan Log — Pending-checks auto-merge: bind review dispatches to their PR and count their failures
+
+- Plan: docs/plans/issue-5906-bind-unbound-review-dispatches-plan.md
+- Source issue: shubhodeep1/coding-workflows#5906
+- Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
+- Project branch: claude/implement-plan-issue-5906-bind-unbound-review-dispatches   Final PR: pending (draft)
+- Status: IN_PROGRESS
+- Stage: phase 1/1
+- Activation: not started
+- Waiting on: none
+- Stage model: claude-opus-5-5   Permission mode: auto
+- Check-in: none
+- Last updated: 2026-10-01
+- Last note: project branch opened from the #4900 project branch; implementing phase 1.
+
+## Phases
+1. [ ] Phase 1 — bind review dispatches to their PR and count their failures
+   - `run-name` `<workflow name> [pr:<pr_number>]` on `workflow_dispatch` in `.github/workflows/review_autofix.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/ai-review.yml`, `workflow-templates/review_rb_judge_dispatch.yml`
+   - `check_review_runs()` in `scripts/claude_fixer_pending_checks.py`: a newer completed dispatch titled for the PR joins the bound reviews; a newer unsuccessful one with no PR binding returns `review_superseded`
+   - Tests: the audit's scenario, every new path, the run-name wiring; existing #4900 / #5147 / #5148 suites green
+   - `README.md`, `agents.md`, `docs/INVENTORY.md`; `changelog.d/5906-bind-review-dispatches-to-pr.md`
+   - Done: the plan's phase 1 "done" condition. Protected paths: none.
+
+## Conformance
+
+## Security pass
+- Skipped: plan header `Security pass: skip (ai:security: automation-produced issue)`
+
+## Validation
+
+## Completion
+
+## Activation
+
+## Auto-decisions
+- AD-1 [plan, 2026-10-01] How are the unbound review dispatches bound to a PR? — Picked: A — a `run-name` of `<workflow name> [pr:<pr_number>]` on `workflow_dispatch` in `review_autofix.yml`, `ai-review.yml`, and both `review_rb_judge_dispatch.yml` copies, read from the listing's `display_title`. Alternatives: B — read each run's jobs or logs to find its PR (calls per run, §15); C — no binding, block on every newer unsuccessful dispatch (blocks every PR in the repo until its next review). Why: the `internal-review.yml` precedent, no new API calls. Applied in: phase 1 PR. Status: pending review
+- AD-2 [plan, 2026-10-01] What does a newer completed dispatch with no `[pr:<N>]` title do? — Picked: A — fail closed: if it did not conclude `success`, `review_superseded`. Alternatives: B — ignore it (today's behaviour, the finding). Why: §1; such runs only come from wrappers before the sync or refs without the run name. Applied in: phase 1 PR. Status: pending review
+- AD-3 [plan, 2026-10-01] How strictly is the title matched? — Picked: A — any title ending in ` [pr:<N>]` (`^.+ \[pr:([1-9][0-9]*)\]$`) in these workflows' listings. Alternatives: B — an exact title per workflow name. Why: the listing already fixes the workflow; a suffix survives a renamed workflow, and only a workflow author controls the run name. Applied in: phase 1 PR. Status: pending review
+- AD-4 [plan, 2026-10-01] Do active dispatches titled for another PR stop blocking? — Picked: A — no, every active dispatch of these workflows still blocks (`review_active`). Alternatives: B — block only on ones titled for this PR or untitled. Why: §5 (no relaxation in a security fix); the delay is one sweep tick. Applied in: no code change. Status: pending review
+- AD-5 [plan, 2026-10-01] Also change the "latest newer review" rule so a later gate-skipped success cannot clear the failure? — Picked: A — no, that is #5904; titled dispatches join the bound set, so #5904's fix covers them too. Alternatives: B — fix it here. Why: one issue per project (`/implement-issue-claude` rules). Applied in: no code change. Status: pending review
+
+## Lessons
+
+## Notes
+- Issue mode; session `session_01YEZ7MVKkvpsMYW3kkWx4by` (started by the Claude issue pickup routine `PR dispatch: #5906`).
+- `security_pass_skip.py`: `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`.
+- Base branch check (2026-10-01): the PR whose head is the base branch, #4922 (into `main`), is open and unmerged, so the base has not moved.
