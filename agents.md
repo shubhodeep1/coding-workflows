@@ -1201,7 +1201,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   `perl -i` / `-pi`, `ruby -i`, and
   `awk -i inplace`, also inside a double-quoted `$(…)` or a backtick, and
   behind the wrappers `env`, `command`, `exec`, `time`, `sudo`, `doas`,
-  `timeout`, and `nice` with their options. Reads,
+  `timeout`, and `nice` with their options (`env -S` / `--split-string`
+  included). Reads,
   `pytest`, `python3 -m …`, scripts run from a file path, and interpreter
   text that is only data get no decision. It fails open (no decision on a bad
   payload, an unparseable command, or an internal error), has the kill switch

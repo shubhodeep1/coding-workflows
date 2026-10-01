@@ -1409,7 +1409,8 @@ enforced one (issue #4858):
 
 - It answers `permissionDecision: deny`, not `ask`, when a command's
   interpreter (past assignments and the wrappers `env`, `command`, `exec`,
-  `time`, `sudo`, `doas`, `timeout N`, and `nice` with their options) is
+  `time`, `sudo`, `doas`, `timeout N`, and `nice` with their options, the
+  words of `env -S` / `--split-string` included) is
   `python` / `python3` running a program from `-c` or from a heredoc on stdin
   that writes (`write_text`, `write_bytes`, `open(` with a `w` / `a` / `x` /
   `+` mode, `os.replace`, `os.rename`, `os.renames`, `os.remove`, a mutating

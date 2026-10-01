@@ -17,7 +17,8 @@ reads the reason and retries with Edit or Write in the same turn.
 
 Denied, when a segment's command word (past assignments, the shell keywords,
 and the wrappers `env`, `command`, `exec`, `time`, `sudo`, `doas`,
-`timeout N`, and `nice` with their options) is the interpreter:
+`timeout N`, and `nice` with their options, the words of
+`env -S` / `--split-string` included) is the interpreter:
   - `python` / `python3` / `pythonX.Y` running a program from `-c` or from a
     heredoc on stdin (`python3 - <<'EOF'`, `python3 <<'EOF'`) that writes:
     `write_text` / `write_bytes`, `open(` (or `fdopen(`, `.open(`) with a
@@ -67,6 +68,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -128,6 +130,11 @@ _WRAPPER_VALUE_OPTIONS = {
 _PREFIX_WRAPPERS = frozenset({"env", "command", "exec", "time"})
 # `command -v` / `-V` only describes the command after it; it does not run it.
 _COMMAND_LOOKUP_FLAGS = frozenset("vV")
+# GNU `env -S STRING` / `--split-string=STRING` splits STRING into words and
+# runs them, parsing `env` options among them (`env -S '-i python3 -c …'`).
+_ENV_SPLIT_STRING_OPTION = "--split-string"
+# `env` short options whose value is the rest of their cluster (`-uS` unsets `S`).
+_ENV_SHORT_VALUE_LETTERS = frozenset("uC")
 
 # Program text that writes, renames, or deletes a file.
 _MODE_WRITES = r"[rRbBuU]?(['\"])[rbt]*[wax+][rwaxbt+]*\1"
@@ -206,8 +213,43 @@ def _skip_prefix_words(tokens: list[str], index: int, tokenizer) -> int:
 	return index
 
 
+def _env_split_string(tokens: list[str], index: int) -> tuple[int, str | None] | None:
+	"""`env`'s split-string option at `tokens[index]`, as (tokens it spans, its value).
+
+	Matches `-S STRING`, `-SSTRING`, a short cluster that reaches it
+	(`-iS STRING`), and `--split-string STRING` / `--split-string=STRING` or
+	any prefix of the long name from `--s`, which `getopt_long` accepts. The
+	value is None when the option ends the command without one. Returns None
+	for any other option.
+	"""
+	token = tokens[index]
+	if token.startswith("--"):
+		name, equals, value = token.partition("=")
+		if len(name) < 3 or not _ENV_SPLIT_STRING_OPTION.startswith(name):
+			return None
+		if equals:
+			return 1, value
+	else:
+		letters = token[1:]
+		for position, letter in enumerate(letters):
+			if letter in _ENV_SHORT_VALUE_LETTERS:
+				return None
+			if letter == "S":
+				if position + 1 < len(letters):
+					return 1, letters[position + 1 :]
+				break
+		else:
+			return None
+	return (2, tokens[index + 1]) if index + 1 < len(tokens) else (1, None)
+
+
 def _command_start(tokens: list[str], tokenizer) -> int:
-	"""Index of the command a segment runs, past keywords, assignments, and wrappers."""
+	"""Index of the command a segment runs, past keywords, assignments, and wrappers.
+
+	`env -S STRING` runs the words STRING splits into, so those words replace
+	the option in `tokens` (in place, for the caller to read) and the walk
+	continues into them.
+	"""
 	index = _skip_prefix_words(tokens, 0, tokenizer)
 	while index < len(tokens):
 		word = os.path.basename(tokens[index])
@@ -222,6 +264,18 @@ def _command_start(tokens: list[str], tokenizer) -> int:
 				break
 			if word == "command" and _COMMAND_LOOKUP_FLAGS.intersection(tokens[index][1:]):
 				return len(tokens)
+			split = _env_split_string(tokens, index) if word == "env" else None
+			if split is not None:
+				span, value = split
+				try:
+					words = shlex.split(value) if value is not None else None
+				except ValueError:
+					words = None
+				if words is None:
+					# `env` refuses a missing or unterminated string and runs nothing.
+					return len(tokens)
+				tokens[index : index + span] = words
+				continue
 			index += 2 if tokens[index] in options else 1
 		if word == "timeout" and index < len(tokens):
 			index += 1

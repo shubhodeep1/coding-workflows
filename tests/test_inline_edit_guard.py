@@ -226,6 +226,20 @@ def test_observed_prompts_are_denied(name):
 		# pathlib's siblings of `os.replace` / `os.rename`.
 		("python3 -c \"from pathlib import Path; Path('a').replace('b')\"", "python"),
 		("python3 -c \"import pathlib; pathlib.Path(os.path.join(d, 'a')).rename('b')\"", "python"),
+		# GNU `env -S` / `--split-string` runs the words its string splits into
+		# (final PR #4877 review round 6).
+		("env -S 'python3 -c \"import os; os.remove(p)\"'", "python"),
+		("env -S 'sed -i s/a/b/ f'", "sed"),
+		("env -iS'perl -pi -e s/a/b/ f'", "perl"),
+		("env --split-string='sed -i s/a/b/ f'", "sed"),
+		("env --split-string 'ruby -i -pe sub(?a,?b) f'", "ruby"),
+		("env --sp 'sed -i s/a/b/ f'", "sed"),
+		("env -S '-i LC_ALL=C sed -i s/a/b/ f'", "sed"),
+		("env -S \"-S 'sed -i s/a/b/ f'\"", "sed"),
+		("sudo env -S 'sed -i s/a/b/ f'", "sed"),
+		("env -S 'python3 -' <<'EOF'\nopen('x', 'w')\nEOF", "python"),
+		# `-uS` unsets `S`; it is not the split-string option.
+		("env -uS sed -i s/a/b/ f", "sed"),
 	],
 )
 def test_inline_writes_are_denied(command, kind):
@@ -298,6 +312,12 @@ def test_deny_message_is_the_issue_text():
 		"python3 -c \"print('a.txt'.replace('a', 'b'))\"",
 		"python3 -c \"from pathlib import Path; print(Path('a').read_text().replace('x', 'y'))\"",
 		"python3 -c \"from pathlib import Path; print(str(Path('a')).replace('a', 'b'))\"",
+		# `env -S` with a read, without its string, or with an unterminated quote
+		# (which `env` refuses, running nothing).
+		"env -S 'sed -n 1p f'",
+		"env -S 'python3 -c \"print(1)\"'",
+		"env -S",
+		"env -S \"sed -i 's/a/b/ f\"",
 	],
 )
 def test_reads_scripts_and_data_get_no_decision(command):
