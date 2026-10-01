@@ -176,6 +176,21 @@ def test_fork_head_repository_is_rejected():
 	assert _verify(api)["reason"] == "untrusted_caller_ref"
 
 
+def test_missing_head_repository_on_a_pr_head_run_is_rejected():
+	# A deleted fork's run carries no head repository; that must not read as same-repo.
+	for head_repository in (None, {}):
+		api = FakeApi(run=_run(head_branch=PR_REF, head_sha=HEAD, head_repository=head_repository))
+		assert _verify(api)["reason"] == "untrusted_caller_ref"
+
+
+def test_default_branch_run_from_a_fork_or_without_head_repository_is_rejected():
+	# A fork branch named like the default branch must not take the default-branch path.
+	for head_repository in ({"full_name": "fork/r"}, None, {}):
+		api = FakeApi(run=_run(head_branch="main", head_repository=head_repository))
+		assert _verify(api)["reason"] == "untrusted_caller_ref", head_repository
+		assert not any("/artifacts" in call for call in api.calls)
+
+
 def test_library_at_an_untrusted_ref_is_rejected_and_release_pins_are_accepted():
 	feature = {"path": "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@feature", "ref": "refs/heads/feature"}
 	assert _verify(FakeApi(run=_run(referenced_workflows=[feature])))["reason"] == "untrusted_review_workflow"

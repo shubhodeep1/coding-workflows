@@ -51,8 +51,8 @@ everything that decides what happens to the PR lives here so it can be tested:
 	``merge_with_followup``.
 
 API budget (CLAUDE.md §15): only ``prior-rulings`` calls the API, through the
-evidence verifier (3 REST reads per run, at most ``--max`` runs, cached per
-run). Everything else is local.
+evidence verifier (3 REST reads per run, at most ``--max`` runs, each run id
+verified once per call; nothing is cached). Everything else is local.
 """
 
 from __future__ import annotations
@@ -81,6 +81,9 @@ STICKY_LINE_WINDOW = 3
 RULINGS = ("invalid", "upheld")
 CATEGORIES = ("security", "data-loss", "correctness", "other")
 HOLD_CATEGORIES = ("security", "data-loss")
+# Comment authors whose judge markers prior_rulings follows: the same set the rejection comment
+# needs in scripts/review_autofix_step_claude_fixer_judge.sh (a test keeps the two equal).
+TRUSTED_COMMENT_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 MODEL_ACTIONS = ("merge", "fix", "merge_with_followup", "hold", "close_and_reissue")
 DECISIONS = ("merge", "fix", "merge_with_followup", "hold")
 
@@ -152,6 +155,11 @@ def parse_findings(ledger_text: str) -> list[dict[str, Any]]:
 	return findings
 
 
+def _one_line(value: Any) -> str:
+	"""Model text on one line, so it can never add a marker or a checklist line to a comment."""
+	return " ".join(str(value or "").split())
+
+
 def _load_json(path: str) -> Any:
 	try:
 		return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -167,7 +175,8 @@ def _ruling_caution(entry: dict[str, Any]) -> tuple[bool, bool]:
 
 def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int) -> dict[str, Any]:
 	model = model if isinstance(model, dict) else {}
-	model_action = str(model.get("action") or "").strip()
+	# Normalised like ruling and category, so "Hold" or "CLOSE_AND_REISSUE" still holds.
+	model_action = _one_line(model.get("action")).lower()
 	raw_rulings = model.get("rulings") if isinstance(model.get("rulings"), list) else []
 	by_id: dict[str, dict[str, Any]] = {}
 	for entry in raw_rulings:
@@ -194,7 +203,7 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 			"claim": finding["claim"],
 			"ruling": str(entry["ruling"]).strip().lower() if entry else "upheld",
 			"category": category,
-			"reason": (str((entry or {}).get("reason") or "").strip() or "no ruling returned; counted as upheld")[:600],
+			"reason": (_one_line((entry or {}).get("reason")) or "no ruling returned; counted as upheld")[:600],
 		})
 	upheld = [ruling for ruling in rulings if ruling["ruling"] == "upheld"]
 	result: dict[str, Any] = {
@@ -203,13 +212,18 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 		"cap": cap,
 		"rulings": rulings,
 		"upheld": upheld,
-		"justification": str(model.get("justification") or "")[:2000],
-		"fix_description": str(model.get("fix_description") or "")[:4000],
+		"justification": _one_line(model.get("justification"))[:2000],
+		# Goes into the fix prompt and the [judge-fix] commit body: one line, so the
+		# model cannot add a trailer or prompt-section line. The jq step that builds
+		# the writer's description appends the upheld list on its own lines after it.
+		"fix_description": _one_line(model.get("fix_description"))[:4000],
 	}
-	if findings and not by_id:
-		result.update(decision="error", reason="no_usable_rulings")
-	elif model_action in ("hold", "close_and_reissue"):
+	# A model hold (or close_and_reissue, which is not allowed here) stays a hold even without
+	# rulings: the plan maps both to `hold`, and every unruled finding already counts as upheld.
+	if model_action in ("hold", "close_and_reissue"):
 		result.update(decision="hold", reason=f"model_{model_action}")
+	elif findings and not by_id:
+		result.update(decision="error", reason="no_usable_rulings")
 	elif not upheld:
 		result.update(decision="merge", reason="all_invalid")
 	elif fix_count < cap:
@@ -283,7 +297,9 @@ def prior_rulings(
 ) -> dict[str, Any]:
 	markers: list[tuple[int, str, str]] = []
 	for comment in comments if isinstance(comments, list) else []:
-		if not isinstance(comment, dict):
+		# Only collaborators' comments can point at judge runs (as for the rejection comment), so a
+		# stranger's fake markers cannot use up the newest-runs budget and switch sticky rulings off.
+		if not isinstance(comment, dict) or comment.get("author_association") not in TRUSTED_COMMENT_ASSOCIATIONS:
 			continue
 		try:
 			comment_id = int(comment.get("id") or 0)
@@ -323,7 +339,7 @@ def verdict_body(result: dict[str, Any], *, head: str, round_number: int, run_id
 	]
 	for ruling in result["rulings"]:
 		location = f"{ruling['file']}:{ruling['line']}" if ruling["file"] else "(no location)"
-		reason = ruling["reason"].replace("|", "\\|").replace("\n", " ")
+		reason = _one_line(ruling["reason"]).replace("|", "\\|")
 		lines.append(f"| {ruling['finding']} | `{location}` | {ruling['ruling']} | {ruling['category']} | {reason} |")
 	lines.append("")
 	lines.append({
@@ -349,7 +365,7 @@ def followup(result: dict[str, Any], *, pr: int, head: str, run_url: str) -> dic
 	]
 	for ruling in result["upheld"]:
 		location = f"{ruling['file']}:{ruling['line']}" if ruling["file"] else "(no location)"
-		body.append(f"- [ ] `{location}` ({ruling['category']}): {ruling['claim']} — {ruling['reason']}")
+		body.append(f"- [ ] `{location}` ({ruling['category']}): {_one_line(ruling['claim'])} — {_one_line(ruling['reason'])}")
 	body.extend(["", f"Refs #{pr}"])
 	return {"title": title[:250], "body": "\n".join(body) + "\n"}
 

@@ -68,7 +68,10 @@ def clean_hold_reason(reason: str) -> str:
 	nor start a marker, and the result is cut to 300 characters. An empty
 	result is rejected.
 	"""
-	cleaned = " ".join(str(reason).replace("`", "").replace("<!--", "").split())
+	cleaned = " ".join(str(reason).replace("`", "").split())
+	# Repeat until stable: one pass would turn `<!<!---- …` back into `<!--`.
+	while "<!--" in cleaned:
+		cleaned = cleaned.replace("<!--", "")
 	cleaned = cleaned[:HOLD_REASON_MAX_CHARS].rstrip()
 	if not cleaned:
 		raise ValueError("--reason must contain text")

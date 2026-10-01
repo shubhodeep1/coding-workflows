@@ -2,8 +2,10 @@
 """Contract for review_autofix.yml Claude-fixer mode.
 
 Every PR-backed `claude/*` head (/implement-plan-claude stages and any
-session's PR under CLAUDE.md §26) keeps the reviewer panel, but the GPT editor, conflict resolver, push / re-trigger tail
-and review-blocked judge do not run: the findings (or the pre-review
+session's PR under CLAUDE.md §26) keeps the reviewer panel, but the GPT editor
+never runs, the conflict resolver and push / re-trigger tail run only for a
+pre-review conflict that touches `.claude/**`, and the review-blocked judge
+runs only in its Claude mode: the findings (or any other pre-review
 conflict) are handed to the Claude session that owns the PR, and a
 `claude_fixer_converged_head` dispatch re-reviews a bot-authenticated ledger
 verdict. Only the fresh clean review can auto-merge, and the
@@ -1280,6 +1282,16 @@ def _run_retrigger_guard(tmp: Path, *, merge_check: bool, force_rb_judge: bool =
 	return dict(line.split("=", 1) for line in lines)
 
 
+def test_merge_check_early_check_read_does_not_wait():
+	# The merge check re-reads checks itself with no wait; the early CI-context read must not poll
+	# for CHECK_RUNS_WAIT_TIMEOUT_SECS on every 30-minute sweep dispatch (conformance fix).
+	step = AGENT_STEPS["Collect PR check-run failures (CI/lint autofix context)"]
+	assert step["env"]["CHECK_RUNS_WAIT_TIMEOUT_SECS"] == (
+		"${{ env.CLAUDE_FIXER_MERGE_CHECK == 'true' && '0' || env.CHECK_RUNS_WAIT_TIMEOUT_SECS }}"
+	)
+	assert "CLAUDE_FIXER_MERGE_CHECK" in WORKFLOW["jobs"]["codex-agent"]["env"]
+
+
 def test_merge_check_short_circuits_reviewers_and_judge():
 	with tempfile.TemporaryDirectory() as td:
 		out = _run_retrigger_guard(Path(td), merge_check=True, autofix_commits=2)
@@ -1526,7 +1538,7 @@ if __name__ == "__main__":
 
 def _run_handoff_with_rulings(tmp: Path, rulings: list[dict], *, enabled: str = "true"):
 	comments = tmp / "pr_comments.json"
-	comments.write_text(json.dumps([{"id": 3, "body": f"<!-- ai:claude-fixer-judge:v1 head={HEAD} round=1 run=900 decision=merge -->"}]), encoding="utf-8")
+	comments.write_text(json.dumps([{"id": 3, "author_association": "OWNER", "body": f"<!-- ai:claude-fixer-judge:v1 head={HEAD} round=1 run=900 decision=merge -->"}]), encoding="utf-8")
 	extra = {
 		"PR_ISSUE_COMMENTS_FILE": str(comments),
 		"MOCK_RULINGS": json.dumps(rulings),

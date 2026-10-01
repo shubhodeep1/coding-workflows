@@ -527,3 +527,18 @@ def test_interim_twin_first_default_is_removed_when_the_4785_sync_lands():
 	assert INTERIM_TWIN_FIRST_AGENTS_MD_MARKER not in _flat(AGENTS_MD), "remove the #4948 interim sentence from agents.md"
 	assert INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER not in _flat(AGENTS_MD), "remove the #4948 interim closing sentence from agents.md"
 	assert INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER not in _flat(MASTER_SESSION_MD), "remove the #4948 interim clause from the Q40 row of docs/operations/master-session.md"
+
+
+def test_conformance_fixes_in_the_twins():
+	"""Conformance run 1 fixes, edited twin-first (CLAUDE.md §28.C); template parity carries them to .claude/."""
+	twin = _flat(TEMPLATE_COMMAND)
+	# Plan D11: the starter records the stage too, or a second starter of the same stage never matches.
+	assert "set the comment's `Stage:` line to this stage and its `Stage session:` line to your own id" in twin
+	# Plan D16: the plan-mode twin-sync stop posts its question on the phase PR, and is the named no-wait stop.
+	assert "as the `<!-- ai:claude-blocked:v1 -->` comment on the phase PR" in twin
+	assert "and neither does the twin-sync stop (step 4)" in twin
+	# Phase 2 / D14: the judge and the protected-conflict resolver do run on these PRs.
+	assert "the GPT conflict resolver runs only for a conflict that touches `.claude/**`, and the GPT review-blocked judge runs only in its Claude mode" in twin
+	assert "the GPT editor, the GPT conflict resolver, and the GPT review-blocked judge never run" not in twin
+	fixer = " ".join(TEMPLATE_FIX_CLAUDE_PR.read_text(encoding="utf-8").split())
+	assert "except a hold's reasoning comment ([Holds](#holds) step 1), which comes before its hold claim" in fixer

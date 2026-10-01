@@ -198,7 +198,8 @@ def test_routine_on_a_second_trigger_page_keeps_the_session(monkeypatch, tmp_pat
 		"Claude issue pickup — last wake 10:00 UTC: 1 started, 0 failed",
 		"Claude automation master session",
 		"implement-plan some-plan — deploy-activate",
-		"PR #4648 — implement-plan some-plan — checker",
+		"#40 · PR #41 — implement-plan issue-40-fix-thing — deploy-activate",
+		"#40 · implement-issue-claude",
 		"Refactor the parser",
 	],
 )
@@ -279,7 +280,12 @@ def test_one_read_per_distinct_pr(monkeypatch, tmp_path, capsys):
 
 @pytest.mark.parametrize(
 	"title",
-	["issue o/r#40 — implement", "Issue #40 — implement", "#40 · issue o/r#40 — implement"],
+	[
+		"issue o/r#40 — implement",
+		"Issue #40 — implement",
+		"#40 · issue o/r#40 — implement",
+		"#40 · PR #41 — issue o/r#40 — implement",
+	],
 )
 def test_issue_start_session_is_archived_after_its_issue_closed(monkeypatch, tmp_path, capsys, title):
 	calls = _stub(monkeypatch, {"repos/o/r/issues/40": _closed_issue()})
@@ -296,6 +302,44 @@ def test_issue_mode_stage_and_checker_follow_the_source_issue(monkeypatch, tmp_p
 	]
 	_, result = _run(tmp_path, capsys, sessions)
 	assert sorted(_archived(result)) == ["session_a", "session_b"]
+
+
+def test_numbers_first_issue_mode_titles_follow_the_source_issue(monkeypatch, tmp_path, capsys):
+	# #4943 titles: `#<issue> · PR #<pr> — implement-plan <slug> — <stage>`; the PR part names a phase or
+	# final PR, so the source issue (from the slug) still decides, exactly as for the unprefixed title.
+	calls = _stub(monkeypatch, {"repos/o/r/issues/40": _closed_issue()})
+	sessions = [
+		_session("session_a", "#40 · PR #41 — implement-plan issue-40-fix-thing — phase 1/1 — review round"),
+		_session("session_b", "#40 · PR #42 — implement-plan issue-40-fix-thing — checker"),
+		_session("session_c", "PR #42 — implement-plan issue-40-fix-thing — final-merge 1/1"),
+	]
+	_, result = _run(tmp_path, capsys, sessions)
+	assert sorted(_archived(result)) == ["session_a", "session_b", "session_c"]
+	assert result["not_ours"] == 0 and calls == ["repos/o/r/issues/40"]
+
+
+@pytest.mark.parametrize(
+	"title",
+	["PR #4648 — implement-plan some-plan — checker", "#4586 · PR #4648 — implement-plan some-plan — phase 2/4"],
+)
+def test_numbers_first_plan_title_without_an_issue_slug_is_kept_without_a_read(monkeypatch, tmp_path, capsys, title):
+	calls = _stub(monkeypatch, {})
+	_, result = _run(tmp_path, capsys, [_session("session_a", title)])
+	assert _archived(result) == [] and result["kept"] == 1 and result["not_ours"] == 0
+	assert calls == []
+
+
+@pytest.mark.parametrize(
+	("title", "kind"),
+	[
+		("PR #41 — fix review", "fixer"),
+		("PR #41 status check-in", "check-in"),
+		("PR #41 merged — no action needed", "terminal"),
+		("#40 · PR #41 — implement-plan issue-40-x — checker", "implement-plan"),
+	],
+)
+def test_numbered_pr_prefix_is_stripped_only_before_plan_and_issue_titles(title, kind):
+	assert janitor.classify_title(title)["kind"] == kind
 
 
 def test_open_issue_keeps_its_sessions(monkeypatch, tmp_path, capsys):

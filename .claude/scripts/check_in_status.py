@@ -797,14 +797,14 @@ def retry_after_minutes(verdict: dict) -> int:
 
 	Input: any verdict or error dict `main` prints. Output: 60, or for
 	`state: held` the CLAUDE_CHECK_IN_HELD_RETRY_MINUTES value (default 180,
-	clamped to 60..1440; unset or non-numeric gives 180). No API calls.
+	clamped to 60..1440; unset, non-numeric, or infinite gives 180). No API calls.
 	"""
 	if verdict.get("state") != "held":
 		return DEFAULT_CHECK_IN_RETRY_MINUTES
 	raw = os.environ.get("CLAUDE_CHECK_IN_HELD_RETRY_MINUTES", "").strip()
 	try:
 		minutes = int(float(raw)) if raw else DEFAULT_CHECK_IN_HELD_RETRY_MINUTES
-	except ValueError:
+	except (ValueError, OverflowError):  # OverflowError: "inf"
 		minutes = DEFAULT_CHECK_IN_HELD_RETRY_MINUTES
 	return max(CHECK_IN_RETRY_MINUTES_MIN, min(CHECK_IN_RETRY_MINUTES_MAX, minutes))
 
