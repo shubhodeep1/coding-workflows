@@ -228,6 +228,10 @@ jobs:
           # waiting for the owner) counts as a differing twin: a consumer
           # that lacks the file gets the .claude/<rel> copy, and one that has
           # it keeps its file.
+          # A guard source must resolve inside the stable .claude/ tree: a
+          # symlink (on the file or a parent directory) into its twin or out
+          # of the tree would let unreviewed content through, so nothing is
+          # installed for it and the consumer's file is left alone.
           # Each skipped or kept guard gets a ::warning:: line. In a shell
           # `case` pattern `*` also matches `/`, so `hooks/*` below covers
           # nested hooks (hooks/lib/x.py) like the Python startswith check.
@@ -236,6 +240,18 @@ jobs:
           CLAUDE_UPSTREAM_DIR="${UPSTREAM_DIR}/.claude"
           CLAUDE_REVIEWED_DIR="${UPSTREAM_DIR}/../.claude"
           CLAUDE_LOCAL_DIR=".claude"
+          # Physical path of the stable .claude/ tree (the checkout root
+          # resolved, .claude itself not), for the boundary check below.
+          CLAUDE_REVIEWED_REAL="$(cd "${UPSTREAM_DIR}/.." && pwd -P)/.claude"
+
+          # True when $1 resolves to a path inside the stable .claude/ tree.
+          guard_source_is_reviewed() {
+            guard_resolved_path="$(realpath -e -- "$1" 2>/dev/null)" || return 1
+            case "${guard_resolved_path}" in
+              "${CLAUDE_REVIEWED_REAL}"/*) return 0 ;;
+            esac
+            return 1
+          }
 
           echo "claude_changed=0" >> "$GITHUB_OUTPUT"
           echo "claude_has_changes=false" >> "$GITHUB_OUTPUT"
@@ -259,6 +275,10 @@ jobs:
                 claude_source_path="${CLAUDE_REVIEWED_DIR}/${rel}"
                 if [ ! -f "${claude_source_path}" ]; then
                   printf '::warning::claude-guard-sync: .claude/%s is not in the stable .claude/ tree (its twin is not synced there yet); nothing installed.\n' "${rel}"
+                  continue
+                fi
+                if ! guard_source_is_reviewed "${claude_source_path}"; then
+                  printf '::warning::claude-guard-sync: .claude/%s in the stable .claude/ tree resolves outside that tree (a symlink to its twin or elsewhere); nothing installed.\n' "${rel}"
                   continue
                 fi
                 # cmp exits 1 when the files differ and 2+ when it cannot
@@ -314,6 +334,10 @@ jobs:
               fi
               if [ ! -f "${reviewed_guard_path}" ]; then
                 printf '::warning::claude-guard-sync: .claude/%s in the stable .claude/ tree is a symlink that does not resolve to a regular file; nothing installed.\n' "${rel}"
+                continue
+              fi
+              if ! guard_source_is_reviewed "${reviewed_guard_path}"; then
+                printf '::warning::claude-guard-sync: .claude/%s in the stable .claude/ tree resolves outside that tree (a symlink to its twin or elsewhere); nothing installed.\n' "${rel}"
                 continue
               fi
               local_path="${CLAUDE_LOCAL_DIR}/${rel}"

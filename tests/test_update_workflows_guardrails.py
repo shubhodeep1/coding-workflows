@@ -607,6 +607,52 @@ def test_claude_sync_installs_a_symlinked_reviewed_guard_without_a_regular_twin(
 	assert outputs["claude_changed"] == "4"
 
 
+def test_claude_sync_skips_a_reviewed_guard_that_resolves_outside_the_reviewed_tree() -> None:
+	"""A guard in the stable .claude/ tree that resolves into its twin or out of the tree is not reviewed content: nothing installed (PR #5654 review)."""
+	outside_file = str(Path(__file__).resolve())
+	twins = {
+		"hooks/real.py": "reviewed hook\n",
+		"hooks/twin_link.py": "UNREVIEWED twin\n",
+		"hooks/twin_link_local.py": "UNREVIEWED twin 2\n",
+		"hooks/twin_dir/x.py": "UNREVIEWED dir twin\n",
+		"commands/foo.md": "UNREVIEWED command twin\n",
+	}
+	reviewed = {"hooks/real.py": "reviewed hook\n"}
+	reviewed_symlinks = {
+		# First pass: the twin exists, so `cmp` sees the twin on both sides.
+		"hooks/twin_link.py": "../../workflow-templates/.claude/hooks/twin_link.py",
+		"hooks/twin_link_local.py": "../../workflow-templates/.claude/hooks/twin_link_local.py",
+		# A directory link: the file path itself is not a symlink.
+		"hooks/twin_dir": "../../workflow-templates/.claude/hooks/twin_dir",
+		# Second pass: no twin at this path.
+		"hooks/no_twin_link.py": "../../workflow-templates/.claude/commands/foo.md",
+		"hooks/abs_outside.py": outside_file,
+		# In-tree link: still installed.
+		"hooks/linked.py": "real.py",
+	}
+	local = {"hooks/twin_link_local.py": "consumer hook\n"}
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, local, reviewed_symlinks=reviewed_symlinks)
+	assert "hooks/twin_link.py" not in tree
+	assert tree["hooks/twin_link_local.py"] == "consumer hook\n"
+	assert "hooks/twin_dir/x.py" not in tree
+	assert "hooks/no_twin_link.py" not in tree
+	assert "hooks/abs_outside.py" not in tree
+	assert "UNREVIEWED" not in "".join(value for rel, value in tree.items() if rel != "commands/foo.md")
+	for rel in (
+		"hooks/twin_link.py",
+		"hooks/twin_link_local.py",
+		"hooks/twin_dir/x.py",
+		"hooks/no_twin_link.py",
+		"hooks/abs_outside.py",
+	):
+		assert f"::warning::claude-guard-sync: .claude/{rel} in the stable .claude/ tree resolves outside that tree (a symlink to its twin or elsewhere); nothing installed." in stdout
+	# In-tree guards and non-guard twins sync as before.
+	assert tree["hooks/linked.py"] == "reviewed hook\n"
+	assert tree["hooks/real.py"] == "reviewed hook\n"
+	assert tree["commands/foo.md"] == "UNREVIEWED command twin\n"
+	assert outputs["claude_changed"] == "3"
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -630,6 +676,7 @@ def main() -> int:
 	test_claude_sync_symlink_guard_twin_is_handled_by_the_reviewed_pass()
 	test_claude_sync_keeps_a_dangling_consumer_symlink_at_a_differing_guard()
 	test_claude_sync_installs_a_symlinked_reviewed_guard_without_a_regular_twin()
+	test_claude_sync_skips_a_reviewed_guard_that_resolves_outside_the_reviewed_tree()
 	return 0
 
 

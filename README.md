@@ -1062,7 +1062,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > `stable` commit's own `.claude/` tree, not its `workflow-templates/.claude/`
 > twin. When the two differ, because an owner-only sync PR is still pending,
 > a consumer keeps the guard file it already has; a guard with no twin is
-> installed from `.claude/` only where the consumer lacks it (issue #5607).
+> installed from `.claude/` only where the consumer lacks it, and a guard
+> that resolves outside the `.claude/` tree (a symlink into its twin or
+> elsewhere) is never installed (issue #5607).
 > `.claude/scripts/stale_routines.py` sweeps the Routines these check-ins
 > leave behind (fired reminders, dead-session Routines, finished hand-backs)
 > each time one is armed or reported, and never touches any other Routine.
