@@ -1261,7 +1261,9 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT reason=<not_library_repository |
   head_repository_mismatch | pr_author_unknown | sync_identity_unavailable |
   pr_author_not_sync_identity>`. The check fails closed when an identity cannot
-  be read; a genuine sync PR then still skips through its `[skip ai]` marker.
+  be read; on a `pull_request` run a genuine sync PR then still skips through
+  its `[skip ai]` marker, while a `workflow_dispatch` run (the callers pass no
+  PR title or body to the gate) reviews it normally.
   The no-PR claude-branch push path keeps the exemption in coding-workflows
   only. The PR author and head repository come from the gate's existing PR
   fetch, and the `gh api user` lookup is shared with the marker-comment check,
