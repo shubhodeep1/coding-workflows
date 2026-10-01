@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cDirectory relocation: Moved all references from `.github/scripts/*` \u2192 `scripts/*` and `.github/prompts/*` \u2192 `prompts/*`.\u201d\n  expected_change_site: `.github/scripts/`, `.github/prompts/`, and corresponding root-level `scripts/` and `prompts/` paths.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no directory relocations or related path-rewrite hunks.\n- requirement: \u201cUpdated all workflow files (`.github/workflows/*.yml`) to reference scripts at the new root-level location.\u201d\n  expected_change_site: `.github/workflows/review_autofix.yml`, `.github/workflows/implement.yml`, and `.github/workflows/memory_maintenance.yml`.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: None of these workflows has a path-reference change in the PR diff. The only workflow change registers a test in `.github/workflows/ci.yml`.\n- requirement: \u201cUpdated research notes, README files, and example records to reflect the new paths.\u201d\n  expected_change_site: `research/squad-workflow-improvements-20260322T042436Z.md`, `ai-memory/README.md`, and `ai-memory/examples/sample_memory_record.v1.json`.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no changes to these paths. Its `README.md` change documents issue-status behavior, not script or prompt path updates.\n- requirement: \u201cUpdated `sys.path` insertion in `memory_maintenance.yml` to point to `scripts/` instead of `.github/scripts/`.\u201d\n  expected_change_site: `.github/workflows/memory_maintenance.yml`.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The workflow is unchanged in the PR diff; no hunk updates its Python path configuration.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after reaching the slot retryable-failure limit (3).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cDirectory relocation: Moved all references from `.github/scripts/*` \u2192 `scripts/*` and `.github/prompts/*` \u2192 `prompts/*`.\u201d\nExpected change site: `.github/scripts/`, `.github/prompts/`, and corresponding root-level `scripts/` and `prompts/` paths.\nEvidence of absence: The PR diff contains no directory relocations or related path-rewrite hunks.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\nRequirement: \u201cUpdated all workflow files (`.github/workflows/*.yml`) to reference scripts at the new root-level location.\u201d\nExpected change site: `.github/workflows/review_autofix.yml`, `.github/workflows/implement.yml`, and `.github/workflows/memory_maintenance.yml`.\nEvidence of absence: None of these workflows has a path-reference change in the PR diff. The only workflow change registers a test in `.github/workflows/ci.yml`.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nRequirement: \u201cUpdated research notes, README files, and example records to reflect the new paths.\u201d\nExpected change site: `research/squad-workflow-improvements-20260322T042436Z.md`, `ai-memory/README.md`, and `ai-memory/examples/sample_memory_record.v1.json`.\nEvidence of absence: The PR diff contains no changes to these paths. Its `README.md` change documents issue-status behavior, not script or prompt path updates.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nRequirement: \u201cUpdated `sys.path` insertion in `memory_maintenance.yml` to point to `scripts/` instead of `.github/scripts/`.\u201d\nExpected change site: `.github/workflows/memory_maintenance.yml`.\nEvidence of absence: The workflow is unchanged in the PR diff; no hunk updates its Python path configuration.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\nReviewer z-ai/glm-5.2 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2dc36decc89e0e286c54fc536586be02ca78ac90d722b535201b86fb0a8ced1c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5825,
+    "run_id": "36885571683",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36885571683",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001164212_68ade2d4ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5825,
+    "run_id": "36885571683"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T16:42:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
