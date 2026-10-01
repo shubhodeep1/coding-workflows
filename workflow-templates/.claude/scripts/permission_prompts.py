@@ -42,8 +42,10 @@ modes its occurrences were logged under) and `allow_rule`, the first
 `permissions.allow` that matches the latest command as a whole (`*` matches
 any run of characters, and a trailing ` *` or `:*` also matches the bare
 command, when that is the rule's only wildcard), or None. Only a single
-command is checked: one with a shell operator, a newline, a backtick, or `$(`
-never matches. A record whose `cwd` lies outside the checkout that holds the
+command is checked: one with a newline, or with a shell operator, a backtick,
+or `$(` outside quotes, never matches (inside double quotes a backtick or `$(`
+still counts, since the shell runs it), and neither does one with an unclosed
+quote or ANSI-C `$'...'` quoting. A record whose `cwd` lies outside the checkout that holds the
 settings file is not checked either, since that checkout's rules did not
 apply to it. Records are ordered by their `ts`, so "latest" is the newest
 occurrence across session files. The issue body and
@@ -119,7 +121,8 @@ _SUBCOMMAND_TOOLS = frozenset(
 _SCRIPT_RE = re.compile(r"\.(py|sh|js|mjs|ts)$")
 _FILE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
 _BULKY_INPUT_KEYS = frozenset({"content", "new_string", "old_string", "new_source", "edits"})
-# A command with any of these is compound or substituted; no prefix rule approves it as a whole.
+# A command with any of these outside quotes (`_shell_visible_text`) is compound or substituted;
+# no prefix rule approves it as a whole.
 _COMPOUND_COMMAND_RE = re.compile(r"[;&|<>()`\n]|\$\(")
 
 
@@ -297,9 +300,50 @@ def allow_rule_for(command: str, settings_path: Path | None = None) -> str | Non
 	return _matching_allow_rule(command, _bash_allow_rules(SETTINGS_PATH if settings_path is None else settings_path))
 
 
+def _shell_visible_text(command: str) -> str | None:
+	"""The command without its quoted literal text, or None when a quote is left open.
+
+	Single-quoted text and backslash-escaped characters are dropped. Inside double
+	quotes only a backtick or `$(` is kept, because the shell still runs those.
+	ANSI-C `$'...'` quoting returns None rather than being parsed.
+	"""
+	visible: list[str] = []
+	quote = ""
+	index = 0
+	while index < len(command):
+		char = command[index]
+		following = command[index + 1] if index + 1 < len(command) else ""
+		if quote == "'":
+			if char == "'":
+				quote = ""
+		elif quote == '"':
+			if char == "\\":
+				index += 1
+			elif char == '"':
+				quote = ""
+			elif char == "`":
+				visible.append(char)
+			elif char == "$" and following == "(":
+				visible.append("$(")
+				index += 1
+		elif char == "\\":
+			index += 1
+		elif char == "$" and following == "'":
+			return None
+		elif char in "'\"":
+			quote = char
+		else:
+			visible.append(char)
+		index += 1
+	return None if quote else "".join(visible)
+
+
 def _matching_allow_rule(command: str, rules: list[str]) -> str | None:
 	command = command.strip()
-	if not command or _COMPOUND_COMMAND_RE.search(command):
+	if not command or "\n" in command:
+		return None
+	visible = _shell_visible_text(command)
+	if visible is None or _COMPOUND_COMMAND_RE.search(visible):
 		return None
 	for rule in rules:
 		if _allow_pattern_matches(rule[len("Bash(") : -1], command):

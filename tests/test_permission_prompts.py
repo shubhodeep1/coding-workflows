@@ -451,12 +451,34 @@ def test_allow_rule_for_uses_the_documented_wildcards(tmp_path, rule, command, m
 		"git merge --no-edit $(cat ref)",
 		"git merge --no-edit `cat ref`",
 		"git merge --no-edit origin/x\ngit status",
+		'git merge --no-edit "$(cat ref)"',
+		'git merge --no-edit "`cat ref`"',
+		"git merge -m 'a|b' origin/x | tail",
+		"git merge -m 'line one\nline two' origin/x",
+		"git merge -m 'unclosed origin/x",
+		'git merge -m "unclosed origin/x',
+		"git merge -m $'a|b' origin/x",
 		"",
 		"   ",
 	],
 )
 def test_allow_rule_for_never_matches_compound_commands(tmp_path, command):
 	assert pp_twin.allow_rule_for(command, _settings(tmp_path, ["Bash(git merge *)", "Bash(git *)"])) is None
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git merge -m 'a|b' origin/x",
+		'git merge -m "use && to chain; (or not)" origin/x',
+		"git merge -m 'it says $(x) and `y`' origin/x",
+		'git merge -m "say \\"a|b\\"" origin/x',
+		"git merge -m a\\|b origin/x",
+		'git merge -m "${x}>y" origin/x',
+	],
+)
+def test_allow_rule_for_ignores_quoted_and_escaped_operators(tmp_path, command):
+	assert pp_twin.allow_rule_for(command, _settings(tmp_path, ["Bash(git merge *)"])) == "Bash(git merge *)"
 
 
 def test_allow_rule_for_ignores_non_bash_rules_and_bad_settings(tmp_path):
@@ -531,7 +553,9 @@ def test_issue_without_a_matching_rule_is_unchanged_apart_from_the_mode(tmp_path
 	body = pp_twin.issue_body(pattern, 1, "s1")
 	assert "Already allowlisted" not in body and "**Permission mode:** `auto`" in body
 	legacy = {"signature": "0" * 12, "event": "PermissionRequest", "tool_name": "Bash", "shape": "ls", "count": 1, "reasons": [], "first_ts": "t", "last_ts": "t", "example": "ls"}
-	assert pp_twin.issue_body(legacy, 1, "s1") == pp.issue_body(legacy, 1, "s1")
+	for text in (pp_twin.issue_body(legacy, 1, "s1"), pp_twin.comment_body(legacy, 1, "s1")):
+		assert "**Occurrences:** 1 (t – t), session `s1`\n\n**Reason Claude Code gave:**" in text
+		assert "Permission mode" not in text and "Already allowlisted" not in text
 
 
 def test_file_dry_run_reports_the_allowlisted_rule(tmp_path, monkeypatch):
