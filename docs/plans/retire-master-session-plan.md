@@ -53,7 +53,7 @@ Facts this plan builds on (all from `origin/main` at `bb80990` unless noted):
   In issue mode each stop posts one `<!-- ai:claude-blocked:v1 -->` comment, adds the `ai:claude-blocked` label, sends one `PushNotification`, and ends (lines 98-118). A human answers and comments `/reclarify`.
 - **`/reclarify` resume path.** `clarify.yml:21` accepts only a `User` comment from an owner, member or collaborator. The route (`scripts/claude_issue_route.py`) and the handoff (`scripts/claude_issue_handoff.sh`) lead to `claude-issue-intake.yml`, then a queue item, then the pickup. From there, `/implement-issue-claude` step 4 finds the in-flight project and resumes from its log, and step 2 removes `ai:claude-blocked`.
 - **Pickup.** `.claude/commands/claude-issue-pickup.md` wakes hourly and never reads target issues (line 73). #4910 adds step 3b (the dead-checker restart), #4887 adds 3a and #4817 adds 3.4. #4990 adds catch-up wakes and a limit of 20.
-- **#4785's sync** (plan `docs/plans/issue-4785-twin-first-claude-sync-plan.md` on its project branch) treats every `.claude/hooks/**`, `.claude/settings.json` or `settings.local.json` change as guard-only. Such a change gets `ai:claude-sync-approval` and never auto-merges. It has no loosening detection (plan lines 41-47).
+- **#4785's sync** (plan `docs/plans/issue-4785-twin-first-claude-sync-plan.md` on its project branch) treats every `.claude/hooks/**`, `.claude/settings.json` or `settings.local.json` change as guard-only. Such a change gets `ai:claude-sync-approval` and never auto-merges. It has no loosening detection (plan lines 41-47). (Extended 2026-10-01 by #5609: `.claude/scripts/**` is a guard path too, `GUARD_PATH_PREFIXES = ("hooks/", "scripts/")` in `scripts/claude_twin_sync.py`, so a script sync is owner-only as well.)
 - **Existing judge pattern.** `security_pass_exhaustion_judge` (`scripts/orchestrate_poll_process.sh:6256-6291`, `prompts/mode-judge-security-pass-exhaustion.txt`) already applies a bounded menu (`keep_fixing` / `accept_with_followup` / `fail`) with "do not repeat what failed" and fail-closed rules. That is the same shape the operator chose for Q4.
 - **Session lineage.** Stage sessions are started by the project checker, which stays at a fixed depth. Having a stage start another session directly would grow the lineage toward the 8-link limit (CLAUDE.md §26.B step 1c; `agents.md` "Interactive slash-command model selection").
 
@@ -62,7 +62,7 @@ Facts this plan builds on (all from `origin/main` at `bb80990` unless noted):
 | ID | Decision |
 |---|---|
 | Q1: A | Long-term fixes are filed as `ai:claude` issues for the unattended pipeline. |
-| Q3: A | Once #4785 lands, its sync PR merges hook and `settings.json` changes with no human, **except guard-loosening changes**, which wait for the operator. |
+| Q3: A | Once #4785 and this plan's phase 3 classifier land, a sync PR merges hook and `settings.json` changes with no human, **except guard-loosening changes**, which wait for the operator. (Corrected 2026-10-01, #5609: the operator's original wording credited #4785 alone; #4785 alone ships every guard-path sync owner-only. Q3: A does not cover `.claude/scripts/**`, a guard path since #5609, whose sync PRs merge only by the repository owner; see `docs/operations/master-session.md`.) |
 | Q4: A | §28.C failure escalations go to an **escalation judge**, a fresh Opus session. It picks from a fixed menu: one more budget round with a narrower fix; de-scope the failing part as an `AD` entry; or close as not planned with a report. It never skips the security pass, never merges past a failing required check, never repeats a choice for the same failure, and notifies the operator. |
 | Q5: A | The poller's checks fold into the hourly pickup and an Actions job, which act instead of handing off. The operator is alerted only for §22.B / §23.C / §24.D operations. Then the poller is retired. |
 | Q6: A | The blocked stage starts the judge straight away (through its project checker, see Approach). The pickup sweep is the backstop. |
@@ -160,6 +160,7 @@ At most 10 actions run per wake. `wake` and `requeue` come first, then `judge`, 
   - `tighten` needs **all** of these: every change is an added `deny`/`ask` entry or a removed `allow` entry; `hooks` is byte-identical; no other key changed.
   - Anything else is `loosen`, including a parse failure.
 - **`.claude/hooks/**`** (edit, add, delete, rename) and **`settings.local.json`**: always `loosen` (Q9: A).
+- **`.claude/scripts/**`** (a guard path since #5609, added 2026-10-01): always `loosen`, because Q3: A does not cover scripts and a script sync merges only by the repository owner.
 
 `claude_twin_sync.py` calls the classifier for each guard path in a sync. When every guard change is `tighten`, the PR follows the non-guard auto-merge rule (every check green, `lint` present, `--match-head-commit`). Otherwise it keeps `ai:claude-sync-approval` and the owner-approval status, as #4785 ships. Every decision is logged as `CLAUDE_GUARD_CLASSIFY path=<p> verdict=<tighten|loosen> reason=<r>`.
 
