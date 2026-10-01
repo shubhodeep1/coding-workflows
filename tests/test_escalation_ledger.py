@@ -404,6 +404,34 @@ def test_project_scoped_record_needs_no_pr_prefix(tmp_path, capsys):
 	assert code == 0
 
 
+def test_grants_counts_budget_and_descope_for_that_failure_only(tmp_path, capsys):
+	# A grant raises the cap for that stop and fingerprint only: another
+	# failure with the same stop id, or `close`, adds no extra round.
+	path = _log(
+		tmp_path,
+		_entry(1, choice="budget")
+		+ _entry(2, choice="descope")
+		+ _entry(3, choice="close")
+		+ _entry(4, fp=OTHER_FP, choice="budget")
+		+ _entry(5, stop="validation-cap", choice="budget"),
+	)
+	code, out = _run(capsys, "grants", "--log", str(path), "--stop", "security-cap", "--fingerprint", FP)
+	assert code == 0 and out == {"stop": "security-cap", "fingerprint": FP, "grants": 2}
+	code, out = _run(capsys, "grants", "--log", str(path), "--stop", "security-cap", "--fingerprint", OTHER_FP)
+	assert code == 0 and out["grants"] == 1
+	code, out = _run(capsys, "grants", "--log", str(path), "--stop", "conformance-cap", "--fingerprint", FP)
+	assert code == 0 and out["grants"] == 0
+
+
+def test_grants_rejects_bad_arguments_and_bad_logs(tmp_path, capsys):
+	code, _ = _run(capsys, "grants", "--log", str(_log(tmp_path)), "--stop", "no-such-stop", "--fingerprint", FP)
+	assert code == 1
+	code, _ = _run(capsys, "grants", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", "xyz")
+	assert code == 1
+	code, _ = _run(capsys, "grants", "--log", str(_log(tmp_path, "- not an entry\n")), "--stop", "security-cap", "--fingerprint", FP)
+	assert code == 2
+
+
 def test_record_refuses_a_used_choice(tmp_path, capsys):
 	path = _log(tmp_path, _entry(1, choice="budget"))
 	code, out = _run(capsys, "record", "--log", str(path), "--stop", "security-cap", "--fingerprint", FP, "--choice", "budget", "--why", "again")

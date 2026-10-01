@@ -240,8 +240,12 @@ def test_escalation_stop_procedure(plan):
 		assert human in section, human
 	# The choices come back as stages; passes are never waived.
 	assert "a pass is never waived" in section
-	assert "counts one extra round for each `ES-<n>` entry with `choice=budget` or `choice=descope` for the same stop id" in section
-	assert "(for `intervention-cap`, only entries whose `why=` starts with `PR #<N>:` for the same PR;" in section
+	# A grant raises the cap for that failure only (plan: "for that fingerprint only").
+	assert "counts one extra round for each `ES-<n>` entry with `choice=budget` or `choice=descope` for the same stop id and the same fingerprint" in section
+	assert "a different failure with the same stop id gets no extra round without its own judge decision" in section
+	assert "escalation_ledger.py grants --log docs/implement-plan/<slug>.md --stop <stop id> --fingerprint <fp>" in section
+	assert "Its cap is the base cap plus `grants`" in section
+	assert "For `intervention-cap` the fingerprint includes the PR, so only grants for the same PR count;" in section
 	assert "`claude/implement-plan-<slug>-descope-<n>`" in section
 	assert "For `intervention-cap` (the stop the `Escalation:` line names)" in section
 	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>[, PR #<N>]) — <the narrower fix | the de-scoped part>`" in section
@@ -331,6 +335,7 @@ def test_claude_md_section_28g():
 	assert "`close` is always available" in section
 	# `close` may repeat, so the rule names only `budget` and `descope`.
 	assert "never picks `budget` or `descope` when that choice is already recorded for the same stop and fingerprint" in section
+	assert "the extra round counts for that stop and fingerprint only (`escalation_ledger.py grants`)" in section
 	assert "`close` is always available, even when it was picked before" in section
 	assert "never picks a choice already recorded" not in section
 	assert "the `why` of the entry starts with `PR #<N>:`, naming that PR" in section

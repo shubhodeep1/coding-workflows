@@ -2407,7 +2407,9 @@ repo that receives this file via the `@stable` sync.
   `validation-cap`, `validation-terminal`, `verify-activation-cap`.
 - **The menu.** The judge picks exactly one:
   - `budget`: the stage that stopped runs once more past its cap, with a
-    narrower fix the judge names;
+    narrower fix the judge names; the extra round counts for that stop and
+    fingerprint only (`escalation_ledger.py grants`), so a different
+    failure with the same stop id gets none without its own decision;
   - `descope`: the failing part leaves the project through a reviewed
     revert PR, recorded as an `AD-<n>` entry (§28.D), allowed only when the
     rest of the project still meets the plan's core goal;

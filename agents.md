@@ -917,7 +917,9 @@ judge — <stop id>` on Opus 5.5 at high effort, about two minutes after the
 stop and at the same lineage depth as every other stage. The judge
 (`.claude/commands/escalation-judge.md`) computes the failure fingerprint
 and the unused choices with `.claude/scripts/escalation_ledger.py`, picks
-`budget` (one more round past the cap with a narrower fix), `descope` (a
+`budget` (one more round past the cap with a narrower fix; the capped
+stage computes its failure's fingerprint and adds only the grants for
+that stop and fingerprint, `escalation_ledger.py grants`, to its cap), `descope` (a
 reviewed revert PR plus an `AD-<n>` entry), or `close` (the chain's PRs
 and the source issue closed as not planned). It records an `ES-<n>` line
 in the log's `## Escalations` section (`record --why-file`, so a reason
