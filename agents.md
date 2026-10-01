@@ -285,12 +285,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     - **When:** on every `start`, hourly, and catch-up wake, before the queue.
     - **Inputs:** the pickup lists sessions (`list_sessions`, `mine: true`,
       pages of 100 while the oldest `created_at` is under 72 hours, at most
-      10 pages) and enabled triggers (at most 5 pages), and reads the login
-      with `gh api user --jq .login`.
+      10 pages) and enabled triggers (at most 5 pages), saves its own step 0
+      `get_session` result (it runs for weeks, so its own entry is rarely on
+      the 3-day listing), and reads the login with `gh api user --jq .login`.
     - **Selector:** `.claude/scripts/usage_limit_resumes.py` reads the saved
       files (the harness's `<other-session>` envelope included) and prints
       `resume`, `pending`, `skipped`, `not_reset`, `limit`, `considered`, and
-      `errors`. It makes no API call, and exits 2 on an unreadable file or a
+      `errors`. It also reads one `get_session` result (`{"ccr": {"id": …}}`);
+      the pickup passes its own first, and the first entry for an id wins.
+      It makes no API call, and exits 2 on an unreadable file or a
       bad login.
     - **Signals:**
       - `IDLE` sessions whose `post_turn_summary.status_detail` carries the
@@ -298,11 +301,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
       - checkers (title contains `— checker` or `status check-in`) whose
         `rate_limit_info` is `rejected` with a passed `resetsAt`, not
         `need_input`, and with no enabled trigger at all.
-    - **Skip reasons:** `pickup`, `archived`, `not_idle:<status>`,
+    - **Skip reasons:** `pickup`, `archived`, `too_old` (`created_at` more
+      than 72 hours ago; the last page listed can reach further back, and an
+      unreadable `created_at` is not skipped), `not_idle:<status>`,
       `permission_prompt`, `needs_input`, `not_reset` (its own limit still
       in the future), `wake_pending` (a pending `Resume after usage limit`
       trigger whatever its time, or another trigger due within 30 minutes,
-      overdue, or unreadable, read from `next_run_at` else `run_once_at`;
+      overdue, or unreadable, read from `next_run_at` when readable, else
+      `run_once_at`;
       for a checker, any trigger, since its triggers are its own
       check-ins). A fired resume trigger no longer counts, so a session
       whose resumed turn fails on a limit again is picked again.
@@ -325,7 +331,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
       others re-read state and continue. Both
       restate the #5068 and #4858 rules.
     - **Pacing:** triggers are created at most 8 per minute across the
-      wake (observed limit about 9), queue starts included. After each 8th
+      wake (observed limit about 9), step 1's hourly trigger in `start` mode
+      and queue starts included. After each 8th
       call, or on `Trigger creation
       rate limit reached`, the pickup waits with a background `sleep 60`. A
       call refused three times waits for the next wake.

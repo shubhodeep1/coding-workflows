@@ -310,7 +310,11 @@ def test_pickup_resumes_sessions_stopped_by_the_usage_limit(pickup_cmd):
 	assert "`list_sessions` with `mine: true` and `limit: 100`" in pickup_cmd
 	assert "less than 72 hours old, at most 10 pages" in pickup_cmd
 	assert "`list_triggers` with `enabled: true` and `limit: 100`" in pickup_cmd
-	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/usage_limit_resumes.py --sessions <file> … --triggers <file> … --pickup-session <your session id> --handoff-author-login <login>" in pickup_cmd
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/usage_limit_resumes.py --sessions <your get_session file> --sessions <file> … --triggers <file> … --pickup-session <your session id> --handoff-author-login <login>" in pickup_cmd
+	# PR #5718 review round 1: the pickup runs for weeks, so its own entry comes from its own get_session.
+	assert "write this wake's step 0 `get_session` result to a file in your scratchpad" in pickup_cmd
+	assert "with your own `get_session` file as the first `--sessions`" in pickup_cmd
+	assert "created more than 3 days ago" in pickup_cmd
 	assert "`gh api user --jq .login`" in pickup_cmd
 	assert "The script decides. Never pick sessions yourself" in pickup_cmd
 	assert "`CLAUDE_USAGE_LIMIT_RESUME_LIMIT` (default 20, clamped to 1..40)" in pickup_cmd
@@ -323,6 +327,9 @@ def test_pickup_resumes_sessions_stopped_by_the_usage_limit(pickup_cmd):
 	assert "a session whose resumed turn fails on a limit again is picked again on the next wake" in pickup_cmd
 	# Pacing (owner comment, 16:13Z): 8 per minute across the wake, a background wait, bounded retries.
 	assert "After every 8th `create_trigger` call of this wake" in pickup_cmd
+	# PR #5718 review round 1: step 1's hourly trigger in `start` mode counts toward the same budget.
+	assert "**Pacing** (steps 1, 1a, and 3 together; in `start` mode, step 1's `Claude issue pickup: hourly` trigger is the wake's first call)" in pickup_cmd
+	assert "(this step and step 3 together)" not in pickup_cmd
 	assert "they count toward the same 8 per minute" in pickup_cmd
 	assert "10 per minute" not in pickup_cmd
 	assert "`Trigger creation rate limit reached. Try again in <n>s`" in pickup_cmd

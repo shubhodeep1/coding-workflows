@@ -15,7 +15,11 @@ Input:
                     `limit: 100`, one file per page). The harness saves large
                     results to a file wrapped in an `<other-session …>`
                     envelope; pass the file as is. `{"ccr": {"data": [...]}}`,
-                    `{"data": [...]}`, and a bare array are accepted too.
+                    `{"data": [...]}`, and a bare array are accepted too, and
+                    so is one `get_session` result (`{"ccr": {"id": …}}`).
+                    The pickup passes its own `get_session` result first:
+                    it runs for weeks, so its own entry is rarely on the
+                    3-day listing, and the first entry for an id wins.
   --triggers FILE   (repeatable) a saved `list_triggers` result
                     (`enabled: true`), in the same forms.
   --pickup-session  the pickup's own session id: never selected, and its own
@@ -51,7 +55,10 @@ A session is a candidate when either signal holds:
     completed on overage also records `rejected`.
 
 A candidate is skipped (listed under `skipped`) when it is the pickup
-(`pickup`), archived (`archived`), not IDLE (`not_idle:<status>`), waiting
+(`pickup`), archived (`archived`), created more than 72 hours ago
+(`too_old`: the pickup lists 3 days of sessions, but the last page it reads
+can reach further back, and those older sessions stay with the manual
+fallback; an unreadable `created_at` is not skipped), not IDLE (`not_idle:<status>`), waiting
 on a permission prompt (`permission_prompt`), waiting on a human answer
 (`needs_input`, rate_limit_info signal only), still limited by its own
 `rate_limit_info` (`not_reset`), or bound to an enabled trigger that will
@@ -61,7 +68,7 @@ session, one due within 30 minutes, overdue, or with an unreadable time,
 because a stage session keeps a 7-day hand-back Routine). A pending
 `Resume after usage limit (…)` trigger counts whatever its time, so a session
 is never resumed twice for the same stop. A trigger's time is its
-`next_run_at`, else its `run_once_at`. A resume trigger that has fired is
+`next_run_at` when readable, else its `run_once_at`. A resume trigger that has fired is
 disabled and no longer counts: when the resumed turn fails on the limit or
 on a rate limit again, the next wake picks the session again.
 
@@ -100,6 +107,7 @@ RESUME_LIMIT_MIN = 1
 RESUME_LIMIT_MAX = 40
 RESUME_LIMIT_ENV = "CLAUDE_USAGE_LIMIT_RESUME_LIMIT"
 WAKE_WINDOW_MINUTES = 30
+SESSION_WINDOW_HOURS = 72
 RESUME_FIRE_FIRST_OFFSET_MINUTES = 2
 RESUME_FIRE_GROUP_SIZE = 4
 RESUME_FIRE_GROUP_SPACING_MINUTES = 3
@@ -187,7 +195,7 @@ def _decode_json_text(text: str, path: str) -> object:
 
 
 def _load_entries(path: str) -> list:
-	"""Return the `data` entries of one saved list result."""
+	"""Return the `data` entries of one saved list result, or a one-entry list for one `get_session` result."""
 	try:
 		with open(path, encoding="utf-8") as handle:
 			text = handle.read()
@@ -196,6 +204,8 @@ def _load_entries(path: str) -> list:
 	payload = _decode_json_text(text, path)
 	if isinstance(payload, dict) and isinstance(payload.get("ccr"), dict):
 		payload = payload["ccr"]
+	if isinstance(payload, dict) and "data" not in payload and isinstance(payload.get("id"), str):
+		return [payload]
 	entries = payload.get("data") if isinstance(payload, dict) else payload
 	if not isinstance(entries, list):
 		raise InputError(f"{path}: expected a list result with a `data` array")
@@ -294,7 +304,7 @@ def fire_offset_minutes(position: int) -> int:
 def _bound_wakes(triggers: list, errors: list) -> dict:
 	"""Map session id → `(wake time, is a resume trigger)` for every enabled trigger bound to it.
 
-	The wake time is `next_run_at`, else `run_once_at`, and None when neither is readable.
+	The wake time is `next_run_at` when readable, else `run_once_at`, and None when neither is readable.
 	"""
 	wakes: dict = {}
 	for position, trigger in enumerate(triggers):
@@ -307,7 +317,9 @@ def _bound_wakes(triggers: list, errors: list) -> dict:
 		if not isinstance(session_id, str) or not session_id:
 			continue
 		is_resume = _text(trigger.get("name")).startswith(RESUME_TRIGGER_PREFIX)
-		wake_time = _parse_time(trigger.get("next_run_at") or trigger.get("run_once_at"))
+		wake_time = _parse_time(trigger.get("next_run_at"))
+		if wake_time is None:
+			wake_time = _parse_time(trigger.get("run_once_at"))
 		wakes.setdefault(session_id, []).append((wake_time, is_resume))
 	return wakes
 
@@ -349,6 +361,9 @@ def _skip_reason(session: dict, kind: str, signal: str, pickup_session: str, nex
 		return "pickup"
 	if status == ARCHIVED_STATUS:
 		return "archived"
+	created_at = _parse_time(session.get("created_at"))
+	if created_at is not None and created_at < now - dt.timedelta(hours=SESSION_WINDOW_HOURS):
+		return "too_old"
 	if status != IDLE_STATUS:
 		short = status[len(SESSION_STATUS_PREFIX):] if status.startswith(SESSION_STATUS_PREFIX) else status
 		return f"not_idle:{short.lower() or 'unknown'}"

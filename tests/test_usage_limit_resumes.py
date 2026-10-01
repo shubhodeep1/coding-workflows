@@ -48,11 +48,12 @@ def _session(
 	rate_status="allowed",
 	resets_at=PAST_RESET,
 	updated_at="2026-09-30T10:40:00Z",
+	created_at=None,
 ):
 	summary = {"status_category": category, "status_detail": detail}
 	if needs_action is not None:
 		summary["needs_action"] = needs_action
-	return {
+	session = {
 		"id": session_id,
 		"title": title,
 		"session_status": status,
@@ -62,6 +63,9 @@ def _session(
 			"rate_limit_info": {"status": rate_status, "resetsAt": resets_at, "rateLimitType": "five_hour", "isUsingOverage": True},
 		},
 	}
+	if created_at is not None:
+		session["created_at"] = created_at
+	return session
 
 
 def _checker(session_id, title="#4750 · PR #4760 — implement-plan issue-4750-x — checker", **kwargs):
@@ -347,6 +351,82 @@ def test_run_once_at_is_read_when_next_run_at_is_missing(tmp_path, capsys):
 	_, result = _run(tmp_path, capsys, sessions, [far, near])
 	assert _ids(result["resume"]) == ["session_far"]
 	assert _skips(result) == {"session_near": "wake_pending"}
+
+
+def test_run_once_at_is_read_when_next_run_at_is_unreadable(tmp_path, capsys):
+	"""PR #5718 review round 1: a truthy but unparseable `next_run_at` must not hide a readable `run_once_at`."""
+	far = _trigger("session_far", "not a time", name="PR #5651 hand-back", run_once_at="2026-10-07T12:00:00Z")
+	near = _trigger("session_near", "not a time", name="PR #5652 hand-back", run_once_at="2026-09-30T12:10:00Z")
+	neither = _trigger("session_neither", "not a time", name="PR #5653 hand-back", run_once_at="also not a time")
+	sessions = [_pickup(), _session("session_far"), _session("session_near"), _session("session_neither")]
+	_, result = _run(tmp_path, capsys, sessions, [far, near, neither])
+	assert _ids(result["resume"]) == ["session_far"]
+	assert _skips(result) == {"session_near": "wake_pending", "session_neither": "wake_pending"}
+
+
+# --- session window ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+	"created_at, reason",
+	[
+		("2026-09-27T11:59:00Z", "too_old"),  # 72 h 1 min before NOW
+		("2026-09-27T12:01:00Z", None),  # 71 h 59 min before NOW
+		("2026-09-30T10:00:00Z", None),
+		("not a time", None),  # unreadable: not skipped
+	],
+)
+def test_sessions_created_more_than_72_hours_ago_are_skipped(tmp_path, capsys, created_at, reason):
+	"""PR #5718 review round 1: the last page the pickup reads can reach past 3 days; those stay with the manual fallback."""
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a", created_at=created_at)])
+	if reason is None:
+		assert _ids(result["resume"]) == ["session_a"]
+	else:
+		assert result["resume"] == [] and _skips(result) == {"session_a": reason}
+
+
+def test_a_session_with_no_created_at_is_not_skipped(tmp_path, capsys):
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a")])
+	assert _ids(result["resume"]) == ["session_a"]
+
+
+def test_an_old_pickup_entry_still_holds_the_account(tmp_path, capsys):
+	"""The pickup runs for weeks: the age cutoff never drops its own entry from the hold-off."""
+	pickup = _pickup(rate_status="rejected", resets_at=FUTURE_RESET)
+	pickup["created_at"] = "2026-09-01T00:00:00Z"
+	_, result = _run(tmp_path, capsys, [pickup, _session("session_a")])
+	assert result["not_reset"] is True
+	assert result["resume"] == [] and _ids(result["pending"]) == ["session_a"]
+
+
+def test_the_pickups_own_get_session_result_is_read(tmp_path, capsys):
+	"""Pickup step 1a passes its own `get_session` result first, because its entry is rarely on the 3-day listing."""
+	own_path = tmp_path / "pickup.json"
+	own_path.write_text(json.dumps({"ccr": _pickup(rate_status="rejected", resets_at=FUTURE_RESET)}), encoding="utf-8")
+	_, result = _run(tmp_path, capsys, [_session("session_a")], extra=["--sessions", str(own_path)])
+	assert result["not_reset"] is True
+	assert result["considered"] == 2
+	assert result["resume"] == [] and _ids(result["pending"]) == ["session_a"]
+
+
+def test_the_first_entry_for_a_session_id_wins(tmp_path, capsys):
+	own_path = tmp_path / "pickup.json"
+	own_path.write_text(json.dumps({"ccr": _pickup(rate_status="allowed", resets_at=None)}), encoding="utf-8")
+	stale_path = tmp_path / "stale.json"
+	stale_path.write_text(json.dumps({"data": [_pickup(rate_status="rejected", resets_at=FUTURE_RESET), _session("session_a")]}), encoding="utf-8")
+	triggers_path = tmp_path / "triggers.json"
+	triggers_path.write_text(json.dumps({"data": []}), encoding="utf-8")
+	argv = [
+		"--sessions", str(own_path),
+		"--sessions", str(stale_path),
+		"--triggers", str(triggers_path),
+		"--pickup-session", PICKUP_ID,
+		"--handoff-author-login", LOGIN,
+	]
+	assert resumes.main(argv, now=NOW, environ={}) == 0
+	result = json.loads(capsys.readouterr().out)
+	assert result["not_reset"] is False
+	assert _ids(result["resume"]) == ["session_a"]
 
 
 @pytest.mark.parametrize(
