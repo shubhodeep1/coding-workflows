@@ -515,6 +515,10 @@ def test_forced_review_running_from_the_default_branch_blocks_the_merge(fake_gh)
 	("stall-poller review_rb_judge_dispatch.yml dispatch (no PR binding)", [],
 		{"review_rb_judge_dispatch.yml": [_run(RUN_ID + 5, workflow="review_rb_judge_dispatch.yml", status="in_progress",
 			event="workflow_dispatch", head_branch="main", title="Internal: Review-Blocked Judge Dispatch")]}),
+	# PR #5929 review round 4: an internal-review.yml dispatch from another ref
+	# set its own run name, so naming another PR does not rule this one out.
+	("internal-review.yml dispatch from another ref titled for another PR", [],
+		{"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, status="in_progress", head_branch="claude/forged")]}),
 ])
 def test_an_active_review_defers_the_merge(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -625,6 +629,21 @@ def test_an_active_review_defers_a_dry_run_too(fake_gh):
 		[_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure", head_branch=REF), _run(RUN_ID + 6)],
 		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure",
 			head_branch=REF)]}),
+	# PR #5929 review round 4: from a ref that is neither the default branch
+	# nor the head branch, a run name naming another PR is just as untrusted.
+	("a failed review_autofix.yml dispatch from another ref titled for another PR", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch="claude/forged")]}),
+	("a cancelled consumer ai-review.yml dispatch from another ref titled for another PR", [],
+		{"internal-review.yml": None, "review_autofix.yml": None,
+			"ai-review.yml": [_titled(RUN_ID + 4, "ai-review.yml", pr=7, conclusion="cancelled", head_branch="feature/x")]}),
+	("a failed review_rb_judge_dispatch.yml dispatch from another ref titled for another PR", [],
+		{"review_rb_judge_dispatch.yml": [_titled(RUN_ID + 5, "review_rb_judge_dispatch.yml", pr=7, conclusion="failure",
+			head_branch="claude/forged")]}),
+	("a failed internal-review.yml dispatch from another ref titled for another PR", [],
+		{"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, conclusion="failure", head_branch="claude/forged")]}),
+	("a failed dispatch from another ref titled for another PR, then a successful bound review",
+		[_run(RUN_ID + 6)],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch="claude/forged")]}),
 ])
 def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -668,15 +687,14 @@ def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, bran
 	("a failed titled dispatch for this PR, then a newer successful bound review", [],
 		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure")],
 			"internal-review.yml": [_dispatch(RUN_ID + 4)]}),
-	# PR #5929 review round 1: a dispatch from another ref is never a bound
-	# review, so its success is ignored, and a failed one titled for another
-	# PR is not a review of this one.
+	# PR #5929 review rounds 1 and 4: a dispatch from another ref is never a
+	# bound review, so its success is ignored, whatever PR it names.
 	("a newer successful titled dispatch for this PR from another ref", [],
 		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", head_branch="claude/other")]}),
-	("a newer failed titled dispatch for another PR from another ref", [],
-		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch="claude/other")]}),
-	("a newer failed internal-review.yml dispatch for another PR from another ref", [],
-		{"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, conclusion="failure", head_branch="claude/other")]}),
+	("a newer successful titled dispatch for another PR from another ref", [],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, head_branch="claude/other")]}),
+	("a newer successful internal-review.yml dispatch for another PR from another ref", [],
+		{"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, head_branch="claude/other")]}),
 	# PR #5929 review round 2: a head-branch dispatch is never a bound review,
 	# so a successful one changes nothing, and a non-review dispatch is ignored.
 	("a newer successful review_autofix.yml dispatch on the head branch", [_titled(RUN_ID + 3, "review_autofix.yml", head_branch=REF)],
@@ -718,8 +736,40 @@ def test_a_titled_failed_dispatch_from_another_ref_names_its_branch(fake_gh):
 		"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", conclusion="failure", head_branch="claude/other")]}))
 	result = _evaluate(dry_run=True)
 	assert result["state"] == "review_superseded", result
-	assert "names this PR from a ref other than the default branch (main)" in result["reason"]
+	assert "ran from a ref other than the default branch (main)" in result["reason"]
 	assert f".github/workflows/review_autofix.yml run {RUN_ID + 3} on claude/other (failure)" in result["reason"]
+
+
+@pytest.mark.parametrize("trusted, names_this_pr, names_no_pr, conclusion, expected", [
+	# From the default branch the run name decides.
+	(True, True, False, "success", "bound"),
+	(True, True, False, "failure", "bound"),
+	(True, False, True, "failure", "blocks"),
+	(True, False, True, "success", None),
+	(True, False, False, "failure", None),
+	(True, False, False, "success", None),
+	# From any other ref it is never read (PR #5929 review rounds 1 to 4).
+	(False, True, False, "success", None),
+	(False, True, False, "failure", "blocks"),
+	(False, False, True, "cancelled", "blocks"),
+	(False, False, False, "failure", "blocks"),
+	(False, False, False, "timed_out", "blocks"),
+	(False, False, False, "success", None),
+])
+def test_one_rule_classifies_every_review_dispatch(trusted, names_this_pr, names_no_pr, conclusion, expected):
+	run = _run(RUN_ID + 1, conclusion=conclusion, event="workflow_dispatch")
+	assert pending_checks._classify_review_dispatch(run, trusted, names_this_pr, names_no_pr) == expected
+
+
+def test_a_failed_dispatch_from_another_ref_titled_for_another_pr_still_blocks(fake_gh):
+	# PR #5929 review round 4: that ref's workflow file set the run name, so
+	# naming another PR does not make the failure someone else's.
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, dispatch_runs=_dispatch_runs(**{
+		"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch="claude/forged")]}))
+	result = _evaluate(dry_run=True)
+	assert result["state"] == "review_superseded", result
+	assert "ran from a ref other than the default branch (main)" in result["reason"]
+	assert f".github/workflows/review_autofix.yml run {RUN_ID + 3} on claude/forged (failure)" in result["reason"]
 
 
 def test_a_failed_head_branch_dispatch_names_its_branch(fake_gh):
@@ -728,7 +778,7 @@ def test_a_failed_head_branch_dispatch_names_its_branch(fake_gh):
 		branch_runs=[_dispatch(RUN_ID + 2, pr=7, conclusion="failure", head_branch=REF)])
 	result = _evaluate(dry_run=True)
 	assert result["state"] == "review_superseded", result
-	assert "was dispatched on this PR's head branch" in result["reason"]
+	assert "this PR's head branch included" in result["reason"]
 	assert f".github/workflows/internal-review.yml run {RUN_ID + 2} on {REF} (failure)" in result["reason"]
 
 
@@ -815,6 +865,9 @@ def _unbound(run_id: int, **overrides) -> dict:
 		"review_superseded"),
 	("sweep dispatch for this PR still running on page 2", [],
 		{"internal-review.yml": _FULL_PAGE_FOR_OTHER_PRS + [_dispatch(RUN_ID + 50, status="queued")]}, "review_active"),
+	("internal-review.yml dispatch from another ref titled for another PR still running on page 2", [],
+		{"internal-review.yml": _FULL_PAGE_FOR_OTHER_PRS + [_dispatch(RUN_ID + 50, pr=7, status="queued", head_branch="claude/forged")]},
+		"review_active"),
 	("unbound dispatch still running on page 2", [],
 		{"review_autofix.yml": [_unbound(RUN_ID + 1000 - offset) for offset in range(100)]
 			+ [_unbound(RUN_ID + 50, status="in_progress")]}, "review_active"),
@@ -895,6 +948,11 @@ def _status_reads(fake_gh) -> list[str]:
 	("older running dispatch for another PR", [],
 		{"internal-review.yml": _FULL_PAGE_REACHING_THE_MARKER + [_dispatch(RUN_ID - 5, pr=7, status="in_progress")]},
 		"merge_enabled"),
+	# PR #5929 review round 4: from another ref the run name is not trusted.
+	("older running dispatch from another ref titled for another PR", [],
+		{"internal-review.yml": _FULL_PAGE_REACHING_THE_MARKER
+			+ [_dispatch(RUN_ID - 5, pr=7, status="in_progress", head_branch="claude/forged")]},
+		"review_active"),
 	("older runs past the marker page all completed", [],
 		{"internal-review.yml": _FULL_PAGE_REACHING_THE_MARKER + [_dispatch(RUN_ID - 5, conclusion="failure")]}, "merge_enabled"),
 ])

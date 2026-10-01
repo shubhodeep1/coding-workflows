@@ -1078,19 +1078,21 @@ reviews, comments, and conflicts stay a direct §12 request.
   the live one on a re-read of the comments, returns `review_superseded`.
   Those three dispatch workflows title a `workflow_dispatch` run
   `<workflow name> [pr:<N>]` (`run-name`, issue #5906; parsed by
-  `DISPATCH_TITLE_PR_RE`): a finished one titled for the PR is one of its
-  reviews, one titled for another PR is ignored, and a newer one that names
-  no PR and did not conclude `success` also returns `review_superseded`
-  (fail closed). A run name only binds a dispatch that ran from the default
-  branch (theirs and `internal-review.yml`'s): `check_review_runs()` takes
-  the PR's `default_branch`, a dispatch from any other ref is never a bound
-  review, and a newer one titled for the PR that did not conclude `success`
-  returns `review_superseded`. With no default branch known, no run name
-  binds. A review workflow dispatched with the head branch as its ref shows
-  up in the head-branch listing too: it is never a bound review there
-  either, and a newer one that did not conclude `success` returns
-  `review_superseded`, whatever PR its run name names (PR #5929 review
-  round 2).
+  `DISPATCH_TITLE_PR_RE`): from the default branch, a finished one titled
+  for the PR is one of its reviews, one titled for another PR is ignored,
+  and a newer one that names no PR and did not conclude `success` also
+  returns `review_superseded` (fail closed). A run name only binds a
+  dispatch that ran from the default branch (theirs and
+  `internal-review.yml`'s): `check_review_runs()` takes the PR's
+  `default_branch`, and a dispatch from any other ref, the head branch
+  included (which the head-branch listing also returns), ran that ref's
+  workflow file, so its run name is never read: it is never a bound
+  review, a newer one that did not conclude `success` returns
+  `review_superseded` whatever PR its run name names, and an
+  `internal-review.yml` one still running returns `review_active`. With no
+  default branch known, no run name binds. Every dispatch, from whichever
+  listing, goes through the one rule in `_classify_review_dispatch()`
+  (PR #5929 review rounds 1 to 4).
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be
