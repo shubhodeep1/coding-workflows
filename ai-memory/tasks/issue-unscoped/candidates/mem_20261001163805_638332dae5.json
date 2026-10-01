@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/protected_path_authorization.py:287-291 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `evaluate_pr()` allows an unprotected PR before validating its head SHA, so the wrapper can run the merge without `--match-head-commit` when the SHA is missing or malformed.\n  WHY: A concurrent push can add a protected path after the check and have it merged without authorization; severity was disputed (one NIT, four MAJOR), so this uses the highest reported severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/protected_path_authorization.py: lines 287-291 | severity=NIT | confidence=2\n  PROBLEM: evaluate_pr returns allow for unprotected PRs before validating that head is a well-formed 40-hex SHA; the merge can then run unbound.\n  WHY: If the PR response lacks a valid head.sha and a push adds a protected path before the merge, that unauthorized head can merge without the gate re-checking it.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/protected_path_authorization.py: lines 287-291 (in `evaluate_pr`); gate wrapper scripts/protected_path_gate.sh lines 135-141 | severity=MAJOR | confidence=5\n  PROBLEM: The function returns \"allow\" for an unprotected PR without validating that the head SHA is a usable 40-hex string, so the wrapper silently runs the merge command unbound.\n  WHY: A transient API condition can leave `head.sha` missing or malformed; a concurrent push can then add a protected path and merge it without authorization.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `evaluate_pr()`, lines 287\u2013291; `protected_path_gate.sh`, lines 135\u2013141 | severity=MAJOR | confidence=4\n  PROBLEM: `evaluate_pr()` allows an unprotected file list before validating that the PR head is a usable SHA, so the wrapper runs the merge command unbound.\n  WHY: If the PR read has a missing or malformed `head.sha` and a protected-path push occurs before the merge, the wrapper can merge the new head without checking its files or requiring authorization.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- `scripts/protected_path_authorization.py`, `evaluate_pr()`, lines ~287-291 (the `if not paths and not truncated:` early return) and `scripts/protected_path_gate.sh` lines ~135-141 (the unprotected-merge binding branch) | severity=MAJOR | confidence=4\n  PROBLEM: When the PR head SHA is unavailable and the file list contains no protected paths, `evaluate_pr` returns `allow` before validating the head, so the wrapper runs the merge unbound.\n  WHY: A push between the check and the merge could add a protected path that merges without authorization.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/protected_path_authorization.py: evaluate_pr, the `if not paths and not truncated:` block (~line 287-291) | severity=MAJOR | confidence=3\n  PROBLEM: An unprotected PR is allowed before its head SHA is validated, so the gate wrapper cannot add `--match-head-commit` and runs the merge unbound.\n  WHY: A push that adds a protected path between the check and merge can land that head without file checking or owner authorization.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "095626015762c4b0d236db4547d5e169bed675a22332bd0fafe927feed96c29a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4973,
+    "run_id": "36888862674",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36888862674",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001163805_638332dae5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4973,
+    "run_id": "36888862674"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T16:38:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
