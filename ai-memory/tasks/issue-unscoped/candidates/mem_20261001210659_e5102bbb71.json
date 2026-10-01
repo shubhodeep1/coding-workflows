@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run auto-synced scripts without session credentials or write access; route necessary writes through immutable, least-privilege helpers that validate operations and targets.\"\n  expected_change_site: `.claude/settings.json` permissions and execution/write paths in `.claude/scripts/**`\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  EVIDENCE: The PR does not change .claude/settings.json or any script execution behavior. Scripts still run with GH_TOKEN and claude-code-remote tools through permissions.allow; The PR adds owner review to the script sync path, but changes neither `.claude/settings.json` nor any `.claude/scripts/**` execution or write behavior. The current settings still allow GitHub API access and script invocations without a prompt.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Run auto-synced scripts without session credentials or write access; route necessary writes through immutable, least-privilege helpers that validate operations and targets.\"\n  Expected change site: .claude/settings.json permissions and .claude/scripts/** execution paths\n  Evidence of absence: The PR does not change .claude/settings.json or any script execution behavior. Scripts still run with GH_TOKEN and claude-code-remote tools through permissions.allow. The linked issue does not defer this recommendation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cRun auto-synced scripts without session credentials or write access; route necessary writes through immutable, least-privilege helpers that validate operations and targets.\u201d\n  Expected change site: `.claude/settings.json` permissions and the execution/write paths in `.claude/scripts/**`.\n  Evidence of absence: The PR adds owner review to the script sync path, but changes neither `.claude/settings.json` nor any `.claude/scripts/**` execution or write behavior. The current settings still allow GitHub API access and script invocations without a prompt. The plan marks this recommendation a non-goal, but the linked issue does not defer it to a follow-up.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9bc7a8ab206b7a05ab14916a8fa011dc19286058f4737629e8f8045908b663a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5650,
+    "run_id": "36919941626",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36919941626",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001210659_e5102bbb71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5650,
+    "run_id": "36919941626"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T21:06:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
