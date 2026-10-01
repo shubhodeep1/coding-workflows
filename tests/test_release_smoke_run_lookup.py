@@ -192,6 +192,21 @@ def test_read_failure_returns_one_and_prints_nothing() -> None:
 	assert len(calls) == 1
 
 
+def test_explicit_page_cap_returns_two_when_every_page_is_full() -> None:
+	# The release gate's captures pass a cap and skip retrying a capped walk.
+	lookup = LOOKUP.format(title="Smoke") + ' "10"'
+	result, calls = _invoke({"default.json": {"workflow_runs": _filler(100, 1000)}}, lookup + '\necho "rc=$?"')
+	assert result.stdout == "rc=2\n", result.stdout + result.stderr
+	assert [_page(c) for c in calls] == list(range(1, 11))
+
+
+def test_page_that_is_not_a_runs_listing_returns_one() -> None:
+	result, calls = _invoke({"page-1.json": {"workflow_runs": _filler(100, 1000)}, "page-2.json": {"workflow_runs": None}}, LOOKUP.format(title="Smoke"))
+	assert result.returncode == 1
+	assert result.stdout == ""
+	assert [_page(c) for c in calls] == [1, 2]
+
+
 def _workflow() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
 
@@ -216,9 +231,11 @@ def test_capture_sites_use_the_paged_lookup() -> None:
 def test_wait_steps_fail_fast_on_an_empty_issue_title() -> None:
 	# An empty ISSUE_TITLE switches the lookup's title filter off, which is
 	# the unscoped lookup of run 36374918973. Every step that scopes by title
-	# must stop before its first lookup instead.
+	# must stop before its first lookup instead. wait-clarify and
+	# wait-implement report the released `run_id_missing` (AD-9 of
+	# docs/completed/issue-4723-require-plan-run-id-plan.md).
 	wf = _workflow()
-	expected = {"wait-clarify": "clarify_failed", "wait-plan": "plan_failed", "wait-implement": "implement_failed"}
+	expected = {"wait-clarify": "run_id_missing", "wait-plan": "plan_failed", "wait-implement": "run_id_missing"}
 	for step_id, status in expected.items():
 		step = re.search(rf"id: {step_id}\n.*?        run: \|\n(.*?)\n      - ", wf, re.S)
 		assert step is not None, step_id
