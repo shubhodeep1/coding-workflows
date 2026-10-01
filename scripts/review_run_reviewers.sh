@@ -1570,6 +1570,12 @@ PY
 # on reruns, while different PRs spread evenly across the panel. Output keeps
 # the panel's REVIEWER_MODELS order.
 reviewer_pick_seeded_models() {
+  # Fewer than <count> and <seed> prints nothing, like a broken hash, so the
+  # caller's count check fails open instead of "$1: unbound variable" (set -u)
+  # or a failed `shift 2` aborting the classifier.
+  if [ "$#" -lt 2 ]; then
+    return 0
+  fi
   local count="$1"
   local seed="$2"
   shift 2

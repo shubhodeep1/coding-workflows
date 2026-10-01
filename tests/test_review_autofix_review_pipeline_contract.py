@@ -4501,6 +4501,54 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_m
 	assert pinned_lite["active_models"] == ["z-ai/glm-5.2"]
 
 
+def test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args() -> None:
+	"""Turning the size tiers off leaves the panel to the risk-tier resolver."""
+	reviewer_models = _workflow_reviewer_models()
+	small_unprotected_diff = _numbered_code_diff({"src/app.py": 5})
+
+	# Both resolvers off: the full panel runs.
+	both_off = _run_review_tier_harness(
+		diff_text=small_unprotected_diff,
+		extra_env={"REVIEW_TIER_RESOLVER_ENABLED": "false", "REVIEWER_RISK_TIER_ENABLED": "0", "REVIEWER_FILTER_ACTIVE": "false"},
+		pre_classify="classify_reviewer_risk_tier",
+	)
+	assert both_off["REVIEW_TIER"] == "disabled"
+	assert both_off["active_models"] == reviewer_models
+
+	# Size tiers off, risk tiers on: the risk tier's smaller selection stands,
+	# as README.md / agents.md now document for REVIEW_TIER_RESOLVER_ENABLED.
+	risk_only = _run_review_tier_harness(
+		diff_text=small_unprotected_diff,
+		extra_env={"REVIEW_TIER_RESOLVER_ENABLED": "false", "REVIEWER_RISK_TIER_ENABLED": "1", "REVIEWER_FILTER_ACTIVE": "false"},
+		pre_classify="classify_reviewer_risk_tier",
+	)
+	assert "REVIEWER_RISK_TIER: tier=trivial" in risk_only["stdout"]
+	assert risk_only["REVIEW_TIER"] == "disabled"
+	assert risk_only["active_models"] == reviewer_models[:1]
+
+	# reviewer_pick_seeded_models with fewer than <count> and <seed> prints
+	# nothing and succeeds under set -euo pipefail, so callers fail open.
+	with tempfile.TemporaryDirectory(prefix="review-tier-pick-args-") as runtime_dir:
+		for args in ("", "1", "1 123"):
+			result = subprocess.run(
+				[
+					"bash",
+					"-c",
+					"set -euo pipefail\n"
+					f"{_reviewer_risk_tier_helper_block()}\n"
+					f"reviewer_pick_seeded_models {args}\n"
+					"echo DONE\n",
+				],
+				cwd=str(REPO_ROOT),
+				env={**os.environ, "RUNTIME_DIR": runtime_dir},
+				check=False,
+				capture_output=True,
+				text=True,
+			)
+			assert result.returncode == 0, (args, result.stderr[-500:])
+			assert result.stdout == "DONE\n", (args, result.stdout, result.stderr[-500:])
+
+
 def test_review_tier_protected_paths_match_deterministic_skip_gate() -> None:
 	"""The tier resolver's protected-path lists must equal the skip gate's."""
 	gate_block = _step_block("Evaluate review gate")
@@ -7791,6 +7839,7 @@ def main() -> int:
 	test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides()
 	test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables()
 	test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_models()
+	test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args()
 	test_review_tier_protected_paths_match_deterministic_skip_gate()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
 	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path()
