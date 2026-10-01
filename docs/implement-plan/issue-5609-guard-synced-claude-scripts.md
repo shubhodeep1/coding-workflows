@@ -7,17 +7,18 @@
 - Status: IN_PROGRESS
 - Stage: conformance 1/3
 - Activation: not started
-- Waiting on: conformance fix PR 1 (branch claude/implement-plan-issue-5609-guard-synced-claude-scripts-conformance-fix-1)
+- Waiting on: PR #5699
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_019Lc5auXqLNUF8Vdips7jGB   (safety net and hand-back ids for the conformance-fix wait are in the conformance 1/3 stage report and the next resume block)
-- Last updated: 2026-09-30
-- Last note: conformance run 1 (session session_01CemB7XtbmJfCvUD2ohXit1): CONFORMANT, Implemented COMPLETE, Correctness CONCERNS (two stale sibling texts still grouped scripts with the workflow-merged commands); fix PR 1 opened against the project branch.
+- Check-in: checker session_019Lc5auXqLNUF8Vdips7jGB   (safety net and hand-back ids for the PR #5699 wait are in the conformance 1/3 review round 2 stage report and the next resume block)
+- Last updated: 2026-10-01
+- Last note: PR #5699 review round 2 (session session_019WZS4KKJdKWSwd4rgrp2PP): 0 reviewer findings; the only failing check was the stale `review / codex-agent` run from the 2026-09-30 OpenRouter credit outage, so this log commit gives the head a fresh review run (AD-7).
 
 ## Phases
 1. [x] Phase 1 — guard `.claude/scripts/**` in the twin sync (code, tests, docs; no `.claude/**` path is edited; protected paths: none)   — PR #5655 merged 2026-09-30; review rounds: 0; interventions: 0
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT (Implemented COMPLETE: G1–G4 map to `scripts/claude_twin_sync.py:95`, tests, label contract, docs; Correctness CONCERNS: `.github/workflows/review_autofix.yml:549` gate comment and `docs/operations/master-session.md:130-131` duty table still grouped scripts with the workflow-merged commands) — fix PR 1 on `claude/implement-plan-issue-5609-guard-synced-claude-scripts-conformance-fix-1` (pre-security)
+- Fix PR 1 = #5699 — review rounds: 2; interventions: 0 of 3. Round 1 fixed in 4be9580. Round 2 blocked 2026-09-30 on OpenRouter `Insufficient credits` (runs 36746700557, 36755525261, 36762737388; identical-failure cap → `ai:review-blocked`); resumed 2026-10-01 by `/reclarify` (operator topped up credits, removed `ai:review-blocked`, the review sweep re-dispatched run 36794109977). Run 36794109977 found 0 findings on head 4be95804ff69 but ran on `main`'s SHA, so the head kept the failed `review / codex-agent` check run 109994664936 and the round was handed to Claude.
 
 ## Security pass
 
@@ -32,9 +33,13 @@
 - AD-2 [plan, 2026-09-30] Should `.claude/commands/**` become a guard path too? — Picked: A — no. Alternatives: B — guard commands too. Why: commands are instructions at CLAUDE.md's trust level, still bound by permission rules and the classifier; scripts and hooks execute without either (§5). Applied in: no code change. Status: pending review
 - AD-3 [plan, 2026-09-30] Should the posted status description `No hook or settings change` change? — Picked: A — keep it. Alternatives: B — rename it to include scripts. Why: still true, and a change re-posts a status on every open non-guard head (§5, §15). Applied in: phase 1. Status: pending review
 - AD-4 [plan, 2026-09-30] How are the parent project's docs kept accurate? — Picked: A — correct the #4785 plan's guard lines, own changelog fragment only. Alternatives: B — also edit the #4785 fragment; C — change no parent doc. Why: the plan text is what the parent's activation check reads; a fragment belongs to its PR (§20). Applied in: phase 1. Status: pending review
+- AD-5 [conformance 1/3 resume, 2026-10-01] /implement-issue-claude step 4 found the committed log IN_PROGRESS with checker session_019Lc5auXqLNUF8Vdips7jGB alive, but the checker had no pending check-in and the project was BLOCKED on OpenRouter credits (blocked state never committed); stop as "already in progress" or resume? — Picked: A — resume and re-arm the wait on PR #5699. Alternatives: B — report "already in progress" and stop. Why: no trigger was driving the project, so stopping would strand it after the owner's /reclarify. Applied in: no code change. Status: pending review
+- AD-6 [conformance 1/3 resume, 2026-10-01] Push the pending progress-log commit to PR #5699 now? — Picked: A — defer it and wait on review run 36794109977 on head 4be9580. Alternatives: B — push now (new head, new review). Why: the owner asked to wait on the running review; a push would supersede it; the log facts ride this block to the next stage's commit. Applied in: no code change. Status: pending review
+- AD-7 [conformance 1/3 review round 2, 2026-10-01] Round 2 was handed off with 0 reviewer findings and only the stale `review / codex-agent` failure (check run 109994664936, credit outage), and no verdict bot is configured (`CLAUDE_FIXER_VERDICT_BOT_LOGIN` unset); how should the round close? — Picked: A — push the deferred progress-log commit as the round-2 `[claude-autofix]` commit so the head gets a fresh review run and fresh checks. Alternatives: B — leave the verdict unposted and stop BLOCKED for a human; C — re-run the failed job (a §23.C re-run, not auto-decidable). Why: the dispatched review was clean, only a run on the PR head replaces the stale check, and the log commit was owed anyway (AD-6). Applied in: PR #5699. Status: pending review
 
 ## Lessons
 - [source:conformance] When a change moves paths from one class to another (here scripts from auto-merged to owner-merged guard paths), grep every prose description of both classes repo-wide, including comments in other workflows and operations tables, not only the docs the plan lists. (files: .github/workflows/review_autofix.yml, docs/operations/master-session.md)
+- [source:intervention] A `workflow_dispatch` review run (sweep re-dispatch) attaches its check runs to the default branch's SHA, not the PR head, so a failed `review / codex-agent` from an earlier outage stays on the head even after a clean re-review; only a run on the PR head (a new push) clears it. (files: .github/workflows/review_autofix.yml, .github/workflows/review_autofix_sweep.yml)
 
 ## Notes
 - Security pass: skip (`security_pass_skip.py` → `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`).
@@ -45,3 +50,5 @@
 - Conformance run 1 checks (2026-09-30): 13 suites 617 passed, 3 skipped (twin sync, labels, implement-plan / implement-issue commands, session titles, CLAUDE.md sections, changelog contract, workflow size, fixer mode, PR sweep, label helpers, permission prompts); ruff (E,F) clean; inventory parity ok; `claude_twin_sync.py check` against the merge-base with `origin/main` (d1e530e) ok.
 - `claude_twin_sync.py check --base origin/main` against `main`'s tip (238f457) reports `.claude/hooks/gh_api_write_guard.py`: `main` gained the #4619 hook sync (70b5493) after the #4785 base last merged `main`. It is not this project's change and clears when the base merges `main` again; a PR's CI checks the merge ref, which carries that sync.
 - Base branch check (conformance 1/3): no merged PR has head claude/implement-plan-issue-4785-twin-first-claude-sync, so the base has not moved.
+- Base branch check (conformance 1/3 review round 2, 2026-10-01): PR #4804 (head = the base branch) is still open, so the base has not moved. The project branch merged `origin/claude/implement-plan-issue-4785-twin-first-claude-sync` (5542316); 8 suites 746 passed, 1 skipped; ruff (E,F) clean; inventory parity ok; `claude_twin_sync.py check` against the merge-base with `origin/main` ok.
+- Claims on #5699: the blocked claim of session_01FujkjVwqY9JxCnEuG5cCXe lifted the hold of session_01J6DjFBeGewd4uJYDZokche; round 2 claimed by session_019WZS4KKJdKWSwd4rgrp2PP (comment 5923784851).
