@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_issue_pr_status_comment_url_links.py:251-263 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `__main__` runner omits `test_adjacent_issue_links_each_count_on_their_own`, so the direct CI invocation does not execute this regression test.\n  WHY: `.github/workflows/ci.yml:1035` runs the module directly, allowing adjacent-link parsing regressions to pass this CI step; severity was MAJOR for five reviewers and NIT for openai_gpt-6-luna, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_issue_pr_status_comment_url_links.py:252-262 | severity=MAJOR | confidence=5\n  PROBLEM: The `__main__` block omits `test_adjacent_issue_links_each_count_on_their_own`.\n  WHY: CI invokes this module directly with `python3 tests/test_issue_pr_status_comment_url_links.py` (`.github/workflows/ci.yml:1035`), so the adjacent-link regression is not exercised.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_issue_pr_status_comment_url_links.py:252-263 | severity=MAJOR | confidence=5\n  PROBLEM: The if __name__ == \"__main__\": block omits test_adjacent_issue_links_each_count_on_their_own().\n  WHY: CI executes this module directly as a script via python3 tests/test_issue_pr_status_comment_url_links.py at .github/workflows/ci.yml:1035, so the adjacent-link regression test is never executed in CI.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_issue_pr_status_comment_url_links.py:251-263 | severity=MAJOR | confidence=5\n  PROBLEM: The `__main__` block calls only 10 of the 11 `test_*` functions and skips `test_adjacent_issue_links_each_count_on_their_own`.\n  WHY: `.github/workflows/ci.yml:1035` runs the module directly as `python3 tests/test_issue_pr_status_comment_url_links.py`, so the adjacent-link parsing test is never exercised by the registered CI step.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_issue_pr_status_comment_url_links.py:252-263 | severity=NIT | confidence=5\n  PROBLEM: The direct test runner omits `test_adjacent_issue_links_each_count_on_their_own`.\n  WHY: CI invokes this file directly at `.github/workflows/ci.yml:1035`, so the adjacent-link regression is not run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_issue_pr_status_comment_url_links.py:251-263 | severity=MAJOR | confidence=5\n  PROBLEM: The `__main__` block omits `test_adjacent_issue_links_each_count_on_their_own()`.\n  WHY: `.github/workflows/ci.yml:1035` executes this module directly as a script via `python3 tests/test_issue_pr_status_comment_url_links.py`, so the adjacent-link regression is not exercised by the registered CI step.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_issue_pr_status_comment_url_links.py:252-263 | severity=MAJOR | confidence=5\n  PROBLEM: The `__main__` block omits a call to `test_adjacent_issue_links_each_count_on_their_own`.\n  WHY: `.github/workflows/ci.yml:1035` runs this module directly with `python3 tests/test_issue_pr_status_comment_url_links.py`, so CI never exercises the adjacent-link regression.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f634c92a2100a9fbdf5919d1fa3f2a6783a6e2638f8d317ba35bfa0f8f38a8ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5825,
+    "run_id": "36827169151",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36827169151",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001072940_b55e3f9236",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5825,
+    "run_id": "36827169151"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T07:29:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
