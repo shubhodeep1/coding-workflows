@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:near line 1174 | severity=low | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The \u201cUnattended helpers and permission prompt reports\u201d description overstates which session data the ordinary `comment_body()` renders.\n  WHY: It says shape and tool name are code-spanned in both kinds of \u201cSeen again\u201d comment, but `comment_body()` contains `_occurrence_block()` and no shape or tool name; `class_comment_body()` includes them.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cThe shape, the tool name, and each prompt reason are written as one line inside a code span longer than any backtick run in them\u201d and AD-1 lists \u201cguard the shape on both `**Pattern:**` lines, the tool name, and every prompt reason\u201d.\n  expected_change_site: workflow-templates/.claude/scripts/permission_prompts.py comment_body\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The diff does not modify `comment_body`; if that function renders `pattern['tool_name']` or `pattern['shape']` outside the shared `_occurrence_block`, the guard would be missing there. The PR description asserts coverage for three paths (issue_body, comment_body, class_comment_body) but only two are visibly modified.\n- requirement: AD-3 says \u201cleave issue titles unchanged; the step 1 rule covers them\u201d.\n  expected_change_site: docs/plans/issue-5810-escape-class-comment-pattern-plan.md or changelog fragment\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Neither the changelog fragment nor the plan notes the explicit boundary that titles remain unguarded and that the protection now rests on the implementer-side rule, not the renderer. A consumer without the implementer-side rule would still be exposed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR description says \"The shape, the tool name, and each prompt reason are written as one line inside a code span longer than any backtick run in them\" and AD-1 lists \"guard the shape on both `**Pattern:**` lines, the tool name, and every prompt reason\".\n  Expected change site: workflow-templates/.claude/scripts/permission_prompts.py comment_body\n  Evidence of absence: The diff does not modify `comment_body`; if that function renders `pattern['tool_name']` or `pattern['shape']` outside of `_occurrence_block`, the guard would be missing there. The PR description asserts coverage for three paths (issue_body, comment_body, class_comment_body) but only two are visibly modified.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- TASK_GAP\n  Requirement: AD-3 says \"leave issue titles unchanged; the step 1 rule covers them\".\n  Expected change site: docs/plans/issue-5810-escape-class-comment-pattern-plan.md or changelog fragment\n  Evidence of absence: Neither the changelog fragment nor the plan notes the explicit boundary that titles remain unguarded and that the protection now rests on the implementer-side rule, not the renderer. A consumer without the implementer-side rule would still be exposed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:near line 1174 | severity=NIT | confidence=5\n  PROBLEM: It says the shape and tool name are code-spanned in both kinds of \u201cSeen again\u201d comment.\n  WHY: The ordinary `comment_body()` contains `_occurrence_block()` but no shape or tool name; `class_comment_body()` is the comment that includes them.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e78a0978b120a2206ec91c1447228a55638ddfe5ad331e2f48f33eaa091e2588",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5855,
+    "run_id": "36804755897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36804755897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001024123_8c86583714",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5855,
+    "run_id": "36804755897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T02:41:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
