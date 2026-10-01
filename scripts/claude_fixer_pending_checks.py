@@ -98,7 +98,9 @@ for a listing whose last page read was full, 1 status-filtered listing
 for each of the 5 run statuses but `completed` (1 call per 100 runs,
 usually 1, at most 10), only when every newer bound review run succeeded,
 1 attempt read per earlier attempt of each one that was re-run (none in
-the usual case, at most MAX_EARLIER_REVIEW_RUN_ATTEMPTS per run), then,
+the usual case, at most MAX_EARLIER_REVIEW_RUN_ATTEMPTS per run and
+MAX_REVIEW_RUN_ATTEMPT_READS in all; a PR that would need more is not
+merged and costs no read), then,
 only when the marker's own run was re-run after the marker was posted,
 1 attempt read per earlier attempt of it back to the one that posted the
 marker (the review run read above is reused; none in the usual case, at
@@ -193,6 +195,11 @@ ACTIVE_REVIEW_RUN_STATUSES = ("requested", "waiting", "pending", "queued", "in_p
 # as not succeeded without being read (fail closed); GitHub allows 50
 # attempts per run.
 MAX_EARLIER_REVIEW_RUN_ATTEMPTS = 5
+# The per-run cap above does not bound one evaluation: the newer bound runs
+# of a PR can hold many re-runs. When reading their earlier attempts would
+# take more than this many calls in all, the newer reviews count as not
+# succeeded without any read (fail closed; issue #5904 review of 0ef911f).
+MAX_REVIEW_RUN_ATTEMPT_READS = 20
 
 
 def _comment_id(comment: dict) -> int:
@@ -561,8 +568,11 @@ def marker_run_attempt_problem(repo: str, marker: dict, marker_run: dict) -> str
 	the marker is reported too (fail closed). A `run_attempt` that is not an
 	integer of at least 1, a missing or malformed `run_started_at` or marker
 	`created_at` when it is needed, a failed or mismatched attempt read, and
-	an attempt 1 that started after the marker was posted raise
-	`check_in_status.ReadError`.
+	reading back to attempt 1 of a re-run marker run without finding an
+	attempt that started before the marker was posted (so none of them
+	posted it) raise `check_in_status.ReadError`. A run that was never
+	re-run (`run_attempt` 1) posted the marker itself and returns "" with no
+	timestamp check.
 	"""
 	attempt = marker_run.get("run_attempt")
 	if type(attempt) is not int or attempt < 1:
@@ -617,8 +627,9 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	review of 95d932b). When every newer bound review run concluded
 	`success`, each one that is a re-run (`run_attempt` above 1) has its
 	earlier attempts read (`_earlier_unsuccessful_attempt`: 1 call per
-	earlier attempt, at most MAX_EARLIER_REVIEW_RUN_ATTEMPTS per run; none
-	in the usual case). Any other failed read, a 404 on the head-branch
+	earlier attempt, at most MAX_EARLIER_REVIEW_RUN_ATTEMPTS per run and
+	MAX_REVIEW_RUN_ATTEMPT_READS in all, counted before any read; more is
+	`review_superseded` with no read; none in the usual case). Any other failed read, a 404 on the head-branch
 	listing or on a status listing included, a listing that needs more
 	pages than that, and a listing with a run that
 	has no integer `id` or string `status` (or, in the internal-review.yml
@@ -691,6 +702,17 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 		# failed forced review concludes `success` under the same id. Read
 		# only when no newer run failed outright, so the usual case costs
 		# no call.
+		planned_reads = 0
+		for run in newer:
+			attempt = run.get("run_attempt")
+			if type(attempt) is not int or attempt < 1:
+				raise check_in_status.ReadError(f"review run {run.get('id')} has no valid run_attempt: {attempt!r}")
+			if attempt - 1 <= MAX_EARLIER_REVIEW_RUN_ATTEMPTS:
+				planned_reads += attempt - 1
+		if planned_reads > MAX_REVIEW_RUN_ATTEMPT_READS:
+			return {"state": "review_superseded", "reason": f"the review runs of this PR newer than the marker's run "
+				f"{marker_run_id} were re-run so often that checking their earlier attempts would take {planned_reads} reads, "
+				f"more than {MAX_REVIEW_RUN_ATTEMPT_READS}; only a newer marker from a successful full review clears it"}
 		for run in sorted(newer, key=lambda run: run["id"]):
 			masked = _earlier_unsuccessful_attempt(repo, run)
 			if masked:

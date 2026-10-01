@@ -1084,7 +1084,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   `run_attempt` above 1 has its earlier attempts read
   (`actions/runs/<id>/attempts/<n>`, only when no newer review failed
   outright, at most `MAX_EARLIER_REVIEW_RUN_ATTEMPTS` = 5 per run; more
-  counts as failed, and a malformed `run_attempt` or attempt read is a
+  counts as failed, as does needing more than
+  `MAX_REVIEW_RUN_ATTEMPT_READS` = 20 attempt reads across the newer runs,
+  decided before any read, and a malformed `run_attempt` or attempt read is a
   failed read). The marker's own run is checked the same way
   (`marker_run_attempt_problem`, review round 2): an attempt of it that
   started after the marker was posted and did not conclude `success`

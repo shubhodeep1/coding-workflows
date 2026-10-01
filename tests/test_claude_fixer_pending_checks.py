@@ -714,6 +714,28 @@ def test_a_run_rerun_too_often_counts_as_not_succeeded_without_reads(fake_gh):
 	assert fake_gh.merges() == []
 
 
+@pytest.mark.parametrize("runs, merges", [(4, True), (5, False)], ids=["at the cap", "over the cap"])
+def test_attempt_reads_across_newer_reruns_are_capped(fake_gh, runs, merges):
+	# Review of 0ef911f: the per-run cap does not bound one evaluation, so
+	# the reads all newer re-runs need are counted first (§15).
+	per_run = pending_checks.MAX_EARLIER_REVIEW_RUN_ATTEMPTS
+	cap = pending_checks.MAX_REVIEW_RUN_ATTEMPT_READS
+	assert runs * per_run - cap == (0 if merges else per_run)
+	reruns = [_dispatch(RUN_ID + 2 + index, run_attempt=per_run + 1) for index in range(runs)]
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		dispatch_runs=_dispatch_runs(**{"internal-review.yml": reruns}),
+		run_attempts={rerun["id"]: {number: _attempt(rerun, number) for number in range(1, per_run + 1)} for rerun in reruns})
+	result = _evaluate()
+	if merges:
+		assert result["state"] == "merge_enabled", result
+		assert len(_attempt_reads(fake_gh)) == cap
+	else:
+		assert result["state"] == "review_superseded", result
+		assert f"would take {runs * per_run} reads, more than {cap}" in result["reason"]
+		assert _attempt_reads(fake_gh) == []
+		assert fake_gh.merges() == []
+
+
 @pytest.mark.parametrize("label, run_attempt, attempt", [
 	("run_attempt missing", None, None),
 	("run_attempt zero", 0, None),

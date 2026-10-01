@@ -6,7 +6,7 @@ The sweep's pending-checks pass (`scripts/claude_fixer_pending_checks.py`) enabl
 | The numbers that matter | Value |
 | --- | --- |
 | Newer review runs that must have concluded `success` | all of them, on every attempt (was: the latest one) |
-| New GitHub API calls per evaluated PR | 0 in the usual case; 1 per earlier attempt of a re-run newer review, at most 5 per run; 1 per attempt of the marker's run re-run after the marker was posted, at most 5 |
+| New GitHub API calls per evaluated PR | 0 in the usual case; 1 per earlier attempt of a re-run newer review, at most 5 per run and 20 in all; 1 per attempt of the marker's run re-run after the marker was posted, at most 5 |
 | Sweep result for a PR with a failed newer review | `review_superseded`, logged every hour |
 
 What this means for operators: a PR whose newer review failed is no longer merged from the earlier clean result. Routine sweep dispatches stay skipped on that head, so the PR waits until a push, a base change, or the `force-review` label sends it through a new full review. The sweep's `pending_checks … state=review_superseded` log line names the failed run.
