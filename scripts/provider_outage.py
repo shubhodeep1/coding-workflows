@@ -117,6 +117,9 @@ CONSUMER_REVIEW_WORKFLOW = "ai-review.yml"
 PROBE_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_PROBE_MODEL = "openai/gpt-6-luna"
 PROBE_TIMEOUT_SECONDS = 30
+# A 1-token completion is a few hundred bytes; the cap only bounds a hostile
+# or broken response.
+PROBE_MAX_BODY_BYTES = 65536
 MAX_PAGES = 10
 RELEASE_CLAIM_BY_PREFIX = "provider-outage-probe-"
 # The PR that first hit the outage posts its failure comment (its last
@@ -561,8 +564,29 @@ class GitHub:
 			return None
 
 
+def _probe_body_error_status(raw: bytes) -> str:
+	"""The provider error a 200 response body carries, or "" when it carries none.
+
+	OpenRouter can answer HTTP 200 with a top-level `error` object (an
+	upstream failure after the request was accepted). Its numeric `code` is
+	returned when it is an HTTP status, else "error_body". A body that is not
+	JSON, or has no `error`, is no error: only the status line decides then.
+	"""
+	try:
+		data = json.loads(raw.decode("utf-8", errors="replace")) if raw.strip() else None
+	except ValueError:
+		return ""
+	if not isinstance(data, dict) or not data.get("error"):
+		return ""
+	error = data["error"]
+	code = error.get("code") if isinstance(error, dict) else None
+	if type(code) is int and 100 <= code <= 599:
+		return str(code)
+	return "error_body"
+
+
 def probe_provider(model: str, api_key: str, *, opener: Callable[..., Any] = urllib.request.urlopen) -> dict[str, Any]:
-	"""One 1-token completion; only HTTP 200 counts as recovered."""
+	"""One 1-token completion; only HTTP 200 without an `error` in its body counts as recovered."""
 	if not api_key:
 		return {"ok": False, "status": "missing_key"}
 	request = urllib.request.Request(
@@ -574,10 +598,14 @@ def probe_provider(model: str, api_key: str, *, opener: Callable[..., Any] = url
 	try:
 		with opener(request, timeout=PROBE_TIMEOUT_SECONDS) as response:
 			status = int(getattr(response, "status", 0) or response.getcode())
+			body = response.read(PROBE_MAX_BODY_BYTES) if status == 200 else b""
 	except urllib.error.HTTPError as exc:
 		return {"ok": False, "status": str(exc.code)}
 	except (urllib.error.URLError, OSError, ValueError) as exc:
 		return {"ok": False, "status": "network_error", "detail": heal.single_line(heal.redact_secrets(str(exc)), 200)}
+	body_error = _probe_body_error_status(body)
+	if body_error:
+		return {"ok": False, "status": body_error, "detail": "HTTP 200 with an error body"}
 	return {"ok": status == 200, "status": str(status)}
 
 
@@ -600,8 +628,13 @@ def record(gh: GitHub, self_repo: str, *, provider: str, status: str, kind: str,
 		try:
 			gh.send("POST", f"repos/{self_repo}/labels",
 				{"name": OUTAGE_LABEL, "color": OUTAGE_LABEL_COLOR, "description": OUTAGE_LABEL_DESCRIPTION})
-		except GitHubError:
-			pass  # the label already exists
+		except GitHubError as exc:
+			# HTTP 422 is the label that already exists. Anything else is logged
+			# and the issue create goes on: it applies (and on push access
+			# creates) the label itself, and if it fails too, this line names
+			# the earlier cause next to its error.
+			if "HTTP 422" not in str(exc):
+				log(f"label_create_failed label={OUTAGE_LABEL} detail={heal.single_line(exc, 200)}")
 		body = render_marker_body(provider=provider, status=status, kind=kind, key=key, source=source,
 			opened_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"))
 		created = gh.send("POST", f"repos/{self_repo}/issues", {

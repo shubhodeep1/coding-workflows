@@ -270,6 +270,25 @@ def test_record_opens_one_marker_and_alerts_once():
 	assert len(gh.sent("POST", f"repos/{SELF}/issues")) == 1
 
 
+def test_record_logs_a_label_create_failure_other_than_already_exists(capsys):
+	gh = FakeGitHub(objects={"user": {"login": LOGIN}}, fail={("POST", f"repos/{SELF}/labels")})
+	result = outage.record(gh, SELF, provider="openrouter", status="402", kind="credits", key="OPENROUTER_API_KEY",
+		source=f"{SELF}#5324 (review run 1)", now=NOW)
+	assert result["action"] == "created" and result["alert"] is True
+	assert "label_create_failed label=ai:provider-outage" in capsys.readouterr().err
+
+	class ExistingLabelGitHub(FakeGitHub):
+		def send(self, method, path, body=None):
+			if method == "POST" and path == f"repos/{SELF}/labels":
+				raise outage.GitHubError(f"gh api -X POST {path} failed: gh: Validation Failed (HTTP 422)")
+			return super().send(method, path, body)
+
+	gh = ExistingLabelGitHub(objects={"user": {"login": LOGIN}})
+	assert outage.record(gh, SELF, provider="openrouter", status="402", kind="credits", key="OPENROUTER_API_KEY",
+		source=f"{SELF}#5324 (review run 1)", now=NOW)["action"] == "created"
+	assert "label_create_failed" not in capsys.readouterr().err
+
+
 def test_record_closes_its_own_duplicate_after_a_race():
 	gh = FakeGitHub(objects={"user": {"login": LOGIN}})
 	gh.next_issue = 11
@@ -343,6 +362,21 @@ def test_probe_counts_only_http_200_as_recovered():
 
 	assert outage.probe_provider("m/x", "key-value", opener=network_opener)["status"] == "network_error"
 	assert outage.probe_provider("m/x", "", opener=ok_opener) == {"ok": False, "status": "missing_key"}
+
+
+@pytest.mark.parametrize(("body", "expected"), [
+	(b'{"choices": [{"message": {"content": "p"}}]}', {"ok": True, "status": "200"}),
+	(b"", {"ok": True, "status": "200"}),
+	(b"not json", {"ok": True, "status": "200"}),
+	(b'{"error": null, "choices": []}', {"ok": True, "status": "200"}),
+	(b'{"error": {"code": 402, "message": "Insufficient credits"}}',
+		{"ok": False, "status": "402", "detail": "HTTP 200 with an error body"}),
+	(b'{"error": {"code": "upstream", "message": "provider down"}}',
+		{"ok": False, "status": "error_body", "detail": "HTTP 200 with an error body"}),
+	(b'{"error": "provider down"}', {"ok": False, "status": "error_body", "detail": "HTTP 200 with an error body"}),
+])
+def test_probe_treats_a_200_with_an_error_body_as_still_down(body, expected):
+	assert outage.probe_provider("m/x", "key-value", opener=lambda request, timeout: _Response(body)) == expected
 
 
 # ---------------------------------------------------------------------------

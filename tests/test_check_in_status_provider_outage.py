@@ -124,3 +124,20 @@ def test_split_and_marker_helpers_are_pure(monkeypatch):
 	assert checker.provider_outage_run_ids([_failure(1, 5), _failure(2, 6, reason="other")], HEAD) == {"5"}
 	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "")
 	assert checker.provider_outage_run_ids([_failure(1, 5)], HEAD) == set()
+
+
+def test_the_heal_marker_and_the_checker_share_the_outage_reason(monkeypatch):
+	# `check_in_status.py` ships to consumer repos without
+	# scripts/workflow_failure_heal.py, so it keeps its own copy of the reason;
+	# this pins the copy to the heal module's constant and to the marker the
+	# heal module actually renders.
+	spec = importlib.util.spec_from_file_location("workflow_failure_heal_reason_parity",
+		ROOT / "scripts" / "workflow_failure_heal.py")
+	heal = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(heal)
+	assert checker.PROVIDER_UNAVAILABLE_REASON == heal.PROVIDER_UNAVAILABLE_REASON
+	marker = heal.render_failure_marker(HEAD, heal.PROVIDER_UNAVAILABLE_REASON, "a" * 64, False, run_id="36748847333")
+	assert marker
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", WORKFLOW)
+	comment = {"id": 1, "user": {"login": WORKFLOW}, "body": f"AI review/autofix paused.\n\n{marker}"}
+	assert checker.provider_outage_run_ids([comment], HEAD) == {"36748847333"}

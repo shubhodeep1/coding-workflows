@@ -92,7 +92,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    one, it makes a single 1-token completion (`PROVIDER_OUTAGE_PROBE_MODEL`,
    default `XPOLL_SUMMARISER_MODEL` or `openai/gpt-6-luna`) and the `sweep`
    job skips its dispatches (`AUTOFIX_SWEEP_SKIP_ALL reason=provider_outage`).
-   On HTTP 200 it resumes and then closes the marker:
+   On HTTP 200 whose body carries no `error` object (OpenRouter can answer
+   200 with one), it resumes and then closes the marker:
    - re-dispatches review for every open PR updated since 6 hours before the
      marker opened (`RESUME_CANDIDATE_LOOKBACK_HOURS`, so the PR that first
      hit the outage is included) whose latest trusted failure marker on its
