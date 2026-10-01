@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_session_janitor.py:lines 132-134, `gh_api()` function | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The no-stderr-no-stdout non-zero exit path is handled correctly but has no test, leaving a possible future regression in the `detail[-1]` guard uncovered.\n  WHY: The current `if detail` guard prevents an `IndexError`; removing or weakening it could crash the script instead of raising `SessionReadError`.\n- scripts/claude_session_janitor.py:lines 111-114, `STAGE_TITLE_PATTERN` and `NON_SUPERSEDING_STAGE_PATTERN` | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: No runtime defect is reported in how stage titles are classified.\n  WHY: The stage kind is reached only when no higher-priority kind matches, which is consistent with the documented behavior and counts stages as `not_ours`.\n- .claude/commands/claude-issue-pickup.md:step 3a, lines 61-69 (new) | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: No runtime defect is reported in the pickup's session archival flow.\n  WHY: The `get_session` re-check gates archiving on the session still being `SESSION_STATUS_IDLE` under the same title, and archiving is reversible.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_session_janitor.py:lines 132-134, `gh_api()` function | severity=low | confidence=2\n  PROBLEM: When `gh api` returns a non-zero exit code but both stderr and stdout are empty strings, `detail` is an empty list `[]`; the `if detail` check correctly falls back to `f'exit {proc.returncode}'`, but no test covers this path.\n  WHY: If a future edit removes or weakens the `if detail` guard before `detail[-1]`, an `IndexError` on an empty list would bypass the `SessionReadError` and crash the script (failing the sweep instead of continuing with a kept session). Add a test case with a mock `gh` that exits non-zero with empty stderr and stdout, asserting the `SessionReadError` message contains `exit <code>`.\n- scripts/claude_session_janitor.py:lines 111-114, `STAGE_TITLE_PATTERN` and `NON_SUPERSEDING_STAGE_PATTERN` | severity=low | confidence=1\n  PROBLEM: The `classify()` function at line 299 filters on `kind in (None, \"stage\")` for the `not_ours` count, but the `STAGE_TITLE_PATTERN` is matched in `classify_title()` only after issue-start patterns; a stage title in `## Notes` that also matches a report/fixer/issue-start pattern would be classified as that kind instead of \"stage\".\n  WHY: The stage kind is reached only when no higher-priority kind matches. This is consistent with the documented behavior: stage titles are only recognized to count them as `not_ours`, which they do correctly. The `NON_SUPERSEDING_STAGE_PATTERN` constant is retained for \u00a76 compliance with a comment stating it is no longer used for archiving, which is truthful.\n- .claude/commands/claude-issue-pickup.md:step 3a, lines 61-69 (new) | severity=low | confidence=1\n  PROBLEM: The pickup's step 3a adds `list_sessions` to the tool list, runs `scripts/claude_session_janitor.py` with `--self <your session id>`, then calls `archive_session` on the script's output.\n  WHY: The `archive_session` calls are gated by a `get_session` re-check (step 3a.3: only archives when still `SESSION_STATUS_IDLE` under the same title). The script itself never performs writes. The re-check guard prevents archiving a session that changed status between the `list_sessions` page read and the archive call, and archiving is reversible.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 3 (extended retry minimax/minimax-m2.5).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2ad1038499f32e5d822df42adbca1516be378404d9668186e1330ede0351bb82",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36814664396",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36814664396",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001044302_fae604923e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36814664396"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T04:43:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
