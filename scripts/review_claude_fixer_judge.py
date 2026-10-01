@@ -174,7 +174,8 @@ def _ruling_caution(entry: dict[str, Any]) -> tuple[bool, bool]:
 
 def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int) -> dict[str, Any]:
 	model = model if isinstance(model, dict) else {}
-	model_action = str(model.get("action") or "").strip()
+	# Normalised like ruling and category, so "Hold" or "CLOSE_AND_REISSUE" still holds.
+	model_action = _one_line(model.get("action")).lower()
 	raw_rulings = model.get("rulings") if isinstance(model.get("rulings"), list) else []
 	by_id: dict[str, dict[str, Any]] = {}
 	for entry in raw_rulings:

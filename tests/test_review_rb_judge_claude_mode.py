@@ -124,6 +124,15 @@ def test_model_hold_without_rulings_is_still_a_hold():
 		assert {r["finding"] for r in result["upheld"]} == {"F1", "F2", "F3"}
 
 
+def test_model_hold_is_case_insensitive():
+	# A case variant must not slip past the hold guard into ai:review-blocked or a merge.
+	for action, expected in (("Hold", "hold"), ("HOLD", "hold"), (" Close_And_Reissue ", "close_and_reissue")):
+		without_rulings = judge.decide({"action": action, "justification": "cannot judge"}, _findings(), 0, 2)
+		assert without_rulings["decision"] == "hold" and without_rulings["reason"] == f"model_{expected}", action
+		all_invalid = judge.decide(_model(action, {"F1": ("invalid", "other"), "F2": ("invalid", "other"), "F3": ("invalid", "other")}), _findings(), 0, 2)
+		assert all_invalid["decision"] == "hold" and all_invalid["model_action"] == expected, action
+
+
 def test_model_text_cannot_add_marker_or_checklist_lines():
 	# Every separator str.splitlines() honours, not only "\n" (a "\r" once slipped through).
 	for separator in ("\n", "\r", "\r\n", "\x0b", "\x0c", "\x1c", "\x85", " ", " "):
