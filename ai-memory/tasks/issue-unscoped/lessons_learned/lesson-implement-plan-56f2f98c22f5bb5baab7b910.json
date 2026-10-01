@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T01:42:06Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a rule changes, grep every operator-facing doc for its old wording, including docs/operations/master-session.md standing decisions, not only the files the plan lists.",
+  "phase": "implement_plan",
+  "pr_number": 5694,
+  "record_id": "lesson-implement-plan-56f2f98c22f5bb5baab7b910",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5664-archived-stage-disables-recovery",
+    "file:docs/operations/master-session.md"
+  ]
+}

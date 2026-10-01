@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T01:42:06Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a rule narrows, update the summary paragraph at the top of each description (module docstring, section intro, changelog lead) as well as the detailed rule below it; reviewers read the two against each other.",
+  "phase": "implement_plan",
+  "pr_number": 5694,
+  "record_id": "lesson-implement-plan-d48cb526dea10db09327487e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5664-archived-stage-disables-recovery",
+    "file:scripts/claude_session_janitor.py",
+    "file:CLAUDE.md"
+  ]
+}
