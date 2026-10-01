@@ -97,6 +97,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import itertools
 import json
 import os
 import re
@@ -182,7 +183,8 @@ def resolve_resume_limit(cli_value: int | None, env_value: str | None) -> int:
 
 def _decode_json_text(text: str, path: str) -> object:
 	"""Decode the first JSON object or array in `text`, skipping an envelope around it."""
-	positions = [index for index, char in enumerate(text) if char in "{["][:MAX_JSON_START_CANDIDATES]
+	starts = (index for index, char in enumerate(text) if char in "{[")
+	positions = list(itertools.islice(starts, MAX_JSON_START_CANDIDATES))
 	decoder = json.JSONDecoder()
 	for index in positions:
 		try:
