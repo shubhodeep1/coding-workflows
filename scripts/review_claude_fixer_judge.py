@@ -211,7 +211,10 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 		"rulings": rulings,
 		"upheld": upheld,
 		"justification": _one_line(model.get("justification"))[:2000],
-		"fix_description": str(model.get("fix_description") or "")[:4000],
+		# Goes into the fix prompt and the [judge-fix] commit body: one line, so the
+		# model cannot add a trailer or prompt-section line. The jq step that builds
+		# the writer's description appends the upheld list on its own lines after it.
+		"fix_description": _one_line(model.get("fix_description"))[:4000],
 	}
 	# A model hold (or close_and_reissue, which is not allowed here) stays a hold even without
 	# rulings: the plan maps both to `hold`, and every unruled finding already counts as upheld.
