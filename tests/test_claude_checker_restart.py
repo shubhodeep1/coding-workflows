@@ -889,29 +889,65 @@ def test_the_harness_envelope_and_bare_shapes_load(tmp_path):
 def test_trigger_pages_join_and_take_has_more_from_the_last_page(tmp_path):
 	# Live on 2026-09-30: 124 enabled Routines, so `limit: 100` left `has_more` true and
 	# every candidate was skipped as `triggers_page_incomplete` (conformance run 3).
-	first = _write(tmp_path, "p1.json", json.dumps({"data": [_trigger("trig_a", "a", "s1"), _trigger("trig_b", "b", "s2")], "has_more": True}))
-	last = _write(tmp_path, "p2.json", json.dumps({"data": [_trigger("trig_c", "c", CHECKER)], "has_more": False}))
-	routines, has_more = restart.load_trigger_pages([first, last])
-	assert [routine["id"] for routine in routines] == ["trig_a", "trig_b", "trig_c"] and has_more is False
+	first = _write(tmp_path, "p1.json", json.dumps({"data": [_trigger("trig_a", "a", "s1"), _trigger("trig_b", "b", "s2")], "has_more": True, "next_cursor": "c1"}))
+	last = _write(tmp_path, "p2.json", json.dumps({"data": [_trigger("trig_c", "c", CHECKER)], "has_more": False, "next_cursor": ""}))
+	problems = []
+	routines, has_more = restart.load_trigger_pages([first, last], ["c1"], problems)
+	assert [routine["id"] for routine in routines] == ["trig_a", "trig_b", "trig_c"] and has_more is False and problems == []
 	# A page that is missing, out of order, or repeated leaves the listing incomplete.
 	assert restart.load_trigger_pages([first])[1] is True
-	assert restart.load_trigger_pages([last, first])[1] is True
-	routines, has_more = restart.load_trigger_pages([first, first])
+	assert restart.load_trigger_pages([last, first], ["c1"])[1] is True
+	routines, has_more = restart.load_trigger_pages([first, first], ["c1"])
 	assert [routine["id"] for routine in routines] == ["trig_a", "trig_b"] and has_more is True
+	# A repeated last page cannot stand in for the first one.
+	assert restart.load_trigger_pages([last, last], [""])[1] is True
 	# One file reads exactly as `load_triggers` does.
 	assert restart.load_trigger_pages([last]) == restart.load_triggers(last)
+	# No page at all is not an empty, complete listing.
+	problems = []
+	assert restart.load_trigger_pages([], None, problems) == ([], True) and problems == ["no list_triggers page given"]
+
+
+def test_trigger_pages_with_a_page_left_out_between_two_others_are_incomplete(tmp_path):
+	# Review round 1 on PR #5755: pages 1 and 3 with page 2 left out used to read as complete,
+	# because only the last page's `has_more` was checked. Page 3 was read with page 2's
+	# next_cursor, which the cursor chain compares with page 1's.
+	page1 = _write(tmp_path, "p1.json", json.dumps({"data": [_trigger("trig_a", "a", "s1")], "has_more": True, "next_cursor": "c1"}))
+	page2 = _write(tmp_path, "p2.json", json.dumps({"data": [_trigger("trig_b", "b", CHECKER)], "has_more": True, "next_cursor": "c2"}))
+	page3 = _write(tmp_path, "p3.json", json.dumps({"data": [_trigger("trig_c", "c", "s3")], "has_more": False}))
+	assert restart.load_trigger_pages([page1, page2, page3], ["c1", "c2"]) == (
+		[_trigger("trig_a", "a", "s1"), _trigger("trig_b", "b", CHECKER), _trigger("trig_c", "c", "s3")],
+		False,
+	)
+	problems = []
+	assert restart.load_trigger_pages([page1, page3], ["c2"], problems)[1] is True
+	assert problems == ["list_triggers page 2 was not read with the next_cursor of page 1"]
+	# Leaving out page 2 and every cursor, or passing the cursors without page 2, fails on the count.
+	problems = []
+	assert restart.load_trigger_pages([page1, page3], None, problems)[1] is True
+	assert problems == ["2 list_triggers pages need 1 --triggers-cursor values, got 0"]
+	problems = []
+	assert restart.load_trigger_pages([page1, page3], ["c1", "c2"], problems)[1] is True
+	assert problems == ["2 list_triggers pages need 1 --triggers-cursor values, got 2"]
+	# A page that ends the listing before the last file is reported too.
+	problems = []
+	assert restart.load_trigger_pages([page3, page1], [""], problems)[1] is True
+	assert problems == ["list_triggers page 1 of 2 ends the listing but is not the last page"]
+	# The pickup's 5-page cap (last page still has `has_more`) is incomplete without a problem entry.
+	problems = []
+	assert restart.load_trigger_pages([page1, page2], ["c1"], problems)[1] is True and problems == []
 
 
 def test_cli_scan_joins_trigger_pages_so_a_page_two_binding_keeps_the_checker(tmp_path, monkeypatch, no_api):
 	monkeypatch.setattr(restart, "scan_logs", lambda repo, errors: ({}, []))
 	dead = _checker("session_dead", slug="plan-y")
 	sessions = _write(tmp_path, "s.json", json.dumps({"ccr": {"data": [dead]}}))
-	page1 = _write(tmp_path, "t1.json", json.dumps({"data": [_trigger("trig_other", "other", "session_other")], "has_more": True}))
+	page1 = _write(tmp_path, "t1.json", json.dumps({"data": [_trigger("trig_other", "other", "session_other")], "has_more": True, "next_cursor": "c1"}))
 	page2 = _write(tmp_path, "t2.json", json.dumps({"data": [_trigger("trig_checkin", "implement-plan plan-y: check-in", "session_dead")], "has_more": False}))
 	state_path = str(tmp_path / "state.json")
 	out = []
 	monkeypatch.setattr("builtins.print", lambda text: out.append(json.loads(text)))
-	argv = ["scan", "--sessions-file", sessions, "--triggers-file", page1, "--triggers-file", page2, "--repo", REPO, "--self", PICKUP, "--state-out", state_path]
+	argv = ["scan", "--sessions-file", sessions, "--triggers-file", page1, "--triggers-file", page2, "--triggers-cursor", "c1", "--repo", REPO, "--self", PICKUP, "--state-out", state_path]
 	assert restart.main(argv, now=NOW) == 0
 	assert out[-1]["trigger_pages"] == 2 and out[-1]["triggers_complete"] is True and out[-1]["lookup"] == []
 	lookups = _write(tmp_path, "l.json", json.dumps({"session_dead": {"ccr": dead}}))
@@ -930,17 +966,37 @@ def test_cli_scan_restarts_once_the_last_page_ends_the_listing(tmp_path, monkeyp
 	monkeypatch.setattr(restart, "scan_logs", lambda repo, errors: ({}, []))
 	dead = _checker("session_dead", slug="plan-y")
 	sessions = _write(tmp_path, "s.json", json.dumps({"ccr": {"data": [dead]}}))
-	page1 = _write(tmp_path, "t1.json", json.dumps({"data": [_trigger("trig_other", "other", "session_other")], "has_more": True}))
+	page1 = _write(tmp_path, "t1.json", json.dumps({"data": [_trigger("trig_other", "other", "session_other")], "has_more": True, "next_cursor": "c1"}))
 	page2 = _write(tmp_path, "t2.json", json.dumps({"data": [_trigger("trig_more", "more", "session_more")], "has_more": False}))
 	state_path = str(tmp_path / "state.json")
 	out = []
 	monkeypatch.setattr("builtins.print", lambda text: out.append(json.loads(text)))
-	argv = ["scan", "--sessions-file", sessions, "--triggers-file", page1, "--triggers-file", page2, "--repo", REPO, "--self", PICKUP, "--state-out", state_path]
+	argv = ["scan", "--sessions-file", sessions, "--triggers-file", page1, "--triggers-file", page2, "--triggers-cursor", "c1", "--repo", REPO, "--self", PICKUP, "--state-out", state_path]
 	assert restart.main(argv, now=NOW) == 0
 	assert out[-1]["lookup"] == ["session_dead"]
 	lookups = _write(tmp_path, "l.json", json.dumps({"session_dead": {"ccr": dead}}))
 	assert restart.main(["decide", "--state", state_path, "--lookup-file", lookups], now=NOW) == 0
 	assert [entry["checker"] for entry in out[-1]["restart"]] == ["session_dead"]
+
+
+def test_cli_scan_keeps_the_checker_when_a_page_was_left_out(tmp_path, monkeypatch, no_api):
+	# Review round 1 on PR #5755: the pending check-in sits on page 2, which the caller left out.
+	# Page 3 was read with page 2's cursor, so the listing is incomplete and nothing restarts.
+	monkeypatch.setattr(restart, "scan_logs", lambda repo, errors: ({}, []))
+	dead = _checker("session_dead", slug="plan-y")
+	sessions = _write(tmp_path, "s.json", json.dumps({"ccr": {"data": [dead]}}))
+	page1 = _write(tmp_path, "t1.json", json.dumps({"data": [_trigger("trig_other", "other", "session_other")], "has_more": True, "next_cursor": "c1"}))
+	page3 = _write(tmp_path, "t3.json", json.dumps({"data": [_trigger("trig_more", "more", "session_more")], "has_more": False}))
+	state_path = str(tmp_path / "state.json")
+	out = []
+	monkeypatch.setattr("builtins.print", lambda text: out.append(json.loads(text)))
+	argv = ["scan", "--sessions-file", sessions, "--triggers-file", page1, "--triggers-file", page3, "--triggers-cursor", "c2", "--repo", REPO, "--self", PICKUP, "--state-out", state_path]
+	assert restart.main(argv, now=NOW) == 0
+	assert out[-1]["trigger_pages"] == 2 and out[-1]["triggers_complete"] is False
+	assert "list_triggers page 2 was not read with the next_cursor of page 1" in out[-1]["errors"]
+	lookups = _write(tmp_path, "l.json", json.dumps({"session_dead": {"ccr": dead}}))
+	assert restart.main(["decide", "--state", state_path, "--lookup-file", lookups], now=NOW) == 0
+	assert out[-1]["restart"] == [] and out[-1]["skipped"][0]["reason"] == "triggers_page_incomplete"
 
 
 def test_session_view_reads_external_metadata_fallbacks():

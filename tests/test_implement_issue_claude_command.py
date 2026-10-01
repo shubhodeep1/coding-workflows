@@ -380,7 +380,10 @@ def test_pickup_reads_every_trigger_page(pickup_cmd):
 	assert "While the last page read has `has_more`, call it again with the same arguments and `cursor` = that page's `next_cursor`, at most 5 pages in all." in pickup_cmd
 	assert "Every use of step 1's result below reads every page." in pickup_cmd
 	assert "Do the same with each `list_triggers` page step 1 read, one file per page." in pickup_cmd
-	assert "When step 1 read more than one page, repeat `--triggers-file` once per page, in the order read." in pickup_cmd
+	assert "Keep the `cursor` you passed for each page after the first: step 3b hands it to `scan`." in pickup_cmd
+	# Review round 1 on PR #5755: the cursors let `scan` catch a page left out between two others.
+	assert "When step 1 read more than one page, repeat `--triggers-file` once per page, in the order read, and add `--triggers-cursor <cursor>` once per page after the first, in the same order: the `cursor` you passed to read that page." in pickup_cmd
+	assert "only when each cursor is the `next_cursor` of the page before it and the last file's `has_more` is false" in pickup_cmd
 	assert "up to 4 more `list_triggers` pages in step 1, read only while a page has `has_more`" in pickup_cmd
 
 
