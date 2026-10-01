@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:569-576 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: A failed dispatch from a non-default ref is ignored when its untrusted run title names a different PR, allowing an older clean marker to enable auto-merge.\n  WHY: The failed run falls through both classification branches; severity disagreement: deepseek rated this MAJOR while minimax and openai rated it BLOCKER, so the highest severity is used.\n- tests/test_claude_fixer_pending_checks.py:test_review_dispatch_workflows_title_their_runs_by_pr | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The reported f-string assertion compares the captured literal `{0}` placeholder with a string containing `0`, causing the parametrized wiring test to fail.\n  WHY: Minimax reports that the assertion uses `f\"{name} [pr:{0}]\"`; deepseek, qwen, and z-ai report the actual source uses escaped braces and the assertion passes.\n- tests/test_claude_fixer_pending_checks.py:_dispatch_runs(**listings) | severity=critical | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The helper as displayed returns an empty dict, so tests using it do not exercise workflow-specific dispatch listings.\n  WHY: If the actual helper matches the displayed body, listing-dependent tests receive no runs and cannot verify the dispatch-binding behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Tests: the audit's scenario, every new path, the run-name wiring\"\n  expected_change_site: tests/test_claude_fixer_pending_checks.py, a parametrized case in test_an_unsuccessful_newer_review_supersedes_the_marker\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The new parametrized cases cover a dispatch from a non-default PR ref titled for this PR, a head-branch dispatch from any of the four review workflows, and the judge wrapper, but none covers a non-default, non-head ref with a forged title naming another PR; scripts/claude_fixer_pending_checks.py:549-556 only matches when head_branch == head_ref.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py:569-576 | severity=high | confidence=[4]\n  PROBLEM: A failed dispatch newer than the marker, from a non-default branch and with a run name claiming a different PR, is silently dropped from unbindable_failures.\n  WHY: When bound_pr is a third PR number, the run falls through both conditions, so the failed review targeting the PR can be missed and an older clean marker can still enable auto-merge.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_fixer_pending_checks.py:566-576 | severity=critical | confidence=[5]\n  PROBLEM: A failed workflow dispatch from a non-default branch whose forged run name targets a different PR is silently dropped from unbindable_failures and does not block the merge.\n  WHY: The bound_pr checks do not match, the head-branch dispatch guard does not catch a different non-default ref, and evaluate() can allow the merge based on an older marker.\n- tests/test_claude_fixer_pending_checks.py:test_review_dispatch_workflows_title_their_runs_by_pr, the assertion `assert match.group(1) == f\"{name} [pr:{0}]\", path` | severity=critical | confidence=[5]\n  PROBLEM: The f-string `{0}` evaluates to integer 0, so the assertion does not match the literal `{0}` placeholder captured from the YAML template.\n  WHY: The reviewer reports this makes the parametrized wiring test fail and leaves the run-name invariant unverified.\n- tests/test_claude_fixer_pending_checks.py:_dispatch_runs(**listings) | severity=critical | confidence=[4]\n  PROBLEM: The helper as displayed returns an empty dict, leaving workflow-specific dispatch listings empty.\n  WHY: Tests relying on those listings would not exercise the bind-by-title branch; the finding is conditional on the actual source matching the displayed body.\n- Requirement: \"Tests: the audit's scenario, every new path, the run-name wiring\" (Phase 1 done condition, `docs/plans/issue-5906-bind-unbound-review-dispatches-plan.md` Tests section, lines 83-92; also `docs/implement-plan/issue-5906-bind-unbound-review-dispatches.md` Phase 1 bullet 3)\n  Expected change site: `tests/test_claude_fixer_pending_checks.py`, a parametrized case in `test_an_unsuccessful_newer_review_supersedes_the_marker` that exercises a `workflow_dispatch` of `review_autofix.yml` (or another unbound workflow) from a non-default, non-head ref with a forged title naming another PR, asserting `review_superseded`\n  Evidence of absence: The new parametrized cases added across rounds 1-3 cover (a) a dispatch from a non-default PR ref titled for this PR, (b) a head-branch dispatch from any of the four review workflows, and (c) the judge wrapper. None places a `workflow_dispatch` run of `review_autofix.yml` / `ai-review.yml` / `review_rb_judge_dispatch.yml` (or `internal-review.yml`) with `head_branch` set to a ref that is neither the default branch nor the PR's `head_ref`, with a forged title naming a different PR, in the workflow-specific dispatch listing. The head-branch dispatch guard (`scripts/claude_fixer_pending_checks.py:549-556`) only matches when `head_branch == head_ref`, so this path is uncovered by the round 2 fix. The cross-pollination review by gpt-6-luna flagged the same production-code gap (severity critical) and noted it as the audit-finding-reopening path for the non-head, non-default ref case. Without the test, the regression to the original audit finding is not caught.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_fixer_pending_checks.py:572\u2013576 | severity=critical | confidence=[5]\n  PROBLEM: A failed dispatch from a non-default ref is ignored when its untrusted run title names a different PR.\n  WHY: The run is neither counted as a bound review nor added to unbindable_failures, so check_review_runs() returns None and evaluate() can enable auto-merge using the older marker (lines 703\u2013705, 722\u2013732).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "24957171f07f69f62d6779576a86d9c524eb5f567646f7a998df0757c2354af4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5929,
+    "run_id": "36863889786",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36863889786",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001142528_2fd24e0f87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5929,
+    "run_id": "36863889786"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T14:25:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
