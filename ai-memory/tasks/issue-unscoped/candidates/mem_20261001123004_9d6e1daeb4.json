@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/5999-restore-scoped-smoke-run-lookups.md:4 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The statement \u201cCallers that pass no cap behave as before\u201d overstates compatibility because the new shape check returns 1 for a malformed runs listing even when the optional cap is omitted.\n  WHY: A no-cap caller previously treated a malformed page as short and returned 0, so the changelog should state only the compatibility that is preserved; all reviewers classified this as a documentation accuracy issue rather than a runtime defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/5999-restore-scoped-smoke-run-lookups.md:4 | severity=NIT | confidence=5\n  PROBLEM: The new shape check at scripts/comprehensive_test_and_release_gh_api.sh:125-127 returns 1 for a non-runs-listing page even when no MAX_PAGES is given, while the old code treated a malformed page as a short page and returned 0.\n  WHY: This is a documentation accuracy defect, not a runtime bug; the behavior change is arguably correct, but the changelog should reflect it. The test tests/test_release_smoke_run_lookup.py:203-207 exercises exactly this default-cap malformed-page case and expects exit 1.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/5999-restore-scoped-smoke-run-lookups.md:4 | severity=NIT | confidence=4\n  PROBLEM: The claim is too broad. The new shape check at `scripts/comprehensive_test_and_release_gh_api.sh:125-127` returns exit 1 when a page is not a runs listing; previously a no-cap caller on such a page would have iterated, hit the same `workflow_runs` filter returning empty, and eventually returned 0 (no match).\n  WHY: No runtime defect; no production caller passes no cap. The behaviour change is purely a documentation/implementation mismatch, and the new behaviour is arguably more correct than the previous return 0. The wording should name the actual preserved compatibility (the 5-page default cap and the existing call sites keep their exit codes for successful reads, match-found, all-pages-empty, and all-pages-full cases).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/5999-restore-scoped-smoke-run-lookups.md:4 | severity=NIT | confidence=5\n  PROBLEM: \u201cCallers that pass no cap behave as before\u201d overstates compatibility. The new shape check returns 1 for a malformed runs listing even when the optional cap is omitted.\n  WHY: A default-cap caller receiving a malformed listing now gets an error status; previously that response was treated as a short page and returned 0. The changelog should state only the compatibility that is preserved.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/5999-restore-scoped-smoke-run-lookups.md:4 | severity=NIT | confidence=5\n  PROBLEM: The claim is inaccurate because the new shape check at scripts/comprehensive_test_and_release_gh_api.sh:125-127 changes the exit code for default-cap callers receiving a malformed runs listing from 0 to 1.\n  WHY: A no-cap caller that previously received a malformed page would treat it as a short page and return 0 (success with no output). The new shape check returns 1 immediately. The test at tests/test_release_smoke_run_lookup.py:203-207 exercises this no-cap case and expects returncode 1. The changelog should state only the compatibility that is actually preserved: the five-page default cap and return 0 when that cap is exhausted with well-formed pages.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "33e6e872f9dfa314d221c46c62cd914339cd18adcc983d20b2ae556e77140288",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5999,
+    "run_id": "36858959467",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36858959467",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001123004_9d6e1daeb4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5999,
+    "run_id": "36858959467"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T12:30:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
