@@ -105,6 +105,24 @@ def test_fragment_after_a_query_or_slash_is_not_a_link() -> None:
 		assert _extract(text) == [], text
 
 
+def test_fragment_after_parentheses_in_the_tail_is_not_a_link() -> None:
+	"""Parentheses are legal in a query or path, so the tail runs through them
+	to reach the fragment (round 3 review of PR #5825)."""
+	for text in (
+		f"https://github.com/{REPOSITORY}/issues/12?q=(a)#issuecomment-1",
+		f"{REPOSITORY}/issues/12/x(y)#c",
+		f"https://github.com/{REPOSITORY}/issues/12?q=a)b#c",
+		f"https://github.com/{REPOSITORY}/issues/12?q=(a#c",
+		f"[comment](https://github.com/{REPOSITORY}/issues/12?q=(a)#issuecomment-4).",
+		f"(see https://github.com/{REPOSITORY}/issues/12?q=(a)#c)",
+	):
+		assert _extract(text) == [], text
+	# Parentheses in the tail with no fragment still link, Markdown links included.
+	assert _extract(f"https://github.com/{REPOSITORY}/issues/17?q=(a)") == [17]
+	assert _extract(f"[t](https://github.com/{REPOSITORY}/issues/18?q=(a)).") == [18]
+	assert _extract(f"(see https://github.com/{REPOSITORY}/issues/19?q=1) and Fixes #20") == [19, 20]
+
+
 def test_bare_urls_paths_and_closing_keywords_still_link() -> None:
 	assert _extract(f"https://github.com/{REPOSITORY}/issues/78") == [78]
 	assert _extract(f"{REPOSITORY}/issues/56.") == [56]
@@ -217,6 +235,7 @@ if __name__ == "__main__":
 	test_comment_url_alone_yields_no_linked_issue()
 	test_any_fragment_after_the_issue_number_is_not_a_link()
 	test_fragment_after_a_query_or_slash_is_not_a_link()
+	test_fragment_after_parentheses_in_the_tail_is_not_a_link()
 	test_bare_urls_paths_and_closing_keywords_still_link()
 	test_mixed_text_keeps_only_the_real_links()
 	test_claude_project_merge_with_refs_and_comment_url_leaves_issue_untouched()
