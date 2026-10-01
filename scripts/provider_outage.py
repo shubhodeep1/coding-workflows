@@ -31,9 +31,14 @@ outage and undoes its effects once the provider recovers:
         event lies inside the outage window and was made by the workflow
         account, on a resumed PR or an issue it references;
       - releases a `hold` claim on a resumed PR's head only when the hold was
-        posted inside the window, every failed check on the head belongs to an
-        outage run, and the PR is not conflicted (a merge state GitHub has
-        not computed yet keeps the hold and counts as an error);
+        posted inside the window, the head has at least one failed check and
+        every failed check belongs to an outage run, and the PR is not
+        conflicted (a merge state GitHub has not computed yet keeps the hold
+        and counts as an error);
+      - the outage window for labels and holds ends at the first recovery
+        (the earliest resume comment), and a PR an earlier tick re-dispatched
+        stays in scope for that cleanup on a retry tick even after its new
+        review posted a newer outcome;
       - re-runs the newest recorded release run when
         PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED is true, and otherwise reports
         it;
@@ -133,6 +138,7 @@ _MARKER_RE = re.compile(
 )
 _RELEASE_RUN_RE = re.compile(r"<!-- " + re.escape(RELEASE_RUN_MARKER_TAG) + r" run=(?P<run>[1-9][0-9]{0,19}) -->")
 _RESUME_RE = re.compile(r"<!-- " + re.escape(RESUME_MARKER_TAG) + r" handled=(?P<handled>[^ ]*) -->")
+_RECOVERED_AT_RE = re.compile(r"^The probe succeeded at (?P<at>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)\.", re.MULTILINE)
 _HANDLED_KEY_RE = re.compile(r"^[a-z]+:[A-Za-z0-9_.@#/-]{1,200}$")
 _FIX_CLAIM_RE = re.compile(
 	r"^<!-- ai:claude-fix-claim:v1 head=([0-9a-f]{40}) kind=(conflict|ci|review|blocked|hold) by=([A-Za-z0-9_-]{1,80}) -->$"
@@ -276,6 +282,26 @@ def resume_attempts(comments: list, workflow_login: str) -> int:
 	)
 
 
+def first_recovery_time(comments: list, workflow_login: str) -> dt.datetime | None:
+	"""When the probe first succeeded for this marker: the earliest workflow-authored resume comment.
+
+	Its "The probe succeeded at" line is used, else the comment's own
+	`created_at`. None when no resume was posted yet. Labels and holds made
+	after this time come from reviews the resume dispatched, not from the
+	outage, so a retry tick never undoes them.
+	"""
+	login = (workflow_login or "").casefold()
+	for comment in _ordered(comments):
+		if not login or _login(comment) != login:
+			continue
+		body = heal.sanitize_text(comment.get("body"))
+		if not _RESUME_RE.search(body):
+			continue
+		match = _RECOVERED_AT_RE.search(body)
+		return (parse_time(match.group("at")) if match else None) or parse_time(comment.get("created_at"))
+	return None
+
+
 def latest_review_outcome(comments: list, head_sha: str, workflow_login: str) -> dict[str, Any] | None:
 	"""The newest workflow-authored review outcome for ``head_sha``.
 
@@ -340,19 +366,22 @@ def latest_head_claim(comments: list, head_sha: str, trusted_logins: tuple[str, 
 
 
 def hold_is_outage_only(claim: dict[str, Any] | None, *, window_start: dt.datetime, failed_check_run_ids: set[str],
-	outage_runs: set[str], conflicted: bool) -> bool:
+	outage_runs: set[str], conflicted: bool, window_end: dt.datetime | None = None) -> bool:
 	"""True when a head's hold has no cause but the outage.
 
-	The latest trusted claim is a hold posted inside the outage window, the PR
-	is not conflicted, and every failed check run on the head belongs to a run
-	the workflow marked `provider_unavailable`.
+	The latest trusted claim is a hold posted inside the outage window (from
+	`window_start` up to `window_end`, the first recovery, when given), the PR
+	is not conflicted, the head has at least one failed check run, and every
+	failed check run belongs to a run the workflow marked
+	`provider_unavailable`. A head with no failed check carries no evidence
+	that the outage caused the hold, so the hold stays.
 	"""
 	if not claim or claim.get("kind") != "hold" or conflicted:
 		return False
 	posted = parse_time(claim.get("at"))
-	if posted is None or posted < window_start:
+	if posted is None or posted < window_start or (window_end is not None and posted > window_end):
 		return False
-	return failed_check_run_ids <= outage_runs
+	return bool(failed_check_run_ids) and failed_check_run_ids <= outage_runs
 
 
 def failed_check_run_ids(check_runs: list) -> tuple[set[str], int]:
@@ -372,8 +401,14 @@ def failed_check_run_ids(check_runs: list) -> tuple[set[str], int]:
 	return from_runs, unnamed
 
 
-def label_applied_by_outage(events: list, *, label: str, window_start: dt.datetime, workflow_login: str) -> bool:
-	"""True when the label's latest `labeled` event is inside the window and by the workflow account."""
+def label_applied_by_outage(events: list, *, label: str, window_start: dt.datetime, workflow_login: str,
+	window_end: dt.datetime | None = None) -> bool:
+	"""True when the label's latest `labeled` event is inside the window and by the workflow account.
+
+	The window runs from `window_start` up to `window_end` (the first recovery)
+	when given: a label applied after it comes from a review the resume
+	dispatched.
+	"""
 	login = (workflow_login or "").casefold()
 	latest = None
 	for event in events:
@@ -387,6 +422,8 @@ def label_applied_by_outage(events: list, *, label: str, window_start: dt.dateti
 	actor = latest.get("actor")
 	actor_login = actor.get("login").casefold() if isinstance(actor, dict) and isinstance(actor.get("login"), str) else ""
 	labeled_at = parse_time(latest.get("created_at"))
+	if window_end is not None and labeled_at is not None and labeled_at > window_end:
+		return False
 	return actor_login == login and labeled_at is not None and labeled_at >= window_start
 
 
@@ -615,11 +652,17 @@ def _dispatch_review(gh: GitHub, repo: str, self_repo: str, pr: dict, allow_work
 
 def resume_repo(gh: GitHub, repo: str, *, self_repo: str, login: str, window_start: dt.datetime, handled: set[str],
 	summary: dict[str, Any], new_handled: list[str], allow_workflow_edits: str, run_id: str,
-	candidate_since: dt.datetime | None = None) -> None:
+	candidate_since: dt.datetime | None = None, window_end: dt.datetime | None = None) -> None:
 	"""Resume one repository (see the module docstring); appends to `summary` / `new_handled`.
 
 	`candidate_since` bounds the PR scan by `updated_at` (default
-	`window_start`); labels and holds always use `window_start`.
+	`window_start`); labels and holds always use `window_start`, and
+	`window_end` (the first recovery) when given.
+
+	A PR whose review an earlier tick already re-dispatched on this head stays
+	in scope for its label, hold and referenced-issue cleanup even when that
+	review has since posted a newer outcome, so a retry tick finishes the work
+	instead of skipping it.
 	"""
 	scan_since = candidate_since or window_start
 	prs = gh.get_list(f"repos/{repo}/pulls?state=open")
@@ -636,10 +679,10 @@ def resume_repo(gh: GitHub, repo: str, *, self_repo: str, login: str, window_sta
 		number = pr["number"]
 		try:
 			comments = gh.get_list(f"repos/{repo}/issues/{number}/comments")
-			if not is_resume_candidate(comments, head_sha, login):
+			pr_key = f"pr:{repo}#{number}@{head_sha[:12]}"
+			if pr_key not in handled and not is_resume_candidate(comments, head_sha, login):
 				continue
 			referenced.update(referenced_issues(pr))
-			pr_key = f"pr:{repo}#{number}@{head_sha[:12]}"
 			if pr_key not in handled:
 				_dispatch_review(gh, repo, self_repo, pr, allow_workflow_edits)
 				summary["dispatched"].append(f"{repo}#{number}")
@@ -648,7 +691,7 @@ def resume_repo(gh: GitHub, repo: str, *, self_repo: str, login: str, window_sta
 			pr_labels = [label.get("name") for label in pr.get("labels") or [] if isinstance(label, dict)]
 			if REVIEW_BLOCKED_LABEL in pr_labels:
 				_remove_outage_label(gh, repo, number, login=login, window_start=window_start, handled=handled,
-					summary=summary, new_handled=new_handled)
+					summary=summary, new_handled=new_handled, window_end=window_end)
 			claim_logins = tuple(trusted_login for trusted_login in (_login(pr), login.casefold()) if trusted_login)
 			claim = latest_head_claim(comments, head_sha, claim_logins)
 			hold_key = f"hold:{repo}#{number}@{head_sha[:12]}"
@@ -660,7 +703,7 @@ def resume_repo(gh: GitHub, repo: str, *, self_repo: str, login: str, window_sta
 				conflicted = merge_state == "dirty" or pull.get("mergeable") is False
 				outage_only = unnamed == 0 and hold_is_outage_only(claim, window_start=window_start,
 					failed_check_run_ids=failed_runs, outage_runs=outage_run_ids(comments, head_sha, login),
-					conflicted=conflicted)
+					conflicted=conflicted, window_end=window_end)
 				if outage_only and (not isinstance(merge_state, str) or merge_state in ("", "unknown")):
 					# GitHub has not computed mergeability yet: a conflict cannot be
 					# ruled out, so keep the hold and let the next tick retry it.
@@ -682,18 +725,19 @@ def resume_repo(gh: GitHub, repo: str, *, self_repo: str, login: str, window_sta
 			continue
 		try:
 			_remove_outage_label(gh, repo, issue["number"], login=login, window_start=window_start, handled=handled,
-				summary=summary, new_handled=new_handled)
+				summary=summary, new_handled=new_handled, window_end=window_end)
 		except GitHubError as exc:
 			summary["errors"].append(f"{repo}#{issue['number']}: {heal.single_line(exc, 160)}")
 
 
 def _remove_outage_label(gh: GitHub, repo: str, number: int, *, login: str, window_start: dt.datetime, handled: set[str],
-	summary: dict[str, Any], new_handled: list[str]) -> None:
+	summary: dict[str, Any], new_handled: list[str], window_end: dt.datetime | None = None) -> None:
 	label_key = f"label:{repo}#{number}"
 	if label_key in handled:
 		return
 	events = gh.get_list(f"repos/{repo}/issues/{number}/events")
-	if not label_applied_by_outage(events, label=REVIEW_BLOCKED_LABEL, window_start=window_start, workflow_login=login):
+	if not label_applied_by_outage(events, label=REVIEW_BLOCKED_LABEL, window_start=window_start, workflow_login=login,
+		window_end=window_end):
 		return
 	try:
 		gh.send("DELETE", f"repos/{repo}/issues/{number}/labels/{REVIEW_BLOCKED_LABEL}")
@@ -742,6 +786,9 @@ def _resume(gh: GitHub, self_repo: str, repos: list[str], now: dt.datetime, *, m
 	marker_comments = gh.get_list(f"repos/{self_repo}/issues/{primary['number']}/comments")
 	handled = handled_keys(marker_comments, login)
 	attempt = resume_attempts(marker_comments, login) + 1
+	# Labels and holds after the first recovery come from the re-dispatched
+	# reviews, not from the outage.
+	window_end = first_recovery_time(marker_comments, login) or now
 	summary: dict[str, Any] = {"recovered_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "dispatched": [],
 		"labels_removed": [], "holds_released": [], "release": "none recorded", "errors": []}
 	new_handled: list[str] = []
@@ -749,7 +796,7 @@ def _resume(gh: GitHub, self_repo: str, repos: list[str], now: dt.datetime, *, m
 		try:
 			resume_repo(gh, repo, self_repo=self_repo, login=login, window_start=window_start, handled=handled,
 				summary=summary, new_handled=new_handled, allow_workflow_edits=allow_workflow_edits, run_id=run_id,
-				candidate_since=candidate_since)
+				candidate_since=candidate_since, window_end=window_end)
 		except GitHubError as exc:
 			summary["errors"].append(f"{repo}: {heal.single_line(exc, 160)}")
 			log(f"error repo={repo} detail={heal.single_line(exc, 160)}")
@@ -778,13 +825,16 @@ def _resume(gh: GitHub, self_repo: str, repos: list[str], now: dt.datetime, *, m
 		summary["marker"] = f"closed after {attempt} resume attempts with errors left; resume them by hand"
 	gh.send("POST", f"repos/{self_repo}/issues/{primary['number']}/comments",
 		{"body": render_resume_comment(summary, sorted(handled) + new_handled)})
-	result.update({"recovered": True, "summary": summary, "skip_review_dispatch": True, "marker_closed": not keep_open})
+	# `marker_closed` turns true only after every close PATCH succeeded; a
+	# failed close leaves it false and `tick` reports the error.
+	result.update({"recovered": True, "summary": summary, "skip_review_dispatch": True, "marker_closed": False})
 	if keep_open:
 		log(f"resume_incomplete issue=#{primary['number']} attempt={attempt} max={MAX_RESUME_ATTEMPTS} "
 			f"errors={len(summary['errors'])} (marker kept open)")
 		return result
 	for marker in markers:
 		gh.send("PATCH", f"repos/{self_repo}/issues/{marker['number']}", {"state": "closed", "state_reason": "completed"})
+	result["marker_closed"] = True
 	result["alert_text"] = render_recovered_alert(primary, summary)
 	log(f"recovered issue=#{primary['number']} dispatched={len(summary['dispatched'])} "
 		f"labels_removed={len(summary['labels_removed'])} holds_released={len(summary['holds_released'])} "

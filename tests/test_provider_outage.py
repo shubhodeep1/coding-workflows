@@ -575,6 +575,63 @@ def test_a_hold_is_kept_when_github_reports_the_pr_unmergeable():
 	assert result["summary"]["holds_released"] == [] and not result["summary"]["errors"]
 
 
+def _handoff(comment_id, head=HEAD, login=LOGIN):
+	return {"id": comment_id, "user": {"login": login}, "body":
+		f"## Review round 1: findings handed to the Claude session\n\n<!-- ai:claude-fixer-handoff:v1 kind=findings head={head} round=1 -->"}
+
+
+def test_a_retry_tick_finishes_cleanup_for_a_pr_whose_new_review_already_posted():
+	gh = _recovery_github()
+	# Tick 1 dispatches PR 1 but keeps its hold: GitHub has not computed the merge state yet.
+	gh.objects[f"repos/{SELF}/pulls/1"] = {"mergeable_state": "unknown", "mergeable": None}
+	first = _tick(gh)
+	assert first["marker_closed"] is False and f"{SELF}#1" in first["summary"]["dispatched"]
+	_retry_marker_comments(gh, gh.sent("POST", f"repos/{SELF}/issues/10/comments")[0][2]["body"])
+	# Before tick 2 the re-dispatched reviews finished: PR 1 and PR 6 got a hand-off, so neither is a
+	# resume candidate any more. PR 6 was also labelled by that new review, after the recovery.
+	gh.lists[f"repos/{SELF}/issues/1/comments"].append(_handoff(14))
+	gh.lists[f"repos/{SELF}/issues/6/comments"].append(_handoff(63))
+	gh.objects[f"repos/{SELF}/pulls/1"] = {"mergeable_state": "blocked", "mergeable": True}
+	prs = gh.lists[f"repos/{SELF}/pulls?state=open"]
+	prs[[pr["number"] for pr in prs].index(6)] = _pr(6, labels=("ai:review-blocked",), updated="2026-09-30T23:50:00Z")
+	gh.lists[f"repos/{SELF}/issues/6/events"] = [_labeled("2026-09-30T23:45:00Z")]
+	later = NOW + dt.timedelta(minutes=30)
+	result = outage.tick(gh, SELF, [SELF, CONSUMER], later, probe=lambda: {"ok": True, "status": "200"},
+		release_rerun_enabled=False, allow_workflow_edits="true", run_id="1000")
+	summary = result["summary"]
+	# The hold left over from tick 1 is released although PR 1's latest outcome is now a hand-off.
+	assert summary["holds_released"] == [f"{SELF}#1"] and not summary["errors"]
+	assert summary["dispatched"] == []
+	# PR 6's label came from the post-recovery review, not the outage: it stays.
+	assert summary["labels_removed"] == [] and not gh.sent("DELETE")
+	assert result["marker_closed"] is True
+
+
+def test_first_recovery_time_reads_the_earliest_resume_comment():
+	resume = lambda at: outage.render_resume_comment({"recovered_at": at, "dispatched": [], "labels_removed": [],  # noqa: E731
+		"holds_released": [], "release": "none", "errors": []}, [])
+	comments = [
+		{"id": 3, "user": {"login": LOGIN}, "body": resume("2026-10-01T01:00:00Z")},
+		{"id": 1, "user": {"login": "someone"}, "body": resume("2026-09-30T19:00:00Z")},
+		{"id": 2, "user": {"login": LOGIN}, "body": resume("2026-09-30T23:30:00Z")},
+	]
+	assert outage.first_recovery_time(comments, LOGIN) == dt.datetime(2026, 9, 30, 23, 30, tzinfo=dt.timezone.utc)
+	# A resume comment without the line falls back to its created_at; no resume comment means no recovery yet.
+	bare = [{"id": 1, "user": {"login": LOGIN}, "created_at": "2026-09-30T23:31:00Z",
+		"body": f"<!-- {outage.RESUME_MARKER_TAG} handled= -->"}]
+	assert outage.first_recovery_time(bare, LOGIN) == dt.datetime(2026, 9, 30, 23, 31, tzinfo=dt.timezone.utc)
+	assert outage.first_recovery_time([{"id": 1, "user": {"login": LOGIN}, "body": "unrelated"}], LOGIN) is None
+	assert outage.first_recovery_time(comments, "") is None
+
+
+def test_a_failed_marker_close_does_not_report_the_marker_closed():
+	gh = _recovery_github()
+	gh.fail.add(("PATCH", f"repos/{SELF}/issues/10"))
+	result = _tick(gh)
+	assert result["recovered"] is True and result["marker_closed"] is False
+	assert "error" in result and "alert_text" not in result
+
+
 def test_a_failed_release_rerun_is_an_error_and_is_retried():
 	gh = _recovery_github(release_runs=(36760421499,))
 	gh.fail.add(("POST", f"repos/{SELF}/actions/runs/36760421499/rerun-failed-jobs"))
@@ -595,6 +652,15 @@ def test_hold_release_rules():
 		failed_check_run_ids=set(), outage_runs=set(), conflicted=False)
 	assert not outage.hold_is_outage_only({"kind": "ci", "at": "2026-09-30T20:00:00Z"}, window_start=window,
 		failed_check_run_ids=set(), outage_runs=set(), conflicted=False)
+	# No failed check on the head is no evidence that the outage caused the hold.
+	assert not outage.hold_is_outage_only(hold, window_start=window, failed_check_run_ids=set(), outage_runs=set(), conflicted=False)
+	assert not outage.hold_is_outage_only(hold, window_start=window, failed_check_run_ids=set(), outage_runs={"1"}, conflicted=False)
+	# A hold posted after the first recovery came from a re-dispatched review.
+	recovered = dt.datetime(2026, 9, 30, 19, 0, tzinfo=dt.timezone.utc)
+	assert not outage.hold_is_outage_only(hold, window_start=window, failed_check_run_ids={"1"}, outage_runs={"1"},
+		conflicted=False, window_end=recovered)
+	assert outage.hold_is_outage_only(hold, window_start=window, failed_check_run_ids={"1"}, outage_runs={"1"},
+		conflicted=False, window_end=recovered + dt.timedelta(hours=2))
 
 
 def test_label_rule_needs_the_window_and_the_workflow_account():
@@ -605,6 +671,11 @@ def test_label_rule_needs_the_window_and_the_workflow_account():
 	assert not rule([_labeled("2026-09-30T18:00:00Z", actor="a-human")])
 	assert rule([_labeled("2026-09-30T10:00:00Z"), _labeled("2026-09-30T18:00:00Z")])
 	assert not rule([])
+	recovered = dt.datetime(2026, 9, 30, 19, 0, tzinfo=dt.timezone.utc)
+	bounded = lambda events: outage.label_applied_by_outage(events, label="ai:review-blocked", window_start=window,  # noqa: E731
+		workflow_login=LOGIN, window_end=recovered)
+	assert bounded([_labeled("2026-09-30T18:00:00Z")])
+	assert not bounded([_labeled("2026-09-30T18:00:00Z"), _labeled("2026-09-30T19:30:00Z")])
 
 
 def test_cli_record_reads_the_reporters_evidence_line(tmp_path, monkeypatch):

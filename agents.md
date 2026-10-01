@@ -101,11 +101,17 @@ Phases of the unattended pipeline (each is a separate workflow file under
    - removes `ai:review-blocked` only where its latest `labeled` event lies
      in the outage window and was made by the workflow account (on those PRs
      and the issues they reference);
-   - releases a hold claim only when it was posted in the window, every
-     failed check on the head is an outage run, and the PR is not conflicted
-     (it posts a newer `kind=review` claim by `provider-outage-probe-<run>`;
-     a merge state GitHub has not computed yet keeps the hold and counts as
-     an error, so the next tick retries it);
+   - releases a hold claim only when it was posted in the window, the head
+     has at least one failed check and every failed check is an outage run,
+     and the PR is not conflicted (it posts a newer `kind=review` claim by
+     `provider-outage-probe-<run>`; a merge state GitHub has not computed yet
+     keeps the hold and counts as an error, so the next tick retries it);
+   - the window for labels and holds runs from the marker's creation to the
+     first recovery (the earliest resume comment), so a label or hold made by
+     a re-dispatched review is never undone; a PR an earlier tick already
+     re-dispatched on the same head stays in scope for its label, hold and
+     referenced-issue cleanup on a retry tick, even after its new review
+     posted a newer outcome;
    - re-runs the newest recorded release run when
      `PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED=true` (default `false`, a §23.C
      dispatch) and otherwise reports it;
