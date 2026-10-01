@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T21:41:23Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change makes a \"never runs\" statement false, grep every doc that repeats it (README sections, command-file intros, CLAUDE.md, agents.md) for the whole statement, not just the files the plan names; run 1 fixed the copies in CLAUDE.md, agents.md, and implement-plan-claude.md but missed README.md and fix-claude-pr.md.",
+  "phase": "implement_plan",
+  "pr_number": 6013,
+  "record_id": "lesson-implement-plan-ba5a653280696b9a844a0954",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:claude-fixer-unattended-convergence",
+    "file:README.md",
+    "file:.claude/commands/fix-claude-pr.md"
+  ]
+}

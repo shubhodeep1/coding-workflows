@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T21:41:23Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A crashed reviewer slot makes the Claude-fixer ledger not clean, so a round with zero findings still gets a findings hand-off and converges only through the verdict bot or a human",
+  "phase": "implement_plan",
+  "pr_number": 6013,
+  "record_id": "lesson-implement-plan-ed877c8517a7ed4e8b677f0a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-fixer-unattended-convergence",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
