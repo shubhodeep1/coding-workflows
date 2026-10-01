@@ -2117,10 +2117,10 @@ sweep runs in the sessions that create them, never in Actions:
   A sync PR the gate skips is merged by `claude-twin-sync.yml` or the
   repository owner, never by AI review. When the gate cannot verify a
   genuine sync PR (its author, head repository, or the `GH_PAT` login cannot
-  be read), a `pull_request` run still skips it through its `[skip ai]`
-  marker, but a `workflow_dispatch` run (the callers pass no PR title or body
-  to the gate) reviews it like any other `claude/*` PR, and a clean review
-  there can enable auto-merge.
+  be read), it still skips through its `[skip ai]` marker, on a
+  `workflow_dispatch` run too: the callers pass no PR title or body to the
+  gate, so for a `claude/claude-twin-sync-*` head the gate reads the marker
+  from its own PR fetch.
 - **Claims stop duplicate fixers.** Before any fix, the fixer claims the
   PR's current head with `.claude/scripts/claude_fix_claim.py post` (one
   comment ending in `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict

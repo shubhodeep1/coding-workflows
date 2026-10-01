@@ -621,6 +621,15 @@ jobs:
           elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
             SHOULD_RUN="false"
             SKIP_REASON="skip_ai_marker"
+          elif [[ "${pr_head_ref}" == claude/claude-twin-sync-* ]] \
+            && printf "%s" "${pr_title_cached} ${pr_body_cached}" | grep -Fq "[skip ai]"; then
+            # Issue #5610: a sync-named PR that gate_twin_sync_exempt could
+            # not verify still honours the [skip ai] marker on a
+            # workflow_dispatch run, whose callers pass no PR title or body.
+            # Read the text the gate's own PR fetch cached instead, so a
+            # genuine sync PR never reaches review or auto-merge.
+            SHOULD_RUN="false"
+            SKIP_REASON="skip_ai_marker"
           fi
 
           # post-merge-validate-dispatch runs in a separate job and cannot

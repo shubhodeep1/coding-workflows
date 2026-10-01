@@ -1261,13 +1261,19 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT reason=<not_library_repository |
   head_repository_mismatch | pr_author_unknown | sync_identity_unavailable |
   pr_author_not_sync_identity>`. The check fails closed when an identity cannot
-  be read; on a `pull_request` run a genuine sync PR then still skips through
-  its `[skip ai]` marker, while a `workflow_dispatch` run (the callers pass no
-  PR title or body to the gate) reviews it normally.
+  be read; a genuine sync PR then still skips through its `[skip ai]` marker
+  (`SKIP_REASON=skip_ai_marker`). On a `workflow_dispatch` run the callers pass
+  no PR title or body to the gate, so for a `claude/claude-twin-sync-*` head
+  the gate reads the marker from the PR text its own PR fetch cached; other
+  heads keep checking only the caller-passed title and body.
   The no-PR claude-branch push path keeps the exemption in coding-workflows
   only. The PR author and head repository come from the gate's existing PR
-  fetch, and the `gh api user` lookup is shared with the marker-comment check,
-  so the gate adds no API call.
+  fetch. The `gh api user` lookup runs only for a `claude/claude-twin-sync-*`
+  PR in coding-workflows from a same-repository head with a known author, at
+  most once per gate evaluation, and the marker-comment check reuses it when
+  that check runs too. Such a PR therefore makes at most one `gh api user`
+  call the name-only skip did not (a genuine sync PR always does, because it
+  skips before the marker-comment check); every other PR makes no extra call.
 - **Sync-state check:** the CI step "Claude twin sync state (CLAUDE.md
   §28.C)" runs `claude_twin_sync.py check --base <base> --head HEAD` on PRs
   into `main` or `stable` (base: the merge commit's first parent) and pushes
@@ -1970,6 +1976,7 @@ and shipped:
 - `MODEL_CATALOG_BACKFILL`
 - `AUTOFIX_GATE_CLAUDE_FIXER`
 - `AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED`
+- `AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT`
 - `CLAUDE_FIXER_HANDOFF`
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
@@ -2162,6 +2169,7 @@ LOG_PREFIX.name=CLAUDE_ISSUE_INTAKE
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
+LOG_PREFIX.name=AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT
 LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE

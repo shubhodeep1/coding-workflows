@@ -648,6 +648,32 @@ def test_gate_twin_sync_skip_marker_still_skips_unverified_sync_prs():
 	assert out["should_run"] == "false" and out["skip_reason"] == "skip_ai_marker"
 
 
+def test_gate_twin_sync_skip_marker_is_read_from_the_fetched_pr_on_dispatch():
+	"""Issue #5610: dispatch callers pass no PR title or body, so the fallback reads the fetched PR text.
+
+	Without it a genuine sync PR whose identity cannot be read would reach
+	Claude-fixer review and, after a clean review, auto-merge.
+	"""
+	body = "[skip ai] — the twin content was reviewed in its own PR; this PR is a mechanical copy."
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=TWIN_SYNC_REF, comments=[], event_name="workflow_dispatch",
+			pr_overrides={**_twin_sync_pr(), "body": body}, extra_env={"REPOSITORY": LIBRARY_REPO, "PR_TITLE": "", "PR_BODY": ""}, user_fail=True)
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTOFIX_GATE_TWIN_SYNC_NOT_EXEMPT reason=sync_identity_unavailable" in proc.stdout
+	assert out["should_run"] == "false" and out["skip_reason"] == "skip_ai_marker", out
+	assert out.get("deterministic_skip") != "true", out
+
+
+def test_gate_fetched_skip_marker_fallback_is_limited_to_twin_sync_heads():
+	"""Other PRs keep today's dispatch behaviour: only the caller-passed title and body are checked."""
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[], event_name="workflow_dispatch",
+			pr_overrides={"body": "[skip ai] Refs #1"}, extra_env={"PR_TITLE": "", "PR_BODY": ""})
+	assert proc.returncode == 0, proc.stderr
+	assert out.get("skip_reason", "") != "skip_ai_marker", out
+	assert out["claude_fixer"] == "true", out
+
+
 def test_gate_twin_sync_identity_lookup_is_shared_with_the_marker_check():
 	"""CLAUDE.md §15: one `gh api user` call per gate evaluation, even when both checks need it."""
 	with tempfile.TemporaryDirectory() as td:

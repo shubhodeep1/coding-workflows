@@ -99,11 +99,12 @@ Issue mode (CLAUDE.md §28.A) authorises a single-phase plan.
 1. `review_autofix.yml`, `_pr_gate` jq: add `author_login: (.user.login // "")` and
    `head_repo: (.head.repo.full_name // "")`; parse them into `pr_author_login` and
    `pr_head_repo` next to the other fields (initialised empty with the rest).
-2. `review_autofix.yml`: define `gate_twin_sync_pat_login=""` and `gate_twin_sync_exempt`
-   before the skip chain; replace the name test in the chain with the function; keep the
-   existing comment, `SKIP_REASON`, and log line.
-3. `review_autofix.yml`, `gate_fetch_marker_comments`: reuse `gate_twin_sync_pat_login` when
-   it is already resolved instead of a second `gh api user` call.
+2. `review_autofix.yml`: define `gate_pat_login=""`, the once-only lookup
+   `gate_resolve_pat_login`, and `gate_twin_sync_exempt` before the skip chain; replace the
+   name test in the chain with the function; keep the existing comment, `SKIP_REASON`, and
+   log line.
+3. `review_autofix.yml`, `gate_fetch_marker_comments`: call `gate_resolve_pat_login` and
+   read `gate_pat_login` instead of a second `gh api user` call.
 4. Tests in `tests/test_review_autofix_claude_fixer_mode.py`: the existing genuine-sync test
    runs with `REPOSITORY=shubhodeep1/coding-workflows`, a same-repo head, and the GH_PAT
    author; new tests cover a consumer repository, a fork head, another author, an
