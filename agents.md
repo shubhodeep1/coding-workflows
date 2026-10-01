@@ -290,8 +290,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     page still has `has_more`, that holds a page without a `has_more` field,
     or whose cursors do not join up, restarts and re-queues nothing; step 1's
     `start`, wake, `stop`, and catch-up branches fail safe on a listing still
-    incomplete after 5 pages, and a wake deletes no other pickup trigger
-    unless it sees its own). It also reads the open
+    incomplete after 5 pages, or cut short by a `list_triggers` call that
+    failed twice or a page without `has_more`, and a wake deletes no other
+    pickup trigger unless it sees its own). It also reads the open
     `ai:claude` issues (one REST call per 100) and their progress logs over git (one
     `git ls-remote` and one shallow `git fetch`), then prints at most 8
     `get_session` lookups. Those cover checkers named by pending safety nets

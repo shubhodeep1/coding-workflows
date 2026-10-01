@@ -331,7 +331,7 @@ def load_trigger_pages(paths: list[str], cursors: list[str] | None = None, probl
 	- every page carries a boolean `has_more` (a bare array, or a page
 		without the field, cannot show where the listing ends);
 	- every page but the last has `has_more` and a `next_cursor`, and the
-		last page has no `has_more`;
+		last page has `has_more` equal to false;
 	- there is exactly one cursor per page after the first, and each equals
 		the `next_cursor` of the page before it.
 	Otherwise it is true, which restarts and re-queues nothing (fail safe).
@@ -360,9 +360,12 @@ def load_trigger_pages(paths: list[str], cursors: list[str] | None = None, probl
 		elif last:
 			if page_has_more:
 				complete = False
-		elif not page_has_more or not next_cursor:
+		elif not page_has_more:
 			complete = False
 			issues.append(f"list_triggers page {index + 1} of {len(paths)} ends the listing but is not the last page")
+		elif not next_cursor:
+			complete = False
+			issues.append(f"list_triggers page {index + 1} of {len(paths)} has has_more but no next_cursor, so the page after it cannot be checked")
 		elif index < len(cursors) and cursors[index] != next_cursor:
 			complete = False
 			issues.append(f"list_triggers page {index + 2} was not read with the next_cursor of page {index + 1}")

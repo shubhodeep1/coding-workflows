@@ -1328,8 +1328,10 @@ each page to `scan`, with the `cursor` each later page was read with
 (`--triggers-cursor`). A listing whose last page still has `has_more`, that
 holds a page without a `has_more` field, or whose cursors do not join each
 page to the one before it (a page left out), restarts and re-queues nothing.
-Step 1's own branches fail safe on a listing that still has `has_more` after
-5 pages: `start` creates and deletes nothing, a wake that cannot see its own
+Step 1's own branches fail safe on an incomplete listing (one that still has
+`has_more` after 5 pages, or whose read stopped at a `list_triggers` call that
+failed twice or at a page without a `has_more` field): `start` creates and
+deletes nothing, a wake that cannot see its own
 `Claude issue pickup: hourly` trigger deletes nothing and stops, `stop` says
 the listing was incomplete, and no catch-up wake is scheduled.
 

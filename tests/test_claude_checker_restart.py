@@ -935,6 +935,12 @@ def test_trigger_pages_with_a_page_left_out_between_two_others_are_incomplete(tm
 	problems = []
 	assert restart.load_trigger_pages([page3, page1], [""], problems)[1] is True
 	assert problems == ["list_triggers page 1 of 2 ends the listing but is not the last page"]
+	# Review round 1 on PR #5755 head 0bcf142: a page with `has_more` but no `next_cursor` says
+	# so, instead of claiming it ended the listing.
+	no_cursor = _write(tmp_path, "p_no_cursor.json", json.dumps({"data": [], "has_more": True}))
+	problems = []
+	assert restart.load_trigger_pages([no_cursor, page3], ["c2"], problems)[1] is True
+	assert problems == ["list_triggers page 1 of 2 has has_more but no next_cursor, so the page after it cannot be checked"]
 	# The pickup's 5-page cap (last page still has `has_more`) is incomplete without a problem entry.
 	problems = []
 	assert restart.load_trigger_pages([page1, page2], ["c1"], problems)[1] is True and problems == []
