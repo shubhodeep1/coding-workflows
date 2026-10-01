@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T10:47:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A bounded paginated read is incomplete when its last page still has `has_more`; every consumer of that listing, not only the one the bound was added for, must say what it does then, and a branch that deletes or creates on \"not found\" must not act on a listing that cannot prove absence.",
+  "phase": "implement_plan",
+  "pr_number": 5755,
+  "record_id": "lesson-implement-plan-6d925a4cce60f2603ff39f0b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:.claude/commands/claude-issue-pickup.md"
+  ]
+}

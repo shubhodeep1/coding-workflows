@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T10:47:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`ci.yml` runs `ruff --select E,F` on `scripts/*.py` only for PRs into `main`, so a mixed tab-and-space docstring indent (E101) on a project-branch PR passes there and fails only on the final PR; run that ruff selection before every push.",
+  "phase": "implement_plan",
+  "pr_number": 5755,
+  "record_id": "lesson-implement-plan-5eb74f25a08fc6363dd9c072",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}

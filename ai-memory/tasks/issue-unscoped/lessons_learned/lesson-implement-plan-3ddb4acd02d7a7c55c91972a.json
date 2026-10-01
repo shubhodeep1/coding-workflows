@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:47:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-safe that needs a complete listing (a paginated API page with `has_more`) must read every page, bounded, or the feature goes dormant as the listing grows; check it against the live count, not the count seen when the plan was written.",
+  "phase": "implement_plan",
+  "pr_number": 5755,
+  "record_id": "lesson-implement-plan-3ddb4acd02d7a7c55c91972a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py",
+    "file:.claude/commands/claude-issue-pickup.md"
+  ]
+}

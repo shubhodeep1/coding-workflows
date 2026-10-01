@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T10:47:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A bounded paginated read must name every way it can stop short, not only the page cap: a call that fails or returns a page without the pagination field ends the read just as surely, and each consumer has to treat that the same as \"more pages left\".",
+  "phase": "implement_plan",
+  "pr_number": 5755,
+  "record_id": "lesson-implement-plan-a7d798afb84016ca501aa827",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:.claude/commands/claude-issue-pickup.md"
+  ]
+}

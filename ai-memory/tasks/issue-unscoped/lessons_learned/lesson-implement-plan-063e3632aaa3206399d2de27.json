@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T10:47:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A loader that fails safe on an incomplete listing must also fail safe when the pagination field is missing: defaulting an absent `has_more` to false turns \"unknown\" into \"complete\". Require the field and count a page without it as incomplete.",
+  "phase": "implement_plan",
+  "pr_number": 5755,
+  "record_id": "lesson-implement-plan-063e3632aaa3206399d2de27",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4910-restart-dead-checkers",
+    "file:scripts/claude_checker_restart.py"
+  ]
+}
