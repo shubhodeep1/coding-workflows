@@ -1085,6 +1085,48 @@ def test_security_audit_codex_failure_prints_masked_stderr_tail_with_provider_40
 	assert final_state.get("issue_comment_args", []) == []
 
 
+def test_security_audit_codex_stderr_tail_masks_short_secrets_and_unpadded_base64() -> None:
+	# Review round 2 on PR #5816: secret-named values shorter than 8 chars are
+	# masked where they stand as a word, and standard base64 with `/` is masked
+	# whole whether padded or not.
+	unpadded_base64 = "QUJD/xyz" * 6
+	split_base64 = "Q" * 45 + "/" + "Zq" * 10
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "8",
+			"SHORT_API_KEY": "k3y9",
+			"MOCK_CODEX_STDERR": (
+				"auth k3y9 rejected, keep wordk3y9x\n"
+				f"blob {unpadded_base64} and {split_base64}=\n"
+			),
+		},
+	)
+	assert proc.returncode == 8, proc.stderr
+	_, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads[0] == "auth\\ \\[redacted\\]\\ rejected\\,\\ keep\\ wordk3y9x", tail_payloads
+	assert tail_payloads[1] == "blob\\ \\[redacted\\]\\ and\\ \\[redacted\\]", tail_payloads
+	for secret_fragment in (" k3y9", "QUJD", "xyz", "QQQQ", "ZqZq"):
+		assert secret_fragment not in proc.stderr, secret_fragment
+
+
+def test_security_audit_codex_stderr_tail_byte_cap_holds_for_multibyte_text() -> None:
+	# The sanitizer keeps printable ASCII only, so the 4096 budget is in bytes.
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "3",
+			"LC_ALL": "C.UTF-8",
+			"MOCK_CODEX_STDERR": "".join(f"é {index} " + "ü" * 300 + " ok\n" for index in range(30)) + "Ω" * 5000 + "\n",
+		},
+	)
+	assert proc.returncode == 3, proc.stderr
+	_, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads, proc.stderr
+	assert all(tail_payload.isascii() for tail_payload in tail_payloads), tail_payloads
+	assert sum(len(tail_payload.encode("utf-8")) for tail_payload in tail_payloads) <= 4096
+
+
 def test_security_audit_codex_stderr_tail_is_capped_to_40_lines_and_4_kib() -> None:
 	many_lines = "".join(f"line-{index:03d} " + "word " * 58 + "\n" for index in range(200))
 	proc, _ = _run_security_audit(

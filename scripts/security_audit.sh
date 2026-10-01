@@ -77,14 +77,22 @@ security_audit_emit_path_diagnostic() {
 SECURITY_AUDIT_CODEX_PROVIDER="unknown"
 
 # Masks token-shaped values in one Codex stderr line before it reaches
-# security_audit_sanitize_log_value: the literal values (8+ chars) of exported
-# variables whose names look secret, sk- keys, 32+ hex runs, 40+ token runs,
-# and padded base64. Values are replaced with bash expansion, never passed in
-# a process argv. Used only for the codex-stderr-tail lines (#5785).
+# security_audit_sanitize_log_value: the literal value of every non-empty
+# exported variable whose name looks secret (8+ chars anywhere in the line,
+# shorter values where they stand as a whole word, so a short setting such as
+# MAX_THINKING_TOKENS=5 does not rewrite every digit), sk- keys, 32+ hex runs,
+# and 40+ base64 or token runs in either alphabet, padded or not. Values are
+# replaced with bash expansion, never passed in a process argv. Used only for
+# the codex-stderr-tail lines (#5785).
 security_audit_mask_stderr_line() {
 	local stderr_line="${1-}"
 	local secret_env_name
 	local secret_env_value
+	local secret_word_rest
+	local secret_word_masked
+	local secret_word_prefix
+	local secret_word_before
+	local secret_word_after
 	while IFS= read -r secret_env_name; do
 		case "${secret_env_name}" in
 			*TOKEN*|*API_KEY*|*SECRET*|*PASSWORD*|PAT|*_PAT|PAT_*|*_PAT_*)
@@ -94,12 +102,32 @@ security_audit_mask_stderr_line() {
 				;;
 		esac
 		secret_env_value="${!secret_env_name-}"
+		if [ -z "${secret_env_value}" ]; then
+			continue
+		fi
 		if [ "${#secret_env_value}" -ge 8 ]; then
 			stderr_line="${stderr_line//"${secret_env_value}"/[redacted]}"
+			continue
 		fi
+		# Short value: mask each occurrence not touching a word character.
+		secret_word_rest="${stderr_line}"
+		secret_word_masked=""
+		while [[ "${secret_word_rest}" == *"${secret_env_value}"* ]]; do
+			secret_word_prefix="${secret_word_rest%%"${secret_env_value}"*}"
+			secret_word_rest="${secret_word_rest#*"${secret_env_value}"}"
+			secret_word_masked+="${secret_word_prefix}"
+			secret_word_before="${secret_word_masked: -1}"
+			secret_word_after="${secret_word_rest:0:1}"
+			if [[ "${secret_word_before}" == [[:alnum:]_-] || "${secret_word_after}" == [[:alnum:]_-] ]]; then
+				secret_word_masked+="${secret_env_value}"
+			else
+				secret_word_masked+="[redacted]"
+			fi
+		done
+		stderr_line="${secret_word_masked}${secret_word_rest}"
 	done < <(compgen -e)
 	printf '%s' "${stderr_line}" \
-		| LC_ALL=C sed -E 's#(^|[^[:alnum:]_])sk-[[:alnum:]_-]{8,}#\1sk-[redacted]#g; s#[[:xdigit:]]{32,}#[redacted]#g; s#[[:alnum:]+_-]{40,}={0,2}#[redacted]#g; s#[[:alnum:]+/]{40,}={1,2}#[redacted]#g'
+		| LC_ALL=C sed -E 's#(^|[^[:alnum:]_])sk-[[:alnum:]_-]{8,}#\1sk-[redacted]#g; s#[[:xdigit:]]{32,}#[redacted]#g; s#[[:alnum:]+/_-]{40,}={0,2}#[redacted]#g'
 }
 
 # Classifies one Codex stderr line as a provider failure. Prints
