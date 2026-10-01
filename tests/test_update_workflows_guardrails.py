@@ -818,6 +818,35 @@ def test_claude_sync_skips_a_guard_under_a_consumer_path_that_is_not_a_directory
 	assert outputs["claude_changed"] == "1"
 
 
+def test_claude_sync_keeps_a_consumer_claude_path_that_is_not_a_directory() -> None:
+	"""A consumer .claude that is a file or a dangling symlink is kept and nothing is synced; `mkdir -p` never aborts the step (PR #5651 review round 2)."""
+	twins = {"hooks/h.py": "h\n", "commands/foo.md": "twin command\n"}
+	reviewed = {"hooks/h.py": "h\n", "hooks/no_twin.py": "n\n"}
+	for kind in ("file", "dangling"):
+
+		def before_run(consumer: Path, kind: str = kind) -> None:
+			shutil.rmtree(consumer / ".claude")
+			if kind == "file":
+				(consumer / ".claude").write_text("consumer file\n", encoding="utf-8")
+			else:
+				(consumer / ".claude").symlink_to("missing_dir")
+
+		def after_run(consumer: Path, kind: str = kind) -> None:
+			claude_path = consumer / ".claude"
+			if kind == "file":
+				assert claude_path.read_text(encoding="utf-8") == "consumer file\n"
+			else:
+				assert claude_path.is_symlink() and not claude_path.exists()
+			assert not (consumer / "missing_dir").exists()
+
+		# The local file only makes the harness create the consumer checkout; before_run replaces its .claude.
+		tree, stdout, outputs = _run_claude_sync(twins, reviewed, {"placeholder.md": "x\n"}, before_run=before_run, after_run=after_run)
+		assert tree == {}, kind
+		assert "::warning::claude-guard-sync: .claude in this repository is not a directory (a file or a dangling symlink); kept it and synced nothing." in stdout, kind
+		assert outputs["claude_changed"] == "0", kind
+		assert outputs["claude_has_changes"] == "false", kind
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -849,6 +878,7 @@ def main() -> int:
 	test_claude_sync_never_writes_a_guard_through_a_consumer_symlink()
 	test_claude_sync_never_writes_a_guard_under_a_symlinked_consumer_claude_dir()
 	test_claude_sync_skips_a_guard_under_a_consumer_path_that_is_not_a_directory()
+	test_claude_sync_keeps_a_consumer_claude_path_that_is_not_a_directory()
 	return 0
 
 

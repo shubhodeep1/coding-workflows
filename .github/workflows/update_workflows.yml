@@ -327,6 +327,15 @@ jobs:
             echo "Upstream has no workflow-templates/.claude/ at this ref — only guards in the stable .claude/ tree are checked."
           fi
 
+          # A consumer .claude that exists but is not a directory (a file, or
+          # a dangling symlink) can hold no synced file, and `mkdir -p` would
+          # abort the step on it before any per-file check runs; keep it and
+          # sync nothing. A symlink to a directory passes `-d`, and the guard
+          # destination check still refuses to write guards through it.
+          if [ ! -d "${CLAUDE_LOCAL_DIR}" ] && { [ -e "${CLAUDE_LOCAL_DIR}" ] || [ -L "${CLAUDE_LOCAL_DIR}" ]; }; then
+            printf '::warning::claude-guard-sync: .claude in this repository is not a directory (a file or a dangling symlink); kept it and synced nothing.\n'
+            exit 0
+          fi
           mkdir -p "${CLAUDE_LOCAL_DIR}"
 
           CHANGED_COUNT=0
