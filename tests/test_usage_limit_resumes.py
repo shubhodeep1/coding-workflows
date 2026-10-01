@@ -344,6 +344,27 @@ def test_a_pending_resume_trigger_blocks_whatever_its_time(tmp_path, capsys):
 	assert result["resume"] == [] and _skips(result) == {"session_a": "wake_pending"}
 
 
+@pytest.mark.parametrize("name", ["Resume after usage limit", "Resume after usage limits (#5607)"])
+def test_a_hand_named_resume_lookalike_is_an_ordinary_trigger(tmp_path, capsys, name):
+	"""PR #5718 review round 1 (head 49c078d): only names the stale sweep deletes count as resume triggers."""
+	trigger = _trigger("session_a", "2026-09-30T12:45:00Z", name=name)
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a")], [trigger])
+	assert _ids(result["resume"]) == ["session_a"]
+
+
+def test_resume_trigger_names_match_the_stale_sweep_pattern():
+	"""Every generated name is one `stale_routines.py` recognises, so a fired resume is swept."""
+	spec = importlib.util.spec_from_file_location(
+		"stale_routines_for_resume_parity", ROOT / "workflow-templates" / ".claude" / "scripts" / "stale_routines.py"
+	)
+	stale = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(stale)
+	assert resumes.RESUME_TRIGGER_NAME_PATTERN.pattern == stale.USAGE_LIMIT_RESUME_NAME_PATTERN.pattern
+	assert resumes.RESUME_TRIGGER_NAME_PATTERN.match(resumes.RESUME_TRIGGER_PREFIX + " (")
+	for title in ("#5607 · PR #5651 — x — checker", "PR #5611 status check-in", "implement-plan x — phase 2/4"):
+		assert stale.USAGE_LIMIT_RESUME_NAME_PATTERN.search(resumes.resume_trigger_name("session_abcd1234", title))
+
+
 def test_run_once_at_is_read_when_next_run_at_is_missing(tmp_path, capsys):
 	far = _trigger("session_far", None, name="PR #5651 hand-back", run_once_at="2026-10-07T12:00:00Z")
 	near = _trigger("session_near", None, name="PR #5652 hand-back", run_once_at="2026-09-30T12:10:00Z")
@@ -601,8 +622,15 @@ def test_json_start_scan_stops_at_the_cap():
 	cap = resumes.MAX_JSON_START_CANDIDATES
 	payload = json.dumps({"data": []})
 	assert resumes._decode_json_text("[" * (cap - 1) + payload, "f") == {"data": []}
-	with pytest.raises(resumes.InputError, match="no JSON object or array found"):
+	with pytest.raises(resumes.InputError, match=f"no JSON object or array found in the first {cap} "):
 		resumes._decode_json_text("[" * cap + payload, "f")
+
+
+def test_the_cap_is_named_only_when_the_scan_hit_it():
+	"""PR #5718 review round 1 (head 49c078d): the error says when the cap ended the scan."""
+	with pytest.raises(resumes.InputError) as raised:
+		resumes._decode_json_text("[[ not json", "f")
+	assert str(raised.value) == "f: no JSON object or array found"
 
 
 def test_bare_arrays_are_accepted(tmp_path, capsys):

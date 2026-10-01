@@ -113,6 +113,9 @@ RESUME_FIRE_FIRST_OFFSET_MINUTES = 2
 RESUME_FIRE_GROUP_SIZE = 4
 RESUME_FIRE_GROUP_SPACING_MINUTES = 3
 RESUME_TRIGGER_PREFIX = "Resume after usage limit"
+# The same shape stale_routines.py's USAGE_LIMIT_RESUME_NAME_PATTERN deletes, so a
+# hand-named trigger the sweep never cleans up never counts as a resume either.
+RESUME_TRIGGER_NAME_PATTERN = re.compile(r"^Resume after usage limit \(")
 ALLOWED_RATE_LIMIT_STATUSES = frozenset({"allowed", "allowed_warning"})
 SESSION_STATUS_PREFIX = "SESSION_STATUS_"
 IDLE_STATUS = "SESSION_STATUS_IDLE"
@@ -193,6 +196,11 @@ def _decode_json_text(text: str, path: str) -> object:
 			continue
 		if isinstance(payload, (dict, list)):
 			return payload
+	if len(positions) == MAX_JSON_START_CANDIDATES:
+		raise InputError(
+			f"{path}: no JSON object or array found in the first {MAX_JSON_START_CANDIDATES} "
+			"`{`/`[` positions (MAX_JSON_START_CANDIDATES); later positions were not tried"
+		)
 	raise InputError(f"{path}: no JSON object or array found")
 
 
@@ -318,7 +326,7 @@ def _bound_wakes(triggers: list, errors: list) -> dict:
 		session_id = trigger.get("persistent_session_id")
 		if not isinstance(session_id, str) or not session_id:
 			continue
-		is_resume = _text(trigger.get("name")).startswith(RESUME_TRIGGER_PREFIX)
+		is_resume = RESUME_TRIGGER_NAME_PATTERN.match(_text(trigger.get("name"))) is not None
 		wake_time = _parse_time(trigger.get("next_run_at"))
 		if wake_time is None:
 			wake_time = _parse_time(trigger.get("run_once_at"))
