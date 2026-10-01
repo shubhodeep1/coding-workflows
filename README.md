@@ -1431,6 +1431,24 @@ Every PR-backed `claude/*` head runs in **Claude-fixer mode**
 GPT editor, conflict resolver, and review-blocked judge never run on it. A
 Claude session fixes it instead (CLAUDE.md §26 and §26.H).
 
+A review round is **clean** (auto-merge once the same-head check-run snapshot
+is fresh and ready) when the successful reviewers reported no finding and no
+task gap and at least half of the active reviewer panel, rounded up, returned
+`success` (6 active reviewers need 3, 5 need 3). A slot that only failed for
+infrastructure reasons (non-retryable error, output-token cap, empty output,
+retryable-failure limit, unmapped model) is dropped from the consensus ledger
+and does not block. A slot skipped for budget is not covered when it is the
+pass's only non-success slot: the pass then requests a partial finalize, no
+consensus ledger is written, and in Claude-fixer mode the hand-off step fails
+closed and hands the round to the Claude session (the partial-finalize
+continuation does not run for `claude/*` heads), as before. Beside a hard
+failure it is dropped like the others. A real finding or task gap
+from any successful reviewer still hands the round to Claude, and so does a
+round below the 50% floor. The hand-off step logs
+`CLAUDE_FIXER_PANEL_FLOOR successful=<n> active=<m> floor_met=<true|false|unknown>`;
+`unknown` (no status files and no active-models list) leaves today's rule in
+place.
+
 The deterministic pre-review skip (`AUTOFIX_SKIP_DOC_ONLY`,
 `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS`) applies to
 `claude/*` PRs exactly as to every other PR: a doc-only or small-diff PR that
