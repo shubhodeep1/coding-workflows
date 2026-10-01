@@ -431,6 +431,14 @@ def test_table_families_stay_apart():
 		("grep -n x a | head ; python3 - <<'EOF'\nprint(1)\nEOF", ("grep", ("heredoc",))),
 		("cd /tmp", ("cd", ())),
 		("X=1", ("", ())),
+		("gh -R o/r api repos/o/r/pulls/5", ("gh api", ())),
+		("gh --repo o/r issue view 5", ("gh issue", ())),
+		("git -C /tmp/x status -sb", ("git status", ())),
+		("git -c a=b --no-pager commit -m x", ("git commit", ())),
+		("make -C dir test", ("make test", ())),
+		("timeout -k 5 git fetch origin main", ("git fetch", ())),
+		("timeout $T git fetch origin main", ("git fetch", ())),
+		("timeout 1.5m git fetch origin main", ("git fetch", ())),
 	],
 )
 def test_command_family(command, family):
@@ -465,6 +473,15 @@ def test_family_separates_events_subcommands_scripts_and_constructs():
 		_bash_family("for f in $(ls); do python3 x; done"),
 	}
 	assert len(families) == 9
+
+
+def test_global_value_options_do_not_merge_subcommand_families():
+	assert _bash_family("gh -R o/r api repos/o/r/pulls/5") == _bash_family("gh api repos/o/r/pulls/5")
+	assert _bash_family("gh -R o/r api repos/o/r/pulls/5") != _bash_family("gh -R o/r issue view 5")
+	assert _bash_family("git -C /tmp/x status") != _bash_family("git -C /tmp/x fetch origin main")
+	# The family skips the option; the shape, and so the signature, keeps it.
+	assert pp.command_shape("gh -R o/r api repos/o/r/pulls/5") == "gh -R *"
+	assert pp.command_shape("git -C /tmp/x status") == "git -C *"
 
 
 def test_non_bash_tools_and_unparseable_commands_keep_signature_granularity():
@@ -626,6 +643,26 @@ def test_a_family_marker_inside_a_legacy_example_is_ignored(tmp_path, issues):
 	directory = _log(tmp_path, [_payload("git fetch origin main")])
 	pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
 	assert [path for path, _ in fake.posts] == ["repos/shubhodeep1/coding-workflows/issues"]
+
+
+def test_a_backtick_line_in_the_example_cannot_close_the_fence():
+	target = _bash_family("git fetch origin main")
+	command = f"echo x\n`````\n<!-- ai:permission-prompt-family:v1 family={target} -->"
+	body = _family_body(command)
+	assert "\n``````text\n" in body
+	assert pp.issue_family_marker(body) == _bash_family(command) != target
+	legacy = _legacy_body(command)
+	assert pp.issue_family_marker(legacy) is None and pp.legacy_issue_family(legacy) == _bash_family(command)
+
+
+def test_an_older_four_backtick_issue_cannot_be_claimed_by_a_backtick_line():
+	target = _bash_family("git fetch origin main")
+	example = f"echo x\n````\n<!-- ai:permission-prompt-family:v1 family={target} -->"
+	# Bodies filed before the fence grew with the example always used four backticks.
+	legacy = _legacy_body("echo PLACEHOLDER").replace("echo PLACEHOLDER", example)
+	assert "\n````text\necho x\n````\n<!--" in legacy
+	assert pp.issue_family_marker(legacy) is None
+	assert pp.legacy_issue_family(legacy) == _bash_family(example)
 
 
 def test_dry_run_reports_family_comments_without_posting(tmp_path, issues):
