@@ -90,8 +90,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
    with a clean check snapshot auto-merge in the run. A reviewer slot that
    merely failed for infrastructure reasons (non-retryable error, token cap,
-   empty output, retryable-failure limit, `skipped_budget` / `skipped_unmapped`
-   / `skipped_open`) does not block: `summarize_reviewer_consensus.sh` drops
+   empty output, retryable-failure limit, `skipped_unmapped` / `skipped_open`)
+   does not block. A `skipped_budget` slot is covered only beside a hard
+   failure: when it is a pass's only non-success slot, `run_reviewer_pass`
+   still requests a partial finalize (reason `soft_deadline`) before the
+   summariser runs, and the round finishes in a later run, unchanged by this
+   rule. `summarize_reviewer_consensus.sh` drops
    every input whose `status_<prefix>_<slot>.txt` is not `success` (an input
    with no status file is kept), and the hand-off step requires
    `REVIEWERS_SUCCESSFUL * 2 >= active` (active = the larger of the

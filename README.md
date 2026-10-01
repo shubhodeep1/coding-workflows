@@ -1423,8 +1423,11 @@ is fresh and ready) when the successful reviewers reported no finding and no
 task gap and at least half of the active reviewer panel, rounded up, returned
 `success` (6 active reviewers need 3, 5 need 3). A slot that only failed for
 infrastructure reasons (non-retryable error, output-token cap, empty output,
-retryable-failure limit, skipped for budget or unmapped model) is dropped
-from the consensus ledger and does not block. A real finding or task gap
+retryable-failure limit, unmapped model) is dropped from the consensus ledger
+and does not block. A slot skipped for budget does not reach that check when
+it is the pass's only non-success slot: the pass then requests a partial
+finalize and the review finishes in a later run, as before. Beside a hard
+failure it is dropped like the others. A real finding or task gap
 from any successful reviewer still hands the round to Claude, and so does a
 round below the 50% floor. The hand-off step logs
 `CLAUDE_FIXER_PANEL_FLOOR successful=<n> active=<m> floor_met=<true|false|unknown>`;

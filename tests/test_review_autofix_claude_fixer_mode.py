@@ -868,3 +868,79 @@ def test_gate_disabled_by_repo_var():
 		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF)], extra_env={"CLAUDE_FIXER_ENABLED": "false"})
 	assert proc.returncode == 0, proc.stderr
 	assert out["claude_fixer"] == "false" and out["should_run"] == "true"
+
+
+REVIEWERS_SCRIPT = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+
+
+def _reviewers_block(start_marker: str, end_marker: str) -> str:
+	text = REVIEWERS_SCRIPT.read_text(encoding="utf-8")
+	start = text.index(start_marker)
+	return text[start:text.index(end_marker, start)]
+
+
+def _run_reviewer_pass_with_statuses(td: Path, statuses: list[str]) -> tuple[subprocess.CompletedProcess, Path]:
+	"""Run the real `run_reviewer_pass` with each slot ending in the given status.
+
+	`run_reviewer` is stubbed to write the slot's status file and output, so
+	the pass's own tally and partial-finalize decision run unchanged.
+	"""
+	partial_block = _reviewers_block(
+		'REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"',
+		"resolve_ledger_substate_helper() {",
+	)
+	pass_block = _reviewers_block("run_reviewer_pass() {", "# Wrap a consolidated pass-1 ledger")
+	reviews = td / "reviews"
+	runtime = td / "runtime"
+	reviews.mkdir()
+	runtime.mkdir()
+	models = "".join(f"vendor/model{index}\\n" for index in range(len(statuses)))
+	status_cases = "".join(f'\t\tvendor/model{index}) echo "{status}" ;;\n' for index, status in enumerate(statuses))
+	script = (
+		"set -euo pipefail\n"
+		f"{partial_block}\n"
+		"emit_run_budget_gate_note() { :; }\n"
+		"codex_run_budget_phase_may_start() { return 0; }\n"
+		"reviewer_resume_should_reuse_success_slot() { return 1; }\n"
+		"reviewer_circuit_breaker_enabled() { return 1; }\n"
+		f"get_active_reviewer_models_text() {{ printf '{models}'; }}\n"
+		"slot_status_for() {\n"
+		'\tcase "$1" in\n'
+		f"{status_cases}"
+		"\tesac\n"
+		"}\n"
+		"run_reviewer() {\n"
+		'\tlocal model="$1" safe_name="$2" prefix="$3"\n'
+		'\tslot_status_for "${model}" > "${PREVIOUS_REVIEWS_DIR}/status_${prefix}_${safe_name}.txt"\n'
+		'\tprintf "(No findings reported.)\\n" > "${PREVIOUS_REVIEWS_DIR}/${prefix}_${safe_name}.txt"\n'
+		"}\n"
+		f"{pass_block}\n"
+		'run_reviewer_pass review "prompt" ""\n'
+	)
+	env = {
+		**os.environ,
+		"PREVIOUS_REVIEWS_DIR": str(reviews),
+		"RUNTIME_DIR": str(runtime),
+		"GITHUB_ENV": str(td / "github_env"),
+	}
+	proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	return proc, runtime / "reviewers_partial_finalize_request.txt"
+
+
+def test_budget_skip_only_pass_still_requests_partial_finalize(tmp_path):
+	"""Q47: A. A pass whose only non-success slot is `skipped_budget` keeps the
+	finish-later path (partial finalize before the summariser), so the panel
+	floor does not apply to it. The README, agents.md and the changelog say so.
+	"""
+	proc, request = _run_reviewer_pass_with_statuses(tmp_path, ["success"] * 3 + ["skipped_budget"])
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip().splitlines()[-1] == "3"
+	assert request.exists()
+	assert "AUTOFIX_PARTIAL_FINALIZE_REASON=soft_deadline" in request.read_text(encoding="utf-8")
+
+
+def test_budget_skip_beside_a_hard_failure_reaches_the_summariser(tmp_path):
+	proc, request = _run_reviewer_pass_with_statuses(tmp_path, ["success"] * 3 + ["failed", "skipped_budget", "skipped_unmapped"])
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip().splitlines()[-1] == "3"
+	assert not request.exists()
