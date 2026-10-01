@@ -22,6 +22,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -847,7 +848,8 @@ def test_release_leaves_pr_queued_when_listing_exceeds_ten_pages(tmp_path: Path)
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
 	# The inclusive bound reads the oldest run of each query again: 100 + 9 * 99.
-	assert "reason=truncated status=in_progress page=11 read=991 total=110" in result.stderr
+	# The diagnostic names the last query sent (PR #5451 review round 1).
+	assert "reason=truncated status=in_progress page=10 read=991 total=110" in result.stderr
 	assert log_text.count("actions/runs?status=in_progress") == 10
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
@@ -881,6 +883,51 @@ def test_release_leaves_pr_queued_when_full_page_has_no_created_at(tmp_path: Pat
 	assert result.returncode == 0, result.stderr
 	assert "reason=malformed_page status=in_progress page=1 read=100 total=150" in result.stderr
 	assert log_text.count("actions/runs?status=in_progress") == 1
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_bounds_follow_up_query_by_fractional_created_at(tmp_path: Path) -> None:
+	"""PR #5451 review round 1: a created_at with fractional seconds still pages.
+
+	The bound is rounded up to the next whole second, so the inclusive
+	follow-up query covers the oldest run read and every run after it.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(150, 120)
+	for run in runs:
+		run["created_at"] = run["created_at"].replace("Z", ".250Z")
+	_write_runs(fixtures, runs)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert f"actions/runs?status=in_progress&per_page=100&page=1&created=%3C%3D{_run_created_at(98)}" in log_text
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("missing", ["path", "id", "empty_path", "null_path"])
+def test_release_leaves_pr_queued_when_a_run_cannot_be_classified(tmp_path: Path, missing: str) -> None:
+	"""PR #5451 review round 1: a run with no id or path could be a review run.
+
+	It can be neither deduplicated nor matched to a review workflow, so the
+	listing is malformed and the queued PR stays queued.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
+		"path": ".github/workflows/ai-review.yml"}
+	if missing == "empty_path":
+		run["path"] = ""
+	elif missing == "null_path":
+		run["path"] = None
+	else:
+		del run[missing]
+	_write_runs(fixtures, [run])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1" in result.stderr
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 

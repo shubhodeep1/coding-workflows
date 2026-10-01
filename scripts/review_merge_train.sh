@@ -440,6 +440,8 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            every run its query matched (workflow_runs reaches total_count).
 #            Otherwise the next query adds `&created=<=<oldest created_at
 #            read>` and asks again, at most 10 queries ("pages") per status.
+#            A created_at with fractional seconds is rounded up to the next
+#            whole second, so the inclusive bound still covers that run.
 #            Normally 3 calls, one per status. REST only (CLAUDE.md §15).
 # Keyset:    the listing is filtered by status and sorted by created_at,
 #            newest first (checked live on 2026-09-30), so offset pages
@@ -453,12 +455,13 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            A run created after the first query was issued is outside the
 #            listing, as it is for any single snapshot.
 # Incomplete: a page that failed after gh_retry, a malformed page (including
-#            a missing or malformed created_at on a page that needs a next
-#            query), a short page before its total_count (the listing
-#            shifted while it was read), more runs than 10 queries read or a
-#            query that adds no new run (more than 100 runs created in one
-#            second), or a failed key filter. Each is logged once on stderr
-#            (CLAUDE.md §8):
+#            a run with no numeric id or no non-empty path, which the listing
+#            can neither deduplicate nor classify, and a missing or malformed
+#            created_at on a page that needs a next query), a short page
+#            before its total_count (the listing shifted while it was read),
+#            more runs than 10 queries read or a query that adds no new run
+#            (more than 100 runs created in one second), or a failed key
+#            filter. Each is logged once on stderr (CLAUDE.md §8):
 #            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|filter_failed> status=<s> page=<p> read=<n> total=<n>
 _mt_inflight_review_branches()
 {
@@ -473,10 +476,6 @@ _mt_inflight_review_branches()
 		__mt_runs_created_bound=""
 		__mt_runs_status_runs='[]'
 		while :; do
-			if [ "${__mt_runs_page}" -gt "${__mt_runs_max_pages}" ]; then
-				__mt_runs_reason="truncated"
-				break 2
-			fi
 			__mt_runs_query="repos/${MT_REPO}/actions/runs?status=${__mt_runs_status}&per_page=100&page=1"
 			if [ -n "${__mt_runs_created_bound}" ]; then
 				__mt_runs_query="${__mt_runs_query}&created=%3C%3D${__mt_runs_created_bound}"
@@ -488,7 +487,7 @@ _mt_inflight_review_branches()
 				break 2
 			fi
 			if ! printf '%s' "${__mt_runs_page_json}" \
-				| jq -e '(.total_count | type == "number" and . >= 0) and (.workflow_runs | type == "array")' >/dev/null 2>&1; then
+				| jq -e '(.total_count | type == "number" and . >= 0) and (.workflow_runs | type == "array") and all(.workflow_runs[]; (.id | type == "number") and (.path | type == "string" and length > 0))' >/dev/null 2>&1; then
 				__mt_runs_reason="malformed_page"
 				break 2
 			fi
@@ -522,7 +521,13 @@ _mt_inflight_review_branches()
 				__mt_runs_reason="truncated"
 				break 2
 			fi
-			if ! __mt_runs_created_bound="$(printf '%s' "${__mt_runs_page_json}" | jq -r '[.workflow_runs[].created_at] | min' 2>/dev/null)" \
+			if [ "${__mt_runs_page}" -ge "${__mt_runs_max_pages}" ]; then
+				__mt_runs_reason="truncated"
+				break 2
+			fi
+			# GitHub reports whole seconds today; a fractional created_at is
+			# rounded up so the inclusive bound never drops the oldest second.
+			if ! __mt_runs_created_bound="$(printf '%s' "${__mt_runs_page_json}" | jq -r '[.workflow_runs[].created_at | if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$") then ((sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) + (if test("\\.[0-9]*[1-9][0-9]*Z$") then 1 else 0 end)) else error("malformed created_at") end] | min | todateiso8601' 2>/dev/null)" \
 				|| ! [[ "${__mt_runs_created_bound}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
 				__mt_runs_reason="malformed_page"
 				break 2

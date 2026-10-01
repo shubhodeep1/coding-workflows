@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5443-merge-train-complete-run-listing-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5443
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4701-review-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-5443-merge-train-complete-run-listing   Final PR: #5451 draft
-- Status: COMPLETE
-- Stage: final-merge
+- Project branch: claude/implement-plan-issue-5443-merge-train-complete-run-listing   Final PR: #5451 ready
+- Status: IN_PROGRESS
+- Stage: final-merge — review round
 - Activation: n/a once the final PR merges (base claude/implement-plan-issue-4701-review-dispatch-default-branch is not the default branch)
-- Waiting on: completion PR (the PR carrying this log update)
+- Waiting on: PR #5451 (final PR, review round 2 on the pushed head)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_018ZxuZKFeRNRTtGvjHSjwZa (project checker)   safety net and hand-back: see the validation 1/3 — read result stage report
-- Last updated: 2026-09-30
-- Last note: validation cycle 1 passed on the project branch at 7cef44d (10/10 tests); completion PR moves the plan to docs/completed/; final PR #5451 is marked ready once it merges.
+- Last updated: 2026-10-01
+- Last note: final PR #5451 review round 1 (2026-10-01): 3 consensus findings, all valid and fixed in one [claude-autofix] commit (fractional created_at bound, runs with no id or path, page=10 diagnostic); the earlier outage block (OpenRouter credits, Q1: A) is resolved.
 
 ## Phases
 1. [x] Phase 1 — complete, suffix-tolerant active-run listing for the merge-train release   — PR #5458 merged 2026-09-30; review rounds: 0; interventions: 0
@@ -27,9 +27,9 @@
 - Cycle 1 — run 36714864057 2026-09-30 (target_ref: project branch, 7cef44d): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 285s); no fixes
 
 ## Completion
-- Completion PR (this log update) — doc moved to docs/completed/issue-5443-merge-train-complete-run-listing-plan.md
+- Completion PR #5696 merged 2026-09-30 — doc moved to docs/completed/issue-5443-merge-train-complete-run-listing-plan.md
 - Merged PRs: phase 1 #5458, conformance fix #5512
-- Final PR #5451 draft (project mode, base claude/implement-plan-issue-4701-review-dispatch-default-branch; marked ready in the final-merge stage)
+- Final PR #5451 ready — review rounds: 1 (project mode, base claude/implement-plan-issue-4701-review-dispatch-default-branch). Round 1, 2026-10-01, head 50e4c6f: (1) the created_at bound regex rejected fractional seconds — valid, bound now rounded up to the next whole second (AD-9); (2) a run with no path was silently treated as a non-review run — valid, a run with no numeric id or no non-empty path makes the page malformed (AD-10); (3) the truncation diagnostic said page=11 after 10 queries — valid, the cap is checked after a query and reports page=10.
 
 ## Activation
 
@@ -42,12 +42,16 @@
 - AD-6 [plan, 2026-09-30] Which statuses count as active? — Picked: A — keep `pending`, `queued`, `in_progress`, the three the filter already uses. Alternatives: B — also `waiting` and `requested` (5 calls). Why: §5, no semantic widening; the review workflows use no deployment environments that would hold a run in `waiting`. Applied in: phase 1. Status: pending review
 - AD-7 [conformance 1/3, 2026-09-30] How should the active-run listing treat a `total_count` that changes between pages of one status? — Picked: A — mark the listing incomplete (`listing_shifted`) when any later page's `total_count` differs from page 1's. Alternatives: B — compare the runs read with page 1's `total_count` only; C — compare with the largest `total_count` seen. Why: §1/§28.B, the safer option: A keeps every listing that is incomplete today incomplete and adds the shrink case; B would newly accept a listing that grew mid-read, and C still accepts a shrink that later additions offset. Applied in: PR #5512. Status: pending review
 - AD-8 [conformance 1/3 — review round, 2026-09-30] How should the active-run listing read a status that holds more than 100 runs, now that a same-count membership shift defeats AD-7's total_count check? — Picked: A — replace offset pages with keyset queries: each follow-up query is `status=<s>&created=<=<oldest created_at read>` (inclusive, deduplicated by id), a status is complete when one response holds its whole `total_count`, at most 10 queries, and a query that adds no new run is `truncated`. Alternatives: B — keep offset pages and re-read pages 1..n-1 after the last page, requiring identical ids (n-1 extra calls, still defeated by churn that restores a page); C — treat any status needing more than one page as incomplete (holds the whole train whenever a status has more than 100 active runs). Why: §1/§28.B, A is the only option that provably returns every run staying in its status during the read (the listing is sorted by created_at, newest first, checked live 2026-09-30), at the same call count as offset paging; it supersedes AD-7's comparison, which has no meaning across differently bounded queries. Applied in: PR #5512. Status: pending review
+- AD-9 [final-merge — review round, 2026-10-01] How should the keyset bound handle a created_at with fractional seconds, which GitHub does not return today? — Picked: A — accept an optional fraction and round the bound up to the next whole second (inclusive `created=<=`, deduplicated by id). Alternatives: B — truncate the fraction (would drop same-second runs later than the bound); C — keep rejecting it as malformed_page (holds the train whenever a status needs a follow-up query). Why: §1/§28.B, A never skips a run and keeps paging working; the extra second only re-reads runs already deduplicated. Applied in: PR #5451 round 1. Status: pending review
+- AD-10 [final-merge — review round, 2026-10-01] What does the listing do with an active run that has no numeric id or no non-empty path? — Picked: A — treat the page as malformed_page, so every queued PR stays queued this invocation. Alternatives: B — count the run as a possible review run and key its head branch / PR title; C — keep ignoring it (today's behaviour). Why: §1/§28.B, A is the fail-safe that matches the function's existing incomplete contract; B still misses a path-less default-branch dispatch whose title is not PR-named, and C is the reported defect. Applied in: PR #5451 round 1. Status: pending review
 
 ## Lessons
 - [source:plan-deviation] Fake `gh` fixtures for paged `actions/runs` listings need a distinct `id` per run: a listing deduplicated by id collapses id-less runs and reads as incomplete. (files: tests/test_review_merge_train.py)
 - [source:conformance] Offset pages over a status-filtered GitHub run listing can skip a run that stays active, even when total_count never changes (one run leaves above it while another enters below the page boundary), so page with a keyset instead: bound each follow-up query by `created=<=<oldest created_at read>` and count a status complete only when one response holds its whole total_count. A time-windowed listing with no status filter only grows at the top and does not need this. (files: scripts/review_merge_train.sh, tests/test_review_merge_train.py)
 - [source:intervention] Before accepting a paging-completeness fix, test the membership swap that keeps total_count unchanged (one run leaves, one enters mid-list): count checks alone never detect it. (files: tests/test_review_merge_train.py)
+- [source:intervention] Validate every field a listing deduplicates or classifies on (`id`, `path`, timestamps) before trusting it: a missing field silently drops a run instead of failing, and an inclusive time bound must round fractional seconds up, never down. (files: scripts/review_merge_train.sh, tests/test_review_merge_train.py)
 
 ## Notes
 - Issue mode: the base branch is the #4701 project branch (final PR #4709, open draft into main on 2026-09-30), not the default branch, so the final PR uses `Refs #5443` and the final-merge stage closes the issue explicitly; activation is n/a for this base.
 - Issue progress comment: 5904107812.
+- 2026-09-30 final-merge: the whole-project review of #5451 failed 3 times on head 50e4c6f (OpenRouter credits exhausted); the stage posted a hold claim and the ai:claude-blocked Q1 on #5443. Answered Q1: A on 2026-10-01 (credits topped up, ai:review-blocked removed, review re-dispatched by the sweep); the resumed stage (session_01R7Po6oyAEjvqLBdCVVSNyH) handled the resulting review round 1.
