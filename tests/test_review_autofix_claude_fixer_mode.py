@@ -928,9 +928,10 @@ def _run_reviewer_pass_with_statuses(td: Path, statuses: list[str]) -> tuple[sub
 
 
 def test_budget_skip_only_pass_still_requests_partial_finalize(tmp_path):
-	"""Q47: A. A pass whose only non-success slot is `skipped_budget` keeps the
-	finish-later path (partial finalize before the summariser), so the panel
-	floor does not apply to it. The README, agents.md and the changelog say so.
+	"""Q47: A. A pass whose only non-success slot is `skipped_budget` still
+	requests a partial finalize before the summariser, so no ledger is written
+	and the panel floor does not apply to it (the hand-off fails closed). The
+	README, agents.md and the changelog say so.
 	"""
 	proc, request = _run_reviewer_pass_with_statuses(tmp_path, ["success"] * 3 + ["skipped_budget"])
 	assert proc.returncode == 0, proc.stderr
@@ -944,3 +945,15 @@ def test_budget_skip_beside_a_hard_failure_reaches_the_summariser(tmp_path):
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stdout.strip().splitlines()[-1] == "3"
 	assert not request.exists()
+
+
+def test_budget_skip_only_pass_without_ledger_hands_off_fail_closed():
+	"""Q47: A. The budget-only pass writes no ledger, so the hand-off step sees
+	ledger=missing and hands the round to Claude (kind=findings) even though
+	the panel floor is met. No auto-merge flag is exported.
+	"""
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=None, panel_statuses=["success"] * 3 + ["skipped_budget"], reviewers_successful="3")
+	assert proc.returncode == 0, proc.stderr
+	assert "kind=findings" in calls[0]["payload"]["body"]
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env

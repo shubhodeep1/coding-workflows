@@ -1424,9 +1424,11 @@ task gap and at least half of the active reviewer panel, rounded up, returned
 `success` (6 active reviewers need 3, 5 need 3). A slot that only failed for
 infrastructure reasons (non-retryable error, output-token cap, empty output,
 retryable-failure limit, unmapped model) is dropped from the consensus ledger
-and does not block. A slot skipped for budget does not reach that check when
-it is the pass's only non-success slot: the pass then requests a partial
-finalize and the review finishes in a later run, as before. Beside a hard
+and does not block. A slot skipped for budget is not covered when it is the
+pass's only non-success slot: the pass then requests a partial finalize, no
+consensus ledger is written, and in Claude-fixer mode the hand-off step fails
+closed and hands the round to the Claude session (the partial-finalize
+continuation does not run for `claude/*` heads), as before. Beside a hard
 failure it is dropped like the others. A real finding or task gap
 from any successful reviewer still hands the round to Claude, and so does a
 round below the 50% floor. The hand-off step logs

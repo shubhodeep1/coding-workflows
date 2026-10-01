@@ -36,9 +36,11 @@
 # active panel size is the larger of the `status_review_*.txt` count in
 # PREVIOUS_REVIEWS_DIR and the line count of ${RUNTIME_DIR}/reviewer_active_models.txt;
 # when neither is available the floor is not applied (today's behaviour).
-# A pass whose only non-success slot is skipped_budget never gets here:
-# run_reviewer_pass requests a partial finalize before the summariser, and the
-# round finishes in a later run (operator Q47: A).
+# A pass whose only non-success slot is skipped_budget writes no ledger:
+# run_reviewer_pass requests a partial finalize before the summariser, so this
+# step sees ledger=missing and fails closed (kind=findings), as before. The
+# partial-finalize continuation does not run in Claude-fixer mode (operator
+# Q47: A keeps that path unchanged).
 #
 # Inputs (environment): PR_NUMBER, GH_TOKEN, GITHUB_REPOSITORY, HEAD_SHA,
 # HEAD_REF, CLAUDE_FIXER_ROUND_INDEX (consecutive [ai-autofix] /

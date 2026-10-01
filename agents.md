@@ -94,8 +94,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    does not block. A `skipped_budget` slot is covered only beside a hard
    failure: when it is a pass's only non-success slot, `run_reviewer_pass`
    still requests a partial finalize (reason `soft_deadline`) before the
-   summariser runs, and the round finishes in a later run, unchanged by this
-   rule. `summarize_reviewer_consensus.sh` drops
+   summariser runs, so no ledger is written and the Claude-fixer hand-off
+   fails closed (`ledger=missing`, `kind=findings`): the round goes to the
+   Claude session as before, since the partial-finalize continuation is off
+   in Claude-fixer mode. This PR leaves that path unchanged (operator Q47: A). `summarize_reviewer_consensus.sh` drops
    every input whose `status_<prefix>_<slot>.txt` is not `success` (an input
    with no status file is kept), and the hand-off step requires
    `REVIEWERS_SUCCESSFUL * 2 >= active` (active = the larger of the

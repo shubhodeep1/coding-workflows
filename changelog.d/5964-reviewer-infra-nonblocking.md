@@ -11,7 +11,7 @@ In Claude-fixer mode the consensus ledger used to carry the failure notice of ev
 | Active panel size | larger of the `status_review_*.txt` count and the `reviewer_active_models.txt` line count |
 | Workflow files changed | 0 (`review_autofix.yml` is untouched) |
 
-A reviewer slot skipped for budget is not covered on its own. When it is the pass's only non-success slot, the runner still requests a partial finalize and the round finishes in a later run, as it did before. Beside a hard failure it is dropped like the others.
+A reviewer slot skipped for budget is not covered on its own. When it is the pass's only non-success slot, the runner still requests a partial finalize before any consensus ledger is written, so the hand-off fails closed and the round goes to the Claude session, as it did before. Beside a hard failure it is dropped like the others.
 
 What this means for operators: `claude/*` PRs whose reviewers hit a rate limit or a token cap should auto-merge when enough of the panel still reviewed them clean, with no Claude fix session. A real finding or task gap from any successful reviewer still blocks, and so does a round below the floor. When the active panel size cannot be read (`floor_met=unknown`) the floor is not applied.
 
