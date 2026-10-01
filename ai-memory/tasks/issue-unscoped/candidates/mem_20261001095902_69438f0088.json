@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:190 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: When default-branch drift remains after the PR\u2019s non-default base is checked, the procedure records `claude_assets=stale` and continues instead of stopping.\n  WHY: A PR based on `stable` or another non-default branch can proceed with outdated `.claude/` guards even when its own base has no guard drift, leaving the security gap the sync is intended to prevent.\n- .github/workflows/review_autofix.yml:338 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The protected-branch lookup has no retry handling for API rate limits.\n  WHY: The supplied failed `review / gate` run received HTTP 403 `API rate limit exceeded` at this call, and the `set -euo pipefail` command substitution failure exits the gate before review can proceed; this file is outside the PR\u2019s changed files.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/implement-plan-claude.md:190 | severity=high | confidence=5\n  PROBLEM: When default-branch drift remains after the PR\u2019s non-default base is checked, the procedure records `claude_assets=stale` and continues instead of stopping.\n  WHY: A PR based on `stable` or another non-default branch can have outdated `.claude/` guards even when its own base has no guard drift. The procedure deliberately avoids merging the default branch, but still lets the session work on the PR head with those outdated guards, leaving the security gap the sync is intended to prevent.\n- .github/workflows/review_autofix.yml:338 | severity=high | confidence=5\n  PROBLEM: This protected-branch lookup has no retry handling for API rate limits.\n  WHY: The supplied failed `review / gate` run received HTTP 403 `API rate limit exceeded` at this call. Because the step uses `set -euo pipefail` at line 299, the command substitution failure exits the gate before review can proceed. This file is outside the PR\u2019s changed files.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nReviewer qwen/qwen3.7-plus failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b056074b235fd45c4f5550c3143093aeb2eeb403d814b22d5d71b164dad63975",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5280,
+    "run_id": "36844128428",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36844128428",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001095902_69438f0088",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5280,
+    "run_id": "36844128428"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T09:59:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
