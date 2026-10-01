@@ -51,7 +51,10 @@ Output: one JSON line on stdout:
 session is younger than `--horizon-days`, and fewer than `--max-pages` pages
 were given: the pickup lists the next page with that `after_id` and runs the
 script again with every page so far. Only the final run's `archive` list is
-acted on.
+acted on. A run that sets `next_after_id` is intermediate: it makes no
+`gh api` read and records no stall, and reports an empty `archive` and
+`stalled_on_prompt`, so the final run classifies every page once and reports
+each new stall as `new`.
 
 Exit status: 0 when a verdict was reached (a failed PR or issue read keeps
 that session and is listed in `errors`), 2 when an input file is missing or
@@ -111,9 +114,11 @@ record whose filing failed is filed on a later wake even when no stall is
 
 API budget (CLAUDE.md §15): REST only, never GraphQL. One `gh api
 repos/<owner>/<repo>/pulls/<N>` or `…/issues/<N>` read per distinct PR or
-issue, cached, and only for a session that passed rules 1 and 2 and is not a
-superseded fixer. A failed read keeps the session and is reported in
-`errors` (fail safe: never archive on missing data).
+issue, cached (a failed read too, so it is not repeated for the next session
+on the same PR or issue), only for a session that passed rules 1 and 2 and is
+not a superseded fixer, and only on the final run. A failed read keeps the
+session and is reported in `errors` (fail safe: never archive on missing
+data).
 """
 
 from __future__ import annotations
@@ -320,11 +325,20 @@ def _bound_session_suffixes(triggers: list[dict]) -> set[str]:
 
 
 def _terminal_age_hours(target: str, repo: str, number: int, now: dt.datetime, cache: dict) -> tuple[str, float] | None:
-	"""(`merged` | `closed`, hours since) for a finished PR or issue, or None while open (one cached read each)."""
+	"""(`merged` | `closed`, hours since) for a finished PR or issue, or None while open (one cached read each).
+
+	A failed read is cached too, so every later session on the same PR or issue gets the same error without
+	another request.
+	"""
 	path = f"repos/{repo}/pulls/{number}" if target == "pr" else f"repos/{repo}/issues/{number}"
 	if path not in cache:
-		cache[path] = gh_api(path)
+		try:
+			cache[path] = gh_api(path)
+		except SessionReadError as exc:
+			cache[path] = exc
 	item = cache[path]
+	if isinstance(item, SessionReadError):
+		raise item
 	if target == "pr" and item.get("merged"):
 		return "merged", (now - _parse_time(item.get("merged_at"))).total_seconds() / 3600
 	if item.get("state") == "closed":
@@ -512,18 +526,25 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 		print(json.dumps({"archive": [], "error": f"cannot read --triggers: {exc}"}))
 		return 2
 	now = now or dt.datetime.now(dt.timezone.utc)
-	result = classify(sessions, triggers, args.grace_hours, now)
 	stall_log_dir = Path(args.stall_log_dir).expanduser().resolve()
-	stalls = stalled_on_prompt(sessions, args.prompt_stall_minutes, now)
-	try:
-		record_stalls(stalls, stall_log_dir, now)
-	except OSError as exc:
-		result["errors"].append(f"cannot write {stall_log_dir}: {exc}")
-	result["stalled_on_prompt"] = stalls
-	result["stall_log_dir"] = str(stall_log_dir)
-	result["next_after_id"] = next_after_id(
+	following_page = next_after_id(
 		sessions, len(args.sessions), has_more, last_id, now, args.horizon_days, args.max_pages
 	)
+	if following_page is not None:
+		# An intermediate run: the pickup only lists the next page and acts on the final run, so this
+		# one makes no `gh api` read and records no stall (recording here would make the final run
+		# report this page's stalls as `new: false` and skip their notifications).
+		result = {"archive": [], "kept": 0, "not_ours": 0, "already_archived": 0, "errors": [], "stalled_on_prompt": []}
+	else:
+		result = classify(sessions, triggers, args.grace_hours, now)
+		stalls = stalled_on_prompt(sessions, args.prompt_stall_minutes, now)
+		try:
+			record_stalls(stalls, stall_log_dir, now)
+		except OSError as exc:
+			result["errors"].append(f"cannot write {stall_log_dir}: {exc}")
+		result["stalled_on_prompt"] = stalls
+	result["stall_log_dir"] = str(stall_log_dir)
+	result["next_after_id"] = following_page
 	print(json.dumps(result, ensure_ascii=False))
 	return 0
 

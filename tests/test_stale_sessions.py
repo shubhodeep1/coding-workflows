@@ -465,6 +465,41 @@ def test_paging_stops_past_the_horizon_at_the_last_page_or_at_max_pages(monkeypa
 	assert result["next_after_id"] is None
 
 
+def test_intermediate_page_run_reads_nothing_and_records_no_stall(monkeypatch, tmp_path, capsys):
+	# The pickup acts only on the final run; an intermediate run that recorded stalls would make the
+	# final run report them `new: false` (no notification), and its reads would be repeated anyway.
+	calls = _stub(monkeypatch, {"repos/o/r/pulls/7": _merged_pr()})
+	fixer = _session("session_f", "PR #7 — fix review", created_at="2026-09-28T12:00:00Z")
+	stall = _blocked("session_s", minutes_ago=45)
+	stall["created_at"] = "2026-09-28T13:00:00Z"
+	first_page = {"ccr": {"data": [stall, fixer], "has_more": True, "last_id": "session_f"}}
+	_, intermediate = _run(tmp_path, capsys, [], pages=[first_page])
+	assert intermediate["next_after_id"] == "session_f"
+	assert intermediate["archive"] == [] and intermediate["stalled_on_prompt"] == []
+	assert calls == []
+	assert not (tmp_path / "stalls" / "reported-stalls.json").exists()
+	assert not (tmp_path / "stalls" / "stalled-sessions.jsonl").exists()
+
+	last_page = {"ccr": {"data": [_session("session_x", "Operator")], "has_more": False, "last_id": "session_x"}}
+	_, final = _run(tmp_path, capsys, [], pages=[first_page, last_page])
+	assert final["next_after_id"] is None
+	assert _archived(final) == ["session_f"]
+	assert [(entry["id"], entry["new"]) for entry in final["stalled_on_prompt"]] == [("session_s", True)]
+	assert calls == ["repos/o/r/pulls/7"]
+
+
+def test_failed_read_is_cached_for_later_sessions_on_the_same_pr(monkeypatch, tmp_path, capsys):
+	calls = _stub(monkeypatch, {"repos/o/r/pulls/7": janitor.SessionReadError("gh api repos/o/r/pulls/7 failed: HTTP 502")})
+	sessions = [
+		_session("session_a", "PR #7 status check-in"),
+		_session("session_b", "PR #7 merged — handed to session_a"),
+	]
+	_, result = _run(tmp_path, capsys, sessions)
+	assert calls == ["repos/o/r/pulls/7"]
+	assert result["archive"] == [] and result["kept"] == 2
+	assert len(result["errors"]) == 2 and all("HTTP 502" in error for error in result["errors"])
+
+
 # --- stalled on a permission prompt (D12) ---
 
 

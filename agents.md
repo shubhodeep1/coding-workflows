@@ -1151,9 +1151,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   is a fixer superseded by a newer fixer for the same PR (not when it waits
   on a question). An `implement-plan` slug names its issue only in the
   issue-mode form `issue-<N>-…`; any other slug is kept. One cached REST read
-  per distinct PR or issue; a failed read keeps the session (`errors`).
-  Paging stops at 14 days (`--horizon-days`) or 10 pages (`--max-pages`,
-  `next_after_id`). It also lists `stalled_on_prompt`: any non-archived
+  per distinct PR or issue, a failed one included; a failed read keeps the
+  session (`errors`). Paging stops at 14 days (`--horizon-days`) or 10 pages
+  (`--max-pages`, `next_after_id`); a run that sets `next_after_id` is
+  intermediate and makes no read, records no stall, and names nothing, so
+  only the final run classifies the sessions and reports new stalls. It also lists `stalled_on_prompt`: any non-archived
   session in `SESSION_STATUS_BUCKET_BLOCKED` whose `needs_action` starts
   `Approve or deny`, idle more than 20 minutes (`--prompt-stall-minutes`).
   A stall is `new` once per session and `updated_at`
