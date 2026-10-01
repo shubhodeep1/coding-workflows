@@ -388,9 +388,14 @@ def test_step_2_sweep_is_skipped_after_a_denied_delete(twin_text):
 	context = _section(twin_text, "- **Context.** Then always read", "3. **Build the phase checklist.**")
 	gate = "then run the stale Routine sweep (CLAUDE.md §26.G) only when none of those deletes was denied"
 	assert gate in context
-	assert "so a denial skips the sweep too, and a later sweep (Arming the wait, step 0) removes what it would have." in context
 	assert "then run the stale Routine sweep (CLAUDE.md §26.G)." not in context
-	assert "0. **Sweep, then the hand-back Routine.** Run the stale Routine sweep (CLAUDE.md §26.G)." in twin_text
+	# PR #5856 review round 2 (head d133928): the later sweep must leave the denied id
+	# out, never "remove what it would have", and the sweep site itself must say so.
+	assert "removes what it would have" not in twin_text
+	assert "so a denial skips the sweep too, and a later sweep (Arming the wait, step 0) removes the rest but leaves out every id whose delete was denied (CLAUDE.md §26.G: a denied delete is never retried)." in context
+	arming = _section(twin_text, "0. **Sweep, then the hand-back Routine.**", "1. **Find or create the project checker.**")
+	assert "Run the stale Routine sweep (CLAUDE.md §26.G), leaving out every trigger id whose `delete_trigger` was denied earlier in this session" in arming
+	assert "`cleanup skipped: <trigger id> denied earlier`" in arming
 
 
 def test_later_sweep_leaves_out_a_trigger_denied_earlier():
