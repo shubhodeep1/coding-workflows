@@ -110,12 +110,19 @@ if len(args) >= 2 and args[0] == "api" and args[1].startswith("repos/") and "/is
 		print("rest unavailable", file=sys.stderr)
 		sys.exit(1)
 	num = args[1].rsplit("/", 1)[1]
+	if num not in state["issues"]:
+		# gh's real message, which gh_retry treats as permanent (no retry).
+		print("gh: Not Found (HTTP 404)", file=sys.stderr)
+		sys.exit(1)
 	issue = state["issues"][num]
 	rest_issue = {
 		"number": int(num),
 		"labels": [{"id": 1000 + idx, "name": name, "color": "ededed"} for idx, name in enumerate(issue["labels"])],
 		"body": issue["body"],
 	}
+	if issue.get("pull_request"):
+		# The issues endpoint serves pull requests too, with this key set.
+		rest_issue["pull_request"] = {"url": "https://api.github.com/repos/acme/widgets/pulls/" + num}
 	jq_filter = args[args.index("--jq") + 1]
 	proc = subprocess.run(["jq", "-c", jq_filter], input=json.dumps(rest_issue), capture_output=True, text=True)
 	if proc.returncode != 0:
@@ -167,7 +174,11 @@ def _run_step(
 		state_path = tmp / "gh_state.json"
 		state_path.write_text(json.dumps({
 			"issues": {
-				str(num): {"body": data.get("body", ""), "labels": list(data.get("labels", []))}
+				str(num): {
+					"body": data.get("body", ""),
+					"labels": list(data.get("labels", [])),
+					"pull_request": bool(data.get("pull_request", False)),
+				}
 				for num, data in issues.items()
 			},
 			"closing_refs": list(closing_refs or []),
@@ -770,6 +781,63 @@ def test_completion_pr_head_alone_never_finalizes_unverified_prs() -> None:
 		assert "No linked issues found; skipping lineage finalization." in lineage["stdout"], (description, lineage["stdout"])
 
 
+def test_completion_pr_head_needs_a_tracking_issue() -> None:
+	"""Review round 2 on the final PR #5632: a merged same-repository
+	`orchestrator/project-<T>` head into the default branch is not enough on
+	its own. <T> is queued only when one REST read shows it is an issue (not a
+	pull request) carrying `ai:orchestrator-tracking`; any other answer, a
+	missing issue, or a failed read queues nothing (fail closed) and never
+	labels or closes anything."""
+	cases = [
+		# (issues, rest read fails, expected log line, description)
+		(
+			{5: {"body": "Standalone issue.", "labels": []}},
+			False,
+			"PR #4748 merged orchestrator/project-5 into main, but #5 is not an ai:orchestrator-tracking issue; skipping its lineage finalization.",
+			"standalone issue",
+		),
+		(
+			{5: {"body": MANAGED_CHILD_BODY, "labels": ["ai:orchestrator-managed"]}},
+			False,
+			"PR #4748 merged orchestrator/project-5 into main, but #5 is not an ai:orchestrator-tracking issue; skipping its lineage finalization.",
+			"managed child",
+		),
+		(
+			{5: {"body": TRACKING_BODY, "labels": ["ai:orchestrator-tracking"], "pull_request": True}},
+			False,
+			"PR #4748 merged orchestrator/project-5 into main, but #5 is not an ai:orchestrator-tracking issue; skipping its lineage finalization.",
+			"pull request carrying the tracking label",
+		),
+		(
+			{},
+			False,
+			"::warning::Could not verify that #5 is an ai:orchestrator-tracking issue for PR #4748's head orchestrator/project-5; skipping its lineage finalization.",
+			"no such issue",
+		),
+		(
+			{5: {"body": TRACKING_BODY, "labels": ["ai:orchestrator-tracking"]}},
+			True,
+			"::warning::Could not verify that #5 is an ai:orchestrator-tracking issue for PR #4748's head orchestrator/project-5; skipping its lineage finalization.",
+			"failed read",
+		),
+	]
+	for issues, rest_fail, expected_log, description in cases:
+		gate = _run_step(
+			issues=issues,
+			pr_base_ref="main",
+			pr_body=COMPLETION_PR_BODY,
+			pr_head_ref="orchestrator/project-5",
+			orch_rest_fail=rest_fail,
+		)
+		assert gate["labels"] == [] and gate["closed"] == [], (description, gate)
+		assert expected_log in gate["stdout"], (description, gate["stdout"])
+		assert "queuing tracking issue #5" not in gate["stdout"], (description, gate["stdout"])
+		assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [], (description, gate["env"])
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], (description, gate["env"])
+		lineage = _run_lineage_step(gate["env"])
+		assert lineage["finalized"] == [], (description, lineage)
+
+
 def test_tracking_issue_lineage_skipped_for_non_completion_prs() -> None:
 	"""The #5619 finding: any other PR that links a tracking issue leaves its
 	lineage alone, whatever it merged into, and so does an unmerged close."""
@@ -787,8 +855,13 @@ def test_tracking_issue_lineage_skipped_for_non_completion_prs() -> None:
 	]
 	for base, head, head_repo, merged, description, queued in cases:
 		gate = _run_step(
-			# #10 is the child an `ai/issue-10` head links through its branch name.
-			issues={5: {"body": TRACKING_BODY, "labels": ["ai:orchestrator-tracking"]}, 10: {"body": "Standalone issue.", "labels": []}},
+			# #10 is the child an `ai/issue-10` head links through its branch
+			# name; #6 is the tracker of the other project's completion PR.
+			issues={
+				5: {"body": TRACKING_BODY, "labels": ["ai:orchestrator-tracking"]},
+				6: {"body": TRACKING_BODY, "labels": ["ai:orchestrator-tracking"]},
+				10: {"body": "Standalone issue.", "labels": []},
+			},
 			pr_base_ref=base,
 			pr_body="Fixes #5\n",
 			closing_refs=[5],
@@ -1138,6 +1211,7 @@ if __name__ == "__main__":
 	test_unmerged_close_still_finalizes_as_closed()
 	test_tracking_issue_completion_pr_finalizes_lineage()
 	test_completion_pr_head_alone_never_finalizes_unverified_prs()
+	test_completion_pr_head_needs_a_tracking_issue()
 	test_tracking_issue_lineage_skipped_for_non_completion_prs()
 	test_tracking_issue_completion_pr_uses_the_payload_default_branch()
 	test_no_linked_issue_exports_an_empty_lineage_list()

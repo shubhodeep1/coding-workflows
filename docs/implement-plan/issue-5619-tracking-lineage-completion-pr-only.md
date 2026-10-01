@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5619-tracking-lineage-completion-pr-only-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5619
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only   Final PR: #5632 ready — review rounds: 1
+- Project branch: claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only   Final PR: #5632 ready — review rounds: 2
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges; the change goes live with that branch's own lifecycle)
-- Waiting on: PR #5632 (final PR, review round 2)
+- Waiting on: PR #5632 (final PR, review round 3)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net and hand-back: ids in the final-merge review-round stage report
 - Last updated: 2026-10-01
-- Last note: final PR #5632 review round 1 (head f11e889): the reviewer panel found the completion-PR lineage path unreachable for the production `Refs #<T>` body; fixed by deriving `<T>` from the verified completion head (AD-7) in one `[claude-autofix]` commit.
+- Last note: final PR #5632 review round 2 (head 75bf650): the reviewer panel found the head-derived tracker unverified; fixed by one REST read that queues `<T>` only when it is an `ai:orchestrator-tracking` issue (AD-8), in one `[claude-autofix]` commit.
 
 ## Phases
 1. [x] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 merged 2026-10-01T01:39:03Z (merge 7d3cb06); review rounds: 3; interventions: 1 (2026-10-01: merged the project branch after the reviewer outage, Q1: A)
@@ -27,7 +27,7 @@
 
 ## Completion
 - Completion PR #5886 merged 2026-10-01 — doc moved to docs/completed/issue-5619-tracking-lineage-completion-pr-only-plan.md
-- Final PR #5632 ready 2026-10-01 (into claude/implement-plan-issue-4813-close-sweep-target-branch-merges) — review rounds: 1
+- Final PR #5632 ready 2026-10-01 (into claude/implement-plan-issue-4813-close-sweep-target-branch-merges) — review rounds: 2
 
 ## Activation
 - n/a: issue base is claude/implement-plan-issue-4813-close-sweep-target-branch-merges, not the default branch (Issue Mode); steps 12–13 run only if the base moves onto main before the final merge.
@@ -40,6 +40,7 @@
 - AD-5 [plan, 2026-09-30] What happens to the existing tests that assert the old tracking and unclassified lineage behaviour? — Picked: A — add accurately named tests and keep the old function names as aliases that call them (§6). Alternatives: B — rewrite the bodies under the old names; C — delete the old tests. Why: §6 forbids removal and repurposing; aliases keep names callable without misleading readers. Applied in: phase 1 PR. Status: pending review
 - AD-6 [phase 1/1, 2026-09-30] The REST fallback appends to `TRACKING_ISSUES` / `MANAGED_ISSUES` with `+=` after the payload list, which has no trailing newline, so `5` plus a failed lookup of `10` became `510` and tracking issue #5 was labelled `ai:merged` and closed on a default-branch merge (reproduced). Fix it in this phase? — Picked: A — yes, merge with the existing `merge_issue_number_list` and add a regression test. Alternatives: B — leave it and file a separate issue. Why: §1; it defeats the tracking skip this phase's gate relies on, and it is the #2760 incident class. Applied in: phase 1 PR. Status: pending review
 - AD-7 [final-merge — review round 1, 2026-10-01] The final PR's reviewer panel (6 of 6 reviewers, round 1 on head f11e889) found the completion-PR gate unreachable in production: the orchestrator's completion PR body says only `Refs #<T>`, so `<T>` is never a linked issue and its lineage is never finalized, and the positive-path test used a URL body that production never produces. How should the round answer it? — Picked: A — derive `<T>` from the verified completion head (merged into the default branch from `orchestrator/project-<T>` in this repository) and add it to `LINEAGE_FINALIZE_ISSUE_NUMBERS` only, never to the linked issues; test with the production body. Alternatives: B — reject the findings under AD-4 and keep the path unreachable; C — change `ensure_eager_final_pr` to also link the tracker with a repo-scoped URL. Why: A meets the issue's recommendation with the same trust rule as AD-1, zero API calls, and labels/state/alerts untouched (AD-4's concern was the label/close loop, which A never enters); B leaves dead code and needs a verdict bot this repo has not configured; C feeds `<T>` into the label/close loop and only helps PRs opened after it ships. Applied in: PR #5632 (review round 1). Status: pending review
+- AD-8 [final-merge — review round 2, 2026-10-01] The final PR's reviewer panel (3 of 5 reviewers, round 2 on head 75bf650) found that the head-derived path (AD-7) trusts the `orchestrator/project-<T>` name without checking that `<T>` is an `ai:orchestrator-tracking` issue, so a same-repository branch with that name merged into the default branch can record an unrelated or missing issue's lineage as `merged`. How should the round answer it? — Picked: A — one REST read of issue `<T>`, only on a merge that passed the event gate; queue `<T>` only when it is an issue (not a pull request) carrying `ai:orchestrator-tracking`, and skip it with a warning when the read fails (fail closed). Alternatives: B — add a `<T>` alias to the existing closingIssuesReferences GraphQL query (no extra call); C — reject the finding (only a collaborator can push and merge such a branch). Why: §1; A costs one call per orchestrator project and leaves the classification payload alone, B turns a missing `<T>` into a payload error that sends every real closing reference to the per-issue REST fallback, and C leaves the gap and needs a verdict bot this repo has not configured. Applied in: PR #5632 (review round 2). Status: pending review
 
 ## Lessons
 - [source:plan-deviation] A bash list built from `$(...)` output has no trailing newline, so appending with `+="<n>"$'\n'` fuses numbers (`5` + `10` → `510`) and silently breaks `grep -qxF` membership; merge list items with a helper such as `merge_issue_number_list`. (files: .github/workflows/issue_pr_status.yml)
@@ -47,6 +48,7 @@
 - [source:intervention] A gate that keys on a linked issue is only reachable when the producer's PR body actually links it; check the real producer's body (for example `Refs #<T>`, which discovery ignores) and test with that exact shape, or derive the id from a verified field such as the head ref. (files: .github/workflows/issue_pr_status.yml, scripts/orchestrate_poll_process.sh)
 
 ## Notes
+- 2026-10-01 final-merge review round 2 (head 75bf650, run 36823304512, ledger b3e3c4d9…): one consensus finding (3 of 5 reviewers; minimax failed, 2 reported nothing): the head-derived path queued `<T>` without checking it is a tracking issue. Valid; fixed per AD-8 (one REST read on a completion-PR merge, issue not pull request, `ai:orchestrator-tracking` label, fail closed) with `test_completion_pr_head_needs_a_tracking_issue`.
 - 2026-10-01 final-merge review round 1 (head f11e889, run 36819687680, ledger 58f99c54…): all 6 reviewers flagged the completion-PR gate as unreachable for the production `Refs #<T>` body and the positive-path test as using a URL body. Valid; fixed per AD-7 (head-derived `<T>`, lineage list only; export dedupes; the lineage step no longer skips when only the derived list is set; production-body tests).
 - 2026-10-01 validation 1/3 stage: the issue base's PR #4826 had not merged (no base move). The step 2 sync merged #5617 (unmerged-close automation-identity gate) into the project branch with conflicts in issue_pr_status.yml, README.md, and the gate tests; resolved keeping #5617's gate for managed/standalone issues and #5619's stricter completion-PR rule for tracking/unclassified issues; #5617's tracking/unclassified test now expects the #5619 skip messages. Gate test script, payload-fallback contract, and file-size tests pass. Validation ran on the pre-sync head 7d3cb06; the final PR's whole-project review covers the merge.
 - 2026-10-01 review round 3 (head 2b0a1f9, run 36794127294, ledger f59789f9…): one consensus finding, the failed `review / codex-agent` check from runs 36741838875 / 36752333871 / 36760232242, all "Insufficient credits" at OpenRouter. Rejected as not a code defect. Per the owner's Q1: A on #5619, merged the project branch into the phase branch (`[claude-intervention]`, brings #5304) for a fresh head.

@@ -428,16 +428,41 @@ jobs:
           # the verified completion head instead: merged into the default
           # branch from `orchestrator/project-<T>` in this repository. <T>
           # goes to the lineage list only, never to ISSUE_NUMBERS, so its
-          # labels, state, alerts, and cleanup stay untouched. Event fields
-          # only; no API call (§15).
+          # labels, state, alerts, and cleanup stay untouched. The head name
+          # alone does not prove <T> is an orchestrator project, so <T> is
+          # queued only when it is an issue (not a pull request) carrying
+          # `ai:orchestrator-tracking`; a failed read skips it (fail closed:
+          # a missed record only leaves the project out of AI memory).
+          #
+          # §15: one REST read, issued only on a merge that passed the event
+          # gate below (once per orchestrator project). Audited existing
+          # calls: <T> is not a linked issue, so neither the
+          # closingIssuesReferences query nor the batched classification
+          # lookup carries it. An alias for <T> in the first query would turn
+          # a missing <T> into a payload error that sends every real closing
+          # reference to the per-issue REST fallback, and adding <T> to the
+          # batch would feed it into the label/close loop.
           COMPLETION_PR_TRACKING_ISSUE=""
           if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" = "${DEFAULT_BRANCH_NAME}" ] \
             && [ -n "${PR_HEAD_REPO_FULL_NAME:-}" ] && [ "${PR_HEAD_REPO_FULL_NAME}" = "${REPOSITORY}" ]; then
             COMPLETION_PR_TRACKING_ISSUE="$(printf '%s\n' "${PR_HEAD_REF:-}" | sed -nE 's#^orchestrator/project-([1-9][0-9]*)$#\1#p' | head -n1)"
           fi
           if [ -n "${COMPLETION_PR_TRACKING_ISSUE}" ]; then
-            LINEAGE_FINALIZE_ISSUE_NUMBERS+="${COMPLETION_PR_TRACKING_ISSUE}"$'\n'
-            echo "PR #${PR_NUMBER} is orchestrator project #${COMPLETION_PR_TRACKING_ISSUE}'s completion PR (${PR_HEAD_REF} from ${REPOSITORY} merged into ${DEFAULT_BRANCH_NAME}); queuing tracking issue #${COMPLETION_PR_TRACKING_ISSUE}'s lineage finalization."
+            COMPLETION_PR_TRACKER_VERIFIED="$(gh_retry gh api "repos/${REPOSITORY}/issues/${COMPLETION_PR_TRACKING_ISSUE}" \
+              --jq '(.pull_request == null) and (([.labels[]?.name] | index("ai:orchestrator-tracking")) != null)' \
+              2>/dev/null || echo 'error')"
+            case "${COMPLETION_PR_TRACKER_VERIFIED}" in
+              true)
+                LINEAGE_FINALIZE_ISSUE_NUMBERS+="${COMPLETION_PR_TRACKING_ISSUE}"$'\n'
+                echo "PR #${PR_NUMBER} is orchestrator project #${COMPLETION_PR_TRACKING_ISSUE}'s completion PR (${PR_HEAD_REF} from ${REPOSITORY} merged into ${DEFAULT_BRANCH_NAME}); queuing tracking issue #${COMPLETION_PR_TRACKING_ISSUE}'s lineage finalization."
+                ;;
+              false)
+                echo "PR #${PR_NUMBER} merged ${PR_HEAD_REF} into ${DEFAULT_BRANCH_NAME}, but #${COMPLETION_PR_TRACKING_ISSUE} is not an ai:orchestrator-tracking issue; skipping its lineage finalization."
+                ;;
+              *)
+                echo "::warning::Could not verify that #${COMPLETION_PR_TRACKING_ISSUE} is an ai:orchestrator-tracking issue for PR #${PR_NUMBER}'s head ${PR_HEAD_REF}; skipping its lineage finalization."
+                ;;
+            esac
           fi
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
