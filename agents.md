@@ -1178,7 +1178,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   only outside `.claude/` is resolved inside the sync merge
   (`git commit --no-edit` keeps the `[claude-asset-sync]` subject). The
   merge's source is the PR's base, and the merged `.claude/` files are
-  already in the working tree, so the fix runs under the current guards.
+  already in the working tree, so the merged hook scripts run; when the
+  merge brings a `settings.json` change, the settings check below runs
+  with `--before HEAD` before anything is resolved.
   When that resolution is not evident, the session aborts and stops as it
   does on any conflict it cannot resolve, and never continues the fix on
   the unsynced head (issue #5258). A merged `settings.json`
@@ -1209,7 +1211,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   with the hooks loaded before a change, so on a branch whose
   `settings.json` predates the recorder the merged file's reload is never
   recorded: `--before HEAD^1` then reports `"before_recorder_wired": false`
-  and a reason that says so. The verdict stays "not current" (fail closed),
+  and a reason that says so. On a sync merge stopped by a conflict outside
+  `.claude/`, the same check runs as `--before HEAD` (the unfinished merge
+  has no merge commit yet, and `HEAD` is still the branch before it) before
+  any resolution, so no conflict work runs under unconfirmed wiring. The
+  verdict stays "not current" (fail closed),
   so such a branch ends in the escalation below once, and a human confirms
   the merged wiring and pushes the sync merge; after that the branch
   carries the recorder.
