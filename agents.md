@@ -1273,9 +1273,16 @@ side so that class cannot land unnoticed.
   job `env` carries a key beyond the test's allow-list (today only
   `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` at workflow level) or the check step
   one beyond `GUARD_DIFFERENTIAL_BASE_REF` (so no `BASH_ENV`, `LD_PRELOAD`,
-  `PATH`, `PIP_*`, `PYTHON*`, ...), when workflow or job `defaults` or a job
-  `container` is set, or when the check step runs `python3 -c` / `-m`
-  without `-P`. `-P` keeps the checkout (the working directory) off
+  `PATH`, `PIP_*`, `PYTHON*`, ...), when workflow or job `defaults`, a job
+  `container`, or a job `continue-on-error` is set, when the check step
+  carries a key beyond `name`, `if`, `env`, and `run` (no `shell`,
+  `working-directory`, or `continue-on-error`) or an `if` other than
+  `github.event_name == 'pull_request'`, when its `run:` body assigns a
+  variable or runs a command outside the test's allow-lists
+  (`_CHECK_STEP_ASSIGNMENTS`, `_CHECK_STEP_COMMANDS`; `$(...)` and
+  process-substitution bodies included, so no `export`, `env`, `source`,
+  or `PYTHONPATH=`), or when it runs `python3 -c` / `-m` without `-P`.
+  `-P` keeps the checkout (the working directory) off
   `sys.path`: without it a PR's `pip/` package or `json.py` runs before the
   verifier. A new dependency or `env` key is added to the test's list in
   the same PR, and only when it runs no code.

@@ -1125,7 +1125,13 @@ def _shell_command_problems(run: str, allowed_assignments: frozenset[str], allow
 	command = None
 	for word in words:
 		if word and set(word) <= operators:
-			if set(word) & {"<", ">"}:
+			if "(" in word:
+				# A subshell, `$(`, or a process substitution (`<(`, `>(`,
+				# which shlex returns as one word): its first word is a command
+				# that runs, not a redirection target (review round 5).
+				command_start = True
+				redirect_operand = False
+			elif set(word) & {"<", ">"}:
 				# A redirection: the next word is its target, not a command.
 				redirect_operand = True
 			else:
@@ -1183,6 +1189,11 @@ def _shell_command_problems(run: str, allowed_assignments: frozenset[str], allow
 		("set -o allexport", "turns on allexport"),
 		("echo `id`", "backtick"),
 		("echo \"unterminated", "cannot parse"),
+		("echo x 2>&1", None),
+		("echo <(bash tests/evil.sh)", "runs 'bash'"),
+		("echo x >(bash tests/evil.sh)", "runs 'bash'"),
+		("echo x > >(bash tests/evil.sh)", "runs 'bash'"),
+		("(bash tests/evil.sh)", "runs 'bash'"),
 	],
 )
 def test_shell_command_scan(run: str, expected: str | None) -> None:
@@ -1268,9 +1279,15 @@ def test_ci_check_runs_before_any_pr_code() -> None:
 		env = scope.get("env") or {}
 		assert isinstance(env, dict), env
 		assert set(env) <= allowed, sorted(set(env) - allowed)
-	# No default shell or working directory, and no job container.
+	# No default shell or working directory, no job container, and nothing
+	# that lets the job pass when the check fails.
 	assert "defaults" not in workflow
-	assert not {"defaults", "container"} & set(job)
+	assert not {"defaults", "container", "continue-on-error"} & set(job)
+	# The check step itself: no `shell` (a checkout script as the shell runs
+	# before the body), `working-directory`, `continue-on-error`, or other
+	# key, and it runs on every pull request (review round 5).
+	assert set(check) <= {"name", "if", "env", "run"}, sorted(set(check) - {"name", "if", "env", "run"})
+	assert check.get("if") == "github.event_name == 'pull_request'", check.get("if")
 	assert [step.get("uses", "").split("@")[0] for step in before[:2]] == ["actions/checkout", "actions/setup-python"]
 	assert set(before[0]) <= {"name", "uses", "with"}
 	assert set(before[0].get("with") or {}) <= {"fetch-depth"}
