@@ -289,7 +289,7 @@ coding-workflows-only script, which is harmless there.
   archiving the issue-start session disabled its safety net. An issue-start
   session is now archived only once its issue is closed. The Goals keep the
   original text as history; do not restore the rule
-  (`docs/plans/issue-5664-archived-stage-disables-recovery-plan.md`).
+  (`docs/completed/issue-5664-archived-stage-disables-recovery-plan.md`).
 - Overlap: phase 4 of `docs/plans/claude-fixer-unattended-convergence-plan.md`
   plans `.claude/scripts/stale_sessions.py` with overlapping rules, in the same
   pickup step. That phase has not started. When it runs, it should extend
