@@ -1092,7 +1092,15 @@ reviews, comments, and conflicts stay a direct §12 request.
   (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
   every `gh api` write that is not a §23.B routine write to the local
   repository (routine includes dispatching the six workflows allowed as
-  `gh workflow run <file> *`, kept equal by a test), allows reads and
+  `gh workflow run <file> *`, kept equal by a test) and for every call with
+  a file-backed `-F`/`--field` value (`@<file>` or `@-`) or `--input` on any
+  method, endpoint, or repository, GraphQL included, because `gh` reads that
+  file and sends it (issue #4619; `-f` values are literal, so post bodies
+  through the GitHub MCP tools or an inline `-f body=...`). It also prompts
+  for an `-F` word the shell could rewrite into `@<file>` (`$`, a backtick,
+  `~`, or a glob character in it) and for any command that uses ANSI-C
+  quoting (`$'...'`), an unquoted `#` comment, or brace expansion, which
+  Bash parses unlike the guard. It allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
   to the allow list or the Auto-mode classifier beside anything else (loops,
@@ -1268,7 +1276,27 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   PRs already checked into `main`. Any other status, or a failed read,
   checks the range (fail closed). A push that creates `stable` (no previous
   tip) and is not a promotion is checked against `main`'s tip. Every PR into
-  `stable` is checked. Tests load the twin and call
+  `stable` is checked. The step runs the copy of `claude_twin_sync.py`
+  on the protected base commit, never the checkout's (issue #5608): it
+  extracts `scripts/claude_twin_sync.py` from the event's base (the merge
+  commit's first parent, or `github.event.before`) into a temporary
+  directory, with `main`'s tip as the fallback on `stable`, and logs `twin
+  sync guard: running scripts/claude_twin_sync.py from <sha>`. A base commit
+  that cannot be resolved or read fails the step. Only when every trusted
+  commit resolves and none carries the script yet (`main` before #4804
+  merges, `stable` before its next promotion) does it run the
+  checkout's copy, with a `::warning::` (bootstrap). The guard's `check`
+  also refuses, on every event, a range that deletes `scripts/claude_twin_sync.py`
+  or turns it into a symlink or directory (`GUARD_SCRIPT_PATH`; a rename
+  counts as a delete), so a base that carries the script cannot lose it and
+  reopen the bootstrap for later PRs unless the same PR drops the step from
+  `.github/workflows/ci.yml` (the gap below). In that window the PR's
+  own copy decides the check, so a PR can still weaken it. That adds nothing
+  to the `.github/workflows/ci.yml` gap below: neither `main` nor `stable`
+  carries this step yet, so only a PR whose own `ci.yml` adds the step
+  reaches the bootstrap, and that PR controls the workflow file anyway
+  (AD-2 of the #5608 plan). The window closes for `main` when #4804 merges
+  and for `stable` at its first promotion after that. Tests load the twin and call
   `tests/claude_twin_state.py::assert_claude_not_ahead`, which skips a
   differing pair in a shallow clone.
 - **Guard paths fail closed in the sync-state check** (issue #5246):
@@ -1292,12 +1320,14 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   auto-merges with a failing check, but `main` has no required status
   checks and the GPT review path only feeds failing checks to its reviewers,
   so making `lint` a required check in the `main` ruleset is the operator
-  step (CLAUDE.md §23.C) that lets GitHub block a PR the check fails. It
-  does not cover a PR that also edits `.github/workflows/ci.yml` or
-  `scripts/claude_twin_sync.py`: a `pull_request` run uses the PR's own
-  copies of both, so such a PR can skip or weaken the check and still turn
-  `lint` green. A PR that changes a guard path together with either file
-  needs the owner's review of those files as well.
+  step (CLAUDE.md §23.C) that lets GitHub block a PR the check fails. A PR
+  that also edits `scripts/claude_twin_sync.py` no longer weakens the
+  check, because the step runs the base commit's copy (issue #5608, outside
+  the bootstrap above). It does not cover a PR that also edits
+  `.github/workflows/ci.yml`: a `pull_request` run uses the PR's own copy of
+  the workflow, so such a PR can skip or change the step and still turn
+  `lint` green. A PR that changes a guard path together with that file
+  needs the owner's review of it as well.
 - **Credentials:** `GITHUB_TOKEN` (`contents`, `pull-requests`, `checks`,
   `statuses`: read) for reads; `GH_PAT` only in the sync step, for the push
   (passed in `GIT_CONFIG_*` environment variables to that one git command),
@@ -2259,6 +2289,7 @@ depend on it.
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | Age past which a still-`queued` review run stops suppressing a sweep dispatch (wedged-run recovery). `in_progress` runs are never discounted; `0` disables the cutoff. |
+| `CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS` | `300` | `internal-review.yml` push route only: when a `claude/**` push finds no open PR, re-check every 60s for up to this many seconds and skip the no-PR reviewer run once a PR appears (its `pull_request` run reviews the same commit). `0` restores the single lookup; values outside 0-3600 fall back to `300` with a warning; a failed lookup counts as no PR and the review runs when the window ends. Logs `RESOLVE_CLAUDE_BRANCH_PR_WAIT` / `RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED` (the latter with gh's error text as `error="..."`: one line, at most 200 characters). |
 | `REVIEW_TIER_RESOLVER_ENABLED` | `false` | Enable the additive Phase I `lite \| standard \| full` review-tier resolver. While `false`, existing reviewer routing is unchanged. |
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for `lite` review-tier resolution. `lite` also requires the existing doc-only path set. |
 | `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.7-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
