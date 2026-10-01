@@ -5,22 +5,23 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5858-phase4b-rate-limit-aware-pr-state   Final PR: #5861 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #5874
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net trig_01HbKixLfqPMRBiidfZobmJq   hand-back trig_01FQNFxAcgixbFbaswSyFrsp
 - Last updated: 2026-10-01
-- Last note: phase 1 implemented and verified; phase PR opened against the project branch.
+- Last note: review round 1 on PR #5874: 4 findings fixed (run-status and run-list reads wait out rate limits, wait-source diagnostics, full stderr in the rate-limit warning, stub coverage), 1 rejected (stderr dropped on a later success is unchanged from main).
 
 ## Phases
-1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 0; interventions: 0 (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
+1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 1; interventions: 0 (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
    - [x] `gh_api_with_retry` returns `GH_API_RATE_LIMITED_RC` (75) on a rate-limited attempt without the short retries
    - [x] `fetch_pr_state` reports `rate_limited` separately from `unknown`
    - [x] `phase4b_rate_limit_wait_seconds` derives the wait from `GET /rate_limit`, capped at the deadline
    - [x] poll loop: `rate_limited` branch leaves `PR_STATE_FAILURES` unchanged and waits (capped at the registration deadline while no run is registered)
    - [x] behavioural + contract tests; every existing test in the file passes under `python3 <file>` and `pytest`
    - [x] changelog fragment
+   - [x] review round 1: every read in the poll loop (PR state, post-dispatch run list, pinned run status) waits out a rate limit (`phase4b_wait_out_rate_limit`)
    - Done when: the plan's Phase 1 "done" condition holds.
 
 ## Conformance
@@ -42,8 +43,10 @@
 - AD-5 [plan, 2026-10-01] What form does the regression test take? — Picked: A — a behavioural test that runs the step's own text in bash with a stub `gh` and a fake clock, plus string contract checks. Alternatives: B — string contract checks only. Why: the issue asks to confirm the gate keeps verifying the adopted run, which only running the code shows. Applied in: phase 1 PR. Status: pending review
 - AD-6 [plan, 2026-10-01] Should a rate-limit wait extend the 90-second registration window on the dispatch path? — Picked: A — no; cap the wait at the registration deadline while no run is registered. Alternatives: B — extend the window by the wait. Why: the issue is about the adopted-run path, and capping keeps the dispatch path's timing exactly as today. Applied in: phase 1 PR. Status: pending review
 - AD-7 [plan, 2026-10-01] Which docs change? — Picked: A — the step's own comments plus a changelog fragment; README.md and agents.md do not describe Phase 4b polling. Alternatives: B — also add an agents.md note. Why: §5 minimal change; the behaviour is documented where operators read it (the step log and comments). Applied in: phase 1 PR. Status: pending review
+- AD-8 [phase 1/1 — review round 1, 2026-10-01] Should the post-dispatch run-list read wait out a rate limit, given the 90-second registration window? — Picked: A — yes, the same wait as every other poll-loop read, capped at the registration deadline. Alternatives: B — wait only on the pinned-run status read and keep re-reading the run list every 15 s; C — extend the registration window by the wait. Why: GitHub documents a minimum 60 s wait for secondary limits and re-reading a limited endpoint can prolong it; AD-6 keeps the window fixed, so a sustained limit still fails closed with `retry_dispatch_failed`. Applied in: PR #5874. Status: pending review
 
 ## Lessons
+- [source:intervention] When a helper starts returning a distinct exit code for a failure class, audit every caller in the same loop, not only the one the incident hit: a caller that keeps treating the new code as a generic failure silently skips the new handling. (files: .github/workflows/test-and-mark-stable.yml)
 
 ## Notes
 - Issue mode: started by the Claude issue dispatcher (routine "PR dispatch: #5858", trigger trig_01Mjrhnyrr1MrJ7ar8r3ViaM) in session session_01KSbUQQrXpu9Y6S3y5WG4mb, permission mode auto.

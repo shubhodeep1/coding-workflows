@@ -248,17 +248,21 @@ _PHASE4B_BUDGET_MINUTES = 25
 _PHASE4B_DEADLINE = _PHASE4B_START_EPOCH + _PHASE4B_BUDGET_MINUTES * 60
 _PHASE4B_PRIOR_RUN = 111
 _PHASE4B_ADOPTED_RUN = 222
+_PHASE4B_DISPATCHED_RUN = 333
 _PHASE4B_BAIT_SHA = "b" * 40
 _PHASE4B_REACHED = "PHASE4B_REACHED_ATTEMPT_2"
 
 # A stand-in for `gh` that answers the Phase 4b reads from a scenario file.
-# PR-state reads are rate-limited while the fake clock is before
-# `limited_until`, the way a real limit lasts until its reset; after that
-# they take `pr_states` one entry per request, repeating the last entry.
-# A `primary` limit spends the core quota and resets at `limited_until`, and
-# a `secondary` limit leaves quota (GitHub's message for each, verbatim in
-# shape). `run_statuses` is consumed one entry per adopted-run read. Every
-# call is appended to calls.log.
+# The reads named in `limited_endpoints` (`pulls`, `runs_list`, `run`) are
+# rate-limited while the fake clock is before `limited_until`, the way a
+# real limit lasts until its reset; after that PR-state reads take
+# `pr_states` one entry per request, repeating the last entry. A `primary`
+# limit spends the core quota and resets at `limited_until`, and a
+# `secondary` limit leaves quota (GitHub's message for each, verbatim in
+# shape). `run_statuses` is consumed one entry per pinned-run read. With
+# `dispatch`, no run is active before the retry, so the step dispatches one
+# (`gh workflow run`) and the run list shows a new run only after that.
+# Every call is appended to calls.log.
 _STUB_GH = r'''#!/usr/bin/env python3
 import json
 import os
@@ -280,13 +284,19 @@ with open(os.environ["FAKE_CLOCK_FILE"], encoding="utf-8") as fh:
 args = sys.argv[1:]
 with open(os.path.join(os.path.dirname(scenario_path), "calls.log"), "a", encoding="utf-8") as fh:
 	fh.write(" ".join(args) + "\n")
+if args[:2] == ["workflow", "run"] and scenario["dispatch"]:
+	state["dispatched"] = True
+	with open(state_path, "w", encoding="utf-8") as fh:
+		json.dump(state, fh)
+	sys.exit(0)
 if not args or args[0] != "api":
 	sys.stderr.write("stub gh: unsupported command\n")
 	sys.exit(2)
 endpoint = args[1]
 jq_expr = args[args.index("--jq") + 1] if "--jq" in args else None
-limited = now < scenario["limited_until"]
+limited_now = now < scenario["limited_until"]
 primary = scenario["limit_kind"] == "primary"
+poll_run = scenario["dispatched_run"] if scenario["dispatch"] else scenario["adopted_run"]
 
 
 def take(key):
@@ -296,6 +306,16 @@ def take(key):
 	with open(state_path, "w", encoding="utf-8") as fh:
 		json.dump(state, fh)
 	return values[min(index, len(values) - 1)]
+
+
+def rate_limited(kind):
+	if not limited_now or kind not in scenario["limited_endpoints"]:
+		return
+	if primary:
+		sys.stderr.write("gh: API rate limit exceeded for user ID 11442166. If you reach out to GitHub Support for help, please include the request ID CC40:3C07B (HTTP 403)\n")
+	else:
+		sys.stderr.write("gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)\n")
+	sys.exit(1)
 
 
 def emit(body):
@@ -308,17 +328,12 @@ def emit(body):
 
 if endpoint == "rate_limit":
 	if primary:
-		core = {"remaining": 0 if limited else 5000, "reset": scenario["limited_until"] if limited else now + 3600}
+		core = {"remaining": 0 if limited_now else 5000, "reset": scenario["limited_until"] if limited_now else now + 3600}
 	else:
 		core = {"remaining": 4999, "reset": now + 3600}
 	emit({"resources": {"core": core}})
 if endpoint.endswith("/pulls/" + os.environ["PR_NUMBER"]):
-	if limited:
-		if primary:
-			sys.stderr.write("gh: API rate limit exceeded for user ID 11442166. If you reach out to GitHub Support for help, please include the request ID CC40:3C07B (HTTP 403)\n")
-		else:
-			sys.stderr.write("gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)\n")
-		sys.exit(1)
+	rate_limited("pulls")
 	pr_state = take("pr_states")
 	if pr_state == "error":
 		sys.stderr.write("gh: Server Error (HTTP 502)\n")
@@ -327,13 +342,23 @@ if endpoint.endswith("/pulls/" + os.environ["PR_NUMBER"]):
 if "/git/refs/heads/" in endpoint:
 	emit({"object": {"sha": os.environ["BAIT_SHA"]}})
 if "/actions/workflows/" in endpoint:
+	prior = {"id": scenario["prior_run"], "head_sha": os.environ["BAIT_SHA"], "status": "completed", "created_at": "2026-10-01T01:30:00Z", "conclusion": "success"}
+	if not scenario["dispatch"]:
+		emit({"workflow_runs": [
+			{"id": scenario["adopted_run"], "head_sha": os.environ["BAIT_SHA"], "status": "in_progress", "created_at": "2026-10-01T01:40:00Z", "conclusion": None},
+			prior,
+		]})
+	if not state.get("dispatched"):
+		emit({"workflow_runs": [prior]})
+	rate_limited("runs_list")
 	emit({"workflow_runs": [
-		{"id": scenario["adopted_run"], "head_sha": os.environ["BAIT_SHA"], "status": "in_progress", "created_at": "2026-10-01T01:40:00Z", "conclusion": None},
-		{"id": scenario["prior_run"], "head_sha": os.environ["BAIT_SHA"], "status": "completed", "created_at": "2026-10-01T01:30:00Z", "conclusion": "success"},
+		{"id": scenario["dispatched_run"], "head_sha": os.environ["BAIT_SHA"], "status": "queued", "created_at": "2026-10-01T01:50:00Z", "conclusion": None},
+		prior,
 	]})
-if endpoint.endswith("/actions/runs/%d" % scenario["adopted_run"]):
+if endpoint.endswith("/actions/runs/%d" % poll_run):
+	rate_limited("run")
 	run_status = take("run_statuses")
-	emit({"id": scenario["adopted_run"], "status": run_status, "conclusion": "success" if run_status == "completed" else None})
+	emit({"id": poll_run, "status": run_status, "conclusion": "success" if run_status == "completed" else None})
 sys.stderr.write("stub gh: unexpected endpoint " + endpoint + "\n")
 sys.exit(2)
 '''
@@ -361,11 +386,13 @@ def _run_phase4b_retry(
 	run_statuses: list[str],
 	limited_for: int = 0,
 	limit_kind: str = "primary",
+	limited_endpoints: tuple[str, ...] = ("pulls",),
+	dispatch: bool = False,
 ) -> dict:
 	"""Run the real Phase 4b helpers and retry block against a stub `gh`.
 
-	PR-state reads are rate-limited for the first `limited_for` seconds of
-	fake time. Returns the exit code, transcript, `$GITHUB_OUTPUT` text, gh
+	The reads in `limited_endpoints` are rate-limited for the first
+	`limited_for` seconds of fake time. Returns the exit code, transcript, `$GITHUB_OUTPUT` text, gh
 	calls, sleeps, and the fake clock's final epoch.
 	"""
 	workflow = _read_workflow()
@@ -389,6 +416,9 @@ def _run_phase4b_retry(
 			"run_statuses": run_statuses,
 			"limited_until": _PHASE4B_START_EPOCH + limited_for,
 			"limit_kind": limit_kind,
+			"limited_endpoints": list(limited_endpoints),
+			"dispatch": dispatch,
+			"dispatched_run": _PHASE4B_DISPATCHED_RUN,
 			"adopted_run": _PHASE4B_ADOPTED_RUN,
 			"prior_run": _PHASE4B_PRIOR_RUN,
 		}), encoding="utf-8")
@@ -484,7 +514,7 @@ def test_phase4b_rate_limit_until_the_deadline_fails_closed_with_retry_timeout()
 	assert result["output"] == "status=retry_timeout\n", result["output"]
 	assert _PHASE4B_REACHED not in result["transcript"]
 	assert "pr_state_check_failed" not in result["transcript"]
-	assert "PR-state reads were rate-limited" in result["transcript"]
+	assert "GitHub reads were rate-limited" in result["transcript"]
 	# The wait is capped at the deadline; only the loop's own 15s sleep can
 	# step past it before the loop condition ends the wait.
 	assert result["clock"] < _PHASE4B_DEADLINE + 15, result["clock"] - _PHASE4B_DEADLINE
@@ -512,6 +542,116 @@ def test_phase4b_plain_pr_state_failures_still_trip_the_breaker() -> None:
 	assert len(_pr_state_calls(result)) == 12
 
 
+def _calls_to(result: dict, endpoint: str) -> list[str]:
+	return [call for call in result["calls"] if call.split()[1:2] == [endpoint]]
+
+
+def test_phase4b_rate_limited_adopted_run_reads_wait_instead_of_rereading_every_15s() -> None:
+	"""A rate limit on the pinned run's status read waits like a PR-state one.
+
+	PR #5874 review: a run-status read that kept re-reading every 15s under a
+	secondary limit would poll a limited endpoint through the whole deadline.
+	"""
+	result = _run_phase4b_retry(
+		pr_states=["open"],
+		run_statuses=["in_progress", "completed"],
+		limited_for=375,
+		limit_kind="secondary",
+		limited_endpoints=("run",),
+	)
+	assert result["rc"] == 0, result["transcript"]
+	assert _PHASE4B_REACHED in result["transcript"]
+	assert result["output"] == "", result["output"]
+	assert result["transcript"].count(f"Retry review run #{_PHASE4B_ADOPTED_RUN} read was rate-limited") == 5
+	assert "not counted as an unresolvable state" not in result["transcript"]
+	assert "60s fallback: core.remaining=4999, so a secondary limit" in result["transcript"]
+	assert result["sleeps"].count(60) == 5
+	# Five limited reads, each followed by a 60s wait, then two good reads.
+	assert len(_calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_ADOPTED_RUN}")) == 7
+
+
+def test_phase4b_rate_limited_registration_list_waits_for_the_reset_then_registers() -> None:
+	result = _run_phase4b_retry(
+		pr_states=["open"],
+		run_statuses=["completed"],
+		limited_for=30,
+		limited_endpoints=("runs_list",),
+		dispatch=True,
+	)
+	assert result["rc"] == 0, result["transcript"]
+	assert _PHASE4B_REACHED in result["transcript"]
+	assert "Retry dispatch sent" in result["transcript"]
+	assert result["transcript"].count("Post-dispatch review run list read was rate-limited") == 1
+	assert f"Registered retry review run #{_PHASE4B_DISPATCHED_RUN}" in result["transcript"]
+	# First list read at +15s; the core quota resets at +30s, so wait 16s.
+	assert 16 in result["sleeps"], result["sleeps"]
+	assert "core quota spent, resets at epoch" in result["transcript"]
+
+
+def test_phase4b_sustained_rate_limit_on_registration_list_fails_closed_in_the_window() -> None:
+	# The wait never extends the 90s registration window (AD-6).
+	result = _run_phase4b_retry(
+		pr_states=["open"],
+		run_statuses=["in_progress"],
+		limited_for=3600,
+		limit_kind="secondary",
+		limited_endpoints=("runs_list",),
+		dispatch=True,
+	)
+	assert result["rc"] == 1, result["transcript"]
+	assert result["output"] == "status=retry_dispatch_failed\n", result["output"]
+	assert "did not register a matching review run within 90 seconds" in result["transcript"]
+	assert result["clock"] <= _PHASE4B_START_EPOCH + 90, result["clock"] - _PHASE4B_START_EPOCH
+	assert result["sleeps"].count(60) == 1
+
+
+def test_gh_api_with_retry_rate_limit_warning_keeps_earlier_attempts_stderr() -> None:
+	"""A 5xx before the rate limit stays in the warning (PR #5874 review)."""
+	stub = textwrap.dedent('''\
+		#!/usr/bin/env bash
+		count=$(( $(cat "${STUB_COUNT_FILE}") + 1 ))
+		echo "${count}" > "${STUB_COUNT_FILE}"
+		if [ "${count}" -eq 1 ]; then
+			echo "gh: Server Error (HTTP 502)" >&2
+		else
+			echo "gh: API rate limit exceeded for user ID 1 (HTTP 403)" >&2
+		fi
+		exit 1
+	''')
+	script = (
+		_FAKE_CLOCK_PRELUDE
+		+ textwrap.dedent(_phase4b_helpers(_read_workflow()))
+		+ '\nrc=0\ngh_api_with_retry "repos/example/repo/pulls/1" || rc=$?\necho "RC=${rc}"\n'
+	)
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		gh = bin_dir / "gh"
+		gh.write_text(stub, encoding="utf-8")
+		gh.chmod(gh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+		count = tmp_path / "count"
+		count.write_text("0", encoding="utf-8")
+		clock = tmp_path / "clock"
+		clock.write_text(str(_PHASE4B_START_EPOCH), encoding="utf-8")
+		script_path = tmp_path / "helpers.sh"
+		script_path.write_text(script, encoding="utf-8")
+		env = dict(os.environ)
+		env.update({
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"STUB_COUNT_FILE": str(count),
+			"FAKE_CLOCK_FILE": str(clock),
+			"SLEEP_LOG": str(tmp_path / "sleeps.log"),
+		})
+		proc = subprocess.run(["bash", str(script_path)], capture_output=True, text=True, env=env, timeout=60)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		assert "RC=75" in proc.stdout
+		assert count.read_text(encoding="utf-8").strip() == "2"
+		warning = next(line for line in proc.stderr.splitlines() if "rate-limited on attempt 2" in line)
+		assert "Server Error (HTTP 502)" in warning
+		assert "API rate limit exceeded" in warning
+
+
 def test_phase4b_rate_limit_branch_contract() -> None:
 	workflow = _read_workflow()
 	helpers = _phase4b_helpers(workflow)
@@ -521,15 +661,24 @@ def test_phase4b_rate_limit_branch_contract() -> None:
 	assert 'return "${GH_API_RATE_LIMITED_RC}"' in helpers
 	assert 'echo "rate_limited"' in helpers
 	assert "gh api rate_limit --jq" in helpers
+	wait_helper = helpers[helpers.index("phase4b_wait_out_rate_limit() {"):]
+	assert 'local wait_deadline="${DEADLINE}"' in wait_helper
+	assert 'wait_deadline="${RETRY_REGISTRATION_DEADLINE}"' in wait_helper
+	assert 'phase4b_rate_limit_wait_seconds "${wait_deadline}"' in wait_helper
+	assert 'sleep "${wait_seconds}"' in wait_helper
 	rate_limited_branch = _slice_between(
 		retry,
 		'if [ "${PR_STATE}" = "rate_limited" ]; then',
 		'elif [ "${PR_STATE}" = "unknown" ]; then',
 	)
 	assert "PR_STATE_FAILURES" not in rate_limited_branch
-	assert 'RATE_LIMIT_WAIT_DEADLINE="${DEADLINE}"' in rate_limited_branch
-	assert 'RATE_LIMIT_WAIT_DEADLINE="${RETRY_REGISTRATION_DEADLINE}"' in rate_limited_branch
-	assert 'sleep "${RATE_LIMIT_WAIT}"' in rate_limited_branch
+	assert "phase4b_wait_out_rate_limit" in rate_limited_branch
+	# The run-list and run-status reads wait out a rate limit too, before
+	# their generic-failure `continue`.
+	for read_call in ('gh_api_with_retry "${RETRY_RUNS_QUERY}") || RETRY_READ_RC=$?', 'gh_api_with_retry "repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}") || RETRY_READ_RC=$?'):
+		after = retry[retry.index(read_call):]
+		assert after.index('-eq "${GH_API_RATE_LIMITED_RC}"') < after.index("continue")
+		assert after.index("phase4b_wait_out_rate_limit") < after.index("continue")
 	assert retry.index('if [ "${PR_STATE}" = "closed" ]; then') < retry.index(
 		'if [ "${PR_STATE}" = "rate_limited" ]; then'
 	)

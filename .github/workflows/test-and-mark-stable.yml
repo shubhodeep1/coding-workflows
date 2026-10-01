@@ -2184,7 +2184,9 @@ jobs:
               rc=$?
               cat "${attempt_err_file}" >> "${err_file}"
               if grep -qi "rate limit" "${attempt_err_file}" 2>/dev/null; then
-                echo "::warning::gh api rate-limited on attempt ${try} (rc=${rc}); not retrying before the limit resets: $(tr '\n' ' ' < "${attempt_err_file}" | head -c 300)" >&2
+                # Surface every attempt's stderr, like the final-failure
+                # warning below, so a 5xx before the limit is not lost.
+                echo "::warning::gh api rate-limited on attempt ${try} (rc=${rc}); not retrying before the limit resets: $(tr '\n' ' ' < "${err_file}" | head -c 1000)" >&2
                 rm -f "${err_file}" "${attempt_err_file}"
                 return "${GH_API_RATE_LIMITED_RC}"
               fi
@@ -2277,7 +2279,9 @@ jobs:
           # it the same way): core.remaining == 0 means the primary limit
           # is spent, so wait until core.reset + 1s. Otherwise the limit
           # was a secondary one (or the read failed), so wait 60s, the
-          # minimum GitHub documents for secondary limits.
+          # minimum GitHub documents for secondary limits. The source of
+          # the wait goes to stderr (the step log), so an operator can
+          # tell a reset-derived wait from the 60s fallback.
           phase4b_rate_limit_wait_seconds() {
             local wait_deadline="$1"
             local now_epoch
@@ -2285,21 +2289,49 @@ jobs:
             local core_remaining=""
             local core_reset=""
             local wait_seconds=60
+            local wait_source="60s fallback: GET /rate_limit unreadable"
             now_epoch=$(date +%s)
             if limits=$(gh api rate_limit --jq '"\(.resources.core.remaining) \(.resources.core.reset)"' 2>/dev/null); then
               read -r core_remaining core_reset <<< "${limits}"
-              if [[ "${core_remaining}" =~ ^[0-9]+$ ]] && [[ "${core_reset}" =~ ^[0-9]+$ ]] \
-                && [ "${core_remaining}" -eq 0 ] && [ "${core_reset}" -gt "${now_epoch}" ]; then
-                wait_seconds=$(( core_reset - now_epoch + 1 ))
+              if [[ "${core_remaining}" =~ ^[0-9]+$ ]] && [[ "${core_reset}" =~ ^[0-9]+$ ]]; then
+                if [ "${core_remaining}" -eq 0 ] && [ "${core_reset}" -gt "${now_epoch}" ]; then
+                  wait_seconds=$(( core_reset - now_epoch + 1 ))
+                  wait_source="core quota spent, resets at epoch ${core_reset}"
+                else
+                  wait_source="60s fallback: core.remaining=${core_remaining}, so a secondary limit"
+                fi
+              else
+                wait_source="60s fallback: malformed GET /rate_limit payload '${limits:0:100}'"
               fi
             fi
             if [ $(( now_epoch + wait_seconds )) -gt "${wait_deadline}" ]; then
               wait_seconds=$(( wait_deadline - now_epoch ))
+              wait_source="${wait_source}; capped at the deadline"
             fi
             if [ "${wait_seconds}" -lt 0 ]; then
               wait_seconds=0
             fi
+            echo "  rate-limit wait ${wait_seconds}s (${wait_source})" >&2
             echo "${wait_seconds}"
+          }
+
+          # Waits out a rate-limited read inside the retry poll loop
+          # ($1 names the read for the log). The wait is capped at
+          # DEADLINE, and at RETRY_REGISTRATION_DEADLINE while no run is
+          # registered yet, so it never extends either window. Used for
+          # every read in the loop: PR state, the post-dispatch run list,
+          # and the pinned run's status (issue #5858).
+          phase4b_wait_out_rate_limit() {
+            local read_label="$1"
+            local wait_deadline="${DEADLINE}"
+            local wait_seconds
+            RETRY_RATE_LIMIT_WAITS=$((RETRY_RATE_LIMIT_WAITS + 1))
+            if [ -z "${RETRY_RUN_ID}" ] && [ "${RETRY_REGISTRATION_DEADLINE}" -lt "${wait_deadline}" ]; then
+              wait_deadline="${RETRY_REGISTRATION_DEADLINE}"
+            fi
+            wait_seconds=$(phase4b_rate_limit_wait_seconds "${wait_deadline}")
+            echo "::notice::${read_label} was rate-limited (wait ${RETRY_RATE_LIMIT_WAITS}); waiting ${wait_seconds}s for the limit to reset, within the ${EDITOR_RETRY_BUDGET_MINUTES}-minute retry deadline"
+            sleep "${wait_seconds}"
           }
 
           run_pytest() {
@@ -2506,14 +2538,18 @@ jobs:
           # 25-min retry window during a GitHub outage.
           # A "rate_limited" state is not an outage: it neither counts
           # toward nor resets the breaker. The loop waits for the limit
-          # to reset (phase4b_rate_limit_wait_seconds), capped at
-          # DEADLINE, and at the 90s registration window while no run
-          # is registered yet, then keeps polling the review run. If the
-          # deadline expires first, the step still fails closed with
-          # retry_timeout below (issue #5858).
+          # to reset (phase4b_wait_out_rate_limit), capped at DEADLINE,
+          # and at the 90s registration window while no run is
+          # registered yet, then keeps polling the review run. A
+          # rate-limited run-list or run-status read waits the same way
+          # instead of re-reading every 15s. If a deadline expires first,
+          # the step still fails closed (retry_dispatch_failed or
+          # retry_timeout below; issue #5858).
           PR_STATE_FAILURES=0
           PR_STATE_FAILURE_LIMIT=4  # ~60s of consecutive unknowns
           PR_STATE_RATE_LIMIT_WAITS=0
+          RETRY_RATE_LIMIT_WAITS=0
+          RETRY_READ_RC=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             sleep 15
             # Bail out if the PR closed/merged during the wait — no
@@ -2527,13 +2563,7 @@ jobs:
             fi
             if [ "${PR_STATE}" = "rate_limited" ]; then
               PR_STATE_RATE_LIMIT_WAITS=$((PR_STATE_RATE_LIMIT_WAITS + 1))
-              RATE_LIMIT_WAIT_DEADLINE="${DEADLINE}"
-              if [ -z "${RETRY_RUN_ID}" ] && [ "${RETRY_REGISTRATION_DEADLINE}" -lt "${RATE_LIMIT_WAIT_DEADLINE}" ]; then
-                RATE_LIMIT_WAIT_DEADLINE="${RETRY_REGISTRATION_DEADLINE}"
-              fi
-              RATE_LIMIT_WAIT=$(phase4b_rate_limit_wait_seconds "${RATE_LIMIT_WAIT_DEADLINE}")
-              echo "::notice::PR #${PR_NUMBER} state read was rate-limited (wait ${PR_STATE_RATE_LIMIT_WAITS}); not counted as an unresolvable state — waiting ${RATE_LIMIT_WAIT}s for the limit to reset, within the ${EDITOR_RETRY_BUDGET_MINUTES}-minute retry deadline"
-              sleep "${RATE_LIMIT_WAIT}"
+              phase4b_wait_out_rate_limit "PR #${PR_NUMBER} state read (not counted as an unresolvable state)"
             elif [ "${PR_STATE}" = "unknown" ]; then
               PR_STATE_FAILURES=$((PR_STATE_FAILURES + 1))
               if [ "${PR_STATE_FAILURES}" -ge "${PR_STATE_FAILURE_LIMIT}" ]; then
@@ -2552,7 +2582,13 @@ jobs:
                 echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
                 exit 1
               fi
-              if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
+              RETRY_READ_RC=0
+              RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}") || RETRY_READ_RC=$?
+              if [ "${RETRY_READ_RC}" -eq "${GH_API_RATE_LIMITED_RC}" ]; then
+                phase4b_wait_out_rate_limit "Post-dispatch review run list read"
+                continue
+              fi
+              if [ "${RETRY_READ_RC}" -ne 0 ]; then
                 echo "::warning::Could not list post-dispatch review runs; retrying within the registration window"
                 continue
               fi
@@ -2589,7 +2625,13 @@ jobs:
               echo "✓ Registered retry review run #${RETRY_RUN_ID}; polling that exact run"
             fi
 
-            if ! RETRY_RUN_JSON=$(gh_api_with_retry "repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"); then
+            RETRY_READ_RC=0
+            RETRY_RUN_JSON=$(gh_api_with_retry "repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}") || RETRY_READ_RC=$?
+            if [ "${RETRY_READ_RC}" -eq "${GH_API_RATE_LIMITED_RC}" ]; then
+              phase4b_wait_out_rate_limit "Retry review run #${RETRY_RUN_ID} read"
+              continue
+            fi
+            if [ "${RETRY_READ_RC}" -ne 0 ]; then
               echo "::warning::Could not read retry review run #${RETRY_RUN_ID}; retrying within the retry window"
               continue
             fi
@@ -2610,8 +2652,8 @@ jobs:
 
           if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
             echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
-            if [ "${PR_STATE_RATE_LIMIT_WAITS}" -gt 0 ]; then
-              echo "::error::PR-state reads were rate-limited ${PR_STATE_RATE_LIMIT_WAITS} time(s) during the retry wait (see the rate-limit notices above)"
+            if [ "${RETRY_RATE_LIMIT_WAITS}" -gt 0 ]; then
+              echo "::error::GitHub reads were rate-limited ${RETRY_RATE_LIMIT_WAITS} time(s) during the retry wait, ${PR_STATE_RATE_LIMIT_WAITS} of them PR-state reads (see the rate-limit notices above)"
             fi
             echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
             exit 1
