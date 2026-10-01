@@ -47,10 +47,10 @@ Security pass: skip (ai:security: automation-produced issue)
 
 1. has the same `command`, or a command that is exactly `python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/<hook>.py` with `<hook>.py` present in the head's matching hooks tree (`.claude/hooks/` or `workflow-templates/.claude/hooks/`);
 2. has a matcher that covers the base matcher: identical; absent, empty, or `*`; or, when both are plain tool-name lists (`A|B`), a superset;
-3. has a timeout at least the base timeout (absent = Claude Code's 60-second default);
+3. has a timeout at least the base timeout (absent = Claude Code's documented default for a command hook: 600 seconds, or 30 seconds on `UserPromptSubmit` / `PreModelSwitch` / `PostModelSwitch`, 10 seconds on `MessageDisplay`, 1.5 seconds on `SessionEnd`; a non-finite value fails);
 4. has every other entry key and group key (anything but `command`, `timeout`, `matcher`, `hooks`) equal to the base.
 
-A base wiring with no such head wiring is a **wiring regression** with identity `settings:<file>:<event>:<matcher>:<hook>`. `disableAllHooks` turning truthy (`settings:<file>:disableAllHooks`) and an unparseable or non-object head file (`settings:<file>:unparseable`) are regressions too. An unparseable base contributes no wiring. Each regression prints one `::error::GUARD_DIFFERENTIAL wiring_regression settings=… event=… matcher=… hook=… reason=… shape=…` line and exits 1. A listed identity prints `GUARD_DIFFERENTIAL intended_wiring_change …` instead.
+A base wiring with no such head wiring is a **wiring regression** with identity `settings:<file>:<event>:<matcher>:<hook>`. `disableAllHooks` turning truthy (`settings:<file>:disableAllHooks`), any change to the top-level `env` object (`settings:<file>:env`, AD-6), and an unparseable or non-object head file (`settings:<file>:unparseable`) are regressions too. A committed base file that is unparseable or non-object is a regression as well (`settings:<file>:base-unparseable`): with no base wiring to compare, the head cannot be verified to keep any guard. Each regression prints one `::error::GUARD_DIFFERENTIAL wiring_regression settings=… event=… matcher=… hook=… reason=… shape=…` line and exits 1. A listed identity prints `GUARD_DIFFERENTIAL intended_wiring_change …` instead.
 
 Alternatives: running the head's wired command through a shell against the corpus (AD-2 B) was rejected, because a command that runs the guard only in CI (`[ -d /home/runner ] || exit 0; …`) would pass. Failing every change with no verification (AD-2 C) would block harmless widenings.
 
@@ -108,6 +108,7 @@ Ships with the #5174 project's final PR into `main`. There is no flag, and the s
 
 - Residual risk (AD-4): a PR can still add a new hook entry that answers `allow` or a `permissions.allow` rule without this check failing. Both are visible in review, and retire-master phase 3 classifies them for the #4785 sync.
 - `security_pass_skip.py` reason: `ai:security: created and labelled by the issue automation`.
+- Revised during review of the final PR #5356: the omitted-timeout baseline is Claude Code's documented per-event default (600 seconds for most events), not 60 seconds, and an unparseable base fails closed (`reason=base-unparseable`, commit 6fc4da8) instead of contributing no wiring. AD-5 records the plan-time decision; its base clause is superseded by that commit.
 
 ## References
 

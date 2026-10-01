@@ -5,13 +5,13 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5174-guard-differential-check
 - Project branch: claude/implement-plan-issue-5328-settings-guard-wiring-check   Final PR: #5356 ready (marked ready 2026-09-30)
 - Status: COMPLETE
-- Stage: final-merge — review round 4
+- Stage: final-merge — review round 2 (second cycle, round count restarted after the round 4 push)
 - Activation: n/a (base claude/implement-plan-issue-5174-guard-differential-check) — the base is not the default branch, so steps 12–13 do not run (Issue Mode)
-- Waiting on: PR #5356 (final PR, review round 5 after the round 4 push)
+- Waiting on: PR #5356 (final PR, next review round after the second-cycle round 2 push)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DZdvBhT9Qf3x3SXQfb4Ugi (reused)   safety net / hand-back: see the final-merge — review round 4 stage report
+- Check-in: checker session_01DZdvBhT9Qf3x3SXQfb4Ugi (reused)   safety net / hand-back: see the final-merge — review round 2 (second cycle) stage report
 - Last updated: 2026-10-01
-- Last note: final PR #5356 review round 4 (head eaf0ba0): the `review / codex-agent` failure finding was rejected (the 2026-09-30 19:47–22:02Z reviewer outage, no code defect); the `_delete_object` test-helper finding was fixed by asserting the blob is unreadable after the delete. Project branch synced with the issue base in the same push. After #5356 merges: close #5328 (completed, add ai:merged).
+- Last note: final PR #5356 review round 2 of the second cycle (head 6cf1a8c): both findings were valid and fixed. The archived plan said an omitted hook timeout means Claude Code's 60-second default (the code and agents.md use the documented per-event default, 600 s for most events) and that an unparseable base contributes no wiring (it fails closed with reason=base-unparseable since 6fc4da8). After #5356 merges: close #5328 (completed, add ai:merged).
 
 ## Phases
 1. [x] Phase 1 — settings guard-wiring check (`scripts/guard_differential.py`, tests, `ci.yml` step comment, `agents.md`, changelog)   — PR #5369 merged 2026-09-30 (bbcb6b1); review rounds: 3; interventions: 0
@@ -27,7 +27,7 @@
 
 ## Completion
 - Completion PR #5549 merged 2026-09-30 (781dd5a) — doc moved to docs/completed/issue-5328-settings-guard-wiring-check-plan.md
-- Final PR #5356 ready (into claude/implement-plan-issue-5174-guard-differential-check) — review rounds: 4 (rounds 1–3 fixed in 993d284, 6fc4da8, eaf0ba0; round 4 in this push)
+- Final PR #5356 ready (into claude/implement-plan-issue-5174-guard-differential-check) — review rounds: 4 + 2 (rounds 1–4 fixed in 993d284, 6fc4da8, eaf0ba0, 6cf1a8c; the workflow then restarted its count and handed head 6cf1a8c over as round 2; that round is fixed in this push)
 
 ## Activation
 - n/a: the base branch is the #5174 project branch, so the change goes live with that project's final PR #5185 (Issue Mode)
@@ -45,6 +45,7 @@
 ## Lessons
 - [source:security] A coverage gate that triggers on changed code files must also trigger on the config that wires that code: a settings-only change can disable a hook while every file-based check stays skipped, and a substring wiring test accepts a command that merely names the hook. (files: scripts/guard_differential.py, .claude/settings.json)
 - [source:intervention] A fail-closed line that shares an input with other checks (a settings `env` change on a deleted file) reads as a duplicate to reviewers whenever it co-occurs with them; pin the case where it is the only line with a test so the next round cannot argue it away. (files: scripts/guard_differential.py, tests/test_guard_differential.py)
+- [source:intervention] When a review round changes behaviour that the plan describes (a default, a fail-open case turned fail-closed), correct the plan doc in the same commit: the archived plan is reviewed with the final PR, and a stale statement there comes back as a finding. (files: docs/completed/issue-5328-settings-guard-wiring-check-plan.md)
 
 ## Notes
 - 2026-09-30: started by the Claude issue dispatcher (`/implement-issue-claude`), session session_01JGsmyk8gEMSXFh6ocygH4q. The issue base is the #5174 project branch, so the final PR targets it and activation is n/a.
@@ -52,3 +53,4 @@
 - 2026-09-30 (conformance 1/3): project branch synced with the issue base in ac0c3b2 (`[claude-merge-resolve]`; the `ci.yml` step comment conflicted with #5325's change to the same comment, both sides kept).
 - 2026-09-30 (validation 1/3): `docs/INVENTORY.md` still has no entry for `scripts/guard_differential.py`, so `tests/inventory_parity.py` fails on this branch and its base. It is inherited from #5174 (PR #5187) and recorded as the #5325 project's AD-4; it surfaces on #5174's final PR #5185 into `main`, so this project does not fix it (§5).
 - 2026-10-01 (final-merge — review round 4): between 2026-09-30 19:47Z and 22:02Z three review runs on head eaf0ba0 failed the same way (reviewer credits ran out) and the identical-failure cap stopped them; the 00:44Z run reviewed the head and handed round 4 over. Its `review / codex-agent` finding restated that outage and was rejected. The minimax finding on `_delete_object` was overstated (an object that is not loose makes `unlink` raise, so the test cannot pass silently), but the helper now also asserts `git cat-file -e` fails, so a blob still readable from a pack fails the test instead of weakening it.
+- 2026-10-01 (final-merge — review round 2, second cycle): the reviewer panel flagged two stale statements in the archived plan (`docs/completed/issue-5328-settings-guard-wiring-check-plan.md` lines 50 and 53). Both were corrected to match the code and `agents.md`, and the plan's Notes record that AD-5's base clause was superseded by 6fc4da8; the AD-5 entry itself is unchanged.
