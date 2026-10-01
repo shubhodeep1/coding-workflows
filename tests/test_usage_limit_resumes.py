@@ -690,6 +690,8 @@ def test_pickup_runs_the_selector_on_every_wake():
 	assert "1a. **Resume sessions stopped by the usage limit** (`start`, `— wake.`, and `— wake. — catch-up`" in pickup
 	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/usage_limit_resumes.py" in pickup
 	assert "Then continue with step 1a now" in pickup
+	# The failure branch reads as the exception, after the continue sentence (round 1 on ddfb81f).
+	assert pickup.index("Then continue with step 1a now") < pickup.index("Only if `create_trigger` fails twice, end the turn instead")
 	assert pickup.index("**Keep exactly one pickup.**") < pickup.index("**Resume sessions stopped by the usage limit**") < pickup.index("**Read the queue.**")
 
 

@@ -7,14 +7,14 @@
 - Status: BLOCKED
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5718: twin sync (third sync: selector twin + pickup diff, review round 1 on head 3eb9711)
+- Waiting on: PR #5718: twin sync (fourth sync: pickup diff only, review round 1 on head ddfb81f)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01FautbVZsyoMqwJS7DRku6r (kept idle; no wait armed while the hold stands)   safety net none   hand-back none
 - Last updated: 2026-10-01
-- Last note: the second twin sync (3eb9711) lifted the earlier hold and the panel reviewed it; this stage fixed the five valid round-1 findings twin-first (AD-21, AD-22), so a hold claim and a third twin-sync blocker are posted on #5660
+- Last note: the third twin sync (ddfb81f) lifted the hold and the panel reviewed it; one valid round-1 finding (pickup step 1 `start` reads as ending the turn before step 1a) is fixed in the pickup diff only, so a hold claim and a fourth twin-sync blocker are posted on #5660
 
 ## Phases
-1. [ ] Phase 1 — usage-limit resumes (selector script, pickup step 1a, sweep name, docs, tests)   — protected paths: .claude/scripts/usage_limit_resumes.py [new], .claude/scripts/stale_routines.py, .claude/settings.json (via workflow-templates/.claude/** twins); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #5718 open (hold: third twin sync); review rounds: 2 (round-1 findings on head 2413da3 answered in the 2026-10-01 amendment; round-1 findings on head 3eb9711 fixed in a [claude-autofix] commit, 2026-10-01); interventions: 0
+1. [ ] Phase 1 — usage-limit resumes (selector script, pickup step 1a, sweep name, docs, tests)   — protected paths: .claude/scripts/usage_limit_resumes.py [new], .claude/scripts/stale_routines.py, .claude/settings.json (via workflow-templates/.claude/** twins); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #5718 open (hold: fourth twin sync); review rounds: 3 (round-1 findings on head 2413da3 answered in the 2026-10-01 amendment; round-1 findings on head 3eb9711 fixed in a [claude-autofix] commit, 2026-10-01; round-1 findings on head ddfb81f: 1 fixed in the pickup diff, 2 rejected, 2026-10-01); interventions: 0
 
 ## Conformance
 
@@ -56,6 +56,7 @@
 - [source:plan-deviation] A `rejected` rate_limit_info snapshot does not mean a session stopped: turns completed on overage record it too, so it may only select checkers with no bound trigger. (files: workflow-templates/.claude/scripts/usage_limit_resumes.py)
 - [source:intervention] A consumer of a listing paged "while the oldest entry is inside the window" must apply the window itself: the last page fetched crosses the boundary. (files: workflow-templates/.claude/scripts/usage_limit_resumes.py)
 - [source:intervention] A long-lived supervisor's own session is not on a recent-sessions listing; when its logic depends on its own entry, pass its own `get_session` result explicitly. (files: workflow-templates/.claude/scripts/usage_limit_resumes.py, .claude/commands/claude-issue-pickup.md)
+- [source:intervention] In a command file, state the success path's "continue with step N" before a failure branch that ends the turn, and mark the failure branch as the exception ("Only if … instead"); a "Then continue" sentence after "end the turn" reads as part of the failure branch to reviewers and models. (files: .claude/commands/claude-issue-pickup.md)
 
 ## Notes
 - 2026-10-01 resume (session_012LmydKWkaC932UcZeUj9ut, /reclarify after the first sync db90cf5): project branch synced with main (f3047e7); phase branch merged it ([claude-merge-resolve], master-session.md: kept this phase's usage-limit bullet and main's newer "Approval windows" bullet). Folded the owner's 16:13Z/16:39Z comments and the valid round-1 findings (duplicate-stage guard, README sentence placement) into #5718 (AD-14..AD-19); the round-1 task gap (pickup diff) was closed by the sync. Selector suite 93/94 on the branch (parity red until the sync); post-sync simulation (selector twin copied, pickup diff applied): 874 passed, 1 skipped across the affected suites; ruff clean.
@@ -65,3 +66,4 @@
 - Twin-sync blocker posted on #5660 (ai:claude-blocked); no project checker armed yet (twin-first: the stage that /reclarify resumes arms the wait on PR #5718).
 - 2026-10-01 second sync 3eb9711 landed and lifted the hold. Session_01AWrxvGJxQ6NdmYJp2wawYg armed the wait (project checker session_01FautbVZsyoMqwJS7DRku6r); the project branch was synced with main as 807b80d.
 - 2026-10-01 review round (session_018tbHnwrLFi3awRnm6xFNkf): project branch synced with main again (2a14a3a). Round-1 ledger on 3eb9711 (ledger sha256 6dc284e7…): fixed the 72-hour cutoff (AD-21), the step-1 pacing count, the `next_run_at` → `run_once_at` fallback, the changelog's one-wake claim, and the README paragraph break, plus the pickup's own entry for the hold-off (AD-22, proactive). Not applied: the hardening suggestions (named 1e12 constant, cap in the no-JSON error), which are optional style and change no behaviour. Selector suite 102/103 on the branch (parity red until the sync). Post-sync simulation (selector twin copied, pickup diff applied): 438 passed across the selector, issue-command, stale-routine, session-title, and issue-route suites; ruff clean.
+- 2026-10-01 review round (session_01Q7vzw2TPe3nTu35QWbqFhG): project branch already up to date with main. Round-1 ledger on ddfb81f (ledger sha256 955efe8b…): fixed the pickup step 1 `start` wording (the continue sentence now comes first and the two-failure exit reads as the exception; pickup diff only, no twin), rejected the `[:MAX_JSON_START_CANDIDATES]` slice report (it slices the position list) and the `too_old` before `not_idle` order (the 72-hour window is the scope boundary; the session is skipped either way). Added a test for the sentence order. Branch suites: 449 passed, 1 expected pre-sync failure; a simulated post-sync copy passes 450.
