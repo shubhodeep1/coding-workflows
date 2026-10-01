@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T10:56:20Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A conservative fallback that puts an unclassifiable item in a privileged bucket to skip a mutation (\"treat as tracking, so do not close it\") must not also grant that bucket's privileges (\"finalize it as the tracker\"); keep the unverified items in their own list and check it before any privileged action.",
+  "phase": "implement_plan",
+  "pr_number": 5632,
+  "record_id": "lesson-implement-plan-cf04cf9f403b5c21d7a04865",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5619-tracking-lineage-completion-pr-only",
+    "file:.github/workflows/issue_pr_status.yml"
+  ]
+}

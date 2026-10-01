@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:56:20Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A gate that keys on a linked issue is only reachable when the producer's PR body actually links it; check the real producer's body (for example `Refs #<T>`, which discovery ignores) and test with that exact shape, or derive the id from a verified field such as the head ref.",
+  "phase": "implement_plan",
+  "pr_number": 5632,
+  "record_id": "lesson-implement-plan-4a19a4a96ea03d5706ccf56c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5619-tracking-lineage-completion-pr-only",
+    "file:.github/workflows/issue_pr_status.yml",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}
