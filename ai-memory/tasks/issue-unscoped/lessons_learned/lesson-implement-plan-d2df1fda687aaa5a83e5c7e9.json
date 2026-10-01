@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T01:42:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Routine names are capped at 60 characters (`implement-plan <long slug>: safety net` reads back as `\u2026: safety\u2026`), so an ownership check matches the `implement-plan <slug>:` prefix, never the full name.",
+  "phase": "implement_plan",
+  "pr_number": 5097,
+  "record_id": "lesson-implement-plan-d2df1fda687aaa5a83e5c7e9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md"
+  ]
+}

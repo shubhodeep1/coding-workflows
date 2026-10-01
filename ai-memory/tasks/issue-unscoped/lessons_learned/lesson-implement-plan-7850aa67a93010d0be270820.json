@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T01:42:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a rule lists the id sources whose deletes need an ownership read first, grep every `delete_trigger` in the flows the rule covers and state the read at each call site. A rule stated only in the definition, plus a skip-on-denial note at each site, leaves by-id deletes that do not say to check the owner.",
+  "phase": "implement_plan",
+  "pr_number": 5097,
+  "record_id": "lesson-implement-plan-7850aa67a93010d0be270820",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:CLAUDE.md",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md"
+  ]
+}

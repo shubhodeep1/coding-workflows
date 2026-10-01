@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T01:42:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A skip-on-denial rule for a singleton's own cleanup must say which copy stands down while the cleanup is skipped. Otherwise both copies keep working, as two pickups reading the same queue did.",
+  "phase": "implement_plan",
+  "pr_number": 5097,
+  "record_id": "lesson-implement-plan-583a80427693505cbfdabc3f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:.claude/commands/claude-issue-pickup.md"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T01:42:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A duplicate guard made of a read and a separate write (a claim comment) is not a lock. Keep two copies of a singleton from overlapping at the source, for example by deferring the new copy's first run past the old copy's in-flight one, rather than relying on downstream claim checks.",
+  "phase": "implement_plan",
+  "pr_number": 5097,
+  "record_id": "lesson-implement-plan-7d93d7c94bf0616076795bbc",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:.claude/commands/claude-issue-pickup.md",
+    "file:.claude/scripts/claude_fix_claim.py"
+  ]
+}

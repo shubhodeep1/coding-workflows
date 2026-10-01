@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T01:42:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A command file's claim about concurrent sessions must name the window it does not cover (a wake already running when a restart lands), and name which check actually guards it; reviewers read an absolute \"no target gets two sessions\" as a promise the code cannot keep.",
+  "phase": "implement_plan",
+  "pr_number": 5097,
+  "record_id": "lesson-implement-plan-ef98a3950117a0051e63568f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:.claude/commands/claude-issue-pickup.md"
+  ]
+}
