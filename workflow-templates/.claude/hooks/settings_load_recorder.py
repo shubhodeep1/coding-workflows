@@ -18,10 +18,11 @@ the working tree:
 - `SessionStart` with `source` `startup`, `resume`, or `fork`: a process that
   read the file at start. `clear` and `compact` keep the running process's
   settings, so they record nothing and the earlier record stands.
-- `ConfigChange` with `config_source` `project_settings`: a change the watcher
-  detected. This must stay the only `ConfigChange` hook wired in
-  `.claude/settings.json`: a hook that blocked a change would leave a record
-  for a change that was never applied.
+- `ConfigChange` with `source` `project_settings`: a change the watcher
+  detected (the payload names the changed file in `file_path`). This must
+  stay the only `ConfigChange` hook wired in `.claude/settings.json`: a hook
+  that blocked a change would leave a record for a change that was never
+  applied.
 
 The record holds `ts`, `event`, `source`, `session_id`, `path`, and `sha256`
 (the file's sha256, or `absent` when there is no file) and replaces the
@@ -83,9 +84,9 @@ def settings_path(payload: dict, project_dir: str | None) -> Path | None:
 			return None
 		return Path(base) / SETTINGS_RELATIVE_PATH
 	if event == "ConfigChange":
-		if payload.get("config_source") != CONFIG_CHANGE_SOURCE:
+		if payload.get("source") != CONFIG_CHANGE_SOURCE:
 			return None
-		changed = payload.get("config_file_path")
+		changed = payload.get("file_path")
 		if isinstance(changed, str) and changed:
 			return Path(changed)
 		base = project_dir or payload.get("cwd")
@@ -104,7 +105,7 @@ def build_record(payload: dict, now: datetime, project_dir: str | None) -> dict 
 	if path is None:
 		return None
 	event = payload["hook_event_name"]
-	source = payload.get("source") if event == "SessionStart" else payload.get("config_source")
+	source = payload.get("source")
 	return {
 		"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
 		"event": event,

@@ -120,13 +120,15 @@ def test_clear_and_compact_keep_the_earlier_record(claude_dir: Path, project: Pa
 
 
 def test_config_change_replaces_the_record(claude_dir: Path, project: Path, tmp_path: Path):
+	"""The payload names the source in `source` and the file in `file_path`
+	(Claude Code hooks reference, "ConfigChange input"; PR #5283 review round 1)."""
 	home = tmp_path / "home"
 	settings = project / ".claude" / "settings.json"
 	_run_recorder(claude_dir, {"hook_event_name": "SessionStart", "source": "startup", "session_id": "s-1"}, home, project)
 	settings.write_text('{"hooks": {"PreToolUse": []}}\n', encoding="utf-8")
 	result = _run_recorder(claude_dir, {
-		"hook_event_name": "ConfigChange", "config_source": "project_settings",
-		"config_file_path": str(settings), "session_id": "s-1",
+		"hook_event_name": "ConfigChange", "source": "project_settings",
+		"file_path": str(settings), "session_id": "s-1",
 	}, home, project)
 	assert result.returncode == 0 and result.stdout == ""
 	record = json.loads(_record_file(home, "s-1").read_text(encoding="utf-8"))
@@ -139,7 +141,18 @@ def test_config_change_replaces_the_record(claude_dir: Path, project: Path, tmp_
 def test_other_config_sources_are_ignored(claude_dir: Path, project: Path, tmp_path: Path, config_source: str):
 	home = tmp_path / "home"
 	_run_recorder(claude_dir, {
-		"hook_event_name": "ConfigChange", "config_source": config_source,
+		"hook_event_name": "ConfigChange", "source": config_source,
+		"file_path": str(project / ".claude" / "settings.json"), "session_id": "s-1",
+	}, home, project)
+	assert not _record_file(home, "s-1").exists()
+
+
+def test_config_change_reads_only_the_documented_payload_fields(claude_dir: Path, project: Path, tmp_path: Path):
+	"""`config_source` / `config_file_path` are not Claude Code's field names; a
+	recorder that read them never recorded a real reload (PR #5283 review round 1)."""
+	home = tmp_path / "home"
+	_run_recorder(claude_dir, {
+		"hook_event_name": "ConfigChange", "config_source": "project_settings",
 		"config_file_path": str(project / ".claude" / "settings.json"), "session_id": "s-1",
 	}, home, project)
 	assert not _record_file(home, "s-1").exists()
