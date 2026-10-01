@@ -24,8 +24,10 @@ of the run this dispatch started (`workflow_run_id`). That id is exact even
 when another session dispatches the same workflow seconds apart (issue
 #5016: taking the newest new run returned the other session's run). Only
 when the response carries no run id does the helper fall back to polling for
-runs that did not exist before the POST, and then it never guesses between
-several.
+runs that did not exist before the POST and were dispatched from the same ref
+(a run's `head_branch`), and then it never guesses between several. A run
+started from another ref runs another copy of the workflow file, so it is
+never this dispatch's run (issue #5841).
 
 API calls (CLAUDE.md §15), all REST:
   - one read of the repository when `--ref` is omitted;
@@ -36,14 +38,15 @@ API calls (CLAUDE.md §15), all REST:
   - with a run id in the response: one best-effort read of that run for
     `status` and `created_at` (both `null` when the read fails);
   - without one: one read of the recent runs every POLL_INTERVAL_SECONDS
-    until a run that did not exist before appears, at most
+    until a run that did not exist before and was dispatched from the same
+    ref appears, at most
     `--timeout-seconds` (default 90) worth of polls.
 
 Prints one JSON line. Exit 0 with `run_id`, `html_url`, `status`,
 `created_at`, and `matched_by` when the run was found: `dispatch_response`
 means GitHub named the run; `new_run` means the fallback saw exactly one new
 run, which may still be another session's, so the caller confirms its target
-ref before trusting it. Exit 1 when the workflow is not allowlisted or an
+ref and the commit it covered before trusting it. Exit 1 when the workflow is not allowlisted or an
 argument is invalid. Exit 2 when a call failed, no new run appeared before
 the timeout, the fallback saw more than one new run (`ambiguous: true`
 with `candidate_run_ids`, newest first), or GitHub returned no run id after
@@ -101,13 +104,20 @@ def recent_run_ids(repo: str, workflow: str) -> set[int]:
 	return {run["id"] for run in payload.get("workflow_runs", []) if isinstance(run, dict) and isinstance(run.get("id"), int)}
 
 
-def new_runs(repo: str, workflow: str, known_ids: set[int]) -> list[dict]:
-	"""Return every run that is not in `known_ids`, newest first (one REST read)."""
+def new_runs(repo: str, workflow: str, known_ids: set[int], dispatched_ref: str | None = None) -> list[dict]:
+	"""Return every run that is not in `known_ids`, newest first (one REST read).
+
+	With `dispatched_ref`, only runs dispatched from that ref (`head_branch`)
+	count: a run started from another ref is another dispatch's (issue #5841).
+	"""
 	payload = check_in_status.gh_api(_runs_path(repo, workflow))
 	fresh = [
 		run
 		for run in payload.get("workflow_runs", [])
-		if isinstance(run, dict) and isinstance(run.get("id"), int) and run["id"] not in known_ids
+		if isinstance(run, dict)
+		and isinstance(run.get("id"), int)
+		and run["id"] not in known_ids
+		and (dispatched_ref is None or run.get("head_branch") == dispatched_ref)
 	]
 	return sorted(fresh, key=lambda run: run["id"], reverse=True)
 
@@ -258,7 +268,7 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 	for attempt in range(attempts):
 		sleep(POLL_INTERVAL_SECONDS)
 		try:
-			fresh = new_runs(repo, workflow, known_ids)
+			fresh = new_runs(repo, workflow, known_ids, dispatched_ref=ref)
 		except (check_in_status.ReadError, KeyError, TypeError) as exc:
 			return 2, {
 				"dispatched": True,
@@ -275,7 +285,7 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 				"ref": ref,
 				"ambiguous": True,
 				"candidate_run_ids": [run["id"] for run in fresh],
-				"error": f"dispatched, but {len(fresh)} new {workflow} runs appeared and GitHub returned no run id; confirm which candidate ran this dispatch's inputs before recording one, and never dispatch again",
+				"error": f"dispatched, but {len(fresh)} new {workflow} runs dispatched from {ref} appeared and GitHub returned no run id; confirm which candidate ran this dispatch's inputs (target ref and audited commit) before using its verdict, and never dispatch again",
 			}
 		if fresh:
 			run = fresh[0]
@@ -293,7 +303,7 @@ def dispatch(repo: str, workflow: str, ref: str | None, inputs: dict[str, str], 
 		"dispatched": True,
 		"workflow": workflow,
 		"ref": ref,
-		"error": f"no new {workflow} run appeared within {attempts * POLL_INTERVAL_SECONDS}s; check `gh run list --workflow={workflow}` before dispatching again",
+		"error": f"no new {workflow} run dispatched from {ref} appeared within {attempts * POLL_INTERVAL_SECONDS}s; check `gh run list --workflow={workflow}` before dispatching again",
 	}
 
 
