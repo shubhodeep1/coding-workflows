@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5874
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net (re-armed by the round 3 stage, see its report)   hand-back (re-armed by the round 3 stage)
+- Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net (re-armed by the round 4 stage, see its report)   hand-back (re-armed by the round 4 stage)
 - Last updated: 2026-10-01
-- Last note: review round 3 on PR #5874: the consensus finding and its two companions fixed (a PR-state rate-limit wait that slept now goes back to the PR-state read, so a run that completed during the wait never skips `pr_closed_during_retry`; the owed-read flag is cleared before that wait so the loop stays finite; AD-10).
+- Last note: review round 4 on PR #5874: the consensus finding fixed (a completed run ends the Phase 4b wait only after a PR-state read in the same poll that was not rate-limited; a zero wait at a deadline no longer lets a completed run skip `pr_closed_during_retry`, and the step fails closed with `retry_timeout` when the PR state stays limited to the deadline; AD-11).
 
 ## Phases
-1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 3; interventions: 0 (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
+1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 4; interventions: 0 (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
    - [x] `gh_api_with_retry` returns `GH_API_RATE_LIMITED_RC` (75) on a rate-limited attempt without the short retries
    - [x] `fetch_pr_state` reports `rate_limited` separately from `unknown`
    - [x] `phase4b_rate_limit_wait_seconds` derives the wait from `GET /rate_limit`, capped at the deadline
@@ -24,6 +24,7 @@
    - [x] review round 1: every read in the poll loop (PR state, post-dispatch run list, pinned run status) waits out a rate limit (`phase4b_wait_out_rate_limit`)
    - [x] review round 2: a wait that slept is followed by one read before the next 15s poll sleep or deadline check (`RETRY_READ_AFTER_RATE_LIMIT_WAIT`)
    - [x] review round 3: a PR-state wait that slept is followed by a PR-state read, not a run read (`PR_STATE_RATE_LIMIT_READ_OWED`)
+   - [x] review round 4: a completed run ends the loop only after a PR-state read in that poll that was not rate-limited (`RETRY_RUN_COMPLETION_ACCEPTED`)
    - Done when: the plan's Phase 1 "done" condition holds.
 
 ## Conformance
@@ -48,11 +49,13 @@
 - AD-8 [phase 1/1 — review round 1, 2026-10-01] Should the post-dispatch run-list read wait out a rate limit, given the 90-second registration window? — Picked: A — yes, the same wait as every other poll-loop read, capped at the registration deadline. Alternatives: B — wait only on the pinned-run status read and keep re-reading the run list every 15 s; C — extend the registration window by the wait. Why: GitHub documents a minimum 60 s wait for secondary limits and re-reading a limited endpoint can prolong it; AD-6 keeps the window fixed, so a sustained limit still fails closed with `retry_dispatch_failed`. Applied in: PR #5874. Status: pending review
 - AD-9 [phase 1/1 — review round 2, 2026-10-01] How should the loop make sure a rate-limit wait that ends at (or within 15s of) a deadline is followed by a read? — Picked: A — a wait that slept owes one read: the loop skips its next 15s poll sleep and lets that read through the registration-window and retry-deadline checks; a zero wait (deadline already reached) owes nothing. Alternatives: B — cap every wait 15s short of the deadline; C — reject the finding. Why: B still loses the read when the limit clears in the last 15s and shortens every wait; A adds at most one read per deadline and keeps the loop finite. Applied in: PR #5874. Status: pending review
 - AD-10 [phase 1/1 — review round 3, 2026-10-01] After a rate-limited PR-state read has waited, which read comes next? — Picked: A — the PR-state read again (`continue` to the loop top), clearing the owed-read flag before the wait and, on a zero wait, restoring a read an earlier wait owed so the registration-window run-list read is never lost. Alternatives: B — keep falling through to the run read and re-check the PR state only before breaking on a completed run; C — reject the finding as unchanged from the old `unknown` handling. Why: a wait can now last up to the whole deadline, so a PR-state read taken before it is stale; A is the smallest fail-closed change and keeps one loop exit, and it departs from the plan's Approach ("falls through to the run read in the same iteration") only after a wait that slept. Applied in: PR #5874. Status: pending review
+- AD-11 [phase 1/1 — review round 4, 2026-10-01] When a zero wait at a deadline falls through to the run reads and the run has completed, what ends the loop? — Picked: A — a completed run ends the loop only after a PR-state read in the same poll that was not rate-limited; otherwise the loop keeps polling, and if the deadline has passed it fails closed with `retry_timeout` (a post-loop check on `RETRY_RUN_COMPLETION_ACCEPTED`, with its own error line). Alternatives: B — end the loop at once on any zero-wait PR-state read (`retry_timeout`, or `retry_dispatch_failed` in the registration window); C — reject the finding as the plan's accepted risk. Why: B would drop the run-list read at the window end that round 3 (AD-10) kept; A keeps every earlier read guarantee, keeps the loop finite, and never proceeds to attempt 2 on a PR whose state stayed unread. Applied in: PR #5874. Status: pending review
 
 ## Lessons
 - [source:intervention] When a helper starts returning a distinct exit code for a failure class, audit every caller in the same loop, not only the one the incident hit: a caller that keeps treating the new code as a generic failure silently skips the new handling. (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] When a poll loop gains a variable-length wait (rate limit, backoff), make the read that follows the wait run before the loop's fixed poll sleep and its deadline checks; otherwise a wait capped at a deadline is never followed by the read it waited for. (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] A long wait inside a poll loop makes every guard checked before it stale: after the wait, go back to the loop top so the guards run again before any later read can end the loop, and clear a carried-over "read owed" flag before the wait so a zero wait cannot keep the loop alive. (files: .github/workflows/test-and-mark-stable.yml)
+- [source:intervention] In a poll loop that waits on two reads, let the success exit check that the guard read in the same iteration actually answered; a guard read that was rate-limited at a deadline must not let the other read end the loop. (files: .github/workflows/test-and-mark-stable.yml)
 
 ## Notes
 - Issue mode: started by the Claude issue dispatcher (routine "PR dispatch: #5858", trigger trig_01Mjrhnyrr1MrJ7ar8r3ViaM) in session session_01KSbUQQrXpu9Y6S3y5WG4mb, permission mode auto.

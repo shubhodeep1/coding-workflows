@@ -2555,7 +2555,9 @@ jobs:
           # 15s poll sleep never crosses a deadline before that read. A
           # PR-state wait that slept is followed by a fresh PR-state read
           # before any run read, so a run that completed during the wait
-          # never ends the loop on a PR that closed meanwhile. If a
+          # never ends the loop on a PR that closed meanwhile. A completed
+          # run ends the loop only after a PR-state read in the same poll
+          # that was not rate-limited (RETRY_RUN_COMPLETION_ACCEPTED). If a
           # deadline expires first, the step still fails closed
           # (retry_dispatch_failed or retry_timeout below; issue #5858).
           PR_STATE_FAILURES=0
@@ -2565,6 +2567,7 @@ jobs:
           RETRY_RATE_LIMIT_WAITS=0
           RETRY_READ_RC=0
           RETRY_READ_AFTER_RATE_LIMIT_WAIT=0
+          RETRY_RUN_COMPLETION_ACCEPTED=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ] || [ "${RETRY_READ_AFTER_RATE_LIMIT_WAIT}" -eq 1 ]; do
             if [ "${RETRY_READ_AFTER_RATE_LIMIT_WAIT}" -ne 1 ]; then
               sleep 15
@@ -2594,7 +2597,9 @@ jobs:
               fi
               # A zero wait (a deadline was reached) owes no new read: fall
               # through to the run reads, keeping a read an earlier wait
-              # owed so the registration-window check still allows it.
+              # owed so the registration-window check still allows it. A
+              # completed run read there does not end the loop, because
+              # this poll never confirmed the PR state (review round 4).
               RETRY_READ_AFTER_RATE_LIMIT_WAIT="${PR_STATE_RATE_LIMIT_READ_OWED}"
             elif [ "${PR_STATE}" = "unknown" ]; then
               PR_STATE_FAILURES=$((PR_STATE_FAILURES + 1))
@@ -2680,12 +2685,27 @@ jobs:
             RETRY_CONCL=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.conclusion // "null"')
             echo "  retry run #${RETRY_RUN_ID}: status=${RETRY_STATUS} conclusion=${RETRY_CONCL}"
             if [ "${RETRY_STATUS}" = "completed" ]; then
+              # A completed run ends the loop only after a PR-state read in
+              # this poll that was not rate-limited. A rate-limited one gets
+              # here only after a zero wait at a deadline, when the last
+              # confirmed state may predate a long wait, so the PR may have
+              # closed meanwhile (PR #5874 review round 4). Poll again; if
+              # the deadline has passed, the check below fails closed.
+              if [ "${PR_STATE}" = "rate_limited" ]; then
+                echo "::warning::Retry review run #${RETRY_RUN_ID} completed, but the PR #${PR_NUMBER} state read in this poll was rate-limited; re-reading the PR state before attempt 2"
+                continue
+              fi
+              RETRY_RUN_COMPLETION_ACCEPTED=1
               break
             fi
           done
 
-          if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
-            echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
+          if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ] || [ "${RETRY_RUN_COMPLETION_ACCEPTED}" -ne 1 ]; then
+            if [ -n "${RETRY_RUN_ID}" ] && [ "${RETRY_STATUS:-}" = "completed" ]; then
+              echo "::error::Retry review run #${RETRY_RUN_ID} completed, but PR #${PR_NUMBER}'s state could not be read after it before the ${EDITOR_RETRY_BUDGET_MINUTES}-minute deadline, so the step cannot confirm the PR is still open"
+            else
+              echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
+            fi
             if [ "${RETRY_RATE_LIMIT_WAITS}" -gt 0 ]; then
               echo "::error::GitHub reads were rate-limited ${RETRY_RATE_LIMIT_WAITS} time(s) during the retry wait, ${PR_STATE_RATE_LIMIT_WAITS} of them PR-state reads (see the rate-limit notices above)"
             fi

@@ -577,11 +577,15 @@ def test_phase4b_sustained_pr_state_limit_still_reads_the_registration_list_at_t
 	there is limited with nothing left to wait, so the loop falls through to
 	the run-list read that the earlier wait owed, instead of failing
 	`retry_dispatch_failed` without reading the list.
+
+	PR #5874 review round 4: the run it registers has completed, but that
+	poll never confirmed the PR state, so the loop keeps polling until a
+	PR-state read succeeds (+345s) before it goes on to attempt 2.
 	"""
 	result = _run_phase4b_retry(
 		pr_states=["open"],
 		run_statuses=["completed"],
-		limited_for=3600,
+		limited_for=300,
 		limit_kind="secondary",
 		dispatch=True,
 	)
@@ -589,9 +593,56 @@ def test_phase4b_sustained_pr_state_limit_still_reads_the_registration_list_at_t
 	assert _PHASE4B_REACHED in result["transcript"]
 	assert result["output"] == "", result["output"]
 	assert f"Registered retry review run #{_PHASE4B_DISPATCHED_RUN}" in result["transcript"]
-	assert result["transcript"].count("not counted as an unresolvable state") == 3
-	assert result["sleeps"] == [15, 60, 15, 0], result["sleeps"]
-	assert result["clock"] == _PHASE4B_START_EPOCH + 90
+	assert result["transcript"].count("not counted as an unresolvable state") == 7
+	assert result["transcript"].count("re-reading the PR state before attempt 2") == 1
+	# Waits to the window's end (+90s), the zero wait there, the run-list
+	# and run reads, then 60s waits (now capped at the 25-minute deadline)
+	# until the PR-state read at +345s succeeds.
+	assert result["sleeps"] == [15, 60, 15, 0, 15, 60, 60, 60, 60], result["sleeps"]
+	assert result["clock"] == _PHASE4B_START_EPOCH + 345
+	assert len(_calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_DISPATCHED_RUN}")) == 2
+
+
+def test_phase4b_completed_run_never_ends_the_wait_on_a_rate_limited_pr_state() -> None:
+	"""PR #5874 review round 4: a zero wait at the deadline proves nothing about the PR.
+
+	The PR-state read is rate-limited until past the 25-minute deadline (a
+	primary limit, so one wait runs to the deadline), and the adopted run has
+	completed. The PR-state read at the deadline is limited with nothing left
+	to wait and falls through to the run read, which sees `completed`. The
+	old loop broke there and went on to attempt 2 without confirming the PR
+	was still open; it must fail closed instead.
+	"""
+	result = _run_phase4b_retry(
+		pr_states=["open"],
+		run_statuses=["completed"],
+		limited_for=3600,
+	)
+	assert result["rc"] == 1, result["transcript"]
+	assert result["output"] == "status=retry_timeout\n", result["output"]
+	assert _PHASE4B_REACHED not in result["transcript"]
+	assert "re-reading the PR state before attempt 2" in result["transcript"]
+	assert f"Retry review run #{_PHASE4B_ADOPTED_RUN} completed, but PR #5823's state could not be read" in result["transcript"]
+	assert "did not complete within" not in result["transcript"]
+	assert result["sleeps"] == [15, _PHASE4B_DEADLINE - _PHASE4B_START_EPOCH - 15, 0], result["sleeps"]
+	assert len(_calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_ADOPTED_RUN}")) == 1
+
+
+def test_phase4b_completed_registered_run_fails_closed_when_the_pr_state_stays_limited() -> None:
+	"""The dispatch path keeps the same guard through to the 25-minute deadline."""
+	result = _run_phase4b_retry(
+		pr_states=["open"],
+		run_statuses=["completed"],
+		limited_for=3600,
+		limit_kind="secondary",
+		dispatch=True,
+	)
+	assert result["rc"] == 1, result["transcript"]
+	assert result["output"] == "status=retry_timeout\n", result["output"]
+	assert _PHASE4B_REACHED not in result["transcript"]
+	assert f"Registered retry review run #{_PHASE4B_DISPATCHED_RUN}" in result["transcript"]
+	assert f"Retry review run #{_PHASE4B_DISPATCHED_RUN} completed, but PR #5823's state could not be read" in result["transcript"]
+	assert result["clock"] == _PHASE4B_DEADLINE
 
 
 def test_phase4b_plain_pr_state_failures_still_trip_the_breaker() -> None:
@@ -811,6 +862,18 @@ def test_phase4b_rate_limit_branch_contract() -> None:
 	assert retry.index('if [ "${PR_STATE}" = "closed" ]; then') < retry.index(
 		'if [ "${PR_STATE}" = "rate_limited" ]; then'
 	)
+	# PR #5874 review round 4: a completed run ends the loop only after a
+	# PR-state read in that poll that was not rate-limited, and the post-loop
+	# check fails closed unless the loop accepted the completion.
+	completed = _slice_between(retry, 'if [ "${RETRY_STATUS}" = "completed" ]; then', "done\n")
+	assert re.search(
+		r'if \[ "\$\{PR_STATE\}" = "rate_limited" \]; then\s+echo "[^"\n]*"\s+continue\s+fi\s+'
+		r"RETRY_RUN_COMPLETION_ACCEPTED=1\s+break\s+fi\s*$",
+		completed,
+	), completed
+	assert retry.count("RETRY_RUN_COMPLETION_ACCEPTED=1") == 1
+	assert retry.index("RETRY_RUN_COMPLETION_ACCEPTED=0") < retry.index("while [")
+	assert '|| [ "${RETRY_RUN_COMPLETION_ACCEPTED}" -ne 1 ]; then' in retry
 
 
 def test_phase6_registers_once_and_polls_only_the_pinned_run() -> None:
