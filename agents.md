@@ -156,9 +156,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    the next sweep. Every hand-off step outcome is also written to the
    `claude-fixer-evidence-<run_id>-<run_attempt>` artifact (30 days);
    `scripts/review_claude_fixer_evidence.py verify` trusts it only after
-   checking the run's repository, caller ref (default branch, or the PR head
-   at the same commit and repository, with an unchanged caller workflow;
-   a run with no head repository is rejected), the library
+   checking the run's repository, caller ref (a head repository that is
+   this repository, never a fork or missing, on the default branch or the
+   PR head at the same commit with an unchanged caller workflow), the library
    `review_autofix.yml` ref (`main`, `stable`, or a release SHA pin), and the
    artifact's PR and head, because every comment marker is forgeable by
    the accounts that share the GH_PAT login. The marker still chooses which

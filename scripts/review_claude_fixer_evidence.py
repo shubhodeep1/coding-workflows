@@ -35,9 +35,10 @@ always exits 0 (2 only for a usage error). The run is accepted only when all
 of these hold:
 
 (a) ``repository.full_name`` is ``--repo``;
-(b) the caller is trusted: the run was started from the default branch, or
-    from ``--pr-head-ref`` of this repository (not a fork) at exactly
-    ``--head`` with a caller workflow file
+(b) the caller is trusted: ``head_repository.full_name`` is ``--repo`` (not
+    a fork, and not missing), and the run was started from the default
+    branch, or from ``--pr-head-ref`` at exactly ``--head`` with a caller
+    workflow file
     (``path``) the PR does not change (``--changed-files-file``, else one
     paginated ``GET /pulls/{n}/files``);
 (c) it ran the library review workflow: ``path`` is
@@ -291,13 +292,15 @@ def verify_evidence(
 	run_branch = str(run.get("head_branch") or "")
 	if not run_path:
 		return reject("run_path_unavailable")
+	# Both caller paths need a head of this repository: a fork branch named like the
+	# default branch is still fork code, and a missing head repository (a deleted
+	# fork) proves nothing about the caller, so fail closed.
+	head_repo = run.get("head_repository") if isinstance(run.get("head_repository"), dict) else {}
+	if str(head_repo.get("full_name") or "").lower() != repo.lower():
+		return reject("untrusted_caller_ref")
 	if run_branch == default_branch:
 		pass
 	elif pr_head_ref and run_branch == pr_head_ref and str(run.get("head_sha") or "") == head_sha:
-		# A missing head repository (a deleted fork) proves nothing about the caller: fail closed.
-		head_repo = run.get("head_repository") if isinstance(run.get("head_repository"), dict) else {}
-		if str(head_repo.get("full_name") or "").lower() != repo.lower():
-			return reject("untrusted_caller_ref")
 		changed = _changed_files(repo, pr, changed_files_file, api)
 		if changed is None:
 			return reject("pr_files_unavailable")
