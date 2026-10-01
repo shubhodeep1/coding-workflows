@@ -1281,6 +1281,19 @@ mode).
    carries `Fixes #N`; into any other branch, the final-merge stage closes the
    issue and labels it `ai:merged`. Verify-activation and `/deploy-activate`
    run only for projects based on the default branch.
+5. **Finished sessions are archived** (CLAUDE.md §26.I, issue #4887).
+   - A `/fix-claude-pr` fixer session archives itself when its PR merges or
+     closes.
+   - On every wake the pickup reads one `list_sessions` page and runs
+     `scripts/claude_session_janitor.py`. Across wakes it walks older pages
+     with a cursor, back 30 days. It archives:
+     - fixer and hold sessions whose PR merged or closed 2 hours ago or more;
+     - issue-start sessions whose issue is closed. A later stage session
+       does not count, because it may be one whose start failed (#5664);
+     - §26.D report sessions idle for 7 days.
+   - Sessions that are running, waiting on a permission prompt, or holding
+     an unanswered report question are left alone. So are checkers, stage
+     sessions, and operator sessions.
 
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without
