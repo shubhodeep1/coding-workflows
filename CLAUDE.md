@@ -2290,9 +2290,10 @@ This is an explicit carve-out from §0 and §2 (including §2's
   `.claude/settings.local.json`, or that lists a conflict (a `.claude/`
   file changed directly), is labelled `ai:claude-sync-approval` and merged
   only by the repository owner: the workflow never approves or merges it,
-  because hooks and settings are the guards that limit what sessions can
-  do, and `settings.json` lets every session run the scripts with its
-  GitHub access and no prompt (issue #5609). `review_autofix.yml` and
+  because hooks, scripts, and settings are all guard paths: hooks and
+  settings limit what sessions can do, and `settings.json` lets every
+  session run the scripts with its GitHub access and no prompt (issue
+  #5609). `review_autofix.yml` and
   the §26.H sweep skip sync PRs. CI fails a PR
   that moves `.claude/` ahead of its twin; the twin may be ahead while its
   sync PR is pending. A hook, script, or settings file may change only to the twin
