@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4867-close-permission-prompt-duplicates
 - Project branch: claude/implement-plan-issue-5809-duplicate-check-trusted-target-fix   Final PR: #5832 draft
 - Status: BLOCKED
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5862: twin sync (copy `workflow-templates/.claude/scripts/permission_prompts.py` into `.claude/scripts/` as a `[claude-twin-sync]` commit, then `/reclarify` on #5809)
+- Waiting on: PR #5862: twin sync, review round 1 (copy `workflow-templates/.claude/scripts/permission_prompts.py` into `.claude/scripts/` as a `[claude-twin-sync]` commit, then `/reclarify` on #5809)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01MXGEmTa7j2hQYy3jTst7MH (reused)   safety net none   hand-back none (trig_012ZLBFRK7wDbZtTc9MsLLcR and trig_01Qyq9XHY4vXEgeKoTuoZb58 deleted at review round 1; the stage after the twin sync re-arms the wait)
 - Last updated: 2026-10-01
-- Last note: phase 1 PR #5862 opened (twin only; 14 new cases fail on the base twin and pass after; hold claim posted); twin-sync blocker posted on #5809. Checker not armed: the resumed stage arms the wait on #5862.
+- Last note: first twin sync landed as 9a1bc89 (/reclarify option A). Review round 1 on 9a1bc89: one valid finding (the inline comment at `permission_prompts.py:943-944` called the `author_association` check a write-access check and its "only such a PR" pointed at the rejected PR), fixed in the twin; two findings rejected (changelog already names `tests/test_permission_prompt_duplicates.py`; the `.claude/` copy already matched the twin). Blocked again on the twin sync of that comment.
 
 ## Phases
-1. [ ] Phase 1 — trusted target and same-repository fix PR in `duplicate-check`   — protected paths: `.claude/scripts/permission_prompts.py` (edited through its `workflow-templates/.claude/` twin)   — PR #5862 open (waiting on twin sync); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — trusted target and same-repository fix PR in `duplicate-check`   — protected paths: `.claude/scripts/permission_prompts.py` (edited through its `workflow-templates/.claude/` twin)   — PR #5862 open (waiting on twin sync of review round 1); review rounds: 1; interventions: 0
    - `workflow-templates/.claude/scripts/permission_prompts.py`: target `author_association` trusted; fix PR same-repository head and trusted author; target evidence `null` when untrusted; docstrings
    - `tests/test_permission_prompt_duplicates.py`: trusted fixtures, failing cases for each new check, five-read budget kept
    - `CLAUDE.md` §23.I condition 2, `agents.md` "Duplicate close", `changelog.d/5809-duplicate-check-trusted-target-and-fix.md` [new]
@@ -39,7 +39,9 @@
 - AD-5 [plan, 2026-10-01] Edit `.claude/scripts/permission_prompts.py` directly, or twin-first? — Picked: A — twin-first under the interim automatic default, with a hold claim and the twin-sync blocker on #5809. Alternatives: B — ask how to run the phase. Why: coding-workflows has `workflow-templates/.claude/` and the plan does not require a watched session. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] `author_association` in `OWNER`/`MEMBER`/`COLLABORATOR` is a trust policy, not proof of write access (a member or collaborator can hold read or triage rights only); describe it that way in comments and docs. (files: workflow-templates/.claude/scripts/permission_prompts.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-01)
+- Review round 1 (2026-10-01, session_01PnXcbxf3thESKMAr71wzhB): the phase-1 twin sync 9a1bc89 resolved the first blocker; the round's comment fix edits the twin only, so a second twin sync is needed (hold claim + blocker on #5809). The project-branch sync merge of the issue base was denied by the Auto-mode classifier ([Modify Shared Resources]); it was a no-op (the project branch already contains every base commit).
 - Security pass: skip (ai:security: automation-produced issue) — `security_pass_skip.py` reason `ai:security: created and labelled by the issue automation`.
