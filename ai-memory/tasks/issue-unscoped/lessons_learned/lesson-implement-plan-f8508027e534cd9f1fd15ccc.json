@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T04:01:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Live claude.ai session titles drift from the documented formats (`Issue #N \u2014 implement`, fixers without a repository, `#N \u00b7 ` prefixes, project checkers renamed with a `PR #N \u2014 ` prefix), and a saved `list_sessions` result is wrapped in the harness's untrusted-data text; any script that selects sessions by title must parse the wrapper and match the live variants without catching a renamed checker.",
+  "phase": "implement_plan",
+  "pr_number": 5215,
+  "record_id": "lesson-implement-plan-f8508027e534cd9f1fd15ccc",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:claude-fixer-unattended-convergence",
+    "file:.claude/scripts/stale_sessions.py"
+  ]
+}

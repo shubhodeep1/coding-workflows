@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T04:01:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Reviewers repeatedly flag a `review_autofix.yml` step for not setting `PR_NUMBER` when it inherits it from the `codex-agent` job env; reject with the job-level env line and the contract test that pins it, and do not add a redundant step-level copy.",
+  "phase": "implement_plan",
+  "pr_number": 5215,
+  "record_id": "lesson-implement-plan-53734497e2ba998851e21e53",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-fixer-unattended-convergence",
+    "file:.github/workflows/review_autofix.yml",
+    "file:tests/test_review_autofix_claude_fixer_mode.py"
+  ]
+}

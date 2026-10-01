@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T04:01:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Skipping an unparseable or malformed candidate line still lets a stray valid line stand in for a truncated real payload; a fallback parser must fail on any line that could be the real result but does not validate, and skip only lines that cannot be it.",
+  "phase": "implement_plan",
+  "pr_number": 5215,
+  "record_id": "lesson-implement-plan-a2e17274a6cbc02bbe9a9afb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-fixer-unattended-convergence",
+    "file:.claude/scripts/stale_sessions.py"
+  ]
+}

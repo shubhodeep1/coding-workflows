@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T04:01:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fallback that scans wrapper text for a JSON payload must accept only a line that passes the payload's shape check and reject more than one match, or a stray `[]` line reads as an empty page and the run silently does nothing.",
+  "phase": "implement_plan",
+  "pr_number": 5215,
+  "record_id": "lesson-implement-plan-d3e6a0f554a9395e3dfbab72",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-fixer-unattended-convergence",
+    "file:.claude/scripts/stale_sessions.py"
+  ]
+}

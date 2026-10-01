@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T04:01:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A project-branch sync with main that conflicts in `.claude/**` cannot be finished by an unattended stage: resolve it on a side branch with the `.claude/**` files taken from the twins, and have the supervising session copy the twins and fast-forward the project branch; a direct push of the sync to the project branch can also be refused by the Auto-mode classifier as \"Auto-Mode Bypass\" (#5018).",
+  "phase": "implement_plan",
+  "pr_number": 5215,
+  "record_id": "lesson-implement-plan-11f0a3a3343274bb525e2154",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:claude-fixer-unattended-convergence",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
