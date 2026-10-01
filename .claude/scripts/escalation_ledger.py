@@ -44,7 +44,7 @@ Subcommands:
   allowed --log <path> --stop <id> --fingerprint <fp>
       Parse `## Escalations` and print the choices not yet used for that
       stop and fingerprint, in the order budget, descope, close.
-  record --log <path> --stop <id> --fingerprint <fp> --choice <c> (--why <text> | --why-file <path>) [--date YYYY-MM-DD]
+  record --log <path> --stop <id> --fingerprint <fp> --choice <c> (--why <text> | --why-file <path>) [--evidence <json> | --evidence-file <path>] [--date YYYY-MM-DD]
       Print the `ES-<n>` line to append, with `n` one more than the highest
       id in the log. It never writes a file: the session adds the line to
       the log with its Edit tool. `--why-file` reads the rationale from a
@@ -53,12 +53,18 @@ Subcommands:
       run before this script sees it). A `budget` or `descope` already used for
       that stop and fingerprint is refused, and so is a PR-scoped stop
       whose reason does not start with `PR #<N>: ` (the intervention cap
-      counts an entry only for the PR its `why` names).
+      counts an entry only for the PR its `why` names). The evidence the
+      fingerprint was computed from is optional, except for a PR-scoped
+      stop, which needs it: when given, its fingerprint must equal
+      `--fingerprint`, and a PR-scoped reason's `<N>` must equal its `pr`,
+      so an entry can never name one PR while its fingerprint is another's.
 
 Output is one JSON line. Exit 0 on success; 1 on bad arguments (an unknown
 stop id, a malformed fingerprint or evidence, a PR-scoped stop without
-`pr` or without the `PR #<N>: ` prefix on its reason, not exactly one
-readable `--why` / `--why-file`, a used choice); 2 when the
+`pr` or without the `PR #<N>: ` prefix on its reason, a PR-scoped
+`record` without evidence or whose reason names another PR than the
+evidence, `record` evidence that does not give `--fingerprint`, not
+exactly one readable `--why` / `--why-file`, a used choice); 2 when the
 log cannot be read or an `## Escalations` line is malformed (a line that
 starts `- ` but does not match the format, a date that is not a real
 calendar date, or a repeated `ES-<n>` id). A log without an
@@ -109,7 +115,7 @@ PR_SCOPED_STOP_IDS = ("intervention-cap", "fix-check-defective")
 PR_NUMBER_RE = re.compile(r"^#?([1-9][0-9]*)$")
 # A PR-scoped entry's `why` names its PR first, so the intervention cap of
 # one PR counts only the rounds granted for that PR.
-WHY_PR_PREFIX_RE = re.compile(r"^PR #[1-9][0-9]*: \S")
+WHY_PR_PREFIX_RE = re.compile(r"^PR #([1-9][0-9]*): \S")
 
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{12}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -265,7 +271,15 @@ def allowed_choices(entries: list[dict], stop: str, fp: str) -> list[str]:
 	return [choice for choice in CHOICES if choice == "close" or choice not in used]
 
 
-def record_line(entries: list[dict], stop: str, fp: str, choice: str, why: str, date: str) -> dict:
+def record_line(
+	entries: list[dict], stop: str, fp: str, choice: str, why: str, date: str, evidence: object = None
+) -> dict:
+	"""The `ES-<n>` line for one decision.
+
+	`evidence` is what the fingerprint was computed from (None when not
+	given). A PR-scoped stop needs it, so the PR its reason names is checked
+	against the PR its fingerprint covers.
+	"""
 	if choice not in CHOICES:
 		raise UsageError(f"unknown choice {choice!r}; expected one of {list(CHOICES)}")
 	if choice not in allowed_choices(entries, stop, fp):
@@ -273,8 +287,25 @@ def record_line(entries: list[dict], stop: str, fp: str, choice: str, why: str, 
 	why = " ".join(why.split())
 	if not why:
 		raise UsageError("--why must not be empty")
-	if stop in PR_SCOPED_STOP_IDS and not WHY_PR_PREFIX_RE.match(why):
+	why_pr = WHY_PR_PREFIX_RE.match(why)
+	if stop in PR_SCOPED_STOP_IDS and not why_pr:
 		raise UsageError(f"stop {stop!r} is about one PR: --why must start with 'PR #<N>: ', got {why!r}")
+	if evidence is None:
+		if stop in PR_SCOPED_STOP_IDS:
+			raise UsageError(
+				f"stop {stop!r} is about one PR: pass the evidence the fingerprint was computed from "
+				"(--evidence-file), so the PR in --why can be checked against it"
+			)
+	else:
+		if fingerprint(stop, evidence) != fp:
+			raise UsageError(f"the evidence does not give fingerprint {fp}: pass the evidence it was computed from")
+		if stop in PR_SCOPED_STOP_IDS:
+			evidence_pr = normalise_evidence(evidence)[EVIDENCE_PR_KEY]
+			if why_pr.group(1) != evidence_pr:
+				raise UsageError(
+					f"stop {stop!r} is about PR #{evidence_pr} (the evidence's pr): "
+					f"--why must start with 'PR #{evidence_pr}: ', got {why!r}"
+				)
 	if not _is_calendar_date(date):
 		raise UsageError(f"--date must be a real calendar date as YYYY-MM-DD, got {date!r}")
 	next_id = max((entry["id"] for entry in entries), default=0) + 1
@@ -282,7 +313,10 @@ def record_line(entries: list[dict], stop: str, fp: str, choice: str, why: str, 
 	return {"id": f"ES-{next_id}", "line": line}
 
 
-def _load_evidence(args: argparse.Namespace) -> object:
+def _load_evidence(args: argparse.Namespace, required: bool = True) -> object:
+	"""The parsed evidence; None when it is optional and neither flag was given."""
+	if args.evidence is None and args.evidence_file is None and not required:
+		return None
 	if (args.evidence is None) == (args.evidence_file is None):
 		raise UsageError("pass exactly one of --evidence or --evidence-file")
 	if args.evidence_file is not None:
@@ -327,6 +361,8 @@ def build_parser() -> argparse.ArgumentParser:
 	record_cmd.add_argument("--choice", required=True)
 	record_cmd.add_argument("--why")
 	record_cmd.add_argument("--why-file")
+	record_cmd.add_argument("--evidence")
+	record_cmd.add_argument("--evidence-file")
 	record_cmd.add_argument("--date")
 	return parser
 
@@ -346,7 +382,7 @@ def run(argv: list[str] | None = None, today: dt.date | None = None) -> dict:
 			"used": used_choices(entries, stop, fp),
 		}
 	date = args.date or (today or dt.datetime.now(dt.timezone.utc).date()).isoformat()
-	return record_line(entries, stop, fp, args.choice, _load_why(args), date)
+	return record_line(entries, stop, fp, args.choice, _load_why(args), date, _load_evidence(args, required=False))
 
 
 def main(argv: list[str] | None = None, today: dt.date | None = None) -> int:
