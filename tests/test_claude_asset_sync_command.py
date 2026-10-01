@@ -437,6 +437,11 @@ def test_failed_fetch_stops_instead_of_checking_a_stale_ref():
 	section = _section(_flat(TWIN_DIR / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
 	step1 = _section(section, "1. `git fetch origin <default>`", "2. **Stale?**")
 	assert "Each fetch must succeed." in step1
+	# PR #5280 final-merge review round 1 (head e06795d6fdc1): `;`-chained
+	# fetches report only the last exit status.
+	assert "Run each fetch as its own Bash call and read its exit status" in step1
+	assert "chained with `;` the exit status is the last command's" in step1
+	assert "`git fetch origin <default>`;" not in step1
 	assert "A failed fetch is therefore a stop with the caller's blocker as in step 5, naming the failed fetch and its error line" in step1
 	assert "never run step 2 against a ref this step did not refresh" in step1
 	fixer = _section(_flat(TWIN_DIR / "fix-claude-pr.md"), "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
