@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_update_workflows_guardrails.py:654\u2013658, 686\u2013688 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Two tests expect warnings naming files beneath symlinked directories, but the reviewed-tree `find` does not descend into directory symlinks and emits warnings naming the symlinks instead.\n  WHY: The assertions for `hooks/twin_dir/x.py` and `hooks/scripts_dir/s.py` fail because the step emits `hooks/twin_dir` and `hooks/scripts_dir`; two reviewers dispute this finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_update_workflows_guardrails.py\n  Line or code reference: `test_claude_sync_skips_a_reviewed_guard_that_resolves_outside_the_reviewed_tree` (lines 654\u2013658) and `test_claude_sync_skips_a_reviewed_guard_that_resolves_to_a_non_guard_file` (lines 686\u2013688); `.github/workflows/update_workflows.yml` lines 428\u2013439 and 468\n  severity=high | confidence=5\n  PROBLEM: The tests expect warnings for files beneath symlinked directories, but the reviewed-tree `find` does not follow directory symlinks. It yields the symlink itself; the subsequent `-f` check rejects it and logs a warning for `hooks/twin_dir` or `hooks/scripts_dir`, not the expected `.../x.py` or `.../s.py`.\n  WHY: Both test assertions search for warning text naming the nested file, which the step never emits. These tests fail with `AssertionError` in CI.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_update_workflows_guardrails.py\n  Line or code reference: test_claude_sync_skips_a_reviewed_guard_that_resolves_outside_the_reviewed_tree (assertion for hooks/twin_dir/x.py) and test_claude_sync_skips_a_reviewed_guard_that_resolves_to_a_non_guard_file (assertion for hooks/scripts_dir/s.py)\n  severity=high | confidence=5\n  PROBLEM: The second-pass `find` uses `\\( -type f -o -type l \\)` without `-L`, so it lists the directory symlink itself (e.g. `hooks/twin_dir`) but never descends into it. The rel recorded in the warning is the symlink name, not the file inside the target directory. The test asserts warnings for `hooks/twin_dir/x.py` and `hooks/scripts_dir/s.py`, but the step emits warnings for `hooks/twin_dir` and `hooks/scripts_dir` respectively.\n  WHY: pytest raises AssertionError on the `hooks/twin_dir/x.py` and `hooks/scripts_dir/s.py` assertion lines because those strings never appear in stdout. The actual stdout contains `hooks/twin_dir` and `hooks/scripts_dir` instead.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fd57bf15401f38276986dc47a059f2033135fb60281f386f7bbc23acf21b51ab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5651,
+    "run_id": "36896681835",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36896681835",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001174608_df2365278d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5651,
+    "run_id": "36896681835"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T17:46:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
