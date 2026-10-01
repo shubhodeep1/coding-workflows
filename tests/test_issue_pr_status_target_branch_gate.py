@@ -692,42 +692,100 @@ def test_unmerged_close_still_finalizes_as_closed() -> None:
 # `orchestrator/project-<T>` in this repository.
 
 TRACKING_BODY = "Project tracker."
-COMPLETION_PR_BODY = f"Squash merge of orchestrator project.\n\nhttps://github.com/{REPOSITORY}/issues/5\n"
+# The body `ensure_eager_final_pr` (scripts/orchestrate_poll_process.sh) gives
+# the completion PR: it names the tracker only as `Refs #<T>`, which the
+# discovery never reads as a link (#1469, CLAUDE.md §19).
+COMPLETION_PR_BODY = (
+	"Squash merge of orchestrator project #5.\n\n"
+	"This PR is created eagerly by the self-healing pipeline so that `main` <-> "
+	"`orchestrator/project-5` drift can be resolved continuously rather than only at finalize time.\n\n"
+	"Refs #5"
+)
+# A completion PR whose body also links the tracker (a repo-scoped URL).
+LINKED_COMPLETION_PR_BODY = f"Squash merge of orchestrator project.\n\nhttps://github.com/{REPOSITORY}/issues/5\n"
 
 
 def test_tracking_issue_completion_pr_finalizes_lineage() -> None:
-	"""The completion PR finalizes the tracking issue's lineage as `merged` and
-	still never labels or closes it. Exercises both payload sources."""
-	for closing_refs in ([5], []):
+	"""The completion PR finalizes the tracking issue's lineage as `merged`
+	exactly once and never labels or closes it: with the production
+	`Refs #<T>` body (the tracker is derived from the verified head and is not
+	a linked issue), and with a body or closing reference that also links it
+	(both payload sources)."""
+	cases = [
+		# (body, closing refs, tracker is a linked issue)
+		(COMPLETION_PR_BODY, [], False),
+		(LINKED_COMPLETION_PR_BODY, [], True),
+		(LINKED_COMPLETION_PR_BODY, [5], True),
+	]
+	for body, closing_refs, linked in cases:
 		gate = _run_step(
 			issues={5: {"body": TRACKING_BODY, "labels": ["ai:orchestrator-tracking"]}},
 			pr_base_ref="main",
-			pr_body=COMPLETION_PR_BODY,
+			pr_body=body,
 			closing_refs=closing_refs,
 			pr_head_ref="orchestrator/project-5",
 		)
-		assert gate["labels"] == [] and gate["closed"] == [], (closing_refs, gate)
-		assert "Skipping orchestrator-tracking issue #5" in gate["stdout"], gate["stdout"]
-		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [5], (closing_refs, gate["env"])
+		assert gate["labels"] == [] and gate["closed"] == [], (body, closing_refs, gate)
+		assert (
+			"PR #4748 is orchestrator project #5's completion PR (orchestrator/project-5 from "
+			f"{REPOSITORY} merged into main); queuing tracking issue #5's lineage finalization."
+		) in gate["stdout"], gate["stdout"]
+		assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == ([5] if linked else []), (body, closing_refs, gate["env"])
+		assert ("Skipping orchestrator-tracking issue #5" in gate["stdout"]) is linked, gate["stdout"]
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [5], (body, closing_refs, gate["env"])
 		lineage = _run_lineage_step(gate["env"])
-		assert lineage["finalized"] == [(5, "merged")], (closing_refs, lineage)
+		assert lineage["finalized"] == [(5, "merged")], (body, closing_refs, lineage)
+
+
+def test_completion_pr_head_alone_never_finalizes_unverified_prs() -> None:
+	"""The head-derived path (production `Refs #<T>` body, no linked issue)
+	applies the same completion-PR rule: a fork head, a non-default base, an
+	unmerged close, or a head that is not exactly `orchestrator/project-<T>`
+	queues nothing and never labels or closes anything."""
+	cases = [
+		# (base, head, head repo, merged, description)
+		("main", "orchestrator/project-5", "attacker/widgets", True, "fork head named like the completion branch"),
+		("main", "orchestrator/project-5", "", True, "empty head repository"),
+		("claude/implement-plan-other", "orchestrator/project-5", REPOSITORY, True, "completion head into a non-default base"),
+		("main", "orchestrator/project-5", REPOSITORY, False, "completion PR closed without merging"),
+		("main", "orchestrator/project-5-extra", REPOSITORY, True, "suffixed head"),
+		("main", "x/orchestrator/project-5", REPOSITORY, True, "prefixed head"),
+		("main", "orchestrator/project-05", REPOSITORY, True, "zero-padded number"),
+	]
+	for base, head, head_repo, merged, description in cases:
+		gate = _run_step(
+			issues={5: {"body": TRACKING_BODY, "labels": ["ai:orchestrator-tracking"]}},
+			pr_base_ref=base,
+			pr_body=COMPLETION_PR_BODY,
+			pr_merged=merged,
+			pr_head_ref=head,
+			pr_head_repo=head_repo,
+		)
+		assert gate["labels"] == [] and gate["closed"] == [], (description, gate)
+		assert _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]) == [], (description, gate["env"])
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], (description, gate["env"])
+		assert "completion PR" not in gate["stdout"], (description, gate["stdout"])
+		lineage = _run_lineage_step(gate["env"], pr_merged=merged)
+		assert lineage["finalized"] == [], (description, lineage)
+		assert "No linked issues found; skipping lineage finalization." in lineage["stdout"], (description, lineage["stdout"])
 
 
 def test_tracking_issue_lineage_skipped_for_non_completion_prs() -> None:
 	"""The #5619 finding: any other PR that links a tracking issue leaves its
 	lineage alone, whatever it merged into, and so does an unmerged close."""
 	cases = [
-		# (base, head, head repo, merged, description)
-		("orchestrator/project-5", "ai/issue-10", REPOSITORY, True, "child merged into the project branch"),
-		("main", "feature/unrelated", REPOSITORY, True, "unrelated default-branch merge"),
-		("claude/implement-plan-other", "feature/unrelated", REPOSITORY, True, "merge into an unrelated branch"),
-		("main", "orchestrator/project-5", "attacker/widgets", True, "fork head named like the completion branch"),
-		("main", "orchestrator/project-5", "", True, "empty head repository"),
-		("claude/implement-plan-other", "orchestrator/project-5", REPOSITORY, True, "completion head into a non-default base"),
-		("main", "orchestrator/project-6", REPOSITORY, True, "another project's completion PR"),
-		("main", "orchestrator/project-5", REPOSITORY, False, "completion PR closed without merging"),
+		# (base, head, head repo, merged, description, lineage queued)
+		("orchestrator/project-5", "ai/issue-10", REPOSITORY, True, "child merged into the project branch", []),
+		("main", "feature/unrelated", REPOSITORY, True, "unrelated default-branch merge", []),
+		("claude/implement-plan-other", "feature/unrelated", REPOSITORY, True, "merge into an unrelated branch", []),
+		("main", "orchestrator/project-5", "attacker/widgets", True, "fork head named like the completion branch", []),
+		("main", "orchestrator/project-5", "", True, "empty head repository", []),
+		("claude/implement-plan-other", "orchestrator/project-5", REPOSITORY, True, "completion head into a non-default base", []),
+		# Project #6's completion PR finalizes #6 (from its head), never the #5 it links.
+		("main", "orchestrator/project-6", REPOSITORY, True, "another project's completion PR", [6]),
+		("main", "orchestrator/project-5", REPOSITORY, False, "completion PR closed without merging", []),
 	]
-	for base, head, head_repo, merged, description in cases:
+	for base, head, head_repo, merged, description, queued in cases:
 		gate = _run_step(
 			# #10 is the child an `ai/issue-10` head links through its branch name.
 			issues={5: {"body": TRACKING_BODY, "labels": ["ai:orchestrator-tracking"]}, 10: {"body": "Standalone issue.", "labels": []}},
@@ -740,15 +798,16 @@ def test_tracking_issue_lineage_skipped_for_non_completion_prs() -> None:
 		)
 		assert gate["labels"] == [] and gate["closed"] == [], (description, gate)
 		assert 5 in _issue_list(gate["env"]["LINKED_ISSUE_NUMBERS"]), (description, gate["env"])
-		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == [], (description, gate["env"])
+		assert _issue_list(gate["env"]["LINEAGE_FINALIZE_ISSUE_NUMBERS"]) == queued, (description, gate["env"])
 		assert (
 			f"PR #4748 is not orchestrator-tracking issue #5's completion PR "
 			f"(merged {'true' if merged else 'false'}, base {base}, head {head}, head repo {head_repo or 'none'}; "
 			f"expected a merge of orchestrator/project-5 from {REPOSITORY} into main); skipping its lineage finalization."
 		) in gate["stdout"], (description, gate["stdout"])
 		lineage = _run_lineage_step(gate["env"], pr_merged=merged)
-		assert lineage["finalized"] == [], (description, lineage)
-		assert '"reason":"no_accepted_issues"' in lineage["stdout"], (description, lineage["stdout"])
+		assert lineage["finalized"] == [(num, "merged") for num in queued], (description, lineage)
+		if not queued:
+			assert '"reason":"no_accepted_issues"' in lineage["stdout"], (description, lineage["stdout"])
 
 
 def test_tracking_issue_completion_pr_uses_the_payload_default_branch() -> None:
@@ -1078,6 +1137,7 @@ if __name__ == "__main__":
 	test_mixed_link_finalizes_only_the_accepted_issue()
 	test_unmerged_close_still_finalizes_as_closed()
 	test_tracking_issue_completion_pr_finalizes_lineage()
+	test_completion_pr_head_alone_never_finalizes_unverified_prs()
 	test_tracking_issue_lineage_skipped_for_non_completion_prs()
 	test_tracking_issue_completion_pr_uses_the_payload_default_branch()
 	test_no_linked_issue_exports_an_empty_lineage_list()

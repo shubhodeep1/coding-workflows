@@ -25,7 +25,7 @@ Security pass: skip (ai:security: automation-produced issue)
 
 ## Non-goals
 
-- Making the orchestrator's completion PR discoverable when its body only says `Refs #<T>` (AD-4). Today the PR's `Refs` line is not a link this step reads, so the tracking issue's lineage is simply not finalized from it; that stays so.
+- Making the orchestrator's completion PR's `Refs #<T>` a linked issue (AD-4): `<T>` never enters the label/close loop. The final PR's review round 1 added a lineage-only path instead: `<T>` is derived from the verified completion head and added to `LINEAGE_FINALIZE_ISSUE_NUMBERS` alone (AD-7).
 - Any change to standalone or managed-child issues, to the label/close gate, to the Telegram alert or cleanup steps (`LINKED_ISSUE_NUMBERS`), or to `close_merged_issues_sweep`.
 - Any change to `scripts/ai_memory*.py` or `scripts/memory_helpers.sh`.
 
@@ -90,7 +90,7 @@ One phase. Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: `/imple
 
 ## Risks & Mitigations
 
-- A tracking issue's lineage is never finalized when its completion PR only carries `Refs #<T>` (today's final PR body). ACCEPTED — lineage is fail-open AI memory; the orchestrator's state machine does not read it, and a missing `merged` state only leaves the project out of the learnings sample (AD-4).
+- A completion PR that only carries `Refs #<T>` (today's final PR body) links no issue. MITIGATED by AD-7: `<T>` is derived from the verified `orchestrator/project-<T>` head for the lineage list only, so its lineage is finalized and its labels and state are untouched.
 - A standalone issue whose classification lookups both failed no longer gets its lineage finalized on a default-branch merge or an unmerged close. ACCEPTED — needs two API failures in one run; fail closed per §1 (AD-3).
 - A repo whose orchestrator integration branch is not named `orchestrator/project-<T>`. Mitigation: `orchestrate.yml` names every integration branch this way, and `issue_body_orchestrator_project_branch` in `scripts/gh_helpers.sh` already relies on the same name.
 
@@ -112,6 +112,7 @@ No flag and no new variable. The reusable workflow ships to consumer repos throu
 - AD-4 [plan, 2026-09-30] Should the step also derive the tracking issue from a completion PR's `orchestrator/project-<T>` head, so a body with only `Refs #<T>` still finalizes it? — Picked: A — no. Alternatives: B — yes, add `<T>` to the linked issues from the head ref. Why: §5; it adds a new linked-issue path into the label/close loop, which is out of scope for a tampering fix. Applied in: no code change. Status: pending review
 - AD-5 [plan, 2026-09-30] What happens to the existing tests that assert the old tracking and unclassified lineage behaviour? — Picked: A — add accurately named tests and keep the old function names as aliases that call them (§6). Alternatives: B — rewrite the bodies under the old names; C — delete the old tests. Why: §6 forbids removal and repurposing; aliases keep names callable without misleading readers. Applied in: phase 1 PR. Status: pending review
 - AD-6 [phase 1/1, 2026-09-30] The REST fallback appends to `TRACKING_ISSUES` / `MANAGED_ISSUES` with `+=` after the payload list, which has no trailing newline, so `5` plus a failed lookup of `10` became `510` and tracking issue #5 was labelled `ai:merged` and closed on a default-branch merge (reproduced). Fix it in this phase? — Picked: A — yes, merge with the existing `merge_issue_number_list` and add a regression test. Alternatives: B — leave it and file a separate issue. Why: §1; it defeats the tracking skip this phase's gate relies on, and it is the #2760 incident class. Applied in: phase 1 PR. Status: pending review
+- AD-7 [final-merge — review round 1, 2026-10-01] The final PR's reviewer panel (6 of 6 reviewers, round 1 on head f11e889) found the completion-PR gate unreachable in production: the orchestrator's completion PR body says only `Refs #<T>`, so `<T>` is never a linked issue and its lineage is never finalized, and the positive-path test used a URL body that production never produces. How should the round answer it? — Picked: A — derive `<T>` from the verified completion head (merged into the default branch from `orchestrator/project-<T>` in this repository) and add it to `LINEAGE_FINALIZE_ISSUE_NUMBERS` only, never to the linked issues; test with the production body. Alternatives: B — reject the findings under AD-4 and keep the path unreachable; C — change `ensure_eager_final_pr` to also link the tracker with a repo-scoped URL. Why: A meets the issue's recommendation with the same trust rule as AD-1, zero API calls, and labels/state/alerts untouched (AD-4's concern was the label/close loop, which A never enters); B leaves dead code and needs a verdict bot this repo has not configured; C feeds `<T>` into the label/close loop and only helps PRs opened after it ships. Applied in: PR #5632 (review round 1). Status: pending review
 
 ## Notes
 

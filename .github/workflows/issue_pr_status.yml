@@ -315,7 +315,9 @@ jobs:
             echo "EOF" >> "$GITHUB_ENV"
             echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"
             echo "LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
-            printf '%s\n' "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" >> "$GITHUB_ENV"
+            # Deduplicated: a completion PR that also links its tracking
+            # issue adds it twice (#5619), and it is finalized once.
+            printf '%s\n' "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" | awk 'NF && !seen[$0]++' >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
           }
 
@@ -418,6 +420,24 @@ jobs:
               LOOKUP_ISSUE_NUMBERS="$(merge_issue_number_list "${LOOKUP_ISSUE_NUMBERS}" "${BRANCH_ISSUE_NUMBER}")"
             fi
             echo "Resolved linked issue from branch ${PR_HEAD_REF}: #${BRANCH_ISSUE_NUMBER}"
+          fi
+
+          # Issue #5619: the orchestrator's completion PR names its tracking
+          # issue only as `Refs #<T>` (ensure_eager_final_pr), which the
+          # discovery above does not read as a link (#1469). Derive <T> from
+          # the verified completion head instead: merged into the default
+          # branch from `orchestrator/project-<T>` in this repository. <T>
+          # goes to the lineage list only, never to ISSUE_NUMBERS, so its
+          # labels, state, alerts, and cleanup stay untouched. Event fields
+          # only; no API call (§15).
+          COMPLETION_PR_TRACKING_ISSUE=""
+          if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" = "${DEFAULT_BRANCH_NAME}" ] \
+            && [ -n "${PR_HEAD_REPO_FULL_NAME:-}" ] && [ "${PR_HEAD_REPO_FULL_NAME}" = "${REPOSITORY}" ]; then
+            COMPLETION_PR_TRACKING_ISSUE="$(printf '%s\n' "${PR_HEAD_REF:-}" | sed -nE 's#^orchestrator/project-([1-9][0-9]*)$#\1#p' | head -n1)"
+          fi
+          if [ -n "${COMPLETION_PR_TRACKING_ISSUE}" ]; then
+            LINEAGE_FINALIZE_ISSUE_NUMBERS+="${COMPLETION_PR_TRACKING_ISSUE}"$'\n'
+            echo "PR #${PR_NUMBER} is orchestrator project #${COMPLETION_PR_TRACKING_ISSUE}'s completion PR (${PR_HEAD_REF} from ${REPOSITORY} merged into ${DEFAULT_BRANCH_NAME}); queuing tracking issue #${COMPLETION_PR_TRACKING_ISSUE}'s lineage finalization."
           fi
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -678,7 +698,10 @@ jobs:
             1|true|yes|on) AI_MEMORY_ENABLED_NORMALIZED=true ;;
           esac
 
-          if [ -z "${LINKED_ISSUE_NUMBERS:-}" ]; then
+          # Issue #5619: a completion PR whose body only says `Refs #<T>`
+          # links no issue but still queues its tracking issue <T>.
+          if [ -z "${LINKED_ISSUE_NUMBERS:-}" ] \
+            && [ -z "$(printf '%s' "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" | tr -d '[:space:]')" ]; then
             echo "No linked issues found; skipping lineage finalization."
             echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"no_linked_issues\",\"source\":\"issue_pr_status.yml\"}"
             exit 0
