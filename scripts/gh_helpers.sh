@@ -1661,52 +1661,97 @@ PY
 #   owner/repo/issues/56/#x
 #   https://github.com/owner/repo/issues/78?q=(a)#issuecomment-2
 #
-# Adjacent links each count on their own:
-#   [one](https://github.com/owner/repo/issues/1?q=1),[two](https://github.com/owner/repo/issues/2)
-#   yields 1 and 2.
-#
 # A URL or path that carries a `#` fragment points at something inside
 # the issue (usually a comment), not at the issue as the PR's subject, so
-# it is not a linked issue (issue #5776). The fragment may follow the
-# issue number directly or a `/…` or `?…` tail; the tail runs up to the
-# first whitespace, `#`, `<`, or `>`, through parentheses, so a fragment
-# after `?q=(a)` is still seen. Each URL/path match keeps that tail and the
-# character after it, a match that ends in `#` is dropped, and the issue
-# number is read from just after `issues/`, so a digit in the query never
-# replaces it. Because the tail excludes `#`, a fragment can only be the
-# match's last character, so the trailing-`#` filter sees every one.
-# Before matching, a line break is put in front of every
-# `<owner/repo>/issues/<n>` that follows a non-word character, so a tail
-# ends where the next issue link starts: otherwise
-# `…/issues/1?q=1),[two](…/issues/2)` is one match that yields only 1, and
-# a `#` on the second link would drop both. (A space would not do: grep
-# would use it up as the first match's last character, leaving the second
-# without the non-word character it must follow.) The break also leaves
-# `github.com/` apart from the path, which the path form then matches at
-# the start of its line. A Markdown link's closing `)` still joins the
-# tail; only a `#` ends the match in a way that drops it.
+# it is not a linked issue (issue #5776). Each URL/path is taken whole,
+# the way GitHub renders it as one link: it runs to the first whitespace,
+# `<`, or `>`, and a Markdown link destination (`[t](…)`) also ends at
+# its first unmatched `)`, so `?q=(a)` stays inside it. A `#` anywhere in
+# that URL after the issue number drops it, and a repo-scoped issue path
+# inside its query or fragment is part of it, never a link of its own:
+#   https://github.com/owner/repo/issues/1?next=owner/repo/issues/2#c
+#   https://github.com/owner/repo/issues/1#see-owner/repo/issues/2
+# both yield nothing, and https://github.com/owner/repo/issues/1,owner/repo/issues/2
+# (no whitespace, one link on GitHub) yields 1. Markdown links side by
+# side still count on their own, because each destination ends at its
+# `)`:
+#   [one](https://github.com/owner/repo/issues/1?q=1),[two](https://github.com/owner/repo/issues/2)
+#   yields 1 and 2.
+# A closing keyword counts unless it sits inside such a URL, and the
+# match before it never hides it ("Fixes #1 fixes #2" yields 1 and 2).
+#
+# The scan runs in python3 (one left-to-right pass over the text,
+# linear in its length), because the URL extent depends on parenthesis
+# depth, which a grep pattern cannot track.
 #
 # Fail-open:
-#   empty text or malformed repository input emits no matches
+#   empty text, malformed repository input, or a python3 failure emits
+#   no matches
 # ---------------------------------------------------------------
 extract_repo_scoped_issue_refs_from_text()
 {
 	local _repository="${1:-}"
 	local _text="${2:-}"
-	local _repository_escaped
 
 	if [ -z "${_repository}" ] || [ -z "${_text}" ] || ! [[ "${_repository}" =~ ^[^/]+/[^/]+$ ]]; then
 		return 0
 	fi
 
-	_repository_escaped="$(printf '%s' "${_repository}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
-	printf '%s\n' "${_text}" \
-		| sed -E "s#([^[:alnum:]_])(${_repository_escaped}/issues/[0-9])#\\1\\n\\2#gI" \
-		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([/?][^[:space:]#<>]*)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([/?][^[:space:]#<>]*)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
-		| grep -viE 'issues/[0-9]+.*#$' \
-		| sed -E 's#(issues/[0-9]+).*#\1#I' \
-		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
-		| sort -un || true
+	printf '%s' "${_text}" | python3 -c '
+import bisect
+import re
+import sys
+
+repository = sys.argv[1]
+text = sys.stdin.buffer.read().decode("utf-8", "replace")
+issue_path = re.compile(r"(?<!\w)" + re.escape(repository) + r"/issues/([0-9]+)", re.IGNORECASE)
+host_prefix = re.compile(r"(?:(?:https?:)?//)?(?:www\.)?github\.com/\Z", re.IGNORECASE)
+keyword_ref = re.compile(
+	r"(?<![\w/-])(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#\s*([0-9]+)(?!\w)",
+	re.IGNORECASE,
+)
+word_char = re.compile(r"\w")
+
+found = set()
+url_starts = []
+url_stops = []
+pos = 0
+while True:
+	match = issue_path.search(text, pos)
+	if match is None:
+		break
+	host = host_prefix.search(text, max(0, match.start() - 32), match.start())
+	url_start = host.start() if host else match.start()
+	markdown_destination = text[max(0, url_start - 2):url_start] == "]("
+	depth = 0
+	stop = match.end()
+	while stop < len(text):
+		char = text[stop]
+		if char.isspace() or char in "<>":
+			break
+		if markdown_destination and char == "(":
+			depth += 1
+		elif markdown_destination and char == ")":
+			if depth == 0:
+				break
+			depth -= 1
+		stop += 1
+	tail = text[match.end():stop]
+	if not word_char.match(tail) and "#" not in tail:
+		found.add(int(match.group(1)))
+	url_starts.append(url_start)
+	url_stops.append(stop)
+	pos = stop
+
+for match in keyword_ref.finditer(text):
+	index = bisect.bisect_right(url_starts, match.start()) - 1
+	if index >= 0 and match.start() < url_stops[index]:
+		continue
+	found.add(int(match.group(1)))
+
+for number in sorted(found):
+	print(number)
+' "${_repository}" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------

@@ -10,7 +10,8 @@ labelled `ai:merged` and its AI-memory lineage finalized as `merged` while the
 project was still running.
 
 `extract_repo_scoped_issue_refs_from_text` (`scripts/gh_helpers.sh`) now ignores
-a repo-scoped issue URL or path whose number is followed by a `#` fragment.
+a repo-scoped issue URL or path that carries a `#` fragment anywhere after the
+issue number, taking each URL whole as GitHub renders it.
 These tests pin that directly, and drive the real `Update linked issue labels
 when PR closes` and `Finalize linked issue lineage state` steps through the stub
 harness of `tests/test_issue_pr_status_target_branch_gate.py` for the cases the
@@ -124,21 +125,59 @@ def test_fragment_after_parentheses_in_the_tail_is_not_a_link() -> None:
 
 
 def test_adjacent_issue_links_each_count_on_their_own() -> None:
-	"""A tail that runs through `)`, `,` and `[` must still stop where the next
-	issue link starts, or the second link is lost, and a fragment on it drops
-	the first (round 4 review of PR #5825)."""
+	"""Markdown links side by side count on their own: each destination ends at
+	its unmatched `)`, so the second link is not lost and a fragment on it does
+	not drop the first (round 4 review of PR #5825). A run with no whitespace
+	and no Markdown link is one URL, the way GitHub renders it, so an issue
+	path inside it is part of the first URL (round 1 review after intervention
+	1 on PR #5825)."""
 	url = f"https://github.com/{REPOSITORY}/issues"
 	assert _extract(f"[one]({url}/1?q=1),[two]({url}/2)") == [1, 2]
 	assert _extract(f"[one]({url}/1/),[two]({url}/2?x=1)") == [1, 2]
-	assert _extract(f"{url}/1?q=1,{url}/2") == [1, 2]
-	assert _extract(f"{url}/1/,{REPOSITORY}/issues/2") == [1, 2]
-	assert _extract(f"{url}/1?q=(a),{url}/2?q=(b),{url}/3") == [1, 2, 3]
+	assert _extract(f"[one]({url}/1?q=(a)),[two]({url}/2?q=(b)),[three]({url}/3)") == [1, 2, 3]
+	assert _extract(f"{url}/1 {url}/2,{url}/3") == [1, 2]
+	assert _extract(f"{url}/1?q=1,{url}/2") == [1]
+	assert _extract(f"{url}/1/,{REPOSITORY}/issues/2") == [1]
 	# A fragment on the neighbour drops only the neighbour.
 	assert _extract(f"[a]({url}/1/),[b]({url}/2#issuecomment-3)") == [1]
 	assert _extract(f"[a]({url}/1#issuecomment-3),[b]({url}/2?q=1)") == [2]
-	# Another repository's issue path is not split off and never links.
+	# Another repository's issue path never links.
 	assert _extract(f"{url}/1?q=1,other/repo/issues/2") == [1]
 	assert _extract(f"{url}/1?q=x{REPOSITORY}/issues/2") == [1]
+
+
+def test_issue_path_inside_a_url_query_or_fragment_is_not_a_link() -> None:
+	"""A repo-scoped issue path in a URL's query or fragment belongs to that
+	URL, whatever character comes before it, so a `#` anywhere in the URL
+	drops it and the embedded path never links on its own (round 1 review
+	after intervention 1 on PR #5825)."""
+	url = f"https://github.com/{REPOSITORY}/issues"
+	path = f"{REPOSITORY}/issues"
+	for text in (
+		f"{url}/1?next={path}/2#comment",
+		f"{url}/1#see-{path}/2",
+		f"{url}/1?a=1&b={url}/2#c",
+		f"{url}/1?ids=7,{path}/2#c",
+		f"{path}/1?next={path}/2#comment",
+		f"[c]({url}/1?next={path}/2#comment).",
+		f"[c]({url}/1#see-{path}/2)",
+		f"<{url}/1?next={path}/2#comment>",
+	):
+		assert _extract(text) == [], text
+	# Without a fragment the URL links its own issue, never the embedded one.
+	assert _extract(f"{url}/1?next={path}/2") == [1]
+	assert _extract(f"{url}/1?a=1&b={url}/2") == [1]
+	assert _extract(f"[c]({url}/1?next={path}/2), and {url}/3") == [1, 3]
+
+
+def test_closing_keyword_after_a_link_or_keyword_still_links() -> None:
+	"""A closing keyword right after another match is not hidden by it; one
+	inside a URL is not a closing keyword."""
+	url = f"https://github.com/{REPOSITORY}/issues"
+	assert _extract("Fixes #1 fixes #2") == [1, 2]
+	assert _extract(f"{url}/1 fixes #2") == [1, 2]
+	assert _extract(f"x {url}/1?x=fix #2") == [1]
+	assert _extract(f"fix {REPOSITORY}/issues/1 #5") == [1]
 
 
 def test_bare_urls_paths_and_closing_keywords_still_link() -> None:
@@ -255,6 +294,8 @@ if __name__ == "__main__":
 	test_fragment_after_a_query_or_slash_is_not_a_link()
 	test_fragment_after_parentheses_in_the_tail_is_not_a_link()
 	test_adjacent_issue_links_each_count_on_their_own()
+	test_issue_path_inside_a_url_query_or_fragment_is_not_a_link()
+	test_closing_keyword_after_a_link_or_keyword_still_links()
 	test_bare_urls_paths_and_closing_keywords_still_link()
 	test_mixed_text_keeps_only_the_real_links()
 	test_claude_project_merge_with_refs_and_comment_url_leaves_issue_untouched()
