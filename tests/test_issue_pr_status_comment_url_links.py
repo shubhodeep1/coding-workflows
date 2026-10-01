@@ -91,12 +91,32 @@ def test_any_fragment_after_the_issue_number_is_not_a_link() -> None:
 		assert _extract(text) == [], text
 
 
+def test_fragment_after_a_query_or_slash_is_not_a_link() -> None:
+	"""A notification link puts a query before the comment fragment; the
+	fragment still points inside the issue (round 2 review of PR #5825)."""
+	for text in (
+		f"https://github.com/{REPOSITORY}/issues/12?notification_referrer_id=NT_1#issuecomment-1",
+		f"{REPOSITORY}/issues/12?x=1&y=2#issuecomment-1",
+		f"https://github.com/{REPOSITORY}/issues/12/#top",
+		f"https://github.com/{REPOSITORY}/issues/12/x#y",
+		f"[comment](https://github.com/{REPOSITORY}/issues/12?q=3#issuecomment-4).",
+		f"<https://github.com/{REPOSITORY}/issues/12?q#c>",
+	):
+		assert _extract(text) == [], text
+
+
 def test_bare_urls_paths_and_closing_keywords_still_link() -> None:
 	assert _extract(f"https://github.com/{REPOSITORY}/issues/78") == [78]
 	assert _extract(f"{REPOSITORY}/issues/56.") == [56]
 	assert _extract(f"(https://github.com/{REPOSITORY}/issues/11)") == [11]
 	assert _extract(f"https://github.com/{REPOSITORY}/issues/9/ and https://github.com/{REPOSITORY}/issues/10?x=1") == [9, 10]
 	assert _extract("Fixes #34\ncloses #35") == [34, 35]
+	# A digit in the query is not the issue number.
+	assert _extract(f"https://github.com/{REPOSITORY}/issues/13?page=2") == [13]
+	assert _extract(f"[t](https://github.com/{REPOSITORY}/issues/14?a=5).") == [14]
+	# A fragment after whitespace belongs to other text, not to the URL.
+	assert _extract(f"https://github.com/{REPOSITORY}/issues/15?a=1 #note") == [15]
+	assert _extract("Fixes #16#later") == [16]
 
 
 def test_mixed_text_keeps_only_the_real_links() -> None:
@@ -196,6 +216,7 @@ def test_default_branch_merge_with_fixes_still_labels_and_closes() -> None:
 if __name__ == "__main__":
 	test_comment_url_alone_yields_no_linked_issue()
 	test_any_fragment_after_the_issue_number_is_not_a_link()
+	test_fragment_after_a_query_or_slash_is_not_a_link()
 	test_bare_urls_paths_and_closing_keywords_still_link()
 	test_mixed_text_keeps_only_the_real_links()
 	test_claude_project_merge_with_refs_and_comment_url_leaves_issue_untouched()

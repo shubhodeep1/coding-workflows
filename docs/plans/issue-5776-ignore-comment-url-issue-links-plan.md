@@ -18,7 +18,7 @@ Security pass: run
 
 ## Goals
 
-- `extract_repo_scoped_issue_refs_from_text` returns no issue for a repo-scoped issue URL or path whose number is followed by `#` (any fragment, `#issuecomment-…` included). Bare `/issues/N` URLs and paths, and `close|fix|resolve` keyword references, are unchanged.
+- `extract_repo_scoped_issue_refs_from_text` returns no issue for a repo-scoped issue URL or path that carries a `#` fragment (any fragment, `#issuecomment-…` included), whether the `#` follows the issue number directly or a `/…` or `?…` tail such as a notification link's query. Bare `/issues/N` URLs and paths, and `close|fix|resolve` keyword references, are unchanged.
 - A PR merged into `claude/implement-plan-x` whose body has only `Refs #N` plus a comment URL on #N: no label call, no close, and #N absent from `LINKED_ISSUE_NUMBERS` and `LINEAGE_FINALIZE_ISSUE_NUMBERS`.
 - The same PR with a closing keyword (`Fixes #N`) into `claude/implement-plan-x`, from a `claude/*` head: no label call, no close, #N not in `LINEAGE_FINALIZE_ISSUE_NUMBERS` (the #4813 / #5226 gate, pinned for the Claude-project shape).
 - An `ai:orchestrator-managed` child merged into its integration branch from `ai/issue-<n>` still gets `ai:merged` and is closed; a default-branch merge with `Fixes #N` still labels and closes.
@@ -42,7 +42,7 @@ Security pass: run
 
 ## Approach
 
-In `extract_repo_scoped_issue_refs_from_text`, change the trailing boundary of the two URL/path alternatives from `([^[:alnum:]_]|$)` to `([^[:alnum:]_#]|$)`. A number followed by `#` then matches no alternative: shorter prefixes are followed by a digit, and the keyword alternative needs `<keyword> #N`. The doc comment gains the rejected `…/issues/N#issuecomment-…` example. Narrowing the shared helper (AD-3) gives every caller one meaning of "linked issue". The `review_autofix.yml` identical-failure cap would otherwise label a comment-linked issue `ai:review-blocked` the same way.
+In `extract_repo_scoped_issue_refs_from_text`, change the trailing boundary of the two URL/path alternatives from `([^[:alnum:]_]|$)` to `([^[:alnum:]_#]|$)`. A number followed by `#` then matches no alternative: shorter prefixes are followed by a digit, and the keyword alternative needs `<keyword> #N`. Review round 2 on PR #5825 widened this: each URL/path alternative also takes an optional `/…` or `?…` tail (up to whitespace, `#`, `<`, `>`, `(`, `)`), a match ending in `#` is dropped, and the number is read from just after `issues/`, so `…/issues/N?query#issuecomment-…` is rejected too and a digit in the query is never read as the issue. The doc comment gains the rejected examples. Narrowing the shared helper (AD-3) gives every caller one meaning of "linked issue". The `review_autofix.yml` identical-failure cap would otherwise label a comment-linked issue `ai:review-blocked` the same way.
 
 The label/lineage gate needs no code change on this base (AD-2). New runtime tests drive the real step script through the existing stub harness and pin the four cases the issue lists, plus the keyword case into a Claude project branch.
 

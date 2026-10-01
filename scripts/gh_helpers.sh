@@ -1657,10 +1657,17 @@ PY
 #   Closes: #12
 #   owner/repo/issues/56#issuecomment-123
 #   https://github.com/owner/repo/issues/78#any-fragment
+#   https://github.com/owner/repo/issues/78?notification_referrer_id=1#issuecomment-2
+#   owner/repo/issues/56/#x
 #
-# A URL or path whose issue number is followed by a `#` fragment points
-# at something inside the issue (usually a comment), not at the issue as
-# the PR's subject, so it is not a linked issue (issue #5776).
+# A URL or path that carries a `#` fragment points at something inside
+# the issue (usually a comment), not at the issue as the PR's subject, so
+# it is not a linked issue (issue #5776). The fragment may follow the
+# issue number directly or a `/…` or `?…` tail; the tail runs up to the
+# first whitespace, `#`, `<`, `>`, `(`, or `)`. Each URL/path match keeps
+# that tail and the character after it, a match that ends in `#` is
+# dropped, and the issue number is read from just after `issues/`, so a
+# digit in the query never replaces it.
 #
 # Fail-open:
 #   empty text or malformed repository input emits no matches
@@ -1677,7 +1684,9 @@ extract_repo_scoped_issue_refs_from_text()
 
 	_repository_escaped="$(printf '%s' "${_repository}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
 	printf '%s\n' "${_text}" \
-		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
+		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([/?][^[:space:]#<>()]*)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([/?][^[:space:]#<>()]*)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
+		| grep -viE 'issues/[0-9]+.*#$' \
+		| sed -E 's#(issues/[0-9]+).*#\1#I' \
 		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
 		| sort -un || true
 }

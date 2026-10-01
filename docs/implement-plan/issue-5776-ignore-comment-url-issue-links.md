@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5825
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01Rqqfni66CCQPdBzVGK14Nh   safety net and hand-back: see the round-1 stage report (session_01L5cMnQrqvTDGXZk5sfsbMQ)
+- Check-in: checker session_01Rqqfni66CCQPdBzVGK14Nh   safety net and hand-back: see the round-2 stage report (session_01JuT7tfbyQSYCBYykwcWdAF)
 - Last updated: 2026-10-01
-- Last note: review round 1 on PR #5825: fixed the one valid finding (changelog caller count, `review_autofix.yml` has 5 call sites) and resolved the README conflict the project-branch sync introduced; waiting on round 2 or merge.
+- Last note: review round 2 on PR #5825: fixed the consensus finding (a `#` fragment after a `?…` or `/…` tail, as in notification links, still linked the issue) and added its regression tests; waiting on round 3 or merge.
 
 ## Phases
-1. [ ] Phase 1 — narrow `extract_repo_scoped_issue_refs_from_text` so `/issues/N#…` URLs are not linked issues; runtime tests pinning the target-branch gate for Claude project PRs; ci.yml, README row, changelog fragment   — PR #5825 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — narrow `extract_repo_scoped_issue_refs_from_text` so `/issues/N#…` URLs are not linked issues; runtime tests pinning the target-branch gate for Claude project PRs; ci.yml, README row, changelog fragment   — PR #5825 open (waiting); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -38,6 +38,7 @@
 
 ## Lessons
 - [source:intervention] When a changelog or plan cites how many places call a shell helper, count invocation lines only; `type <helper> >/dev/null` availability guards sit beside each call and are not call sites. (files: changelog.d/5776-ignore-comment-url-issue-links.md, .github/workflows/review_autofix.yml)
+- [source:intervention] A matcher that must reject URLs with a `#` fragment has to look past the path and query, not just the character after the id: GitHub notification links put `?notification_referrer_id=…` before `#issuecomment-…`. Match the whole URL tail, then drop matches that end in `#`, and read the id from its own position rather than the last number. (files: scripts/gh_helpers.sh)
 
 ## Notes
 - Issue progress comment: 5922355476.
@@ -46,3 +47,4 @@
 - Base check (2026-10-01): no merged PR with head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`; its final PR #4826 is an open draft into `main`.
 - Round 1 (2026-10-01): the stage synced the project branch with the issue base (merge c319847, which brought in the #5617 unmerged-close gate; no conflict, gate and helper tests pass) and pushed it, which made PR #5825 conflict in the README `issue_pr_status.yml` row. Resolved by keeping the base's row and appending this project's #5776 sentence. Base check: still no merged PR with head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`.
 - Round 1 also corrected the same stale count in the plan's Context section (four → five `review_autofix.yml` call sites), a proactive stale-doc fix.
+- Round 2 (2026-10-01): six reviewers agreed the boundary only checked the character right after the issue number. Fixed in `extract_repo_scoped_issue_refs_from_text`; README row, changelog fragment, and the plan's Goals/Approach updated to match. Base check: still no merged PR with head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`; project branch already up to date with it.
