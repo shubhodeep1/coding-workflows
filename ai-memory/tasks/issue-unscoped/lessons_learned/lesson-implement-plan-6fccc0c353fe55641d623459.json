@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T11:36:51Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A sweep that archives sessions on a \"superseded by a later session\" signal must verify the later session actually started and the earlier one's recovery triggers were disarmed; when a list page cannot show that, keep the earlier session.",
+  "phase": "implement_plan",
+  "pr_number": 5991,
+  "record_id": "lesson-implement-plan-6fccc0c353fe55641d623459",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-4887-archive-finished-sessions",
+    "file:scripts/claude_session_janitor.py"
+  ]
+}
