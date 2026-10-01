@@ -77,7 +77,7 @@ list_dispatch_runs()
 	gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=100"
 }
 
-# find_latest_scoped_run_field REPO CREATED_AFTER NAME_RE TITLE FIELD
+# find_latest_scoped_run_field REPO CREATED_AFTER NAME_RE TITLE FIELD [MAX_PAGES]
 #
 # Prints FIELD of the newest workflow run in REPO created after
 # CREATED_AFTER whose name matches NAME_RE (case-insensitive), whose
@@ -92,11 +92,15 @@ list_dispatch_runs()
 # Pages are therefore read in order until one holds a match or comes back
 # short (the last page).
 #
-# API calls: one REST read per 100 runs, newest first, at most
-# FIND_LATEST_SCOPED_RUN_MAX_PAGES (5) reads. A page with a match ends the
-# scan, so the usual cost is one read.
-# Failure: returns 1 when a page cannot be read and nothing matched yet
-# (callers already fall back with `|| echo ""`); returns 0 otherwise.
+# API calls: one REST read per 100 runs, newest first, at most MAX_PAGES
+# reads (default FIND_LATEST_SCOPED_RUN_MAX_PAGES, 5; the release smoke
+# test's run-ID captures pass 10, GitHub's 1,000-result ceiling for this
+# list). A page with a match ends the scan, so the usual cost is one read.
+# Failure: returns 1 when a page cannot be read, or is not a runs listing,
+# and nothing matched yet (callers already fall back with `|| echo ""`).
+# When MAX_PAGES is given, returns 2 when every page up to it was full and
+# none matched, so the caller need not retry a walk that would repeat the
+# same reads (PR #4730 review). Returns 0 otherwise.
 FIND_LATEST_SCOPED_RUN_MAX_PAGES=5
 
 find_latest_scoped_run_field()
@@ -106,13 +110,19 @@ find_latest_scoped_run_field()
 	local name_re="$3"
 	local title="$4"
 	local field="$5"
+	local max_pages="${6:-${FIND_LATEST_SCOPED_RUN_MAX_PAGES}}"
 	local page=1
 	local runs_json=""
 	local match=""
 	local page_count=0
 
-	while [ "${page}" -le "${FIND_LATEST_SCOPED_RUN_MAX_PAGES}" ]; do
+	while [ "${page}" -le "${max_pages}" ]; do
 		if ! runs_json="$(gh_api_safe_print "repos/${repo}/actions/runs?per_page=100&page=${page}&created=>${created_after}")"; then
+			return 1
+		fi
+		# A page that is not a runs listing would otherwise end the scan as a
+		# short page (PR #4730 conformance audit).
+		if ! printf '%s' "${runs_json}" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1; then
 			return 1
 		fi
 		match="$(printf '%s' "${runs_json}" | jq -r \
@@ -136,5 +146,8 @@ find_latest_scoped_run_field()
 		fi
 		page=$((page + 1))
 	done
+	if [ -n "${6:-}" ]; then
+		return 2
+	fi
 	return 0
 }
