@@ -296,7 +296,8 @@ def test_pickup_reports_queue_age_limit_and_resume_order(pickup_cmd):
 	assert "`QUEUE_PICKUP_LIMIT` (20), or the session's `CLAUDE_ISSUE_PICKUP_LIMIT` clamped to 1..30" in pickup_cmd
 	assert "at most 10 are started per wake" not in pickup_cmd
 	assert "first 3 × `limit` targets (60 at the default)" in pickup_cmd
-	assert "failed <f>; oldest_waiting=<oldest_waiting_minutes, or none>; catch_up=<scheduled | pending | none | failed>`" in pickup_cmd
+	# Issue #4887 appends the step 3a sweep's `archived <a> (next …)` part after catch_up.
+	assert "failed <f>; oldest_waiting=<oldest_waiting_minutes, or none>; catch_up=<scheduled | pending | none | failed>; archived <a> (next <next_after_id or null>)`" in pickup_cmd
 
 
 def test_pickup_arms_check_ins_for_deep_sessions(pickup_cmd):
