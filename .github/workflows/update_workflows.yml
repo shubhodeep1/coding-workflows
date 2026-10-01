@@ -285,14 +285,20 @@ jobs:
           # ${CLAUDE_LOCAL_DIR}/) can be written without leaving that tree:
           # the file is not a symlink, and no directory on the way to it,
           # ${CLAUDE_LOCAL_DIR} included, is a symlink or exists as anything
-          # but a directory. Returns 1 when the file itself is a symlink and
-          # 3 when a directory on the way is not a plain directory. `mkdir -p`,
-          # `diff` and `cp` follow symlinks, so either would carry the write
-          # out of the tree (or abort the step on a dangling link).
+          # but a directory. Returns 1 when the file itself is a symlink, 4
+          # when it exists as anything but a regular file (a directory, where
+          # `cp` would put the guard inside it, or a FIFO, socket or device,
+          # which `diff` and `cp` could block on), and 3 when a directory on
+          # the way is not a plain directory. `mkdir -p`, `diff` and `cp`
+          # follow symlinks, so a link would carry the write out of the tree
+          # (or abort the step on a dangling link).
           guard_destination_is_confined() {
             local guard_destination_dir
             if [ -L "$1" ]; then
               return 1
+            fi
+            if [ -e "$1" ] && [ ! -f "$1" ]; then
+              return 4
             fi
             guard_destination_dir="$(dirname -- "$1")"
             while :; do
@@ -314,6 +320,8 @@ jobs:
           warn_guard_destination_not_confined() {
             if [ "$2" -eq 1 ]; then
               printf '::warning::claude-guard-sync: .claude/%s is a symlink in this repository and a guard is never written through one; kept the existing file.\n' "$1"
+            elif [ "$2" -eq 4 ]; then
+              printf '::warning::claude-guard-sync: .claude/%s exists in this repository but is not a regular file (a directory, FIFO or other special file); kept it and installed nothing.\n' "$1"
             else
               printf '::warning::claude-guard-sync: .claude/%s sits under a symlink or a non-directory in this repository, which could carry the write out of .claude/; nothing installed.\n' "$1"
             fi
@@ -438,6 +446,10 @@ jobs:
                 continue
               fi
               local_path="${CLAUDE_LOCAL_DIR}/${rel}"
+              if [ -e "${local_path}" ] && [ ! -L "${local_path}" ] && [ ! -f "${local_path}" ]; then
+                warn_guard_destination_not_confined "${rel}" 4
+                continue
+              fi
               if [ -e "${local_path}" ] || [ -L "${local_path}" ]; then
                 printf '::warning::claude-guard-sync: .claude/%s has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); kept the existing file.\n' "${rel}"
                 continue

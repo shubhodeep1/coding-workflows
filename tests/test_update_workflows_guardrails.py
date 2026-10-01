@@ -847,6 +847,30 @@ def test_claude_sync_keeps_a_consumer_claude_path_that_is_not_a_directory() -> N
 		assert outputs["claude_has_changes"] == "false", kind
 
 
+def test_claude_sync_keeps_a_consumer_guard_path_that_is_not_a_regular_file() -> None:
+	"""A directory or FIFO at a guard path is kept: the guard is never copied inside it, never counted as synced, and the step never blocks (PR #5651 review round 3)."""
+	twins = {"settings.json": "{}\n", "hooks/fifo.py": "f\n", "hooks/ok.py": "ok\n"}
+	reviewed = {**twins, "hooks/no_twin_dir.py": "n\n"}
+
+	def before_run(consumer: Path) -> None:
+		(consumer / ".claude" / "settings.json").mkdir()
+		(consumer / ".claude" / "hooks").mkdir(parents=True, exist_ok=True)
+		(consumer / ".claude" / "hooks" / "no_twin_dir.py").mkdir()
+		os.mkfifo(consumer / ".claude" / "hooks" / "fifo.py")
+
+	def after_run(consumer: Path) -> None:
+		assert list((consumer / ".claude" / "settings.json").iterdir()) == []
+		assert list((consumer / ".claude" / "hooks" / "no_twin_dir.py").iterdir()) == []
+		assert (consumer / ".claude" / "hooks" / "fifo.py").is_fifo()
+
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, {"placeholder.md": "x\n"}, before_run=before_run, after_run=after_run)
+	assert tree["hooks/ok.py"] == "ok\n"
+	for rel in ("settings.json", "hooks/fifo.py", "hooks/no_twin_dir.py"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} exists in this repository but is not a regular file (a directory, FIFO or other special file); kept it and installed nothing." in stdout
+	assert "no_twin_dir.py has no regular-file workflow-templates twin on stable" not in stdout
+	assert outputs["claude_changed"] == "1"
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -879,6 +903,7 @@ def main() -> int:
 	test_claude_sync_never_writes_a_guard_under_a_symlinked_consumer_claude_dir()
 	test_claude_sync_skips_a_guard_under_a_consumer_path_that_is_not_a_directory()
 	test_claude_sync_keeps_a_consumer_claude_path_that_is_not_a_directory()
+	test_claude_sync_keeps_a_consumer_guard_path_that_is_not_a_regular_file()
 	return 0
 
 

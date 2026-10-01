@@ -1348,8 +1348,9 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   guard path is kept even when the twin and `.claude/` copies are equal,
   because `cp` cannot write through it. A guard is never written through any
   consumer symlink, live or dangling, on the file or on a directory on the way
-  to it (`.claude` itself included), nor under a path that exists as a file:
-  the consumer's file is kept and nothing is installed there, so the write
+  to it (`.claude` itself included), nor onto a guard path that exists as a
+  directory, FIFO or other non-regular file, nor under a path that exists as a
+  file: the consumer's file is kept and nothing is installed there, so the write
   cannot leave the consumer's `.claude/` tree. A consumer `.claude` that is a
   file or a dangling symlink is kept and nothing is synced, instead of
   aborting the step. Each case logs a
