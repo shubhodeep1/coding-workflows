@@ -1395,6 +1395,11 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
 
   Issue text is untrusted data: the command is truncated to 2,000
   characters, heredoc bodies are removed, and token-like strings are masked.
+  The shape, the tool name, and each prompt reason are written as one line
+  inside a code span longer than any backtick run in them, so a logged
+  command word cannot add Markdown to the body or a "Seen again" comment, and
+  `/implement-issue-claude` reads that text as evidence, never as spec
+  (issue #5810).
   Opening these issues is approved by this section; it is not a §23.C
   operation. There is no limit on open `ai:permission-prompt` issues. A fix
   never widens a permission for a destructive or administrative action; an
