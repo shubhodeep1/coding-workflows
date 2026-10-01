@@ -1420,9 +1420,11 @@ classify_reviewer_risk_tier() {
 
 reviewer_collect_review_tier_path_metadata() {
   local paths_file="$1"
+  local diff_file="${2:-}"
 
   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
-    "$paths_file" <<'PY'
+    "$paths_file" "$diff_file" <<'PY'
+from fnmatch import fnmatchcase
 from pathlib import Path
 import sys
 
@@ -1431,7 +1433,66 @@ try:
 except ModuleNotFoundError:
 	from scripts.targeted_file_context import parse_paths_file
 
+# Protected paths: the same filename rules as the deterministic pre-review
+# skip gate in .github/workflows/review_autofix.yml (PROTECTED_SKIP_SUPPRESSED).
+# A diff touching one of them never drops to the one-reviewer lite tier.
+# tests/test_review_autofix_review_pipeline_contract.py keeps the lists in sync.
+PROTECTED_BASENAMES = (
+	"agents.md|claude.md|unattended_system_instructions.md"
+).split("|")
+PROTECTED_PATH_GLOBS = (
+	".github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*"
+).split("|")
+PROTECTED_BASENAME_GLOBS = (
+	"dockerfile|dockerfile.*|dockerfile-*|*.dockerfile|*.dockerfile.*|*.dockerfile-*|containerfile|containerfile.*|containerfile-*|*.containerfile|*.containerfile.*|*.containerfile-*|.dockerignore|.containerignore|compose.yml|compose.yaml|compose.*.yml|compose.*.yaml|compose-*.yml|compose-*.yaml|docker-compose.yml|docker-compose.yaml|docker-compose.*.yml|docker-compose.*.yaml|docker-compose-*.yml|docker-compose-*.yaml|makefile|makefile.*|gnumakefile|gnumakefile.*|justfile|justfile.*|taskfile|taskfile.*|rakefile|rakefile.*|jenkinsfile|jenkinsfile.*|cmakelists.txt|meson.build|meson_options.txt|pom.xml|build.xml|build.gradle*|settings.gradle*|gradlew|gradlew.bat|gulpfile.*|gruntfile.*|package.json|build|build.bazel|workspace|workspace.bazel|module.bazel|*.bazel|*.bzl|*.mk|*.cmake|*.gradle|*.gradle.kts|requirements*.txt|constraints*.txt|go.mod|go.sum|pipfile|pipfile.lock|*.lock|*.lockb|config|*.config|*.config.*|*.conf|*.ini|*.toml|*.yaml|*.yml|*.json|*.jsonc|*.properties|*.xml|*.tf|*.hcl|.*rc|.*rc.*|.env|.env.*|*.sh|*.bash|*.zsh|*.ps1|*.cmd|*.bat"
+).split("|")
+PROTECTED_ROOT_BASENAME_GLOBS = (
+	"package.json|pyproject.toml|cargo.toml|go.mod|go.work|makefile|.editorconfig|turbo.json|pytest.ini|tox.ini|noxfile.py|*.config.js|*.config.cjs|*.config.mjs|*.config.ts|package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|cargo.lock|poetry.lock|uv.lock|go.sum|pipfile|pipfile.lock|requirements*.txt|constraints*.txt|.eslintrc*|eslint.config.*|.prettierrc*|.stylelintrc*|stylelint.config.*|ruff.toml|.ruff.toml|.flake8|pylintrc|biome.json|biome.jsonc"
+).split("|")
+
+
+# fnmatchcase is not path-aware: its "*" also matches "/" (unlike glob or
+# pathlib), the same as the gate's bash `case`, so "scripts/*" covers nested
+# paths such as scripts/sub/README.md. The parity test checks this against the
+# gate's own patterns.
+def is_protected_path(path):
+	lower_path = path.lower()
+	lower_base = lower_path.rsplit("/", 1)[-1]
+	if lower_base in PROTECTED_BASENAMES:
+		return True
+	if any(fnmatchcase(lower_path, glob) for glob in PROTECTED_PATH_GLOBS):
+		return True
+	if any(fnmatchcase(lower_base, glob) for glob in PROTECTED_BASENAME_GLOBS):
+		return True
+	if lower_path == lower_base and any(
+		fnmatchcase(lower_base, glob) for glob in PROTECTED_ROOT_BASENAME_GLOBS
+	):
+		return True
+	return False
+
+
+def diff_side_paths(diff_path):
+	# Both sides of every file header, so a rename away from a protected
+	# path still counts as protected (the changed-files list only carries
+	# the destination).
+	side_paths = []
+	if not diff_path or not Path(diff_path).is_file():
+		return side_paths
+	with open(diff_path, encoding="utf-8", errors="replace") as handle:
+		for line in handle:
+			line = line.rstrip("\r\n")
+			# git wraps paths with special characters in double quotes
+			# ("--- \"a/x y\"", "rename from \"x y\""); drop them so the
+			# globs still see the path.
+			for prefix in ('--- "a/', '+++ "b/', "--- a/", "+++ b/", "rename from ", "rename to ", "copy from ", "copy to "):
+				if line.startswith(prefix):
+					side_paths.append(line[len(prefix):].strip('"'))
+					break
+	return side_paths
+
+
 paths_file = Path(sys.argv[1])
+diff_file = sys.argv[2] if len(sys.argv) > 2 else ""
 if not paths_file.is_file():
 	print("paths_state=unavailable")
 	sys.exit(0)
@@ -1443,7 +1504,15 @@ if not paths:
 	print("scope_state=empty")
 	print("scope_value=")
 	print("unsupported_path=")
+	print("protected=false")
+	print("protected_path=")
 	sys.exit(0)
+
+protected_path = ""
+for candidate in list(paths) + diff_side_paths(diff_file):
+	if candidate and is_protected_path(candidate):
+		protected_path = candidate
+		break
 
 doc_only = True
 scopes = set()
@@ -1490,7 +1559,52 @@ print(f"doc_only={'true' if doc_only else 'false'}")
 print(f"scope_state={scope_state}")
 print(f"scope_value={scope_value}")
 print(f"unsupported_path={unsupported_path}")
+print(f"protected={'true' if protected_path else 'false'}")
+print(f"protected_path={protected_path}")
 PY
+}
+
+# Deterministic "random" reviewer pick for the review tiers: rank every live
+# panel model by sha256("<seed>:<model>") and keep the lowest <count>. The
+# seed is the PR number, so a PR keeps the same reviewers on every round and
+# on reruns, while different PRs spread evenly across the panel. Output keeps
+# the panel's REVIEWER_MODELS order.
+reviewer_pick_seeded_models() {
+  # Fewer than <count> and <seed> prints nothing, like a broken hash, so the
+  # caller's count check fails open instead of "$1: unbound variable" (set -u)
+  # or a failed `shift 2` aborting the classifier.
+  if [ "$#" -lt 2 ]; then
+    return 0
+  fi
+  local count="$1"
+  local seed="$2"
+  shift 2
+  local model
+  local model_hash
+  local ranked_rows=""
+  local -A picked_map=()
+
+  # Every hash must be a real sha256 digest; anything else (sha256sum
+  # missing or failing) prints nothing, and the caller's count check then
+  # fails open to the full panel.
+  for model in "$@"; do
+    model_hash="$(printf '%s:%s' "${seed}" "${model}" | sha256sum 2>/dev/null | cut -c1-64)" || model_hash=""
+    if [[ ! "${model_hash}" =~ ^[0-9a-f]{64}$ ]]; then
+      return 0
+    fi
+    ranked_rows+="${model_hash} ${model}"$'\n'
+  done
+
+  while IFS= read -r model; do
+    [ -z "${model}" ] && continue
+    picked_map["${model}"]=1
+  done < <(printf '%s' "${ranked_rows}" | LC_ALL=C sort | awk -v limit="${count}" 'NR <= limit { print $2 }')
+
+  for model in "$@"; do
+    if [ -n "${picked_map["${model}"]:-}" ]; then
+      printf '%s\n' "${model}"
+    fi
+  done
 }
 
 resolve_review_tier_active_models() {
@@ -1499,10 +1613,16 @@ resolve_review_tier_active_models() {
   local selected_display=""
   local model
   local invalid_model=""
+  local random_count=0
+  local pool_model
+  local pool_invalid_model=""
   local -A live_models_map=()
   local -A resolved_models_seen=()
+  local -A pool_models_seen=()
   local -a live_models=()
   local -a resolved_models=()
+  local -a pick_pool_models=()
+  local -a standard_pool_models=()
 
   REVIEW_TIER_ACTIVE_MODELS_SOURCE="full"
 
@@ -1520,10 +1640,12 @@ resolve_review_tier_active_models() {
 
   case "${tier}" in
     lite)
-      selected_raw="${REVIEW_TIER_LITE_REVIEWER_SLUG:-qwen/qwen3.7-plus}"
+      selected_raw="${REVIEW_TIER_LITE_REVIEWER_SLUG:-}"
+      random_count=1
       ;;
     standard)
-      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna}"
+      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}"
+      random_count=4
       ;;
     *)
       reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
@@ -1531,6 +1653,55 @@ resolve_review_tier_active_models() {
       return 0
       ;;
   esac
+
+  # An empty slug variable draws the tier's reviewers at random, seeded by the
+  # PR number. A repo that sets the variable keeps exactly the reviewers it
+  # names (validated below).
+  if [ -z "$(normalize_reviewer_model_list "${selected_raw}")" ]; then
+    # Pool for the random pick: the whole live panel, except that an unpinned
+    # lite tier draws from the standard tier's reviewer list when that list is
+    # set and every slug in it is on the panel. With the defaults, lite then
+    # never picks a model the standard tier leaves out (the most expensive
+    # ones). A standard list naming an unknown slug falls back to the panel.
+    pick_pool_models=("${live_models[@]}")
+    if [ "${tier}" = "lite" ] && [ -n "$(normalize_reviewer_model_list "${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}")" ]; then
+      while IFS= read -r pool_model; do
+        [ -z "${pool_model}" ] && continue
+        if [ -z "${live_models_map["${pool_model}"]:-}" ]; then
+          pool_invalid_model="${pool_model}"
+          break
+        fi
+        if [ -n "${pool_models_seen["${pool_model}"]:-}" ]; then
+          continue
+        fi
+        standard_pool_models+=("${pool_model}")
+        pool_models_seen["${pool_model}"]=1
+      done <<< "$(normalize_reviewer_model_list "${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}")"
+      if [ -n "${pool_invalid_model}" ]; then
+        echo "::warning::Unknown review-tier model '${pool_invalid_model}' in REVIEW_TIER_STANDARD_REVIEWER_SLUGS. The lite tier draws its reviewer from the full panel instead." >&2
+      elif [ "${#standard_pool_models[@]}" -gt 0 ]; then
+        pick_pool_models=("${standard_pool_models[@]}")
+      fi
+    fi
+    while IFS= read -r model; do
+      [ -z "${model}" ] && continue
+      resolved_models+=("${model}")
+    done < <(reviewer_pick_seeded_models "${random_count}" "${PR_NUMBER:-0}" "${pick_pool_models[@]}")
+    # A broken pick (e.g. no sha256sum) must never leave the tier with fewer
+    # reviewers than asked for: fail open to the full panel.
+    if [ "${random_count}" -gt "${#pick_pool_models[@]}" ]; then
+      random_count="${#pick_pool_models[@]}"
+    fi
+    if [ "${#resolved_models[@]}" -ne "${random_count}" ]; then
+      echo "::warning::Review tier ${tier} random reviewer pick returned ${#resolved_models[@]} of ${random_count} models. Failing open to full reviewer set." >&2
+      reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
+      REVIEW_TIER_ACTIVE_MODELS_SOURCE="fallback_full_random_pick_failed"
+      return 0
+    fi
+    reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${resolved_models[@]}"
+    REVIEW_TIER_ACTIVE_MODELS_SOURCE="random_${tier}"
+    return 0
+  fi
 
   while IFS= read -r model; do
     [ -z "${model}" ] && continue
@@ -1581,6 +1752,8 @@ classify_review_tier() {
   local scope_state="empty"
   local scope_value=""
   local unsupported_path=""
+  local protected="false"
+  local protected_path=""
   local reviewer_count=0
   local classified_tier=""
 
@@ -1605,6 +1778,12 @@ classify_review_tier() {
     if reviewer_env_is_truthy "${FORCE_FULL_REVIEW_TIER:-false}"; then
       REVIEW_TIER_FORCED_FULL=true
       REVIEW_TIER_REASON="force_review_marker"
+    elif [ "${REVIEWER_RISK_TIER_FORCED_FULL:-false}" = "true" ]; then
+      # classify_reviewer_risk_tier (REVIEWER_RISK_TIER_ENABLED) already
+      # forced the full panel, e.g. REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX
+      # matched; a size tier must not shrink it again.
+      REVIEW_TIER_FORCED_FULL=true
+      REVIEW_TIER_REASON="risk_tier_forced_full"
     elif [ -z "${PR_NUMBER:-}" ]; then
       REVIEW_TIER_REASON="no_pr_number"
     elif [ ! -s "${RAW_REVIEWER_PR_CHANGED_FILES_FILE:-}" ]; then
@@ -1619,7 +1798,7 @@ classify_review_tier() {
 		echo "::warning::Invalid review-tier diff line count '${REVIEW_TIER_LOC}'. Failing closed to full tier." >&2
 		REVIEW_TIER_LOC=999999
 	  fi
-	  if ! path_metadata="$(reviewer_collect_review_tier_path_metadata "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}")"; then
+	  if ! path_metadata="$(reviewer_collect_review_tier_path_metadata "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" "${RAW_REVIEWER_PR_DIFF_FILE}")"; then
 		echo "::warning::Failed to classify review-tier paths from ${RAW_REVIEWER_PR_CHANGED_FILES_FILE}; failing open to full reviewer set." >&2
 		REVIEW_TIER_REASON="raw_changed_files_parse_failed"
       else
@@ -1630,18 +1809,35 @@ classify_review_tier() {
             scope_state) scope_state="${value}" ;;
             scope_value) scope_value="${value}" ;;
             unsupported_path) unsupported_path="${value}" ;;
+            protected) protected="${value}" ;;
+            protected_path) protected_path="${value}" ;;
           esac
         done <<< "${path_metadata}"
 
         case "${paths_state}" in
           available)
-            if [ "${doc_only}" = "true" ] && [ "${REVIEW_TIER_LOC}" -le "${lite_loc}" ]; then
+            # lite (one reviewer): any diff up to lite_loc that touches no
+            # protected path. standard (four reviewers): any diff up to
+            # standard_loc, in any folder, including small protected diffs.
+            if [ "${protected}" != "true" ] && [ "${REVIEW_TIER_LOC}" -le "${lite_loc}" ]; then
               REVIEW_TIER="lite"
-              REVIEW_TIER_REASON="doc_only_<=${lite_loc}_loc"
-            elif [ "${scope_state}" = "single" ] && [ -n "${scope_value}" ] && [ "${REVIEW_TIER_LOC}" -le "${standard_loc}" ]; then
+              if [ "${doc_only}" = "true" ]; then
+                REVIEW_TIER_REASON="doc_only_<=${lite_loc}_loc"
+              else
+                REVIEW_TIER_REASON="code_<=${lite_loc}_loc_unprotected"
+              fi
+            elif [ "${REVIEW_TIER_LOC}" -le "${standard_loc}" ]; then
               REVIEW_TIER="standard"
-              REVIEW_TIER_REASON="code_<=${standard_loc}_loc_single_dir"
-              REVIEW_TIER_SCOPE="${scope_value}"
+              if [ "${protected}" = "true" ] && [ "${REVIEW_TIER_LOC}" -le "${lite_loc}" ]; then
+                REVIEW_TIER_REASON="protected_path_<=${lite_loc}_loc"
+              elif [ "${scope_state}" = "single" ] && [ -n "${scope_value}" ]; then
+                REVIEW_TIER_REASON="code_<=${standard_loc}_loc_single_dir"
+              else
+                REVIEW_TIER_REASON="code_<=${standard_loc}_loc"
+              fi
+              if [ "${scope_state}" = "single" ] && [ -n "${scope_value}" ]; then
+                REVIEW_TIER_SCOPE="${scope_value}"
+              fi
             else
               REVIEW_TIER="full"
               REVIEW_TIER_REASON="default"
@@ -1678,6 +1874,11 @@ classify_review_tier() {
           *) REVIEW_TIER_REASON="empty_review_tier_subset" ;;
         esac
         ;;
+      fallback_full_random_pick_failed)
+        REVIEW_TIER="full"
+        REVIEW_TIER_FORCED_FULL=true
+        REVIEW_TIER_REASON="random_reviewer_pick_failed"
+        ;;
       empty_live)
         REVIEW_TIER="full"
         REVIEW_TIER_FORCED_FULL=true
@@ -1698,11 +1899,11 @@ classify_review_tier() {
 
   reviewer_count="$(wc -l < "${REVIEWER_ACTIVE_MODELS_FILE}" 2>/dev/null || echo 0)"
   if [ -n "${unsupported_path}" ]; then
-    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} unsupported_path=${unsupported_path}"
+    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} protected=${protected}${protected_path:+ protected_path=${protected_path}} unsupported_path=${unsupported_path}"
   elif [ -n "${REVIEW_TIER_SCOPE}" ]; then
-    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} scope=${REVIEW_TIER_SCOPE}"
+    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} protected=${protected}${protected_path:+ protected_path=${protected_path}} scope=${REVIEW_TIER_SCOPE}"
   else
-    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE}"
+    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} protected=${protected}${protected_path:+ protected_path=${protected_path}}"
   fi
 }
 # ── End reviewer risk-tier helpers ───────────────────────────────────
