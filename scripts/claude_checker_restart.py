@@ -11,18 +11,28 @@ comments on anything itself.
 
 Two subcommands, each printing one JSON object on stdout:
 
-  scan   --sessions-file S --triggers-file T --repo OWNER/REPO --self ID
-         --state-out F
+  scan   --sessions-file S --triggers-file T [--triggers-file T2 ...]
+         [--triggers-cursor C2 ...] --repo OWNER/REPO --self ID --state-out F
       Reads the saved newest `list_sessions` page (`mine: true`,
-      `limit: 100`) and the saved `list_triggers` page (`enabled: true`,
-      `limit: 100`), exactly as the harness saved them (an untrusted-data
-      envelope around the JSON is fine). Lists the open `ai:claude` issues of
+      `limit: 100`) and the saved `list_triggers` pages (`enabled: true`,
+      `limit: 100`, one `--triggers-file` per page in the order read; the
+      pickup reads up to 5), exactly as the harness saved them (an
+      untrusted-data envelope around the JSON is fine). Every page after the
+      first also takes one `--triggers-cursor`, in the same order: the
+      `cursor` that page was read with. The trigger listing is complete only
+      when every file carries a boolean `has_more` (a bare array or a page
+      without the field counts as incomplete), the last file's `has_more` is
+      false, every earlier file has
+      `has_more` and a `next_cursor`, and each cursor is the `next_cursor` of
+      the file before it, so a page left out between two others is caught;
+      with more than 100 enabled Routines, one page never proves condition 1
+      (issue #4910, conformance run 3). Lists the open `ai:claude` issues of
       `--repo` with one REST call and reads their progress logs from the
       project branches over git (one `git ls-remote`, one shallow
       `git fetch`, no REST). Writes everything `decide` needs to `F` and
       prints `{"lookup": [session ids], "candidates": n, "state": F,
-      "log_projects": n, "errors": [...]}`. The pickup calls `get_session`
-      once per `lookup` id.
+      "log_projects": n, "trigger_pages": n, "triggers_complete": bool,
+      "errors": [...]}`. The pickup calls `get_session` once per `lookup` id.
 
   decide --state F [--lookup-file L]
       `L` is a JSON object mapping each looked-up session id to the
@@ -54,7 +64,8 @@ looked up is kept (`not_looked_up`) until a later wake looks it up.
 
 Restart (Q63, all must hold; the first that fails is the `skipped` reason):
 
-  0. the trigger page is complete (`has_more` false);
+  0. the trigger listing is complete (`load_trigger_pages`: the pages join
+     up through their cursors and the last page's `has_more` is false);
   1. no enabled trigger has `persistent_session_id` equal to the checker
      (`has_pending_trigger`), and no other checker of the slug is bound to
      one (`sibling_checker_alive`);
@@ -88,8 +99,8 @@ Re-queue (OWNER scope addition): a checker named only by a progress log that
 `get_session` reports as not found. The issue is re-queued when it is still
 open, labelled `ai:claude`, not `ai:claude-blocked`; no project session on the
 page is active; no other checker of the slug is on the page; the trigger
-page is complete (`has_more` false) and no enabled trigger on it belongs to
-the project; and no trusted `/reclarify` comment was
+listing is complete (as in condition 0 above) and no enabled
+trigger on it belongs to the project; and no trusted `/reclarify` comment was
 posted in the last `REQUEUE_COOLDOWN_HOURS` (24). A `requeue` entry carries
 `repo`, `issue`, `slug`, `checker`, and the exact `comment_body`, which
 starts with `/reclarify`.
@@ -285,14 +296,89 @@ def load_sessions(path: str) -> list[dict]:
 	return sessions
 
 
-def load_triggers(path: str) -> tuple[list[dict], bool]:
-	"""Return (routines, has_more)."""
+def _load_trigger_page(path: str) -> tuple[list[dict], bool | None, str]:
+	"""Return (routines, has_more, next_cursor) for one saved `list_triggers` page.
+
+	`has_more` is None when the page carries no boolean `has_more` (a bare
+	array, or an object without the field). The API always sends it, so such
+	a page was cut or rebuilt and cannot show where the listing ends; the
+	callers treat it as incomplete.
+	"""
 	payload = _load_json_value(path)
-	has_more = bool(payload.get("has_more")) if isinstance(payload, dict) else False
+	raw_has_more = payload.get("has_more") if isinstance(payload, dict) else None
+	has_more = raw_has_more if isinstance(raw_has_more, bool) else None
+	next_cursor = payload.get("next_cursor") if isinstance(payload, dict) else ""
 	routines = payload.get("data") if isinstance(payload, dict) else payload
 	if not isinstance(routines, list) or any(not isinstance(item, dict) for item in routines):
 		raise ValueError("expected the list_triggers result or its `data` array of objects")
-	return routines, has_more
+	return routines, has_more, next_cursor if isinstance(next_cursor, str) else ""
+
+
+def load_triggers(path: str) -> tuple[list[dict], bool]:
+	"""Return (routines, has_more); `has_more` is true unless the page says false."""
+	routines, has_more, _ = _load_trigger_page(path)
+	return routines, has_more is not False
+
+
+def load_trigger_pages(paths: list[str], cursors: list[str] | None = None, problems: list[str] | None = None) -> tuple[list[dict], bool]:
+	"""Return (routines, has_more) for the `list_triggers` pages the pickup read, in the order read.
+
+	`cursors[k]` is the `cursor` the page in `paths[k + 1]` was read with, so
+	there is one fewer cursor than pages. The routines of every page are
+	joined (a repeated id is kept once). The returned `has_more` is false, a
+	complete listing, only when all of these hold:
+	- at least one page was given;
+	- every page carries a boolean `has_more` (a bare array, or a page
+		without the field, cannot show where the listing ends);
+	- every page but the last has `has_more` and a `next_cursor`, and the
+		last page has `has_more` equal to false;
+	- there is exactly one cursor per page after the first, and each equals
+		the `next_cursor` of the page before it.
+	Otherwise it is true, which restarts and re-queues nothing (fail safe).
+	The cursor check is what catches a page left out between two others: the
+	page after the gap was read with the missing page's `next_cursor`, not
+	with the one before the gap. The pages themselves cannot show a gap.
+	Each failed check except a last page that still has `has_more` (the
+	pickup's 5-page cap) is appended to `problems`.
+	"""
+	cursors = list(cursors or [])
+	routines: list[dict] = []
+	seen: set = set()
+	complete = bool(paths)
+	issues: list[str] = []
+	if not paths:
+		issues.append("no list_triggers page given")
+	elif len(cursors) != len(paths) - 1:
+		complete = False
+		issues.append(f"{len(paths)} list_triggers pages need {len(paths) - 1} --triggers-cursor values, got {len(cursors)}")
+	for index, path in enumerate(paths):
+		page, page_has_more, next_cursor = _load_trigger_page(path)
+		last = index == len(paths) - 1
+		if page_has_more is None:
+			complete = False
+			issues.append(f"list_triggers page {index + 1} of {len(paths)} has no has_more field, so it cannot show where the listing ends")
+		elif last:
+			if page_has_more:
+				complete = False
+		elif not page_has_more:
+			complete = False
+			issues.append(f"list_triggers page {index + 1} of {len(paths)} ends the listing but is not the last page")
+		elif not next_cursor:
+			complete = False
+			issues.append(f"list_triggers page {index + 1} of {len(paths)} has has_more but no next_cursor, so the page after it cannot be checked")
+		elif index < len(cursors) and cursors[index] != next_cursor:
+			complete = False
+			issues.append(f"list_triggers page {index + 2} was not read with the next_cursor of page {index + 1}")
+		for routine in page:
+			key = routine.get("id")
+			if isinstance(key, str) and key:
+				if key in seen:
+					continue
+				seen.add(key)
+			routines.append(routine)
+	if problems is not None:
+		problems.extend(issues)
+	return routines, not complete
 
 
 def load_lookups(path: str) -> dict[str, Any]:
@@ -861,7 +947,18 @@ def build_parser() -> argparse.ArgumentParser:
 	sub = parser.add_subparsers(dest="command", required=True)
 	scan = sub.add_parser("scan", help="read the inputs, write the state file, and list the get_session lookups")
 	scan.add_argument("--sessions-file", required=True, help="saved list_sessions result (mine: true, limit: 100)")
-	scan.add_argument("--triggers-file", required=True, help="saved list_triggers result (enabled: true, limit: 100)")
+	scan.add_argument(
+		"--triggers-file",
+		required=True,
+		action="append",
+		help="saved list_triggers result (enabled: true, limit: 100); repeat once per page, in the order read",
+	)
+	scan.add_argument(
+		"--triggers-cursor",
+		action="append",
+		default=[],
+		help="the cursor a later list_triggers page was read with; one per page after the first, in the order read",
+	)
 	scan.add_argument("--repo", required=True, help="owner/repo whose open ai:claude issues are scanned")
 	scan.add_argument("--self", default="", help="the pickup's own session id (never counted as project activity)")
 	scan.add_argument("--state-out", required=True, help="where to write the state for `decide`")
@@ -877,11 +974,13 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 	if args.command == "scan":
 		try:
 			sessions_raw = load_sessions(args.sessions_file)
-			triggers_raw, has_more = load_triggers(args.triggers_file)
+			trigger_page_problems: list[str] = []
+			triggers_raw, has_more = load_trigger_pages(args.triggers_file, args.triggers_cursor, trigger_page_problems)
 		except (OSError, ValueError) as exc:
 			print(json.dumps({"lookup": [], "error": f"cannot read inputs: {exc}"}))
 			return 2
 		state = build_state(sessions_raw, triggers_raw, has_more, args.repo, args.self)
+		state["errors"].extend(trigger_page_problems)
 		lookup = lookups_needed(state, now)
 		try:
 			with open(args.state_out, "w", encoding="utf-8") as handle:
@@ -896,6 +995,8 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 					"candidates": len(collect_candidates(state)),
 					"state": args.state_out,
 					"log_projects": len(state["log_projects"]),
+					"trigger_pages": len(args.triggers_file),
+					"triggers_complete": not has_more,
 					"errors": state["errors"],
 				}
 			)

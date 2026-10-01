@@ -1322,6 +1322,18 @@ This happens at most once per 24 hours, counting any trusted `/reclarify`.
 
 Budget: one open-issue list, plus one issue or comment read per candidate. The
 logs are read over git. Every failed read or missing input keeps the checker.
+Condition 1 needs the whole list of enabled Routines, so step 1 reads up to 5
+`list_triggers` pages of 100 while a page has `has_more`, and step 3b passes
+each page to `scan`, with the `cursor` each later page was read with
+(`--triggers-cursor`). A listing whose last page still has `has_more`, that
+holds a page without a `has_more` field, or whose cursors do not join each
+page to the one before it (a page left out), restarts and re-queues nothing.
+Step 1's own branches fail safe on an incomplete listing (one that still has
+`has_more` after 5 pages, or whose read stopped at a `list_triggers` call that
+failed twice or at a page without a `has_more` field): `start` creates and
+deletes nothing, a wake that cannot see its own
+`Claude issue pickup: hourly` trigger deletes nothing and stops, `stop` says
+the listing was incomplete, and no catch-up wake is scheduled.
 
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without
