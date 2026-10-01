@@ -914,7 +914,7 @@ for `<dst>`, with `<src>` taking the role of `HEAD`. A detached scratch
 worktree pushing to an open PR's branch is therefore allowed, and a worktree
 pushing merged history to a merged branch with no open PR is blocked,
 whatever the main checkout is on. Deletions, tag refspecs (patterns such as
-`refs/tags/*` included), and `--tags` with no refspec land no commits on a
+`refs/tags/*` included), and `--tags` (or `--tag`) with no refspec land no commits on a
 branch and are not judged, even when the directory cannot be resolved; a push
 without a refspec judges the current branch. A bulk push (`--all`, `--branches`,
 `--mirror`, or a prefix git expands to one, the `:` matching refspec, or a `*`
@@ -924,7 +924,7 @@ listed; the ask issues no API call and applies on the default branch too. When t
 substitution, a subshell, `pushd`/`popd`, a `cd` joined by `||`, `&` or `|`,
 a `cd` after `&&` behind a command that may fail once its `&&` chain ends
 (`a && cd x; git push`), a `cd` inside a list sent to the background with `&`,
-`export GIT_DIR`, a path that does not exist yet), or a refspec cannot be
+`export GIT_DIR`, a path that does not exist yet or cannot be entered), or a refspec cannot be
 turned into one branch (a variable, a glob or brace pattern, a `heads/` /
 `tags/` / `remotes/` shorthand, a word starting with `-`), that call is
 judged on the session checkout as before and the guard emits a warning naming

@@ -1323,6 +1323,8 @@ def test_a_subshell_only_affects_later_commands(tmp_path: Path) -> None:
 		"git push origin 'refs/tags/v1.?'",
 		"git push --tags origin",
 		"git push origin --tags",
+		"git push --tag origin",
+		"git push --ta origin",
 		"git status",
 		"git log -1",
 	],
@@ -1338,7 +1340,6 @@ def test_deletions_tags_and_unguarded_calls_yield_no_target(tmp_path: Path, comm
 		("git push -u origin", "", "HEAD"),
 		("git push --tags origin HEAD:feature/y", "feature/y", "HEAD"),
 		("git push --follow-tags origin", "", "HEAD"),
-		("git push --tag origin", "", "HEAD"),
 		("git push origin HEAD", "", "HEAD"),
 		("git push origin feature/y", "feature/y", "feature/y"),
 		("git push origin +HEAD:refs/heads/feature/y", "feature/y", "HEAD"),
@@ -1922,9 +1923,36 @@ def test_unresolvable_directory_still_falls_back_for_a_branch_push(tmp_path: Pat
 @pytest.mark.parametrize("command", ["git push origin feature/merged:", "git push origin +feature/merged:"])
 def test_empty_destination_refspec_judges_the_checked_out_branch(tmp_path: Path, command: str) -> None:
 	"""PR #5173 review: git rejects `<src>:` for a push (`fatal: invalid
-	refspec`), so it writes nothing; the guard judges the checked-out branch,
-	as for a push without a refspec, rather than skipping the call."""
-	assert _targets(command, tmp_path) == [("push", str(tmp_path), "", "feature/merged", True, False)]
+	refspec`), so it writes nothing; the guard judges the checked-out branch
+	with HEAD, as for a push without a refspec, rather than skipping the call."""
+	assert _targets(command, tmp_path) == [("push", str(tmp_path), "", "HEAD", True, False)]
+
+
+def test_ambiguous_tags_prefix_still_judges_the_checked_out_branch(tmp_path: Path) -> None:
+	"""PR #5173 review: only `--ta`, `--tag` and `--tags` mean tags-only; git
+	refuses `--t` as ambiguous with `--thin`, so it is judged as before."""
+	assert _targets("git push --t origin", tmp_path) == [("push", str(tmp_path), "", "HEAD", True, False)]
+
+
+def test_cd_into_a_directory_without_search_permission_falls_back(monkeypatch, tmp_path: Path) -> None:
+	"""PR #5173 review: `cd` fails on a directory the process cannot enter, so
+	`cd locked; git push` pushes from the session checkout; the guard judges
+	the session checkout with a reason instead of probing the locked
+	directory (where git cannot run, which would allow silently)."""
+	locked = tmp_path / "locked"
+	locked.mkdir()
+	real_access = twin_guard.os.access
+
+	def fake_access(path, mode, *args, **kwargs):
+		if os.path.normpath(str(path)) == str(locked) and mode & os.X_OK:
+			return False
+		return real_access(path, mode, *args, **kwargs)
+
+	monkeypatch.setattr(twin_guard.os, "access", fake_access)
+	targets = twin_guard.guard_targets("cd locked; git push origin HEAD:feature/y", str(tmp_path))
+	assert len(targets) == 1
+	assert (targets[0].cwd, targets[0].branch, targets[0].tip) == (str(tmp_path), "", "HEAD")
+	assert "cannot be entered" in targets[0].fallback_reason
 
 
 def test_failed_reverification_is_not_repeated_for_the_same_pair(monkeypatch, tmp_path: Path, capsys) -> None:
