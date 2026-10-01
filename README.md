@@ -1762,7 +1762,10 @@ through `clarify → plan → implement → review`.
   Test & Mark Stable Release run name, so every cycle shares one fingerprint),
   the failing step, and a normalised error signature built from the step's
   `##[error]` / `::error::` output (numbers, SHAs, URLs, and temp paths
-  stripped) — the same bug in ten consumers is one
+  stripped); a review/autofix report's signature comes from its evidence
+  without the reporter's own `failure_reason=` / `finalize_reason=` /
+  `consecutive_failed_runs=` / `flags:` header lines, led by the run's first
+  error (`AUTOFIX_FAILURE_FIRST_ERROR`) — the same bug in ten consumers is one
   issue with an occurrence comment per report (`<!-- workflow-failure-heal:fp=… -->`).
   A recurrence after the previous heal issue closed increments the generation
   (`<!-- workflow-failure-heal:gen=N -->`, `root=…`); an escalation on a heal

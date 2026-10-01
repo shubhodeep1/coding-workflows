@@ -168,7 +168,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     heal issues of the same fingerprint / lineage. It de-dupes by fingerprint
     (label `ai:workflow-heal`; the promote cycle's `[cycle:<id>]` run-name
     suffix is ignored, and the error signature comes from the steps'
-    `##[error]` output, not the echoed step script), de-dupes an
+    `##[error]` output, not the echoed step script; for an `autofix_failure`
+    report it comes from the evidence minus the reporter's header lines,
+    `error-signature --strip-autofix-header`, led by the
+    `AUTOFIX_FAILURE_FIRST_ERROR` line the reporter adds), de-dupes an
     `autofix_failure` report also by its pull request's `source=` marker (that
     PR's closed heal issues, and the heal issue its `ai/issue-<N>` head branch
     fixes, continue the lineage), caps the lineage at

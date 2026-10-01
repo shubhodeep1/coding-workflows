@@ -283,8 +283,11 @@ if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	# evidence identify the failure; the job logs still go to the model below.
 	[ -n "${PAYLOAD_WORKFLOW_NAME}" ] && FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
 	FIRST_FAILING_STEP="autofix:${FAILURE_REASON:-unknown}"
+	# The reporter's own header lines are not evidence: its `flags:` line
+	# matched the signature patterns on every report, so unrelated failures
+	# shared one fingerprint and lineage (PR #5892 escalated at generation 4).
 	if [ -s "${FAILURE_EVIDENCE_FILE}" ]; then
-		SIGNATURE="$(python3 "${HEAL_PY}" error-signature --log-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || echo "no-error-lines")"
+		SIGNATURE="$(python3 "${HEAL_PY}" error-signature --strip-autofix-header --log-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || echo "no-error-lines")"
 	else
 		SIGNATURE="autofix:${FAILURE_REASON:-unknown}"
 	fi
