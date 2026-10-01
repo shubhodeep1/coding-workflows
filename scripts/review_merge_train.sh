@@ -429,7 +429,8 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # Input:     none (MT_REPO).
 # Output:    one key per line on stdout, sorted and unique: the head branch
 #            of each active review run, plus "pr:<N>" for a workflow_dispatch
-#            run named for PR <N>.
+#            run named for PR <N>. Every run an active-status query returned
+#            counts as active, whatever its own status field says.
 # Returns:   0 = the listing is complete: a PR with no key has no active run.
 #            1 = the listing is incomplete. Stdout carries nothing; the caller
 #            must not release on it, and the next invocation retries.
@@ -455,7 +456,8 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 #            A run created after the first query was issued is outside the
 #            listing, as it is for any single snapshot.
 # Incomplete: a page that failed after gh_retry, a malformed page (including
-#            a run with no numeric id or no non-empty path, which the listing
+#            a total_count that is not a whole number, a run with no numeric
+#            id, no non-empty path, or no non-empty status, which the listing
 #            can neither deduplicate nor classify, and a missing or malformed
 #            created_at on a page that needs a next query), a short page
 #            before its total_count (the listing shifted while it was read),
@@ -487,7 +489,7 @@ _mt_inflight_review_branches()
 				break 2
 			fi
 			if ! printf '%s' "${__mt_runs_page_json}" \
-				| jq -e '(.total_count | type == "number" and . >= 0) and (.workflow_runs | type == "array") and all(.workflow_runs[]; (.id | type == "number") and (.path | type == "string" and length > 0))' >/dev/null 2>&1; then
+				| jq -e '(.total_count | type == "number" and . >= 0 and . == floor) and (.workflow_runs | type == "array") and all(.workflow_runs[]; (.id | type == "number") and (.path | type == "string" and length > 0) and (.status | type == "string" and length > 0))' >/dev/null 2>&1; then
 				__mt_runs_reason="malformed_page"
 				break 2
 			fi
@@ -540,7 +542,7 @@ _mt_inflight_review_branches()
 		fi
 	done
 	if [ -z "${__mt_runs_reason}" ]; then
-		if ! __mt_runs_keys="$(printf '%s' "${__mt_runs_all}" | jq -r '.[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | ((.head_branch // empty), (if (.event // "") == "workflow_dispatch" then ((.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)") else empty end))' 2>/dev/null)"; then
+		if ! __mt_runs_keys="$(printf '%s' "${__mt_runs_all}" | jq -r '.[]? | select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | ((.head_branch // empty), (if (.event // "") == "workflow_dispatch" then ((.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)") else empty end))' 2>/dev/null)"; then
 			__mt_runs_reason="filter_failed"
 		fi
 	fi

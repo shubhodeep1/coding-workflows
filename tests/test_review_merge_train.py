@@ -59,8 +59,10 @@ path="${endpoint%%\?*}"
 # parameter and by a URL-encoded created=<=<timestamp> bound (runs without a
 # created_at never match a bound), paged by page/per_page, with total_count
 # (issue #5443). A fixture may set total_count_override: {"<status>": <n>} to
-# report more runs than it holds. fail_runs_get fails the call;
-# malformed_runs returns an object with no total_count.
+# report more runs than it holds. A run's listed_status, when set, is the
+# status query that returns it, whatever its own status field says.
+# fail_runs_get fails the call; malformed_runs returns an object with no
+# total_count.
 if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
   if [ -f "${FAKE_GH_DIR}/fail_runs_get" ] || [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
   query=""
@@ -87,7 +89,7 @@ if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
       runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_page1.json")"
     fi
     page_json="$(printf '%s' "${runs_source}" | jq -c --arg st "${run_status}" --arg cm "${run_created_max}" --argjson pg "${run_page}" --argjson pp "${run_per_page}" '
-      ((.workflow_runs // []) | map(select($st == "" or .status == $st))
+      ((.workflow_runs // []) | map(select($st == "" or (.listed_status // .status) == $st))
         | map(select($cm == "" or ((.created_at // "") != "" and .created_at <= $cm)))) as $r
       | {total_count: ((.total_count_override // {})[$st] // ($r | length)),
          workflow_runs: $r[(($pg - 1) * $pp):($pg * $pp)]}')"
@@ -925,6 +927,64 @@ def test_release_leaves_pr_queued_when_a_run_cannot_be_classified(tmp_path: Path
 	else:
 		del run[missing]
 	_write_runs(fixtures, [run])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("status", ["missing", None, ""])
+def test_release_leaves_pr_queued_when_a_run_has_no_status(tmp_path: Path, status: object) -> None:
+	"""PR #5451 review round 2: a run with no status could be an active review run.
+
+	Every run an active-status query returns must carry a non-empty status, or
+	the page is malformed and the queued PR stays queued.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 5000, "listed_status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
+		"path": ".github/workflows/ai-review.yml"}
+	if status != "missing":
+		run["status"] = status
+	_write_runs(fixtures, [run])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_holds_pr_for_review_run_with_unexpected_status(tmp_path: Path) -> None:
+	"""PR #5451 review round 2 (AD-11): an active-status query proves the run active.
+
+	A review run the in_progress query returns with another status value still
+	holds its PR instead of being dropped by a status filter.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 5000, "listed_status": "in_progress", "status": "waiting",
+		"head_branch": "ai/issue-4064", "event": "pull_request", "path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_on_fractional_total_count(tmp_path: Path) -> None:
+	"""PR #5451 review round 2: a fractional total_count is malformed, never floored.
+
+	100 runs read against total_count 100.5 would look complete once floored,
+	so a review run past them could be missed.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+		 "path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
+		for i in range(100)
+	], total_count_override={"in_progress": 100.5})
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
 	assert "reason=malformed_page status=in_progress page=1" in result.stderr
