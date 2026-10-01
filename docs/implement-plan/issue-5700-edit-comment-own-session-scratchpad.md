@@ -1,20 +1,20 @@
 # Implement-Plan Log — edit_comment.py: read input files only from the calling session's own scratchpad
 
-- Plan: docs/plans/issue-5700-edit-comment-own-session-scratchpad-plan.md
+- Plan: docs/completed/issue-5700-edit-comment-own-session-scratchpad-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5700
-- Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5700-edit-comment-own-session-scratchpad   Final PR: #5713 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #5714
+- Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5452-edit-comment-scratchpad-only
+- Project branch: claude/implement-plan-issue-5700-edit-comment-own-session-scratchpad   Final PR: #5713 draft (into claude/implement-plan-issue-5452-edit-comment-scratchpad-only)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-5452-edit-comment-scratchpad-only)
+- Waiting on: the completion PR from claude/implement-plan-issue-5700-edit-comment-own-session-scratchpad-complete
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01S21tY9dpFN43vkHR6vDw4H   safety net and hand-back re-armed by the round-3 stage session_01Urvm34cqyQyoZTJGrTV9Qt (ids in its report)
+- Check-in: checker session_01S21tY9dpFN43vkHR6vDw4H   safety net and hand-back: see the completion stage report
 - Last updated: 2026-10-01
-- Last note: the review of d377c0e handed off round 2 (ledger 09be1f5c…) with one task gap: the PR #5714 description still described the twin sync as pending. This round rewrote the description to match the head (both twin syncs done, parity green, current test counts) and records the round here.
+- Last note: completion stage: plan moved to docs/completed/; conformance run 1 CONFORMANT; security skipped (plan header); validation cycle 1 passed on the project branch (run 36817704751, 10/10 tests). Next: final-merge 1/1 marks #5713 ready and closes #5700 with `ai:merged` once it merges.
 
 ## Phases
-1. [ ] Phase 1 — bind edit_comment.py input files to the caller's own session scratchpad   — PR #5714 open (waiting on the review of the round-3 description fix); review rounds: 3; interventions: 0; protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
+1. [x] Phase 1 — bind edit_comment.py input files to the caller's own session scratchpad   — PR #5714 merged 2026-10-01 (cb5e5c2, merged by the master session under Q46 after round 3 was all-rejected); review rounds: 3; interventions: 0; protected paths: `.claude/scripts/edit_comment.py`, `.claude/commands/implement-plan-claude.md`
    - [x] twin `workflow-templates/.claude/scripts/edit_comment.py`: `SESSION_ID_ENV_VAR`, `SESSION_ID_RE`, `_caller_scratchpad_identity`, `is_own_scratchpad_path`, owner check in `read_input_file`
    - [x] `tests/test_edit_comment.py`: fixture binds the session id and uid; other-session, other-uid, other-owner, and bad-session-id cases; `is_own_scratchpad_path` table
    - [x] CLAUDE.md §23.I, `agents.md`, twin `implement-plan-claude.md` Comment helper
@@ -26,14 +26,20 @@
    - [x] review round 3 (head d377c0e, hand-off round 2): PR #5714 description updated to the head's state; no code change
 
 ## Conformance
+- Run 1 — 2026-10-01: CONFORMANT — no fixes (pre-security). G1–G5 mapped to `.claude/scripts/edit_comment.py:115-145,188-208` and the docs; 864 tests passed, 1 skipped; `ruff` clean; end to end, `--dry-run` from this session's own scratchpad succeeds, and a sibling session's scratchpad or an unset `CLAUDE_CODE_SESSION_ID` exits 1.
 
 ## Security pass
+- Skipped (ai:security: automation-produced issue, per the plan header).
 
 ## Validation
+- Cycle 1 — run 36817704751 2026-10-01 (target_ref: claude/implement-plan-issue-5700-edit-comment-own-session-scratchpad, head cb5e5c2): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 288s).
 
 ## Completion
+- Completion PR from claude/implement-plan-issue-5700-edit-comment-own-session-scratchpad-complete (open) — doc moved to docs/completed/issue-5700-edit-comment-own-session-scratchpad-plan.md
+- Final PR #5713 draft
 
 ## Activation
+- n/a: the base is the #5452 project branch, so this change goes live with project #5452 (final PR #5464 into main).
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-30] Which trusted metadata binds the check to the caller? — Picked: A — `CLAUDE_CODE_SESSION_ID` must equal the `<session>` component and `claude-<os.getuid()>` the first component; fail closed when either is unavailable or malformed. Alternatives: B — the session id only; C — derive the identity from the parent process or the harness socket. Why: the harness exports the variable to every Bash call and a prefixed override leaves the allow rule; the uid covers other users on a shared `/tmp`; C has no documented contract. Applied in: phase 1 PR. Status: pending review
