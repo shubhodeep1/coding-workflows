@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5809-duplicate-check-trusted-target-fix-plan.md
 - Source issue: shubhodeep1/coding-workflows#5809 (https://github.com/shubhodeep1/coding-workflows/issues/5809)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4867-close-permission-prompt-duplicates
-- Project branch: claude/implement-plan-issue-5809-duplicate-check-trusted-target-fix   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5809-duplicate-check-trusted-target-fix   Final PR: #5832 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5862: twin sync (copy `workflow-templates/.claude/scripts/permission_prompts.py` into `.claude/scripts/` as a `[claude-twin-sync]` commit, then `/reclarify` on #5809)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project branch opened from the issue base; plan committed with this log.
+- Last note: phase 1 PR #5862 opened (twin only; 14 new cases fail on the base twin and pass after; hold claim posted); twin-sync blocker posted on #5809. Checker not armed: the resumed stage arms the wait on #5862.
 
 ## Phases
-1. [ ] Phase 1 — trusted target and same-repository fix PR in `duplicate-check`   — protected paths: `.claude/scripts/permission_prompts.py` (edited through its `workflow-templates/.claude/` twin)
+1. [ ] Phase 1 — trusted target and same-repository fix PR in `duplicate-check`   — protected paths: `.claude/scripts/permission_prompts.py` (edited through its `workflow-templates/.claude/` twin)   — PR #5862 open (waiting on twin sync); review rounds: 0; interventions: 0
    - `workflow-templates/.claude/scripts/permission_prompts.py`: target `author_association` trusted; fix PR same-repository head and trusted author; target evidence `null` when untrusted; docstrings
    - `tests/test_permission_prompt_duplicates.py`: trusted fixtures, failing cases for each new check, five-read budget kept
    - `CLAUDE.md` §23.I condition 2, `agents.md` "Duplicate close", `changelog.d/5809-duplicate-check-trusted-target-and-fix.md` [new]
