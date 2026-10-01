@@ -8,7 +8,7 @@ Automation posts issue comments as the same trusted `User` account a maintainer 
 | New comment markers | `<!-- ai:clarify-escalation:v1 -->` (`scripts/orchestrate_parse_and_post_answer.sh`), `<!-- ai:clarify-blocked:v1 -->` (`clarify.yml`), `<!-- ai:plan-blocked:v1 -->` and `<!-- ai:clarification-required:v1 -->` (`plan.yml`), `<!-- ai:implement-blocked:v1 -->` (`implement.yml`) |
 | Later-line `/reclarify` never counts on | `ai:orchestrator-tracking`, `ai:orchestrator-managed`, or a `Managed by: AI Orchestrator` body line |
 | Comment starting with `/reclarify` | unchanged, on every issue |
-| Extra GitHub API calls | 0 per route; when a Codex route releases a Claude claim, one label deletion per Claude label the issue carries (at most 2 more than before) |
+| Extra GitHub API calls | 0 per route; when a Codex route releases a Claude claim, one GraphQL `removeLabelsFromLabelable` call removes every Claude label the issue carries (one REST DELETE per label only when that call fails) |
 
 What this means for operators and maintainers: to resume a blocked standalone issue, answer and put `/reclarify` on its own line, outside any code block, with no HTML comment in the reply. On orchestrator issues, answer with `/answer` as the escalation says, or start the comment with `/reclarify`. Consumer repos get the stricter `ai-clarify.yml` gate on the next `@stable` sync. Until then the reusable workflow's own gate and route step apply.
 

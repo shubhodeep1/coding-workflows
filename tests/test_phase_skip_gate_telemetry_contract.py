@@ -267,57 +267,116 @@ def test_clarify_route_releases_stale_claude_labels_on_switch_to_codex() -> None
 			assert "issue_implementer=codex" in outputs, labels
 			assert f"release_claude_claim={str(release).lower()}" in outputs, labels
 	release_block = _step_block(CLARIFY_WF, "Release Claude claim on switch to Codex")
-	for encoded in ("ai%3Aclaude\"", "ai%3Aclaude-blocked\"", "ai%3Aclaude-handoff-failed\""):
-		assert f"/labels/{encoded}" in release_block, encoded
+	for name in ("ai:claude", "ai:claude-blocked", "ai:claude-handoff-failed"):
+		assert f'.name == "{name}"' in release_block, name
 
 
-def test_clarify_release_step_deletes_only_labels_the_issue_carries() -> None:
-	"""Review round 3 (§15): one DELETE per Claude label actually on the issue.
-
-	The step reads the issue metadata the route step already fetched, so a
-	release on an issue with only `ai:claude-blocked` costs one API call, not
-	three.
-	"""
+def _run_clarify_release_step(root: Path, issue: dict, graphql_ok: bool) -> tuple[list[str], list[dict], str]:
+	"""Run the real release step against a stub `gh`; return (calls, graphql bodies, stdout)."""
 	workflow = yaml.safe_load(_read(CLARIFY_WF))
 	step = next(step for step in workflow["jobs"]["clarify"]["steps"] if step.get("name") == "Release Claude claim on switch to Codex")
 	script = step["run"].replace("${{ github.repository }}", "o/r").replace(
 		"${{ steps.clarify_route.outputs.issue_implementer_reason }}", "label_override"
 	)
 	assert "${{" not in script
-	with tempfile.TemporaryDirectory() as workdir:
-		root = Path(workdir)
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		calls_path = root / "calls"
-		gh_stub = bin_dir / "gh"
-		gh_stub.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "${GH_CALLS_FILE}"\n', encoding="utf-8")
-		gh_stub.chmod(0o755)
-		meta_path = root / "issue.json"
-		for labels, expected in (
-			(["ai:codex", "ai:claude-blocked"], ["ai%3Aclaude-blocked"]),
-			(["ai:codex", "ai:claude-handoff-failed"], ["ai%3Aclaude-handoff-failed"]),
-			(["ai:codex", "ai:claude"], ["ai%3Aclaude"]),
-			(
-				["ai:claude", "ai:claude-blocked", "ai:claude-handoff-failed", "ai:codex"],
-				["ai%3Aclaude", "ai%3Aclaude-blocked", "ai%3Aclaude-handoff-failed"],
-			),
-			(["ai:codex", "ai:claude-blocked-extra"], []),
-		):
-			meta_path.write_text(json.dumps({"number": 123, "labels": [{"name": label} for label in labels]}), encoding="utf-8")
-			calls_path.write_text("", encoding="utf-8")
-			env = os.environ.copy()
-			for name in ("BASH_ENV", "ENV"):
-				env.pop(name, None)
-			env.update({
-				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
-				"GH_CALLS_FILE": str(calls_path),
-				"ISSUE_META_FILE": str(meta_path),
-				"ISSUE_NUMBER": "123",
-			})
-			result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True)
-			calls = calls_path.read_text(encoding="utf-8").splitlines()
-			assert calls == [f"api -X DELETE repos/o/r/issues/123/labels/{encoded}" for encoded in expected], labels
-			assert "CLAUDE_ISSUE_HANDOFF released issue=123" in result.stdout, labels
+	bin_dir = root / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	calls_path = root / "calls"
+	bodies_path = root / "graphql_bodies"
+	gh_stub = bin_dir / "gh"
+	gh_stub.write_text(
+		"#!/usr/bin/env bash\n"
+		"printf '%s\\n' \"$*\" >> \"${GH_CALLS_FILE}\"\n"
+		"if [ \"$1 $2\" = \"api graphql\" ]; then\n"
+		"  jq -c . >> \"${GH_GRAPHQL_BODIES_FILE}\"\n"
+		"  if [ \"${GH_GRAPHQL_OK}\" = \"true\" ]; then echo true; else echo 'gh: Could not resolve to a node' >&2; exit 1; fi\n"
+		"fi\n",
+		encoding="utf-8",
+	)
+	gh_stub.chmod(0o755)
+	meta_path = root / "issue.json"
+	meta_path.write_text(json.dumps(issue), encoding="utf-8")
+	calls_path.write_text("", encoding="utf-8")
+	bodies_path.write_text("", encoding="utf-8")
+	env = os.environ.copy()
+	for name in ("BASH_ENV", "ENV"):
+		env.pop(name, None)
+	env.update({
+		"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+		"GH_CALLS_FILE": str(calls_path),
+		"GH_GRAPHQL_BODIES_FILE": str(bodies_path),
+		"GH_GRAPHQL_OK": "true" if graphql_ok else "false",
+		"ISSUE_META_FILE": str(meta_path),
+		"ISSUE_NUMBER": "123",
+	})
+	result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True)
+	assert "CLAUDE_ISSUE_HANDOFF released issue=123" in result.stdout, issue
+	calls = calls_path.read_text(encoding="utf-8").splitlines()
+	bodies = [json.loads(line) for line in bodies_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+	return calls, bodies, result.stdout
+
+
+_CLARIFY_RELEASE_CASES = (
+	(["ai:codex", "ai:claude-blocked"], ["ai:claude-blocked"]),
+	(["ai:codex", "ai:claude-handoff-failed"], ["ai:claude-handoff-failed"]),
+	(["ai:codex", "ai:claude"], ["ai:claude"]),
+	(
+		["ai:claude", "ai:claude-blocked", "ai:claude-handoff-failed", "ai:codex"],
+		["ai:claude", "ai:claude-blocked", "ai:claude-handoff-failed"],
+	),
+	(["ai:codex", "ai:claude-blocked-extra"], []),
+)
+
+
+def _clarify_release_issue(labels: list[str], with_node_ids: bool) -> dict:
+	if not with_node_ids:
+		return {"number": 123, "labels": [{"name": label} for label in labels]}
+	return {
+		"number": 123,
+		"node_id": "I_issue123",
+		"labels": [{"name": label, "node_id": f"LA_{label}"} for label in labels],
+	}
+
+
+def test_clarify_release_step_removes_present_labels_in_one_graphql_call() -> None:
+	"""Review round 4 (§15): every Claude label on the issue goes in ONE call.
+
+	The step reads the issue metadata the route step already fetched, so it
+	spends nothing on absent labels, and batches the present ones into one
+	`removeLabelsFromLabelable` mutation instead of one REST DELETE each.
+	"""
+	for labels, expected in _CLARIFY_RELEASE_CASES:
+		with tempfile.TemporaryDirectory() as workdir:
+			calls, bodies, stdout = _run_clarify_release_step(Path(workdir), _clarify_release_issue(labels, True), graphql_ok=True)
+		if not expected:
+			assert calls == [], labels
+			continue
+		assert len(calls) == 1 and calls[0].startswith("api graphql --input - "), (labels, calls)
+		assert len(bodies) == 1, labels
+		assert "removeLabelsFromLabelable" in bodies[0]["query"], labels
+		assert bodies[0]["variables"] == {"id": "I_issue123", "labelIds": [f"LA_{label}" for label in expected]}, labels
+		assert "release_batch_fallback" not in stdout, labels
+
+
+def test_clarify_release_step_falls_back_to_one_delete_per_present_label() -> None:
+	"""A failed batch call, or a snapshot without node ids, falls back to REST.
+
+	Fallback deletes only the Claude labels the issue carries (never a
+	look-alike), one DELETE each, so a failed mutation never leaves the
+	issue holding a stale Claude label.
+	"""
+	for graphql_ok, with_node_ids in ((False, True), (True, False)):
+		for labels, expected in _CLARIFY_RELEASE_CASES:
+			with tempfile.TemporaryDirectory() as workdir:
+				calls, _, stdout = _run_clarify_release_step(
+					Path(workdir), _clarify_release_issue(labels, with_node_ids), graphql_ok=graphql_ok
+				)
+			deletes = [call for call in calls if call.startswith("api -X DELETE")]
+			encoded = [label.replace(":", "%3A") for label in expected]
+			assert deletes == [f"api -X DELETE repos/o/r/issues/123/labels/{name}" for name in encoded], (labels, calls)
+			graphql_calls = [call for call in calls if call.startswith("api graphql")]
+			assert len(graphql_calls) == (1 if expected and with_node_ids else 0), (labels, calls)
+			assert ("release_batch_fallback" in stdout) == bool(expected), (labels, stdout)
 
 
 def test_clarify_route_hands_trailing_reclarify_answer_to_claude() -> None:

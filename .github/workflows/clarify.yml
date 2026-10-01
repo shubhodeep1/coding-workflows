@@ -590,14 +590,29 @@ jobs:
           # §15: only delete a label the issue carries, read from the issue
           # metadata the route step already fetched (the same snapshot that
           # set release_claude_claim), so no call is spent on absent labels.
-          if jq -e '[(.labels // [])[]?.name] | index("ai:claude") != null' "${ISSUE_META_FILE}" >/dev/null; then
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai%3Aclaude" >/dev/null 2>&1 || true
-          fi
-          if jq -e '[(.labels // [])[]?.name] | index("ai:claude-blocked") != null' "${ISSUE_META_FILE}" >/dev/null; then
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai%3Aclaude-blocked" >/dev/null 2>&1 || true
-          fi
-          if jq -e '[(.labels // [])[]?.name] | index("ai:claude-handoff-failed") != null' "${ISSUE_META_FILE}" >/dev/null; then
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai%3Aclaude-handoff-failed" >/dev/null 2>&1 || true
+          # Review round 4 (§15): the present labels go in ONE GraphQL
+          # removeLabelsFromLabelable call. REST has no multi-label remove,
+          # and a PUT of the whole label set would drop any label added since
+          # the snapshot. If the snapshot lacks node ids or the call fails,
+          # fall back to one REST DELETE per present label, as before.
+          RELEASE_CLAUDE_LABELS_JSON="$(jq -c '[(.labels // [])[]? | select(.name == "ai:claude" or .name == "ai:claude-blocked" or .name == "ai:claude-handoff-failed")]' "${ISSUE_META_FILE}")"
+          if [ "$(jq 'length' <<<"${RELEASE_CLAUDE_LABELS_JSON}")" -gt 0 ]; then
+            RELEASE_CLAUDE_BATCHED="false"
+            RELEASE_ISSUE_NODE_ID="$(jq -r '.node_id // ""' "${ISSUE_META_FILE}")"
+            if [ -n "${RELEASE_ISSUE_NODE_ID}" ] && jq -e 'all(.[]; (.node_id // "") != "")' <<<"${RELEASE_CLAUDE_LABELS_JSON}" >/dev/null; then
+              RELEASE_BATCH_RESULT="$(jq -n --arg id "${RELEASE_ISSUE_NODE_ID}" --argjson labels "${RELEASE_CLAUDE_LABELS_JSON}" \
+                '{query: "mutation($id: ID!, $labelIds: [ID!]!) { removeLabelsFromLabelable(input: {labelableId: $id, labelIds: $labelIds}) { clientMutationId } }", variables: {id: $id, labelIds: [$labels[].node_id]}}' \
+                | gh api graphql --input - --jq '(.errors // [] | length == 0) and (.data.removeLabelsFromLabelable != null)' 2>/dev/null || true)"
+              if [ "${RELEASE_BATCH_RESULT}" = "true" ]; then
+                RELEASE_CLAUDE_BATCHED="true"
+              fi
+            fi
+            if [ "${RELEASE_CLAUDE_BATCHED}" != "true" ]; then
+              echo "CLAUDE_ISSUE_HANDOFF release_batch_fallback issue=${ISSUE_NUMBER} transport=rest"
+              while IFS= read -r release_label_encoded; do
+                gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${release_label_encoded}" >/dev/null 2>&1 || true
+              done < <(jq -r '.[].name | @uri' <<<"${RELEASE_CLAUDE_LABELS_JSON}")
+            fi
           fi
           echo "CLAUDE_ISSUE_HANDOFF released issue=${ISSUE_NUMBER} reason=${{ steps.clarify_route.outputs.issue_implementer_reason }}"
 
