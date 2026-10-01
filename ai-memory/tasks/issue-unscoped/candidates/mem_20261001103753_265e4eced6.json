@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:_bound_wakes, the `is_resume` flag derivation\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The selector treats any trigger name beginning with \u201cResume after usage limit\u201d as a resume trigger, while `stale_routines.py` only recognizes names with a following parenthetical, so a hand-named trigger without one can block its session but persist indefinitely.\n  WHY: The name patterns diverge; the reviewer notes that generated names include a parenthetical, making this an edge-input issue.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:_decode_json_text, the `raise InputError(...)` line\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When the bounded scan finds no JSON, the error message does not indicate that the candidate-position cap was exhausted.\n  WHY: This is a diagnosability suggestion, not a runtime bug.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py \u2014 Location: _bound_wakes, the `is_resume` flag derivation\n  PROBLEM: `is_resume = _text(trigger.get(\"name\")).startswith(RESUME_TRIGGER_PREFIX)` accepts any name starting with \"Resume after usage limit\", but `stale_routines.py`'s `USAGE_LIMIT_RESUME_NAME_PATTERN` requires `^Resume after usage limit \\(`. A hand-named trigger like \"Resume after usage limit\" (no parenthetical) would be treated as a resume trigger by the selector (blocking its session) but would not be recognised by `stale_routines.is_ours` for cleanup, so it persists indefinitely. In practice the script only produces names with a parenthetical (issue number, PR number, or session id tail), so this is a divergence only on edge inputs.\n  WHY: The selector and cleanup pattern diverge for hand-named triggers without a parenthetical.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py \u2014 Location: _decode_json_text, the `raise InputError(...)` line\n  PROBLEM: When the bounded scan exhausts `MAX_JSON_START_CANDIDATES` without finding JSON, the operator sees only \"no JSON object or array found\" with no signal that the cap was the cause.\n  WHY: This is a small diagnosability gain, not a runtime bug.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3d66aacbf7d766ce4d13e596a55e89e7df19ec782e351de2e28dae9e3f7c530d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5718,
+    "run_id": "36848148781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36848148781",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001103753_265e4eced6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5718,
+    "run_id": "36848148781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T10:37:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
