@@ -1104,7 +1104,30 @@ reviews, comments, and conflicts stay a direct §12 request.
   read. It recurs on every hourly run, and the gate skips sweep re-reviews
   while the marker is live, so the sweep does not enable auto-merge for that
   PR until a push, a base change, or a forced review (`force-review`) sends
-  the head through a new review. Tests:
+  the head through a new review. The base binding is re-checked at merge
+  time (issue #5905): `enable_auto_merge` passes the reviewed base to
+  `review_enable_auto_merge.sh` as `REVIEWED_BASE_REF` /
+  `REVIEWED_BASE_SHA` (optional inputs; either set means both must match the
+  `.base.ref` / `.base.sha` of the helper's PR read right before
+  `gh pr merge`, else it prints
+  `AUTOFIX_AUTO_MERGE_HEAD_BOUND ... action=refuse reason=base_changed`,
+  records no merge-authorization labels, and the sweep reports
+  `base_changed`; both empty, as in the workflow's own auto-merge step,
+  keeps the head-only behaviour). After a successful merge call the sweep
+  re-reads the PR once (`recheck_reviewed_pair`). A moved head, base ref, or
+  base sha, or a failed re-read, runs `gh pr merge --disable-auto`
+  (`revoke_auto_merge`) and returns `merge_revoked`, or
+  `merge_revoke_failed` when that call fails. A PR already merged is judged
+  by head and base ref only (a merge can refresh `base.sha`), and one merged
+  with another head or ref returns `merged_unreviewed_base`. After a
+  successful disable one more PR read confirms the PR did not merge in
+  between: merged with another head or base ref → `merged_unreviewed_base`,
+  merged with the reviewed pair → `merge_enabled`, unreadable →
+  `merge_revoke_unconfirmed`. The sweep prints `::warning::` for
+  `merge_revoke_failed`, `merge_revoke_unconfirmed`, and
+  `merged_unreviewed_base` (`PENDING_CHECKS_ALARM_STATES`). Cost: 1 PR read
+  per enabled merge, plus 1 GraphQL disable and 1 confirming PR read only
+  when the pair moved. Tests:
   `tests/test_check_in_status_hand_back.py`,
   `tests/test_claude_pr_sweep.py`, `tests/test_claude_fixer_pending_checks.py`.
 

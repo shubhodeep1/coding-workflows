@@ -18,6 +18,10 @@ or when a newer one did not succeed.
 
 Issue #5904: any newer review that did not succeed blocks, not only the
 latest one, so a later gate-skipped `success` cannot mask a failed review.
+
+Issue #5905: the merge helper re-checks the reviewed base from its own PR
+read right before the merge call, and a pair that moved around that call has
+its auto-merge disabled again.
 """
 
 from __future__ import annotations
@@ -181,13 +185,30 @@ def fail(message):
 	sys.exit(1)
 
 if args[:2] == ["pr", "merge"]:
+	if "--disable-auto" in args:
+		if state.get("disable_fails"):
+			fail("GraphQL: could not disable auto-merge")
+		sys.exit(0)
 	if state.get("merge_fails"):
 		fail("GraphQL: auto-merge is not allowed")
 	sys.exit(0)
 if args[:1] != ["api"]:
 	fail("unsupported gh call")
 if base == f"repos/o/r/pulls/42":
-	emit(state["pr"])
+	# Issue #5905: `pr_sequence` answers the n-th PR read (0-based, counted
+	# across every process) with its n-th entry, the last one repeating, so
+	# a test can retarget the PR between evaluate's read, the helper's read,
+	# and the re-read after the merge call. "error" fails that read.
+	sequence = state.get("pr_sequence")
+	if sequence:
+		with open(os.environ["FAKE_GH_CALLS"]) as log:
+			earlier = sum(1 for line in log if any(arg.split("?", 1)[0] == base for arg in json.loads(line)[1:])) - 1
+		entry = sequence[min(earlier, len(sequence) - 1)]
+		if entry == "error":
+			fail("gh: Server Error (HTTP 502)")
+		emit(entry)
+	else:
+		emit(state["pr"])
 elif base == "repos/o/r/pulls":
 	emit([state["pr"]] if "page=1" in path else [])
 elif base == "repos/o/r/issues/42/comments":
@@ -253,7 +274,7 @@ def fake_gh(tmp_path, monkeypatch):
 
 	class Fake:
 		def set(self, *, pr=None, comments=(), check_runs=(), review_run=None, enable_auto_merge=None, merge_fails=False,
-			branch_runs=(), dispatch_runs=None, run_attempts=None):
+			branch_runs=(), dispatch_runs=None, run_attempts=None, pr_sequence=None, disable_fails=False):
 			# dispatch_runs maps a workflow file to its workflow_dispatch runs;
 			# a workflow left out (or None) answers 404, as a missing workflow
 			# does. The default is this repo: internal-review.yml and
@@ -267,6 +288,7 @@ def fake_gh(tmp_path, monkeypatch):
 				"dispatch_runs": dispatch_runs if dispatch_runs is not None else {"internal-review.yml": [], "review_autofix.yml": []},
 				"run_attempts": {str(run_id): {str(number): attempt for number, attempt in attempts.items()}
 					for run_id, attempts in (run_attempts or {}).items()},
+				"pr_sequence": list(pr_sequence) if pr_sequence is not None else None, "disable_fails": disable_fails,
 			}), encoding="utf-8")
 
 		def calls(self) -> list[list[str]]:
@@ -274,6 +296,9 @@ def fake_gh(tmp_path, monkeypatch):
 
 		def merges(self) -> list[list[str]]:
 			return [call for call in self.calls() if call[:2] == ["pr", "merge"]]
+
+		def pr_reads(self) -> int:
+			return sum(1 for call in self.calls() if any(arg.split("?", 1)[0] == f"repos/{REPO}/pulls/{PR}" for arg in call[1:]))
 
 	return Fake()
 
@@ -1483,3 +1508,211 @@ def test_handoff_without_a_reviewed_base_posts_no_pending_checks_comment(fake_gh
 	body = _run_handoff_step(tmp_path, PR_4869_SNAPSHOT, payload=payload)
 	assert "ai:claude-fixer-pending-checks" not in body, label
 	assert f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=1 -->" in body.splitlines(), label
+
+
+# ---- issue #5905: the reviewed base is re-checked at merge time ----
+
+RETARGETED = {"ref": "main", "sha": OTHER_BASE_SHA, "repo": {"full_name": REPO, "default_branch": "main"}}
+SQUASH_MERGE = ["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]
+DISABLE_AUTO_MERGE = ["pr", "merge", "42", "--repo", REPO, "--disable-auto"]
+
+
+def test_issue_5905_retarget_after_the_base_check_is_refused_by_the_merge_helper(fake_gh):
+	"""The finding's exploit: evaluate's first PR read still shows the reviewed
+	base, the PR is retargeted while the checks, runs, comments, and variable
+	are read, and the helper's own PR read right before `gh pr merge` refuses it."""
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, pr_sequence=[_pr(), _pr(base=RETARGETED)])
+	result = _evaluate()
+	assert result["state"] == "base_changed", result
+	assert "retargeted before the merge call" in result["reason"]
+	assert fake_gh.merges() == []
+	assert fake_gh.pr_reads() == 2
+
+
+def test_issue_5905_a_new_base_sha_on_the_same_ref_is_refused_too(fake_gh):
+	moved = {**_pr()["base"], "sha": OTHER_BASE_SHA}
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, pr_sequence=[_pr(), _pr(base=moved)])
+	assert _evaluate()["state"] == "base_changed"
+	assert fake_gh.merges() == []
+
+
+def test_issue_5905_the_reviewed_pair_holding_still_merges_with_one_more_pr_read(fake_gh):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN)
+	result = _evaluate()
+	assert result["state"] == "merge_enabled", result
+	assert fake_gh.merges() == [SQUASH_MERGE]
+	# evaluate's read, the helper's read, and the re-read after the merge call.
+	assert fake_gh.pr_reads() == 3
+
+
+@pytest.mark.parametrize("label, after_merge", [
+	("retargeted between the helper's read and the merge call", _pr(base=RETARGETED)),
+	("base sha moved on the same ref", _pr(base={**_pr()["base"], "sha": OTHER_BASE_SHA})),
+	("head moved after the merge call", _pr(head={"sha": OTHER_HEAD, "ref": REF, "repo": {"full_name": REPO}})),
+	("re-read failed", "error"),
+	("re-read without a base", _pr(base=None)),
+	("re-read not an object", ["not", "a", "pr"]),
+])
+def test_issue_5905_a_moved_pair_after_the_merge_call_disables_auto_merge(fake_gh, label, after_merge):
+	# The fourth read confirms, after the disable, that the PR did not merge.
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		pr_sequence=[_pr(), _pr(), after_merge, _pr(base=RETARGETED)])
+	result = _evaluate()
+	assert result["state"] == "merge_revoked", (label, result)
+	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE], label
+	assert fake_gh.pr_reads() == 4, label
+
+
+def test_issue_5905_a_merge_between_the_re_read_and_the_disable_is_reported(fake_gh):
+	"""The re-read finds the PR retargeted but not merged yet, GitHub merges it
+	before the disable lands, and the disable still succeeds: the confirming
+	read reports the merge instead of a clean revoke (review round 1 of #5917)."""
+	merged = _pr(state="closed", merged=True, base=RETARGETED)
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		pr_sequence=[_pr(), _pr(), _pr(base=RETARGETED), merged])
+	result = _evaluate()
+	assert result["state"] == "merged_unreviewed_base", result
+	assert "before auto-merge was disabled" in result["reason"]
+	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE]
+	assert fake_gh.pr_reads() == 4
+
+
+@pytest.mark.parametrize("label, after_merge", [
+	("base sha moved on the same ref", _pr(base={**_pr()["base"], "sha": OTHER_BASE_SHA})),
+	("re-read failed", "error"),
+])
+def test_issue_5905_a_merge_with_the_reviewed_pair_before_the_disable_stands(fake_gh, label, after_merge):
+	"""The re-read triggers a disable, but the PR had merged with the reviewed
+	head and base ref first: that is the reviewed merge, not an alarm (review
+	round 2 of #5915)."""
+	merged = _pr(state="closed", merged=True, base={**_pr()["base"], "sha": OTHER_BASE_SHA})
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		pr_sequence=[_pr(), _pr(), after_merge, merged])
+	result = _evaluate()
+	assert result["state"] == "merge_enabled", (label, result)
+	assert "before auto-merge was disabled" in result["reason"], label
+	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE], label
+	assert fake_gh.pr_reads() == 4, label
+
+
+@pytest.mark.parametrize("label, confirm", [
+	("confirming read failed", "error"),
+	("confirming read without a base", _pr(base=None)),
+])
+def test_issue_5905_an_unconfirmed_revoke_is_reported(fake_gh, label, confirm):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		pr_sequence=[_pr(), _pr(), _pr(base=RETARGETED), confirm])
+	result = _evaluate()
+	assert result["state"] == "merge_revoke_unconfirmed", (label, result)
+	assert "cannot be ruled out" in result["reason"], label
+	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE], label
+
+
+def test_issue_5905_a_failed_disable_is_reported(fake_gh):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, pr_sequence=[_pr(), _pr(), _pr(base=RETARGETED)],
+		disable_fails=True)
+	result = _evaluate()
+	assert result["state"] == "merge_revoke_failed", result
+	assert "could not disable auto-merge" in result["reason"]
+	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE]
+	# No confirming read after a failed disable: the state already warns.
+	assert fake_gh.pr_reads() == 3
+
+
+def test_issue_5905_a_merge_into_the_reviewed_base_ref_stands(fake_gh):
+	"""A merged PR is judged by head and base ref: the merge may refresh its base.sha snapshot."""
+	merged = _pr(state="closed", merged=True, base={**_pr()["base"], "sha": OTHER_BASE_SHA})
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, pr_sequence=[_pr(), _pr(), merged])
+	assert _evaluate()["state"] == "merge_enabled"
+	assert fake_gh.merges() == [SQUASH_MERGE]
+
+
+def test_issue_5905_a_merge_into_another_base_is_reported(fake_gh):
+	merged = _pr(state="closed", merged=True, base=RETARGETED)
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, pr_sequence=[_pr(), _pr(), merged])
+	result = _evaluate()
+	assert result["state"] == "merged_unreviewed_base", result
+	assert fake_gh.merges() == [SQUASH_MERGE]
+
+
+def test_issue_5905_dry_run_never_reaches_the_helper(fake_gh):
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, pr_sequence=[_pr(), _pr(base=RETARGETED)])
+	assert _evaluate(dry_run=True)["state"] == "ready"
+	assert fake_gh.merges() == [] and fake_gh.pr_reads() == 1
+
+
+# ---- review_enable_auto_merge.sh's REVIEWED_BASE_* inputs ----
+
+def _run_helper(fake_gh, **env_overrides) -> subprocess.CompletedProcess:
+	env = {**os.environ, "GITHUB_REPOSITORY": REPO, "PR_NUMBER": str(PR), "ENABLE_AUTO_MERGE": "true",
+		"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "true", "ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
+		"INITIAL_HEAD_SHA": HEAD}
+	for name in ("REVIEWED_BASE_REF", "REVIEWED_BASE_SHA"):
+		env.pop(name, None)
+	env.update(env_overrides)
+	return subprocess.run(["bash", str(pending_checks.AUTO_MERGE_SCRIPT)], env=env, capture_output=True, text=True, timeout=120)
+
+
+def test_helper_without_a_reviewed_base_keeps_the_head_only_behaviour(fake_gh):
+	fake_gh.set(pr=_pr(base=RETARGETED))
+	proc = _run_helper(fake_gh)
+	assert proc.returncode == 0 and "Auto-merge enabled." in proc.stdout, proc.stdout + proc.stderr
+	assert fake_gh.merges() == [SQUASH_MERGE]
+
+
+def test_helper_merges_when_the_reviewed_base_still_holds(fake_gh):
+	fake_gh.set()
+	proc = _run_helper(fake_gh, REVIEWED_BASE_REF=BASE_REF, REVIEWED_BASE_SHA=BASE_SHA)
+	assert "Auto-merge enabled." in proc.stdout, proc.stdout + proc.stderr
+	assert fake_gh.merges() == [SQUASH_MERGE]
+
+
+@pytest.mark.parametrize("label, pr, env", [
+	("retargeted ref", _pr(base=RETARGETED), dict(REVIEWED_BASE_REF=BASE_REF, REVIEWED_BASE_SHA=BASE_SHA)),
+	("moved base sha", _pr(base={**_pr()["base"], "sha": OTHER_BASE_SHA}), dict(REVIEWED_BASE_REF=BASE_REF, REVIEWED_BASE_SHA=BASE_SHA)),
+	("only the ref given", _pr(), dict(REVIEWED_BASE_REF=BASE_REF)),
+	("only the sha given", _pr(), dict(REVIEWED_BASE_SHA=BASE_SHA)),
+	("malformed sha", _pr(), dict(REVIEWED_BASE_REF=BASE_REF, REVIEWED_BASE_SHA=BASE_SHA[:12])),
+	("PR read without a base", _pr(base=None), dict(REVIEWED_BASE_REF=BASE_REF, REVIEWED_BASE_SHA=BASE_SHA)),
+	("forward-merge fallback head retargeted", _pr(ref="auto/forward-merge-stable-1-1", base=RETARGETED),
+		dict(REVIEWED_BASE_REF=BASE_REF, REVIEWED_BASE_SHA=BASE_SHA)),
+])
+def test_helper_refuses_a_base_other_than_the_reviewed_one(fake_gh, tmp_path, label, pr, env):
+	fake_gh.set(pr=pr)
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	proc = _run_helper(fake_gh, GITHUB_ENV=str(github_env), **env)
+	assert proc.returncode == 0, (label, proc.stderr)
+	refusal = [line for line in proc.stdout.splitlines() if line.startswith(pending_checks.AUTO_MERGE_BASE_REFUSED_LINE_PREFIX)]
+	assert refusal == [f"AUTOFIX_AUTO_MERGE_HEAD_BOUND pr={PR} head_sha={HEAD} action=refuse reason=base_changed"], (label, proc.stdout)
+	assert refusal[0].endswith(pending_checks.AUTO_MERGE_BASE_REFUSED_LINE_SUFFIX)
+	assert fake_gh.merges() == [], label
+	# No merge-authorization labels for an unreviewed base.
+	assert github_env.read_text(encoding="utf-8").splitlines() == ["AUTO_MERGE_READY_LABELS_ALLOWED=false"], label
+
+
+def test_enable_auto_merge_reports_a_base_refusal(monkeypatch):
+	seen = {}
+
+	def fake_run(argv, **kwargs):
+		seen.update(kwargs["env"])
+		return subprocess.CompletedProcess(argv, 0, stdout=f"AUTOFIX_AUTO_MERGE_HEAD_BOUND pr={PR} head_sha={HEAD} action=refuse reason=base_changed\n", stderr="")
+
+	monkeypatch.setattr(pending_checks.subprocess, "run", fake_run)
+	result = pending_checks.enable_auto_merge(REPO, PR, HEAD, "true", base_ref=BASE_REF, base_sha=BASE_SHA)
+	assert result["enabled"] is False and result["base_refused"] is True
+	assert seen["REVIEWED_BASE_REF"] == BASE_REF and seen["REVIEWED_BASE_SHA"] == BASE_SHA
+
+
+def test_sweep_warns_when_an_unreviewed_base_may_still_merge(monkeypatch, capsys):
+	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: [{"number": n, "head_ref": REF} for n in (1, 2, 3, 4)])
+	monkeypatch.setattr(sweeper.check_in_status, "check_pr_hand_back", lambda *a, **k: {"done": False, "state": "open"})
+	states = {1: "merge_revoke_failed", 2: "merged_unreviewed_base", 3: "merge_revoked", 4: "merge_revoke_unconfirmed"}
+	summary = _sweep(pending=lambda repo, number, dry_run: {"state": states[number], "head_sha": HEAD, "reason": "r"})
+	out = capsys.readouterr().out
+	assert "::warning::CLAUDE_PR_SWEEP pending_checks_merge_revoke_failed repo=o/r pr=#1" in out
+	assert "::warning::CLAUDE_PR_SWEEP pending_checks_merged_unreviewed_base repo=o/r pr=#2" in out
+	assert "::warning::CLAUDE_PR_SWEEP pending_checks_merge_revoke_unconfirmed repo=o/r pr=#4" in out
+	assert "pending_checks_merge_revoked repo=o/r pr=#3" not in out
+	assert "pending_checks repo=o/r pr=#3 state=merge_revoked" in out
+	assert summary["pending_checks_merged"] == 0

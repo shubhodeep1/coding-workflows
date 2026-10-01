@@ -13,6 +13,9 @@
 #   FORWARD_MERGE_FALLBACK_AUTO_MERGE
 #   ORCH_INTEGRATION_BRANCH_PATTERN
 #   INITIAL_HEAD_SHA
+#   REVIEWED_BASE_REF, REVIEWED_BASE_SHA (optional; when either is set, the
+#     PR's current base ref and base sha must equal them or the merge is
+#     refused with reason=base_changed — issue #5905)
 #   GH_TOKEN
 #
 # Outputs (via GITHUB_ENV):
@@ -188,6 +191,26 @@ fi
 if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then
 	echo "::warning::PR #${PR_NUMBER} no longer points at reviewed head ${INITIAL_HEAD_SHA}. Failing closed: refusing auto-merge enablement and merge-authorization labels for current head ${_orch_pr_head_sha:-unknown}."
 	exit 0
+fi
+
+# Reviewed-base binding (issue #5905). A caller that reviewed the PR against a
+# known base passes it as REVIEWED_BASE_REF / REVIEWED_BASE_SHA, and this is
+# the last PR read before every merge call below, so a PR retargeted after
+# the caller's own base check (with the head unchanged) is refused here
+# instead of auto-merging into a base nobody reviewed. GitHub's merge APIs
+# bind only the head (--match-head-commit), so this read-compare is the
+# closest base check there is. Either input set means both must be valid and
+# match (fail closed); both empty keeps the head-only behaviour for the
+# workflow's own caller.
+if [ -n "${REVIEWED_BASE_REF:-}" ] || [ -n "${REVIEWED_BASE_SHA:-}" ]; then
+	_reviewed_pr_base_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+	_reviewed_pr_base_sha="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.base.sha // ""' 2>/dev/null || echo "")"
+	if [ -z "${REVIEWED_BASE_REF:-}" ] || ! [[ "${REVIEWED_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+		|| [ "${_reviewed_pr_base_ref}" != "${REVIEWED_BASE_REF}" ] || [ "${_reviewed_pr_base_sha}" != "${REVIEWED_BASE_SHA}" ]; then
+		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=base_changed"
+		echo "::warning::PR #${PR_NUMBER} no longer targets the reviewed base (${REVIEWED_BASE_REF:-unset} at ${REVIEWED_BASE_SHA:-unset}); current base is ${_reviewed_pr_base_ref:-unknown} at ${_reviewed_pr_base_sha:-unknown}. Failing closed: refusing auto-merge enablement and merge-authorization labels."
+		exit 0
+	fi
 fi
 
 # Scoped opt-out for forward-merge fallback PRs opened by
