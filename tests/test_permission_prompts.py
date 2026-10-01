@@ -388,6 +388,7 @@ def _bash(command):
 		("sh -c 2>/dev/null 'mysql -pS3cretPass app'", "S3cretPass", "sh -c 2>/dev/null 'mysql -p*** app'"),
 		("bash -c >/tmp/out \"mysql -pS3cretPass\"", "S3cretPass", "bash -c >/tmp/out \"mysql -p***\""),
 		("sh -c 2>&1 'curl -u deploy:mycustompwd https://a.b'", "mycustompwd", "sh -c 2>&1 'curl -u *** https://a.b'"),
+		("sh -c 2>/dev/null '-x; mysql -pS3cretPass app'", "S3cretPass", "sh -c 2>/dev/null '-x; mysql -p*** app'"),
 		("mysql >out -pS3cretPass app", "S3cretPass", "mysql >out -p*** app"),
 		("curl -u >out deploy:mycustompwd https://a.b", "mycustompwd", "curl -u >out *** https://a.b"),
 		("echo x > \"$(mysql -pS3cretPass)\"", "S3cretPass", "echo x > \"$(mysql -p***)\""),
@@ -540,6 +541,12 @@ def test_credential_free_commands_are_unchanged(command):
 		# Only a one-digit word joins a redirection as its file descriptor; a longer one is a value.
 		("sshpass -p 123456789 >log ssh host", "sshpass -p * > *"),
 		("sh -c 2>/dev/null 'mysql -pS3cretPass app'", "sh -c 2> *"),
+		# A redirection between `-c` and a command line that starts with `-` keeps its operator; the command line stays one value.
+		("sh -c 2>/dev/null '-x; mysql -pS3cretPass app'", "sh -c 2> *"),
+		("bash -c >out '-x; mysql -pS3cretPass app'", "bash -c > *"),
+		("bash -c 2>&1 -- '-x; mysql -pS3cretPass app'", "bash -c 2>& *"),
+		("sh -c </dev/null -x '-y; mysql -pS3cretPass app'", "sh -c < *"),
+		("sh -c 2>/dev/null 'mysql -pS3cretPass app' >log", "sh -c 2> * > *"),
 		("bash <<< 'mysql -pS3cretPass app'", "bash <<< *"),
 	],
 )

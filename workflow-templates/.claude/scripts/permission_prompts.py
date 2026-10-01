@@ -409,10 +409,13 @@ def _shell_command_line_words(words: list[str], index: int) -> list[str]:
 	A shell reads its command line from the first argument after its options,
 	so options and `--` can come between the command flag and it (`bash -c --
 	'mysql -p…'`, `bash -c -x '…'`), and a quoted command line can itself
-	start with `-` (`sh -c '-x; mysql -p…'`).
+	start with `-` (`sh -c '-x; mysql -p…'`). A redirection does not end the
+	scan either: the `\\x00`-marked operators and targets that command_shape
+	leaves in a segment are passed over too (`sh -c 2>/dev/null '-x; mysql
+	-p…'`), and returned with the words, so the caller decides what to show.
 	"""
 	end = index
-	while end < len(words) and words[end].startswith("-"):
+	while end < len(words) and words[end].startswith(("-", "\x00")):
 		end += 1
 	return words[index : end + 1]
 
@@ -516,13 +519,14 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			if runner_before and (_SHELL_COMMAND_FLAG_RE.match(token) or (attached_command and attached_command.group(2).isalpha())):
 				# A shell's command line is one value: the first word after its options (`bash -c -- '…'`), which can
 				# start with `-` (`sh -c '-x; mysql -p…'`) or end like a script name (`sh -c '… ./run.sh'`). Neither
-				# it nor those options reach the shape.
+				# it nor those options reach the shape; a redirection among them keeps its operator (`sh -c 2> *`).
 				line_words = _shell_command_line_words(tokens, index)
-				if line_words and line_words[-1].startswith("\x00"):
-					line_words.pop()
 				index += len(line_words)
-				if line_words and shape[-1] != "*":
-					shape.append("*")
+				for line_word in line_words:
+					if line_word.startswith("\x00"):
+						shape.append(line_word[1:])
+					elif shape[-1] != "*":
+						shape.append("*")
 				continue
 			if index < len(tokens) and tokens[index].startswith("-") and _credential_flag_awaits_value(token, command, subcommand, _segment_flag_letters(tokens, command_position, index - 1)):
 				# A next word that starts with `-` may be this flag's value (`--password -s3cret`): it never reaches the shape.
