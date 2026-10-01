@@ -48,11 +48,13 @@ Subcommands:
       Print the `ES-<n>` line to append, with `n` one more than the highest
       id in the log. It never writes a file: the session adds the line to
       the log with its Edit tool. A `budget` or `descope` already used for
-      that stop and fingerprint is refused.
+      that stop and fingerprint is refused, and so is a PR-scoped stop
+      whose `--why` does not start with `PR #<N>: ` (the intervention cap
+      counts an entry only for the PR its `why` names).
 
 Output is one JSON line. Exit 0 on success; 1 on bad arguments (an unknown
 stop id, a malformed fingerprint or evidence, a PR-scoped stop without
-`pr`, a used choice); 2 when the
+`pr` or without the `PR #<N>: ` prefix on `--why`, a used choice); 2 when the
 log cannot be read or an `## Escalations` line is malformed (a line that
 starts `- ` but does not match the format, a date that is not a real
 calendar date, or a repeated `ES-<n>` id). A log without an
@@ -101,6 +103,9 @@ EVIDENCE_PR_KEY = "pr"
 # Stops that are about one PR: their fingerprint must carry `pr`.
 PR_SCOPED_STOP_IDS = ("intervention-cap", "fix-check-defective")
 PR_NUMBER_RE = re.compile(r"^#?([1-9][0-9]*)$")
+# A PR-scoped entry's `why` names its PR first, so the intervention cap of
+# one PR counts only the rounds granted for that PR.
+WHY_PR_PREFIX_RE = re.compile(r"^PR #[1-9][0-9]*: \S")
 
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{12}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -264,6 +269,8 @@ def record_line(entries: list[dict], stop: str, fp: str, choice: str, why: str, 
 	why = " ".join(why.split())
 	if not why:
 		raise UsageError("--why must not be empty")
+	if stop in PR_SCOPED_STOP_IDS and not WHY_PR_PREFIX_RE.match(why):
+		raise UsageError(f"stop {stop!r} is about one PR: --why must start with 'PR #<N>: ', got {why!r}")
 	if not _is_calendar_date(date):
 		raise UsageError(f"--date must be a real calendar date as YYYY-MM-DD, got {date!r}")
 	next_id = max((entry["id"] for entry in entries), default=0) + 1

@@ -2246,14 +2246,18 @@ This is an explicit carve-out from §0 and §2 (including §2's
   `codex_failure`, unknown payload), a security follow-up closed without
   a merged PR. These are failures, not clarifications: picking a
   "recommended" way past them could skip the security pass or loop
-  forever. The chain stops at `Status: BLOCKED` and asks, as the command
-  describes. In issue mode nobody watches the session, so the ask is
-  delivered on the source issue: one comment naming the blocker, the
-  options, and the recommended one, the `ai:claude-blocked` label, and one
-  `PushNotification`. A human answers there and comments `/reclarify` to
-  resume. These stops are not auto-decided, but they no longer wait for a
+  forever. These stops are not auto-decided, but they no longer wait for a
   human: the escalation judge answers them under the operator's standing
-  decision (§28.G).
+  decision (§28.G). The chain stops at `Status: BLOCKED`, posts the
+  blocker (in issue mode on the source issue, with the `ai:claude-blocked`
+  label), sends no `PushNotification`, and hands its project checker the
+  escalation wait, as the command describes. Only when that wait cannot
+  be armed (the claude-code-remote tools are missing, or a call is
+  refused) does the stop wait for a human. In issue mode nobody watches
+  the session, so the ask is delivered on the source issue: one comment
+  naming the blocker, the options, and the recommended one, the
+  `ai:claude-blocked` label, and one `PushNotification`. A human answers
+  there and comments `/reclarify` to resume.
 - **Ask-first operations** — §22.B (DigitalOcean mutations), §23.C
   (destructive and administrative GitHub writes, merges included), and
   §24.D (Cloudflare destructive and account-level writes). The chain never
@@ -2400,9 +2404,12 @@ repo that receives this file via the `@stable` sync.
   and `fix-check-defective`, so two PRs that fail the same way never
   share a fingerprint) (`.claude/scripts/escalation_ledger.py
   fingerprint`). The judge
-  never picks a choice already recorded for the same stop and fingerprint
-  (`escalation_ledger.py allowed`); `close` is always available. A
-  different failure starts with the full menu.
+  never picks `budget` or `descope` when that choice is already recorded
+  for the same stop and fingerprint (`escalation_ledger.py allowed`);
+  `close` is always available, even when it was picked before. A
+  different failure starts with the full menu. For a PR-scoped stop the
+  `why` of the entry starts with `PR #<N>:`, naming that PR, so the
+  intervention cap of one PR counts only the rounds granted for it.
 - **Invariants.** The judge never skips, waives, or marks passed a
   security pass or a validation run (a `descope` after a security or
   validation stop is followed by the same pass on the de-scoped branch; a

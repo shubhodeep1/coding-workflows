@@ -280,6 +280,29 @@ def test_record_starts_at_one_and_takes_an_explicit_date(tmp_path, capsys):
 	assert out["line"].startswith("- ES-1 [intervention-cap, 2026-10-01] ")
 
 
+@pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective"])
+@pytest.mark.parametrize("why", ["retry the tests", "#12: retry", "PR 12: retry", "PR #12 retry", "PR #12:", "PR #012: retry", "fix PR #12: retry"])
+def test_pr_scoped_record_requires_the_pr_prefix(tmp_path, capsys, stop, why):
+	# The intervention cap counts an entry only for the PR its `why=` names.
+	code, out = _run(capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", FP, "--choice", "budget", "--why", why)
+	assert code == 1 and "must start with 'PR #<N>: '" in out["error"]
+
+
+@pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective"])
+def test_pr_scoped_record_accepts_the_pr_prefix(tmp_path, capsys, stop):
+	code, out = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", FP,
+		"--choice", "budget", "--why", "  PR #12:   retry the failing check  ",
+	)
+	assert code == 0
+	assert out["line"].endswith("why=PR #12: retry the failing check")
+
+
+def test_project_scoped_record_needs_no_pr_prefix(tmp_path, capsys):
+	code, _ = _run(capsys, "record", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", FP, "--choice", "budget", "--why", "re-dispatch the audit")
+	assert code == 0
+
+
 def test_record_refuses_a_used_choice(tmp_path, capsys):
 	path = _log(tmp_path, _entry(1, choice="budget"))
 	code, out = _run(capsys, "record", "--log", str(path), "--stop", "security-cap", "--fingerprint", FP, "--choice", "budget", "--why", "again")

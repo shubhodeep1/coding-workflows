@@ -83,7 +83,7 @@ def test_judge_menu_and_ledger_calls(judge):
 
 def test_judge_fingerprint_names_the_pr(judge):
 	assert "and `pr`, the number of the PR the stop is about" in judge
-	assert "always give `pr` for `intervention-cap` (the blocked PR) and `fix-check-defective` (the fix PR)" in judge
+	assert "always give `pr` for `intervention-cap` (the blocked PR) and `fix-check-defective` (the fix PR: the third conformance run's fix PR, also when the check that failed was on a `budget` round's fix PR" in judge
 	assert "Two PRs that fail the same way are two failures." in judge
 	# `close` stays available, so the invariant is about `budget` and `descope` only.
 	assert "never pick `budget` or `descope` twice for the same failure (`close` stays available)" in judge
@@ -119,7 +119,27 @@ def test_judge_hands_on_through_the_checker(judge):
 	assert "`Wait: escalation — start <next stage> with /implement-plan-claude`" in judge
 	# The stop id rides the line, so a `budget` or `descope` stage knows which
 	# cap it raises and whether `descope` is an `intervention-cap` commit.
-	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>) — <the narrower fix | the de-scoped part>`" in judge
+	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>[, PR #<N>]) — <the narrower fix | the de-scoped part>`" in judge
+	assert "where `, PR #<N>` names the PR of a PR-scoped stop (`intervention-cap`, `fix-check-defective`)" in judge
+
+
+def test_judge_records_the_pr_of_a_pr_scoped_stop(judge):
+	# The intervention cap counts an `intervention-cap` entry only for the PR
+	# its `why=` names, so the judge must write that PR into `--why`.
+	record = judge[judge.index("5. **Record.**"):judge.index("6. **Post the escalation comment**")]
+	assert "start `--why` with `PR #<N>: `, where `<N>` is the fingerprint's `pr`" in record
+	assert "`record` refuses a PR-scoped entry without that prefix (exit 1)" in record
+
+
+def test_judge_stops_when_the_thread_cannot_be_read(judge):
+	step1 = judge[judge.index("1. **Read the evidence.**"):judge.index("2. **Compute the fingerprint.**")]
+	assert "If reading the blocker comment or the thread's comments fails, retry once; if it fails again, choose nothing" in step1
+	assert "leave `Status: BLOCKED` for a human, and end the turn" in step1
+
+
+def test_judge_label_removal_is_issue_mode_only(judge):
+	step7 = judge[judge.index("7. **Remove `ai:claude-blocked`**"):judge.index("8. **Hand on.**")]
+	assert "an escalation stop adds the label only to a source issue, never to the final PR" in step7
 
 
 def test_judge_imports_only_trusted_escalation_markers(judge):
@@ -194,10 +214,22 @@ def test_escalation_stop_procedure(plan):
 	# The choices come back as stages; passes are never waived.
 	assert "a pass is never waived" in section
 	assert "counts one extra round for each `ES-<n>` entry with `choice=budget` or `choice=descope` for the same stop id" in section
-	assert "(for `intervention-cap`, only entries whose `why=` names the same PR)" in section
+	assert "(for `intervention-cap`, only entries whose `why=` starts with `PR #<N>:` for the same PR;" in section
 	assert "`claude/implement-plan-<slug>-descope-<n>`" in section
 	assert "For `intervention-cap` (the stop the `Escalation:` line names)" in section
-	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>) — <the narrower fix | the de-scoped part>`" in section
+	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>[, PR #<N>]) — <the narrower fix | the de-scoped part>`" in section
+
+
+def test_fix_check_budget_is_a_fix_round(plan):
+	# The fix check only checks, so re-running it under a `budget` would see
+	# the same diff and fail the same way: its budget round opens a fix PR.
+	section = plan[plan.index("## Escalations"):plan.index("## Progress Log")]
+	assert "`fix-check-defective` has no cap and its stage only checks, so its budget round is a fix instead" in section
+	assert "`claude/implement-plan-<slug>-conformance-fix-budget-<n>`" in section
+	assert "with `conformance 3/3 — fix check` as the next stage on merge" in section
+	assert "a repeat stop's `pr` evidence stays the third run's fix PR" in section
+	step8 = plan[plan.index("8. **Conformance audit"):plan.index("9. **Security pass")]
+	assert "after a `budget` for `fix-check-defective`, `#<fix PR>` is that budget round's fix PR" in step8
 
 
 def test_every_cap_defers_to_the_escalations_counting_rule(plan):
@@ -218,7 +250,7 @@ def test_every_cap_defers_to_the_escalations_counting_rule(plan):
 
 def test_resume_template_carries_the_stop_id(plan):
 	sessions = plan[plan.index("## Stage Sessions"):plan.index("### Claims")]
-	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>) — <the narrower fix | the de-scoped part>`" in sessions
+	assert "`Escalation: ES-<n> <budget | descope> (stop <stop id>[, PR #<N>]) — <the narrower fix | the de-scoped part>`" in sessions
 	assert "`Escalation: ES-<n> <budget | descope> — " not in plan
 
 
@@ -270,7 +302,11 @@ def test_claude_md_section_28g():
 	for stop in STOP_IDS:
 		assert f"`{stop}`" in section, stop
 	assert "`close` is always available" in section
-	assert "never picks a choice already recorded for the same stop and fingerprint" in section
+	# `close` may repeat, so the rule names only `budget` and `descope`.
+	assert "never picks `budget` or `descope` when that choice is already recorded for the same stop and fingerprint" in section
+	assert "`close` is always available, even when it was picked before" in section
+	assert "never picks a choice already recorded" not in section
+	assert "the `why` of the entry starts with `PR #<N>:`, naming that PR" in section
 	assert "and the PR the stop is about (required for `intervention-cap` and `fix-check-defective`" in section
 	assert "never skips, waives, or marks passed a security pass or a validation run" in section
 	assert "never merges past a failing required check" in section
@@ -281,6 +317,14 @@ def test_claude_md_section_28g():
 	c_section = claude.split("### C) Never auto-decided — still stop and ask", 1)[1].split("### D) Recording", 1)[0]
 	assert "the escalation judge answers them under the operator's standing decision (§28.G)" in c_section
 	assert "**Failure escalations** — a cap reached" in c_section
+	# The human ask (PushNotification, `/reclarify`) is only the fallback for
+	# a wait that cannot be armed; the escalation stop itself sends no push.
+	failure = c_section[c_section.index("**Failure escalations**"):c_section.index("**Ask-first operations**")]
+	assert "sends no `PushNotification`, and hands its project checker the escalation wait" in failure
+	assert "Only when that wait cannot be armed" in failure
+	assert failure.index("Only when that wait cannot be armed") < failure.index("one `PushNotification`")
+	assert failure.index("Only when that wait cannot be armed") < failure.index("`/reclarify`")
+	assert "The chain stops at `Status: BLOCKED` and asks" not in failure
 
 
 @pytest.mark.parametrize("name", ["escalation-judge.md", "implement-plan-claude.md"])

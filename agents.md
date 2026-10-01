@@ -903,9 +903,14 @@ in the log's `## Escalations` section, posts
 and hands the checker the next stage through another escalation wait. It
 never repeats `budget` or `descope` for the same fingerprint (`close`
 stays available; the fingerprint of `intervention-cap` and
-`fix-check-defective` includes the PR number), never skips or waives a
-security or validation pass, never merges, and sends a `PushNotification`
-only for `close`. Human-only stops (Q8: ask-first operations, no
+`fix-check-defective` includes the PR number, and their `ES-<n>` entry's
+`why=` starts with `PR #<N>: `, which `escalation_ledger.py record`
+enforces, so the intervention cap of one PR counts only its own grants),
+never skips or waives a security or validation pass, never merges, and
+sends a `PushNotification` only for `close`. A `budget` for
+`fix-check-defective` is a fix round: a
+`claude/implement-plan-<slug>-conformance-fix-budget-<n>` PR for the
+findings the check left open, followed by a fix check of that PR. Human-only stops (Q8: ask-first operations, no
 claude-code-remote tools, a depth-limit refusal) are never judged.
 
 No field here changes what any consumer repo receives on the `@stable`
