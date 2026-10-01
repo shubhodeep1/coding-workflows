@@ -6,7 +6,7 @@ The `claude-pr-catch-all` sweep enables auto-merge for a `claude/*` PR whose rev
 The sweep now passes the reviewed base to the helper as `REVIEWED_BASE_REF` / `REVIEWED_BASE_SHA`. The helper refuses a mismatch from the PR read it already makes right before the merge call, printing `AUTOFIX_AUTO_MERGE_HEAD_BOUND ... action=refuse reason=base_changed`. GitHub's merge APIs bind only the head, so the sweep then reads the PR once more:
 
 - a moved head or base, or a failed read, runs `gh pr merge --disable-auto` and logs `pending_checks ... state=merge_revoked`, after one more read confirms the PR did not merge first;
-- a PR that already merged with another head or base ref, or merged before the disable landed, logs `merged_unreviewed_base`;
+- a PR that already merged with another head or base ref, or merged that way before the disable landed, logs `merged_unreviewed_base` (a merge with the reviewed head and base ref stands);
 - a confirming read that fails logs `merge_revoke_unconfirmed`;
 - those two and a failed disable (`merge_revoke_failed`) also print a `::warning::` line.
 

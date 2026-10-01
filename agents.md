@@ -1103,7 +1103,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   by head and base ref only (a merge can refresh `base.sha`), and one merged
   with another head or ref returns `merged_unreviewed_base`. After a
   successful disable one more PR read confirms the PR did not merge in
-  between: merged → `merged_unreviewed_base`, unreadable →
+  between: merged with another head or base ref → `merged_unreviewed_base`,
+  merged with the reviewed pair → `merge_enabled`, unreadable →
   `merge_revoke_unconfirmed`. The sweep prints `::warning::` for
   `merge_revoke_failed`, `merge_revoke_unconfirmed`, and
   `merged_unreviewed_base` (`PENDING_CHECKS_ALARM_STATES`). Cost: 1 PR read

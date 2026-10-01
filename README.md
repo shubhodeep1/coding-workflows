@@ -1525,7 +1525,9 @@ head, so after enabling auto-merge the sweep reads the PR once more:
   merge between the re-read and the disable) fails →
   `merge_revoke_unconfirmed`;
 - the PR already merged with another head or base ref, or that confirming
-  read finds it merged → `merged_unreviewed_base`.
+  read finds it merged with another head or base ref →
+  `merged_unreviewed_base` (merged with the reviewed head and base ref, it
+  stands as `merge_enabled`).
 
 The last three are also printed as `::warning::` lines.
 

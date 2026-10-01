@@ -1279,6 +1279,24 @@ def test_issue_5905_a_merge_between_the_re_read_and_the_disable_is_reported(fake
 	assert fake_gh.pr_reads() == 4
 
 
+@pytest.mark.parametrize("label, after_merge", [
+	("base sha moved on the same ref", _pr(base={**_pr()["base"], "sha": OTHER_BASE_SHA})),
+	("re-read failed", "error"),
+])
+def test_issue_5905_a_merge_with_the_reviewed_pair_before_the_disable_stands(fake_gh, label, after_merge):
+	"""The re-read triggers a disable, but the PR had merged with the reviewed
+	head and base ref first: that is the reviewed merge, not an alarm (review
+	round 2 of #5915)."""
+	merged = _pr(state="closed", merged=True, base={**_pr()["base"], "sha": OTHER_BASE_SHA})
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		pr_sequence=[_pr(), _pr(), after_merge, merged])
+	result = _evaluate()
+	assert result["state"] == "merge_enabled", (label, result)
+	assert "before auto-merge was disabled" in result["reason"], label
+	assert fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE], label
+	assert fake_gh.pr_reads() == 4, label
+
+
 @pytest.mark.parametrize("label, confirm", [
 	("confirming read failed", "error"),
 	("confirming read without a base", _pr(base=None)),

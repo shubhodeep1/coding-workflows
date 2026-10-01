@@ -70,7 +70,8 @@ so after the helper enabled auto-merge the PR is read once more: a head or
 base that moved in between, or a re-read that fails, disables auto-merge again
 (`gh pr merge --disable-auto`), and the gate's stale-binding rule (#5147) lets
 the next review sweep review the PR against its new base. One more read after
-that disable reports a PR that merged in between as `merged_unreviewed_base`.
+that disable reports a PR that merged in between with another head or base
+ref as `merged_unreviewed_base` (one that merged with the reviewed pair stands).
 
 A check that finishes failed is not handled here: `check_in_status.py
 --hand-back` reports it as `ci-failed` like any other `claude/*` head, and a
@@ -650,7 +651,9 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	be on), `merge_revoke_unconfirmed` (the disable succeeded, but the
 	confirming read failed, so a merge just before it is not ruled out), and
 	`merged_unreviewed_base` (the PR had already merged with another head or
-	base ref, or merged after the re-read found the pair moved). Only
+	base ref, or merged with another head or base ref after the re-read found
+	the pair moved; a merge with the reviewed head and base ref before the
+	disable is `merge_enabled`). Only
 	`merge_enabled`, `merge_revoke_failed`, `merge_revoke_unconfirmed`, and
 	`merged_unreviewed_base` may leave a change behind.
 	Raises `check_in_status.ReadError` when a read fails, and `OSError` when
@@ -765,6 +768,13 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 		return {"state": "merge_revoke_unconfirmed", "head_sha": head_sha,
 			"reason": f"auto-merge disabled after {pair['detail']}, but {confirm['detail']}, so a merge before the "
 				f"disable cannot be ruled out; reviewed {head_sha[:12]} into {base_ref} at {base_sha[:12]}"}
+	if confirm["merged"] and confirm["outcome"] == "held":
+		# Merged with the reviewed head and base ref before the disable landed
+		# (a moved base sha on the same ref, or an unreadable re-read): the same
+		# rule as a merged `held` re-read above, so no false alarm.
+		return {"state": "merge_enabled", "head_sha": head_sha,
+			"reason": f"the PR merged as {confirm['detail']}, the reviewed head and base ref, before auto-merge "
+				f"was disabled after {pair['detail']}"}
 	if confirm["merged"]:
 		return {"state": "merged_unreviewed_base", "head_sha": head_sha,
 			"reason": f"the PR merged as {confirm['detail']} after the re-read found {pair['detail']}, before auto-merge "
