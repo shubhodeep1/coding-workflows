@@ -7,14 +7,14 @@
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #5718: twin sync
+- Waiting on: PR #5718: twin sync (second sync: selector twin + pickup diff)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
-- Last updated: 2026-09-30
-- Last note: phase 1 PR #5718 opened twin-first; hold claim posted; waiting on the Q40 twin sync (twins + claude-issue-pickup.md diff) and /reclarify on #5660
+- Last updated: 2026-10-01
+- Last note: first twin sync landed (db90cf5); the owner's 16:13Z/16:39Z comments and the valid round-1 findings were folded into #5718 twin-first (AD-14..AD-19); hold claim and a second twin-sync blocker posted on #5660
 
 ## Phases
-1. [ ] Phase 1 — usage-limit resumes (selector script, pickup step 1a, sweep name, docs, tests)   — protected paths: .claude/scripts/usage_limit_resumes.py [new], .claude/scripts/stale_routines.py, .claude/settings.json (via workflow-templates/.claude/** twins); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #5718 open (hold: twin sync); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — usage-limit resumes (selector script, pickup step 1a, sweep name, docs, tests)   — protected paths: .claude/scripts/usage_limit_resumes.py [new], .claude/scripts/stale_routines.py, .claude/settings.json (via workflow-templates/.claude/** twins); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #5718 open (hold: second twin sync); review rounds: 1 (round-1 findings on head 2413da3 answered in the 2026-10-01 amendment); interventions: 0
 
 ## Conformance
 
@@ -40,12 +40,20 @@
 - AD-11 [plan, 2026-09-30] How does this phase change `.claude/**`? — Picked: A — twin-first per Q40; pickup diff in the sync blocker; hold claim. Alternatives: B — edit `.claude/**` unattended; C — drop the `.claude/` part. Why: §28.C forbids B; C ships nothing. Applied in: phase 1 PR. Status: pending review
 - AD-12 [plan, 2026-09-30] Where does the selector live? — Picked: A — `.claude/scripts/usage_limit_resumes.py` with its twin. Alternatives: B — `scripts/usage_limit_resumes.py`. Why: the issue names the path. Applied in: phase 1 PR. Status: pending review
 - AD-13 [plan, 2026-09-30] The handbook's manual procedure and the "Retiring the master" table? — Picked: A — replace the procedure with a pointer plus a fallback for sessions beyond the 3-day window; add the row. Alternatives: B — delete the note, add no row. Why: the issue asks for both. Applied in: phase 1 PR. Status: pending review
+- AD-14 [phase 1/1 — resume after twin sync, 2026-10-01] Owner comments posted after phase 1 was built (16:13Z pacing at 8/min; 16:39Z fire spacing about 4 per 3 minutes, small per-wake cap, re-pick a failed resume) and the round-1 duplicate-guard findings: how are they handled? — Picked: A — fold them into PR #5718 now, twin-first, with one new twin-sync blocker. Alternatives: B — arm the wait on #5718 as synced and leave them out; C — leave them for a separate issue. Why: owner comments are part of the spec and every change touches `.claude/`, so one sync instead of two; B and C ship the burst that re-tripped the limits. Applied in: PR #5718. Status: pending review
+- AD-15 [phase 1/1 — resume after twin sync, 2026-10-01] How are resume fire times spaced? — Picked: A — the selector gives each `resume` entry `fire_offset_minutes` = 2 + 3 × floor(position / 4) (checkers first; 29 at the largest cap) and the pickup sets `run_once_at` to the trigger's creation time plus the offset. Alternatives: B — absolute `run_once_at` from the script; C — the pickup computes the spacing. Why: an offset read at creation stays in the future across pacing waits; the script decides. Applied in: PR #5718. Status: pending review
+- AD-16 [phase 1/1 — resume after twin sync, 2026-10-01] How fast are triggers created? — Picked: A — at most 8 `create_trigger` calls per minute across the wake (supersedes AD-5's 10). Alternatives: B — keep 10. Why: the owner observed about 9 per minute and asked for 8. Applied in: PR #5718. Status: pending review
+- AD-17 [phase 1/1 — resume after twin sync, 2026-10-01] Does the per-wake cap change? — Picked: A — keep the default 20 (clamped 1..40); spaced, 20 resumes fire over 2–17 minutes (about 4 per 3 minutes). Alternatives: B — default 8; C — default 12. Why: the issue body sets 20 and the comment names no number; spacing bounds the fire rate. Applied in: no code change. Status: pending review
+- AD-18 [phase 1/1 — resume after twin sync, 2026-10-01] How is a failed resume picked again without double resumes? — Picked: A — a fired resume trigger no longer counts as a wake; a pending one counts whatever its time; a trigger's time is `next_run_at`, else `run_once_at`. Alternatives: B — keep the 30-minute window for resume triggers. Why: spacing plus pacing can put a resume beyond 30 minutes, and B could resume it twice from a catch-up wake. Applied in: PR #5718. Status: pending review
+- AD-19 [phase 1/1 — resume after twin sync, 2026-10-01] How wide is the checker prompt's duplicate-stage guard? — Picked: A — page `list_sessions` by 100 back to the instructions message (at most 5 pages) and match exact title, creation after the message, and this repository as source. Alternatives: B — one page of 20 by title; C — no guard. Why: round-1 reviewers showed B can miss the child or match another repository's session. Applied in: PR #5718. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] Re-read the source issue's owner comments before arming a wait on a phase held for a twin sync: comments posted during the hold can change the twin-first code, and folding them in before the sync saves a second sync. (files: docs/implement-plan/issue-5660-resume-usage-limit-stops.md)
 - [source:plan-deviation] A selector that resumes stopped sessions must treat any trigger bound to a checker as a live chain (its triggers are its own check-ins), or a resume starts a second send_later chain. (files: workflow-templates/.claude/scripts/usage_limit_resumes.py)
 - [source:plan-deviation] A `rejected` rate_limit_info snapshot does not mean a session stopped: turns completed on overage record it too, so it may only select checkers with no bound trigger. (files: workflow-templates/.claude/scripts/usage_limit_resumes.py)
 
 ## Notes
+- 2026-10-01 resume (session_012LmydKWkaC932UcZeUj9ut, /reclarify after the first sync db90cf5): project branch synced with main (f3047e7); phase branch merged it ([claude-merge-resolve], master-session.md: kept this phase's usage-limit bullet and main's newer "Approval windows" bullet). Folded the owner's 16:13Z/16:39Z comments and the valid round-1 findings (duplicate-stage guard, README sentence placement) into #5718 (AD-14..AD-19); the round-1 task gap (pickup diff) was closed by the sync. Selector suite 93/94 on the branch (parity red until the sync); post-sync simulation (selector twin copied, pickup diff applied): 874 passed, 1 skipped across the affected suites; ruff clean.
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-09-30)
 - security_pass_skip.py: {"skip": false, "label": null, "reason": "no skip label"} → Security pass: run.
 - Phase 1 verification (2026-09-30): full suite in this session's checkout 156 failed / 4916 passed; 114 of the failures also fail on an origin/main copy (missing local tools), 31 orchestrate_* tests time out only in the proxied checkout and pass on a local clone of the phase head, and the rest are the expected pre-sync parity and pickup assertions. A clone with the twins copied and the pickup diff applied passes all 774 tests of the affected suites.
