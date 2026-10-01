@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2475, 3577-3620 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A push between the gate\u2019s PR lookup and the later branch fetch can leave reviewers reading the gate-time tree while the workflow reviews the newer head and authorizes auto-merge for it.\n  WHY: The finding identifies a mismatch between `GITHUB_WORKSPACE` at the gate-time SHA and `WORKSPACE_PATH` / `INITIAL_HEAD_SHA` at the later head; minimax_minimax-m3, qwen_qwen3_7-plus, and z-ai_glm-5_2 dispute the finding, stating that the later checkout realigns the workspace to the branch tip.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml: `Checkout repo` uses the gate-time SHA at line 2475. Later, `Checkout PR head branch` fetches and resets `WORKSPACE_PATH` to the live branch head at lines 3577-3620. `scripts/review_run_reviewers.sh:4300` sets the reviewer project path to `GITHUB_WORKSPACE`; `scripts/review_enable_auto_merge.sh:182-190` authorizes against the later `INITIAL_HEAD_SHA`. | severity=MAJOR | confidence=5\n  PROBLEM: A push between the gate\u2019s PR lookup and the later branch fetch leaves reviewers reading the gate-time tree while the workflow fetches, reviews the diff for, and can authorize auto-merge of the newer head.\n  WHY: For a gate lookup of head A followed by a push to head B before the fetch, `GITHUB_WORKSPACE` remains at A, while `WORKSPACE_PATH` and `INITIAL_HEAD_SHA` advance to B. The auto-merge head check can pass for B even though reviewers used A\u2019s files. Keep both review trees pinned to the same SHA or stop the run when they differ.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bc050b55354d37e7ef1dbbf3f2e2188d4995d18e0fad95a44416ef587f5f5f87",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5857,
+    "run_id": "36813401264",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36813401264",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001043634_0d56d1a36d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5857,
+    "run_id": "36813401264"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T04:36:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
