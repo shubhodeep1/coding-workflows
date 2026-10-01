@@ -26,7 +26,9 @@
 #     posted, a pending auto-merge on the PR is turned off (GitHub keeps
 #     auto-merge across pushes by anyone with write access, so one enabled
 #     on an earlier, unprotected head would land this one), a warning is
-#     logged, and the wrapper returns 3. A failed read,
+#     logged (an error annotation when turning auto-merge off failed), and
+#     the wrapper returns 3. A call bound to an older head is refused too,
+#     and the PR's current head decides the auto-merge. A failed read,
 #     a missing checker, or an unparseable call also returns 3 (fail closed).
 #
 # Callers put the PR number right after `pr merge`. A flag first
@@ -112,6 +114,13 @@ protected_path_guarded_merge()
 	if [ "${_ppg_rc}" != "0" ] || [ "${_ppg_decision}" != "allow" ]; then
 		echo "::warning::protected-path gate refused the merge of PR #${_ppg_pr}: ${_ppg_reason}. The repository owner must post '/authorize-protected-paths <head sha>' on the PR (issue #4919)." >&2
 		echo "PROTECTED_PATH_GATE pr=${_ppg_pr} head=${_ppg_authorized_head:-${_ppg_head:-unknown}} decision=block rc=${_ppg_rc} auto_merge=${_ppg_auto_merge} reason=${_ppg_reason}" >&2
+		case "${_ppg_auto_merge}" in
+			"disable failed"*)
+				# Refusing this call does not stop GitHub: the pending
+				# auto-merge still lands the unauthorized head once checks pass.
+				echo "::error::protected-path gate could not turn off the pending auto-merge on PR #${_ppg_pr} (${_ppg_auto_merge}); GitHub can still merge the unauthorized head once its checks pass. Turn auto-merge off on the PR, or authorize the head (issue #4919)." >&2
+				;;
+		esac
 		return 3
 	fi
 	if [ "${_ppg_protected}" = "true" ]; then

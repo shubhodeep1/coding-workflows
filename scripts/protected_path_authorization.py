@@ -47,6 +47,8 @@ command; that comment is never a bare command, so it cannot authorize. With
 turned off (GitHub keeps auto-merge across pushes by anyone with write
 access, so one enabled on an earlier, unprotected head would otherwise land
 the unauthorized one); the JSON's `auto_merge` field says what happened.
+That is judged on the PR's current head, also when `--head` names an older
+one and the call is refused for the move.
 
 `release` checks every non-merge commit in `<base>..<head>` that touches a
 protected path, and every merge commit that makes a protected change of its
@@ -310,13 +312,18 @@ def check_pr(
 ) -> dict[str, Any]:
 	"""Fetch what `evaluate_pr` needs and return its decision.
 
-	With `disable_auto_merge`, a protected PR blocked for want of the owner's
-	comment also has a pending auto-merge turned off. GitHub keeps auto-merge
+	With `disable_auto_merge`, a blocked call also turns off a pending
+	auto-merge when the PR's current head is protected and not authorized
+	(no owner comment, or no readable head SHA). GitHub keeps auto-merge
 	enabled when someone with write access pushes, so an auto-merge enabled on
 	an earlier, unprotected head would otherwise land this unauthorized one.
-	The PR read already carries `auto_merge`, so this costs a write only when
-	one is pending; a failed write is retried up to READ_ATTEMPTS times, each
-	retry after one more PR read (`_turn_off_auto_merge`)."""
+	A call bound to an older head (`expected_head`) is still refused for the
+	head move, but the current head is judged too, so a stale call cannot
+	leave that auto-merge pending; an unprotected or authorized current head
+	keeps its auto-merge. The PR read already carries `auto_merge`, so this
+	costs a write only when one is pending; a failed write is retried up to
+	READ_ATTEMPTS times, each retry after one more PR read
+	(`_turn_off_auto_merge`)."""
 	get = get or gh_get_json
 	post = post or _post_comment
 	disable = disable or _disable_auto_merge
@@ -331,11 +338,21 @@ def check_pr(
 		raise ReadError(f"PR #{number} returned non-object JSON")
 	files, files_complete = _get_pages(f"repos/{repo}/pulls/{number}/files", MAX_FILE_PAGES, get)
 	decision = evaluate_pr(pr, files, files_complete, None, expected_head)
-	if decision["decision"] == "allow" or decision["reason"] != "comments were not read":
+	if decision["decision"] == "allow":
 		return decision
-	comments, _complete = _get_pages(f"repos/{repo}/issues/{number}/comments", MAX_COMMENT_PAGES, get)
-	decision = evaluate_pr(pr, files, files_complete, comments, expected_head)
-	if decision["decision"] == "block" and post_instructions:
+	# A call bound to an older head is refused for the move, but whether a
+	# pending auto-merge must go depends on the head the PR has now.
+	head_moved = expected_head is not None and decision["head"] != expected_head
+	current = evaluate_pr(pr, files, files_complete, None) if head_moved else decision
+	if current["decision"] == "allow":
+		return decision
+	comments: list[Any] | None = None
+	if current["reason"] == "comments were not read":
+		comments, _complete = _get_pages(f"repos/{repo}/issues/{number}/comments", MAX_COMMENT_PAGES, get)
+		current = evaluate_pr(pr, files, files_complete, comments)
+		if not head_moved:
+			decision = current
+	if decision["decision"] == "block" and post_instructions and comments is not None and not head_moved:
 		head = decision["head"]
 		already = any(
 			isinstance(comment, dict) and INSTRUCTION_MARKER.format(head=head) in (comment.get("body") or "")
@@ -347,7 +364,7 @@ def check_pr(
 				post(f"repos/{repo}/issues/{number}/comments", instruction_body(head, protected_files(files)))
 			except ReadError as exc:
 				decision["instructions"] = f"post failed: {exc}"
-	if decision["decision"] == "block" and disable_auto_merge:
+	if current["decision"] == "block" and disable_auto_merge:
 		node_id = pr.get("node_id")
 		if not pr.get("auto_merge"):
 			decision["auto_merge"] = "none pending"

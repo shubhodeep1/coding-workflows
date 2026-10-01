@@ -1171,7 +1171,14 @@ reviews, comments, and conflicts stay a direct §12 request.
       retried twice (2s, 4s), each retry after a PR read that ends the
       loop if auto-merge is already off. `auto_merge=` in the log reads
       `disabled`, `none pending`, or `disable failed: …`. A failure still
-      refuses the merge.
+      refuses the merge and adds a `::error::` annotation, because GitHub
+      can still land the pending auto-merge once checks pass.
+    - The PR's current head decides the auto-merge. A call bound to an older
+      head (`--match-head-commit`) is refused for the move, and a pending
+      auto-merge is still turned off when the current head is protected and
+      not authorized, or its SHA cannot be read; an unprotected or authorized
+      current head keeps it. Only a call bound to the current head posts the
+      instruction comment.
     - `review_enable_auto_merge.sh` then logs
       `AUTOFIX_AUTO_MERGE_PROTECTED_PATH … action=refuse` (squash) or
       `action=refuse_merge_commit` (forward-merge fallback PR) and withholds

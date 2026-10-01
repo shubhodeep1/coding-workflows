@@ -289,11 +289,44 @@ def test_check_pr_leaves_auto_merge_alone_unless_a_protected_pr_is_refused(pr, f
 	assert disabled == []
 
 
-def test_check_pr_head_mismatch_leaves_auto_merge_alone():
-	fake = _FakeGitHub(_auto_merge_pr(head=OTHER), [{"filename": ".claude/settings.json"}], [])
+@pytest.mark.parametrize("files, comments", [
+	([{"filename": "README.md"}], []),
+	([{"filename": ".claude/settings.json"}], [_comment(f"/authorize-protected-paths {OTHER}")]),
+])
+def test_check_pr_head_mismatch_leaves_auto_merge_alone(files, comments):
+	# The PR's current head (OTHER) is unprotected or authorized, so the
+	# call bound to HEAD is refused for the move but the auto-merge stays.
+	fake = _FakeGitHub(_auto_merge_pr(head=OTHER), files, comments)
 	disabled = []
-	decision = ppa.check_pr("o/r", 7, HEAD, get=fake.get, post=fake.post, disable_auto_merge=True, disable=disabled.append)
-	assert decision["decision"] == "block" and "auto_merge" not in decision and disabled == []
+	decision = ppa.check_pr(
+		"o/r", 7, HEAD, post_instructions=True, get=fake.get, post=fake.post, disable_auto_merge=True, disable=disabled.append,
+	)
+	assert decision["decision"] == "block" and decision["reason"].startswith(f"PR head moved to {OTHER}")
+	assert "auto_merge" not in decision and disabled == [] and fake.posts == []
+
+
+@pytest.mark.parametrize("head", [OTHER, None])
+def test_check_pr_head_mismatch_turns_off_auto_merge_on_an_unauthorized_protected_head(head):
+	# Review round 4 on PR #4973: a call bound to an older head returned
+	# before the auto-merge check, so a pending auto-merge on a later,
+	# unauthorized protected head (or one whose SHA cannot be read) survived.
+	fake = _FakeGitHub(_auto_merge_pr(head=head), [{"filename": ".claude/settings.json"}], [])
+	disabled = []
+	decision = ppa.check_pr(
+		"o/r", 7, HEAD, post_instructions=True, get=fake.get, post=fake.post, disable_auto_merge=True, disable=disabled.append,
+	)
+	assert decision["decision"] == "block" and decision["reason"].startswith("PR head moved to ")
+	assert decision["auto_merge"] == "disabled" and disabled == ["PR_node7"]
+	assert fake.posts == [], "instructions are posted only by a call bound to the current head"
+
+
+def test_check_pr_turns_off_auto_merge_when_a_protected_head_sha_is_unreadable():
+	fake = _FakeGitHub(_auto_merge_pr(head=None), [{"filename": ".claude/settings.json"}], [])
+	disabled = []
+	decision = ppa.check_pr("o/r", 7, get=fake.get, post=fake.post, disable_auto_merge=True, disable=disabled.append)
+	assert decision["decision"] == "block" and decision["reason"] == "PR head SHA is unavailable"
+	assert decision["auto_merge"] == "disabled" and disabled == ["PR_node7"]
+	assert not any("comments" in read for read in fake.reads)
 
 
 def test_check_pr_still_blocks_when_turning_auto_merge_off_fails():
@@ -925,6 +958,21 @@ def test_gate_logs_what_happened_to_a_pending_auto_merge(tmp_path):
 	)
 	assert "rc=3" in proc.stdout and merges == []
 	assert f"PROTECTED_PATH_GATE pr=42 head={HEAD} decision=block rc=3 auto_merge=disabled" in proc.stderr
+	assert "::error::" not in proc.stderr
+
+
+def test_gate_raises_an_error_when_turning_auto_merge_off_failed(tmp_path):
+	# Review round 4 on PR #4973: the refusal alone reads as safe, but GitHub
+	# can still land the pending auto-merge, so a failed disable must stand out.
+	proc, merges, _checks = _run_gate(
+		tmp_path,
+		{"decision": "block", "protected": True, "head": HEAD, "reason": "no owner comment", "auto_merge": "disable failed: HTTP 502"},
+		3,
+		'protected_path_guarded_merge fake_merge gh pr merge 42 --repo o/r --squash --auto',
+	)
+	assert "rc=3" in proc.stdout and merges == []
+	assert "auto_merge=disable failed: HTTP 502" in proc.stderr
+	assert "::error::protected-path gate could not turn off the pending auto-merge on PR #42 (disable failed: HTTP 502)" in proc.stderr
 
 
 def test_gate_binds_an_authorized_protected_merge_to_its_head(tmp_path):
