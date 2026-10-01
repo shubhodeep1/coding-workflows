@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue improve?\nChoices:\nA. A specific bug \u2014 provide the behavior, reproduction steps, and expected result. (RECOMMENDED)\nB. A specific workflow or feature \u2014 name it and describe the desired change.\nC. Documentation or usability \u2014 name the affected page or interaction and the intended improvement.",
+  "fingerprint": "1097a897aeed66c5e30ae5d921fccbe8646004ae93e7196c849919f56f399b7b",
+  "lineage": {
+    "issue_number": 5799,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36797812650",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36797812650",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261001005013_f078ecad37",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5799,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36797812650"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #5799 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-01T00:50:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
