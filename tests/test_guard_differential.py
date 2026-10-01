@@ -19,6 +19,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -984,6 +985,127 @@ def test_ci_step_does_not_import_modules_from_the_checkout(tmp_path: Path) -> No
 # before the check, so the list is pinned here.
 CI_INSTALL_PACKAGES = ("yamllint", "coverage", "pyyaml", "jsonschema", "jinja2", "pytest", "ruff")
 
+# A Python interpreter word in a shell `run:` body: `python3`, `python`,
+# `python3.12`, or a path to one (`/usr/bin/python3`), wherever it sits on a
+# line (after `env`, an assignment, `$(`, a pipe, ...).
+_PYTHON_INTERPRETER_WORD = re.compile(r"(?<![\w.${}/-])(?:[\w.${}-]*/)*python[0-9.]*(?![\w.${}/-])")
+# CPython long options that print and exit without running any code.
+_PYTHON_NO_CODE_LONG_OPTIONS = frozenset({"--help", "--help-all", "--help-env", "--help-xoptions", "--version"})
+
+
+def _python_invocation_problems(run: str, script_dir_prefix: str) -> list[str]:
+	"""Every Python invocation in a `run:` body that could import code from the
+	checkout (issue #5327 review rounds 2 and 3).
+
+	Parses each invocation's options the way CPython does: short options
+	cluster (`-BP`), `-W` and `-X` take an argument (the rest of the cluster
+	or the next word), and `-c` / `-m` end the options. A `-c` / `-m` call is
+	safe only when `-P` or `-I` came before it; reading the program from stdin
+	(no argument, or `-`) likewise. A script is safe only under
+	`script_dir_prefix`, the pinned verifier's directory. A line the scan
+	cannot parse is reported, never skipped.
+	"""
+	problems = []
+	for line in run.replace("\\\n", " ").splitlines():
+		for match in _PYTHON_INTERPRETER_WORD.finditer(line):
+			call = line[match.start():].strip()
+			lexer = shlex.shlex(line[match.end():], posix=True, punctuation_chars=True)
+			lexer.whitespace_split = True
+			lexer.commenters = ""
+			safe_path = False
+			problem = None
+			try:
+				while True:
+					word = lexer.get_token()
+					if word is None or (word and set(word) <= set(lexer.punctuation_chars)):
+						# Program read from stdin: sys.path[0] is the working directory.
+						problem = None if safe_path else "reads the program from stdin without -P or -I"
+						break
+					if word == "-":
+						problem = None if safe_path else "reads the program from stdin without -P or -I"
+						break
+					if word == "--":
+						word = lexer.get_token() or ""
+						problem = None if word.startswith(script_dir_prefix) else f"runs a script outside {script_dir_prefix}: {word!r}"
+						break
+					if word.startswith("--"):
+						name, _, value = word.partition("=")
+						if name in _PYTHON_NO_CODE_LONG_OPTIONS:
+							break
+						if name == "--check-hash-based-pycs":
+							if not value:
+								lexer.get_token()
+							continue
+						problem = f"unknown option {name!r}"
+						break
+					if word.startswith("-"):
+						cluster = word[1:]
+						options_end = False
+						for index, flag in enumerate(cluster):
+							if flag in "PI":
+								safe_path = True
+							elif flag in "cm":
+								problem = None if safe_path else f"runs -{flag} without -P or -I"
+								options_end = True
+								break
+							elif flag in "WX":
+								# The rest of the cluster, or else the next word, is its argument.
+								if index == len(cluster) - 1:
+									lexer.get_token()
+								break
+							elif flag in "hV":
+								options_end = True
+								break
+						if options_end:
+							break
+						continue
+					problem = None if word.startswith(script_dir_prefix) else f"runs a script outside {script_dir_prefix}: {word!r}"
+					break
+			except ValueError as error:
+				problem = f"cannot parse: {error}"
+			if problem is not None:
+				problems.append(f"{problem}: {call}")
+	return problems
+
+
+@pytest.mark.parametrize(
+	("run", "expected"),
+	[
+		("python3 -P -c 'import json'", None),
+		("python3 -I -m json.tool", None),
+		("python3 -BPc 'x'", None),
+		("python3 -W ignore -P -c 'x'", None),
+		("python3 -X dev -I -m json.tool", None),
+		('PYTHONDONTWRITEBYTECODE=1 python3 "${guard_differential_verifier_dir}/guard_differential.py" \\\n  --base-ref FETCH_HEAD', None),
+		("python3 --version", None),
+		("python3 -W ignore -c 'import json'", "runs -c without -P or -I"),
+		("python3 -Wignore -c 'x'", "runs -c without -P or -I"),
+		("python3 -X dev -m json.tool", "runs -m without -P or -I"),
+		("python3 --check-hash-based-pycs always -m json.tool", "runs -m without -P or -I"),
+		("python3 -WP -c 'x'", "runs -c without -P or -I"),
+		("python3 -c 'x' -P", "runs -c without -P or -I"),
+		('out="$(python3 -W ignore -c \'x\')"', "runs -c without -P or -I"),
+		("env python3 -m json.tool", "runs -m without -P or -I"),
+		("/usr/bin/python3.12 -c 'x'", "runs -c without -P or -I"),
+		("python -B -c 'x'", "runs -c without -P or -I"),
+		("echo x | python3 -", "reads the program from stdin"),
+		("python3 <<'EOF'", "reads the program from stdin"),
+		("python3 scripts/guard_differential.py", "runs a script outside"),
+		("python3 -P scripts/guard_differential.py", "runs a script outside"),
+		("python3 -- scripts/x.py", "runs a script outside"),
+		("python3 --unknown -c 'x'", "unknown option"),
+		("python3 -P -W \"unterminated", "cannot parse"),
+	],
+)
+def test_python_invocation_scan(run: str, expected: str | None) -> None:
+	"""Issue #5327 review round 3: an option that takes an argument (-W, -X)
+	before `-c` / `-m` must not hide an unisolated call from the scan."""
+	problems = _python_invocation_problems(run, "${guard_differential_verifier_dir}/")
+	if expected is None:
+		assert problems == []
+	else:
+		assert len(problems) == 1 and expected in problems[0], problems
+
 
 def test_ci_check_runs_before_any_pr_code() -> None:
 	"""Issue #5327 conformance run 3: PR code that runs earlier in the same
@@ -1036,11 +1158,8 @@ def test_ci_check_runs_before_any_pr_code() -> None:
 	assert sorted(lines[0][len(install_prefix):].split(" ")) == sorted(CI_INSTALL_PACKAGES), lines[0]
 	# The check step's own `python3 -c` / `-m` calls keep the checkout off
 	# sys.path too (-P, or -I which implies it), or a PR's json.py would run
-	# inside the step.
-	for python_flags in re.findall(r"\bpython3((?: +-[A-Za-z]+)+)", check["run"]):
-		flags = python_flags.split()
-		if flags[-1][-1] in "cm":
-			assert any({"P", "I"} & set(flag[1:]) for flag in flags), python_flags
+	# inside the step; its only script is the pinned verifier copy.
+	assert _python_invocation_problems(check["run"], "${guard_differential_verifier_dir}/") == []
 	assert "python3 -P -c " in check["run"]
 
 
