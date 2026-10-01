@@ -185,7 +185,7 @@ def test_one_checker_per_project_keeps_the_chain_shallow(text):
 	# 8 parent links below a root; a checker per stage added two links per
 	# hand-off and stalled a project at its fourth security cycle.
 	assert "**One checker per project, so the session chain stays shallow.**" in text
-	assert "`title` = `implement-plan <slug> — checker`" in text
+	assert "`title` = `<numbers>implement-plan <slug> — checker`" in text
 	assert "**Reuse it** when it is not archived" in text
 	assert "`title` = `implement-plan <slug> — waiting:" not in text
 	assert "archives the previous stage session and the checker" not in text
