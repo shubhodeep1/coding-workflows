@@ -1175,6 +1175,41 @@ The nightly promote cycle's smoke gate (`Test & Mark Stable Release` run 3580259
 
 What this means for operators: review runs finish in fewer editor attempts, and a failed first canary check in the release gate can now actually recover. Watch for `EDITOR_REVIEWER_CHECKSUM_UNVERIFIED` warnings if you want to track how often the model miscopies hashes.
 
+- **A review-blocked spot-fix reissue can now list the new files its follow-up must create, so the implement run's scope guard no longer refuses a required changelog fragment or new test fixture.**
+
+When the review-blocked judge closes a PR with `reissue_mode: spot-fix`, `scripts/review_rb_judge.sh` writes a `files_touched` allowlist into the replacement issue, and `implement.yml` refuses any commit outside it. That list could only hold files the judge cited or files the closed PR changed, and both had to exist at the closed PR head. A follow-up that had to add a file was therefore blocked. #4664, the reissue of #4605 / PR #4607, latched `ai:scope-blocked` on a new changelog fragment and four new `tests/fixtures/integration_ref_resolver/*.json` fixtures. The judge contract (`prompts/mode-judge-review-blocked.txt`) now has an optional `new_output_paths` array, and each declared path that passes validation is appended to the allowlist.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Paths #4664's scope guard refused | 5 (1 changelog fragment, 4 new fixtures) |
+| Declared paths read per reissue | at most 10 |
+| New GitHub API calls | 0 |
+
+What this means for operators: a spot-fix reissue that has to add files no longer stops at `ai:scope-blocked`. The guard itself is unchanged. A declared path is dropped when it fails the path validator, is not printable ASCII or has a leading or trailing space, contains a glob character or trailing `/`, has a `.git` segment at any depth, already exists at the closed PR head, cannot be looked up there, or has no file extension in its last segment, so this cannot exempt an existing file or directory, or a new extensionless directory path. Extensionless new files (`Dockerfile`, `.gitignore`) are dropped too and still need the human-gated procedure, and a new directory whose name carries a dot (`conf.d`) is the one accepted residual: one brand-new subtree the judge named. The new `REISSUE_FILES_TOUCHED_NEW_OUTPUTS` log line shows how many paths the judge declared, added, and skipped, and each skip is logged with its reason. #4664 still has to be released through the existing human-gated procedure.
+
+### For contributors
+
+The new source runs after the `REISSUE_FILES_TOUCHED_UNION` step and only on the spot-fix path. A rejected entry is skipped and never forces `redo`, which matches the closed-PR union. A judge that omits the field produces a byte-identical issue body. Change `prompts/_templates/mode-judge-review-blocked.txt` together with the runtime prompt.
+
+- **The release smoke test no longer reports Clarify, Plan, or Implement success without that phase's run ID.** `test-and-mark-stable.yml` now finds each phase's run past the first 100 runs, only for the smoke issue's own title, and when no run can be found the phase fails at capture with `status=run_id_missing`.
+
+Run 36374918973 blocked the stable release at `Internals .. FAILED` even though its totals showed 0 failed steps. The Plan wait step read one 100-run page of `actions/runs`. As skipped `issue_comment` runs piled up, the smoke issue's Plan run slid to index 96 of that page and then off it, so the step wrote `status=success` with an empty `run_id`. That skipped `Phase 2b: Soft-error analyser (plan)` and left deep verification to fail the release as `Plan: run ID not found`. Run 36504041362 failed the same way at Implement: the smoke issue's Implement run sat at index 137 of the window when the PR appeared. The Clarify and Implement captures also had no issue-title filter, so a newer run from the parallel alt-model smoke job could be taken as ours. All three captures now walk later pages of the same query, still matching only non-skipped runs of that phase whose `display_title` is the smoke issue's title. A missing ID now stops the gate at that phase's line. The check that keeps the Plan step waiting while another Plan run for the issue is still active pages the same way, so an older active run past page 1 no longer ends the step as `plan_failed`. When that check cannot read a page, it retries only until the Plan phase's inactivity limit and then fails with `status=timeout`, instead of polling until the job's 300-minute limit.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Pages read by each run-ID capture (Clarify, Plan, Implement) | 1 normally, at most 10 per attempt (GitHub's 1,000-result ceiling); a walk that reads all 10 full pages without a match is not retried |
+| Pages read by each 10-second Plan status poll | 1 (unchanged) |
+| Pages read by the "other active Plan runs" check (Plan completed without its label) | 1 when page 1 holds an active run, otherwise up to 10, stopping at a short page |
+| New status value for `wait-clarify`, `wait-plan`, and `wait-implement` | `run_id_missing` |
+| Retries of an unreadable runs page in the "other active Plan runs" check | until `PLAN_PHASE_TIMEOUT` (default 60 minutes) without activity, then `status=timeout` |
+| Runs created in the first failed window (03:46–03:57 UTC) | 166 |
+
+What this means for release operators: a busy repository no longer turns a successful Clarify, Plan, or Implement phase into a release block with no failed steps, and deep verification checks the smoke issue's own runs rather than the alt-model job's. If a phase's run really cannot be found, the gate prints `FAILED (run_id_missing)` on that phase's line and the wait step names the issue and title it searched for.
+
+### For contributors
+
+The Plan change is in the `wait-plan` step (`fetch_plan_runs_page_json`, `latest_scoped_run_field`, `require_plan_run_id`, `fail_plan_confirm_retry_if_idle`). `wait-clarify` and `wait-implement` keep their own `capture_run_id`, now paged and title-scoped, plus `require_scoped_run_id`, and take `ISSUE_TITLE` from `steps.create-issue.outputs.title`; like `wait-plan`, they fail before polling when that title is empty, because an empty title would match a run with an empty `display_title`. `tests/test_test_and_mark_stable_plan_polling_guard.py` runs the real step scripts against a stubbed `gh` to cover the missing-ID, later-page, other-issue, page-cap, and unreadable-page cases for all three captures, and the empty-title case for `wait-clarify` and `wait-implement`.
+
 ### For contributors
 
 Issue #4305's heal traced this failure to the reviewer-majority shortcut that PR #4306 removed; on run 35802596362 Phase 4 had in fact waited for the review run to complete, so that change did not cover it. The retry still has the same 25-minute budget (`EDITOR_RETRY_BUDGET_MINUTES`), and a full review pipeline can take longer, because the job's serial budget is already 295 of its 300 minutes.
