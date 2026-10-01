@@ -6,6 +6,7 @@ On 2026-09-29 a twin-sync push from a detached worktree onto an open PR's branch
 | The numbers that matter | Value |
 | --- | --- |
 | Directory sources followed | earlier `cd <path>` in the same command, `git -C <path>`, `GIT_DIR=<path>`, `--git-dir` |
+| Path resolution | `cd` lexical (physical with `-P`), `git -C` and the git directory physical; a quoted or escaped `~` (`"~"`, `'~'`, `\~`, `--git-dir=~`) is a literal directory, not `$HOME` |
 | Push refspecs judged on the target | `<src>:<dst>`, `HEAD:<dst>`, `+<src>:refs/heads/<dst>`, `<branch>` |
 | Not judged | `--delete`, `:<dst>`, `refs/tags/…` (patterns such as `refs/tags/*` included), `--tags` (or `--tag`) with no refspec, also in a directory the guard cannot resolve |
 | Judged on the current branch, then a confirmation prompt | `--all`, `--branches`, `--mirror` (and prefixes such as `--al`), the `:` matching refspec, `*` pattern refspecs |

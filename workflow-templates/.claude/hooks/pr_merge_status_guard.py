@@ -51,8 +51,12 @@ allow with a warning.
 "The current branch" and HEAD are those of the repository each guarded git
 call actually runs in, not the session's checkout (issue #5144): the hook's
 `cwd`, moved by every earlier `cd <path>` in the same command, then by
-`git -C <path>`, then by `GIT_DIR=<path>` / `--git-dir`. A push that names a
-refspec is judged on the branch it writes to — `git push origin HEAD:<ref>`
+`git -C <path>`, then by `GIT_DIR=<path>` / `--git-dir`. Paths resolve as the
+shell and git do: `cd` lexically unless `-P` is in force, `-C` and the git
+directory physically (symlinks followed), and a `~` that is quoted or escaped
+(`"~"`, `'~'`, `\\~`, or one in `--git-dir=`) as a literal directory name.
+A push that names a refspec is judged on the branch it writes to —
+`git push origin HEAD:<ref>`
 checks `<ref>`, with the refspec's source as the commit that would stack on
 it — so a detached worktree pushing to an open PR's branch is allowed while a
 worktree pushing merged history to a merged branch is blocked, whatever the
@@ -472,12 +476,92 @@ class GuardTarget(NamedTuple):
 	bulk_reason: str = ""
 
 
-def _resolve_guard_path(value: str, base: str) -> tuple[str | None, str]:
+def _literal_tilde_words(command: str) -> frozenset[str]:
+	"""Words of `command`, as the tokenizer returns them, whose `~` Bash leaves literal.
+
+	The tokenizer drops quoting, so `cd "~"`, `cd '~'`, `cd \\~` and
+	`cd ~"/x"` reach the resolver as `~` / `~/x` although Bash expands none
+	of them. Bash expands a `~` only at the start of a word (or right after
+	the first `=` of an assignment word) when nothing up to the first
+	unquoted `/` is quoted. Splits words where `_shell_segments` does.
+	"""
+	literal_words: set[str] = set()
+	word: list[tuple[str, bool]] = []
+
+	def tilde_is_literal(start: int) -> bool:
+		if start >= len(word) or word[start][0] != "~":
+			return False
+		for character, quoted in word[start:]:
+			if character == "/" and not quoted:
+				return False
+			if quoted:
+				return True
+		return False
+
+	def finish_word() -> None:
+		if not word:
+			return
+		text = "".join(character for character, _quoted in word)
+		positions = [0]
+		assignment = re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", text)
+		if assignment and not any(quoted for _character, quoted in word[: assignment.end()]):
+			positions.append(assignment.end())
+		if any(tilde_is_literal(position) for position in positions):
+			literal_words.add(text)
+		word.clear()
+
+	single_quoted = False
+	double_quoted = False
+	escaped = False
+	for character in command:
+		if escaped:
+			escaped = False
+			if double_quoted and character not in '"\\':
+				# Inside double quotes a backslash escapes only `"` and `\`.
+				word.append(("\\", True))
+			word.append((character, True))
+			continue
+		if single_quoted:
+			if character == "'":
+				single_quoted = False
+			else:
+				word.append((character, True))
+			continue
+		if character == "\\":
+			escaped = True
+			continue
+		if double_quoted:
+			if character == '"':
+				double_quoted = False
+			else:
+				word.append((character, True))
+			continue
+		if character == "'":
+			single_quoted = True
+			continue
+		if character == '"':
+			double_quoted = True
+			continue
+		if character in " \t\r" or character in _SHELL_PUNCTUATION_CHARS:
+			finish_word()
+			continue
+		word.append((character, False))
+	finish_word()
+	return frozenset(literal_words)
+
+
+def _resolve_guard_path(
+	value: str, base: str, physical: bool = False, expand_tilde: bool = True
+) -> tuple[str | None, str]:
 	"""Resolve a `cd` / `-C` / `GIT_DIR` path word against `base`.
 
 	Returns (absolute directory, "") or (None, reason) when the word needs
 	shell expansion the guard does not perform, or names no existing
-	directory this process can enter at hook time.
+	directory this process can enter at hook time. `physical` follows
+	symlinks before `..` as `cd -P` and git's `chdir` do; otherwise `..`
+	removes the previous component, as a plain `cd` does. `expand_tilde` is
+	False for a `~` the shell leaves literal (`_literal_tilde_words`), which
+	then names a directory called `~`.
 	"""
 	if not value:
 		return None, "an empty path"
@@ -485,11 +569,14 @@ def _resolve_guard_path(value: str, base: str) -> tuple[str | None, str]:
 		return None, "`cd -`"
 	if any(marker in value for marker in _UNRESOLVABLE_PATH_MARKERS):
 		return None, f"`{value}` needs shell expansion"
-	if value.startswith("~"):
+	if value.startswith("~") and expand_tilde:
 		if value != "~" and not value.startswith("~/"):
 			return None, f"`{value}` names another user's home directory"
 		value = os.path.expanduser(value)
-	resolved = os.path.normpath(os.path.join(base, value))
+	if physical:
+		resolved = os.path.realpath(os.path.join(base, value))
+	else:
+		resolved = os.path.normpath(os.path.join(base, value))
 	if not os.path.isdir(resolved):
 		return None, f"`{resolved}` is not an existing directory"
 	if not os.access(resolved, os.X_OK):
@@ -498,22 +585,41 @@ def _resolve_guard_path(value: str, base: str) -> tuple[str | None, str]:
 	return resolved, ""
 
 
-def _cd_destination(args: list[str], base: str) -> tuple[str | None, str]:
-	"""Directory a `cd <args>` segment moves to, or (None, reason)."""
+def _cd_destination(
+	args: list[str], base: str, literal_tilde_words: frozenset[str] = frozenset()
+) -> tuple[str | None, str]:
+	"""Directory a `cd <args>` segment moves to, or (None, reason).
+
+	Options end at `--` or the first operand, as for the builtin, so a word
+	after the directory is a second operand (`cd a -P` fails). The last of
+	`-L` / `-P` decides between lexical and physical resolution; any other
+	option than those and `-e` makes `cd` fail, so it is unresolvable.
+	"""
 	operands: list[str] = []
 	options_done = False
+	physical = False
 	for arg in args:
 		if not options_done and arg == "--":
 			options_done = True
 			continue
 		if not options_done and arg.startswith("-") and arg != "-":
+			for flag in arg[1:]:
+				if flag == "P":
+					physical = True
+				elif flag == "L":
+					physical = False
+				elif flag != "e":
+					return None, f"`cd {arg}` (an option the guard does not model)"
 			continue
+		options_done = True
 		operands.append(arg)
 	if not operands:
-		return _resolve_guard_path("~", base)
+		return _resolve_guard_path("~", base, physical=physical)
 	if len(operands) > 1:
 		return None, "`cd` with several operands"
-	return _resolve_guard_path(operands[0], base)
+	return _resolve_guard_path(
+		operands[0], base, physical=physical, expand_tilde=operands[0] not in literal_tilde_words
+	)
 
 
 def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> list[GuardTarget]:
@@ -689,19 +795,27 @@ def _unresolvable_refspec_reason(refspec: str) -> str:
 
 
 def _git_invocation_targets(
-	args: list[str], assignments: dict[str, str], directory: str | None, unresolved: str, session_cwd: str
+	args: list[str],
+	assignments: dict[str, str],
+	directory: str | None,
+	unresolved: str,
+	session_cwd: str,
+	literal_tilde_words: frozenset[str] = frozenset(),
 ) -> list[GuardTarget]:
 	"""Targets for one `git <args>` segment; [] when it is not guarded.
 
 	`directory` is where the segment runs after earlier `cd`s (None when that
 	is unknown, with `unresolved` saying why). `git -C <path>` then applies,
 	then `GIT_DIR=<path>` / `--git-dir`, each relative to the directory
-	reached so far, as git itself resolves them. An unresolvable directory
-	falls back to the session checkout's branch and HEAD.
+	reached so far and with symlinks followed, as git's `chdir` resolves
+	them. A `~` the shell leaves literal (quoted, or after `--git-dir=`)
+	names a directory called `~`. An unresolvable directory falls back to the
+	session checkout's branch and HEAD.
 	"""
 	repo_dir = directory
 	reason = unresolved
 	git_dir = assignments.get("GIT_DIR")
+	git_dir_expands_tilde = f"GIT_DIR={git_dir}" not in literal_tilde_words
 	subcommand = ""
 	index = 0
 	while index < len(args):
@@ -713,17 +827,23 @@ def _git_invocation_targets(
 		if token == "-C":
 			value = args[index + 1] if index + 1 < len(args) else ""
 			if repo_dir is not None:
-				repo_dir, path_reason = _resolve_guard_path(value, repo_dir)
+				repo_dir, path_reason = _resolve_guard_path(
+					value, repo_dir, physical=True, expand_tilde=value not in literal_tilde_words
+				)
 				if repo_dir is None:
 					reason = f"`git -C` names {path_reason}"
 			index += 2
 			continue
 		if token == "--git-dir":
 			git_dir = args[index + 1] if index + 1 < len(args) else ""
+			git_dir_expands_tilde = git_dir not in literal_tilde_words
 			index += 2
 			continue
 		if token.startswith("--git-dir="):
 			git_dir = token.split("=", 1)[1]
+			# `--git-dir=` is not an assignment word, so the shell never
+			# expands a `~` in it and git receives it as written.
+			git_dir_expands_tilde = False
 			index += 1
 			continue
 		if token in GIT_GLOBAL_OPTS_WITH_VALUE:
@@ -733,7 +853,9 @@ def _git_invocation_targets(
 	if subcommand not in GUARDED_SUBCOMMANDS:
 		return []
 	if git_dir is not None and repo_dir is not None:
-		repo_dir, path_reason = _resolve_guard_path(git_dir, repo_dir)
+		repo_dir, path_reason = _resolve_guard_path(
+			git_dir, repo_dir, physical=True, expand_tilde=git_dir_expands_tilde
+		)
 		if repo_dir is None:
 			reason = f"the git directory is {path_reason}"
 	reaches_remote = subcommand == "push"
@@ -775,6 +897,7 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 		segments = _shell_segments_with_separators(command)
 	except ValueError:
 		return []
+	literal_tilde_words = _literal_tilde_words(command)
 	targets: list[GuardTarget] = []
 	directory: str | None = session_cwd
 	unresolved = ""
@@ -835,7 +958,7 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 				directory, unresolved = None, f"a `cd` joined by `{joined_by.strip()}`"
 				continue
 			elif executable == "cd":
-				destination, cd_reason = _cd_destination(args, directory)
+				destination, cd_reason = _cd_destination(args, directory, literal_tilde_words)
 				if destination is None:
 					directory, unresolved = None, f"`cd` to {cd_reason}"
 				else:
@@ -848,7 +971,9 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 				continue
 		if executable != "git" and not executable.endswith("/git"):
 			continue
-		targets.extend(_git_invocation_targets(args, assignments, directory, unresolved, session_cwd))
+		targets.extend(
+			_git_invocation_targets(args, assignments, directory, unresolved, session_cwd, literal_tilde_words)
+		)
 	return targets
 
 

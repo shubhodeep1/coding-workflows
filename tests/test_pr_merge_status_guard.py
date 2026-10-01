@@ -1261,6 +1261,130 @@ def test_git_dir_prefix_and_option_select_the_repository(tmp_path: Path) -> None
 	]
 
 
+@pytest.mark.parametrize(
+	"command",
+	[
+		'cd "~"; git commit -m x',
+		"cd '~'; git commit -m x",
+		"cd \\~; git commit -m x",
+		'cd ~"/wt"; git commit -m x',
+		'git -C "~" commit -m x',
+		"git --git-dir '~' commit -m x",
+		'GIT_DIR="~" git commit -m x',
+		"git --git-dir=~ commit -m x",
+	],
+)
+def test_quoted_tilde_is_a_literal_directory_not_home(tmp_path: Path, monkeypatch, command: str) -> None:
+	# Bash expands none of these, so the path names a directory called `~`
+	# under the current one. It does not exist here, so the guard falls back
+	# to the session checkout instead of judging $HOME.
+	home = tmp_path / "home"
+	(home / "wt").mkdir(parents=True)
+	session = tmp_path / "session"
+	session.mkdir()
+	monkeypatch.setenv("HOME", str(home))
+	targets = twin_guard.guard_targets(command, str(session))
+	assert len(targets) == 1, command
+	assert targets[0].cwd == str(session)
+	assert "~" in targets[0].fallback_reason
+
+
+def test_quoted_tilde_resolves_to_a_literal_tilde_directory(tmp_path: Path, monkeypatch) -> None:
+	home = tmp_path / "home"
+	home.mkdir()
+	(tmp_path / "~" / "wt").mkdir(parents=True)
+	monkeypatch.setenv("HOME", str(home))
+	assert _targets('cd "~/wt" && git commit -m x', tmp_path) == [
+		("commit", str(tmp_path / "~" / "wt"), "", "HEAD", False, False)
+	]
+	assert _targets("git --git-dir=~/wt commit -m x", tmp_path) == [
+		("commit", str(tmp_path / "~" / "wt"), "", "HEAD", False, False)
+	]
+
+
+def test_unquoted_tilde_still_expands_to_home(tmp_path: Path, monkeypatch) -> None:
+	home = tmp_path / "home"
+	(home / "wt").mkdir(parents=True)
+	monkeypatch.setenv("HOME", str(home))
+	# A quoted `~` elsewhere in the command does not affect this path word.
+	assert _targets('cd ~/wt && git commit -m "~ fix"', tmp_path) == [
+		("commit", str(home / "wt"), "", "HEAD", False, False)
+	]
+	assert _targets("GIT_DIR=~/wt git commit -m x", tmp_path) == [
+		("commit", str(home / "wt"), "", "HEAD", False, False)
+	]
+
+
+def test_literal_tilde_words_follow_bash_quoting() -> None:
+	assert twin_guard._literal_tilde_words('cd "~" ~/a \'~/b\' \\~c ~"/d" x"~" GIT_DIR="~/e" GIT_DIR=~/f') == {
+		"~",
+		"~/b",
+		"~c",
+		"~/d",
+		"GIT_DIR=~/e",
+	}
+
+
+def test_cd_dash_p_resolves_symlinks_physically(tmp_path: Path) -> None:
+	(tmp_path / "real" / "sub").mkdir(parents=True)
+	(tmp_path / "repo").mkdir()
+	(tmp_path / "repo" / "link").symlink_to(tmp_path / "real" / "sub")
+	repo = tmp_path / "repo"
+	assert _targets("cd -P link/.. && git commit -m x", repo) == [
+		("commit", str(tmp_path / "real"), "", "HEAD", False, False)
+	]
+	# The last of -L / -P wins, grouped or not.
+	assert _targets("cd -LP link/.. && git commit -m x", repo) == [
+		("commit", str(tmp_path / "real"), "", "HEAD", False, False)
+	]
+	assert _targets("cd -P -L link/.. && git commit -m x", repo) == [
+		("commit", str(repo), "", "HEAD", False, False)
+	]
+	# A plain cd is logical: `link/..` is the directory it started in.
+	assert _targets("cd link/.. && git commit -m x", repo) == [
+		("commit", str(repo), "", "HEAD", False, False)
+	]
+
+
+def test_git_dash_c_and_git_dir_resolve_symlinks_physically(tmp_path: Path) -> None:
+	(tmp_path / "real" / "sub").mkdir(parents=True)
+	(tmp_path / "real" / ".git").mkdir()
+	(tmp_path / "repo").mkdir()
+	(tmp_path / "repo" / "link").symlink_to(tmp_path / "real" / "sub")
+	repo = tmp_path / "repo"
+	assert _targets("git -C link/.. push origin HEAD:x", repo) == [
+		("push", str(tmp_path / "real"), "x", "HEAD", True, False)
+	]
+	assert _targets("git --git-dir=link/../.git commit -m x", repo) == [
+		("commit", str(tmp_path / "real" / ".git"), "", "HEAD", False, False)
+	]
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"cd wt -P && git push origin HEAD:x",
+		"cd -X wt; git push origin HEAD:x",
+		"cd -@ wt; git push origin HEAD:x",
+	],
+)
+def test_cd_that_bash_rejects_falls_back_to_the_session_checkout(tmp_path: Path, command: str) -> None:
+	# `cd wt -P` is "too many arguments" and an unknown option is rejected,
+	# so the shell stays where it was.
+	(tmp_path / "wt").mkdir()
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert len(targets) == 1, command
+	assert targets[0].cwd == str(tmp_path)
+	assert targets[0].fallback_reason
+
+
+def test_cd_dash_e_is_accepted(tmp_path: Path) -> None:
+	(tmp_path / "wt").mkdir()
+	assert _targets("cd -Pe wt && git commit -m x", tmp_path) == [
+		("commit", str(tmp_path / "wt"), "", "HEAD", False, False)
+	]
+
+
 def test_git_work_tree_does_not_change_the_judged_repository(tmp_path: Path) -> None:
 	(tmp_path / "tree").mkdir()
 	assert _targets("GIT_WORK_TREE=tree git commit -m x", tmp_path) == [

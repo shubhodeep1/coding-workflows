@@ -907,7 +907,13 @@ already decides for them.
 each guarded git call runs in, not the session's own checkout (issue #5144).
 The guard replays the command line: the hook's working directory, moved by
 every earlier `cd <path>` in the same command, then by `git -C <path>`, then
-by a `GIT_DIR=<path>` prefix or `--git-dir` option. A push that names a
+by a `GIT_DIR=<path>` prefix or `--git-dir` option. Paths resolve the way
+the shell and git resolve them: `cd` lexically unless `-P` is in force,
+`git -C` and the git directory physically (symlinks followed before `..`),
+and a `~` that is quoted or escaped (`"~"`, `'~'`, `\~`, or one inside
+`--git-dir=`) as a literal directory name rather than the home directory. A
+`cd` that Bash rejects (an unknown option, or a second operand such as
+`cd x -P`) leaves the directory unknown. A push that names a
 refspec is judged on the branch it writes to: for
 `git push <remote> <src>:<dst>` (and `HEAD:<dst>`) the conditions are checked
 for `<dst>`, with `<src>` taking the role of `HEAD`. A detached scratch
