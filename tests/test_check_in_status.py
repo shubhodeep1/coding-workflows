@@ -1102,7 +1102,7 @@ def test_hold_limit_is_configurable(monkeypatch, capsys):
 	assert out["state"] == "blocked" and "past the 2h limit" in out["reason"]
 
 
-@pytest.mark.parametrize("bad_limit", ["0", "-1", "abc", ""])
+@pytest.mark.parametrize("bad_limit", ["0", "-1", "abc", "", "inf", "+inf", "Infinity", "-inf", "nan", "1e309"])
 def test_invalid_hold_limit_falls_back_to_24_hours(monkeypatch, capsys, bad_limit):
 	monkeypatch.setenv("CLAUDE_FIX_HOLD_MAX_HOURS", bad_limit)
 	_stub_twin_fixer(monkeypatch, _fixer_responses(_held_fixer_pr()), [_aged_claim(HOLD_23_HOURS_OLD)])
@@ -1112,6 +1112,21 @@ def test_invalid_hold_limit_falls_back_to_24_hours(monkeypatch, capsys, bad_limi
 	_, out = _twin_run(["--pr", "7"], capsys)
 	assert out["state"] == "blocked"
 
+
+
+@pytest.mark.parametrize("non_finite", ["inf", "+inf", "Infinity", "-inf", "nan", "1e309"])
+def test_non_finite_env_numbers_fall_back_to_defaults(monkeypatch, non_finite):
+	# An infinite limit would never expire, and int() of an infinite cap raises
+	# OverflowError (issue #5927, review round 2).
+	for name, default in (
+		("CLAUDE_FIX_HOLD_MAX_HOURS", twin_checker.DEFAULT_FIX_HOLD_MAX_HOURS),
+		("CLAUDE_FIX_CLAIM_LEASE_HOURS", twin_checker.DEFAULT_FIX_CLAIM_LEASE_HOURS),
+		("CLAUDE_FIX_HAND_BACK_CAP", twin_checker.DEFAULT_FIX_HAND_BACK_CAP),
+	):
+		monkeypatch.setenv(name, non_finite)
+		assert twin_checker._env_positive_float(name, default) == default
+	monkeypatch.setenv("CLAUDE_FIX_HOLD_MAX_HOURS", "1.5")
+	assert twin_checker._env_positive_float("CLAUDE_FIX_HOLD_MAX_HOURS", 24) == 1.5
 
 def test_a_newer_hold_restarts_the_limit(monkeypatch, capsys):
 	# The latest trusted claim on the head decides (AD-5 of issue #5927).

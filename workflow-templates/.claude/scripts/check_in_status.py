@@ -104,6 +104,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import re
 import subprocess
@@ -529,12 +530,17 @@ def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str,
 
 
 def _env_positive_float(name: str, default: float) -> float:
-	"""Read a positive number from the environment, falling back to `default`."""
+	"""Read a positive number from the environment, falling back to `default`.
+
+	`inf`, `nan`, and values that overflow to infinity (`1e309`) fall back too:
+	an infinite hold limit or claim lease would never expire, and `int()` of an
+	infinite hand-back cap raises `OverflowError` (issue #5927).
+	"""
 	try:
 		value = float(os.environ.get(name, "") or default)
 	except ValueError:
 		return default
-	return value if value > 0 else default
+	return value if math.isfinite(value) and value > 0 else default
 
 
 def _fix_claim_trusted_logins(pr: dict) -> tuple[str, ...]:
