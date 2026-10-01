@@ -295,8 +295,9 @@ def test_inline_wrapper_capture_holds_only_the_successful_body(
 	assert captured.read_text(encoding="utf-8") == ISSUE_BODY.rstrip("\n")
 	assert _calls(tmp_path) == 3
 	size = len(RATE_LIMIT_BODY.encode("utf-8"))
-	assert f"gh_retry: dropped {size} bytes of stdout from failed attempt 1/4" in result.stderr
-	assert f"gh_retry: dropped {size} bytes of stdout from failed attempt 2/4" in result.stderr
+	# Same line format as scripts/gh_helpers.sh, so one log search finds both.
+	assert f"::warning::  gh_retry: dropped {size} bytes of stdout from failed attempt 1/4" in result.stderr
+	assert f"::warning::  gh_retry: dropped {size} bytes of stdout from failed attempt 2/4" in result.stderr
 	assert "BODY-MARKER" not in result.stderr
 	assert _all_temp_files(tmp_path) == []
 
@@ -330,3 +331,20 @@ def test_inline_wrapper_first_try_success_passes_stdout_through_unchanged(
 	assert result.stderr == ""
 	assert _calls(tmp_path) == 1
 	assert _all_temp_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("step_name", INLINE_GH_RETRY_STEPS)
+def test_inline_wrapper_mktemp_failure_does_not_run_the_command(
+	tmp_path: Path, step_name: str,
+) -> None:
+	env = _setup(tmp_path, [(ISSUE_BODY, "", 0)])
+	result = _run_inline(
+		tmp_path,
+		env,
+		step_name,
+		'mktemp() { return 1; }\n'
+		'if gh_retry gh api repos/o/r/issues/5016; then echo "rc=0"; else echo "rc=$?"; fi',
+	)
+	assert result.stdout == "rc=1\n", result.stderr
+	assert "::error::gh_retry: failed to create stdout temp file" in result.stderr
+	assert _calls(tmp_path) == 0

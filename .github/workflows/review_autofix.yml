@@ -1615,8 +1615,11 @@ jobs:
             # of the real response in a $(gh_retry ...) capture (#5495).
             gh_retry() {
               local n=0 max=4 delay=2
-              local _gh_retry_inline_out _gh_retry_inline_rc=0
-              _gh_retry_inline_out="$(mktemp)" || return 1
+              local _gh_retry_inline_out _gh_retry_inline_bytes _gh_retry_inline_rc=0
+              if ! _gh_retry_inline_out="$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null)"; then
+                echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+                return 1
+              fi
               while :; do
                 if "$@" >"${_gh_retry_inline_out}"; then
                   cat "${_gh_retry_inline_out}" || _gh_retry_inline_rc=$?
@@ -1625,7 +1628,8 @@ jobs:
                 fi
                 n=$((n+1))
                 if [ -s "${_gh_retry_inline_out}" ]; then
-                  echo "::warning::gh_retry: dropped $(wc -c <"${_gh_retry_inline_out}" | tr -d '[:space:]') bytes of stdout from failed attempt ${n}/${max}" >&2
+                  _gh_retry_inline_bytes="$(wc -c <"${_gh_retry_inline_out}" 2>/dev/null | tr -d '[:space:]' || true)"
+                  echo "::warning::  gh_retry: dropped ${_gh_retry_inline_bytes:-?} bytes of stdout from failed attempt ${n}/${max}" >&2
                 fi
                 if [ "${n}" -ge "${max}" ]; then rm -f "${_gh_retry_inline_out}"; return 1; fi
                 sleep "${delay}"
@@ -1844,8 +1848,11 @@ jobs:
           # $(gh_retry ...) capture (#5495).
           gh_retry() {
             local n=0 max=4 delay=2
-            local _gh_retry_inline_out _gh_retry_inline_rc=0
-            _gh_retry_inline_out="$(mktemp)" || return 1
+            local _gh_retry_inline_out _gh_retry_inline_bytes _gh_retry_inline_rc=0
+            if ! _gh_retry_inline_out="$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null)"; then
+              echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+              return 1
+            fi
             while :; do
               if "$@" >"${_gh_retry_inline_out}"; then
                 cat "${_gh_retry_inline_out}" || _gh_retry_inline_rc=$?
@@ -1854,7 +1861,8 @@ jobs:
               fi
               n=$((n+1))
               if [ -s "${_gh_retry_inline_out}" ]; then
-                echo "::warning::gh_retry: dropped $(wc -c <"${_gh_retry_inline_out}" | tr -d '[:space:]') bytes of stdout from failed attempt ${n}/${max}" >&2
+                _gh_retry_inline_bytes="$(wc -c <"${_gh_retry_inline_out}" 2>/dev/null | tr -d '[:space:]' || true)"
+                echo "::warning::  gh_retry: dropped ${_gh_retry_inline_bytes:-?} bytes of stdout from failed attempt ${n}/${max}" >&2
               fi
               if [ "${n}" -ge "${max}" ]; then rm -f "${_gh_retry_inline_out}"; return 1; fi
               sleep "${delay}"
