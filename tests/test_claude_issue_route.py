@@ -356,6 +356,61 @@ def test_handoff_failure_marks_issue_and_exits_zero(stubs):
 	assert "CLAUDE_ISSUE_HANDOFF error dispatch_failed issue=42" in result.stdout
 
 
+
+def _tg_env(env, routed_level):
+	"""Enable the Telegram send path (curl is stubbed) with a DEBUG global threshold."""
+	env = {**env, "TG_BOT_SECRET": "secret", "TG_CHAT_ID": "chat", "ALERT_MSG_LEVEL": "DEBUG"}
+	env.pop("TG_ADMIN_CHAT_ID", None)
+	env.pop("CLAUDE_ISSUE_ROUTED_ALERT_LEVEL", None)
+	if routed_level is not None:
+		env["CLAUDE_ISSUE_ROUTED_ALERT_LEVEL"] = routed_level
+	return env
+
+
+def _telegram_text(stubs):
+	curl_log = stubs["tmp"] / "curl_args.log"
+	return curl_log.read_text() if curl_log.exists() else ""
+
+
+@pytest.mark.parametrize("routed_level, sent", [(None, False), ("SILENT", False), ("WARNING", False), ("DEBUG", True)])
+def test_handoff_success_ping_follows_routed_alert_level(stubs, routed_level, sent):
+	issue_file = stubs["tmp"] / "issue.json"
+	issue_file.write_text(json.dumps(_issue(number=43)))
+	env = _tg_env(
+		{
+			**stubs["env"],
+			"GITHUB_REPOSITORY": "o/r",
+			"ISSUE_NUMBER": "43",
+			"ISSUE_META_FILE": str(issue_file),
+			"CLAUDE_ISSUE_TRIGGER": "reclarify",
+			"GH_TOKEN": "x",
+		},
+		routed_level,
+	)
+	result = _run("claude_issue_handoff.sh", env)
+	assert result.returncode == 0, result.stderr
+	assert "CLAUDE_ISSUE_HANDOFF dispatched issue=43" in result.stdout
+	assert ("Claude issue handoff dispatched for o/r#43 (reclarify)" in _telegram_text(stubs)) is sent
+
+
+def test_handoff_failure_alert_ignores_routed_alert_level(stubs):
+	issue_file = stubs["tmp"] / "issue.json"
+	issue_file.write_text(json.dumps(_issue(number=44)))
+	env = _tg_env(
+		{
+			**stubs["env"],
+			"GITHUB_REPOSITORY": "o/r",
+			"ISSUE_NUMBER": "44",
+			"ISSUE_META_FILE": str(issue_file),
+			"GH_TOKEN": "x",
+			"GH_STUB_FAIL_DISPATCH": "1",
+		},
+		None,
+	)
+	result = _run("claude_issue_handoff.sh", env)
+	assert result.returncode == 0, result.stderr
+	assert "ERROR: Claude issue handoff FAILED for o/r#44" in _telegram_text(stubs)
+
 def _intake_env(stubs, payload, **extra):
 	payload_file = stubs["tmp"] / "payload.json"
 	payload_file.write_text(json.dumps(payload))
@@ -397,6 +452,21 @@ def test_intake_queues_issue_with_github_token_and_comments(stubs):
 	# No routine is fired any more.
 	assert not (stubs["tmp"] / "curl_args.log").exists()
 
+
+
+@pytest.mark.parametrize("routed_level, sent", [(None, False), ("SILENT", False), ("DEBUG", True)])
+def test_intake_queued_ping_follows_routed_alert_level(stubs, routed_level, sent):
+	env = _tg_env(_intake_env(stubs, _payload(repo="shubhodeep1/digital_pa", issue_number=9), GH_STUB_QUEUE_NUMBER="88"), routed_level)
+	result = _run("claude_issue_intake.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "queue_issue=88" in result.stdout
+	assert ("Claude issue queued for shubhodeep1/digital_pa#9 (opened)" in _telegram_text(stubs)) is sent
+
+
+@pytest.mark.parametrize("path", [".github/workflows/clarify.yml", ".github/workflows/claude-issue-intake.yml"])
+def test_workflows_default_routed_alert_level_to_silent(path):
+	text = (ROOT / path).read_text()
+	assert "CLAUDE_ISSUE_ROUTED_ALERT_LEVEL: ${{ vars.CLAUDE_ISSUE_ROUTED_ALERT_LEVEL || 'SILENT' }}" in text
 
 def test_intake_reuses_open_queue_item(stubs):
 	existing = [{"number": 55, "title": "[claude-issue-queue] shubhodeep1/digital_pa#9", "user": {"login": "github-actions[bot]"}}]
