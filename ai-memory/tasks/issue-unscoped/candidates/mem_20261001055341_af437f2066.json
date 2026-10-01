@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/claude-issue-pickup.md:32-40, 84 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Step 1 can stop after five trigger-list pages while the listing is incomplete, but the `start`, wake, `stop`, and catch-up branches treat the partial results as authoritative.\n  WHY: When the pickup trigger is beyond the fifth page, these branches can create duplicate pickups, misidentify the active pickup, or leave triggers behind; severity disagreement: qwen_qwen3_7-plus rated this NIT while the other reviewers rated it MAJOR.\n- (No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/claude-issue-pickup.md | severity=MAJOR | confidence=4\n  PROBLEM: The pickup command's step 1 multi-page read is bounded at 5 pages of 100, so on an account with more than 500 enabled triggers the listing is incomplete at the end of step 1; `start`, `stop`, `catch-up`, and `wake` do not fail safe when the pickup trigger is beyond those pages.\n  WHY: `start` or catch-up can create duplicate triggers, `stop` can leave a trigger active, and `wake` can fail its sanity check spuriously; step 3b already handles the incomplete listing safely via `load_trigger_pages`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/claude-issue-pickup.md | severity=MAJOR | confidence=4\n  PROBLEM: Lines 32-40 and 84. Step 1 stops after five pages, but these branches use the pages read without checking whether the fifth page still has `has_more`.\n  WHY: With more than 500 enabled triggers, the pickup\u2019s own trigger can fall beyond the pages read, causing `start` to create another pickup, wake to report \u201cnot the active pickup\u201d and exit, `stop` to leave triggers active, or catch-up to schedule a duplicate.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/commands/claude-issue-pickup.md | severity=NIT | confidence=4\n  PROBLEM: Step 1 (lines 32-35) reads at most 5 `list_triggers` pages and stops even when page 5 still has `has_more`; `start`, `stop`, wake, and catch-up then treat the partial listing as authoritative.\n  WHY: With more than 500 enabled Routines, `start` or catch-up can create a duplicate, `stop` can leave active triggers behind, and an hourly wake can misidentify itself as stale and stop draining the queue; step 3b's `scan` path already handles incomplete listings safely.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/claude-issue-pickup.md | severity=MAJOR | confidence=3\n  PROBLEM: Step 1, line 32 \u2014 \"Every use of step 1's result below reads every page.\" The five-page limit can leave the listing incomplete, but the `start`, `\u2014 wake.`, `stop`, and catch-up branches treat it as authoritative.\n  WHY: With more than 500 enabled Routines, the pickup trigger can be beyond the pages read; `start` can create a duplicate, `stop` can leave triggers behind, and wake can incorrectly conclude it is not the active pickup.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "149da23d969aa849f2d1c32fc0d95a29dfa6fbd4a2f896578ede38f0d8ea7917",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5755,
+    "run_id": "36820008650",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36820008650",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001055341_af437f2066",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5755,
+    "run_id": "36820008650"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T05:53:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
