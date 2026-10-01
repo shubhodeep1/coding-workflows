@@ -685,6 +685,22 @@ def test_missing_security_pass_skip_only_disables_duplicate_check(tmp_path, monk
 	assert verdict["eligible"] is False and "security_pass_skip.py" in verdict["reasons"][0]
 
 
+def test_decide_without_security_pass_skip_fails_closed(tmp_path):
+	# PR #5862 review round 1: a direct caller of the pure decision must get a
+	# refusal, not an AttributeError, when security_pass_skip.py did not load.
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "permission_prompts.py").write_bytes(TEMPLATE_SCRIPT_PATH.read_bytes())
+	(scripts / "check_in_status.py").write_bytes((TEMPLATE_SCRIPT_PATH.parent / "check_in_status.py").read_bytes())
+	module = _load("permission_prompts_decide_without_skip_check", scripts / "permission_prompts.py")
+	assert module.security_pass_skip is None
+	untrusted_target = _target(author_association="NONE")
+	verdict = module.decide_duplicate_close(_issue(), _events(), untrusted_target, _fix(), LOGIN, 4843, 4678)
+	assert verdict["eligible"] is False
+	assert verdict["reasons"] == [module._SKIP_CHECK_ERROR] and "security_pass_skip.py" in verdict["reasons"][0]
+	assert (verdict["issue"], verdict["target"], verdict["fix_pr"]) == (4843, 4678, 4684)
+
+
 # ──────────────────────────────────────────────────────────────────
 # Instruction text: the carve-out and its limits
 # ──────────────────────────────────────────────────────────────────
