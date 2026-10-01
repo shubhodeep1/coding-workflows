@@ -230,7 +230,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `Managed by: AI Orchestrator` line, issue #5309; the route step repeats
     this rule, also ignores a `/reclarify` line inside a fenced code block,
     and logs `reason=not_reclarify_command` for anything else; a Codex route
-    also drops stale `ai:claude-blocked` / `ai:claude-handoff-failed`),
+    also drops stale `ai:claude-blocked` / `ai:claude-handoff-failed`, and
+    stops with `CLAUDE_ISSUE_HANDOFF release_incomplete` when a Claude
+    label cannot be removed, so the next `/reclarify` retries),
     clarify's `Decide clarify route` step routes each issue that would
     otherwise run Codex clarify. Orchestrator-managed issues (label or
     `Managed by: AI Orchestrator` body line), tracking / security-audit /

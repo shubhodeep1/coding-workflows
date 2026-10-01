@@ -1320,7 +1320,7 @@ three REST reads.
 | To … | Do |
 | --- | --- |
 | Send every new issue in a repo to Codex | Set repo variable `AI_ISSUE_IMPLEMENTER=codex` |
-| Move one issue to Codex | Add `ai:codex`, then comment `/reclarify` (the `ai:claude` claim and any `ai:claude-blocked` / `ai:claude-handoff-failed` label are released) |
+| Move one issue to Codex | Add `ai:codex`, then comment `/reclarify` (the `ai:claude` claim and any `ai:claude-blocked` / `ai:claude-handoff-failed` label are released; if one cannot be removed, the clarify run fails with `CLAUDE_ISSUE_HANDOFF release_incomplete` before Codex runs, and the next `/reclarify` retries) |
 | Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
 | Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
 

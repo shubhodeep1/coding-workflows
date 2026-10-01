@@ -271,8 +271,15 @@ def test_clarify_route_releases_stale_claude_labels_on_switch_to_codex() -> None
 		assert f'.name == "{name}"' in release_block, name
 
 
-def _run_clarify_release_step(root: Path, issue: dict, graphql_ok: bool) -> tuple[list[str], list[dict], str]:
-	"""Run the real release step against a stub `gh`; return (calls, graphql bodies, stdout)."""
+def _run_clarify_release_step(
+	root: Path, issue: dict, graphql_ok: bool, delete_status: dict[str, int] | None = None, expect_released: bool = True
+) -> tuple[list[str], list[dict], str]:
+	"""Run the real release step against a stub `gh`; return (calls, graphql bodies, stdout).
+
+	`delete_status` maps a URL-encoded label to the HTTP status its REST DELETE
+	fails with (anything not listed succeeds). With `expect_released` False the
+	step must exit non-zero and must not log `released`.
+	"""
 	workflow = yaml.safe_load(_read(CLARIFY_WF))
 	step = next(step for step in workflow["jobs"]["clarify"]["steps"] if step.get("name") == "Release Claude claim on switch to Codex")
 	script = step["run"].replace("${{ github.repository }}", "o/r").replace(
@@ -290,6 +297,11 @@ def _run_clarify_release_step(root: Path, issue: dict, graphql_ok: bool) -> tupl
 		"if [ \"$1 $2\" = \"api graphql\" ]; then\n"
 		"  jq -c . >> \"${GH_GRAPHQL_BODIES_FILE}\"\n"
 		"  if [ \"${GH_GRAPHQL_OK}\" = \"true\" ]; then echo true; else echo 'gh: Could not resolve to a node' >&2; exit 1; fi\n"
+		"fi\n"
+		"if [ \"$1 $2 $3\" = \"api -X DELETE\" ]; then\n"
+		"  status=\"$(jq -r --arg label \"${4##*/}\" '.[$label] // empty' <<<\"${GH_DELETE_STATUS}\")\"\n"
+		"  if [ -n \"${status}\" ]; then echo '{\"message\":\"stub\"}'; echo \"gh: stub failure (HTTP ${status})\" >&2; exit 1; fi\n"
+		"  echo '[]'\n"
 		"fi\n",
 		encoding="utf-8",
 	)
@@ -306,11 +318,17 @@ def _run_clarify_release_step(root: Path, issue: dict, graphql_ok: bool) -> tupl
 		"GH_CALLS_FILE": str(calls_path),
 		"GH_GRAPHQL_BODIES_FILE": str(bodies_path),
 		"GH_GRAPHQL_OK": "true" if graphql_ok else "false",
+		"GH_DELETE_STATUS": json.dumps(delete_status or {}),
 		"ISSUE_META_FILE": str(meta_path),
 		"ISSUE_NUMBER": "123",
 	})
-	result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True)
-	assert "CLAUDE_ISSUE_HANDOFF released issue=123" in result.stdout, issue
+	result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=False)
+	if expect_released:
+		assert result.returncode == 0, (issue, result.stdout, result.stderr)
+		assert "CLAUDE_ISSUE_HANDOFF released issue=123" in result.stdout, issue
+	else:
+		assert result.returncode != 0, (issue, result.stdout)
+		assert "CLAUDE_ISSUE_HANDOFF released issue=123" not in result.stdout, issue
 	calls = calls_path.read_text(encoding="utf-8").splitlines()
 	bodies = [json.loads(line) for line in bodies_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 	return calls, bodies, result.stdout
@@ -377,6 +395,47 @@ def test_clarify_release_step_falls_back_to_one_delete_per_present_label() -> No
 			graphql_calls = [call for call in calls if call.startswith("api graphql")]
 			assert len(graphql_calls) == (1 if expected and with_node_ids else 0), (labels, calls)
 			assert ("release_batch_fallback" in stdout) == bool(expected), (labels, stdout)
+
+
+
+def test_clarify_release_step_fallback_fails_closed_when_a_delete_fails() -> None:
+	"""PR #5324 Copilot finding: a failed fallback DELETE must not log `released`.
+
+	A stale `ai:claude-blocked` / `ai:claude-handoff-failed` label keeps the
+	later-line /reclarify form open while Codex posts unmarked text, so a
+	DELETE that fails for any reason but 404 stops the Codex route. The other
+	present labels are still attempted, and the log names what is left.
+	"""
+	labels = ["ai:claude", "ai:claude-blocked", "ai:claude-handoff-failed", "ai:codex"]
+	for graphql_ok, with_node_ids in ((False, True), (True, False)):
+		for status in (403, 502):
+			with tempfile.TemporaryDirectory() as workdir:
+				calls, _, stdout = _run_clarify_release_step(
+					Path(workdir),
+					_clarify_release_issue(labels, with_node_ids),
+					graphql_ok=graphql_ok,
+					delete_status={"ai%3Aclaude-blocked": status},
+					expect_released=False,
+				)
+			deletes = [call for call in calls if call.startswith("api -X DELETE")]
+			assert deletes == [
+				f"api -X DELETE repos/o/r/issues/123/labels/{name}"
+				for name in ("ai%3Aclaude", "ai%3Aclaude-blocked", "ai%3Aclaude-handoff-failed")
+			], (status, calls)
+			assert "CLAUDE_ISSUE_HANDOFF release_incomplete issue=123 labels=ai:claude-blocked" in stdout, (status, stdout)
+
+
+def test_clarify_release_step_fallback_treats_404_as_already_removed() -> None:
+	"""A label removed since the route step's snapshot answers 404: that is the goal, not a failure."""
+	labels = ["ai:claude", "ai:claude-blocked", "ai:codex"]
+	with tempfile.TemporaryDirectory() as workdir:
+		_, _, stdout = _run_clarify_release_step(
+			Path(workdir),
+			_clarify_release_issue(labels, False),
+			graphql_ok=True,
+			delete_status={"ai%3Aclaude": 404, "ai%3Aclaude-blocked": 404},
+		)
+	assert "release_incomplete" not in stdout, stdout
 
 
 def test_clarify_route_hands_trailing_reclarify_answer_to_claude() -> None:

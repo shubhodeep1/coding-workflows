@@ -609,9 +609,27 @@ jobs:
             fi
             if [ "${RELEASE_CLAUDE_BATCHED}" != "true" ]; then
               echo "CLAUDE_ISSUE_HANDOFF release_batch_fallback issue=${ISSUE_NUMBER} transport=rest"
-              while IFS= read -r release_label_encoded; do
-                gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${release_label_encoded}" >/dev/null 2>&1 || true
-              done < <(jq -r '.[].name | @uri' <<<"${RELEASE_CLAUDE_LABELS_JSON}")
+              # Fail closed (PR #5324 review): a Claude label left behind here
+              # keeps the later-line /reclarify form open while Codex posts
+              # unmarked text (ai:claude-blocked / ai:claude-handoff-failed),
+              # or stops plan / implement (ai:claude). A 404 means the label
+              # went since the snapshot, which is the goal; any other failure
+              # stops the Codex route, and the next /reclarify retries it.
+              RELEASE_CLAUDE_REMAINING=""
+              while IFS=$'\t' read -r release_label_encoded release_label_name; do
+                if release_delete_stderr="$(gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${release_label_encoded}" 2>&1 >/dev/null)"; then
+                  continue
+                fi
+                if grep -qF '(HTTP 404)' <<<"${release_delete_stderr}"; then
+                  continue
+                fi
+                RELEASE_CLAUDE_REMAINING="${RELEASE_CLAUDE_REMAINING:+${RELEASE_CLAUDE_REMAINING},}${release_label_name}"
+              done < <(jq -r '.[] | [(.name | @uri), .name] | @tsv' <<<"${RELEASE_CLAUDE_LABELS_JSON}")
+              if [ -n "${RELEASE_CLAUDE_REMAINING}" ]; then
+                echo "CLAUDE_ISSUE_HANDOFF release_incomplete issue=${ISSUE_NUMBER} labels=${RELEASE_CLAUDE_REMAINING}"
+                echo "::error::Could not remove ${RELEASE_CLAUDE_REMAINING} from issue #${ISSUE_NUMBER}; stopping the Codex route so a stale Claude label cannot keep the later-line /reclarify form open. Comment /reclarify again to retry."
+                exit 1
+              fi
             fi
           fi
           echo "CLAUDE_ISSUE_HANDOFF released issue=${ISSUE_NUMBER} reason=${{ steps.clarify_route.outputs.issue_implementer_reason }}"
