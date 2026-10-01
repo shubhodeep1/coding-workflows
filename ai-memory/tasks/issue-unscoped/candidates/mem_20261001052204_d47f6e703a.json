@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:1954 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The README says setting `REVIEW_TIER_RESOLVER_ENABLED=false` always runs the full panel, but enabling `REVIEWER_RISK_TIER_ENABLED` can still leave a reduced reviewer set active.\n  WHY: The risk-tier resolver runs first, and disabling the size-based resolver leaves its selected reviewer list unchanged.\n- scripts/review_run_reviewers.sh:1572-1575\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: `reviewer_pick_seeded_models` unconditionally executes `shift 2`, which fails if a future caller invokes it with fewer than two arguments.\n  WHY: The current caller passes valid arguments, so this is not reachable in current production flows; under `set -euo pipefail`, a future under-argument invocation would fail.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- README.md; scripts/review_run_reviewers.sh:1398, 1731-1735, 1875-1876 | severity=NIT | confidence=4\n  PROBLEM: When `REVIEW_TIER_RESOLVER_ENABLED=false`, the risk-tier resolver's reduced reviewer set survives if `REVIEWER_RISK_TIER_ENABLED=true`, despite the README and changelog claiming the setting always runs the full panel.\n  WHY: Under defaults, `REVIEWER_RISK_TIER_ENABLED=0` makes the claim hold; the risk-tier interaction is misleading for non-default combinations.\n- scripts/review_run_reviewers.sh:1575\n  PROBLEM: `reviewer_pick_seeded_models` can fail at `shift 2` if invoked with fewer than two arguments.\n  WHY: `set -euo pipefail` is active; the only current caller passes at least two arguments, so this cannot fire in current production flows.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_run_reviewers.sh: line 1572, reviewer_pick_seeded_models()\n  PROBLEM: If invoked with fewer than two arguments in isolation, `shift 2` exits non-zero under `set -e`.\n  WHY: A guard before `shift 2` would avoid failure for a future isolated invocation; no current production caller was identified that triggers it.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_run_reviewers.sh, reviewer_pick_seeded_models function, the `shift 2` statement near the top of the function body\n  PROBLEM: The function unconditionally executes `shift 2`; fewer than two positional arguments cause it to fail under `set -e`.\n  WHY: The current call site passes at least three arguments, but a future caller omitting the seed could abort the function instead of degrading to the full panel.\n- README.md, variable table row for `REVIEW_TIER_RESOLVER_ENABLED` around line 1954\n  PROBLEM: The README says setting `REVIEW_TIER_RESOLVER_ENABLED=false` always runs the full panel, but the independent risk-tier resolver can still select a reduced subset.\n  WHY: The risk-tier resolver runs first and can select one or two reviewers before the size-tier resolver; disabling the latter does not override that decision.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:1954; scripts/review_run_reviewers.sh:1398, 1731-1735, 1875-1876 | severity=NIT | confidence=5\n  PROBLEM: The README says setting `REVIEW_TIER_RESOLVER_ENABLED=false` always runs the full panel, but this disables only the size-based resolver.\n  WHY: With `REVIEWER_RISK_TIER_ENABLED=true`, the risk-tier resolver's reduced reviewer list remains unchanged when the size-based resolver is disabled.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- README.md:1954 | severity=NIT | confidence=5\n  PROBLEM: The README says setting `REVIEW_TIER_RESOLVER_ENABLED=false` always runs the full panel, but the risk-tier resolver can still select a reduced reviewer subset when `REVIEWER_RISK_TIER_ENABLED=true`.\n  WHY: Disabling the size-tier resolver does not override the risk-tier resolver's prior decision.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_run_reviewers.sh, line 1575 (`shift 2`)\n  PROBLEM: `shift 2` fails under `set -euo pipefail` if `reviewer_pick_seeded_models` is called with fewer than two positional arguments.\n  WHY: The sole current caller passes valid arguments, so this is not reachable today; a future caller could trigger it.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "33fd37f22d49e0905ac209199752a8255c017f99c971ec68b573143989838c67",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5715,
+    "run_id": "36814956138",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36814956138",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001052204_d47f6e703a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5715,
+    "run_id": "36814956138"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T05:22:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
