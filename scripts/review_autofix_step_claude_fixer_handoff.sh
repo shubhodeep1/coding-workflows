@@ -131,7 +131,9 @@ fi
 claude_fixer_panel_active=0
 claude_fixer_panel_floor_met="unknown"
 if [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] && [ -d "${PREVIOUS_REVIEWS_DIR}" ]; then
-  claude_fixer_panel_active="$(find "${PREVIOUS_REVIEWS_DIR}" -maxdepth 1 -type f -name 'status_review_*.txt' 2>/dev/null | wc -l | tr -d '[:space:]')"
+  # `|| true` keeps a failing find from aborting the step under pipefail; an
+  # unreadable directory then counts 0 and falls through to the models file.
+  claude_fixer_panel_active="$({ find "${PREVIOUS_REVIEWS_DIR}" -maxdepth 1 -type f -name 'status_review_*.txt' 2>/dev/null || true; } | wc -l | tr -d '[:space:]')"
 fi
 [[ "${claude_fixer_panel_active}" =~ ^[0-9]+$ ]] || claude_fixer_panel_active=0
 if [ -s "${RUNTIME_DIR:-/nonexistent}/reviewer_active_models.txt" ]; then
