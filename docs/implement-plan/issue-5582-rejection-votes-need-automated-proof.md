@@ -1,31 +1,35 @@
 # Implement-Plan Log — Rejection votes never demote a finding without an automated disproof
 
-- Plan: docs/plans/issue-5582-rejection-votes-need-automated-proof-plan.md
+- Plan: docs/completed/issue-5582-rejection-votes-need-automated-proof-plan.md
 - Source issue: shubhodeep1/coding-workflows#5582
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof   Final PR: #5605 draft
-- Status: IN_PROGRESS
-- Stage: conformance 1/3 — review round
-- Activation: not started
-- Waiting on: PR #5741 (conformance fix 1/3; review round 1 handled, this log rides it)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: PR #5900 (completion PR into the project branch; this log rides it)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the conformance 1/3 stage)   hand-back (re-armed by the conformance 1/3 stage)
+- Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the validation 1/3 — read result stage)   hand-back (re-armed by the validation 1/3 — read result stage)
 - Last updated: 2026-10-01
-- Last note: PR #5741 review round 1 (session session_01H7iPhquKg4c9Jd1NBj3WDd, resumed on the owner's `/reclarify` after the OpenRouter outage): 1 of 5 findings fixed (end-to-end case for a quoted file missing from the reviewed commit, AD-6), 4 rejected with reasons
+- Last note: validation cycle 1 (run 36813024951, target_ref project branch) passed 10/10; completion PR moves the plan to docs/completed/ (stage session session_01LXFrYb2Bxgncqt2FeLPyHu)
 
 ## Phases
 1. [x] Phase 1 — votes alone never demote a single-reviewer finding   — PR #5611 merged 2026-09-30 (cb8a7aa); review rounds: 2; interventions: 0
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT (Implemented: COMPLETE; Correctness: CONCERNS, 3 EVIDENCE-BASED concerns) — fix PR from branch `claude/implement-plan-issue-5582-rejection-votes-need-automated-proof-conformance-fix-1` (pre-security; security pass skipped for this project)
-- Fix PR #5741 — review runs 1–3 failed on 2026-09-30 (OpenRouter account out of credits; fingerprint cap labelled it `ai:review-blocked`, hold claim posted); resumed 2026-10-01 on the owner's `/reclarify` (Q1: A). Review round 1 (head 4f3649a, run 36794089014): 5 findings, 1 fixed (AD-6), 4 rejected; review rounds: 1; interventions: 0
+- Fix PR #5741 — review runs 1–3 failed on 2026-09-30 (OpenRouter account out of credits; fingerprint cap labelled it `ai:review-blocked`, hold claim posted); resumed 2026-10-01 on the owner's `/reclarify` (Q1: A). Review round 1 (head 4f3649a, run 36794089014): 5 findings, 1 fixed (AD-6), 4 rejected; review rounds: 1; interventions: 0. Merged 2026-10-01 as dc0af3e (the owner reviewed and merged it, Q1: A on #5582)
+- Run 2 — 2026-10-01: CONFORMANT (Implemented: COMPLETE; Correctness: PASS) — no fixes (pre-security; security pass skipped)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue; `.claude/scripts/security_pass_skip.py` verified it)
 
 ## Validation
+- Cycle 1 — run 36813024951 2026-10-01 (target_ref: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 289s)
 
 ## Completion
+- PR #5900 open — doc moved to docs/completed/issue-5582-rejection-votes-need-automated-proof-plan.md
+- Final PR #5605 draft (into `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`; ready once the completion PR merges)
 
 ## Activation
 
@@ -48,3 +52,5 @@
 - Review round 1 (2026-09-30): the sibling #4975 project merged into the issue base first, as expected; the phase branch took it through a `[claude-merge-resolve]` merge. `no_automated_proof` still runs last, after #4975's `flagger_citation_mismatch` and `ambiguous_flagger_nearby` checks.
 - Review round 2 (2026-09-30): both consensus findings fixed (README vote-conditions paragraph; misnamed hand-off test, AD-5). The task gap was round 1's README `CLAUDE_FIXER_ENABLED` row, which its own evidence says is already updated. A dispatched review run for PR #5611 (36722924281) was still queued when this stage started; the round-2 push supersedes it.
 - 2026-09-30/10-01: PR #5741's review runs failed three times because the OpenRouter account had no credits (`AI_APICallError: Insufficient credits`, run 36766395306); the stage stopped `BLOCKED` on #5582 instead of pushing. The owner topped up the credits, removed `ai:review-blocked`, and the 00:00Z sweep re-ran review (run 36794089014), which handed round 1 to Claude. The resumed session (session_01H7iPhquKg4c9Jd1NBj3WDd) replaced the hold with a review claim on 4f3649a.
+- 2026-10-01 (conformance 2/3 stage): follow-up issue #5880 filed for the check-run collector's empty-snapshot ready status, found while waiting on validation; it is out of this project's scope.
+- 2026-10-01 (validation 1/3 — read result stage): the step 2 `git merge --no-edit origin/<issue base>` was denied by the Auto-mode classifier (`[Modify Shared Resources]`); no merge was needed, because `git rev-list --count HEAD..origin/<issue base>` was 0.
