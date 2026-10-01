@@ -82,13 +82,23 @@ FAKE_GH = textwrap.dedent(
 		base = path.split("?", 1)[0]
 		if "/labels" in path and base not in fixture:
 			sys.exit(0)
+		flaky = fixture.get("__flaky__", {})
+		if base in flaky:
+			count_path = os.environ["FAKE_GH_CALLS"] + ".flaky." + base.replace("/", "_")
+			count = int(open(count_path).read()) if os.path.exists(count_path) else 0
+			if count < flaky[base]:
+				open(count_path, "w").write(str(count + 1))
+				sys.stderr.write("HTTP 502: %s\\n" % path)
+				sys.exit(1)
 		if base not in fixture or fixture[base] is None:
 			sys.stderr.write("HTTP 502: %s\\n" % path)
 			sys.exit(1)
 		payload = fixture[base]
-		page = dict(pair.split("=", 1) for pair in path.split("?", 1)[1].split("&") if "=" in pair).get("page", "1") if "?" in path else "1"
-		if isinstance(payload, list) and page != "1":
-			payload = []
+		query = dict(part.split("=", 1) for part in path.partition("?")[2].split("&") if "=" in part)
+		if isinstance(payload, list) and "page" in query:
+			size = int(query.get("per_page", max(len(payload), 1)))
+			start = (int(query["page"]) - 1) * size
+			payload = payload[start:start + size]
 		if "--jq" in args:
 			import subprocess
 			expr = args[args.index("--jq") + 1]
@@ -293,6 +303,130 @@ def test_bad_arguments_fail_closed(tmp_path, argv):
 	proc = subprocess.run(["python3", str(GATE), *argv], env=env, capture_output=True, text=True, check=False)
 	assert proc.returncode == 2
 	assert json.loads(proc.stdout)["skip_reason"] == "gate_unavailable"
+
+
+# --- comment flood (issue #5566) --------------------------------------------
+
+COMMENTS_PATH = f"repos/{REPO}/issues/42/comments"
+
+
+def _flood(count, start_id=1, login="flooder", association="NONE", body=None):
+	return [{"id": start_id + offset, "user": {"login": login}, "author_association": association,
+		"created_at": "2026-09-30T00:00:00Z",
+		"body": body if body is not None else f"spam {start_id + offset}"} for offset in range(count)]
+
+
+def _comment_page_calls(calls):
+	return [call for call in calls if any(COMMENTS_PATH in arg for arg in call)]
+
+
+def _run_gate_in_process(tmp_path, monkeypatch, capsys, fixture):
+	"""Run `main` in this process so the retry back-off can be recorded instead of slept."""
+	env = _fake_gh_env(tmp_path, fixture)
+	for key in ("PATH", "FAKE_GH_FIXTURE", "FAKE_GH_CALLS"):
+		monkeypatch.setenv(key, env[key])
+	monkeypatch.delenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", raising=False)
+	sleeps = []
+	monkeypatch.setattr(gate.time, "sleep", sleeps.append)
+	code = gate.main(["--repo", REPO, "--pr", "42", "--head", HEAD])
+	return code, json.loads(capsys.readouterr().out), _calls(tmp_path), sleeps
+
+
+def test_hold_on_page_eleven_of_a_comment_flood_blocks(tmp_path):
+	# The old reader stopped after 10 pages and refused every merge
+	# (gate_unavailable); the stream reads page 11 and finds the hold.
+	comments = _flood(1049) + [_claim(1050, "hold")]
+	code, result, calls = _run_gate(tmp_path, _fixture(comments=comments))
+	assert code == 1, result
+	assert result["skip_reason"] == "hold_claim"
+	assert result["claim"] == "held"
+	assert len(_comment_page_calls(calls)) == 11
+
+
+def test_comment_flood_without_a_trusted_hold_allows(tmp_path):
+	# Untrusted comments that copy the hold marker never count, however many.
+	fake_hold = f"<!-- ai:claude-fix-claim:v1 head={HEAD} kind=hold by=attacker -->"
+	comments = (_flood(600, body=fake_hold)
+		+ _flood(450, start_id=601, login=AUTHOR, association="CONTRIBUTOR", body=fake_hold))
+	code, result, calls = _run_gate(tmp_path, _fixture(comments=comments))
+	assert code == 0, result
+	assert result["merge"] is True
+	assert result["claim"] == "none"
+	assert len(_comment_page_calls(calls)) == 11
+
+
+def test_an_exact_page_multiple_reads_one_empty_page(tmp_path):
+	comments = _flood(1099) + [_claim(1100, "hold")]
+	code, result, calls = _run_gate(tmp_path, _fixture(comments=comments))
+	assert code == 1, result
+	assert result["skip_reason"] == "hold_claim"
+	assert len(_comment_page_calls(calls)) == 12
+
+
+def test_a_transient_page_failure_is_retried(tmp_path, monkeypatch, capsys):
+	fixture = _fixture(comments=[_claim(1, "hold")])
+	fixture["__flaky__"] = {COMMENTS_PATH: 2}
+	code, result, calls, sleeps = _run_gate_in_process(tmp_path, monkeypatch, capsys, fixture)
+	assert code == 1, result
+	assert result["skip_reason"] == "hold_claim"
+	assert len(_comment_page_calls(calls)) == 3
+	assert sleeps == [1, 2]
+
+
+def test_a_page_that_stays_unreadable_fails_closed_after_three_attempts(tmp_path, monkeypatch, capsys):
+	code, result, calls, sleeps = _run_gate_in_process(tmp_path, monkeypatch, capsys, _fixture(fail=[COMMENTS_PATH]))
+	assert code == 2
+	assert result["merge"] is False
+	assert result["skip_reason"] == "gate_unavailable"
+	assert "after 3 attempts" in result["reason"]
+	assert len(_comment_page_calls(calls)) == 3
+	assert sleeps == [1, 2]
+
+
+def test_zero_read_attempts_fail_closed_with_a_clear_reason(monkeypatch):
+	check_in_status = gate._load_check_in_status()
+	monkeypatch.setattr(gate, "COMMENT_READ_ATTEMPTS", 0)
+	with pytest.raises(gate.GateUnavailable) as raised:
+		gate._read_comment_page(check_in_status, COMMENTS_PATH, 1)
+	assert str(raised.value).endswith("after 0 attempts: no read attempted")
+
+
+def test_a_malformed_page_fails_closed_without_a_retry(tmp_path, monkeypatch, capsys):
+	fixture = _fixture()
+	fixture[COMMENTS_PATH] = {"message": "not a list"}
+	code, result, calls, sleeps = _run_gate_in_process(tmp_path, monkeypatch, capsys, fixture)
+	assert code == 2
+	assert result["skip_reason"] == "gate_unavailable"
+	assert len(_comment_page_calls(calls)) == 1
+	assert sleeps == []
+
+
+def test_a_trusted_comment_with_two_markers_is_still_ignored(tmp_path):
+	two_markers = {**_claim(1, "hold"), "body": (f"<!-- ai:claude-fix-claim:v1 head={HEAD} kind=hold by=s1 -->\n"
+		f"<!-- ai:claude-fix-claim:v1 head={OLD_HEAD} kind=hold by=s1 -->")}
+	code, result, _ = _run_gate(tmp_path, _fixture(comments=[two_markers]))
+	assert code == 0, result
+	assert result["claim"] == "none"
+
+
+def test_the_stream_keeps_only_trusted_marker_lines(monkeypatch):
+	check_in_status = gate._load_check_in_status()
+	marker = f"<!-- ai:claude-fix-claim:v1 head={HEAD} kind=hold by=session_x -->"
+	pages = {
+		1: _flood(99, body="x" * 10_000) + [{**_claim(100, "hold"), "body": "big text " * 1000 + "\n" + marker}],
+		2: _flood(5, start_id=101, login=AUTHOR, association="OWNER", body="no marker here"),
+	}
+	requested = []
+
+	def fake_read(path):
+		requested.append(path)
+		return pages[int(path.rsplit("page=", 1)[1])]
+
+	monkeypatch.setattr(check_in_status, "_gh_api_json", fake_read)
+	kept = gate._stream_claim_comments(check_in_status, REPO, 42, (AUTHOR.casefold(),))
+	assert kept == [{"id": 100, "user": {"login": AUTHOR}, "author_association": "OWNER",
+		"created_at": "2026-09-29T23:39:07Z", "body": marker}]
+	assert requested == [f"{COMMENTS_PATH}?per_page=100&page=1", f"{COMMENTS_PATH}?per_page=100&page=2"]
 
 
 # --- scripts/review_enable_auto_merge.sh -----------------------------------

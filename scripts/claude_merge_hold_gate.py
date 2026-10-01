@@ -48,12 +48,16 @@ it (hold or parity), 2 means the gate could not decide; callers treat 2 as a
 refusal (fail closed, CLAUDE.md §1).
 
 API calls (CLAUDE.md §15), `claude/*` heads only: one `pulls/{n}` read unless
-`--pr-json` is given; one call per 100 PR comments (the fresh read is the
-point: the race is a hold posted after the run's earlier reads); one
-`compare/{base}...{head}` read; and two recursive `git/trees` reads only when
-the compare lists a changed `workflow-templates/.claude/` path, returns the
-300-file maximum, or returns no file list. Any read failure, a truncated
-tree, or a head that no longer matches `--head` is `gate_unavailable`.
+`--pr-json` is given; one call per 100 PR comments with no page cap (the
+fresh read is the point: the race is a hold posted after the run's earlier
+reads; issue #5566: a cap let a comment flood refuse every merge), plus up
+to two retries of a failing page, keeping only trusted claim-marker lines
+in memory; one `compare/{base}...{head}` read; and two recursive
+`git/trees` reads only when the compare lists a changed
+`workflow-templates/.claude/` path, returns the 300-file maximum, or
+returns no file list. Any read failure (a comment page only after its
+retries), a malformed comment page, a truncated tree, or a head that no
+longer matches `--head` is `gate_unavailable`.
 """
 
 from __future__ import annotations
@@ -64,6 +68,7 @@ import importlib.util
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +78,11 @@ LIVE_PREFIX = ".claude/"
 # GitHub's compare endpoint returns at most 300 changed files; a list that
 # long may be truncated, so the tree comparison runs instead of trusting it.
 COMPARE_FILES_MAX = 300
+# Issue #5566: the comment read streams every page. A fixed page cap let
+# anyone who can comment push a PR past it and refuse every merge.
+COMMENT_PAGE_SIZE = 100
+COMMENT_READ_ATTEMPTS = 3
+COMMENT_RETRY_DELAYS_SECONDS = (1, 2)
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 HEAD_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -147,6 +157,73 @@ def _changes_twin(files: list) -> bool:
 	return False
 
 
+def _read_comment_page(check_in_status, path: str, page: int) -> list:
+	"""GET one 100-item page of `path`, retrying a failed read (issue #5566).
+
+	One API call per attempt, at most COMMENT_READ_ATTEMPTS, waiting
+	COMMENT_RETRY_DELAYS_SECONDS between them. Only a failed read
+	(`check_in_status.ReadError`: non-zero `gh` exit, timeout, invalid JSON)
+	is retried; a page that is not an array of objects is not transient and
+	raises `GateUnavailable` at once, as does the last failed attempt.
+	"""
+	last_error = None
+	for attempt in range(COMMENT_READ_ATTEMPTS):
+		if attempt:
+			time.sleep(COMMENT_RETRY_DELAYS_SECONDS[min(attempt - 1, len(COMMENT_RETRY_DELAYS_SECONDS) - 1)])
+		try:
+			page_items = check_in_status._gh_api_json(f"{path}?per_page={COMMENT_PAGE_SIZE}&page={page}")
+		except check_in_status.ReadError as exc:
+			last_error = exc
+			continue
+		if not isinstance(page_items, list) or any(not isinstance(item, dict) for item in page_items):
+			raise GateUnavailable(f"{path} page {page} is not an array of objects")
+		return page_items
+	raise GateUnavailable(
+		f"{path} page {page} unreadable after {COMMENT_READ_ATTEMPTS} attempts: {last_error or 'no read attempted'}")
+
+
+def _stream_claim_comments(check_in_status, repo: str, number: int, trusted_logins: tuple[str, ...]) -> list:
+	"""Read every comment page of PR `number` and keep only trusted claim markers.
+
+	Issue #5566. Input: the PR and the casefolded `trusted_logins`
+	(`check_in_status._fix_claim_trusted_logins`). Output: trimmed copies of
+	the comments `read_fix_claims` could count - a trusted author association,
+	a trusted login, and at least one line fully matching `FIX_CLAIM_RE` -
+	holding `id`, `user.login`, `author_association`, `created_at`, and a body
+	of just those marker lines. `read_fix_claims` therefore sees the same
+	marker count per comment and decides exactly as on the full comments,
+	while memory grows only with trusted markers, never with a flood of
+	untrusted or large comments. API calls: one per 100 comments with no page
+	cap (the read ends at the first page shorter than 100), plus up to two
+	retries per failing page (`_read_comment_page`). An unreadable or
+	malformed page raises `GateUnavailable` (the caller fails closed).
+	"""
+	path = f"repos/{repo}/issues/{number}/comments"
+	kept: list = []
+	page = 1
+	while True:
+		page_items = _read_comment_page(check_in_status, path, page)
+		for comment in page_items:
+			if comment.get("author_association") not in check_in_status.FIX_CLAIM_TRUSTED_ASSOCIATIONS:
+				continue
+			author = comment.get("user")
+			if (not isinstance(author, dict) or not isinstance(author.get("login"), str)
+				or author["login"].casefold() not in trusted_logins):
+				continue
+			body = comment.get("body")
+			if not isinstance(body, str):
+				continue
+			marker_lines = [line for line in body.splitlines() if check_in_status.FIX_CLAIM_RE.fullmatch(line)]
+			if not marker_lines:
+				continue
+			kept.append({"id": comment.get("id"), "user": {"login": author["login"]},
+				"author_association": comment.get("author_association"), "created_at": comment.get("created_at"),
+				"body": "\n".join(marker_lines)})
+		if len(page_items) < COMMENT_PAGE_SIZE:
+			return kept
+		page += 1
+
+
 def evaluate(repo: str, number: int, head: str, pr: dict | None, now: dt.datetime, check_in_status=None) -> dict:
 	"""Decide whether `repo`#`number` may be merged at `head`; see the module docstring."""
 	result = {"merge": True, "skip_reason": None, "reason": "", "pr": number, "head_sha": head,
@@ -167,9 +244,9 @@ def evaluate(repo: str, number: int, head: str, pr: dict | None, now: dt.datetim
 	if pr_head.get("sha") != head:
 		raise GateUnavailable(f"PR head is {str(pr_head.get('sha'))[:12]}, not the head being merged {head[:12]}")
 
-	comments = check_in_status.gh_api_list(f"repos/{repo}/issues/{number}/comments")
-	claims = check_in_status.read_fix_claims(comments, head, now,
-		trusted_logins=check_in_status._fix_claim_trusted_logins(pr))
+	trusted_logins = check_in_status._fix_claim_trusted_logins(pr)
+	comments = _stream_claim_comments(check_in_status, repo, number, trusted_logins)
+	claims = check_in_status.read_fix_claims(comments, head, now, trusted_logins=trusted_logins)
 	claim = claims.get("claim") or {}
 	result["claim"] = claim.get("state", "none")
 	if claim.get("state") == "held":
