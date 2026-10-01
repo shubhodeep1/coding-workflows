@@ -645,12 +645,83 @@ def test_claude_sync_skips_a_reviewed_guard_that_resolves_outside_the_reviewed_t
 		"hooks/no_twin_link.py",
 		"hooks/abs_outside.py",
 	):
-		assert f"::warning::claude-guard-sync: .claude/{rel} in the stable .claude/ tree resolves outside that tree (a symlink to its twin or elsewhere); nothing installed." in stdout
+		assert f"::warning::claude-guard-sync: .claude/{rel} in the stable .claude/ tree resolves outside its guard paths (a symlink to its twin, to a non-guard file, or out of the tree); nothing installed." in stdout
 	# In-tree guards and non-guard twins sync as before.
 	assert tree["hooks/linked.py"] == "reviewed hook\n"
 	assert tree["hooks/real.py"] == "reviewed hook\n"
 	assert tree["commands/foo.md"] == "UNREVIEWED command twin\n"
 	assert outputs["claude_changed"] == "3"
+
+
+def test_claude_sync_skips_a_reviewed_guard_that_resolves_to_a_non_guard_file() -> None:
+	"""A guard linked to a non-guard file in .claude/ (e.g. scripts/, which the twin sync merges without the owner) is not reviewed guard content (PR #5654 review round 5)."""
+	twins = {
+		"hooks/real.py": "reviewed hook\n",
+		"hooks/to_script.py": "UNREVIEWED twin\n",
+		"hooks/scripts_dir/s.py": "UNREVIEWED dir twin\n",
+		"scripts/s.py": "twin script\n",
+	}
+	reviewed = {"hooks/real.py": "reviewed hook\n", "scripts/s.py": "UNREVIEWED script\n", "commands/c.md": "cmd\n"}
+	reviewed_symlinks = {
+		# First pass: has a twin.
+		"hooks/to_script.py": "../scripts/s.py",
+		# Second pass: no twin.
+		"hooks/no_twin_to_command.py": "../commands/c.md",
+		# A directory link onto a non-guard directory (first pass, via its twin).
+		"hooks/scripts_dir": "../scripts",
+		# Guard to guard: still installed.
+		"settings.local.json": "hooks/real.py",
+	}
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, {}, reviewed_symlinks=reviewed_symlinks)
+	for rel in ("hooks/to_script.py", "hooks/no_twin_to_command.py", "hooks/scripts_dir/s.py"):
+		assert rel not in tree
+		assert f"::warning::claude-guard-sync: .claude/{rel} in the stable .claude/ tree resolves outside its guard paths (a symlink to its twin, to a non-guard file, or out of the tree); nothing installed." in stdout
+	assert "UNREVIEWED" not in "".join(tree.values())
+	assert tree["settings.local.json"] == "reviewed hook\n"
+	assert tree["hooks/real.py"] == "reviewed hook\n"
+	assert tree["scripts/s.py"] == "twin script\n"
+
+
+def test_claude_sync_installs_a_reviewed_guard_whose_twin_sits_under_a_symlinked_directory() -> None:
+	"""`find` never descends a symlinked twin directory, so the reviewed pass must still install the guard (PR #5654 review round 5)."""
+	twins = {"lib/x.py": "UNREVIEWED twin\n"}
+	reviewed = {"hooks/lib/x.py": "reviewed hook\n", "hooks/lib/y.py": "reviewed hook 2\n"}
+	local = {"hooks/lib/y.py": "consumer hook\n"}
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, local, twin_symlinks={"hooks/lib": "../lib"})
+	assert tree["hooks/lib/x.py"] == "reviewed hook\n"
+	assert tree["hooks/lib/y.py"] == "consumer hook\n"
+	assert "::warning::claude-guard-sync: .claude/hooks/lib/x.py has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); installed the .claude/ copy." in stdout
+	assert "::warning::claude-guard-sync: .claude/hooks/lib/y.py has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); kept the existing file." in stdout
+	assert "UNREVIEWED" not in "".join(value for rel, value in tree.items() if rel.startswith("hooks/"))
+
+
+def test_claude_sync_keeps_a_dangling_consumer_symlink_at_an_equal_guard() -> None:
+	"""An equal guard still never writes through a dangling consumer symlink, which would abort the step (PR #5654 review round 5)."""
+	twins = {"hooks/same.py": "same hook\n", "settings.json": "{}\n", "hooks/other.py": "other\n"}
+	local_symlinks = {"hooks/same.py": "missing_target.py", "settings.json": "missing_settings.json"}
+	tree, stdout, outputs = _run_claude_sync(twins, dict(twins), {}, local_symlinks=local_symlinks)
+	assert tree["hooks/same.py"] == "symlink:missing_target.py"
+	assert tree["settings.json"] == "symlink:missing_settings.json"
+	assert tree["hooks/other.py"] == "other\n"
+	for rel in ("hooks/same.py", "settings.json"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} is a dangling symlink in this repository; kept the existing file." in stdout
+	assert outputs["claude_changed"] == "1"
+
+
+def test_claude_sync_reports_a_realpath_failure_on_its_own() -> None:
+	"""A failing realpath is its own warning, not "resolves outside", and installs nothing (PR #5654 review round 5)."""
+	twins = {"hooks/h.py": "h\n"}
+	reviewed = {"hooks/h.py": "h\n", "hooks/no_twin.py": "n\n"}
+	with tempfile.TemporaryDirectory() as stub_dir:
+		stub = Path(stub_dir) / "realpath"
+		stub.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+		stub.chmod(0o755)
+		tree, stdout, outputs = _run_claude_sync(twins, reviewed, {}, extra_path=stub_dir)
+	assert tree == {}
+	for rel in ("hooks/h.py", "hooks/no_twin.py"):
+		assert f"::warning::claude-guard-sync: could not resolve .claude/{rel} in the stable .claude/ tree (realpath failed); nothing installed." in stdout
+		assert f".claude/{rel} in the stable .claude/ tree resolves outside" not in stdout
+	assert outputs["claude_changed"] == "0"
 
 
 def main() -> int:
@@ -677,6 +748,10 @@ def main() -> int:
 	test_claude_sync_keeps_a_dangling_consumer_symlink_at_a_differing_guard()
 	test_claude_sync_installs_a_symlinked_reviewed_guard_without_a_regular_twin()
 	test_claude_sync_skips_a_reviewed_guard_that_resolves_outside_the_reviewed_tree()
+	test_claude_sync_skips_a_reviewed_guard_that_resolves_to_a_non_guard_file()
+	test_claude_sync_installs_a_reviewed_guard_whose_twin_sits_under_a_symlinked_directory()
+	test_claude_sync_keeps_a_dangling_consumer_symlink_at_an_equal_guard()
+	test_claude_sync_reports_a_realpath_failure_on_its_own()
 	return 0
 
 

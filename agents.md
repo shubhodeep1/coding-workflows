@@ -1339,10 +1339,14 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `.claude/` tree with no twin counts as a differing twin (installed when the
   consumer lacks it, kept when it has it; a symlink there is installed as its
   target's content when it resolves to a regular file, and installs nothing
-  otherwise). A guard source must resolve inside that `.claude/` tree: one
-  that a symlink (on the file or a parent directory) points into its twin or
-  out of the tree installs nothing, and the consumer's file is left alone.
-  Each case logs a
+  otherwise). A guard source must resolve to a guard path inside that
+  `.claude/` tree: one that a symlink (on the file or a parent directory)
+  points into its twin, out of the tree, or at a non-guard file there (such
+  as `.claude/scripts/`, which the twin sync merges without the owner)
+  installs nothing, and the consumer's file is left alone; a failing
+  `realpath` installs nothing and says so. A dangling consumer symlink at a
+  guard path is kept even when the twin and `.claude/` copies are equal,
+  because `cp` cannot write through it. Each case logs a
   `::warning::claude-guard-sync: …` line. Non-guard files still come from the
   twin. `/seed-repo` follows the same rule. The shell pattern must list the
   same paths as `GUARD_PATH_PREFIXES` / `GUARD_PATH_FILES`, and
