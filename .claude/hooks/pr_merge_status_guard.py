@@ -140,6 +140,8 @@ _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
 # more characters that starts one of these counts as it.
 _PUSH_BULK_FLAGS = ("--all", "--branches", "--mirror")
 # The only `git push` option that, given with no refspec, writes no branch.
+# git also accepts its unambiguous prefixes `--ta` and `--tag` (`--t` is
+# ambiguous with `--thin` and refused).
 _PUSH_TAGS_ONLY_FLAG = "--tags"
 # A push refspec word containing any of these is a shell expansion or a
 # pattern the guard cannot turn into one branch name.
@@ -475,7 +477,7 @@ def _resolve_guard_path(value: str, base: str) -> tuple[str | None, str]:
 
 	Returns (absolute directory, "") or (None, reason) when the word needs
 	shell expansion the guard does not perform, or names no existing
-	directory at hook time.
+	directory this process can enter at hook time.
 	"""
 	if not value:
 		return None, "an empty path"
@@ -490,6 +492,9 @@ def _resolve_guard_path(value: str, base: str) -> tuple[str | None, str]:
 	resolved = os.path.normpath(os.path.join(base, value))
 	if not os.path.isdir(resolved):
 		return None, f"`{resolved}` is not an existing directory"
+	if not os.access(resolved, os.X_OK):
+		# `cd` into it fails, so the commands after it run where they were.
+		return None, f"`{resolved}` cannot be entered (no search permission)"
 	return resolved, ""
 
 
@@ -555,7 +560,7 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 				bulk_option_reason = bulk_option_reason or f"`git push {token}` writes every local branch"
 				index += 1
 				continue
-			if token == _PUSH_TAGS_ONLY_FLAG:
+			if _is_push_tags_only_flag(token):
 				pushes_tags = True
 				index += 1
 				continue
@@ -607,9 +612,11 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 		if not source:
 			continue
 		# `<src>:` with an empty destination is not a valid push refspec: git
-		# exits with `fatal: invalid refspec` and writes nothing. Its empty
-		# destination falls through to the checked-out branch below, which is
-		# judged as for a push without a refspec.
+		# exits with `fatal: invalid refspec` and writes nothing. It is judged
+		# as for a push without a refspec: the checked-out branch with HEAD.
+		if colon and not destination:
+			targets.append(GuardTarget("push", repo_dir, "", "HEAD", True))
+			continue
 		if destination.startswith("refs/heads/"):
 			destination = destination[len("refs/heads/") :]
 		elif destination.startswith("refs/"):
@@ -625,6 +632,12 @@ def _is_push_bulk_flag(token: str) -> bool:
 	"""Whether a `git push` word is `--all`, `--branches` or `--mirror`, or a
 	prefix of four or more characters git would expand to one."""
 	return len(token) >= 4 and any(flag.startswith(token) for flag in _PUSH_BULK_FLAGS)
+
+
+def _is_push_tags_only_flag(token: str) -> bool:
+	"""Whether a `git push` word is `--tags` or a prefix git expands to it
+	(`--ta`, `--tag`)."""
+	return len(token) >= 4 and _PUSH_TAGS_ONLY_FLAG.startswith(token)
 
 
 def _pattern_refspec_bulk_reason(spec: str) -> str:
