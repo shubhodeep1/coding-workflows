@@ -25,7 +25,7 @@ When `dispatch_workflow.py` cannot name a dispatch's run exactly, `/implement-pl
 - G2. In project mode, a security read-result stage uses a run's verdict only when the run's log shows `AUDIT_TARGET_REF_INPUT` equal to the project branch and an audited commit (`SECURITY_AUDIT_TARGET … ..<sha>` / `SECURITY_AUDIT_DIFF_HEAD`) equal to the project head at the start of that stage, before its step 2 sync. This holds for every match type, `dispatch_response` included.
 - G3. A validation read-result stage applies the same rule to `VALIDATE_TARGET_REF` and `HEAD commit:`.
 - G4. With several recorded candidates, the stage decides only once every one has completed. Every candidate matching both ref and commit counts: the security pass is clean only when all of them are, and validation acts on the worst verdict among them.
-- G5. A mismatch (no candidate matches, or a step 2 sync needed a conflict resolution) never yields a verdict. The stage re-dispatches once in the cycle, and a second mismatch stops at `Status: BLOCKED` (#5016's existing bound).
+- G5. A read-result stage runs no step 2 sync merge (AD-7, PR #5860 review round 1: a clean sync advances the branch too), so no commit lands on the project branch between the check and the verdict. A mismatch (no candidate matches) never yields a verdict. The stage re-dispatches once in the cycle, and a second mismatch stops at `Status: BLOCKED` (#5016's existing bound).
 
 ## Non-goals
 
@@ -45,7 +45,7 @@ When `dispatch_workflow.py` cannot name a dispatch's run exactly, `/implement-pl
 ## Approach
 
 1. Helper twin: `new_runs(repo, workflow, known_ids, ref=None)` drops runs whose `head_branch` is not `ref` when `ref` is given. `dispatch` passes its dispatched `ref`, and the error text and docstring say so.
-2. Command twin, step 2: in a `… — read result` stage of steps 9 and 10, record the head from the mode check's `git ls-remote --heads origin claude/implement-plan-<slug>` as the **pre-sync head**. Also record whether the sync merge needed a conflict resolution.
+2. Command twin, step 2: a `… — read result` stage of steps 9 and 10 records the head from the mode check's `git ls-remote --heads origin claude/implement-plan-<slug>` as the **pre-sync head** and runs no sync merge (nor the Issue Mode base-branch move) in that session (AD-7); the next stage syncs.
 3. Command twin, step 9: replace "check each of them in order … is this project's run" with the rule in G2, G4, and G5, and keep the #5016 re-arm on an in-progress candidate.
 4. Command twin, step 10: same rule with the validation log keys.
 5. Command twin, Dispatch helper section: describe the `head_branch` filter, and say the right candidate is confirmed by target ref and audited commit.
@@ -96,7 +96,7 @@ Phase 1:
 
 ## Risks & Mitigations
 
-- The step 2 sync merges a busy default branch on every stage, so comparing against the post-sync head would re-audit after nearly every run → compare against the pre-sync head (AD-2). A conflict-resolved sync changes project code, so it counts as a mismatch.
+- The step 2 sync merges a busy default branch on every stage, so comparing against the post-sync head would re-audit after nearly every run → compare against the pre-sync head (AD-2), and run no sync in a read-result stage, so even a clean merge never lands between the check and the verdict (AD-7).
 - A legitimate move of the project branch during an audit (a late follow-up fix merge) means a mismatch and one re-dispatch. Two in a row means `Status: BLOCKED` → ACCEPTED — the branch should not move during a run wait, so two moves in a row need a human.
 - Waiting for every candidate can delay a read by the difference in the runs' durations → ACCEPTED — only on the fallback path, which needs both a missing run id and a parallel dispatch (#5016 AD-7).
 - A run without `head_branch` is dropped from the fallback → ACCEPTED — the field is always present on workflow runs. Its absence means a timeout and exit 2 with `dispatched: true`, never a wrong run.

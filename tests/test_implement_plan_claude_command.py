@@ -421,9 +421,19 @@ def _step_twin(start: str, end: str) -> str:
 
 def test_step_2_records_the_pre_sync_head_for_read_result_stages():
 	step = _step_twin("2. **Pick the mode", "3. **Build the phase checklist")
-	assert "In a `security-pass <k>/5 — read result` or `validation <k>/3 — read result` stage, first write down the sha that the mode check's `git ls-remote --heads origin claude/implement-plan-<slug>` printed" in step
-	assert "that is the **pre-sync head**" in step
-	assert "Also write down whether this sync needed a conflict resolution." in step
+	assert "A `security-pass <k>/5 — read result` or `validation <k>/3 — read result` stage does **not** sync: write down the sha that the mode check's `git ls-remote --heads origin claude/implement-plan-<slug>` printed" in step
+	assert "which is the **pre-sync head**" in step
+	assert "check out `origin/claude/implement-plan-<slug>` at that sha with no merge" in step
+	# A clean sync merge advances the branch too (PR #5860 review round 1),
+	# so the read-result stage runs none, not only none with a conflict.
+	assert "including the steps it continues to (step 10's dispatch, step 8, step 11), and for the [Issue Mode](#issue-mode) base-branch move" in step
+	assert "a sync merge there, even a clean one, would put commits no recorded run audited or validated on the project branch after the verdict was checked (issue #5841)" in step
+	assert "Also write down whether this sync needed a conflict resolution." not in step
+
+
+def test_issue_mode_base_move_waits_for_the_next_stage_in_a_read_result_stage():
+	section = _step_twin("## Issue Mode", "## Stage Sessions")
+	assert "before the step 2 sync (a `… — read result` stage of steps 9–10 leaves the move to the next stage, step 2)" in section
 
 
 def test_step_9_requires_the_project_branch_and_the_pre_sync_head():
@@ -433,7 +443,8 @@ def test_step_9_requires_the_project_branch_and_the_pre_sync_head():
 	assert "that `<sha>` must be the pre-sync head step 2 recorded" in step
 	assert "This check applies to every recorded run, a `dispatch_response` match included." in step
 	assert "A run that audited another commit of the project branch never counts (issue #5841" in step
-	assert "A step 2 sync that needed a conflict resolution changed the project's code after every recorded run, so none of them counts." in step
+	assert "This stage runs no step 2 sync, so no commit lands on the project branch between this check and the verdict it allows." in step
+	assert "A step 2 sync that needed a conflict resolution" not in step
 	# The old first-match rule is gone.
 	assert "check each of them in order" not in step
 	assert "a completed candidate whose log shows the project branch is this project's run" not in step
@@ -451,6 +462,8 @@ def test_step_10_applies_the_same_commit_check_to_validation():
 	assert "first confirm the run validated this project's current code" in step
 	assert "in project mode `HEAD commit: <sha>` must be the pre-sync head step 2 recorded" in step
 	assert "every recorded run, `dispatch_response` included" in step
+	assert "no step 2 sync in this stage;" in step
+	assert "a conflict-resolved sync means no run counts" not in step
 	assert "decide only once every recorded run has completed" in step
 	assert "act on the worst verdict among them (a terminal class over `needs_fixes` over `pass`)" in step
 

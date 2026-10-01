@@ -1155,8 +1155,10 @@ reviews, comments, and conflicts stay a direct §12 request.
     The `/implement-plan-claude` read-result stages (steps 9–10) use a run's
     verdict only when its log shows the project branch and, in project mode,
     an audited commit (`SECURITY_AUDIT_TARGET … ..<sha>`, validate's
-    `HEAD commit:`) equal to the project head before that stage's sync
-    merge, for every match type; they wait for every recorded candidate and
+    `HEAD commit:`) equal to the project head that stage found on origin,
+    for every match type. A read-result stage runs no sync merge, not even a
+    clean one, so no unaudited commit lands between that check and the
+    verdict; the next stage syncs. They wait for every recorded candidate,
     count every matching run, and re-dispatch once on a mismatch.
     A failed pre-dispatch run-list read no longer cancels the dispatch: with
     a returned id the result is exact, and without one it is exit 2 with
