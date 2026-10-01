@@ -14,7 +14,7 @@ Reviewer `REJECTED_FINDING` votes, even a verified majority with quotes, no long
 - Earlier follow-ups hardened the vote. #4688 binds a vote to a run-issued `RF-<16 hex>` ID. #4687 binds the ID to a pass-1 `consensus_id`. #4976 requires `evidence: <file>:<range> | quote: <text>` that the gate finds at those lines of the reviewed commit (`_verify_evidence`, `_votes_in`, `scripts/review_claude_fixer_nonblocking.py:579-620`). #4975 (a sibling follow-up in flight on its own project branch) binds the flagger's citation to its own structured finding.
 - #5582 (this issue) reports that a matching quote proves only that the reviewer copied text from the file, not that the finding is false. A PR author can prompt-inject reviewers into copying the run-issued ID and nearby source text into rejection votes, even text that *demonstrates* the defect. A majority of such votes demotes the last finding and permits auto-merge. The recommendation: "Treat reviewer votes and PR source as untrusted data. Require independently verifiable automated proof that the specific finding is false; otherwise keep it blocking for the unattended fixer."
 - Every vote field (ID, reason, evidence, quote) is written by a model whose input includes PR-controlled text. No verification of those fields can turn a model's opinion into proof, so this plan stops using votes as the deciding signal.
-- The Claude fixer already judges every handed-off finding against the code and answers invalid ones through the dedicated verdict bot and a fresh reviewer panel (`.claude/commands/implement-plan-claude.md` step 7a). A single-reviewer false positive therefore still has a path to convergence without the demotion.
+- The Claude fixer already judges every handed-off finding against the code (`.claude/commands/implement-plan-claude.md` step 7a). When `CLAUDE_FIXER_VERDICT_BOT_LOGIN` is configured, it answers invalid ones through that verdict bot and a fresh reviewer panel; with it empty (the default), it leaves the PR blocked for a human to merge by hand or rework. A single-reviewer false positive therefore still has a path to a merge without the demotion, automatic only when the verdict bot is configured.
 
 ## Goals
 
@@ -64,7 +64,7 @@ Phase 1:
    - `demote_with_diagnostics(..., disproof_check=None)`: after the `too_few_rejecters` check, build the candidate record. Call `keep("no_automated_proof")` and `continue` unless `disproof_check` is set and returns exactly `True`. Reuse the record for `demoted.append`.
    - `demote(..., disproof_check=None)`: pass it through.
    - Module docstring, both function docstrings, and the `NON-BLOCKING FINDINGS` preamble: state that votes are necessary but never sufficient (issue #5582), and that without a disproof check (the CLI never has one) nothing is demoted. Add `no_automated_proof` to the documented keep reasons.
-2. `scripts/review_run_reviewers.sh`: replace the header sentence "A finding raised by one reviewer and rejected this way by a majority of the others is not handed to the fixer." with one saying that a rejection is recorded for the run log and does not stop the finding from reaching the fixer, which checks every finding against the code. Update the comment block above `build_cross_pollination_summary` to match.
+2. `scripts/review_run_reviewers.sh`: replace the header sentence "A finding raised by one reviewer and rejected this way by a majority of the others is not handed to the fixer." with one saying that a rejection stays in the reviewer's output and is counted in the run log's diagnostics, and does not stop the finding from reaching the fixer, which checks every finding against the code. Update the comment block above `build_cross_pollination_summary` to match.
 3. `scripts/review_autofix_step_claude_fixer_handoff.sh`: update the header comment paragraph (lines 25-43) and the inline comment at the filter call to say that votes alone never demote (issue #5582). No logic change.
 4. Tests (`tests/test_review_claude_fixer_nonblocking.py`):
    - `_run` / `_kept` pass a stand-in `disproof_check` that always proves, so the existing mechanics tests keep testing the necessary conditions.
@@ -97,7 +97,7 @@ Phase 1:
 
 ## Risks & Mitigations
 
-- More review rounds: single-reviewer false positives now reach the Claude fixer instead of being demoted. ACCEPTED: the fixer judges each finding and answers invalid ones through the verdict bot and a fresh reviewer panel. The cost is time, not safety.
+- More review rounds: single-reviewer false positives now reach the Claude fixer instead of being demoted. ACCEPTED: the fixer judges each finding and answers invalid ones through the verdict bot and a fresh reviewer panel, or, with no verdict bot configured (the default), leaves the PR blocked for a human. The cost is time and, without the bot, a human merge, not safety.
 - Merge conflict with #4975's project, which edits the same function region and the same README / agents.md paragraphs. Mitigation: both merge into the #4586 project branch through reviewed PRs. The step 7a / Claude-fixer conflict flow resolves the conflict keeping both changes.
 - Doc drift in `.claude/` command text. ACCEPTED: it describes the `NON-BLOCKING FINDINGS` block's meaning, which is unchanged. The block is simply never produced.
 

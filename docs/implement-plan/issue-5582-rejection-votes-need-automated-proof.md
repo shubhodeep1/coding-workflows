@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5582-rejection-votes-need-automated-proof-plan.md
 - Source issue: shubhodeep1/coding-workflows#5582
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof   Final PR: #5605 draft
+- Project branch: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof   Final PR: #5605 ready
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: pending verify-activation
-- Waiting on: PR #5900 (completion PR into the project branch; this log rides it)
+- Waiting on: PR #5605 (final PR into the issue base; this log rides it)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the validation 1/3 — read result stage)   hand-back (re-armed by the validation 1/3 — read result stage)
+- Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the final-merge — review round stage)   hand-back (re-armed by the final-merge — review round stage)
 - Last updated: 2026-10-01
-- Last note: validation cycle 1 (run 36813024951, target_ref project branch) passed 10/10; completion PR moves the plan to docs/completed/ (stage session session_01LXFrYb2Bxgncqt2FeLPyHu)
+- Last note: final PR #5605 review round 1 (head ae9eb47, run 36819223164): 5 consensus findings, all valid doc wording, all fixed in one [claude-autofix] commit (stage session session_013WdgzLTn2cVsar6zakV6Se)
 
 ## Phases
 1. [x] Phase 1 — votes alone never demote a single-reviewer finding   — PR #5611 merged 2026-09-30 (cb8a7aa); review rounds: 2; interventions: 0
@@ -28,8 +28,8 @@
 - Cycle 1 — run 36813024951 2026-10-01 (target_ref: claude/implement-plan-issue-5582-rejection-votes-need-automated-proof): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 289s)
 
 ## Completion
-- PR #5900 open — doc moved to docs/completed/issue-5582-rejection-votes-need-automated-proof-plan.md
-- Final PR #5605 draft (into `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`; ready once the completion PR merges)
+- PR #5900 merged 2026-10-01 (ae9eb47) — doc moved to docs/completed/issue-5582-rejection-votes-need-automated-proof-plan.md
+- Final PR #5605 ready 2026-10-01 — review rounds: 1 (into `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`)
 
 ## Activation
 
@@ -45,6 +45,7 @@
 - [source:security] A reviewer vote is model output from PR-influenced input: verifying its fields (IDs, quotes, ranges) proves the reviewer copied text, never that a finding is false, so an unattended gate must not let votes alone clear a finding. (files: scripts/review_claude_fixer_nonblocking.py)
 - [source:intervention] When a change alters behaviour a doc describes, grep every summary of it too (the Quickstart variables table row, not only the detailed section): a stale one-line summary contradicts the new rule. (files: README.md)
 - [source:conformance] When a security fix has an end-to-end regression goal, the end-to-end test must use the exploit's own input shape (here, a vote quoting the defective line), not a benign variant the gate happens to treat the same. (files: tests/test_review_autofix_claude_fixer_mode.py)
+- [source:intervention] Docs that describe where reviewer votes or verdicts surface must name the real surface: the Actions run log carries only the gate's aggregate lines, per-reviewer output is in the `reviewer-logs-*` artifact, and verdict convergence happens only when `CLAUDE_FIXER_VERDICT_BOT_LOGIN` is set (empty by default). (files: README.md, scripts/review_run_reviewers.sh)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher in session session_01Btdcvy38twXdNjpDgPWDBg (permission mode auto). Base branch `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason` (the issue's `Integration branch:` line; its final PR #4593 is an open draft into `main`). The issue therefore closes by an explicit close plus `ai:merged` at the final-merge stage, not by a `Fixes` keyword.
@@ -54,3 +55,4 @@
 - 2026-09-30/10-01: PR #5741's review runs failed three times because the OpenRouter account had no credits (`AI_APICallError: Insufficient credits`, run 36766395306); the stage stopped `BLOCKED` on #5582 instead of pushing. The owner topped up the credits, removed `ai:review-blocked`, and the 00:00Z sweep re-ran review (run 36794089014), which handed round 1 to Claude. The resumed session (session_01H7iPhquKg4c9Jd1NBj3WDd) replaced the hold with a review claim on 4f3649a.
 - 2026-10-01 (conformance 2/3 stage): follow-up issue #5880 filed for the check-run collector's empty-snapshot ready status, found while waiting on validation; it is out of this project's scope.
 - 2026-10-01 (validation 1/3 — read result stage): the step 2 `git merge --no-edit origin/<issue base>` was denied by the Auto-mode classifier (`[Modify Shared Resources]`); no merge was needed, because `git rev-list --count HEAD..origin/<issue base>` was 0.
+- 2026-10-01 (final-merge — review round stage): final PR #5605 review round 1 handed 5 consensus findings on ae9eb47 (two themes: the run log holds only aggregate vote diagnostics, and verdict-bot convergence needs `CLAUDE_FIXER_VERDICT_BOT_LOGIN`, empty by default). All valid; fixed in the changelog fragment, README, the pass-2 header in `scripts/review_run_reviewers.sh`, and the archived plan. No new auto-decision.

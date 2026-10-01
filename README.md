@@ -1483,9 +1483,11 @@ file, not that the finding is false. The vote rules below are therefore
 necessary but never sufficient: the filter demotes a finding only when an
 independent automated check also proves it false, and the hand-off step has
 no such check. Every single-reviewer finding, however many reviewers
-rejected it, is handed to the Claude fixer, which judges it against the code;
-the votes stay in the run log as diagnostics
-(`CLAUDE_FIXER_NONBLOCKING_KEPT … reason=no_automated_proof`).
+rejected it, is handed to the Claude fixer, which judges it against the code.
+The run log keeps only aggregate diagnostics (the `CLAUDE_FIXER_NONBLOCKING_VOTES`
+count and `CLAUDE_FIXER_NONBLOCKING_KEPT … reason=no_automated_proof`); each
+reviewer's own `REJECTED_FINDING` lines stay in its output, uploaded as the
+`reviewer-logs-<run id>-<attempt>` artifact.
 
 **How rejection votes are collected and checked.** After pass 1,
 `scripts/review_claude_fixer_nonblocking.py --issue-ids` gives every
