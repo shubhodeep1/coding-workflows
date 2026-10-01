@@ -631,6 +631,30 @@ def test_a_settings_read_failure_is_a_setup_error(settings_repo: Path, monkeypat
 		gd.read_settings_text(settings_repo, None, ".claude/settings.json")
 
 
+def _git_fails(exc: BaseException):
+	def run(*args, **kwargs):
+		raise exc
+
+	return run
+
+
+@pytest.mark.parametrize(
+	"exc",
+	[subprocess.TimeoutExpired(["git"], 120), FileNotFoundError("git")],
+	ids=["timeout", "missing-git"],
+)
+def test_a_hung_or_missing_git_is_a_setup_error(settings_repo: Path, tmp_path: Path, monkeypatch, capsys, exc) -> None:
+	"""A git call that times out or cannot start takes the exit-2 path, not a
+	traceback: at a ref the settings reader, the scenario setup, and the CLI."""
+	monkeypatch.setattr(gd.subprocess, "run", _git_fails(exc))
+	with pytest.raises(gd.SetupError, match="git cat-file|git ls-tree"):
+		gd.read_settings_text(settings_repo, "main", ".claude/settings.json")
+	with pytest.raises(gd.SetupError, match="git init"):
+		gd._git(tmp_path, "init", "-q")
+	assert gd.main(["--base-ref", "main", "--repo-root", str(settings_repo)]) == 2
+	assert "status=error" in capsys.readouterr().out
+
+
 def test_cli_non_utf8_settings_are_unparseable_in_the_tree_and_at_a_ref(settings_repo: Path) -> None:
 	target = settings_repo / ".claude" / "settings.json"
 	target.write_bytes(json.dumps(_settings()).encode("utf-8") + b"\xff")

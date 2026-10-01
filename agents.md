@@ -1259,7 +1259,8 @@ side so that class cannot land unnoticed.
   (it reaches every hook's process: `CLAUDE_PR_MERGE_GUARD=off` or a
   shadowing `PATH`), and a deleted, unparseable, or non-object settings file
   (parsed as strict JSON like Claude Code does: `NaN` or `Infinity`, or
-  content that is not UTF-8, is unparseable; a read error exits 2 with
+  content that is not UTF-8, is unparseable; a read error, including a git
+  call that times out or cannot start, exits 2 with
   `status=error`, in the working tree or at a ref, where a settings blob the
   tree lists but git cannot read, missing from a partial clone or corrupt,
   never counts as an absent file). A committed base settings file that is

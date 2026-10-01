@@ -437,14 +437,17 @@ def _git(cwd: Path, *args: str) -> str:
 	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 	env["GIT_CONFIG_NOSYSTEM"] = "1"
 	env["HOME"] = str(cwd)
-	proc = subprocess.run(
-		["git", *args],
-		cwd=cwd,
-		capture_output=True,
-		text=True,
-		env=env,
-		timeout=60,
-	)
+	try:
+		proc = subprocess.run(
+			["git", *args],
+			cwd=cwd,
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=60,
+		)
+	except (subprocess.TimeoutExpired, OSError) as exc:
+		raise SetupError(f"git {' '.join(args)} failed: {exc}") from exc
 	if proc.returncode != 0:
 		raise SetupError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
 	return proc.stdout.strip()
@@ -564,7 +567,11 @@ def _repo_git(repo_root: Path, *args: str, check: bool = True) -> subprocess.Com
 	inherited `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_INDEX_FILE` (a git hook, a CI
 	step) cannot point it at another repository."""
 	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-	proc = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True, env=env, timeout=120)
+	try:
+		proc = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True, env=env, timeout=120)
+	except (subprocess.TimeoutExpired, OSError) as exc:
+		# A hung or missing git is a setup failure (exit 2), never a traceback.
+		raise SetupError(f"git {' '.join(args)} failed: {exc}") from exc
 	if check and proc.returncode != 0:
 		raise SetupError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
 	return proc
