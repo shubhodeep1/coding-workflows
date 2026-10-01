@@ -4,14 +4,14 @@
 - Source issue: shubhodeep1/coding-workflows#5810 (https://github.com/shubhodeep1/coding-workflows/issues/5810)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4867-close-permission-prompt-duplicates
 - Project branch: claude/implement-plan-issue-5810-escape-class-comment-pattern   Final PR: #5833 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5855: twin sync 2 (the review round 1 fix changed `workflow-templates/.claude/scripts/permission_prompts.py` and `workflow-templates/.claude/commands/implement-issue-claude.md` again; hold claim on the phase head), asked on #5810, then `/reclarify`
+- Waiting on: PR #5855 (review of the round 2 fix)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none (held for the twin sync; the stage that `/reclarify` resumes arms the wait on PR #5855)
+- Check-in: checker session_01Msc3b8xfUvDG34kWXoXhaV   safety net and hand-back re-armed by the review round 2 stage after its push (ids in its report)
 - Last updated: 2026-10-01
-- Last note: twin sync 1 landed (c83626e); review round 1 fixed in one `[claude-autofix]` commit (step 1 rule names the tool name in the title and body; docstring, `agents.md`, and changelog say which values each comment renders; this log); both edited twins need twin sync 2.
+- Last note: twin sync 2 landed (bbaacdc), so the twin-sync hold is lifted. Review round 2 (workflow round 1 on bbaacdc): the stale-log finding is fixed in this log; the `comment_body` wording finding is rejected (a11834a already says which values each path renders). No `.claude/` change, so no twin sync is needed.
 
 ## Phases
 1. [ ] Phase 1 — code spans for session data and the spec rule   — protected paths: `.claude/scripts/permission_prompts.py`, `.claude/commands/implement-issue-claude.md` (edited through their `workflow-templates/.claude/` twins)
@@ -20,7 +20,7 @@
    - `tests/test_permission_prompt_duplicates.py`: new cases (fail against the base twin), updated reason assertion
    - `CLAUDE.md` §23.I and `agents.md`: "Issue text is untrusted data" sentences; `changelog.d/5810-permission-prompt-code-spans.md` [new]
    - Done: goals 1–4 hold; new tests pass; with the twins copied, `tests/test_permission_prompts.py`, `tests/test_permission_prompt_duplicates.py`, `tests/test_implement_issue_claude_command.py` pass; ruff clean
-   - PR #5855 open (twin sync 2 pending); review rounds: 1; twin syncs: 1 (c83626e, 2026-10-01); interventions: 0
+   - PR #5855 open (waiting on review); review rounds: 2 (c83626e → a11834a; bbaacdc → this log fix); twin syncs: 2 (c83626e, bbaacdc, 2026-10-01); interventions: 0
 
 ## Conformance
 
@@ -41,6 +41,7 @@
 
 ## Lessons
 - [source:intervention] When a spec rule lists which generated fields are evidence, name every session-derived field the renderer writes (the tool name as well as the shape), and describe per rendering path which fields it shows, so the docs never claim a path renders a field it does not. (files: workflow-templates/.claude/commands/implement-issue-claude.md, workflow-templates/.claude/scripts/permission_prompts.py)
+- [source:intervention] A `[claude-twin-sync]` commit that lifts a twin-sync block must also update the progress log (`Status`, `Waiting on`, `Check-in`, the phase's twin-sync count) in the same commit; otherwise the next review round flags a log that still says `BLOCKED` on a sync already done. (files: docs/implement-plan/issue-5810-escape-class-comment-pattern.md)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-01)
