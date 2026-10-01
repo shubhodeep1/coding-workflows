@@ -35,7 +35,7 @@ $ARGUMENTS
      Read .claude/commands/claude-issue-pickup.md in full and follow it with these arguments:
      — wake.
      ```
-     If `create_trigger` fails twice, report the error and end the turn: without the trigger nothing drains the queue. Then continue with step 1a now, so stopped sessions are resumed and the queue is drained immediately.
+     Then continue with step 1a now, so stopped sessions are resumed and the queue is drained immediately. Only if `create_trigger` fails twice, end the turn instead: report the error and skip step 1a and every later step, since without the trigger nothing drains the queue.
    - **`— wake.`** (hourly or catch-up): delete every enabled `Claude issue pickup: hourly` trigger whose `persistent_session_id` is not your own session (a second pickup started by mistake), so pickups converge to this one. If none targets your own session, you were woken by a stale trigger: report `claude-issue-pickup: not the active pickup` and end the turn. Note whether an enabled `Claude issue pickup: catch-up` trigger is bound to your own session (step 4 needs it).
    - **`stop`**: delete every such trigger and every enabled `Claude issue pickup: catch-up` trigger, archive each `persistent_session_id` that is not your own session, report `stopped: <n> trigger(s)` and end the turn.
 
