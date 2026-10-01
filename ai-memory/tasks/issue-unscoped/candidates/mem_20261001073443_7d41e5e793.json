@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "A merged change updated Claude command and script files alongside matching files under `workflow-templates`. When changing shared workflow support that has a template counterpart, check whether both copies need the same update and test the rendered template behavior.",
+  "fingerprint": "9571cfa7455e630013031f9ff7ee530f3d9d44943392405b7b293b49ab4aa3cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36830311551",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36830311551",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4563",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4564",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4566",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4577",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4595",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4569",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4570",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4574",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4578",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4600"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261001073443_7d41e5e793",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep reusable workflow-template copies in sync with their corresponding implementation files.",
+  "timestamps": {
+    "created_at": "2026-10-01T07:34:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
