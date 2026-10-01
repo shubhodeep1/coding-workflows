@@ -19,13 +19,13 @@ $ARGUMENTS
    `--ignore-claim-by` looks past your own earlier claim and the sweep's reservation for you, so they never stop you; anyone else's live claim still does.
    `<login>` is the account that posts the review workflow's hand-offs: the value the hand-back or checker prompt names, else `gh api user --jq .login` (in this setup the workflow's `GH_PAT` and the session act as the same owner account). A wrong login only hides review hand-offs from the script (it fails closed); the sweep then finds them. The script decides; the model does not re-interpret the PR.
 
-2. **Route on `action`** (the script maps `state` to it; CLAUDE.md §26.C step 1). `state` only names the detail for your report.
+2. **Route on `action`** (the script maps `state` to it; CLAUDE.md §26.C step 1). `state` only names the detail for your report. Every branch below that reports and ends the turn (`hand_back_all`, `held`, `claimed`, `open`, `retry`) first runs step 8's permission prompt report, as its own Bash call, and puts its result on the report's `Permission prompts:` line.
    - `hand_back_all` (`merged` / `closed`) → nothing to fix. Report, and, if you are the pushing session, continue with CLAUDE.md §26.D instead, including its `get_session` title check before you rename or archive the checker.
    - `wait` → nothing for you to fix now; by `state`:
      - `held` → a human decision is pending (see step 3). Report the hold and end the turn.
      - `claimed` → another fixer owns this head (your own claim and your sweep reservation were ignored in step 1). Report and end the turn; never fix alongside it.
-     - `open` → nothing is due. If you are a fresh session, make sure the PR has a §26 check-in (step 7) and end the turn.
-   - `retry` (exit 2) → the read failed: run step 1 once more; if it fails again, report the error and end the turn.
+     - `open` → nothing is due. If you are a fresh session, make sure the PR has a §26 check-in (step 7). Report and end the turn.
+   - `retry` (exit 2) → the read failed: run step 1 once more; if it fails again, run step 8's permission prompt report, report the error, and end the turn.
    - `hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`) → continue. `kind` is the claim kind: `conflict`, `review`, `ci`, `blocked`.
 
 3. **Cap.** For `kind` other than `review`, when `cap_reached` is true (`hand_backs` ≥ `cap`, default 3: CLAUDE.md §26.H), do not fix. Hold as [Holds](#holds) describes, with `--reason cap`, then send one `PushNotification` (`<repo>#<N>: Claude fix cap reached (<kind>) — decision needed in "<session title>"`), and ask in the CLAUDE.md §2 Q/A format:
@@ -41,7 +41,7 @@ $ARGUMENTS
    ```
    PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/claude_fix_claim.py post --repo <owner>/<repo> --pr <N> --head <head_sha> --kind <kind> --by <session id>
    ```
-   Exit 1 with "head moved" → go back to step 1. Exit 2 → retry once, then report the error and end the turn. A hold claim adds `--reason <one line>` and follows [Holds](#holds). The claim is live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3); your push moves the head and ends it. A claim or hold counts only when it is posted as the PR's author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` (CLAUDE.md §26.H); posted under any other account it is ignored, and the checker or the sweep may start a second fixer on the same head.
+   Exit 1 with "head moved" → go back to step 1. Exit 2 → retry once, then run step 8's permission prompt report, report the error, and end the turn. A hold claim adds `--reason <one line>` and follows [Holds](#holds). The claim is live for `CLAUDE_FIX_CLAIM_LEASE_HOURS` (default 3); your push moves the head and ends it. A claim or hold counts only when it is posted as the PR's author or as `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` (CLAUDE.md §26.H); posted under any other account it is ignored, and the checker or the sweep may start a second fixer on the same head.
 
 5. **Fix it.** `git fetch origin <head ref> <base ref>` and `git checkout -B <head ref> origin/<head ref>`; confirm `HEAD` is `<head_sha>` (otherwise step 1 again). Work under CLAUDE.md §12 (PR Review Mode), with §5, §6, §9, §10, §19, §20, §21 and §27 still binding. Never force-push, rebase, merge the PR, close it, or disable, skip or weaken a test or a check.
    - **`claude/implement-plan-*` head** → this PR belongs to an `/implement-plan-claude` project: follow that command's **step 7a** for `review` and `conflict`, and its step 7 **Blocked** rule for `blocked` and `ci`, on this PR only (commit subjects, the finding-by-finding judgement, the verdict-bot rule, removing `ai:review-blocked`). Record the fix in the project log only if you are one of the project's stage sessions. Never start a stage session or arm the project's checker: the project's own checker sees the pushed head.
@@ -59,7 +59,7 @@ $ARGUMENTS
    - **You are a fresh session** → you are now the PR's fixer: register with the existing checker (§26.B step 1b) or, when there is none, arm one (§26.B).
    - **`claude/implement-plan-*` head** → skip this step; the project checker covers the PR.
 
-8. **Report** in chat: the PR, the kind, the head you claimed, what you changed with `file:line` and test evidence (or the hold and its question), the pushed commit, and the check-in ids. Rename this session (`set_session_title` with your session id from step 0, never another session's) to `PR <owner>/<repo>#<N> — <fixed <kind> | on hold: <kind>>`. Send a `PushNotification` only for a hold. Never archive yourself: the report is what the user opens.
+8. **Report** in chat: the PR, the kind, the head you claimed, what you changed with `file:line` and test evidence (or the hold and its question), the pushed commit, and the check-in ids. First run the permission prompt report (CLAUDE.md §23.I, plan D12), as its own Bash call exactly as written, before this report and before every earlier report this file ends a turn with (step 2's early ends included): `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/permission_prompts.py file --session-label <your session id>`. It files the prompts and Auto-mode denials this session hit, including ones a human answered late, as `ai:permission-prompt` issues in coding-workflows (elsewhere it only reports). Put its result on a `Permission prompts:` line of the report; a failure is reported in one line and never blocks the report. Rename this session (`set_session_title` with your session id from step 0, never another session's) to `PR <owner>/<repo>#<N> — <fixed <kind> | on hold: <kind>>`. Send a `PushNotification` only for a hold. Never archive yourself: the report is what the user opens.
 
 ## Holds
 
