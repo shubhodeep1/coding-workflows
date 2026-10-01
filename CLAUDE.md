@@ -911,7 +911,10 @@ by a `GIT_DIR=<path>` prefix or `--git-dir` option. Paths resolve the way
 the shell and git resolve them: `cd` lexically unless `-P` is in force,
 `git -C` and the git directory physically (symlinks followed before `..`),
 and a `~` that is quoted or escaped (`"~"`, `'~'`, `\~`, or one inside
-`--git-dir=`) as a literal directory name rather than the home directory. A
+`--git-dir=`) as a literal directory name rather than the home directory;
+quoting is read per word, so a quoted `"~/x"` elsewhere in the command leaves
+an unquoted `~/x` to the home directory. A git call after a reserved word
+(`then git push`, `do git commit`, `! git commit`) is guarded like a bare one. A
 `cd` that Bash rejects (an unknown option, or a second operand such as
 `cd x -P`) leaves the directory unknown. A push that names a
 refspec is judged on the branch it writes to: for
@@ -930,7 +933,8 @@ listed; the ask issues no API call and applies on the default branch too. When t
 substitution, a subshell, `pushd`/`popd`, a `cd` joined by `||`, `&` or `|`,
 a `cd` after `&&` behind a command that may fail once its `&&` chain ends
 (`a && cd x; git push`), a `cd` inside a list sent to the background with `&`,
-`export GIT_DIR`, a path that does not exist yet or cannot be entered), or a refspec cannot be
+a `cd` inside an `if`, loop or `case` body, the same `~` path quoted and
+unquoted in one git call, `export GIT_DIR`, a path that does not exist yet or cannot be entered), or a refspec cannot be
 turned into one branch (a variable, a glob or brace pattern, a `heads/` /
 `tags/` / `remotes/` shorthand, a word starting with `-`), that call is
 judged on the session checkout as before and the guard emits a warning naming

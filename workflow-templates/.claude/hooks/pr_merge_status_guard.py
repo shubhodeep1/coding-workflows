@@ -136,6 +136,16 @@ _UNMODELLED_DIRECTORY_COMMANDS = frozenset({"pushd", "popd"})
 # Shell keywords that can prefix a directory change inside the same segment
 # (`if cd x; then …`), which the walker cannot place in the command's flow.
 _DIRECTORY_KEYWORD_PREFIXES = frozenset({"if", "then", "else", "elif", "do", "while", "until", "!", "time"})
+# Reserved words Bash accepts ahead of a simple command (`then git push`,
+# `do git commit`, `! git push`): the command after them still runs, so it is
+# found past them. The same set as the directory-change prefixes above.
+_COMMAND_RESERVED_WORD_PREFIXES = _DIRECTORY_KEYWORD_PREFIXES
+# Words that open or close an `if`, loop or `case` body. A `cd` inside such a
+# body may not run (or may run several times), so the directory after it is
+# unknown. `if` / `while` / `until` can follow other reserved words
+# (`then if …`); `for`, `case` and `select` only start a segment.
+_COMPOUND_OPENING_WORDS = frozenset({"if", "while", "until", "for", "case", "select"})
+_COMPOUND_CLOSING_WORDS = frozenset({"fi", "done", "esac"})
 # `git push` options that consume the following word as their value.
 _PUSH_OPTS_WITH_VALUE = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
 _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
@@ -416,10 +426,12 @@ def git_subcommands(command: str) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
 	Only counts `git` when it is the first real token of a shell segment, after
-	any leading `VAR=value` assignments. That keeps `man git commit` and
+	any leading reserved words (`then`, `do`, `else`, `!`, `time`, …) and
+	`VAR=value` assignments. That keeps `man git commit` and
 	`echo "git commit"` from tripping the guard, at the cost of missing
 	wrapper-prefixed invocations like `sudo git commit` — an acceptable trade,
 	since a false block is more disruptive than a missed check on a rare form.
+	A reserved word is not a wrapper: `if …; then git push; fi` runs the push.
 	"""
 	found: set[str] = set()
 	try:
@@ -428,8 +440,11 @@ def git_subcommands(command: str) -> set[str]:
 		# Unbalanced quotes — the command is not something we can read.
 		return found
 	for tokens in segments:
-		# Drop leading environment assignments (`GIT_DIR=... git commit`).
+		# Drop leading reserved words (`then git push`), then environment
+		# assignments (`GIT_DIR=... git commit`).
 		index = 0
+		while index < len(tokens) and tokens[index] in _COMMAND_RESERVED_WORD_PREFIXES:
+			index += 1
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
 			index += 1
 		if index >= len(tokens):
@@ -484,9 +499,24 @@ def _literal_tilde_words(command: str) -> frozenset[str]:
 	of them. Bash expands a `~` only at the start of a word (or right after
 	the first `=` of an assignment word) when nothing up to the first
 	unquoted `/` is quoted. Splits words where `_shell_segments` does.
+
+	A set of texts cannot tell two occurrences of the same text apart;
+	`guard_targets` uses the per-word `_tilde_word_flags` instead.
 	"""
-	literal_words: set[str] = set()
+	return frozenset(text for text, tilde_is_literal in _tilde_word_flags(command) if tilde_is_literal)
+
+
+def _tilde_word_flags(command: str) -> list[tuple[str, bool]]:
+	"""Every word of `command` in order, as the tokenizer returns it, with
+	whether Bash leaves its `~` literal (`_literal_tilde_words`).
+
+	Words split where `_shell_segments` does, and a word made only of quotes
+	(`""`) is kept as "" as the tokenizer keeps it, so the list lines up one
+	to one with the segments' tokens.
+	"""
+	word_flags: list[tuple[str, bool]] = []
 	word: list[tuple[str, bool]] = []
+	word_started = False
 
 	def tilde_is_literal(start: int) -> bool:
 		if start >= len(word) or word[start][0] != "~":
@@ -499,16 +529,17 @@ def _literal_tilde_words(command: str) -> frozenset[str]:
 		return False
 
 	def finish_word() -> None:
-		if not word:
+		nonlocal word_started
+		if not word and not word_started:
 			return
 		text = "".join(character for character, _quoted in word)
 		positions = [0]
 		assignment = re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", text)
 		if assignment and not any(quoted for _character, quoted in word[: assignment.end()]):
 			positions.append(assignment.end())
-		if any(tilde_is_literal(position) for position in positions):
-			literal_words.add(text)
+		word_flags.append((text, any(tilde_is_literal(position) for position in positions)))
 		word.clear()
+		word_started = False
 
 	single_quoted = False
 	double_quoted = False
@@ -529,6 +560,7 @@ def _literal_tilde_words(command: str) -> frozenset[str]:
 			continue
 		if character == "\\":
 			escaped = True
+			word_started = True
 			continue
 		if double_quoted:
 			if character == '"':
@@ -538,16 +570,18 @@ def _literal_tilde_words(command: str) -> frozenset[str]:
 			continue
 		if character == "'":
 			single_quoted = True
+			word_started = True
 			continue
 		if character == '"':
 			double_quoted = True
+			word_started = True
 			continue
 		if character in " \t\r" or character in _SHELL_PUNCTUATION_CHARS:
 			finish_word()
 			continue
 		word.append((character, False))
 	finish_word()
-	return frozenset(literal_words)
+	return word_flags
 
 
 def _resolve_guard_path(
@@ -888,16 +922,34 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 	unknown for the rest of the command, and the git calls after that point
 	keep the old behaviour (the session checkout) with a `fallback_reason`.
 	So does a `cd` after `&&` behind a command that may fail, once its `&&`
-	chain ends (`a && cd x; git push`, `a && cd x && b || git push`), and a
-	`cd` inside a list sent to the background with `&`.
+	chain ends (`a && cd x; git push`, `a && cd x && b || git push`), a
+	`cd` inside a list sent to the background with `&`, and a `cd` inside an
+	`if`, loop or `case` body (`if a; then b; cd x; fi`).
 	The same segments count as git calls as in `git_subcommands`, so nothing
-	it ignores is judged here.
+	it ignores is judged here; reserved words ahead of `git` (`then git push`)
+	are skipped as there. Whether a `~` is literal is read per word, so a
+	quoted `"~/x"` in one place does not change an unquoted `~/x` elsewhere.
 	"""
 	try:
 		segments = _shell_segments_with_separators(command)
 	except ValueError:
 		return []
-	literal_tilde_words = _literal_tilde_words(command)
+	# Whether each word's `~` is literal, per occurrence: a quoted `"~/x"` in
+	# one segment must not make an unquoted `~/x` elsewhere literal too. When
+	# the per-word flags cannot be lined up with the tokens, a `~` path word
+	# is unresolvable instead.
+	# A word made only of separator characters (a quoted `";"`) is a
+	# separator to `_shell_segments` as well, so it is dropped here too.
+	tilde_word_flags = [
+		(text, tilde_is_literal)
+		for text, tilde_is_literal in _tilde_word_flags(command)
+		if not (text and set(text) <= set(_SHELL_PUNCTUATION_CHARS))
+	]
+	tilde_flags_aligned = [text for text, _tilde_is_literal in tilde_word_flags] == [
+		token for tokens, _before, _after in segments for token in tokens
+	]
+	word_offset = 0
+	compound_depth = 0
 	targets: list[GuardTarget] = []
 	directory: str | None = session_cwd
 	unresolved = ""
@@ -925,8 +977,25 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 			directory, unresolved = None, "a `cd` after `&&` that may not have run"
 		may_fail_before_segment = list_may_fail
 		list_may_fail = True
-		assignments: dict[str, str] = {}
+		segment_tilde_flags = tilde_word_flags[word_offset : word_offset + len(tokens)] if tilde_flags_aligned else []
+		word_offset += len(tokens)
+		literal_tilde_texts = {text for text, tilde_is_literal in segment_tilde_flags if tilde_is_literal}
+		expanding_texts = {text for text, tilde_is_literal in segment_tilde_flags if not tilde_is_literal}
+		segment_literal_tilde_words = frozenset(literal_tilde_texts - expanding_texts)
+		tilde_quoting_reason = ""
+		if not tilde_flags_aligned and any("~" in token for token in tokens):
+			tilde_quoting_reason = "a `~` whose quoting the guard could not read"
+		elif literal_tilde_texts & expanding_texts:
+			tilde_quoting_reason = "the same `~` path quoted in one place and unquoted in another"
+		if tokens and tokens[0] in _COMPOUND_CLOSING_WORDS:
+			compound_depth = max(0, compound_depth - 1)
+		# Reserved words ahead of the command (`then git push`, `! git commit`).
 		index = 0
+		while index < len(tokens) and tokens[index] in _COMMAND_RESERVED_WORD_PREFIXES:
+			index += 1
+		leading_reserved_words = tokens[:index]
+		compound_depth += sum(1 for word in leading_reserved_words if word in _COMPOUND_OPENING_WORDS)
+		assignments: dict[str, str] = {}
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
 			assignments[name] = value
@@ -937,15 +1006,23 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 			continue
 		executable = tokens[index]
 		args = tokens[index + 1 :]
+		if executable in _COMPOUND_OPENING_WORDS:
+			# `for …`, `case …`, `select …`: not a command, but a body follows.
+			compound_depth += 1
 		if directory is not None:
 			if executable.startswith(("(", "{")):
 				directory, unresolved = None, "a subshell or command group"
+			elif (leading_reserved_words or executable in _COMPOUND_OPENING_WORDS) and any(
+				word == "cd" or word in _UNMODELLED_DIRECTORY_COMMANDS for word in [executable, *args]
+			):
+				directory, unresolved = None, f"a directory change after `{tokens[0]}`"
 			elif executable in _UNMODELLED_DIRECTORY_COMMANDS:
 				directory, unresolved = None, f"`{executable}`"
-			elif executable in _DIRECTORY_KEYWORD_PREFIXES and any(
-				arg == "cd" or arg in _UNMODELLED_DIRECTORY_COMMANDS for arg in args
-			):
-				directory, unresolved = None, f"a directory change after `{executable}`"
+			elif executable == "cd" and compound_depth > 0:
+				# `if a; then b; cd x; fi`: the body may not run, or may run
+				# several times, so the directory after it is unknown.
+				directory, unresolved = None, "a `cd` inside an `if`, loop or `case` body"
+				continue
 			elif executable == "export" and any(arg.split("=", 1)[0] == "GIT_DIR" for arg in args):
 				directory, unresolved = None, "`export GIT_DIR`"
 			elif executable == "cd" and not (
@@ -957,8 +1034,11 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 				joined_by = separator_after if not _is_sequential_separator(separator_after) else separator_before
 				directory, unresolved = None, f"a `cd` joined by `{joined_by.strip()}`"
 				continue
+			elif executable == "cd" and tilde_quoting_reason:
+				directory, unresolved = None, f"`cd` with {tilde_quoting_reason}"
+				continue
 			elif executable == "cd":
-				destination, cd_reason = _cd_destination(args, directory, literal_tilde_words)
+				destination, cd_reason = _cd_destination(args, directory, segment_literal_tilde_words)
 				if destination is None:
 					directory, unresolved = None, f"`cd` to {cd_reason}"
 				else:
@@ -971,8 +1051,15 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 				continue
 		if executable != "git" and not executable.endswith("/git"):
 			continue
+		git_directory, git_unresolved = directory, unresolved
+		if git_directory is not None and tilde_quoting_reason:
+			# Only this call: its own `-C` / `GIT_DIR` / `--git-dir` word may
+			# be the ambiguous one; later commands keep the directory.
+			git_directory, git_unresolved = None, f"`git` with {tilde_quoting_reason}"
 		targets.extend(
-			_git_invocation_targets(args, assignments, directory, unresolved, session_cwd, literal_tilde_words)
+			_git_invocation_targets(
+				args, assignments, git_directory, git_unresolved, session_cwd, segment_literal_tilde_words
+			)
 		)
 	return targets
 

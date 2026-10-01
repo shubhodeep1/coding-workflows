@@ -2153,3 +2153,161 @@ def test_bulk_push_with_an_inconclusive_judge_asks_once(monkeypatch, tmp_path: P
 	decision_reason = hook_output["hookSpecificOutput"]["permissionDecisionReason"]
 	assert "short: inconclusive" in decision_reason
 	assert "judges only the checked-out branch" in decision_reason
+
+
+def test_a_quoted_tilde_word_does_not_make_the_same_unquoted_word_literal(tmp_path: Path, monkeypatch) -> None:
+	"""PR #5173 review (round 9): literal-tilde state is per occurrence, not per
+	text. A quoted `"~/wt"` elsewhere in the command leaves an unquoted `~/wt`
+	to the home directory, as Bash expands it."""
+	home = tmp_path / "home"
+	(home / "wt").mkdir(parents=True)
+	(tmp_path / "~" / "wt").mkdir(parents=True)
+	monkeypatch.setenv("HOME", str(home))
+	assert _targets('echo "~/wt"; cd ~/wt && git commit -m x', tmp_path) == [
+		("commit", str(home / "wt"), "", "HEAD", False, False)
+	]
+	assert _targets('git commit -m "~/wt" && git -C ~/wt push origin HEAD:feature/x', tmp_path) == [
+		("commit", str(tmp_path), "", "HEAD", False, False),
+		("push", str(home / "wt"), "feature/x", "HEAD", True, False),
+	]
+	# The quoted occurrence still names a directory called `~`.
+	(home / "wt" / "~" / "wt").mkdir(parents=True)
+	assert _targets('cd ~/wt; cd "~/wt" && git commit -m x', tmp_path) == [
+		("commit", str(home / "wt" / "~" / "wt"), "", "HEAD", False, False)
+	]
+
+
+def test_tilde_flags_are_read_per_word(tmp_path: Path, monkeypatch) -> None:
+	home = tmp_path / "home"
+	(home / "wt").mkdir(parents=True)
+	(tmp_path / "~" / "wt").mkdir(parents=True)
+	monkeypatch.setenv("HOME", str(home))
+	# The unquoted occurrence after the quoted one expands; the quoted one does not.
+	assert twin_guard._tilde_word_flags('cd "~/wt"; cd ~/wt') == [
+		("cd", False),
+		("~/wt", True),
+		("cd", False),
+		("~/wt", False),
+	]
+	# A word made only of quotes is kept, so the flags line up with the tokens.
+	assert twin_guard._tilde_word_flags('git commit -m "" ~') == [
+		("git", False),
+		("commit", False),
+		("-m", False),
+		("", False),
+		("~", False),
+	]
+	assert _targets('cd "~/wt" && cd .. && cd ~/wt && git commit -m x', tmp_path) == [
+		("commit", str(home / "wt"), "", "HEAD", False, False)
+	]
+
+
+def test_the_same_tilde_path_quoted_and_unquoted_in_one_git_call_falls_back(tmp_path: Path, monkeypatch) -> None:
+	"""Within one segment the guard cannot tell which occurrence is the path
+	word, so that call is judged on the session checkout with a warning; later
+	calls keep the directory."""
+	home = tmp_path / "home"
+	(home / "wt").mkdir(parents=True)
+	monkeypatch.setenv("HOME", str(home))
+	targets = twin_guard.guard_targets('git -C ~/wt commit -m "~/wt"; git -C ~/wt push origin HEAD:feature/x', str(tmp_path))
+	assert [(t.subcommand, t.cwd, bool(t.fallback_reason)) for t in targets] == [
+		("commit", str(tmp_path), True),
+		("push", str(home / "wt"), False),
+	]
+	assert "quoted in one place and unquoted in another" in targets[0].fallback_reason
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"if true; then git push origin HEAD:x; fi",
+		"if false; then true; else git commit -m x; fi",
+		"while true; do git push origin HEAD:x; done",
+		"until false; do git commit -m x; done",
+		"! git commit -m x",
+		"time git push origin HEAD:x",
+		"if true; then GIT_DIR=.git git commit -m x; fi",
+		"if git commit -m x; then true; fi",
+	],
+)
+def test_git_after_a_reserved_word_is_guarded(command: str) -> None:
+	"""PR #5173 review (round 9): `then git push`, `do git commit`, `! git …`
+	run git, so they are guarded like a bare `git …`."""
+	assert twin_guard.git_subcommands(command) & twin_guard.GUARDED_SUBCOMMANDS
+	assert twin_guard.guard_targets(command, "/")
+
+
+def test_git_after_a_reserved_word_is_judged_in_the_tracked_directory(tmp_path: Path) -> None:
+	(tmp_path / "wt").mkdir()
+	assert _targets("cd wt && if true; then git push origin HEAD:feature/x; fi", tmp_path) == [
+		("push", str(tmp_path / "wt"), "feature/x", "HEAD", True, False)
+	]
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"if true; then true; cd wt; fi; git push origin HEAD:x",
+		"if false; then true; else true; cd wt; fi; git push origin HEAD:x",
+		"for d in a; do true; cd wt; done; git push origin HEAD:x",
+		"while false; do true; cd wt; done; git push origin HEAD:x",
+		"case a in a) cd wt;; esac; git push origin HEAD:x",
+		"if true; then if true; then true; fi; cd wt; fi; git push origin HEAD:x",
+	],
+)
+def test_a_cd_inside_an_if_or_loop_body_makes_the_directory_unknown(tmp_path: Path, command: str) -> None:
+	(tmp_path / "wt").mkdir()
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert [(t.subcommand, t.cwd, bool(t.fallback_reason)) for t in targets] == [("push", str(tmp_path), True)]
+
+
+def test_a_cd_after_a_closed_compound_is_followed(tmp_path: Path) -> None:
+	(tmp_path / "wt").mkdir()
+	for command in (
+		"if true; then true; fi; cd wt && git commit -m x",
+		"for d in a b; do true; done; cd wt && git commit -m x",
+		"case a in a) true;; esac; cd wt && git commit -m x",
+	):
+		assert _targets(command, tmp_path) == [("commit", str(tmp_path / "wt"), "", "HEAD", False, False)], command
+
+
+def test_e2e_push_after_a_reserved_word_is_blocked_on_a_stranded_checkout(worktree_repo) -> None:
+	"""The bypass from the PR #5173 review: a push inside `if …; then …; fi`
+	was never judged. It is now blocked like a bare push."""
+	repo, _, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, "if true; then git push origin HEAD:feature/x; fi")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+
+
+def test_structurally_equal_targets_are_judged_once(monkeypatch, tmp_path: Path) -> None:
+	"""PR #5173 review (round 9, rejected finding): two equal targets are the
+	same question about the same repository state (the hook runs before the
+	command), so the second judgement could not differ; it is skipped."""
+	judged: list[tuple] = []
+
+	def fake_judge(target, session_cwd, memo):
+		judged.append(target)
+		return 0, "", "", "", ""
+
+	monkeypatch.setattr(twin_guard, "_judge_guard_target", fake_judge)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+	code, _message = twin_guard.evaluate(
+		{"tool_name": "Bash", "tool_input": {"command": "git commit -m a && git commit -m b"}, "cwd": str(tmp_path)}
+	)
+	assert code == 0
+	assert len(judged) == 1
+
+
+def test_git_dir_option_with_equals_keeps_its_tilde_literal_as_bash_does(tmp_path: Path) -> None:
+	"""PR #5173 review (round 9, rejected finding): Bash expands a `~` after
+	`=` only in an assignment word (`NAME=~/x`); `--git-dir=~/wt` is not one,
+	so git receives the `~` as written."""
+	proc = subprocess.run(
+		["bash", "-c", 'printf "%s" --git-dir=~/wt'],
+		capture_output=True,
+		text=True,
+		env={**os.environ, "HOME": str(tmp_path)},
+		check=True,
+	)
+	assert proc.stdout == "--git-dir=~/wt"
