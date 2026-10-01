@@ -235,8 +235,9 @@ jobs:
           # Issues put in TRACKING_ISSUES only because their classification
           # lookup failed. The gate never read their labels or body, so
           # they may be tracking issues: their lineage follows the same
-          # completion-PR rule (fail closed, #5227, #5619). This list only
-          # picks the log line.
+          # completion-PR rule (fail closed, #5227, #5619), which never
+          # finalizes on an unmerged close (stricter than #5617). This
+          # list only picks the log line.
           LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS=""
           if ! type issue_body_integration_branch >/dev/null 2>&1; then
             # Older gh_helpers.sh: no parser, so only default-branch
@@ -261,6 +262,18 @@ jobs:
             # default-branch merges count (fail closed).
             pr_head_ref_is_issue_automation_branch() { return 1; }
           fi
+
+          # Issue #5617: GitHub never closes an issue when a PR closes
+          # without merging, and a PR's `Fixes #<n>` is text its author
+          # controls. On an unmerged close the step therefore changes an
+          # issue's labels, state, or lineage only when this PR is the
+          # issue's own automation PR: its head lives in this repository
+          # and is an automation branch for that issue (the #5226 rule).
+          # Reads event fields only; no API call.
+          pr_is_issue_automation_pr() {
+            [ -n "${PR_HEAD_REPO_FULL_NAME:-}" ] && [ "${PR_HEAD_REPO_FULL_NAME}" = "${REPOSITORY}" ] \
+              && pr_head_ref_is_issue_automation_branch "$1" "${PR_HEAD_REF:-}"
+          }
 
           record_issue_integration_branches() {
             local payload="$1"
@@ -440,7 +453,10 @@ jobs:
           #      scripts/orchestrate_poll_process.sh. SKIP entirely.
           #      This is the regression guard for issue #1469: when a
           #      child PR's body mentions a tracking issue, we must not
-          #      relabel or auto-close it.
+          #      relabel or auto-close it. Their lineage is finalized
+          #      only for the project's completion PR (issue #5619), so a
+          #      PR closed without merging never finalizes it; this is
+          #      stricter than the unmerged-close rule below (#5617).
           #
           #   2. MANAGED_ISSUES — orchestrator-managed child issues
           #      (label `ai:orchestrator-managed` OR the
@@ -467,6 +483,13 @@ jobs:
           #      only from a same-repository automation head for the
           #      issue (issue #5226); any other base or head leaves them
           #      unchanged.
+          #
+          #   A PR closed without merging labels (FINAL_LABEL =
+          #   ai:closed), closes, and finalizes the lineage of a managed
+          #   or standalone issue only when its head is a same-repository
+          #   automation branch for that issue (pr_is_issue_automation_pr,
+          #   issue #5617); any other head leaves the issue's labels,
+          #   state, and lineage unchanged.
           #
           # Single batched GraphQL call (one API request regardless of
           # N) per CLAUDE.md §15. Fail-open with a per-issue REST
@@ -562,6 +585,8 @@ jobs:
               # Issue #5619: only the project's completion PR finishes a
               # tracking issue. Head ref, head repository, base, and merged
               # flag all come from the event payload (no API call, §15).
+              # An unmerged close never qualifies, so this also covers the
+              # #5617 unmerged-close rule for tracking issues.
               if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" = "${DEFAULT_BRANCH_NAME}" ] \
                 && [ -n "${PR_HEAD_REPO_FULL_NAME:-}" ] && [ "${PR_HEAD_REPO_FULL_NAME}" = "${REPOSITORY}" ] \
                 && [ "${PR_HEAD_REF:-}" = "orchestrator/project-${issue_number}" ]; then
@@ -582,6 +607,11 @@ jobs:
               else
                 echo "Issue #${issue_number} has the \"Managed by: AI Orchestrator\" text but not the ai:orchestrator-managed label; treating it as a standalone issue."
               fi
+            fi
+
+            if [ "${PR_MERGED}" != "true" ] && ! pr_is_issue_automation_pr "${issue_number}"; then
+              echo "PR #${PR_NUMBER} closed without merging is not an automation PR for issue #${issue_number} (head ${PR_HEAD_REF:-none}, head repo ${PR_HEAD_REPO_FULL_NAME:-none}); leaving its labels, state, and lineage unchanged."
+              continue
             fi
 
             if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${DEFAULT_BRANCH_NAME}" ]; then

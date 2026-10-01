@@ -1833,7 +1833,10 @@ issue_body_orchestrator_project_branch()
 # close_merged_issues_sweep and issue_pr_status.yml therefore count a PR
 # as the issue's own only when its head is such a branch AND lives in
 # this repository (the caller checks the head repository), so only an
-# account with write access could have created it. Issues no API call.
+# account with write access could have created it. Issue #5617:
+# issue_pr_status.yml applies the same rule to a PR closed without
+# merging before it labels, closes, or finalizes the lineage of a linked
+# issue. Issues no API call.
 # ---------------------------------------------------------------
 pr_head_ref_is_issue_automation_branch()
 {
