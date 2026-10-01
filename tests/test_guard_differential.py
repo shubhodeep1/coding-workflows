@@ -359,7 +359,7 @@ def test_cli_skips_when_no_hook_changed(hook_repo: Path) -> None:
 	(hook_repo / "README.md").write_text("changed\n", encoding="utf-8")
 	proc = _cli(hook_repo)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert "status=skipped reason=no-hook-change verifier_changes=0" in proc.stdout
+	assert "status=skipped reason=no-hook-change checked=hooks,settings verifier_changes=0" in proc.stdout
 
 
 def test_cli_fails_on_a_silent_loosening_in_the_working_tree(hook_repo: Path) -> None:
@@ -673,7 +673,7 @@ def test_cli_reports_a_verifier_script_change_without_failing(verifier_repo: Pat
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "::warning::GUARD_DIFFERENTIAL verifier_change path=scripts/guard_differential.py:" in proc.stdout
 	assert "path=.github/workflows/ci.yml" not in proc.stdout
-	assert "status=skipped reason=no-hook-change verifier_changes=1" in proc.stdout
+	assert "status=skipped reason=no-hook-change checked=hooks,settings verifier_changes=1" in proc.stdout
 
 
 @pytest.mark.parametrize(
@@ -703,7 +703,7 @@ def test_cli_ignores_other_workflow_edits(verifier_repo: Path) -> None:
 	proc = _cli(verifier_repo)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "verifier_change path=" not in proc.stdout
-	assert "status=skipped reason=no-hook-change verifier_changes=0" in proc.stdout
+	assert "status=skipped reason=no-hook-change checked=hooks,settings verifier_changes=0" in proc.stdout
 
 
 def test_cli_verifier_change_keeps_the_regression_exit_code(verifier_repo: Path) -> None:
@@ -713,6 +713,492 @@ def test_cli_verifier_change_keeps_the_regression_exit_code(verifier_repo: Path)
 	assert proc.returncode == 1, proc.stdout + proc.stderr
 	assert "verifier_change path=scripts/guard_differential.py" in proc.stdout
 	assert "regressions=1" in proc.stdout and "verifier_changes=1" in proc.stdout
+
+
+# ──────────────────────────────────────────────────────────────────
+# Settings guard wiring (issue #5328)
+# ──────────────────────────────────────────────────────────────────
+
+
+SETTINGS_PATHS = (".claude/settings.json", "workflow-templates/.claude/settings.json")
+CANONICAL_FAKE_COMMAND = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/fake_guard.py'
+EXPLOIT_FAKE_COMMAND = "python3 -c 'pass' \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/fake_guard.py"
+
+
+def _settings(command: str = CANONICAL_FAKE_COMMAND, matcher: object = "Bash", **entry_extra) -> dict:
+	entry = {"type": "command", "command": command, "timeout": 30, **entry_extra}
+	group: dict = {"hooks": [entry]}
+	if matcher is not None:
+		group["matcher"] = matcher
+	return {
+		"permissions": {"allow": ["Bash(git status)"]},
+		"hooks": {
+			"PreToolUse": [group],
+			"PostToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/notes_hook.py'}]}
+			],
+		},
+	}
+
+
+def _write_settings(repo: Path, settings: object, paths=SETTINGS_PATHS) -> None:
+	for path in paths:
+		target = repo / path
+		target.parent.mkdir(parents=True, exist_ok=True)
+		text = settings if isinstance(settings, str) else json.dumps(settings, indent=2)
+		target.write_text(text, encoding="utf-8")
+
+
+@pytest.fixture()
+def settings_repo(hook_repo: Path) -> Path:
+	"""`hook_repo` plus the twin hooks tree and both settings files wiring
+	`fake_guard` canonically, committed on `main`."""
+	twin = hook_repo / "workflow-templates" / ".claude" / "hooks"
+	twin.mkdir(parents=True)
+	(twin / "fake_guard.py").write_text(FAKE_BLOCKING_HOOK, encoding="utf-8")
+	_write_settings(hook_repo, _settings())
+	_git(hook_repo, "add", "-A")
+	_git(hook_repo, "commit", "-q", "-m", "wire the guard")
+	return hook_repo
+
+
+def _wiring_lines(proc: subprocess.CompletedProcess) -> list[str]:
+	return [line for line in proc.stdout.splitlines() if "wiring_regression settings=" in line]
+
+
+def test_extract_guard_wiring_reads_only_guard_commands() -> None:
+	settings = _settings()
+	settings["hooks"]["PreToolUse"].append("not a group")
+	settings["hooks"]["Stop"] = "not a list"
+	[wiring] = gd.extract_guard_wiring(settings)
+	assert (wiring.event, wiring.matcher, wiring.hook, wiring.command, wiring.timeout) == (
+		"PreToolUse",
+		"Bash",
+		"fake_guard",
+		CANONICAL_FAKE_COMMAND,
+		30,
+	)
+	assert gd.extract_guard_wiring({"hooks": []}) == []
+	assert gd.extract_guard_wiring({}) == []
+
+
+@pytest.mark.parametrize(
+	("head", "base", "covers"),
+	[
+		("Bash", "Bash", True),
+		(None, "Bash", True),
+		("", "Bash", True),
+		("*", "Bash", True),
+		("Bash|Edit", "Bash", True),
+		("mcp__a|mcp__b|Bash", "mcp__b|mcp__a", True),
+		("Bashx", "Bash", False),
+		("Edit", "Bash", False),
+		("mcp__a", "mcp__a|mcp__b", False),
+		("mcp__.*__x|Bash", "mcp__.*__x", False),
+		("Bash", None, False),
+		(".*", "Bash", False),
+	],
+)
+def test_matcher_covers(head, base, covers: bool) -> None:
+	assert gd.matcher_covers(head, base) is covers
+
+
+def test_wiring_failures_require_the_hook_at_the_head() -> None:
+	base = gd.GuardWiring("PreToolUse", "Bash", "fake_guard", "python3 old-form fake_guard", 30, "{}")
+	head = gd.GuardWiring("PreToolUse", "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, 30, "{}")
+	assert gd.wiring_failures(head, base, {"fake_guard"}) == []
+	assert gd.wiring_failures(head, base, set()) == ["command"]
+
+
+def test_malformed_timeouts_fail_closed_without_crashing() -> None:
+	base = gd.GuardWiring("PreToolUse", "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, 30, "{}")
+	for timeout in ([30], "30", True):
+		head = gd.GuardWiring("PreToolUse", "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, timeout, "{}")
+		assert gd.wiring_failures(head, base, {"fake_guard"}) == ["timeout"]
+
+
+def test_non_finite_timeouts_fail_closed() -> None:
+	# A NaN compares false with everything, so `head < base` alone let it pass.
+	base = gd.GuardWiring("PreToolUse", "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, 30, "{}")
+	for timeout in (float("nan"), float("inf"), float("-inf"), 10**400):
+		head = gd.GuardWiring("PreToolUse", "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, timeout, "{}")
+		assert gd.wiring_failures(head, base, {"fake_guard"}) == ["timeout"]
+
+
+@pytest.mark.parametrize(
+	("event", "head_timeout", "base_timeout", "failures"),
+	[
+		("PreToolUse", 90, None, ["timeout"]),
+		("PreToolUse", None, 30, []),
+		("PreToolUse", 600, None, []),
+		("UserPromptSubmit", None, 100, ["timeout"]),
+		("UserPromptSubmit", 30, None, []),
+		("MessageDisplay", 5, None, ["timeout"]),
+	],
+)
+def test_an_omitted_timeout_is_claude_codes_default(event: str, head_timeout, base_timeout, failures: list[str]) -> None:
+	"""600 s for a command hook, lowered on some events (code.claude.com/docs/en/hooks)."""
+	base = gd.GuardWiring(event, "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, base_timeout, "{}")
+	head = gd.GuardWiring(event, "Bash", "fake_guard", CANONICAL_FAKE_COMMAND, head_timeout, "{}")
+	assert gd.wiring_failures(head, base, {"fake_guard"}) == failures
+
+
+@pytest.mark.parametrize("text", ['{"a": NaN}', '{"a": Infinity}', '{"a": -Infinity}'])
+def test_parse_settings_rejects_non_standard_constants(text: str) -> None:
+	assert json.loads(text)  # Python accepts them by default; Claude Code does not.
+	assert gd.parse_settings(text) is None
+
+
+def test_a_settings_read_failure_is_a_setup_error(settings_repo: Path, monkeypatch) -> None:
+	def unreadable(*args, **kwargs):
+		raise PermissionError("denied")
+
+	monkeypatch.setattr(Path, "read_text", unreadable)
+	with pytest.raises(gd.SetupError, match="cannot read settings .claude/settings.json"):
+		gd.read_settings_text(settings_repo, None, ".claude/settings.json")
+
+
+def _git_fails(exc: BaseException):
+	def run(*args, **kwargs):
+		raise exc
+
+	return run
+
+
+@pytest.mark.parametrize(
+	"exc",
+	[subprocess.TimeoutExpired(["git"], 120), FileNotFoundError("git")],
+	ids=["timeout", "missing-git"],
+)
+def test_a_hung_or_missing_git_is_a_setup_error(settings_repo: Path, tmp_path: Path, monkeypatch, capsys, exc) -> None:
+	"""A git call that times out or cannot start takes the exit-2 path, not a
+	traceback: at a ref the settings reader, the scenario setup, and the CLI."""
+	monkeypatch.setattr(gd.subprocess, "run", _git_fails(exc))
+	with pytest.raises(gd.SetupError, match="git cat-file|git ls-tree"):
+		gd.read_settings_text(settings_repo, "main", ".claude/settings.json")
+	with pytest.raises(gd.SetupError, match="git init"):
+		gd._git(tmp_path, "init", "-q")
+	assert gd.main(["--base-ref", "main", "--repo-root", str(settings_repo)]) == 2
+	assert "status=error" in capsys.readouterr().out
+
+
+def test_cli_non_utf8_settings_are_unparseable_in_the_tree_and_at_a_ref(settings_repo: Path) -> None:
+	target = settings_repo / ".claude" / "settings.json"
+	target.write_bytes(json.dumps(_settings()).encode("utf-8") + b"\xff")
+	proc = _cli(settings_repo)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert "reason=unparseable " in line, line
+	_git(settings_repo, "commit", "-q", "-am", "non-utf8 settings")
+	proc = _cli(settings_repo, "--base-ref", "HEAD~1", "--head-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert "reason=unparseable " in line, line
+
+
+def test_cli_the_finding_exploit_fails_in_both_settings_files(settings_repo: Path) -> None:
+	"""The #5328 finding: rewiring the guard to `python3 -c 'pass' <hook path>`
+	used to skip the check because no hook `*.py` file changed."""
+	_write_settings(settings_repo, _settings(EXPLOIT_FAKE_COMMAND))
+	proc = _cli(settings_repo)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	lines = _wiring_lines(proc)
+	assert len(lines) == 2, proc.stdout
+	for path in SETTINGS_PATHS:
+		assert any(
+			f"settings={path} event=PreToolUse matcher=\"Bash\" hook=fake_guard reason=command "
+			f'shape="settings:{path}:PreToolUse:Bash:fake_guard"' in line
+			for line in lines
+		), proc.stdout
+	assert "status=fail" in proc.stdout
+	assert "wiring_regressions=2" in proc.stdout
+
+
+@pytest.mark.parametrize("path", SETTINGS_PATHS)
+def test_cli_the_exploit_fails_between_committed_refs(settings_repo: Path, path: str) -> None:
+	_git(settings_repo, "checkout", "-q", "-b", "pr")
+	_write_settings(settings_repo, _settings(EXPLOIT_FAKE_COMMAND), paths=(path,))
+	_git(settings_repo, "commit", "-q", "-am", "rewire")
+	_git(settings_repo, "checkout", "-q", "main")
+	proc = _cli(settings_repo, "--head-ref", "pr")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert f"settings={path} " in line
+
+
+def _without_guard(settings: dict) -> dict:
+	settings["hooks"]["PreToolUse"] = []
+	return settings
+
+
+def _moved_to_post_tool_use(settings: dict) -> dict:
+	settings["hooks"]["PostToolUse"] += settings["hooks"].pop("PreToolUse")
+	return settings
+
+
+def _all_hooks_disabled(settings: dict) -> dict:
+	settings["disableAllHooks"] = True
+	return settings
+
+
+def _with_env(settings: dict, **env: str) -> dict:
+	settings["env"] = env
+	return settings
+
+
+@pytest.mark.parametrize(
+	("head", "reason"),
+	[
+		(_without_guard(_settings()), "removed"),
+		(_moved_to_post_tool_use(_settings()), "removed"),
+		(_settings(matcher="Bashx"), "matcher"),
+		(_settings(matcher="Edit|Write"), "matcher"),
+		(_settings(command="python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/fake_guard.py || true"), "command"),
+		(_settings(command="python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/fake_guard.py; exit 0"), "command"),
+		(_settings(timeout=1), "timeout"),
+		(_settings(**{"async": True}), "keys"),
+		(_settings(type="prompt"), "keys"),
+		(_all_hooks_disabled(_settings()), "disableAllHooks"),
+		(_with_env(_settings(), CLAUDE_PR_MERGE_GUARD="off"), "env"),
+		(_with_env(_settings(), PATH="./bin:/usr/bin"), "env"),
+		("{not json", "unparseable"),
+		("[]", "unparseable"),
+		(json.dumps(_settings(timeout=float("nan"))), "unparseable"),
+		(json.dumps(_settings(timeout=float("inf"))), "unparseable"),
+		(json.dumps(_settings(timeout=12345)).replace("12345", "1e400"), "timeout"),
+		(json.dumps(_settings(timeout=12345)).replace("12345", "1" + "0" * 400), "timeout"),
+	],
+	ids=[
+		"removed",
+		"moved-event",
+		"matcher-typo",
+		"matcher-other-tools",
+		"command-or-true",
+		"command-exit-0",
+		"timeout-lowered",
+		"async-added",
+		"type-changed",
+		"disable-all-hooks",
+		"env-kill-switch",
+		"env-path-shadow",
+		"invalid-json",
+		"not-an-object",
+		"timeout-nan",
+		"timeout-infinity",
+		"timeout-overflows-to-inf",
+		"timeout-int-overflows-float",
+	],
+)
+def test_cli_unverifiable_wiring_changes_fail_closed(settings_repo: Path, head, reason: str) -> None:
+	_write_settings(settings_repo, head, paths=(".claude/settings.json",))
+	proc = _cli(settings_repo)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert "settings=.claude/settings.json " in line
+	assert f"reason={reason} " in line, line
+
+
+def test_cli_a_deleted_settings_file_fails(settings_repo: Path) -> None:
+	(settings_repo / ".claude" / "settings.json").unlink()
+	proc = _cli(settings_repo)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert "reason=removed" in line
+
+
+def test_cli_a_deleted_settings_file_with_only_env_fails(settings_repo: Path) -> None:
+	# The `env` regression is the only line when the deleted file wires no
+	# guard, so it is not a duplicate of the per-entry `removed` lines.
+	_write_settings(settings_repo, _with_env(_without_guard(_settings()), CLAUDE_PR_MERGE_GUARD="on"), paths=(".claude/settings.json",))
+	_git(settings_repo, "commit", "-q", "-am", "env only")
+	(settings_repo / ".claude" / "settings.json").unlink()
+	proc = _cli(settings_repo, "--base-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert 'reason=env shape="settings:.claude/settings.json:env"' in line, line
+
+
+def _commit_unparseable_base(repo: Path, text: str) -> None:
+	_write_settings(repo, text, paths=(".claude/settings.json",))
+	_git(repo, "commit", "-q", "-am", "unparseable base")
+
+
+@pytest.mark.parametrize(
+	"base_text",
+	["{not json", "[]", json.dumps(_settings(timeout=float("nan")))],
+	ids=["not-json", "non-object", "nan"],
+)
+@pytest.mark.parametrize(
+	"head",
+	[_without_guard(_settings()), _settings()],
+	ids=["guard-dropped", "guard-kept"],
+)
+def test_cli_an_unparseable_base_fails_closed(settings_repo: Path, base_text: str, head) -> None:
+	"""A committed base that does not parse has no wiring to compare, so a
+	head that repairs it cannot be verified to keep any guard running."""
+	_commit_unparseable_base(settings_repo, base_text)
+	_write_settings(settings_repo, head, paths=(".claude/settings.json",))
+	proc = _cli(settings_repo, "--base-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert (
+		"settings=.claude/settings.json event=- matcher=null hook=- reason=base-unparseable "
+		'shape="settings:.claude/settings.json:base-unparseable"'
+	) in line, line
+
+
+def test_cli_an_unparseable_base_fails_between_committed_refs(settings_repo: Path) -> None:
+	_commit_unparseable_base(settings_repo, "{not json")
+	_write_settings(settings_repo, _without_guard(_settings()), paths=(".claude/settings.json",))
+	_git(settings_repo, "commit", "-q", "-am", "repair without the guard")
+	proc = _cli(settings_repo, "--base-ref", "HEAD~1", "--head-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert "reason=base-unparseable " in line, line
+
+
+def test_cli_an_unparseable_head_is_reported_before_an_unparseable_base(settings_repo: Path) -> None:
+	_commit_unparseable_base(settings_repo, "{not json")
+	_write_settings(settings_repo, "[]", paths=(".claude/settings.json",))
+	proc = _cli(settings_repo, "--base-ref", "HEAD")
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	[line] = _wiring_lines(proc)
+	assert 'reason=unparseable shape="settings:.claude/settings.json:unparseable"' in line, line
+
+
+def test_cli_the_pr_body_can_list_an_unparseable_base_repair(settings_repo: Path, tmp_path: Path) -> None:
+	_commit_unparseable_base(settings_repo, "{not json")
+	_write_settings(settings_repo, _settings(), paths=(".claude/settings.json",))
+	body = tmp_path / "body.md"
+	body.write_text("## Intended loosening:\n- `settings:.claude/settings.json:base-unparseable`\n", encoding="utf-8")
+	proc = _cli(settings_repo, "--base-ref", "HEAD", "--pr-body-file", str(body))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "GUARD_DIFFERENTIAL intended_wiring_change settings=.claude/settings.json" in proc.stdout
+	assert "reason=base-unparseable" in proc.stdout
+	assert not _wiring_lines(proc)
+
+
+def _delete_object(repo: Path, rev: str) -> None:
+	"""Drop the loose object `rev` names, as a missing or corrupt blob would be.
+
+	`unlink` fails loudly when the object is not loose, and the `cat-file -e`
+	check fails the test when git can still read the object (for example from
+	a pack), so a caller never runs against a blob that is still readable."""
+	oid = _git(repo, "rev-parse", rev)
+	(repo / ".git" / "objects" / oid[:2] / oid[2:]).unlink()
+	with pytest.raises(subprocess.CalledProcessError):
+		_git(repo, "cat-file", "-e", oid)
+
+
+def test_read_settings_text_at_a_ref_tells_absent_from_present(settings_repo: Path) -> None:
+	assert gd.read_settings_text(settings_repo, "main", ".claude/settings.json") == json.dumps(_settings(), indent=2)
+	assert gd.read_settings_text(settings_repo, "main", ".claude/missing.json") is None
+	assert gd.read_settings_text(settings_repo, "main", "no-such-dir/settings.json") is None
+
+
+def test_cli_an_unreadable_base_settings_blob_exits_2(settings_repo: Path) -> None:
+	"""A base settings file that exists but cannot be read is not an absent
+	one: read as absent, it left no base wiring, so dropping the guard passed.
+	(Against the working tree, `git diff` already fails on the missing blob.)"""
+	_git(settings_repo, "checkout", "-q", "-b", "pr")
+	_write_settings(settings_repo, _without_guard(_settings()))
+	_git(settings_repo, "commit", "-q", "-am", "drop the guard")
+	_delete_object(settings_repo, "main:.claude/settings.json")
+	proc = _cli(settings_repo, "--head-ref", "pr")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "status=error" in proc.stdout
+	assert "cat-file -p main:.claude/settings.json failed" in proc.stdout, proc.stdout
+	assert not _wiring_lines(proc)
+
+
+def _permissions_only(settings: dict) -> dict:
+	settings["permissions"]["allow"].append("Bash(git log)")
+	return settings
+
+
+def _canonical_twice(settings: dict) -> dict:
+	settings["hooks"]["PreToolUse"].append({"matcher": "Edit", "hooks": [{"type": "command", "command": CANONICAL_FAKE_COMMAND}]})
+	return settings
+
+
+@pytest.mark.parametrize(
+	"head",
+	[
+		_permissions_only(_settings()),
+		_settings(matcher="Bash|Edit"),
+		_settings(matcher=None),
+		_settings(timeout=90),
+		_canonical_twice(_settings()),
+	],
+	ids=["permissions-only", "matcher-widened", "matcher-match-all", "timeout-raised", "second-entry-added"],
+)
+def test_cli_verifiable_wiring_changes_pass(settings_repo: Path, head) -> None:
+	_write_settings(settings_repo, head)
+	proc = _cli(settings_repo)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "status=pass" in proc.stdout
+	assert "settings=.claude/settings.json,workflow-templates/.claude/settings.json wiring_regressions=0" in proc.stdout
+
+
+def test_cli_a_changed_command_in_the_canonical_form_passes(settings_repo: Path) -> None:
+	_write_settings(settings_repo, _settings(command='python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/fake_guard.py 2>&1'))
+	_git(settings_repo, "commit", "-q", "-am", "non-canonical base")
+	_write_settings(settings_repo, _settings())
+	proc = _cli(settings_repo, "--base-ref", "HEAD")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "wiring_regressions=0" in proc.stdout
+
+
+def test_cli_the_pr_body_can_list_an_intended_wiring_change(settings_repo: Path, tmp_path: Path) -> None:
+	_write_settings(settings_repo, _settings(matcher="Edit"), paths=(".claude/settings.json",))
+	body = tmp_path / "body.md"
+	body.write_text(
+		"## Intended loosening:\n- fake_guard: `settings:.claude/settings.json:PreToolUse:Bash:fake_guard`\n",
+		encoding="utf-8",
+	)
+	proc = _cli(settings_repo, "--pr-body-file", str(body))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "GUARD_DIFFERENTIAL intended_wiring_change settings=.claude/settings.json" in proc.stdout
+	assert not _wiring_lines(proc)
+
+
+def test_cli_a_listing_for_another_hook_does_not_excuse_the_change(settings_repo: Path, tmp_path: Path) -> None:
+	_write_settings(settings_repo, _settings(matcher="Edit"), paths=(".claude/settings.json",))
+	body = tmp_path / "body.md"
+	body.write_text(
+		"## Intended loosening:\n- other_guard: `settings:.claude/settings.json:PreToolUse:Bash:fake_guard`\n",
+		encoding="utf-8",
+	)
+	proc = _cli(settings_repo, "--pr-body-file", str(body))
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+
+
+def test_cli_settings_json_output_rows(settings_repo: Path) -> None:
+	_write_settings(settings_repo, _settings(EXPLOIT_FAKE_COMMAND), paths=(".claude/settings.json",))
+	proc = _cli(settings_repo, "--json")
+	rows = [json.loads(line) for line in proc.stdout.splitlines() if line.startswith("{")]
+	assert rows == [
+		{
+			"settings": ".claude/settings.json",
+			"event": "PreToolUse",
+			"matcher": "Bash",
+			"hook": "fake_guard",
+			"reason": "command",
+			"identity": "settings:.claude/settings.json:PreToolUse:Bash:fake_guard",
+			"intended": False,
+		}
+	]
+
+
+def test_shipped_settings_wire_every_guard_canonically() -> None:
+	"""Both shipped settings files wire each guard in the canonical form, so a
+	change to any of them is caught and a revert to that form passes."""
+	for path in SETTINGS_PATHS:
+		settings = json.loads((REPO_ROOT / path).read_text(encoding="utf-8"))
+		wirings = gd.extract_guard_wiring(settings)
+		assert {wiring.hook for wiring in wirings} >= {"pr_merge_status_guard", "gh_api_write_guard", "pr_watch_guard"}
+		for wiring in wirings:
+			assert gd.CANONICAL_GUARD_COMMAND_RE.fullmatch(wiring.command), (path, wiring.command)
 
 
 # ──────────────────────────────────────────────────────────────────

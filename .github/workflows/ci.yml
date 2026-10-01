@@ -408,8 +408,11 @@ jobs:
         # fails on a shape the PR's hook now treats less strictly (for example
         # the base blocked it and the PR allows it), with or without a
         # warning (issue #5325), unless the PR body lists it under
-        # `Intended loosening:`. Skips when no
-        # .claude/hooks/*.py file (or its workflow-templates twin) changed.
+        # `Intended loosening:`. It also fails closed when a changed
+        # .claude/settings.json (or its workflow-templates twin) rewires a
+        # *_guard.py hook in a way it cannot verify still runs the guard
+        # (issue #5328). Skips when no hook *.py file and neither settings
+        # file changed.
         # The base branch's corpus runs too. #5173's review found three such
         # shapes that the reviewer panel missed. No GitHub API calls: the base
         # comes through git and the PR body from the event payload, so a body

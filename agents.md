@@ -1242,12 +1242,49 @@ side so that class cannot land unnoticed.
   so that later shapes compare the loosened hook with itself. A head hook
   that escalates (for example with the hosted runner's `sudo`) can still
   reach the verifier process; that is inherent to executing PR hook code.
+- **Settings wiring (issue #5328).** A guard only runs when a settings file
+  wires it, so the check also runs when `.claude/settings.json` or
+  `workflow-templates/.claude/settings.json` changes. It extracts every hook
+  entry, under any event, whose command names
+  `.claude/hooks/<name>_guard.py`. Each base entry needs a head entry with
+  the same event and hook that verifiably still runs the guard. That means
+  the command is unchanged, or is exactly
+  `python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/<hook>.py` with that hook
+  present in the same side's hooks tree. The matcher must cover the base
+  matcher: identical, match-all (absent, empty, or `*`), or a superset when
+  both are plain `A|B` tool-name lists; any other regex change fails. The
+  timeout must be no lower (absent = Claude Code's default: 600 s, or 30 s
+  on `UserPromptSubmit` / `PreModelSwitch` / `PostModelSwitch`, 10 s on
+  `MessageDisplay`, 1.5 s on `SessionEnd`; a non-finite value fails), and
+  every other key of the entry
+  and its matcher group (`type`, `async`, …) must be equal. Anything else
+  fails closed: for example `python3 -c 'pass' <hook path>`, `… || true`, a
+  removed or moved entry, a narrowed matcher, a lower timeout,
+  `disableAllHooks` turning on, any change to the top-level `env` object
+  (it reaches every hook's process: `CLAUDE_PR_MERGE_GUARD=off` or a
+  shadowing `PATH`), and a deleted, unparseable, or non-object settings file
+  (parsed as strict JSON like Claude Code does: `NaN` or `Infinity`, or
+  content that is not UTF-8, is unparseable; a read error, including a git
+  call that times out or cannot start, exits 2 with
+  `status=error`, in the working tree or at a ref, where a settings blob the
+  tree lists but git cannot read, missing from a partial clone or corrupt,
+  never counts as an absent file). A committed base settings file that is
+  unparseable or non-object fails too (`reason=base-unparseable`): with no
+  base wiring to compare, the head cannot be verified to keep any guard, so
+  the PR that repairs it lists the identity. The identity of a wiring
+  failure is `settings:<file>:<event>:<matcher>:<hook>`
+  (`settings:<file>:disableAllHooks`, `settings:<file>:env`,
+  `settings:<file>:unparseable`, `settings:<file>:base-unparseable`). New
+  non-guard hooks and `permissions.*` rules are not checked here.
 - **`Intended loosening:`** A PR that means to loosen lists each shape
   verbatim (the corpus line, placeholders included) under a heading or bold
   line `Intended loosening:` in its body, one list item per shape,
   optionally prefixed with the hook and a colon, with the shape in
   backticks (``- pr_merge_status_guard: `git push` ``). The
-  section ends at the next markdown heading. A listed shape counts as a
+  section ends at the next markdown heading. A wiring change is listed the
+  same way, with its printed identity as the shape
+  (``- pr_merge_status_guard: `settings:.claude/settings.json:PreToolUse:Bash:pr_merge_status_guard` ``).
+  A listed shape counts as a
   loosening under the retire-master Q3: A rule, so a sync that carries it
   waits for the operator. CI reads the body from the event payload of the
   push, so a body edited later needs another push to count.
@@ -1321,13 +1358,21 @@ side so that class cannot land unnoticed.
 - **Output.** `GUARD_DIFFERENTIAL regression tree=… hook=… line=… base=…
   head=… shape=…` per failing shape (as `::error::`), `GUARD_DIFFERENTIAL
   intended_loosening …` per listed shape, `GUARD_DIFFERENTIAL missing_corpus
-  path=…`, `GUARD_DIFFERENTIAL verifier_change path=<scripts/guard_differential.py
+  path=…`, `GUARD_DIFFERENTIAL wiring_regression settings=… event=…
+  matcher=… hook=… reason=<removed|command|matcher|timeout|keys|disableAllHooks|env|unparseable|base-unparseable>
+  shape=…` per wiring failure (as `::error::`; `reason` joins several with
+  commas), `GUARD_DIFFERENTIAL intended_wiring_change …` per listed one,
+  `GUARD_DIFFERENTIAL verifier_change path=<scripts/guard_differential.py
   | .github/workflows/ci.yml>: …` (as `::warning::`, printed even when no
-  hook changed, never failing), and a `GUARD_DIFFERENTIAL
-  status=<pass|fail|skipped> … verifier_changes=<n>` summary (a
-  `status=error` line, printed when the check could not run, carries no
-  count). Exit 0 when clean or when no hook changed, 1 on a failure, 2 on
-  a bad ref, unreadable corpus, or unreadable PR body.
+  hook or settings file changed, never failing), and a `GUARD_DIFFERENTIAL
+  status=<pass|fail|skipped> … verifier_changes=<n> …` summary ending in
+  `settings=… wiring_regressions=<n>`, or `GUARD_DIFFERENTIAL
+  status=skipped reason=no-hook-change checked=hooks,settings
+  verifier_changes=<n>` when no hook `*.py` file and no settings file
+  changed. A `status=error` line, printed when the check could not run,
+  carries no count. Exit 0 when clean or when no hook or settings file
+  changed, 1 on a failure, 2 on a bad ref, unreadable corpus, unreadable
+  settings file, or unreadable PR body.
 
 ---
 
