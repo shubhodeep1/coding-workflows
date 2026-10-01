@@ -2188,14 +2188,19 @@ def test_autofix_report_puts_first_error_into_evidence() -> None:
 		flags_index = next(i for i, line in enumerate(lines) if line.startswith("flags: "))
 		assert lines[flags_index + 1] == "::error::Resolver scope check failed closed (ValueError).second line"
 		assert heal.error_signature(heal.strip_autofix_evidence_header(evidence)).startswith("::error::resolver scope check failed closed (valueerror).")
-	with tempfile.TemporaryDirectory(prefix="heal-autofix-no-first-error-") as tmp_name:
-		tmp = Path(tmp_name)
-		work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_FAILED_COMMENT}], flags={"AUTOFIX_FAILURE_REASON": "workflow_failure"})
-		_run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
-		evidence = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["failure_evidence"]
-		lines = evidence.split("\n")
-		flags_index = next(i for i, line in enumerate(lines) if line.startswith("flags: "))
-		assert not lines[flags_index + 1].startswith("::error::")
+	# Unset, or only CR/LF/blanks: no bare ::error:: line.
+	for first_error in (None, "\r\n", " \r\n\t"):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-no-first-error-") as tmp_name:
+			tmp = Path(tmp_name)
+			flags = {"AUTOFIX_FAILURE_REASON": "workflow_failure"}
+			if first_error is not None:
+				flags["AUTOFIX_FAILURE_FIRST_ERROR"] = first_error
+			work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_FAILED_COMMENT}], flags=flags)
+			_run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			evidence = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["failure_evidence"]
+			lines = evidence.split("\n")
+			flags_index = next(i for i, line in enumerate(lines) if line.startswith("flags: "))
+			assert not lines[flags_index + 1].startswith("::error::"), repr(first_error)
 
 
 def test_validate_payload_failure_fingerprint_is_optional_and_strict() -> None:

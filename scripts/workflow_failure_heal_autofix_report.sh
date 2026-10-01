@@ -188,8 +188,11 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	# The step's first error ("Assemble failure evidence"), as an ::error:: line
 	# so the intake's error signature ranks it first; the tails below often
 	# carry only model output. Written to the evidence file, never to stdout.
-	if [ -n "${AUTOFIX_FAILURE_FIRST_ERROR:-}" ]; then
-		printf '::error::%s\n' "$(printf '%s' "${AUTOFIX_FAILURE_FIRST_ERROR}" | tr -d '\r\n' | cut -c1-400)"
+	# A value of only CR/LF/blanks emits nothing: a bare ::error:: line would
+	# become a signature shared by every such report.
+	heal_first_error_line="$(printf '%s' "${AUTOFIX_FAILURE_FIRST_ERROR:-}" | tr -d '\r\n' | cut -c1-400)"
+	if [ -n "${heal_first_error_line//[[:space:]]/}" ]; then
+		printf '::error::%s\n' "${heal_first_error_line}"
 	fi
 	# The bounded stderr tail of the failing stages ("Assemble failure
 	# evidence"): it carries the shell error that names the crash file.

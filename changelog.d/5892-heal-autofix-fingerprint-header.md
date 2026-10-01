@@ -1,11 +1,11 @@
 <!-- changelog: fixed -->
 - **Workflow failure heal no longer files unrelated review/autofix failures under one fingerprint.** The intake now ignores the reporter's own header lines when it fingerprints an `autofix_failure` report, and the reporter puts the run's first error into the evidence.
 
-`scripts/workflow_failure_heal_autofix_report.sh` opens every evidence file with `failure_reason=`, `finalize_reason=`, `consecutive_failed_runs=` and a `flags: AUTOFIX_REVIEWERS_FAILED=…` line. That `flags:` line matched the `*_FAILED` signature pattern on every report, so any failure whose evidence had no `::error::` line got the same signature. Four heal issues about one resolver bug (#4411, #4447, #4459, #4465) and the unrelated forward-merge failure on PR #5892 all shared fingerprint `218ad70d…`, and #5892's first report escalated at generation 4 without any heal attempt. `scripts/workflow_failure_heal_intake.sh` now passes `--strip-autofix-header` to `workflow_failure_heal.py error-signature`, and the reporter writes `AUTOFIX_FAILURE_FIRST_ERROR` (the `**First error:**` of the PR failure comment) into the evidence as an `::error::` line, which the signature ranks first.
+`scripts/workflow_failure_heal_autofix_report.sh` opens every evidence file with `failure_reason=`, `finalize_reason=`, `consecutive_failed_runs=` and a `flags: AUTOFIX_REVIEWERS_FAILED=…` line. That `flags:` line matched the `*_FAILED` signature pattern on every report, so any failure whose evidence had no `::error::` line got the same signature. Three heal issues about one resolver bug (#4411, #4447, #4459) carried fingerprint `218ad70d…`, and #4465 continued that lineage through its `root=` marker. The unrelated forward-merge failure on PR #5892 got the same fingerprint, so its first report continued the lineage of #4459 and escalated at generation 4 without any heal attempt. `scripts/workflow_failure_heal_intake.sh` now passes `--strip-autofix-header` to `workflow_failure_heal.py error-signature`, and the reporter writes `AUTOFIX_FAILURE_FIRST_ERROR` (the `**First error:**` of the PR failure comment) into the evidence as an `::error::` line, which the signature ranks first.
 
 | The numbers that matter | Value |
 | --- | --- |
-| Heal issues that shared the header fingerprint | 4 (#4411, #4447, #4459, #4465) |
+| Heal issues that carried the header fingerprint | 3 (#4411, #4447, #4459) |
 | Generation PR #5892's first report escalated at | 4 (cap 3) |
 | Header lines ignored by the signature | 4 |
 
