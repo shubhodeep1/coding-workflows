@@ -198,6 +198,32 @@ def test_issue_path_inside_another_hosts_url_is_not_a_link() -> None:
 	assert _extract(f"[a](https://example.com/?x=1), {url}/11") == [11]
 
 
+def test_longer_host_ending_in_github_com_is_not_a_link() -> None:
+	"""`github.com/` must start the hostname: a host that merely ends in it,
+	or a GitHub subdomain, is another host's URL (round 2 review on head
+	5ac98f1 of PR #5825)."""
+	path = f"{REPOSITORY}/issues"
+	for text in (
+		f"evilgithub.com/{path}/42",
+		f"www.evilgithub.com/{path}/43",
+		f"https://evilgithub.com/{path}/44",
+		f"see notgithub.com/{path}/45 now",
+		f"[c](evilgithub.com/{path}/46)",
+		f"<evil-github.com/{path}/47>",
+		f"gist.github.com/{path}/48",
+		f"https://gist.github.com/{path}/49",
+	):
+		assert _extract(text) == [], text
+	# A real GitHub host still links, at the start of the text or after a wrapper.
+	assert _extract(f"github.com/{path}/50") == [50]
+	assert _extract(f"www.github.com/{path}/51") == [51]
+	assert _extract(f"//github.com/{path}/52") == [52]
+	assert _extract(f"x https://www.github.com/{path}/53") == [53]
+	assert _extract(f"[c](github.com/{path}/54)") == [54]
+	assert _extract(f"<https://github.com/{path}/55>") == [55]
+	assert _extract(f'"https://github.com/{path}/56"') == [56]
+
+
 def test_escaped_parenthesis_stays_inside_a_markdown_destination() -> None:
 	"""A backslash-escaped `)` is part of a Markdown link destination, so a
 	fragment after it still drops the link (round 2 review after intervention
@@ -341,6 +367,7 @@ if __name__ == "__main__":
 	test_adjacent_issue_links_each_count_on_their_own()
 	test_issue_path_inside_a_url_query_or_fragment_is_not_a_link()
 	test_issue_path_inside_another_hosts_url_is_not_a_link()
+	test_longer_host_ending_in_github_com_is_not_a_link()
 	test_escaped_parenthesis_stays_inside_a_markdown_destination()
 	test_closing_keyword_after_a_link_or_keyword_still_links()
 	test_bare_urls_paths_and_closing_keywords_still_link()

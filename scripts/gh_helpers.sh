@@ -1682,7 +1682,10 @@ PY
 # or `#`, or ends with `/`, the path is part of that URL and never a
 # link, so https://example.com/?next=owner/repo/issues/2,
 # https://example.com/#see-owner/repo/issues/2, and
-# https://example.com/owner/repo/issues/2 yield nothing. Inside a
+# https://example.com/owner/repo/issues/2 yield nothing. The
+# `github.com/` lead must start a hostname, so a longer host ending in
+# it (evilgithub.com/owner/repo/issues/2, gist.github.com/…) is another
+# host's URL and yields nothing either. Inside a
 # Markdown link destination a backslash-escaped character (`\)`, `\(`,
 # `\#`) is part of the URL, as GitHub reads it, so
 # [c](https://github.com/owner/repo/issues/1?q=a\)b#c) yields nothing.
@@ -1715,7 +1718,7 @@ import sys
 repository = sys.argv[1]
 text = sys.stdin.buffer.read().decode("utf-8", "replace")
 issue_path = re.compile(r"(?<!\w)" + re.escape(repository) + r"/issues/([0-9]+)", re.IGNORECASE)
-host_prefix = re.compile(r"(?:(?:https?:)?//)?(?:www\.)?github\.com/\Z", re.IGNORECASE)
+host_prefix = re.compile(r"(?<![\w.-])(?:(?:https?:)?//)?(?:www\.)?github\.com/\Z", re.IGNORECASE)
 keyword_ref = re.compile(
 	r"(?<![\w/-])(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#\s*([0-9]+)(?!\w)",
 	re.IGNORECASE,

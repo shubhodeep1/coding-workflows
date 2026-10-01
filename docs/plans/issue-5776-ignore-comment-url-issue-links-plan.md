@@ -32,7 +32,7 @@ Security pass: run
 
 ## Constraints
 
-- §5: a change to the shared helper's matching only (the regex; from review round 1 after intervention 1, an inline `python3` scan, AD-8), plus tests and docs. No change to the label/close loop.
+- §5: a change to the shared helper's matching only (an inline `python3` scan since review round 1 after intervention 1, AD-8; this plan first proposed one regex boundary), plus tests and docs. No change to the label/close loop.
 - §6: no identifier is renamed. The helper keeps its name and signature. New test names are unique.
 - §9: shell keeps the helper's tab indentation, YAML stays 2-space, and tests use tabs.
 - §15: no new GitHub API call; the helper is pure text processing.
