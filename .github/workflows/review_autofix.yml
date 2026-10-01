@@ -1907,6 +1907,7 @@ jobs:
           deterministic_skip_pr_json=""
           deterministic_skip_current_head_ref=""
           deterministic_skip_head_verified="false"
+          deterministic_skip_route_ref=""
           deterministic_skip_head_is_current()
           {
             local refused_what="${1:-deterministic-skip merge-authorization labels}"
@@ -2018,7 +2019,12 @@ jobs:
             # claude/* snapshot ref, or (claude/* heads, current or snapshot
             # ref) the merge hold gate refused (issue #5564).
             auto_merge_summary="REFUSED (head not current or merge hold gate: ${merge_hold_gate_reason:-see warnings above})"
-          elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
+          elif deterministic_skip_route_ref="${deterministic_skip_current_head_ref:-${PR_HEAD_REF}}" \
+            && [ -n "${deterministic_skip_route_ref}" ] && printf '%s\n' "${deterministic_skip_route_ref}" | grep -Eq '^auto/forward-merge-stable-'; then
+            # The merge strategy follows the ref the shared check just read
+            # (a branch renamed without a new commit keeps its SHA), and the
+            # gate job's snapshot only when that read fell back to it (PR
+            # #5572 review round 4).
             # Mirror of the forward-merge-fallback handling in the codex-agent
             # "Enable auto-merge on PR" step. Defense in depth: a tiny
             # forward-merge fallback PR (e.g. one that just happens to fall
@@ -2031,7 +2037,7 @@ jobs:
             # full rationale (promote-main-to-stable.yml ancestry check,
             # "Create a merge commit" requirement, etc.).
             if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
-              echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
+              echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${deterministic_skip_route_ref}')..."
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"
               if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
@@ -2048,8 +2054,8 @@ jobs:
               if [ "${deterministic_skip_head_verified}" = "true" ] || deterministic_skip_head_is_current; then
                 auto_merge_ready_labels_allowed="true"
               fi
-              auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
-              echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
+              auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${deterministic_skip_route_ref}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
+              echo "PR #${PR_NUMBER} head ref '${deterministic_skip_route_ref}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
             fi
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."

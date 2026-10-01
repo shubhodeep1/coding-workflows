@@ -727,6 +727,33 @@ def test_deterministic_skip_forward_merge_manual_mode_rechecks_a_head_the_shared
 	assert body.rindex('deterministic_skip_head_verified="true"') > body.index("merge_hold_gate_allows")
 
 
+FORWARD_MERGE_REF = "auto/forward-merge-stable-123-1"
+
+
+def test_deterministic_skip_routes_a_head_renamed_to_forward_merge_to_a_merge_commit(tmp_path):
+	# PR #5572 review round 4: the merge strategy follows the ref the shared
+	# check read, not the gate job's snapshot, so a branch renamed into the
+	# forward-merge namespace without a new commit keeps stable's ancestry.
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(pr=_pr(ref=FORWARD_MERGE_REF)), head_ref="ai/issue-42")
+	assert proc.returncode == 0, proc.stderr
+	assert merges == [["pr", "merge", "42", "--repo", REPO, "--merge", "--auto", "--match-head-commit", HEAD]]
+	assert f"(head ref '{FORWARD_MERGE_REF}')" in proc.stdout, proc.stdout
+	assert len(_pr_reads(tmp_path)) == 1
+
+
+def test_deterministic_skip_routes_a_head_renamed_out_of_forward_merge_to_squash(tmp_path):
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(pr=_pr(ref="ai/issue-42")), head_ref=FORWARD_MERGE_REF)
+	assert proc.returncode == 0, proc.stderr
+	assert merges == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
+
+
+def test_deterministic_skip_routes_on_the_snapshot_ref_when_the_refresh_fails(tmp_path):
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(fail=[f"repos/{REPO}/pulls/42"]), head_ref=FORWARD_MERGE_REF)
+	assert proc.returncode == 0, proc.stderr
+	assert merges == [["pr", "merge", "42", "--repo", REPO, "--merge", "--auto", "--match-head-commit", HEAD]]
+	assert f"(head ref '{FORWARD_MERGE_REF}')" in proc.stdout, proc.stdout
+
+
 def _label_posts(tmp_path):
 	return [call for call in _calls(tmp_path) if call[:3] == ["api", "-X", "POST"] and call[3].endswith("/labels")]
 
