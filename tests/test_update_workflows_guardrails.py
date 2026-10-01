@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 import yaml
 
@@ -332,12 +333,17 @@ def _run_claude_sync(
 	twin_symlinks: dict[str, str] | None = None,
 	local_symlinks: dict[str, str] | None = None,
 	reviewed_symlinks: dict[str, str] | None = None,
+	before_run: Callable[[Path], None] | None = None,
+	after_run: Callable[[Path], None] | None = None,
 ) -> tuple[dict[str, str], str, dict[str, str]]:
 	"""Run the real claude_sync step body against a fake stable checkout.
 
 	``extra_path`` is prepended to PATH (for stub commands). ``twin_symlinks``,
 	``local_symlinks``, and ``reviewed_symlinks`` map a twin, consumer, or
-	stable .claude/ path to the symlink target written there. Returns the consumer .claude/ tree afterwards (a symlink as
+	stable .claude/ path to the symlink target written there. ``before_run``
+	and ``after_run`` get the consumer checkout root, before the step runs
+	(after the trees above are written) and after it, so a test can lay out
+	and inspect paths outside the consumer .claude/ tree. Returns the consumer .claude/ tree afterwards (a symlink as
 	``symlink:<target>``), the step's stdout, and its outputs.
 	"""
 	with tempfile.TemporaryDirectory() as tmp:
@@ -368,6 +374,8 @@ def _run_claude_sync(
 		script = script.replace("${{ steps.fetch.outputs.upstream_dir }}", str(upstream / "workflow-templates"))
 		script = script.replace("/tmp/claude_changed_files.txt", str(changed_list))
 		assert "${{" not in script
+		if before_run:
+			before_run(consumer)
 		run_env = {**os.environ, "GITHUB_OUTPUT": str(output_file)}
 		if extra_path:
 			run_env["PATH"] = f"{extra_path}{os.pathsep}{run_env.get('PATH', '')}"
@@ -380,6 +388,8 @@ def _run_claude_sync(
 			check=False,
 		)
 		assert result.returncode == 0, result.stderr
+		if after_run:
+			after_run(consumer)
 		outputs = dict(line.split("=", 1) for line in output_file.read_text(encoding="utf-8").splitlines() if "=" in line)
 		consumer_claude = (consumer if consumer.exists() else root) / ".claude"
 		tree = {
@@ -724,6 +734,90 @@ def test_claude_sync_reports_a_realpath_failure_on_its_own() -> None:
 	assert outputs["claude_changed"] == "0"
 
 
+def test_claude_sync_never_writes_a_guard_through_a_consumer_symlink() -> None:
+	"""A guard destination must stay in the consumer's own .claude/ tree: never written through a symlink on the file or a directory on the way (PR #5651 review round 1)."""
+	twins = {
+		"hooks/same.py": "same hook\n",
+		"hooks/lib/nested.py": "nested hook\n",
+		"settings.json": "{\"reviewed\": true}\n",
+		"settings.local.json": "{\"local\": true}\n",
+		"hooks/plain.py": "plain hook\n",
+		"commands/foo.md": "twin command\n",
+	}
+	reviewed = {**twins, "hooks/lib/no_twin.py": "reviewed no-twin hook\n"}
+	del reviewed["commands/foo.md"]
+	local_symlinks = {
+		# A directory on the way to two guards (the twin loop and the reviewed pass).
+		"hooks/lib": "../../outside_lib",
+		# A live symlink at the guard file itself, pointing out of .claude/.
+		"settings.json": "../outside_workflows/ci.yml",
+		# A live symlink at the guard file, pointing inside .claude/.
+		"settings.local.json": "settings.inside.json",
+	}
+	local = {"settings.inside.json": "consumer inside\n"}
+
+	def before_run(consumer: Path) -> None:
+		(consumer / "outside_lib").mkdir()
+		(consumer / "outside_workflows").mkdir()
+		(consumer / "outside_workflows" / "ci.yml").write_text("name: ci\n", encoding="utf-8")
+
+	def after_run(consumer: Path) -> None:
+		assert sorted(path.name for path in (consumer / "outside_lib").iterdir()) == []
+		assert (consumer / "outside_workflows" / "ci.yml").read_text(encoding="utf-8") == "name: ci\n"
+
+	tree, stdout, outputs = _run_claude_sync(
+		twins,
+		reviewed,
+		local,
+		local_symlinks=local_symlinks,
+		before_run=before_run,
+		after_run=after_run,
+	)
+	assert tree["settings.json"] == "symlink:../outside_workflows/ci.yml"
+	assert tree["settings.local.json"] == "symlink:settings.inside.json"
+	assert tree["settings.inside.json"] == "consumer inside\n"
+	for rel in ("settings.json", "settings.local.json"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} is a symlink in this repository and a guard is never written through one; kept the existing file." in stdout
+	for rel in ("hooks/lib/nested.py", "hooks/lib/no_twin.py"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} sits under a symlink or a non-directory in this repository, which could carry the write out of .claude/; nothing installed." in stdout
+	# Plain guards and non-guard files sync as before.
+	assert tree["hooks/same.py"] == "same hook\n"
+	assert tree["hooks/plain.py"] == "plain hook\n"
+	assert tree["commands/foo.md"] == "twin command\n"
+	assert outputs["claude_changed"] == "3"
+
+
+def test_claude_sync_never_writes_a_guard_under_a_symlinked_consumer_claude_dir() -> None:
+	"""A consumer whose .claude itself is a symlink gets no guard written through it (PR #5651 review round 1)."""
+	twins = {"hooks/h.py": "h\n", "settings.json": "{}\n"}
+	reviewed = {**twins, "hooks/no_twin.py": "n\n"}
+
+	def before_run(consumer: Path) -> None:
+		(consumer / ".claude").rename(consumer / "elsewhere")
+		(consumer / ".claude").symlink_to("elsewhere")
+
+	def after_run(consumer: Path) -> None:
+		assert sorted(str(path.relative_to(consumer / "elsewhere")) for path in (consumer / "elsewhere").rglob("*")) == ["skills", "skills/private.md"]
+
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, {"skills/private.md": "consumer-local\n"}, before_run=before_run, after_run=after_run)
+	assert tree == {"skills/private.md": "consumer-local\n"}
+	for rel in ("hooks/h.py", "settings.json", "hooks/no_twin.py"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} sits under a symlink or a non-directory in this repository, which could carry the write out of .claude/; nothing installed." in stdout
+	assert outputs["claude_changed"] == "0"
+
+
+def test_claude_sync_skips_a_guard_under_a_consumer_path_that_is_not_a_directory() -> None:
+	"""A file where a guard's directory should be is kept, and never aborts the step in `mkdir -p` (PR #5651 review round 1)."""
+	twins = {"hooks/lib/x.py": "x\n", "hooks/ok.py": "ok\n"}
+	reviewed = {**twins, "hooks/lib/no_twin.py": "n\n"}
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, {"hooks/lib": "consumer file\n"})
+	assert tree["hooks/lib"] == "consumer file\n"
+	assert tree["hooks/ok.py"] == "ok\n"
+	for rel in ("hooks/lib/x.py", "hooks/lib/no_twin.py"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} sits under a symlink or a non-directory in this repository, which could carry the write out of .claude/; nothing installed." in stdout
+	assert outputs["claude_changed"] == "1"
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -752,6 +846,9 @@ def main() -> int:
 	test_claude_sync_installs_a_reviewed_guard_whose_twin_sits_under_a_symlinked_directory()
 	test_claude_sync_keeps_a_dangling_consumer_symlink_at_an_equal_guard()
 	test_claude_sync_reports_a_realpath_failure_on_its_own()
+	test_claude_sync_never_writes_a_guard_through_a_consumer_symlink()
+	test_claude_sync_never_writes_a_guard_under_a_symlinked_consumer_claude_dir()
+	test_claude_sync_skips_a_guard_under_a_consumer_path_that_is_not_a_directory()
 	return 0
 
 
