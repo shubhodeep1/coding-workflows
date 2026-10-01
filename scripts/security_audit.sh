@@ -102,7 +102,9 @@ SECURITY_AUDIT_CODEX_PROVIDER="unknown"
 # security_audit_sanitize_log_value: the literal value of every non-empty
 # exported variable whose name looks secret (8+ chars anywhere in the line,
 # shorter values where they stand as a whole word, so a short setting such as
-# MAX_THINKING_TOKENS=5 does not rewrite every digit), sk- keys, 32+ hex runs,
+# MAX_THINKING_TOKENS=5 does not rewrite every digit; a multiline value is
+# split into its lines, CR removed as in the stderr stream, and each non-empty
+# line is masked by the same rule), sk- keys, 32+ hex runs,
 # and 40+ base64 or token runs in either alphabet, padded or not. Values are
 # replaced with bash expansion, never passed in a process argv. Used only for
 # Codex stderr: the codex-stderr-tail lines and the codex-execution
@@ -111,6 +113,7 @@ security_audit_mask_stderr_line() {
 	local stderr_line="${1-}"
 	local secret_env_name
 	local secret_env_value
+	local secret_value_rest
 	local secret_word_rest
 	local secret_word_masked
 	local secret_word_prefix
@@ -124,30 +127,41 @@ security_audit_mask_stderr_line() {
 				continue
 				;;
 		esac
-		secret_env_value="${!secret_env_name-}"
-		if [ -z "${secret_env_value}" ]; then
-			continue
-		fi
-		if [ "${#secret_env_value}" -ge 8 ]; then
-			stderr_line="${stderr_line//"${secret_env_value}"/[redacted]}"
-			continue
-		fi
-		# Short value: mask each occurrence not touching a word character.
-		secret_word_rest="${stderr_line}"
-		secret_word_masked=""
-		while [[ "${secret_word_rest}" == *"${secret_env_value}"* ]]; do
-			secret_word_prefix="${secret_word_rest%%"${secret_env_value}"*}"
-			secret_word_rest="${secret_word_rest#*"${secret_env_value}"}"
-			secret_word_masked+="${secret_word_prefix}"
-			secret_word_before="${secret_word_masked: -1}"
-			secret_word_after="${secret_word_rest:0:1}"
-			if [[ "${secret_word_before}" == [[:alnum:]_-] || "${secret_word_after}" == [[:alnum:]_-] ]]; then
-				secret_word_masked+="${secret_env_value}"
+		# Stderr lines lose CR and are split on LF, so a multiline value
+		# (a PEM key) is matched line by line, never as one string.
+		secret_value_rest="${!secret_env_name-}"
+		secret_value_rest="${secret_value_rest//$'\r'/}"
+		while [ -n "${secret_value_rest}" ]; do
+			secret_env_value="${secret_value_rest%%$'\n'*}"
+			if [[ "${secret_value_rest}" == *$'\n'* ]]; then
+				secret_value_rest="${secret_value_rest#*$'\n'}"
 			else
-				secret_word_masked+="[redacted]"
+				secret_value_rest=""
 			fi
+			if [ -z "${secret_env_value}" ]; then
+				continue
+			fi
+			if [ "${#secret_env_value}" -ge 8 ]; then
+				stderr_line="${stderr_line//"${secret_env_value}"/[redacted]}"
+				continue
+			fi
+			# Short value: mask each occurrence not touching a word character.
+			secret_word_rest="${stderr_line}"
+			secret_word_masked=""
+			while [[ "${secret_word_rest}" == *"${secret_env_value}"* ]]; do
+				secret_word_prefix="${secret_word_rest%%"${secret_env_value}"*}"
+				secret_word_rest="${secret_word_rest#*"${secret_env_value}"}"
+				secret_word_masked+="${secret_word_prefix}"
+				secret_word_before="${secret_word_masked: -1}"
+				secret_word_after="${secret_word_rest:0:1}"
+				if [[ "${secret_word_before}" == [[:alnum:]_-] || "${secret_word_after}" == [[:alnum:]_-] ]]; then
+					secret_word_masked+="${secret_env_value}"
+				else
+					secret_word_masked+="[redacted]"
+				fi
+			done
+			stderr_line="${secret_word_masked}${secret_word_rest}"
 		done
-		stderr_line="${secret_word_masked}${secret_word_rest}"
 	done < <(compgen -e)
 	printf '%s' "${stderr_line}" \
 		| LC_ALL=C sed -E 's#(^|[^[:alnum:]_])sk-[[:alnum:]_-]{8,}#\1sk-[redacted]#g; s#[[:xdigit:]]{32,}#[redacted]#g; s#[[:alnum:]+/_-]{40,}={0,2}#[redacted]#g'
@@ -155,12 +169,14 @@ security_audit_mask_stderr_line() {
 
 # Classifies one Codex stderr line as a provider failure. Prints
 # 402|401|429|5xx, or nothing when the line matches no class. A bare status
-# code counts only after http, status, code, or error, so token counts and
-# ids never match. Within one line the order is 402, 401, 429, 5xx.
+# code counts only after the word http, status, code, or error (also the
+# compounds statuscode and errorcode), never inside a longer word such as
+# encode or ValueError, so token counts and ids never match. Within one line
+# the order is 402, 401, 429, 5xx.
 security_audit_classify_codex_provider() {
 	local provider_line="${1-}"
 	provider_line="${provider_line,,}"
-	local provider_status_context='(http/[0-9.]+|http|status|code|error)[^[:alnum:]]{0,16}'
+	local provider_status_context='(^|[^[:alnum:]])(http/[0-9.]+|http|statuscode|status|errorcode|code|error)[^[:alnum:]]{0,16}'
 	local provider_402_pattern="payment required|insufficient credits|${provider_status_context}402([^0-9]|$)"
 	local provider_401_pattern="unauthorized|${provider_status_context}401([^0-9]|$)"
 	local provider_429_pattern="too many requests|rate[ _-]?limit([^i]|$)|${provider_status_context}429([^0-9]|$)"

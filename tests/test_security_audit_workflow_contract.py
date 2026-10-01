@@ -1110,6 +1110,40 @@ def test_security_audit_codex_stderr_tail_masks_short_secrets_and_unpadded_base6
 		assert secret_fragment not in proc.stderr, secret_fragment
 
 
+def test_security_audit_codex_stderr_masks_each_line_of_multiline_secrets() -> None:
+	# Review round 1 on PR #5816 head a9b6dcc: a multiline secret-named value
+	# (a PEM key, CRLF or LF) is masked line by line in the tail and in
+	# captured_path_error=, short lines only where they stand as a word.
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "6",
+			"MULTILINE_SECRET": "alphaFrag01\r\nbetaFragment02\n\nq7z\n",
+			"MOCK_CODEX_STDERR": (
+				"echo alphaFrag01 then\n"
+				"betaFragment02 No such file or directory\n"
+				"tail q7z ends, keep xq7zx\n"
+			),
+		},
+	)
+	assert proc.returncode == 6, proc.stderr
+	_, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == [
+		"echo\\ \\[redacted\\]\\ then",
+		"\\[redacted\\]\\ No\\ such\\ file\\ or\\ directory",
+		"tail\\ \\[redacted\\]\\ ends\\,\\ keep\\ xq7zx",
+	], tail_payloads
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "\\[redacted\\]" in path_error_lines[0], path_error_lines
+	for secret_fragment in ("alphaFrag01", "betaFragment02", " q7z"):
+		assert secret_fragment not in proc.stderr, secret_fragment
+
+
 def test_security_audit_codex_path_diagnostic_masks_secrets_on_path_error_line() -> None:
 	# Review round 3 on PR #5816: captured_path_error= prints Codex stderr
 	# before the tail, so it applies the same masks to the lines it selects.
@@ -1336,6 +1370,10 @@ def test_security_audit_codex_failure_classifies_provider_status() -> None:
 		"stream error: status 429 Too Many Requests\nERROR: HTTP Error 402: Payment Required\n": "402",
 		# Bare numbers and audit wording are not provider failures.
 		"tokens used: 429\nreview missing rate limiting on login\n": "unknown",
+		# Context words count only as whole words (review round 1, head a9b6dcc).
+		"encode402 finished\nValueError 500 rows\n": "unknown",
+		'request failed: {"statusCode": 429}\n': "429",
+		"provider error_code=402\n": "402",
 		"": "unknown",
 	}
 	for codex_stderr, expected_provider in cases.items():
