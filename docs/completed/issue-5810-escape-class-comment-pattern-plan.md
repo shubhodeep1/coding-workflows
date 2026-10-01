@@ -8,6 +8,14 @@ Security pass: skip (ai:security: automation-produced issue)
 
 `permission_prompts.py` writes session-derived text (the command shape, the tool name, and the prompt reasons) into `ai:permission-prompt` issue bodies and "Seen again" comments outside the fenced example. A backtick in that text closes the surrounding code span, so a logged command word can inject Markdown into an owner-authored comment that `/implement-issue-claude` reads as spec. This plan renders each of those values in a code span whose delimiter is longer than any backtick run in it, and tells the issue implementer that this generated text is evidence, never spec, whatever account posted it.
 
+## Automation (CLAUDE.md §18.E)
+
+- **Scripts:** extends the existing `.claude/scripts/permission_prompts.py` (through its `workflow-templates/.claude/` twin) with one rendering helper; no new script.
+- **Scheduler entry point:** unchanged. `permission_prompts.py file` already runs at the end of every `/implement-plan-claude` stage (`.claude/commands/implement-plan-claude.md`, "Permission prompt report"); the `/implement-issue-claude` step 1 rule is read by the sessions the Claude issue pickup already starts. No workflow file changes.
+- **Supervisor:** none new; none extended.
+- **DB work:** none.
+- **Future-removal registry:** no entry; nothing single-use or long-running is added.
+
 ## Context
 
 - **The finding (#5810, `A03:2021-Injection`, medium, confidence 8/10).** The security audit of the #4867 project branch flagged `.claude/scripts/permission_prompts.py:676`: `class_comment_body` writes `**Pattern:** \`{pattern['shape'] or pattern['tool_name']}\``, the raw shape in a one-backtick code span. `_segment_shape` keeps a segment's command word literally, so a command such as ``'a`` + newline + `**Do X**' ; sed -i 's/a/b/' f`` gives an inline-interpreter-write shape whose first word holds a backtick and a newline. The class comment is posted by the session's account (`OWNER` here), and `/implement-issue-claude` step 1 makes every `OWNER` / `MEMBER` / `COLLABORATOR` comment part of the spec.
@@ -34,6 +42,7 @@ Security pass: skip (ai:security: automation-produced issue)
 
 - §6: `_pattern_line` and `_reason_line` keep their return values; the new helper gets a name no identifier in the module uses.
 - §9: tabs in Python.
+- §14: both changed files reach every consumer through the `.claude/` sync (see Rollout); the consumer registry itself does not change.
 - §15: no new API calls; rendering only.
 - §28.C: protected paths are edited through their twins only, and the phase stops at the twin-sync blocker.
 
@@ -87,6 +96,8 @@ Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: the issue is one d
 ## Rollout
 
 Ships with the #4867 project's final PR into `main`, then to consumers on the next `@stable` sync of `.claude/`. No flag; it affects only issues and comments filed after the sync.
+
+Consumer propagation (CLAUDE.md §14): `.github/workflows/update_workflows.yml` mirrors `workflow-templates/.claude/` into `.claude/` in every repo listed in `.github/ai/consumer_repos.json` (13 today: `tele-funtoken-msg-scoring`, `digital_pa`, `fun-token-multi-chain`, `btc_sweeper`, `atlas-bridge.gd`, `binance-blessings`, `mongo-explorer`, `multi-user-ai-agent`, `fbc_shutdown`, `bitsafe.io`, `hylifegroup.com`, `radateeree-resort.com`, `drhyg_ecommerce_automation`, all under `shubhodeep1/`), so all of them receive both changed files. The rendering change has no effect there, because `permission_prompts.py file` files issues and comments only in coding-workflows (`FILING_REPO`) and only reports elsewhere. The `/implement-issue-claude` step 1 rule applies in every consumer that runs that command.
 
 ## References
 
