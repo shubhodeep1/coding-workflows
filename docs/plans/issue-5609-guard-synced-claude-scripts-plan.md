@@ -28,6 +28,7 @@ The twin sync (`scripts/claude_twin_sync.py`, issue #4785) auto-merges a sync PR
 - Running synced scripts without session credentials, or rebuilding them as least-privilege helpers (the issue's long-form recommendation; AD-1).
 - Guarding `.claude/commands/**` (AD-2).
 - The consumer `@stable` sync (`update_workflows.yml`), which copies `workflow-templates/.claude/**` into consumer repos; it is not the twin sync and is out of this finding's scope.
+  > **Changed 2026-10-01 (AD-14):** #5607, merged into the base branch after this plan was written, makes the consumer sync and `/seed-repo` take guard paths from the `stable` commit's `.claude/` tree and ties `update_workflows.yml`'s shell pattern to `GUARD_PATH_PREFIXES` / `GUARD_PATH_FILES` with a parity test. The project branch's sync merge therefore adds `scripts/*` to that pattern (with its tests, README, agents.md, and the `seed-repo.md` twin), so consumers get `.claude/scripts/**` from `.claude/` too.
 - The CI trust boundary already documented in agents.md: a PR that also edits `ci.yml` or `scripts/claude_twin_sync.py` runs its own copies of both.
 
 ## Constraints

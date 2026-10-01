@@ -82,7 +82,10 @@ jobs:
           # directory patterns, which keeps workflow-templates/CLAUDE.md
           # (a symlink to ../CLAUDE.md) readable without passing a bare
           # root-file argument here; modern git rejects that form.
-          git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"
+          # .claude is checked out too: the .claude/ asset sync takes hook
+          # and settings files from this commit's owner-reviewed .claude/
+          # tree, never from their workflow-templates/.claude/ twin (#5607).
+          git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}" ".claude"
           if [[ ! "${UPSTREAM_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::Resolved upstream stable ref is not a 40-character commit SHA."
             exit 1
@@ -205,40 +208,267 @@ jobs:
           #     consumer; orphans accumulate. Intentional retirement
           #     is a future feature.
           # If upstream has no workflow-templates/.claude/ at this
-          # stable ref, log and exit 0 — the sync is additive.
+          # stable ref, log it and skip the twin loop — the sync is
+          # additive. Guards in the .claude/ tree are still checked.
+          #
+          # Guard paths (hooks/**, scripts/**, settings.json,
+          # settings.local.json; the GUARD_PATH_PREFIXES / GUARD_PATH_FILES of
+          # scripts/claude_twin_sync.py) are the exception (issue #5607;
+          # scripts/** since issue #5609). A
+          # guard twin can reach main, and stable by promotion, while its
+          # owner-only .claude/ sync PR is still pending, so the twin is not
+          # reviewed content. A guard file is therefore copied from the same
+          # commit's .claude/ tree, never from its twin:
+          #   - .claude/<rel> missing at this commit → nothing is installed;
+          #   - twin and .claude/<rel> differ (bytes) and the consumer has
+          #     the file → the consumer's file is kept;
+          #   - the compare itself fails (cmp exit 2+, a read error) →
+          #     nothing is changed for that file;
+          #   - otherwise the .claude/<rel> copy is synced as usual.
+          # A guard in the .claude/ tree with no twin (a twin deletion still
+          # waiting for the owner) counts as a differing twin: a consumer
+          # that lacks the file gets the .claude/<rel> copy, and one that has
+          # it keeps its file.
+          # A guard source must resolve to a guard path inside the stable
+          # .claude/ tree: a symlink (on the file or a parent directory) into
+          # its twin, out of the tree, or to a non-guard file there (the twin
+          # sync merges those without the owner) would let unreviewed content
+          # through, so nothing is installed for it and the consumer's file
+          # is left alone. A dangling consumer symlink at a guard path is
+          # kept, since `cp` cannot write through it.
+          # A guard destination must stay inside the consumer's own .claude/
+          # tree: `mkdir -p`, `diff` and `cp` follow symlinks, so a guard is
+          # never written through a consumer symlink, whether on the file
+          # itself or on a directory on the way to it (.claude included), nor
+          # under a path that exists as something other than a directory; the
+          # consumer's file is kept and nothing is installed there.
+          # Each skipped or kept guard gets a ::warning:: line. In a shell
+          # `case` pattern `*` also matches `/`, so `hooks/*` and `scripts/*`
+          # below cover nested files (hooks/lib/x.py) like the Python
+          # startswith check.
 
           UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
           CLAUDE_UPSTREAM_DIR="${UPSTREAM_DIR}/.claude"
+          CLAUDE_REVIEWED_DIR="${UPSTREAM_DIR}/../.claude"
           CLAUDE_LOCAL_DIR=".claude"
+          # Physical path of the stable .claude/ tree (the checkout root
+          # resolved, .claude itself not), for the boundary check below.
+          CLAUDE_REVIEWED_REAL="$(cd "${UPSTREAM_DIR}/.." && pwd -P)/.claude"
+
+          # Returns 0 when $1 resolves to a guard path inside the stable
+          # .claude/ tree, 1 when it resolves anywhere else (its twin, out of
+          # the tree, or a non-guard file there such as .claude/commands/,
+          # which the twin sync merges without the owner), and 2 when
+          # realpath itself fails.
+          guard_source_is_reviewed() {
+            local guard_resolved_path
+            guard_resolved_path="$(realpath -e -- "$1" 2>/dev/null)" || return 2
+            case "${guard_resolved_path}" in
+              "${CLAUDE_REVIEWED_REAL}"/*) ;;
+              *) return 1 ;;
+            esac
+            case "${guard_resolved_path#"${CLAUDE_REVIEWED_REAL}"/}" in
+              hooks/*|scripts/*|settings.json|settings.local.json) return 0 ;;
+            esac
+            return 1
+          }
+
+          # Prints the warning for a guard source that is not reviewed
+          # content; $1 is the rel path, $2 guard_source_is_reviewed's status.
+          warn_guard_source_not_reviewed() {
+            if [ "$2" -eq 2 ]; then
+              printf '::warning::claude-guard-sync: could not resolve .claude/%s in the stable .claude/ tree (realpath failed); nothing installed.\n' "$1"
+            else
+              printf '::warning::claude-guard-sync: .claude/%s in the stable .claude/ tree resolves outside its guard paths (a symlink to its twin, to a non-guard file, or out of the tree); nothing installed.\n' "$1"
+            fi
+          }
+
+          # Returns 0 when the consumer guard destination $1 (a path under
+          # ${CLAUDE_LOCAL_DIR}/) can be written without leaving that tree:
+          # the file is not a symlink, and no directory on the way to it,
+          # ${CLAUDE_LOCAL_DIR} included, is a symlink or exists as anything
+          # but a directory. Returns 1 when the file itself is a symlink, 4
+          # when it exists as anything but a regular file (a directory, where
+          # `cp` would put the guard inside it, or a FIFO, socket or device,
+          # which `diff` and `cp` could block on), and 3 when a directory on
+          # the way is not a plain directory. `mkdir -p`, `diff` and `cp`
+          # follow symlinks, so a link would carry the write out of the tree
+          # (or abort the step on a dangling link).
+          guard_destination_is_confined() {
+            local guard_destination_dir
+            if [ -L "$1" ]; then
+              return 1
+            fi
+            if [ -e "$1" ] && [ ! -f "$1" ]; then
+              return 4
+            fi
+            guard_destination_dir="$(dirname -- "$1")"
+            while :; do
+              case "${guard_destination_dir}" in
+                .|/) return 3 ;;
+              esac
+              if [ -L "${guard_destination_dir}" ] || { [ -e "${guard_destination_dir}" ] && [ ! -d "${guard_destination_dir}" ]; }; then
+                return 3
+              fi
+              if [ "${guard_destination_dir}" = "${CLAUDE_LOCAL_DIR}" ]; then
+                return 0
+              fi
+              guard_destination_dir="$(dirname -- "${guard_destination_dir}")"
+            done
+          }
+
+          # Prints the warning for a guard destination that is not confined;
+          # $1 is the rel path, $2 guard_destination_is_confined's status.
+          warn_guard_destination_not_confined() {
+            if [ "$2" -eq 1 ]; then
+              printf '::warning::claude-guard-sync: .claude/%s is a symlink in this repository and a guard is never written through one; kept the existing file.\n' "$1"
+            elif [ "$2" -eq 4 ]; then
+              printf '::warning::claude-guard-sync: .claude/%s exists in this repository but is not a regular file (a directory, FIFO or other special file); kept it and installed nothing.\n' "$1"
+            else
+              printf '::warning::claude-guard-sync: .claude/%s sits under a symlink or a non-directory in this repository, which could carry the write out of .claude/; nothing installed.\n' "$1"
+            fi
+          }
 
           echo "claude_changed=0" >> "$GITHUB_OUTPUT"
           echo "claude_has_changes=false" >> "$GITHUB_OUTPUT"
           : > /tmp/claude_changed_files.txt
 
           if [ ! -d "${CLAUDE_UPSTREAM_DIR}" ]; then
-            echo "Upstream has no workflow-templates/.claude/ at this ref — nothing to sync."
-            exit 0
+            echo "Upstream has no workflow-templates/.claude/ at this ref — only guards in the stable .claude/ tree are checked."
           fi
 
+          # A consumer .claude that exists but is not a directory (a file, or
+          # a dangling symlink) can hold no synced file, and `mkdir -p` would
+          # abort the step on it before any per-file check runs; keep it and
+          # sync nothing. A symlink to a directory passes `-d`, and the guard
+          # destination check still refuses to write guards through it.
+          if [ ! -d "${CLAUDE_LOCAL_DIR}" ] && { [ -e "${CLAUDE_LOCAL_DIR}" ] || [ -L "${CLAUDE_LOCAL_DIR}" ]; }; then
+            printf '::warning::claude-guard-sync: .claude in this repository is not a directory (a file or a dangling symlink); kept it and synced nothing.\n'
+            exit 0
+          fi
           mkdir -p "${CLAUDE_LOCAL_DIR}"
 
           CHANGED_COUNT=0
+          # Guard rels the twin loop handled, so the reviewed pass below
+          # skips exactly those (a `-f` test on the twin path would also
+          # follow a symlinked parent directory that `find` never descends).
+          declare -A guard_twin_seen=()
           while IFS= read -r upstream_path; do
             [ -n "${upstream_path}" ] || continue
             rel="${upstream_path#${CLAUDE_UPSTREAM_DIR}/}"
             local_path="${CLAUDE_LOCAL_DIR}/${rel}"
+            claude_source_path="${upstream_path}"
+
+            case "${rel}" in
+              hooks/*|scripts/*|settings.json|settings.local.json)
+                guard_twin_seen["${rel}"]=1
+                claude_source_path="${CLAUDE_REVIEWED_DIR}/${rel}"
+                if [ ! -f "${claude_source_path}" ]; then
+                  printf '::warning::claude-guard-sync: .claude/%s is not in the stable .claude/ tree (its twin is not synced there yet); nothing installed.\n' "${rel}"
+                  continue
+                fi
+                guard_boundary_status=0
+                guard_source_is_reviewed "${claude_source_path}" || guard_boundary_status=$?
+                if [ "${guard_boundary_status}" -ne 0 ]; then
+                  warn_guard_source_not_reviewed "${rel}" "${guard_boundary_status}"
+                  continue
+                fi
+                # cmp exits 1 when the files differ and 2+ when it cannot
+                # read one; a read error must not be reported as a difference.
+                guard_cmp_status=0
+                cmp -s "${upstream_path}" "${claude_source_path}" || guard_cmp_status=$?
+                if [ "${guard_cmp_status}" -gt 1 ]; then
+                  printf '::warning::claude-guard-sync: could not compare .claude/%s with its workflow-templates twin (cmp exit %s); nothing changed.\n' "${rel}" "${guard_cmp_status}"
+                  continue
+                fi
+                # `-L` too: a dangling consumer symlink is a file the
+                # consumer has, and `cp` refuses to write through it.
+                if [ "${guard_cmp_status}" -eq 1 ] && { [ -e "${local_path}" ] || [ -L "${local_path}" ]; }; then
+                  printf '::warning::claude-guard-sync: .claude/%s differs from its workflow-templates twin on stable (owner sync pending); kept the existing file.\n' "${rel}"
+                  continue
+                fi
+                # Equal copies sync as usual, but `cp` refuses to write
+                # through a dangling consumer symlink and would abort the
+                # step, so that file is kept too.
+                if [ -L "${local_path}" ] && [ ! -e "${local_path}" ]; then
+                  printf '::warning::claude-guard-sync: .claude/%s is a dangling symlink in this repository; kept the existing file.\n' "${rel}"
+                  continue
+                fi
+                guard_destination_status=0
+                guard_destination_is_confined "${local_path}" || guard_destination_status=$?
+                if [ "${guard_destination_status}" -ne 0 ]; then
+                  warn_guard_destination_not_confined "${rel}" "${guard_destination_status}"
+                  continue
+                fi
+                ;;
+            esac
+
             local_dir=$(dirname "${local_path}")
             mkdir -p "${local_dir}"
 
             # Copy if absent or differs (whitespace-tolerant compare,
             # matching the wrapper-update step's diff invocation so
             # CRLF round-trips don't trigger spurious churn).
-            if [ ! -f "${local_path}" ] || ! diff -q --strip-trailing-cr --ignore-space-at-eol "${upstream_path}" "${local_path}" >/dev/null 2>&1; then
-              cp "${upstream_path}" "${local_path}"
+            if [ ! -f "${local_path}" ] || ! diff -q --strip-trailing-cr --ignore-space-at-eol "${claude_source_path}" "${local_path}" >/dev/null 2>&1; then
+              cp "${claude_source_path}" "${local_path}"
               CHANGED_COUNT=$((CHANGED_COUNT + 1))
               printf '%s\n' "${local_path}" >> /tmp/claude_changed_files.txt
             fi
-          done < <(LC_ALL=C find "${CLAUDE_UPSTREAM_DIR}" -type f | LC_ALL=C sort)
+          done < <(if [ -d "${CLAUDE_UPSTREAM_DIR}" ]; then LC_ALL=C find "${CLAUDE_UPSTREAM_DIR}" -type f | LC_ALL=C sort; fi)
+
+          # Guards in the .claude/ tree that the twin loop above never saw
+          # (no regular-file twin: `find -type f` lists no symlink and never
+          # descends a symlinked directory, so a symlink twin, or one under a
+          # symlinked parent, lands here too). Same pattern as the loop's guard
+          # arm. This pass runs even when the twin tree is absent. It lists
+          # symlinks in the .claude/ tree as well, because the loop above
+          # accepts a reviewed guard that is a symlink to a regular file
+          # (`-f`, `cmp` and `cp` follow it); one that does not resolve to a
+          # regular file (dangling, or a directory) is skipped, since `cp`
+          # would abort the step on it.
+          if [ -d "${CLAUDE_REVIEWED_DIR}" ]; then
+            while IFS= read -r reviewed_guard_path; do
+              [ -n "${reviewed_guard_path}" ] || continue
+              rel="${reviewed_guard_path#${CLAUDE_REVIEWED_DIR}/}"
+              case "${rel}" in
+                hooks/*|scripts/*|settings.json|settings.local.json) ;;
+                *) continue ;;
+              esac
+              if [ -n "${guard_twin_seen["${rel}"]+set}" ]; then
+                continue
+              fi
+              if [ ! -f "${reviewed_guard_path}" ]; then
+                printf '::warning::claude-guard-sync: .claude/%s in the stable .claude/ tree is a symlink that does not resolve to a regular file; nothing installed.\n' "${rel}"
+                continue
+              fi
+              guard_boundary_status=0
+              guard_source_is_reviewed "${reviewed_guard_path}" || guard_boundary_status=$?
+              if [ "${guard_boundary_status}" -ne 0 ]; then
+                warn_guard_source_not_reviewed "${rel}" "${guard_boundary_status}"
+                continue
+              fi
+              local_path="${CLAUDE_LOCAL_DIR}/${rel}"
+              if [ -e "${local_path}" ] && [ ! -L "${local_path}" ] && [ ! -f "${local_path}" ]; then
+                warn_guard_destination_not_confined "${rel}" 4
+                continue
+              fi
+              if [ -e "${local_path}" ] || [ -L "${local_path}" ]; then
+                printf '::warning::claude-guard-sync: .claude/%s has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); kept the existing file.\n' "${rel}"
+                continue
+              fi
+              guard_destination_status=0
+              guard_destination_is_confined "${local_path}" || guard_destination_status=$?
+              if [ "${guard_destination_status}" -ne 0 ]; then
+                warn_guard_destination_not_confined "${rel}" "${guard_destination_status}"
+                continue
+              fi
+              mkdir -p "$(dirname "${local_path}")"
+              cp "${reviewed_guard_path}" "${local_path}"
+              CHANGED_COUNT=$((CHANGED_COUNT + 1))
+              printf '%s\n' "${local_path}" >> /tmp/claude_changed_files.txt
+              printf '::warning::claude-guard-sync: .claude/%s has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); installed the .claude/ copy.\n' "${rel}"
+            done < <(LC_ALL=C find "${CLAUDE_REVIEWED_DIR}" \( -type f -o -type l \) | LC_ALL=C sort)
+          fi
 
           echo "claude_changed=${CHANGED_COUNT}" >> "$GITHUB_OUTPUT"
           if [ "${CHANGED_COUNT}" -gt 0 ]; then

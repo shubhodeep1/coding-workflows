@@ -1328,6 +1328,41 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   the workflow, so such a PR can skip or change the step and still turn
   `lint` green. A PR that changes a guard path together with that file
   needs the owner's review of it as well.
+- **Consumers get guard files from `.claude/`, not the twin** (issue
+  #5607): a guard twin can reach `main`, and `stable` by promotion, while its
+  owner-only sync PR is pending, so the consumer sync
+  (`update_workflows.yml`, step "Sync .claude/ assets from upstream") also
+  checks out the `stable` commit's `.claude/` tree and, for
+  `.claude/hooks/**`, `.claude/scripts/**` (since issue #5609),
+  `.claude/settings.json`, and `.claude/settings.local.json`, copies that
+  `.claude/` file instead of the twin. When the twin and the `.claude/` copy differ (bytes) and the consumer
+  already has the file (a dangling symlink counts), the consumer keeps it; when the `.claude/` copy
+  is missing at that commit, nothing is installed; when the compare itself
+  fails (`cmp` exit 2+, a read error), nothing changes for that file and the
+  warning says so rather than reporting a difference; a guard in the
+  `.claude/` tree with no twin counts as a differing twin (installed when the
+  consumer lacks it, kept when it has it; a symlink there is installed as its
+  target's content when it resolves to a regular file, and installs nothing
+  otherwise). A guard source must resolve to a guard path inside that
+  `.claude/` tree: one that a symlink (on the file or a parent directory)
+  points into its twin, out of the tree, or at a non-guard file there (such
+  as `.claude/commands/`, which the twin sync merges without the owner)
+  installs nothing, and the consumer's file is left alone; a failing
+  `realpath` installs nothing and says so. A dangling consumer symlink at a
+  guard path is kept even when the twin and `.claude/` copies are equal,
+  because `cp` cannot write through it. A guard is never written through any
+  consumer symlink, live or dangling, on the file or on a directory on the way
+  to it (`.claude` itself included), nor onto a guard path that exists as a
+  directory, FIFO or other non-regular file, nor under a path that exists as a
+  file: the consumer's file is kept and nothing is installed there, so the write
+  cannot leave the consumer's `.claude/` tree. A consumer `.claude` that is a
+  file or a dangling symlink is kept and nothing is synced, instead of
+  aborting the step. Each case logs a
+  `::warning::claude-guard-sync: …` line. Non-guard files still come from the
+  twin. `/seed-repo` follows the same rule. The shell pattern must list the
+  same paths as `GUARD_PATH_PREFIXES` / `GUARD_PATH_FILES`, and
+  `tests/test_update_workflows_guardrails.py` runs the real step body against
+  a fake `stable` checkout.
 - **Credentials:** `GITHUB_TOKEN` (`contents`, `pull-requests`, `checks`,
   `statuses`: read) for reads; `GH_PAT` only in the sync step, for the push
   (passed in `GIT_CONFIG_*` environment variables to that one git command),
@@ -1341,10 +1376,12 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `claude-twin-sync/owner-approval` status is posted only when its state or
   description changes (GitHub allows 1000 statuses per sha and context). No
   GraphQL except `gh pr merge`.
-- **Consumers:** unaffected. `update_workflows.yml` already copies
-  `workflow-templates/.claude/**` into consumer repos at `@stable`, so they
-  never depend on a sync PR, and the workflow runs only in
-  `shubhodeep1/coding-workflows`. The twinned commands tell consumer
+- **Consumers:** `update_workflows.yml` copies
+  `workflow-templates/.claude/**` into consumer repos at `@stable`, so
+  non-guard files never depend on a sync PR; guard files come from the
+  `stable` commit's `.claude/` tree (issue #5607, above), so a guard change
+  reaches consumers only once its sync PR merged and was promoted. The
+  workflow runs only in `shubhodeep1/coding-workflows`. The twinned commands tell consumer
   sessions to keep the protected-path stop, since a consumer has no
   `workflow-templates/.claude/`.
 - **Residual risks:** every AI actor here authenticates to GitHub as the
