@@ -975,7 +975,12 @@ def _run_side(runs: list[ShapeRun], scratch: Path, side: str) -> list[Outcome]:
 	can rewrite any file it can reach, including the base hook copies next
 	to its own (issue #5327 conformance run 2). Callers therefore finish
 	every base run, in every hook tree, before the first head run: a head
-	hook that rewrites a base copy then changes no base decision."""
+	hook that rewrites a base copy then changes no base decision. Every
+	other read of the head side (changed paths, hook copies, corpora,
+	settings) also happens before the first head run. Head runs are not
+	isolated from each other: a head hook that rewrites its own copy or a
+	sibling's only changes head decisions, which head code already decides
+	(it can tell it runs here from its own path)."""
 	outcomes: list[Outcome] = []
 	for run in runs:
 		hook_file = run.base_file if side == "base" else run.head_file
@@ -1044,6 +1049,14 @@ def run_check(
 	listed = intended_loosening(pr_body)
 	changed = changed_paths(repo_root, base_ref, head_ref)
 	report = Report(verifier_changes=verifier_changes(repo_root, base_ref, head_ref))
+	# Settings wiring is read before any hook runs: without `--head-ref` the
+	# head side is the working tree, which a head hook can rewrite (for
+	# example back to the base settings) before a later read.
+	for tree, settings_path in SETTINGS_FILES.items():
+		if settings_path not in changed and not all_trees:
+			continue
+		report.settings.append(settings_path)
+		report.wiring += compare_settings_wiring(repo_root, base_ref, head_ref, settings_path, tree, listed)
 	with tempfile.TemporaryDirectory(prefix="guard-differential-") as tmp:
 		# (tree, its hook runs, its scratch directory), collected for every
 		# tree before any hook runs, so every base run finishes before the
@@ -1077,11 +1090,6 @@ def run_check(
 			# Each tree compares its own hook files (the twin is a separate
 			# file), so rows for the same shape in two trees are not duplicates.
 			report.results += _shape_results(runs, tree_base, tree_head, listed, tree)
-	for tree, settings_path in SETTINGS_FILES.items():
-		if settings_path not in changed and not all_trees:
-			continue
-		report.settings.append(settings_path)
-		report.wiring += compare_settings_wiring(repo_root, base_ref, head_ref, settings_path, tree, listed)
 	return report
 
 

@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5327-pin-guard-differential-verifier-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5327   Progress comment: 5902400503
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5174-guard-differential-check
-- Project branch: claude/implement-plan-issue-5327-pin-guard-differential-verifier   Final PR: #5364 draft (into claude/implement-plan-issue-5174-guard-differential-check)
+- Project branch: claude/implement-plan-issue-5327-pin-guard-differential-verifier   Final PR: #5364 ready (into claude/implement-plan-issue-5174-guard-differential-check)
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-5174-guard-differential-check)
-- Waiting on: the completion PR from claude/implement-plan-issue-5327-pin-guard-differential-verifier-complete
+- Waiting on: PR #5364 (final PR, review round 2 after the round-1 push)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01QvzxwDiVmtxwS9giV5Ro4Q   safety net and hand-back: see the completion stage report
+- Check-in: checker session_01QvzxwDiVmtxwS9giV5Ro4Q   safety net and hand-back: see the final-merge review round 1 report
 - Last updated: 2026-10-01
-- Last note: completion stage: validation cycle 1 (run 36835576883, head 801bcde) passed 10/10; plan moved to docs/completed/. Conformance: 3 runs, fix check FIX-VERIFIED (#5647); security skipped (plan header). Next: final-merge 1/1 marks #5364 ready and, once it merges into the issue base, closes #5327 with `ai:merged`.
+- Last note: final-merge review round 1 (head dad7939): settings wiring is now compared before the first hook runs; the log header is current; the head-hook self-rewrite finding was rejected. Once #5364 merges into the issue base, `final-merge 1/1 — close issue` closes #5327 with `ai:merged`.
 
 ## Phases
 1. [x] Phase 1 — pin the verifier to the base branch and report verifier changes (ci.yml step, scripts/guard_differential.py, tests, agents.md, changelog) — PR #5368 merged 2026-09-30 (b197b1f); review rounds: 3; interventions: 0
@@ -37,8 +37,9 @@
 - Cycle 1 — run 36835576883 2026-10-01 (target_ref: claude/implement-plan-issue-5327-pin-guard-differential-verifier, pinned 801bcde): conclusion=success, status=pass raw_status=pass — "Runtime validation passed (10/10 tests, 271s)"; no fix issues
 
 ## Completion
-- Completion PR from claude/implement-plan-issue-5327-pin-guard-differential-verifier-complete (open) — doc moved to docs/completed/issue-5327-pin-guard-differential-verifier-plan.md
-- Final PR #5364 draft
+- Completion PR #5979 merged 2026-10-01 (dad7939) — doc moved to docs/completed/issue-5327-pin-guard-differential-verifier-plan.md
+- Final PR #5364 ready 2026-10-01 — review rounds: 1
+  - Round 1 (2026-10-01, head dad7939, ledger f5335f2a…, review run 36843970480), session session_01W4eNWCxHTLkY6pbxPKvjcX: 19 ledger entries, 3 distinct findings plus 1 task gap. Fixed: (1) `run_check` compared the settings wiring after every hook ran, and CI passes no `--head-ref`, so a head hook could write the base settings back into the checkout and hide a rewiring (reproduced: the new `test_cli_a_head_hook_cannot_restore_the_settings_before_they_are_read` exits 0 on the old code); the comparison now runs before the first hook. (2) The log header still waited on the completion PR and called it open, and called the final PR a draft (plus the task gap). Rejected: head hook copies are shared across head runs, so a head hook can rewrite its own or a sibling's copy. That only changes head decisions, which head code decides anyway (it can tell from its temp-dir path that it runs under the verifier), so it adds no bypass; base copies stay protected by AD-5. The rationale is now in the `_run_side` docstring and agents.md. Checks: tests/test_guard_differential.py 219 passed; changelog, inventory-order, and workflow-size suites 58 passed; ruff clean; the fixed verifier with --all against the issue base: status=pass, 186 shapes, 0 regressions, 0 wiring regressions.
 
 ## Activation
 - n/a: the base is the #5174 project branch (claude/implement-plan-issue-5174-guard-differential-check), so this change goes live with that project. The final-merge stage closes #5327 with `ai:merged`.
@@ -69,6 +70,7 @@
 - [source:intervention] A path-containment check must test the remainder after the directory prefix (a plain file name, no `..`, no `/`), not `startswith`, and an interpreter-isolation check must also look at the environment the command gets: `-P` keeps the working directory off `sys.path` but still honours `PYTHONPATH`, so assignments before the call, `export`, and `PATH` edits belong in the same allow-list. (files: tests/test_guard_differential.py)
 - [source:intervention] A test that pins what may run before a trusted CI step must allow-list that step's own keys (`shell`, `continue-on-error`, `working-directory`, `if`), not only its `env` and `run`, and a shell scan must treat `<(` / `>(` as the start of a command: shlex returns each as one punctuation word, which a redirection check misreads. (files: tests/test_guard_differential.py)
 - [source:intervention] A test that must stop a CI step from running untrusted code cannot do it with a per-word command allow-list: an allowed interpreter or tool (`python3 -c`, `git -c alias`, `cp`) carries arbitrary behaviour in its arguments. Pin the step's exact text instead, as for a dependency install, and keep any scans only as the rules a new pinned text must follow. (files: tests/test_guard_differential.py)
+- [source:intervention] A verifier that runs untrusted code must read all of its static inputs (changed paths, hook copies, corpora, settings) before the first untrusted run: when the head side is the working tree, the untrusted code can rewrite those files before a later read. (files: scripts/guard_differential.py)
 
 ## Notes
 - Issue mode: single-phase plan; security pass skipped per the plan header.

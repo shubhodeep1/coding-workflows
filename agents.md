@@ -1239,7 +1239,12 @@ side so that class cannot land unnoticed.
   files as changed. Every base-side run, in every tree, finishes before the
   first head-side run (issue #5327): a head hook is PR code running as the
   same user, and it could otherwise rewrite the base copies next to its own
-  so that later shapes compare the loosened hook with itself. A head hook
+  so that later shapes compare the loosened hook with itself. The settings
+  wiring comparison below also runs before the first hook, so a head hook
+  cannot restore the working-tree settings files before they are read.
+  Head runs are not isolated from each other: a head hook that rewrites its
+  own copy only changes head decisions, which the PR's code decides anyway
+  (it can tell from its path that it runs under the verifier). A head hook
   that escalates (for example with the hosted runner's `sudo`) can still
   reach the verifier process; that is inherent to executing PR hook code.
 - **Settings wiring (issue #5328).** A guard only runs when a settings file
