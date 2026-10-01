@@ -1282,7 +1282,12 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   that cannot be resolved or read fails the step. Only when every trusted
   commit resolves and none carries the script yet (`main` before #4804
   merges, `stable` before its next promotion) does it run the
-  checkout's copy, with a `::warning::` (bootstrap). In that window the PR's
+  checkout's copy, with a `::warning::` (bootstrap). The guard's `check`
+  also refuses, on every event, a range that deletes `scripts/claude_twin_sync.py`
+  or turns it into a symlink or directory (`GUARD_SCRIPT_PATH`; a rename
+  counts as a delete), so a base that carries the script cannot lose it and
+  reopen the bootstrap for later PRs unless the same PR drops the step from
+  `.github/workflows/ci.yml` (the gap below). In that window the PR's
   own copy decides the check, so a PR can still weaken it. That adds nothing
   to the `.github/workflows/ci.yml` gap below: neither `main` nor `stable`
   carries this step yet, so only a PR whose own `ci.yml` adds the step

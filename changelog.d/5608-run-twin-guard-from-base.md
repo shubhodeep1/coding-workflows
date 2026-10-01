@@ -7,7 +7,8 @@ The CI step "Claude twin sync state (CLAUDE.md §28.C)" in `.github/workflows/ci
 | --- | --- |
 | Copy of the guard that runs | the base commit's, then `main`'s tip on `stable` |
 | Bootstrap fallback | the checkout's copy, with a `::warning::`, only while no trusted commit carries the script (`main` before #4804 merges, `stable` before its next promotion) |
+| Removing the script | refused by the base copy on every event (delete, rename, or swap for a symlink or directory), so a base that carries it cannot drop back into the bootstrap fallback |
 | GitHub API calls added | 0 |
 | Security finding | `pr-controlled-sync-guard` (#5608, A08:2021, high) |
 
-What this means for operators: a fix to `scripts/claude_twin_sync.py` itself is checked by the old copy until it lands on the base, and the job log names the commit whose copy ran. Until #4804 merges, the bootstrap fallback lets a PR's own copy decide the check; only a PR whose own `ci.yml` adds the step reaches it, because `main` and `stable` do not carry the step yet. A PR can still edit `.github/workflows/ci.yml` to skip the step, so a PR that changes a guard path together with the workflow file still needs the owner's review of it.
+What this means for operators: a fix to `scripts/claude_twin_sync.py` itself is checked by the old copy until it lands on the base, and the job log names the commit whose copy ran. A PR that deletes the script fails the check (`::error file=scripts/claude_twin_sync.py::twin sync guard: …`); retiring the guard means removing the CI step in the same PR. Until #4804 merges, the bootstrap fallback lets a PR's own copy decide the check; only a PR whose own `ci.yml` adds the step reaches it, because `main` and `stable` do not carry the step yet. A PR can still edit `.github/workflows/ci.yml` to skip the step, so a PR that changes a guard path together with the workflow file still needs the owner's review of it.

@@ -283,7 +283,9 @@ jobs:
           # the step (fail closed). Only when every trusted commit resolves
           # and none carries the script yet (main before #4804, stable before
           # its next promotion) does the checkout's copy run, with a warning:
-          # such a base has no guard to bypass.
+          # such a base has no guard to bypass. The guard's `check` refuses a
+          # range that deletes the script, so a base that carries it keeps it
+          # unless a PR also drops this step (the ci.yml gap in agents.md).
           twin_guard_candidates=("${base}")
           if [ "${twin_on_stable}" = "true" ]; then
             twin_guard_candidates+=("${twin_provenance}")

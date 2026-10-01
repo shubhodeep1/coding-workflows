@@ -327,6 +327,69 @@ def test_check_cli_exit_codes(repo, capsys):
 	assert sync.main(["check", "--repo-root", str(repo), "--base", "no-such-ref"]) == 2
 
 
+# --- check: the guard script cannot be removed (issue #5608 review) -----------
+
+
+def _with_guard_script(repo: Path) -> str:
+	write(repo, sync.GUARD_SCRIPT_PATH, "guard v1\n")
+	return commit(repo, "guard script lands")
+
+
+def test_check_refuses_deleting_the_guard_script(repo):
+	base = _with_guard_script(repo)
+	(repo / sync.GUARD_SCRIPT_PATH).unlink()
+	head = commit(repo, "delete the guard")
+	result = sync.check_not_ahead(str(repo), base, head, event="pull_request", pr_head_ref="claude/feature", pr_head_repo="o/r", base_repo="o/r")
+	assert not result["ok"]
+	assert [v["path"] for v in result["violations"]] == [sync.GUARD_SCRIPT_PATH]
+	assert "retired only together with the CI step" in result["violations"][0]["reason"]
+
+
+def test_check_refuses_renaming_the_guard_script(repo):
+	base = _with_guard_script(repo)
+	git(repo, "mv", sync.GUARD_SCRIPT_PATH, "scripts/claude_twin_sync_old.py")
+	head = commit(repo, "rename the guard")
+	assert [v["path"] for v in sync.check_not_ahead(str(repo), base, head)["violations"]] == [sync.GUARD_SCRIPT_PATH]
+
+
+@pytest.mark.parametrize("swap", ["symlink", "directory"])
+def test_check_refuses_swapping_the_guard_script_for_a_non_file(repo, swap):
+	base = _with_guard_script(repo)
+	(repo / sync.GUARD_SCRIPT_PATH).unlink()
+	if swap == "symlink":
+		(repo / sync.GUARD_SCRIPT_PATH).symlink_to("claude_twin_sync_elsewhere.py")
+	else:
+		write(repo, f"{sync.GUARD_SCRIPT_PATH}/x.py", "x\n")
+	head = commit(repo, f"guard becomes a {swap}")
+	assert [v["path"] for v in sync.check_not_ahead(str(repo), base, head)["violations"]] == [sync.GUARD_SCRIPT_PATH]
+
+
+def test_check_allows_editing_or_adding_the_guard_script(repo):
+	before = git(repo, "rev-parse", "HEAD")
+	base = _with_guard_script(repo)
+	assert sync.check_not_ahead(str(repo), before, base)["ok"]
+	write(repo, sync.GUARD_SCRIPT_PATH, "guard v2\n")
+	head = commit(repo, "edit the guard")
+	assert sync.check_not_ahead(str(repo), base, head)["ok"]
+
+
+def test_check_guard_script_rule_applies_with_guard_provenance(repo):
+	base = _with_guard_script(repo)
+	(repo / sync.GUARD_SCRIPT_PATH).unlink()
+	head = commit(repo, "delete the guard")
+	assert not sync.check_not_ahead(str(repo), base, head, base)["ok"]
+
+
+def test_check_cli_labels_a_guard_script_violation(repo, capsys):
+	base = _with_guard_script(repo)
+	(repo / sync.GUARD_SCRIPT_PATH).unlink()
+	commit(repo, "delete the guard")
+	assert sync.main(["check", "--repo-root", str(repo), "--base", base]) == 1
+	out = capsys.readouterr().out
+	assert f"::error file={sync.GUARD_SCRIPT_PATH}::twin sync guard: the sync-state guard script is removed" in out
+	assert ".claude/ is ahead of its twin" not in out
+
+
 # --- check: guard paths fail closed (issue #5246) -----------------------------
 
 SYNC_HEAD = f"{sync.SYNC_BRANCH_PREFIX}abc123"
@@ -1339,6 +1402,23 @@ def test_ci_step_bootstrap_warns_and_runs_the_checkout_copy(repo, ci):
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert f"::warning::twin sync guard: no trusted commit ({base}) carries scripts/claude_twin_sync.py yet" in proc.stdout
 	assert "PERMISSIVE GUARD RAN" in proc.stdout
+
+
+def test_ci_step_pr_into_main_cannot_delete_the_guard_script(repo, ci):
+	# After rollout, a PR that deletes the script must fail on the base copy:
+	# merged, it would put every later PR into the bootstrap fallback.
+	main = _move_origin_main(repo, {"scripts/claude_twin_sync.py": REAL_GUARD_SCRIPT})
+	git(repo, "fetch", "-q", "origin")
+	git(repo, "checkout", "-q", "-B", "feature", "origin/main")
+	git(repo, "rm", "-q", "scripts/claude_twin_sync.py")
+	commit(repo, "delete the guard")
+	git(repo, "checkout", "-q", "--detach", "origin/main")
+	git(repo, "merge", "-q", "--no-ff", "-m", "merge", "feature")
+	proc = ci("pull_request", base_ref="main", ref_name="42/merge", pr_head_ref="feature", pr_head_repo="owner/repo", checkout_script=PERMISSIVE_GUARD_SCRIPT)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert f"running scripts/claude_twin_sync.py from {main}, not the checkout" in proc.stdout
+	assert "::error file=scripts/claude_twin_sync.py::twin sync guard:" in proc.stdout
+	assert "PERMISSIVE GUARD RAN" not in proc.stdout
 
 
 def test_ci_step_fails_closed_on_an_unreadable_base(repo, ci):
