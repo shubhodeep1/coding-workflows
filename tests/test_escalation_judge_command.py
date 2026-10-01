@@ -127,8 +127,26 @@ def test_judge_records_the_pr_of_a_pr_scoped_stop(judge):
 	# The intervention cap counts an `intervention-cap` entry only for the PR
 	# its `why=` names, so the judge must write that PR into `--why`.
 	record = judge[judge.index("5. **Record.**"):judge.index("6. **Post the escalation comment**")]
-	assert "start `--why` with `PR #<N>: `, where `<N>` is the fingerprint's `pr`" in record
+	assert "start the reason with `PR #<N>: `, where `<N>` is the fingerprint's `pr`" in record
 	assert "`record` refuses a PR-scoped entry without that prefix (exit 1)" in record
+
+
+def test_judge_passes_the_reason_through_a_file(judge):
+	# The reason can quote failure evidence; inside a double-quoted `--why`
+	# a `$(...)` or backtick would run under the non-prompting allow rule.
+	record = judge[judge.index("5. **Record.**"):judge.index("6. **Post the escalation comment**")]
+	assert "Write the one-line reason with the Write tool into a file in your scratchpad" in record
+	assert "--choice <choice> --why-file <file>" in record
+	assert "Never pass the reason inline with `--why`" in record
+	assert '--why "' not in record
+
+
+def test_judge_close_skips_finished_items_and_keeps_going(judge):
+	# A merged PR or one an earlier `close` closed must not stop the rest.
+	close = judge[judge.index("**`close`** → close the project yourself"):judge.index("9. **Report**")]
+	assert "skip what is already merged or closed" in close
+	assert "A close that still fails does not stop the others" in close
+	assert "list each failed close with its error in the report" in close
 
 
 def test_judge_stops_when_the_thread_cannot_be_read(judge):

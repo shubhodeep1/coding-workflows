@@ -298,6 +298,45 @@ def test_pr_scoped_record_accepts_the_pr_prefix(tmp_path, capsys, stop):
 	assert out["line"].endswith("why=PR #12: retry the failing check")
 
 
+def test_record_reads_the_reason_from_a_file_verbatim(tmp_path, capsys):
+	# `--why-file` keeps shell syntax in the reason as literal text.
+	why_file = tmp_path / "why.txt"
+	why_file.write_text("PR #12: retry `make test` and $(rerun)\n", encoding="utf-8")
+	code, out = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "intervention-cap", "--fingerprint", FP,
+		"--choice", "budget", "--why-file", str(why_file),
+	)
+	assert code == 0
+	assert out["line"].endswith("why=PR #12: retry `make test` and $(rerun)")
+
+
+def test_record_why_file_still_needs_the_pr_prefix(tmp_path, capsys):
+	why_file = tmp_path / "why.txt"
+	why_file.write_text("retry the failing check", encoding="utf-8")
+	code, out = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "fix-check-defective", "--fingerprint", FP,
+		"--choice", "budget", "--why-file", str(why_file),
+	)
+	assert code == 1 and "must start with 'PR #<N>: '" in out["error"]
+
+
+@pytest.mark.parametrize("which", ["both", "neither", "missing", "empty"])
+def test_record_takes_exactly_one_readable_reason(tmp_path, capsys, which):
+	why_file = tmp_path / "why.txt"
+	why_file.write_text("  \n", encoding="utf-8")
+	extra = {
+		"both": ["--why", "x", "--why-file", str(why_file)],
+		"neither": [],
+		"missing": ["--why-file", str(tmp_path / "absent.txt")],
+		"empty": ["--why-file", str(why_file)],
+	}[which]
+	code, _ = _run(
+		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", FP,
+		"--choice", "budget", *extra,
+	)
+	assert code == 1
+
+
 def test_project_scoped_record_needs_no_pr_prefix(tmp_path, capsys):
 	code, _ = _run(capsys, "record", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", FP, "--choice", "budget", "--why", "re-dispatch the audit")
 	assert code == 0

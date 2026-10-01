@@ -898,7 +898,8 @@ and the unused choices with `.claude/scripts/escalation_ledger.py`, picks
 `budget` (one more round past the cap with a narrower fix), `descope` (a
 reviewed revert PR plus an `AD-<n>` entry), or `close` (the chain's PRs
 and the source issue closed as not planned). It records an `ES-<n>` line
-in the log's `## Escalations` section, posts
+in the log's `## Escalations` section (`record --why-file`, so a reason
+that quotes failure evidence never passes through shell quoting), posts
 `<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fp> choice=<choice> -->`,
 and hands the checker the next stage through another escalation wait. It
 never repeats `budget` or `descope` for the same fingerprint (`close`
