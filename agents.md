@@ -1042,16 +1042,22 @@ reviews, comments, and conflicts stay a direct §12 request.
   and `e2e-smoke-test` exits, which set `AUTO_MERGE_READY_LABELS_ALLOWED`
   without `gh pr merge`) and the job's `deterministic_skip_head_is_current`
   run it for `claude/*` heads, classified on the head ref read together with
-  the fresh head SHA (one `pulls/{n}` read; the job also keeps the gate job's
-  snapshot ref, so a branch renamed to `claude/*` without a new commit still
-  meets the gate, which refuses when its support checkout was skipped),
-  because the orchestrator poller merges the PR
-  of every `ai:ready-to-merge` issue. The poller
+  the fresh head SHA (one `pulls/{n}` read, reused as the gate's
+  `--pr-json`; the job also keeps the gate job's snapshot ref, so a branch
+  renamed to `claude/*` without a new commit still meets the gate, which
+  refuses when its support checkout was skipped), because the orchestrator
+  poller merges the PR of every `ai:ready-to-merge` issue. The job runs
+  `deterministic_skip_head_is_current` before it enables auto-merge too
+  (PR #5572 review round 2), so every deterministic-skip merge or label
+  path makes that one read and refuses when the head moved, its ref is
+  unreadable, or the read fails. The poller
   (`_orch_claude_merge_hold_gate_allows` in
-  `scripts/orchestrate_poll_process.sh`) runs it right before its two
-  ready-to-merge merges (current wave, prior-wave backward scan) for
-  `claude/*` heads, with the PR object it already fetched as `--pr-json`,
-  and then merges with `--match-head-commit` on that head; the gate comes
+  `scripts/orchestrate_poll_process.sh`) re-reads the PR once right before
+  each of its two ready-to-merge merges (current wave, prior-wave backward
+  scan), defers the merge when the head is no longer the one the checks saw
+  or its ref is unreadable, runs the gate for a `claude/*` current ref with
+  that PR object as `--pr-json`, and then merges with
+  `--match-head-commit` on that head; the gate comes
   from `CLAUDE_MERGE_HOLD_GATE_SCRIPT`, else `.codex-workflow-src/scripts/`
   (missing refuses; `.codex-workflow-src-main` is no fallback, since the
   staging step deletes it before the poller runs), and

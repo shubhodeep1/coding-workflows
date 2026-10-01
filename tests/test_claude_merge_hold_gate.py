@@ -589,9 +589,12 @@ def test_deterministic_skip_checks_out_the_gate_for_claude_heads():
 
 def test_deterministic_skip_runs_the_gate_before_every_merge_call():
 	run = _step(_jobs()["deterministic-skip-merge"], "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")["run"]
-	branch = 'elif [[ "${PR_HEAD_REF}" == claude/* ]] && ! merge_hold_gate_allows; then'
+	branch = 'elif ! deterministic_skip_head_is_current "deterministic-skip auto-merge enablement" "Auto-merge not enabled"; then'
 	assert branch in run
 	assert run.index(branch) < run.index("gh_retry gh pr merge"), "the hold gate branch must precede every merge call"
+	# PR #5572 review round 2: the merge path no longer classifies on the
+	# gate job's snapshot ref alone.
+	assert 'elif [[ "${PR_HEAD_REF}" == claude/* ]] && ! merge_hold_gate_allows' not in run
 	assert ".codex-workflow-src/scripts/claude_merge_hold_gate.py" in run
 	assert "AUTOFIX_AUTO_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA}" in run
 
@@ -617,13 +620,56 @@ def test_deterministic_skip_refuses_a_held_claude_head(tmp_path):
 	assert proc.returncode == 0, proc.stderr
 	assert merges == []
 	assert "reason=hold_claim" in proc.stdout, proc.stdout
-	assert "REFUSED (merge hold gate" in (tmp_path / "summary.md").read_text(encoding="utf-8")
+	assert "REFUSED (head not current or merge hold gate: " in (tmp_path / "summary.md").read_text(encoding="utf-8")
 
 
 def test_deterministic_skip_merges_an_unheld_claude_head(tmp_path):
 	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture())
 	assert proc.returncode == 0, proc.stderr
 	assert merges == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
+	# PR #5572 review round 2: one pulls/{n} read serves the freshness check
+	# and the gate (--pr-json).
+	assert len(_pr_reads(tmp_path)) == 1
+
+
+def _pr_reads(tmp_path):
+	return [call for call in _calls(tmp_path) if call[:2] == ["api", f"repos/{REPO}/pulls/42"]]
+
+
+def test_deterministic_skip_gates_a_head_renamed_to_claude_before_enabling_auto_merge(tmp_path):
+	# PR #5572 review round 2: the gate job saw a non-claude/* ref, the branch
+	# was renamed to claude/* without a new commit, and the head carries a
+	# hold. The refreshed ref decides, so auto-merge is not enabled.
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(comments=[_claim(1, "hold")]), head_ref="ai/issue-42")
+	assert proc.returncode == 0, proc.stderr
+	assert merges == []
+	assert f"AUTOFIX_AUTO_MERGE_SKIPPED pr=42 head_sha={HEAD} reason=hold_claim" in proc.stdout, proc.stdout
+	assert _label_posts(tmp_path) == []
+
+
+def test_deterministic_skip_enables_auto_merge_for_other_heads_without_the_gate(tmp_path):
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(pr=_pr(ref="ai/issue-42"), comments=[_claim(1, "hold")]), head_ref="ai/issue-42")
+	assert proc.returncode == 0, proc.stderr
+	assert merges == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
+	assert "AUTOFIX_MERGE_HOLD_GATE" not in proc.stdout
+	assert not [call for call in _calls(tmp_path) if "/comments" in " ".join(call)]
+	assert len(_pr_reads(tmp_path)) == 1
+
+
+def test_deterministic_skip_refuses_auto_merge_when_the_head_moved(tmp_path):
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(pr=_pr(head=OLD_HEAD)))
+	assert proc.returncode == 0, proc.stderr
+	assert merges == []
+	assert "no longer points at gate-observed head" in proc.stdout, proc.stdout
+	assert _label_posts(tmp_path) == []
+
+
+def test_deterministic_skip_refuses_auto_merge_when_the_refresh_fails(tmp_path):
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(fail=[f"repos/{REPO}/pulls/42"]), head_ref="ai/issue-42")
+	assert proc.returncode == 0, proc.stderr
+	assert merges == []
+	assert "Could not refresh the current head for PR #42; refusing deterministic-skip auto-merge enablement." in proc.stdout, proc.stdout
+	assert _label_posts(tmp_path) == []
 
 
 def _label_posts(tmp_path):
@@ -648,6 +694,7 @@ def test_deterministic_skip_with_auto_merge_disabled_labels_an_unheld_claude_hea
 	assert merges == []
 	assert f"AUTOFIX_MERGE_HOLD_GATE pr=42 head_sha={HEAD} action=allow" in proc.stdout, proc.stdout
 	assert [call[3] for call in _label_posts(tmp_path)] == [f"repos/{REPO}/issues/42/labels"]
+	assert len(_pr_reads(tmp_path)) == 1, "one pulls/{n} read serves the freshness check and the gate"
 
 
 def test_deterministic_skip_with_auto_merge_disabled_labels_other_heads_without_the_gate(tmp_path):
@@ -662,7 +709,7 @@ def test_deterministic_skip_label_freshness_check_runs_the_gate_for_claude_heads
 	run = _step(_jobs()["deterministic-skip-merge"], "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")["run"]
 	start = run.index("deterministic_skip_head_is_current()")
 	body = run[start:run.index("\n}\n", start)]
-	assert 'if { [[ "${ready_label_current_head_ref}" == claude/* ]] || [[ "${PR_HEAD_REF}" == claude/* ]]; } && ! merge_hold_gate_allows "Merge-authorization labels withheld"; then' in body
+	assert 'if { [[ "${ready_label_current_head_ref}" == claude/* ]] || [[ "${PR_HEAD_REF}" == claude/* ]]; } && ! merge_hold_gate_allows "${gate_refused_what}"; then' in body
 	assert body.index("no longer points at gate-observed head") < body.index("merge_hold_gate_allows")
 	# One pulls/{n} read refreshes both the SHA and the ref (CLAUDE.md §15).
 	assert body.count("gh api ") == 1
@@ -785,8 +832,8 @@ def test_poller_gate_fails_closed_on_a_read_error(tmp_path):
 
 
 @pytest.mark.parametrize("merge_var,ref_var,sha_var,json_var", [
-	("RTM_PR", "_rtm_head_ref", "_rtm_head_sha", "_rtm_pr_json"),
-	("PW_PR", "_pw_head_ref", "_pw_head_sha", "_pw_pr_json"),
+	("RTM_PR", "_rtm_gate_head_ref", "_rtm_head_sha", "_rtm_gate_pr_json"),
+	("PW_PR", "_pw_head_ref", "_pw_head_sha", "_pw_gate_pr_json"),
 ])
 def test_poller_ready_to_merge_merges_run_the_gate_and_bind_the_head(merge_var, ref_var, sha_var, json_var):
 	text = POLLER.read_text(encoding="utf-8")
@@ -802,6 +849,14 @@ def test_poller_ready_to_merge_merges_run_the_gate_and_bind_the_head(merge_var, 
 	bind = f'{match_var}=(--match-head-commit "${{{sha_var}}}")'
 	assert gate_at < text.index(bind) < first_merge
 	assert text.rindex(f"{match_var}=()", 0, gate_at) < gate_at
+	# PR #5572 review round 2: the ref is re-read at the merge point, after
+	# the check-run wait, and the head the checks saw must still be current.
+	refresh = f'{json_var}="$(_fetch_pr_json "${{{merge_var}}}")"'
+	refresh_at = text.rindex(refresh, 0, gate_at)
+	assert text.rindex(f'_pr_checks_completed "${{{merge_var}}}"', 0, gate_at) < refresh_at
+	assert text.index(f'{ref_var}="$(_jq_field "${{{json_var}}}" \'.head.ref\')"', refresh_at) < gate_at
+	gate_sha_var = "_rtm_gate_head_sha" if merge_var == "RTM_PR" else "_pw_gate_head_sha"
+	assert text.index(f'[ "${{{gate_sha_var}}}" != "${{{sha_var}}}" ]', refresh_at) < gate_at
 
 
 def test_poller_workflow_passes_the_trusted_login():
