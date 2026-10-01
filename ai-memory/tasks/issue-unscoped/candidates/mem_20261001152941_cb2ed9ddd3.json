@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:294-297; scripts/workflow_failure_heal.py:830-831 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Invalid or missing `failure_fingerprint` values can cause distinct `identical_failure_cap` reports for the same workflow to receive the same heal fingerprint.\n  WHY: The fallback evidence signature can collapse to `no-error-lines` after header stripping, allowing deduplication to merge unrelated failures into one lineage.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh:294-297; scripts/workflow_failure_heal.py:830-831 | severity=high | confidence=[4]\n  PROBLEM: When an `identical_failure_cap` payload lacks a valid `failure_fingerprint`, the intake falls back to signing the evidence, which can give distinct failures the same heal fingerprint.\n  WHY: Two such cap reports for the same workflow can receive the same fingerprint when cap evidence yields `no-error-lines` after header stripping, allowing deduplication to merge unrelated failures into one lineage.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "977ab86e6864bcb31a73989ab2a41a116805ab1defa462e0f66b64e0d71f7252",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5975,
+    "run_id": "36879187181",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36879187181",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001152941_cb2ed9ddd3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5975,
+    "run_id": "36879187181"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T15:29:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
