@@ -31,7 +31,10 @@ and the wrappers `env`, `command`, `exec`, `time`, `sudo`, `doas`,
     `awk` / `gawk -i inplace`: those flags exist only to edit files in place.
 The same applies to a command inside a substitution Bash runs within one word
 (a double-quoted `"$(…)"` or a backtick), which the tokenizer keeps inside
-another command's argument, a heredoc inside the substitution included.
+another command's argument, a heredoc inside the substitution included, and
+to a `$(…)` or backtick in the body of an unquoted heredoc (`<<EOF`, not
+`<<'EOF'`), which Bash runs while it expands the body, before any command
+reads it.
 
 No decision (the normal permission flow applies):
   - a read-only interpreter program, `pytest`, `python3 -m …`, and a script
@@ -460,6 +463,33 @@ def _restore_heredocs(text: str, heredocs: list[tuple[str, bool, str]], delimite
 	return "\n".join(lines)
 
 
+def _heredoc_substitution_bodies(body: str, tokenizer) -> list[str]:
+	"""The command substitutions Bash runs while it expands an unquoted heredoc body.
+
+	Quotes are plain text in such a body, so every `$(` and backtick a
+	backslash does not escape starts a substitution. Each one's command is
+	read the way `substitution_bodies` reads one inside double quotes, so a
+	quoted `)` inside it does not close it.
+	"""
+	bodies: list[str] = []
+	index = 0
+	while index < len(body):
+		character = body[index]
+		if character == "\\":
+			index += 2
+			continue
+		if character == "`" or body.startswith("$(", index):
+			found = tokenizer.substitution_bodies('"' + body[index:])
+			if not found:
+				break
+			bodies.append(found[0])
+			# Past the opening `` ` `` or `$(`, the command, and the closing character.
+			index += (1 if character == "`" else 2) + len(found[0]) + 1
+			continue
+		index += 1
+	return bodies
+
+
 def segment_kind(tokens: list[str], tokenizer) -> str:
 	"""The interpreter kind when one command segment edits files in place, else ""."""
 	start = _command_start(tokens, tokenizer)
@@ -497,7 +527,7 @@ def inline_edit_kind(command: str, tokenizer, _depth: int = 0) -> str:
 		for line_start, line in _lines_with_offsets(stripped)
 		for match in _HEREDOC_OPERATOR_RE.finditer(line)
 	]
-	for (_prefix, _quoted, body), offset in zip(heredocs, operator_offsets):
+	for (_prefix, quoted, body), offset in zip(heredocs, operator_offsets):
 		# The heredoc feeds the last command before its `<<` operator. Text up
 		# to the operator that does not tokenize ends inside an open quote, so
 		# the `<<` is data (a commit message, an echo), not a heredoc.
@@ -505,6 +535,13 @@ def inline_edit_kind(command: str, tokenizer, _depth: int = 0) -> str:
 			prefix_segments = tokenizer.shell_segments(stripped[:offset])
 		except ValueError:
 			continue
+		# Bash runs the substitutions in an unquoted heredoc's body before the
+		# command reads it, whatever that command is (`cat <<EOF`, `python3 -`).
+		if not quoted and _depth < _MAX_SUBSTITUTION_DEPTH:
+			for substitution in _heredoc_substitution_bodies(body, tokenizer):
+				kind = inline_edit_kind(substitution, tokenizer, _depth + 1)
+				if kind:
+					return kind
 		if not prefix_segments:
 			continue
 		tokens = prefix_segments[-1]

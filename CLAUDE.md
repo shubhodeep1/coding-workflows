@@ -1419,7 +1419,9 @@ enforced one (issue #4858):
   `unpack_archive`), `.unlink(`, `Path(…).replace(` / `.rename(`), or is
   `sed -i` / `--in-place`, `perl -i`,
   `ruby -i`, or `awk -i inplace`, including inside a double-quoted `$(…)` or
-  a backtick substitution that Bash runs.
+  a backtick substitution that Bash runs, and inside a `$(…)` or backtick in
+  the body of an unquoted heredoc (`<<EOF`), which Bash runs before the
+  command reads the body.
   The reason tells the session to use the Edit tool (exact `old_string` /
   `new_string`) or the Write tool, and to edit the
   `workflow-templates/.claude/**` twin of a protected `.claude/**` file (the

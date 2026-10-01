@@ -248,6 +248,16 @@ def test_observed_prompts_are_denied(name):
 		("out=\"$(python3 <<-'PY'\n\topen('x', 'w').write('y')\n\tPY\n)\"", "python"),
 		("echo \"$(cat <<'A'\nhello\nA\n)\" \"$(python3 - <<'B'\nimport os\nos.remove('x')\nB\n)\"", "python"),
 		("echo \"$(echo `python3 - <<'PY'\nPath('x').unlink()\nPY\n`)\"", "python"),
+		# Bash runs a substitution in an unquoted heredoc's body before the command
+		# reads it; quotes there are plain text (final PR #4877 final-merge review
+		# round 10).
+		("python3 - <<EOF\n$(sed -i 's/a/b/' f; echo 1)\nEOF", "sed"),
+		("cat <<EOF\n$(sed -i s/a/b/ f)\nEOF", "sed"),
+		("cat <<EOF\n`perl -pi -e s/a/b/ f`\nEOF", "perl"),
+		("cat <<EOF\n'$(sed -i s/a/b/ f)'\nEOF", "sed"),
+		("cat <<-EOF > out.txt\n\thello $(python3 -c \"open('x','w').write('y')\")\n\tEOF", "python"),
+		("cat <<EOF\nfirst $(echo \")\") then $(sed -i s/a/b/ f)\nEOF", "sed"),
+		("echo \"$(cat <<EOF\n$(sed -i s/a/b/ f)\nEOF\n)\"", "sed"),
 	],
 )
 def test_inline_writes_are_denied(command, kind):
@@ -331,6 +341,13 @@ def test_deny_message_is_the_issue_text():
 		"echo \"$(python3 - <<'PY'\nprint(open('x').read())\nPY\n)\"",
 		"gh pr create --body \"$(cat <<'EOF'\nGuard `sed -i` and Path('x').write_text('y')\nEOF\n)\"",
 		"git commit -F - <<'EOF'\nfix: `sed -i s/a/b/ f` and \"$(perl -pi -e x f)\"\nEOF",
+		# A quoted delimiter, an escaped `$(` or backtick, plain text, and
+		# substitutions that only read, in a heredoc body.
+		"cat <<\"EOF\"\n`sed -i s/a/b/ f`\nEOF",
+		"cat <<EOF\n\\$(sed -i s/a/b/ f)\nEOF",
+		"cat <<EOF\n\\`sed -i s/a/b/ f\\`\nEOF",
+		"cat <<EOF\nsed -i s/a/b/ f\nEOF",
+		"gh pr create --body \"$(cat <<EOF\nGuard sed -i at $(git rev-parse --short HEAD)\nEOF\n)\"",
 	],
 )
 def test_reads_scripts_and_data_get_no_decision(command):

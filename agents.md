@@ -1199,7 +1199,8 @@ reviews, comments, and conflicts stay a direct §12 request.
   `copystat`, `move`, `rmtree`, `chown`, `make_archive`, `unpack_archive`),
   `.unlink(`, `Path(…).replace(` / `.rename(`), and for `sed -i`,
   `perl -i` / `-pi`, `ruby -i`, and
-  `awk -i inplace`, also inside a double-quoted `$(…)` or a backtick, and
+  `awk -i inplace`, also inside a double-quoted `$(…)` or a backtick or in
+  a `$(…)` or backtick in an unquoted heredoc's body (`<<EOF`), and
   behind the wrappers `env`, `command`, `exec`, `time`, `sudo`, `doas`,
   `timeout`, and `nice` with their options (`env -S` / `--split-string`
   included). Reads,
