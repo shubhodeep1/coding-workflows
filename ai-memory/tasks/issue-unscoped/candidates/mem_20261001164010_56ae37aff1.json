@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/operations/master-session.md:27, 113, 219 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The Q46 standing-merge-approval exclusion list omits `.claude/settings.local.json`, so qualifying held `claude/*` PRs that modify this guard path may be merged without explicit owner review.\n  WHY: `.claude/settings.local.json` is a guard path requiring owner-only merge; all reviewers rate this MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/operations/master-session.md: PR lines 27, 113, 219 | severity=high | confidence=5\n  PROBLEM: The Q46 standing-merge-approval exclusion list enumerates `.claude/hooks/**`, `.claude/scripts/**`, and `settings.json` but omits `.claude/settings.local.json`.\n  WHY: A held `claude/*` PR whose diff touches `settings.local.json` but no other guard path passes Q46's exclusion condition, so the master may merge it under standing approval instead of requiring explicit owner review.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after reaching the slot retryable-failure limit (3).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/operations/master-session.md: Q46 at line 27 and held-PR procedure step 3 at line 113 | severity=high | confidence=5\n  PROBLEM: Both updated exclusions name `.claude/hooks/**`, `.claude/scripts/**`, and `settings.json`, but omit `.claude/settings.local.json`, which \u00a728.C identifies as a guard path.\n  WHY: A held `claude/*` PR changing only `.claude/settings.local.json` satisfies the written Q46 exclusion and may be merged under standing approval, bypassing the owner-only merge rule for guard-path syncs.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/operations/master-session.md: 27 (Q46 rule) and 113 (procedure step 3) | severity=high | confidence=5\n  PROBLEM: The Q46 exclusion list omits `.claude/settings.local.json`, allowing a qualifying held `claude/*` PR that changes `settings.local.json` to be merged under standing approval.\n  WHY: `scripts/claude_twin_sync.py:96` includes `settings.local.json` in `GUARD_PATH_FILES`, and `CLAUDE.md:2289-2292` requires owner-only merging for that guard path. A master following Q46 could merge a held PR that changes `settings.local.json` without the required owner review, bypassing the guard.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ab8913d6066ebcbf605d07b2fd1430e7b6886d8209281f8edc9d48dc88ba2a18",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5699,
+    "run_id": "36888872234",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36888872234",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001164010_56ae37aff1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5699,
+    "run_id": "36888872234"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T16:40:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
