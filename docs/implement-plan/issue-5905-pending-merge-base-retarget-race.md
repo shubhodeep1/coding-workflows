@@ -16,8 +16,8 @@
 ## Phases
 1. [ ] Phase 1 — re-check the reviewed base at merge time and revoke a stale authorization   — PR #5917 open (waiting); review rounds: 1; interventions: 0
    - `scripts/review_enable_auto_merge.sh` refuses a merge when optional `REVIEWED_BASE_REF` / `REVIEWED_BASE_SHA` do not match its pre-merge PR read (unchanged when both are empty)
-   - `scripts/claude_fixer_pending_checks.py` passes the reviewed base, reports a helper refusal as `base_changed`, re-reads the PR after enabling auto-merge, and revokes it (`merge_revoked` / `merge_revoke_failed`) or reports `merged_unreviewed_base`
-   - `scripts/claude_pr_sweep.py` warns on `merge_revoke_failed` / `merged_unreviewed_base`
+   - `scripts/claude_fixer_pending_checks.py` passes the reviewed base, reports a helper refusal as `base_changed`, re-reads the PR after enabling auto-merge, and revokes it (`merge_revoked` / `merge_revoke_failed` / `merge_revoke_unconfirmed`) or reports `merged_unreviewed_base`
+   - `scripts/claude_pr_sweep.py` warns on `merge_revoke_failed` / `merge_revoke_unconfirmed` / `merged_unreviewed_base`
    - Tests reproduce the #5905 retarget-inside-the-window exploit; README / agents.md; `changelog.d/` fragment
    - Done: the plan's phase 1 "done" condition. Protected paths: none.
 

@@ -676,6 +676,12 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	elif pr.get("mergeable_state") == "dirty":
 		ineligible = "merge conflict"
 	elif pr.get("auto_merge"):
+		# Not re-checked against the marker's base binding: a retarget after the
+		# post-enable re-read below is an accepted residual (issue #5905 plan,
+		# AD-2 and Risks). GitHub disables auto-merge when someone without write
+		# access switches the base, someone with write access can merge directly
+		# under the same protection, and revoking here can loop against the
+		# in-run auto-merge of a fresh clean review that posts no new marker.
 		ineligible = "auto-merge already enabled"
 	if ineligible:
 		return {"state": "not_eligible", "head_sha": head_sha, "reason": ineligible}
