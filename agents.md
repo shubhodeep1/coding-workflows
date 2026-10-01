@@ -1086,7 +1086,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   the PR's `default_branch`, a dispatch from any other ref is never a bound
   review, and a newer one titled for the PR that did not conclude `success`
   returns `review_superseded`. With no default branch known, no run name
-  binds.
+  binds. A review workflow dispatched with the head branch as its ref shows
+  up in the head-branch listing too: it is never a bound review there
+  either, and a newer one that did not conclude `success` returns
+  `review_superseded`, whatever PR its run name names (PR #5929 review
+  round 2).
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be

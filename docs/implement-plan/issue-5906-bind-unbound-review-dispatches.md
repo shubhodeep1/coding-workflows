@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5929
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_016uEWHbfeYumDLuXt13ZaAp   safety net and hand-back re-armed by the review round 1 stage (ids in its report)
+- Check-in: checker session_016uEWHbfeYumDLuXt13ZaAp   safety net and hand-back re-armed by the review round 2 stage (ids in its report)
 - Last updated: 2026-10-01
-- Last note: review round 1 on PR #5929: 2 findings fixed (a dispatch's run name only binds from the default branch), 2 rejected (contradict AD-2); waiting on round 2.
+- Last note: review round 2 on PR #5929: 1 finding fixed (a review dispatched on the head branch entered the bound reviews through the head-branch listing), its task gap covered by tests; waiting on round 3.
 
 ## Phases
-1. [ ] Phase 1 — bind review dispatches to their PR and count their failures   — PR #5929 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — bind review dispatches to their PR and count their failures   — PR #5929 open (waiting); review rounds: 2; interventions: 0
    - `run-name` `<workflow name> [pr:<pr_number>]` on `workflow_dispatch` in `.github/workflows/review_autofix.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/ai-review.yml`, `workflow-templates/review_rb_judge_dispatch.yml`
    - `check_review_runs()` in `scripts/claude_fixer_pending_checks.py`: a newer completed dispatch titled for the PR joins the bound reviews; a newer unsuccessful one with no PR binding returns `review_superseded`
    - Tests: the audit's scenario, every new path, the run-name wiring; existing #4900 / #5147 / #5148 suites green
@@ -40,9 +40,11 @@
 - AD-4 [plan, 2026-10-01] Do active dispatches titled for another PR stop blocking? — Picked: A — no, every active dispatch of these workflows still blocks (`review_active`). Alternatives: B — block only on ones titled for this PR or untitled. Why: §5 (no relaxation in a security fix); the delay is one sweep tick. Applied in: no code change. Status: pending review
 - AD-5 [plan, 2026-10-01] Also change the "latest newer review" rule so a later gate-skipped success cannot clear the failure? — Picked: A — no, that is #5904; titled dispatches join the bound set, so #5904's fix covers them too. Alternatives: B — fix it here. Why: one issue per project (`/implement-issue-claude` rules). Applied in: no code change. Status: pending review
 - AD-6 [phase 1/1 — review round 1, 2026-10-01] How does `check_review_runs()` treat a finished review dispatch that did not run from the default branch, whose run name its own ref's workflow file sets? — Picked: A — its run name never binds it: it is never a bound review (a success is ignored), and when it did not succeed and its title names this PR or no PR it returns `review_superseded`; the same for `internal-review.yml` dispatches; no default branch known means no run name binds. Alternatives: B — ignore every non-default-branch dispatch (a failed review of this PR from another ref would be lost); C — trust the title on any ref (a forged success masks a failed review, the round 1 finding). Why: §1, an untrusted title may only block a merge, never allow one; keeps AD-2 fail closed. Applied in: PR #5929. Status: pending review
+- AD-7 [phase 1/1 — review round 2, 2026-10-01] What does `check_review_runs()` do with a finished review workflow dispatch that the head-branch listing returns (dispatched with the PR's head branch as its ref)? — Picked: A — never a bound review; a newer one that did not conclude `success` returns `review_superseded` whatever PR its run name names. Alternatives: B — drop it from the head-branch path only, leaving it to the dispatch listings (a failed one titled for another PR, which blocked before this PR as the latest head-branch review, would then be ignored); C — apply the run-name rule (block only when titled for this PR or no PR). Why: §1, it ran the head branch's workflow file on this PR's own branch, so its run name is untrusted and it may have been a review of this PR; keeps the pre-#5906 block. Applied in: PR #5929. Status: pending review
 
 ## Lessons
 - [source:intervention] A workflow run's `display_title` (its `run-name`) is only trustworthy on a run from the default branch: a `workflow_dispatch` on any other ref runs that ref's workflow file, so any PR binding read from a title must also check `head_branch` against the default branch. (files: scripts/claude_fixer_pending_checks.py, .claude/scripts/check_in_status.py)
+- [source:intervention] An `actions/runs?branch=<head>` listing also returns `workflow_dispatch` runs started with that branch as their ref, which ran the branch's own workflow file with any inputs; a trust rule applied to dispatch listings must also be applied (by `event`) wherever a branch listing is read. (files: scripts/claude_fixer_pending_checks.py)
 
 ## Notes
 - Issue mode; session `session_01YEZ7MVKkvpsMYW3kkWx4by` (started by the Claude issue pickup routine `PR dispatch: #5906`).

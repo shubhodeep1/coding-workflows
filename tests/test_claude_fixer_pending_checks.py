@@ -587,6 +587,32 @@ def test_an_active_review_defers_a_dry_run_too(fake_gh):
 	("newer untitled review_autofix.yml dispatch from another ref failed", [],
 		{"review_autofix.yml": [_run(RUN_ID + 3, workflow="review_autofix.yml", conclusion="failure", event="workflow_dispatch",
 			head_branch="claude/other", title="Codex PR Self-Healing Semantic Agent")]}),
+	# PR #5929 review round 2: a review workflow dispatched with the PR's head
+	# branch as its ref is in the head-branch listing as well as its own
+	# dispatch listing. It ran the branch's workflow file with whatever PR it
+	# was given, so the head-branch listing must not make it a bound review.
+	("a forged successful review_autofix.yml dispatch on the head branch after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _titled(RUN_ID + 3, "review_autofix.yml", head_branch=REF)],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", head_branch=REF)]}),
+	("a forged successful ai-review.yml dispatch on the head branch after a failed review",
+		[_run(RUN_ID + 1, workflow="ai-review.yml", conclusion="failure"), _titled(RUN_ID + 4, "ai-review.yml", head_branch=REF)],
+		{"internal-review.yml": None, "review_autofix.yml": None,
+			"ai-review.yml": [_titled(RUN_ID + 4, "ai-review.yml", head_branch=REF)]}),
+	("a forged successful internal-review.yml dispatch on the head branch after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _dispatch(RUN_ID + 2, head_branch=REF)],
+		{"internal-review.yml": [_dispatch(RUN_ID + 2, head_branch=REF)]}),
+	("a successful head-branch dispatch for another PR after a failed review",
+		[_run(RUN_ID + 1, conclusion="failure"), _dispatch(RUN_ID + 2, pr=7, head_branch=REF)],
+		{"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, head_branch=REF)]}),
+	("a successful untitled head-branch dispatch after a failed review (head-branch listing only)",
+		[_run(RUN_ID + 1, conclusion="failure"),
+			_run(RUN_ID + 3, workflow="review_autofix.yml", event="workflow_dispatch", title="Codex PR Self-Healing Semantic Agent")],
+		{}),
+	("a failed head-branch dispatch titled for another PR", [_dispatch(RUN_ID + 2, pr=7, conclusion="failure", head_branch=REF)],
+		{"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, conclusion="failure", head_branch=REF)]}),
+	("a failed head-branch dispatch, then a successful pull_request review",
+		[_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch=REF), _run(RUN_ID + 6)],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch=REF)]}),
 ])
 def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -639,6 +665,15 @@ def test_an_unsuccessful_newer_review_supersedes_the_marker(fake_gh, label, bran
 		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", pr=7, conclusion="failure", head_branch="claude/other")]}),
 	("a newer failed internal-review.yml dispatch for another PR from another ref", [],
 		{"internal-review.yml": [_dispatch(RUN_ID + 2, pr=7, conclusion="failure", head_branch="claude/other")]}),
+	# PR #5929 review round 2: a head-branch dispatch is never a bound review,
+	# so a successful one changes nothing, and a non-review dispatch is ignored.
+	("a newer successful review_autofix.yml dispatch on the head branch", [_titled(RUN_ID + 3, "review_autofix.yml", head_branch=REF)],
+		{"review_autofix.yml": [_titled(RUN_ID + 3, "review_autofix.yml", head_branch=REF)]}),
+	("a newer failed non-review dispatch on the head branch",
+		[_run(RUN_ID + 1, workflow="ci.yml", conclusion="failure", event="workflow_dispatch")], {}),
+	("an older failed review dispatch on the head branch",
+		[_titled(RUN_ID - 3, "review_autofix.yml", conclusion="failure", head_branch=REF)],
+		{"review_autofix.yml": [_titled(RUN_ID - 3, "review_autofix.yml", conclusion="failure", head_branch=REF)]}),
 ])
 def test_settled_reviews_let_the_merge_through(fake_gh, label, branch_runs, listings):
 	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN, branch_runs=branch_runs,
@@ -665,6 +700,16 @@ def test_a_titled_failed_dispatch_from_another_ref_names_its_branch(fake_gh):
 	assert result["state"] == "review_superseded", result
 	assert "names this PR from a ref other than the default branch (main)" in result["reason"]
 	assert f".github/workflows/review_autofix.yml run {RUN_ID + 3} on claude/other (failure)" in result["reason"]
+
+
+def test_a_failed_head_branch_dispatch_names_its_branch(fake_gh):
+	# Only in the head-branch listing, so the block comes from that path alone.
+	fake_gh.set(comments=[_comment(5, _pending_body())], check_runs=GREEN,
+		branch_runs=[_dispatch(RUN_ID + 2, pr=7, conclusion="failure", head_branch=REF)])
+	result = _evaluate(dry_run=True)
+	assert result["state"] == "review_superseded", result
+	assert "was dispatched on this PR's head branch" in result["reason"]
+	assert f".github/workflows/internal-review.yml run {RUN_ID + 2} on {REF} (failure)" in result["reason"]
 
 
 @pytest.mark.parametrize("label, branch_runs, listings, expected", [
