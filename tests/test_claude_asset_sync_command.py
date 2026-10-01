@@ -353,12 +353,19 @@ def test_outside_conflict_checks_the_merged_settings_before_any_resolution(loade
 	assert "the resolution runs under the current guards" not in step5
 	assert step5.index("loaded_settings_check.py --before HEAD`") < step5.index("`git add` the resolved files")
 	assert "as its own Bash call before any other tool call" in step5
-	assert "resolve, `git add`, and commit nothing, and follow [Settings restart](#settings-restart)" in step5
+	# The failure path forbids resolution and staging outright (PR #5511 review
+	# round 1 on dfa204b): "resolve, `git add`, and commit nothing" read as
+	# three steps, the first two of them conflict work under unconfirmed wiring.
+	assert "commit nothing" not in step5
+	assert "do not resolve any conflict, run `git add`, or commit; go straight to [Settings restart](#settings-restart)" in step5
+	assert step5.index("do not resolve any conflict") < step5.index("`git add` the resolved files")
 	step2 = _section(plan, "**Sync the project branch**", "This and the step 3a log commit")
 	assert step2.index("step 5 settings check (`--before HEAD`)") < step2.index("then resolve it keeping both sides' intent")
 	fixer = _section(_flat(TWIN_DIR / "fix-claude-pr.md"), "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
 	assert fixer.index("run the sync's step 5 settings check (`--before HEAD`) before resolving anything") < fixer.index("`git add` the resolved files")
 	assert "When the sync's step 5 or step 6 check cannot confirm" in fixer
+	bail_out = fixer.index("when it cannot confirm the load, do not resolve any conflict, run `git add`, or commit")
+	assert fixer.index("before resolving anything") < bail_out < fixer.index("`git add` the resolved files")
 	merge = _documented_command(section, r"`(git merge [^`]*origin/<source>)`")
 	changed = re.search(r"`(git diff --quiet HEAD -- \.claude/settings\.json)`", step5)
 	check = re.search(r"`(PYTHONDONTWRITEBYTECODE=1 python3 \.claude/scripts/loaded_settings_check\.py --before HEAD)`", step5)
