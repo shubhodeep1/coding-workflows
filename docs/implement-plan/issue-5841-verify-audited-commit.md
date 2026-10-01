@@ -3,24 +3,25 @@
 - Plan: docs/plans/issue-5841-verify-audited-commit-plan.md
 - Source issue: shubhodeep1/coding-workflows#5841
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5016-dispatch-exact-run-id
-- Project branch: claude/implement-plan-issue-5841-verify-audited-commit   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5841-verify-audited-commit   Final PR: #5853 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1/1 PR (branch `claude/implement-plan-issue-5841-verify-audited-commit-phase-1`): twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project branch opened from the issue base; phase 1/1 starting twin-first.
+- Last note: phase 1/1 implemented twin-first (only `workflow-templates/.claude/` twins changed); phase PR held for the `[claude-twin-sync]` copy, blocker posted on issue #5841.
 
 ## Phases
 1. [ ] Phase 1 — same-ref fallback candidates; ref-and-commit check before any verdict in steps 9–10
    - protected paths: `.claude/scripts/dispatch_workflow.py`, `.claude/commands/implement-plan-claude.md` (twins: `workflow-templates/.claude/scripts/dispatch_workflow.py`, `workflow-templates/.claude/commands/implement-plan-claude.md`)
-   - [ ] helper twin: `new_runs(..., ref=None)` keeps only runs whose `head_branch` is the dispatched ref; `dispatch` passes it
-   - [ ] `tests/test_dispatch_workflow.py`: same-ref filter tests against the twin
-   - [ ] command twin: step 2 pre-sync head; steps 9–10 ref + audited-commit rule, all candidates, one re-dispatch; Dispatch helper paragraph
-   - [ ] `tests/test_implement_plan_claude_command.py`: twin-reading tests for steps 2, 9, 10
-   - [ ] `agents.md`, `changelog.d/5841-verify-audited-commit.md`
+   - [x] helper twin: `new_runs(..., dispatched_ref=None)` keeps only runs whose `head_branch` is the dispatched ref; `dispatch` passes it (`workflow-templates/.claude/scripts/dispatch_workflow.py:107-122`, `:271`)
+   - [x] `tests/test_dispatch_workflow.py`: 5 same-ref filter tests against the twin (`dw_twin`); `_run` carries `head_branch`; the two `new_runs` fakes accept `dispatched_ref`
+   - [x] command twin: step 2 pre-sync head (line 19); step 9 ref + audited-commit rule, all candidates, one re-dispatch (line 71); step 10 (line 78); Dispatch helper paragraph (line 179)
+   - [x] `tests/test_implement_plan_claude_command.py`: 5 twin-reading tests for steps 2, 9, 10 and the Dispatch helper section
+   - [x] `agents.md` (dispatch_workflow bullet), `changelog.d/5841-verify-audited-commit.md` (`security`)
+   - review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -48,3 +49,5 @@
 - Security pass: `security_pass_skip.py` → `{"skip": true, "label": "ai:security", "reason": "ai:security: created and labelled by the issue automation"}`, so step 9 is skipped.
 - Stale Routine sweep (2026-10-01): 100 listed, nothing to delete (33 kept, 67 not ours).
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-01)
+- Phase 1 verification (2026-10-01): on the phase branch `tests/test_dispatch_workflow.py` + `tests/test_implement_plan_claude_command.py` → 85 passed / 1 skipped, the two `test_template_parity` tests red until the twin sync (by design). Reverse check: with the twins at `HEAD~1`, all 10 new tests fail. Scratch copy with both twins in `.claude/`, every test file that names `implement-plan-claude`, `dispatch_workflow`, `changelog.d`, or `agents.md` (34 files) → 2195 passed / 1 skipped / 1 failed; the failure (`test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean`) is `scripts/review_issue_ledger.sh: gawk: command not found`, a sandbox tool gap unrelated to this change. `ruff check` clean. Twin sha256: `dispatch_workflow.py` `4c9bb4aae89c7f5ec00fce9236592978a9732b69947a9bb578610838a786dabb`, `implement-plan-claude.md` `c08f007b45dd0341c6e76d8026baea28d1b902457e2a9583eab910826286b568`.
+- Sandbox note: `tests/test_ingest_implement_plan_lessons.py` and seven other suites import `yaml`, which the session's `pytest` lacks; they ran through `uv run --no-project --with pytest --with pyyaml`.
