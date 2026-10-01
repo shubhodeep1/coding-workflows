@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Keep reusable workflow-template copies in sync with their corresponding implementation files.",
   "timestamps": {
     "created_at": "2026-10-01T07:34:43Z",
