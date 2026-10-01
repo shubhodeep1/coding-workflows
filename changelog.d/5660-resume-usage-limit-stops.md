@@ -6,13 +6,15 @@ On 2026-09-30, 47 sessions failed between 10:29Z and 10:59Z with `You've hit you
 The pickup's wakes are cron Routines, which keep firing through a failed turn, so the pickup is the first session to run after a reset. On every `start`, hourly, and catch-up wake it now:
 - lists sessions (3 days back) and enabled triggers;
 - runs `.claude/scripts/usage_limit_resumes.py`;
-- sends each selected session one `Resume after usage limit (#<N>)` trigger, two minutes out.
+- sends each selected session one `Resume after usage limit (#<N>)` trigger, spaced at 4 wakes every 3 minutes.
 
 The script selects `IDLE` sessions whose last summary carries the usage-limit or account rate-limit error, plus checkers whose `rate_limit_info` shows a `rejected` limit that has since reset and that have no trigger at all. It skips a session that is:
 - archived, running, or on a permission prompt;
 - the pickup itself;
 - still limited;
-- bound to a wake that is already due.
+- bound to a wake that is already due, including an earlier resume trigger that has not fired yet.
+
+A session whose resumed turn fails on a limit again is picked again on the next wake. Waking 57 sessions within about 10 minutes on 2026-09-30 made some resumed turns fail with `Server is temporarily limiting requests` or hit the limit again, which is why the wakes are spaced.
 
 Nothing is resumed while the account is still limited. Checkers repeat their latest checker instructions, after checking that the stage they would start does not exist yet. Other sessions re-read their state and continue. Every prompt names `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`.
 
@@ -20,8 +22,9 @@ Nothing is resumed while the account is still limited. Checkers repeat their lat
 | --- | --- |
 | Sessions resumed per wake | at most 20 (`CLAUDE_USAGE_LIMIT_RESUME_LIMIT`, clamped 1..40) |
 | Order | checkers first, then the oldest `updated_at` |
-| Wake that blocks a resume | a bound trigger due within 30 minutes (for a checker, any bound trigger) |
-| `create_trigger` pacing | 10 per minute across the wake; a background 60-second wait on `Trigger creation rate limit reached` |
+| Wake that blocks a resume | a pending resume trigger, or another bound trigger due within 30 minutes (for a checker, any bound trigger) |
+| Wake spacing | 4 every 3 minutes, first at 2 minutes (`fire_offset_minutes`; 29 minutes at the largest cap) |
+| `create_trigger` pacing | at most 8 per minute across the wake (observed limit about 9); a background 60-second wait on `Trigger creation rate limit reached` |
 | Sessions listed per wake | 3 days back, at most 10 pages of 100 |
 | New report fields | `limit_resumed=<n>; limit_pending=<n>` |
 

@@ -300,9 +300,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
         `need_input`, and with no enabled trigger at all.
     - **Skip reasons:** `pickup`, `archived`, `not_idle:<status>`,
       `permission_prompt`, `needs_input`, `not_reset` (its own limit still
-      in the future), `wake_pending` (a trigger due within 30 minutes,
-      overdue, or unreadable; for a checker, any trigger, since its
-      triggers are its own check-ins).
+      in the future), `wake_pending` (a pending `Resume after usage limit`
+      trigger whatever its time, or another trigger due within 30 minutes,
+      overdue, or unreadable, read from `next_run_at` else `run_once_at`;
+      for a checker, any trigger, since its triggers are its own
+      check-ins). A fired resume trigger no longer counts, so a session
+      whose resumed turn fails on a limit again is picked again.
     - **Hold-off:** `allowed` and `allowed_warning` count as allowed. When
       the pickup's own `rate_limit_info` is still limited, `not_reset` is
       true and nothing is resumed.
@@ -310,14 +313,20 @@ Phases of the unattended pipeline (each is a separate workflow file under
       at `CLAUDE_USAGE_LIMIT_RESUME_LIMIT` (default 20, clamped to 1..40).
       The rest go to `pending`.
     - **Resume:** each resume is one `create_trigger` bound to the session,
-      two minutes out, named `Resume after usage limit (#<N>)` (else
+      `fire_offset_minutes` out from its creation (4 every 3 minutes: 2, 2,
+      2, 2, 5, …, at most 29 at the largest cap; waking every stopped
+      session at once made the resumed turns fail on a rate limit again),
+      named `Resume after usage limit (#<N>)` (else
       `(PR #<n>)`, else the id's last 8 characters). Its prompt is fixed text
       from the script plus the login: checkers repeat their latest
       checker-instructions after checking that the session a step would
-      create does not exist yet; others re-read state and continue. Both
+      create does not exist yet (up to 5 pages of 100 sessions, matched by
+      exact title, creation time, and this repository as the source);
+      others re-read state and continue. Both
       restate the #5068 and #4858 rules.
-    - **Pacing:** triggers are created at 10 per minute across the wake,
-      queue starts included. After each 10th call, or on `Trigger creation
+    - **Pacing:** triggers are created at most 8 per minute across the
+      wake (observed limit about 9), queue starts included. After each 8th
+      call, or on `Trigger creation
       rate limit reached`, the pickup waits with a background `sleep 60`. A
       call refused three times waits for the next wake.
     - **Report:** the line adds `limit_resumed=<n>; limit_pending=<n, or

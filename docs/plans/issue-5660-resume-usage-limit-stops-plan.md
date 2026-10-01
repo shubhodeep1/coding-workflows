@@ -38,9 +38,10 @@ When the account hits its Claude usage limit, every running session fails its tu
   - waiting on a permission prompt;
   - the pickup itself;
   - bound to a wake that is scheduled soon.
-- A pending resume trigger counts as a scheduled wake, so no session is resumed twice for the same stop.
+- A pending resume trigger counts as a scheduled wake, whatever its time, so no session is resumed twice for the same stop. A fired resume trigger no longer counts, so a session whose resumed turn fails on a limit again is picked again on the next wake (owner comment, 16:39Z; AD-18).
 - While the account is still limited, the selector resumes nothing and reports `not_reset`.
-- The pickup paces `create_trigger` at 10 per minute across the wake and waits out `Trigger creation rate limit reached` instead of failing.
+- The resumes fire spaced at 4 every 3 minutes, checkers first: each `resume` entry carries `fire_offset_minutes` (2, 2, 2, 2, 5, …), and the pickup sets `run_once_at` to the trigger's creation time plus that offset (owner comment, 16:39Z; AD-15).
+- The pickup paces `create_trigger` at most 8 per minute across the wake (owner comment, 16:13Z; AD-16, superseding AD-5's 10) and waits out `Trigger creation rate limit reached` instead of failing.
 - The pickup's one-line report carries `limit_resumed=<n>` and `limit_pending=<n>`.
 - `.claude/scripts/stale_routines.py` deletes ended `Resume after usage limit (…)` Routines.
 - The selector has unit tests for each skip reason, the cap, the ordering, the hold-off, and malformed input. The pickup wiring has command-text tests. `ruff check` is clean on the new script.
@@ -261,12 +262,37 @@ Ships with the final PR into `main`. The pickup reads its command file and scrip
   - Alternatives: B, delete the note entirely and add no row.
   - Why: the issue asks for both. The fallback covers the AD-9 window.
 
+- AD-14 **Q14: Two owner comments added requirements after phase 1 was built (16:13Z: pace at 8 per minute; 16:39Z: space when resumes fire, about 4 per 3 minutes, a small per-wake cap, and re-pick a session whose resumed turn failed), and the round-1 reviewers flagged the duplicate-stage guard. How are they handled?**
+  - Picked: A. Fold them into phase PR #5718 now, twin-first, with one new twin-sync blocker.
+  - Alternatives: B, arm the wait on #5718 as synced and leave them out; C, leave them for a separate issue.
+  - Why: owner comments are part of the issue's spec, and every change touches `.claude/`, so doing it now costs one sync instead of two. B and C ship the resume burst the owner saw re-trip the limits on 2026-09-30.
+- AD-15 **Q15: How are the resume fire times spaced?**
+  - Picked: A. The selector gives each `resume` entry `fire_offset_minutes` = 2 + 3 × ⌊position / 4⌋ (positions in `resume` order, so checkers fire first; 29 at the largest cap), and the pickup sets `run_once_at` to the moment it creates that trigger plus the offset.
+  - Alternatives: B, the script emits absolute `run_once_at` times; C, the pickup computes the spacing itself.
+  - Why: an offset read at creation time stays in the future across pacing waits, where a precomputed time can already be past, and a wait only widens the spacing. The script still decides.
+- AD-16 **Q16: How fast does the pickup create triggers?**
+  - Picked: A. At most 8 `create_trigger` calls per minute across the wake, with the same background `sleep 60` and 3 retries (supersedes AD-5's 10).
+  - Alternatives: B, keep 10.
+  - Why: the owner observed about 9 per minute and asked for 8.
+- AD-17 **Q17: Does the per-wake cap change?**
+  - Picked: A. Keep the default of 20 (clamped 1..40). With the spacing, 20 resumes fire over 2–17 minutes, about 1.3 per minute, which is the owner's 4 per 3 minutes.
+  - Alternatives: B, lower the default to 8; C, lower it to 12.
+  - Why: the issue body sets 20, and the comment names no number. The spacing bounds the fire rate either way, and a lower cap only adds hourly wakes before the last session resumes.
+- AD-18 **Q18: How is a resume whose turn failed again picked again without double resumes?**
+  - Picked: A. A fired (disabled or ended) resume trigger no longer counts as a wake, so the session is picked again. A pending resume trigger counts whatever its time. A trigger's time is `next_run_at`, else `run_once_at`.
+  - Alternatives: B, keep the 30-minute window for resume triggers too.
+  - Why: spacing at the largest cap plus pacing waits can put a resume more than 30 minutes out, and under B a catch-up wake could resume that session a second time.
+- AD-19 **Q19: How wide is the checker prompt's duplicate-stage guard?**
+  - Picked: A. Page `list_sessions` by 100 back to the latest checker-instructions message (at most 5 pages), and match the exact title, a creation time after that message, and this repository as the source.
+  - Alternatives: B, keep one page of 20 matched by title; C, drop the guard.
+  - Why: six of the seven round-1 reviewers showed that B can miss the child or match another repository's session. C risks a second copy of a stage.
+
 ## Notes
 
 - `security_pass_skip.py` result: `{"skip": false, "label": null, "reason": "no skip label"}`.
 
 ## References
 
-- Issue #5660, and the owner's comment of 2026-09-30 12:43Z.
+- Issue #5660, and the owner's comments of 2026-09-30 12:43Z, 16:13Z (pacing), and 16:39Z (fire spacing, re-pick).
 - Related: #4910, #5068, #4858, #4948 / Q40, #4785, #4990 (the pickup catch-up wake), #4525 (why a pickup session).
 - `docs/operations/master-session.md`: "Usage limit stops" and "Retiring the master".
