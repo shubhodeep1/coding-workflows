@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5824-dispatched-review-pr-head-checkout   Final PR: #5837 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
 - Waiting on: PR #5857
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_016vfvJu7J6F4Y3sRhBoQPFf   safety net and hand-back: see the latest stage report
 - Last updated: 2026-10-01
-- Last note: phase 1 PR #5857 opened (review rounds in Claude-fixer mode); checker armed — ids in the stage report and the resume block.
+- Last note: review round 1 on PR #5857 (head dd699bf3c838): fixed the one valid finding (AUTOFIX_GATE_REVIEW_CHECKOUT missing from both agents.md stable-log-prefix inventories) plus a regression test; nothing rejected.
 
 ## Phases
-1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 1; interventions: 0
    - gate exports `review_checkout_sha` from the existing `/pulls/<n>` fetch (same-repo heads only)
    - `codex-agent` → "Checkout repo" uses `pull_request.head.sha || review_checkout_sha || github.sha`
    - regression test `tests/test_review_autofix_dispatch_pr_head_checkout.py`; updated `tests/test_review_autofix_merge_precheck.py`
@@ -38,6 +38,7 @@
 - AD-3 [plan, 2026-10-01] Should the `HEAD_SHA` env of the interim judge, behavioural smoke, and claude-branch consensus steps also switch to the gate head? — Picked: A — no, out of scope. Alternatives: B — switch them too. Why: they are not reviewer file reads, and the issue's acceptance criteria do not cover them (§5). Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:intervention] A workflow change that emits a new stable log prefix must add it to both `agents.md` inventories (the "Stable log prefixes (contractual)" bullet list and the `LOG_PREFIX.name=` block) in the same PR, and a test should pin both entries. (files: agents.md, .github/workflows/review_autofix.yml)
 
 ## Notes
 - Security pass: run (`security_pass_skip.py`: no skip label).

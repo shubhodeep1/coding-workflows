@@ -32,6 +32,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEWERS_SCRIPT = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+AGENTS_MD = REPO_ROOT / "agents.md"
 
 REPOSITORY = "shubhodeep1/coding-workflows"
 HEAD = "a645b00f3c3d0d6c1e2f8b9a7c6d5e4f3a2b1c0d"
@@ -188,6 +189,14 @@ def test_reviewers_read_files_from_github_workspace():
 	"""The checkout above is what the reviewers read; keep the two pinned together."""
 	text = REVIEWERS_SCRIPT.read_text(encoding="utf-8")
 	assert 'local reviewer_opencode_workspace="${GITHUB_WORKSPACE:-$(pwd)}"' in text
+
+
+def test_review_checkout_log_prefix_is_registered_in_agents_md():
+	"""The gate's new log prefix is in both contractual inventories (PR #5857 review round 1)."""
+	assert "AUTOFIX_GATE_REVIEW_CHECKOUT pr=" in _workflow_text()
+	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	assert "\n- `AUTOFIX_GATE_REVIEW_CHECKOUT`\n" in agents_text
+	assert "\nLOG_PREFIX.name=AUTOFIX_GATE_REVIEW_CHECKOUT\n" in agents_text
 
 
 # ---------------------------------------------------------------------------
