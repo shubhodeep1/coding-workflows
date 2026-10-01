@@ -2168,8 +2168,8 @@ sweep runs in the sessions that create them, never in Actions:
 
 Three kinds of automation session are never archived by the flows that start
 them: `/fix-claude-pr` fixer and hold sessions that were never handed their
-terminal PR back, issue-start sessions after the `/implement-plan-claude`
-chain has moved past them, and §26.D report sessions (issue #4887). The Claude
+terminal PR back, issue-start sessions after their issue is closed, and
+§26.D report sessions (issue #4887). The Claude
 issue pickup archives them on its hourly `— wake.`
 (`.claude/commands/claude-issue-pickup.md` step 3a), so a session left open
 no longer needs an operator's hand:
@@ -2195,23 +2195,25 @@ no longer needs an operator's hand:
     `issue <owner>/<repo>#<n> — implement`, `implement-issue-claude — #<n>`,
     and `#<n> · implement-issue-claude` (later
     `#<n> · PR #<pr> — implement-issue-claude`), whose only issue number is
-    the prefix, a form the pickup has been seen to use):
-    a later `implement-plan issue-<n>-… — <stage>` session (not a checker,
-    `waiting:`, or `deploy-activate` session) for the same repository and
-    issue is on the page, or the issue is closed;
+    the prefix, a form the pickup has been seen to use): its issue is
+    closed. A later `implement-plan issue-<n>-… — <stage>` session does not
+    count (issue #5664): the checker archives a stage whose start trigger
+    failed, and archiving the issue-start session would disable its safety
+    net and hand-back Routines, which a session page cannot show were
+    already deleted;
   - **report** (`PR #<n> <merged | closed> — <no action needed | action
     needed | decision needed>`): its `updated_at` is at least 7 days old
     (`--report-days`) and it is not `need_input`.
   A `RUNNING` or `REQUIRES_ACTION` session (a permission prompt) is never
   archived. A `need_input` question blocks archiving only for a report
   session: a hold or issue-start question is moot once its PR is terminal or
-  its issue is closed or superseded. Checkers, stage sessions, the pickup,
+  its issue is closed. Checkers, stage sessions, the pickup,
   `/deploy-activate`, and every other title are never archived. Blocked
   sessions that `/reclarify` replaced are #4817's rule.
 - **Budget and failure** (§15): one `list_sessions` page per wake, walked
   across wakes with the cursor back to a 30-day horizon, and one REST read
-  per distinct pull request or issue a rule needs (none for reports or
-  superseded sessions), never GraphQL. A failed read keeps the session and
+  per distinct pull request or issue a rule needs (none for reports), never
+  GraphQL. A failed read keeps the session and
   lists it under `errors`; a sweep that fails as a whole is reported in the
   pickup's one-line report and never stops the wake. Archiving is reversible
   (`unarchive_session`).

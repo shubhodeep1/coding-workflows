@@ -3,8 +3,8 @@
 
 Three kinds of automation session are never archived by the flows that start
 them: `/fix-claude-pr` fixer and hold sessions after their pull request is
-terminal, issue-start sessions after the `/implement-plan-claude` chain has
-moved past them, and CLAUDE.md §26.D report sessions (issue #4887). This script
+terminal, issue-start sessions after their issue is closed, and CLAUDE.md
+§26.D report sessions (issue #4887). This script
 decides which of them to archive; the Claude issue pickup lists one page of
 sessions, runs this script, re-checks each printed session with `get_session`,
 and calls `archive_session` on it. The script never archives anything itself.
@@ -44,8 +44,9 @@ Only these titles are eligible, each with or without the #4886 prefix
 
 Every other title (checkers, stage sessions, the pickup, `/deploy-activate`,
 operator sessions) counts as `not_ours` and is never named. Stage sessions
-(`implement-plan issue-<n>-… — <stage>`) are read only to detect that an
-issue-start session was superseded.
+(`implement-plan issue-<n>-… — <stage>`) are recognised only to count them as
+`not_ours`: a later stage never makes an issue-start session archivable
+(issue #5664, below).
 
 An eligible session is named only when it is `SESSION_STATUS_IDLE`, its
 bucket is not `…_WORKING`, it is not `--self`, and:
@@ -53,9 +54,12 @@ bucket is not `…_WORKING`, it is not `--self`, and:
   1. fixer: its pull request merged or closed at least `--fixer-grace-hours`
      (default 2) ago. The grace leaves the §26 checker time to hand the
      terminal PR back, which makes the fixer archive itself first;
-  2. issue-start: a later stage session (not `— checker`, `— waiting:…`, or
-     `— deploy-activate`) for the same repository and issue is on this page,
-     or the issue is closed;
+  2. issue-start: its issue is closed. A later stage session on the page
+     does not count (issue #5664): the checker archives a stage whose start
+     trigger failed, and even a live stage does not prove that the
+     issue-start session's safety net and hand-back Routines were deleted.
+     Archiving the issue-start session disables those Routines, which could
+     stall the chain, and a session page cannot show either check;
   3. report: its `updated_at` is at least `--report-days` (default 7) old and
      its `post_turn_summary.status_category` is not `need_input` (a report
      still waiting on an answer stays).
@@ -64,8 +68,8 @@ A `RUNNING` or `REQUIRES_ACTION` session (a permission prompt) is never named.
 
 API budget (CLAUDE.md §15): REST only, never GraphQL, one `gh api
 repos/<owner>/<repo>/pulls/<n>` or `…/issues/<n>` call per distinct pull
-request or issue that a rule needs, and none for report sessions or for a
-superseded issue-start session. A failed read keeps the session and is
+request or issue that a rule needs, and none for report sessions. A failed
+read keeps the session and is
 reported in `errors` (fail safe: never archive on missing data). A
 repository with a `.` or `..` path segment is never read and keeps the
 session, with an error.
@@ -105,6 +109,8 @@ ISSUE_START_TITLE_PATTERNS = (
 	re.compile(r"^#(?P<issue>\d+) · (?:PR #\d+ — )?implement-issue-claude(?![\w-])"),
 )
 STAGE_TITLE_PATTERN = re.compile(r"^implement-plan issue-(?P<issue>\d+)-\S* — (?P<stage>.+)$")
+# No longer used for archiving: since issue #5664 no stage supersedes an
+# issue-start session. Kept so the module's names do not change (CLAUDE.md §6).
 NON_SUPERSEDING_STAGE_PATTERN = re.compile(r"^(?:checker|waiting:|deploy-activate)")
 ISSUE_PREFIX_PATTERN = re.compile(r"^#\d+ · ")
 PR_PREFIX_PATTERN = re.compile(r"^PR #\d+ — ")
@@ -276,7 +282,6 @@ def classify(sessions: list[dict], now: dt.datetime, self_id: str | None = None,
 	fixer_grace_hours: float = DEFAULT_FIXER_GRACE_HOURS, report_days: float = DEFAULT_REPORT_DAYS) -> dict:
 	"""Split `sessions` into the ones to archive and counts of the rest."""
 	parsed = []
-	later_stages: dict[tuple[str, int], list[tuple[dt.datetime, str, str]]] = {}
 	for session in sessions:
 		session_id, title = session.get("id"), session.get("title")
 		if not isinstance(session_id, str) or not isinstance(title, str):
@@ -284,13 +289,6 @@ def classify(sessions: list[dict], now: dt.datetime, self_id: str | None = None,
 			continue
 		kind, fields = classify_title(title)
 		parsed.append((session, kind, fields))
-		repo = session_repo(session)
-		if kind == "stage" and repo and not NON_SUPERSEDING_STAGE_PATTERN.match(fields["stage"]):
-			try:
-				created_at = _parse_time(session.get("created_at"))
-			except ValueError:
-				continue
-			later_stages.setdefault((repo, fields["issue"]), []).append((created_at, session_id, title))
 
 	to_archive: list[dict] = []
 	errors: list[str] = []
@@ -326,13 +324,10 @@ def classify(sessions: list[dict], now: dt.datetime, self_id: str | None = None,
 					terminal = _terminal_pr_age_hours(repo, fields["pr"], now, cache)
 					if terminal is not None and terminal[1] >= fixer_grace_hours:
 						reason = f"fixer: {repo}#{fields['pr']} {terminal[0]} {terminal[1]:.1f}h ago (>= {fixer_grace_hours:g}h)"
-				else:
-					created_at = _parse_time(session.get("created_at"))
-					later = sorted(item for item in later_stages.get((repo, fields["issue"]), []) if item[0] > created_at)
-					if later:
-						reason = f"issue-start: superseded by {later[0][1]} ({later[0][2]})"
-					elif _issue_closed(repo, fields["issue"], cache):
-						reason = f"issue-start: {repo}#{fields['issue']} closed"
+				elif _issue_closed(repo, fields["issue"], cache):
+					# Only a closed issue ends an issue-start session: a later
+					# stage session may be one that never started (issue #5664).
+					reason = f"issue-start: {repo}#{fields['issue']} closed"
 		except (SessionReadError, KeyError, TypeError, ValueError) as exc:
 			errors.append(f"{session_id} ({title}): {exc}")
 			kept += 1
