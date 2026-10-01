@@ -64,6 +64,58 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   **Model-provider outages (`provider_unavailable`, issue #5773).**
+   `"Assemble failure evidence"` (and the empty-noop marker in
+   `"Post editor summary comment"`) pass the reviewer / editor logs
+   (`PREVIOUS_REVIEWS_DIR`, `RUNTIME_DIR`) to
+   `workflow_failure_heal.py autofix-failure-fingerprint --provider-log-dir`.
+   A provider error there names the failure `provider_unavailable`: 402 or
+   `Insufficient credits` and 401 on the provider key on sight, 429 and 5xx
+   only when no reviewer succeeded (no `status_*.txt` reads `success`). Such
+   a run exports `AUTOFIX_PROVIDER_UNAVAILABLE=true` and
+   `AUTOFIX_PROVIDER_OUTAGE=provider=… status=… kind=… key=…`; it labels no
+   linked issue `ai:review-blocked`, forces no orchestrator tick, sends no
+   per-PR "PR autofix failed" alert, and posts an "AI review/autofix paused:
+   model provider unavailable" comment. Its `reason=provider_unavailable`
+   marker never counts toward the fingerprint cap or the heal streak, and
+   `.claude/scripts/check_in_status.py` reports the not-done
+   `provider-unavailable` (`wait`) for its failed check, so no Claude fixer
+   starts. The heal reporter reports it on the first failure, and the heal
+   intake (`scripts/workflow_failure_heal_intake.sh`) files no heal issue.
+   Instead it calls `scripts/provider_outage.py record`, which opens at most one
+   `ai:provider-outage` marker issue in coding-workflows and sends one
+   Telegram `ERROR` alert naming the provider, status and key (never its
+   value). While the marker is open, a failed release run is recorded on it
+   instead of being diagnosed. The marker label is excluded from clarify and
+   from the Claude issue route. The `provider-outage-probe` job of
+   `review_autofix_sweep.yml` (`*/30`) costs one read without a marker. With
+   one, it makes a single 1-token completion (`PROVIDER_OUTAGE_PROBE_MODEL`,
+   default `XPOLL_SUMMARISER_MODEL` or `openai/gpt-6-luna`) and the `sweep`
+   job skips its dispatches (`AUTOFIX_SWEEP_SKIP_ALL reason=provider_outage`).
+   On HTTP 200 it resumes and then closes the marker:
+   - re-dispatches review for every open PR updated since the outage whose
+     latest trusted failure marker on its head is `provider_unavailable`
+     (`internal-review.yml` here, `ai-review.yml` in registered consumers);
+   - removes `ai:review-blocked` only where its latest `labeled` event lies
+     in the outage window and was made by the workflow account (on those PRs
+     and the issues they reference);
+   - releases a hold claim only when it was posted in the window, every
+     failed check on the head is an outage run, and the PR is not conflicted
+     (it posts a newer `kind=review` claim by `provider-outage-probe-<run>`);
+   - re-runs the newest recorded release run when
+     `PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED=true` (default `false`, a §23.C
+     dispatch) and otherwise reports it;
+   - records what it handled in an `ai:provider-outage-resume:v1` comment,
+     and sends one Telegram `WARNING` "recovered" alert.
+
+   Failure modes:
+   - A wrong probe model or a missing `OPENROUTER_API_KEY` keeps the marker
+     open (`PROVIDER_OUTAGE … probe status=<n>`); an operator may close it
+     by hand, which re-enables the sweep but resumes nothing.
+   - A failed tick fails open: the sweep runs.
+
+   Switches: `PROVIDER_OUTAGE_PROBE_ENABLED=false` turns the probe and the
+   skip off. Marker creation rides `WORKFLOW_HEAL_ENABLED`.
    The review editor's disposable Docker workspace admits `.cjs`, `.mjs`,
    `.cts`, and `.mts` alongside other source extensions for snapshot and
    validated transfer. Its isolation helpers must already exist in the

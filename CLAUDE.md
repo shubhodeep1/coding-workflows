@@ -1880,8 +1880,9 @@ hand-back trigger id, a session id, and a role. There is at most one
    | `conflict`, `review-round`, `ci-failed`, `blocked` | `hand_back_fixer` | 4    |
    | `merged`, `closed`                                 | `hand_back_all`   | 4    |
 
-2. **`action` is `wait`** (`open`, `claimed`, `held`, or waiting on a
-   run) → renew the dead-man's switch on every subscriber's Routine
+2. **`action` is `wait`** (`open`, `claimed`, `held`,
+   `provider-unavailable`, or waiting on a run) → renew the dead-man's
+   switch on every subscriber's Routine
    (`update_trigger` with only `run_once_at` = now + 7 days), call
    `send_later` with `delay_minutes: 60`, `initiation: own_followup`, and
    `name` = `PR #<n> status check-in` into the checker session, and end
@@ -2138,6 +2139,19 @@ sweep runs in the sessions that create them, never in Actions:
   or pending on the branch, or a failed check with none either. No age
   window applies, except that a `claude/implement-plan-*` head keeps its
   chain's 6-hour stuck window for failed checks.
+- **A model-provider outage is never a fix.** A review that failed
+  because the model provider is down (OpenRouter 402 credits, 401 key, or
+  429 / 5xx with the whole reviewer panel down) is named
+  `provider_unavailable` in its `review-autofix-failure:v1` marker (issue
+  #5773). Its failed check is not a failed check: `check_in_status.py`
+  reports the not-done `provider-unavailable` (`action: wait`) when
+  nothing else failed, so no checker or sweep starts a fixer and nothing
+  counts toward the hand-back cap. No session asks a human to add
+  credits. The review workflow labels nothing `ai:review-blocked` for it,
+  the heal intake opens one `ai:provider-outage` marker issue with one
+  alert, and the `provider-outage-probe` job of
+  `.github/workflows/review_autofix_sweep.yml` re-runs the paused reviews
+  when the provider recovers (`scripts/provider_outage.py`).
 - **Catch-all sweep.** The `claude-pr-catch-all` job of
   `.github/workflows/review_autofix_sweep.yml` runs hourly (cron
   `17 * * * *`) in coding-workflows over this repo and every repo in
