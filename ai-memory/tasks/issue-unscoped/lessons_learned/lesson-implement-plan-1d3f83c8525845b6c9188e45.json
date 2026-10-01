@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:31:53Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a gate is scoped by head ref, every merge-capable path must classify on a ref read at the merge point, not on a snapshot from an earlier job or an earlier step of the same tick, and should hand that same PR object to the gate (`--pr-json`) so the fix costs no extra API call.",
+  "phase": "implement_plan",
+  "pr_number": 5572,
+  "record_id": "lesson-implement-plan-1d3f83c8525845b6c9188e45",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5564-hold-gate-ready-labels-and-poller-merge",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}

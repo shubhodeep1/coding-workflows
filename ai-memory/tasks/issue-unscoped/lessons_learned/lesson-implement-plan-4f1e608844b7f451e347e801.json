@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T10:31:53Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a step refreshes the head ref for one decision (the hold gate), every later ref-based decision in the same step, such as the merge strategy, must use the refreshed ref too, falling back to the snapshot only when the refresh did.",
+  "phase": "implement_plan",
+  "pr_number": 5572,
+  "record_id": "lesson-implement-plan-4f1e608844b7f451e347e801",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5564-hold-gate-ready-labels-and-poller-merge",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

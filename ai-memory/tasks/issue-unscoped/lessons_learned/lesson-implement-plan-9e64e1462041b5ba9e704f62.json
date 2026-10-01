@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:31:53Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-closed freshness read added for a ref-scoped gate must fall back to the old behaviour for refs outside that scope (classify on the earlier read's ref when the re-read fails), or a transient API error starts holding back every other merge.",
+  "phase": "implement_plan",
+  "pr_number": 5572,
+  "record_id": "lesson-implement-plan-9e64e1462041b5ba9e704f62",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5564-hold-gate-ready-labels-and-poller-merge",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/orchestrate_poll_process.sh"
+  ]
+}

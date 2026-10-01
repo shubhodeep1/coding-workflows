@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T10:31:53Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A freshness re-read that guards a ref-scoped gate (`claude/*` heads) must re-read the head ref in the same call as the head SHA: a branch rename keeps the SHA, so a SHA-only check passes on a stale ref classification.",
+  "phase": "implement_plan",
+  "pr_number": 5572,
+  "record_id": "lesson-implement-plan-ba3beacb88998b323426bf68",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5564-hold-gate-ready-labels-and-poller-merge",
+    "file:.github/workflows/review_autofix.yml",
+    "file:scripts/review_enable_auto_merge.sh"
+  ]
+}
