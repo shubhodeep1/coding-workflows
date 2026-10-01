@@ -370,6 +370,15 @@ def _bash(command):
 		# A `?` in the password is still userinfo, and a query after the host stays.
 		("curl https://user:pa?ss1234@host/path", "ss1234", "curl https://***@host/path"),
 		("curl https://user:p@ss1234@host?x=1", "ss1234", "curl https://***@host?x=1"),
+		# A backtick or `$(…)` command substitution runs a command line of its own, unquoted, inside double quotes,
+		# attached to a flag, nested, or escaped inside a `-c` command line.
+		("echo `mysql -pS3cretPass app`", "S3cretPass", "echo `mysql -p*** app`"),
+		("echo \"`mysql -pS3cretPass app`\"", "S3cretPass", "echo \"`mysql -p*** app`\""),
+		("echo \"$(mysql -pS3cretPass app)\"", "S3cretPass", "echo \"$(mysql -p*** app)\""),
+		("echo \"$(sudo mysql -pS3cretPass)\"", "S3cretPass", "echo \"$(sudo mysql -p***)\""),
+		("tool -o\"$(mysql -pS3cretPass app)\"", "S3cretPass", "tool -o\"$(mysql -p*** app)\""),
+		("echo \"$(echo \"$(mysql -pS3cretPass)\")\"", "S3cretPass", "echo \"$(echo \"$(mysql -p***)\")\""),
+		("sh -c \"echo \\`mysql -pS3cretPass\\`\"", "S3cretPass", "sh -c \"echo \\`mysql -p***\\`\""),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -443,6 +452,8 @@ def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
 		"pwsh -NoProfile -Command Get-Date",
 		"pwsh -Command='Get-Date'",
 		"su postgres --command='psql -c \"select 1\"'",
+		# A quoted command substitution without credentials changes nothing.
+		"git tag \"v$(date +%Y%m%d)\"",
 	],
 )
 def test_credential_free_commands_are_unchanged(command):
@@ -494,6 +505,11 @@ def test_credential_free_commands_are_unchanged(command):
 		("pwsh -Command='mysql -pS3cretPass app'", "pwsh -Command=*"),
 		("pwsh -Command:'mysql -pS3cretPass app'", "pwsh -Command:*"),
 		("sudo -u bash mysql -pSecretAbc app", "sudo -u * -p* *"),
+		# A backtick substitution is split into its commands like `$(…)`; one attached to a flag is a value.
+		("echo `mysql -pS3cretPass app`", "echo * ( mysql -p* * )"),
+		("echo $(mysql -pS3cretPass app)", "echo * ( mysql -p* * )"),
+		("tool -o\"$(mysql -pS3cretPass app)\"", "tool -o*"),
+		("tool -o\"`mysql -pS3cretPass app`\"", "tool -o*"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):
