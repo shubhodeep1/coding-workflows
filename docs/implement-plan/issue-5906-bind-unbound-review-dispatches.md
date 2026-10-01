@@ -5,16 +5,16 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
 - Project branch: claude/implement-plan-issue-5906-bind-unbound-review-dispatches   Final PR: #5916 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
+- Stage: phase 1/1 — blocked PR (intervention 1/3)
 - Activation: not started
 - Waiting on: PR #5929
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_016uEWHbfeYumDLuXt13ZaAp   safety net and hand-back re-armed by the review round 5 stage (ids in its report)
+- Check-in: checker session_016uEWHbfeYumDLuXt13ZaAp   safety net and hand-back re-armed by the phase 1/1 blocked PR intervention (ids in its report)
 - Last updated: 2026-10-01
-- Last note: review round 5 on PR #5929: 1 consensus finding fixed (a successful `push` run of internal-review.yml's no-PR route on the head branch counted as a bound review and could mask a failed review). Same root cause as rounds 1 to 4: the head-branch listing still trusted runs by excluding `workflow_dispatch` instead of naming the one trusted event, a gap in the rule that predates this PR. The rule now names it (`_is_this_repo_pull_request_run()`, AD-9) and sends every other head-branch review run, fork runs included, through `_classify_review_dispatch()`; waiting on round 6.
+- Last note: intervention 1/3 on PR #5929 (2026-10-01): the review workflow labelled it `ai:review-blocked` at MAX_AUTOFIX_ITERATIONS (5) before reviewing the round 5 head `e3d19b6`, so no finding on that head is unresolved; this `[claude-intervention]` commit restarts the autofix count so the reviewer panel reviews the round 5 fix (AD-9). Waiting on that review.
 
 ## Phases
-1. [ ] Phase 1 — bind review dispatches to their PR and count their failures   — PR #5929 open (waiting); review rounds: 5; interventions: 0
+1. [ ] Phase 1 — bind review dispatches to their PR and count their failures   — PR #5929 open (waiting); review rounds: 5; interventions: 1 (2026-10-01: autofix cap reached before the round 5 head was reviewed; no code change, count restarted)
    - `run-name` `<workflow name> [pr:<pr_number>]` on `workflow_dispatch` in `.github/workflows/review_autofix.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/ai-review.yml`, `workflow-templates/review_rb_judge_dispatch.yml`
    - `check_review_runs()` in `scripts/claude_fixer_pending_checks.py`: a newer completed dispatch titled for the PR joins the bound reviews; a newer unsuccessful one with no PR binding returns `review_superseded`
    - Tests: the audit's scenario, every new path, the run-name wiring; existing #4900 / #5147 / #5148 suites green
