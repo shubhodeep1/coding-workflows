@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document the new `grants` subcommand in the module docstring.\n  expected_change_site: `workflow-templates/.claude/scripts/escalation_ledger.py` module docstring\n  confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: qwen reports that the Subcommands section at lines 1-62 omits `grants`; deepseek_deepseek-v4-pro, minimax_minimax-m3, and z-ai_glm-5_2 report that the twin documents `grants` at lines 47-52, disputing the gap.\n(No other task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nFile: workflow-templates/.claude/scripts/escalation_ledger.py\nLine or code reference: Module docstring, lines 1-62 (Subcommands section)\nProblem: The module docstring lists three subcommands (fingerprint, allowed, record) but does not document the new `grants` subcommand added in this commit. The `grants` subcommand is documented in `--help`, tests, `implement-plan-claude.md`, `agents.md`, `CLAUDE.md`, and the changelog fragment, but the module docstring is the first thing a reader sees when opening the file.\nWhy it fails at runtime: No runtime impact. The `grants` subcommand works correctly. This is a documentation gap that could confuse a future maintainer reading the docstring to understand the script's capabilities.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "734c7f1ed35db26e553f60f8b29d93731514741d83bed2f081cb44d11ae42311",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36912083058",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36912083058",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001193820_a47b9e5af0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36912083058"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T19:38:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
