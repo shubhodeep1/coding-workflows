@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/claude-issue-pickup.md:32-40, 84 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: A failed or malformed `list_triggers` page read is not defined as an incomplete listing, so pickup branches can act on partial results.\n  WHY: Partial results can lead to duplicate pickups or catch-ups, or cause wake to exit without draining the queue; severity is MAJOR for three reviewers and NIT for deepseek_deepseek-v4-pro.\n- scripts/claude_checker_restart.py:366 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: An empty cursor on a non-last page produces the generic incomplete-listing error before the cursor-chain mismatch can be reported.\n  WHY: The listing is still correctly marked incomplete, but the cursor mismatch is not inspected and the error is less specific.\n- scripts/claude_checker_restart.py:317-320 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `load_triggers` now returns `([], True)` rather than `([], False)` for a bare-array input of `\"[]\"`.\n  WHY: This is a behavioral change on malformed or cut input, though the reviewer reports no production caller depends on the old return value.\n- scripts/claude_checker_restart.py:334 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The docstring phrase \u201cthe last page has no `has_more`\u201d is ambiguous about whether the field is absent or boolean false.\n  WHY: The implementation treats a missing field as incomplete, but a future caller could misread the wording as allowing an absent field.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_checker_restart.py:366 | severity=low | confidence=3\n  PROBLEM: For a non-last page with an empty `next_cursor`, the generic incomplete-listing error occurs before the cursor-chain mismatch is evaluated.\n  WHY: The listing is still correctly marked incomplete, but the cursor mismatch is not inspected and the error is less specific.\n- .claude/commands/claude-issue-pickup.md:32 | severity=low | confidence=2\n  PROBLEM: Step 1 does not explicitly define a failed intermediate `list_triggers` page read as making the listing incomplete.\n  WHY: The model could proceed using only page 1 after a page-2 read fails, potentially creating a duplicate pickup based on partial data.\n- scripts/claude_checker_restart.py:317-320 | severity=low | confidence=3\n  PROBLEM: `load_triggers` changed its return value for a bare-array input: `load_triggers(\"[]\")` previously returned `([], False)` and now returns `([], True)`.\n  WHY: No runtime failure is reported; the reviewer notes there are zero production callers outside the test suite and the change affects malformed or cut input.\n- scripts/claude_checker_restart.py:334\n  PROBLEM: The docstring bullet \"the last page has no `has_more`\" could be read as allowing the field to be absent.\n  WHY: The code rejects an absent field; the suggested wording is \"the last page has `has_more` equal to False\" or \"the last page has `has_more: false`.\"\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/claude_checker_restart.py:334\n  PROBLEM: The `load_trigger_pages` docstring phrase \"the last page has no has_more\" could be interpreted as the field being absent rather than boolean False.\n  WHY: The code enforces boolean False for the last page.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_checker_restart.py:334 | severity=low | confidence=4\n  PROBLEM: The docstring bullet \"- the last page has no `has_more`;\" is ambiguous about whether the field is absent or boolean false.\n  WHY: The implementation marks a missing field incomplete, but a future caller could expect an absent field to mean `has_more=False`.\n- .claude/commands/claude-issue-pickup.md:32, 33\u201340, 84 | severity=high | confidence=4\n  PROBLEM: The pickup command does not classify a failed or malformed page read as an incomplete listing before its branches act on partial results.\n  WHY: `start` can create a duplicate pickup, `\u2014 wake.` can exit without draining the queue, `stop` can leave a pickup unreported, and catch-up can schedule a duplicate.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/claude-issue-pickup.md:32-40, 84 | severity=high | confidence=4\n  PROBLEM: The command does not define a failed later-page `list_triggers` call as making the listing incomplete or require stopping before using pages already read.\n  WHY: If an earlier page reports `has_more: true` and the next page read fails, `start` can create a duplicate pickup or wake can incorrectly report that it is not the active pickup and stop draining the queue.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/commands/claude-issue-pickup.md: Step 1 (lines 32-35) | severity=high | confidence=3\n  PROBLEM: The command does not define a failed `list_triggers` page read as making the listing incomplete or require stopping before acting on partial results.\n  WHY: `start` can create a duplicate pickup, `\u2014 wake.` can exit without draining the queue, and catch-up can schedule a duplicate.\n- scripts/claude_checker_restart.py: load_trigger_pages docstring, line 334 | severity=low | confidence=4\n  PROBLEM: The docstring phrase \"the last page has no `has_more`\" can be read as allowing the field to be absent.\n  WHY: The code requires boolean False, so a future caller could misread the contract.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_checker_restart.py: Location: load_trigger_pages docstring, line 333-334\n  PROBLEM: The completeness-condition bullet \"the last page has no `has_more`\" can be read as allowing the field to be absent.\n  WHY: The code treats a None field as incomplete; a future caller could incorrectly expect an absent field to indicate a complete listing.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2cde02c9131eb09644fcb62f9b321a910cd97203c86a7510dfcf3ccfc4ded103",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5755,
+    "run_id": "36830136765",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36830136765",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001082748_a2a893aef1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5755,
+    "run_id": "36830136765"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T08:27:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
