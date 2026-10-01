@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:2553-2633 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: After a rate-limited run-list read, the loop continues to an unconditional 15-second sleep before retrying the read or checking the registration deadline, which can cause a false `retry_dispatch_failed`; the run-status rate-limit path has the same structural issue with its longer deadline.\n  WHY: When the rate-limit wait leaves fewer than 15 seconds before the applicable deadline, the sleep crosses it and the deadline check exits without retrying the read, even if the rate limit cleared and the dispatched run registered.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:2585-2589 (run-list read rate-limit path) and 2628-2633 (run-status read rate-limit path), interacting with line 2554 | severity=high | confidence=4\n  PROBLEM: After a rate-limited run-list read, the loop continues to an unconditional 15-second sleep before checking the registration deadline or retrying the read; the run-status read path has the same structural defect with its longer deadline.\n  WHY: The rate-limit wait can leave less than 15 seconds before the registration deadline, so the next loop's sleep crosses it and exits with `retry_dispatch_failed` without retrying the read, even if the rate limit cleared and the run registered.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/test-and-mark-stable.yml: lines 2553-2554, 2580-2589 | severity=high | confidence=4\n  PROBLEM: After a rate-limited post-dispatch run-list read, the loop continues to an unconditional 15-second sleep before checking the registration deadline or retrying the read.\n  WHY: If the wait leaves 15 seconds or fewer in the 90-second registration window, the sleep crosses the deadline and exits with `retry_dispatch_failed` without retrying the query after the limit clears.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml: 2553-2554, 2587-2589, 2579-2583 | severity=high | confidence=4\n  PROBLEM: After a rate-limited run-list read, the loop continues to an unconditional 15-second sleep before checking the registration deadline or retrying the read.\n  WHY: If the rate limit clears with fewer than 15 seconds remaining, the sleep crosses the deadline and reports `retry_dispatch_failed` without querying the run list, even if the dispatched run registered before the deadline.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml: Lines 2553-2554 (`while`/`sleep 15` at loop top) combined with lines 2587-2589 (run-list rate-limit `continue`) and line 2580 (registration deadline check) | severity=high | confidence=3\n  PROBLEM: After a rate-limited run-list read, the loop continues to an unconditional 15-second sleep before checking the registration deadline or retrying the read.\n  WHY: If the rate limit clears with fewer than 15 seconds left in the 90-second registration window, the sleep crosses the deadline and exits with `retry_dispatch_failed` even though the dispatched run may have registered within the window.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/test-and-mark-stable.yml: Lines 2554 (sleep 15), 2587-2589 (rate-limited run-list read \u2192 continue), 2580-2583 (registration deadline check) | severity=high | confidence=3\n  PROBLEM: After a rate-limited run-list read, the loop continues to an unconditional 15-second sleep before checking the registration deadline or retrying the read.\n  WHY: If the rate-limit wait brings the clock close to the 90-second deadline, the sleep crosses it and exits with `retry_dispatch_failed` without retrying the read, even though the rate limit cleared and the run may have registered.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b289db7fb96383012409ac2ab57246156c0e5624a6f0f36a4d69dd05ecf3ef7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5874,
+    "run_id": "36818541234",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36818541234",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001054732_f54adb8a14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5874,
+    "run_id": "36818541234"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T05:47:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
