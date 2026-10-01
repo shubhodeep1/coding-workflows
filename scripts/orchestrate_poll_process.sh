@@ -19212,15 +19212,27 @@ The poller will resume processing on the next cycle."
               # saw; it is also the gate's --pr-json. (CLAUDE.md §15: the
               # _pw_pr_json read above predates the check-run wait, so it
               # cannot prove the ref; this is the only other PR read here.)
+              # When the re-read fails or returns no head ref, the earlier
+              # read's ref classifies instead, so a non-claude/* PR merges
+              # exactly as before (PR #5572 review round 3); a claude/* ref
+              # without a confirmed head, or no ref at all, defers.
               _pw_match_args=()
               _pw_gate_pr_json="$(_fetch_pr_json "${PW_PR}")"
               _pw_gate_head_sha="$(_jq_field "${_pw_gate_pr_json}" '.head.sha')"
               _pw_head_ref="$(_jq_field "${_pw_gate_pr_json}" '.head.ref')"
-              if [ -z "${_pw_gate_head_sha}" ] || [ "${_pw_gate_head_sha}" != "${_pw_head_sha}" ] || [ -z "${_pw_head_ref}" ]; then
-                echo "  [backward-scan] Deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}: could not confirm head ${_pw_head_sha:-unknown} and its ref at the merge point (current head ${_pw_gate_head_sha:-unknown})."
+              _pw_gate_class_ref="${_pw_head_ref}"
+              if [ -z "${_pw_gate_class_ref}" ]; then
+                _pw_gate_class_ref="$(_jq_field "${_pw_pr_json}" '.head.ref')"
+              fi
+              if [ -z "${_pw_gate_class_ref}" ]; then
+                echo "  [backward-scan] Deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}: could not determine its head ref at the merge point."
                 continue
               fi
-              if [[ "${_pw_head_ref}" == claude/* ]]; then
+              if [[ "${_pw_gate_class_ref}" == claude/* ]]; then
+                if [ -z "${_pw_gate_head_sha}" ] || [ "${_pw_gate_head_sha}" != "${_pw_head_sha}" ] || [ -z "${_pw_head_ref}" ]; then
+                  echo "  [backward-scan] Deferring auto-merge of claude/* PR #${PW_PR} for prior-wave issue #${pw_inum}: could not confirm head ${_pw_head_sha:-unknown} and its ref at the merge point (current head ${_pw_gate_head_sha:-unknown})."
+                  continue
+                fi
                 if ! [[ "${_pw_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
                   || ! _orch_claude_merge_hold_gate_allows "${PW_PR}" "${_pw_head_sha}" "${_pw_gate_pr_json}"; then
                   echo "  [backward-scan] Deferring auto-merge of claude/* PR #${PW_PR} for prior-wave issue #${pw_inum}: merge hold gate did not allow head ${_pw_head_sha:-unknown}."
@@ -19930,15 +19942,27 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		  # §15: the _rtm_pr_json read above predates the checks, the sibling
 		  # probe, and the pre-merge alignment, so it cannot prove the ref;
 		  # this is the only other PR read here.)
+		  # When the re-read fails or returns no head ref, the earlier read's
+		  # ref classifies instead, so a non-claude/* PR merges exactly as
+		  # before (PR #5572 review round 3); a claude/* ref without a
+		  # confirmed head, or no ref at all, defers.
 		  _rtm_match_args=()
 		  _rtm_gate_pr_json="$(_fetch_pr_json "${RTM_PR}")"
 		  _rtm_gate_head_sha="$(_jq_field "${_rtm_gate_pr_json}" '.head.sha')"
 		  _rtm_gate_head_ref="$(_jq_field "${_rtm_gate_pr_json}" '.head.ref')"
-		  if [ -z "${_rtm_gate_head_sha}" ] || [ "${_rtm_gate_head_sha}" != "${_rtm_head_sha}" ] || [ -z "${_rtm_gate_head_ref}" ]; then
-		    echo "  Deferring merge of PR #${RTM_PR} for issue #${rtm_issue}: could not confirm head ${_rtm_head_sha:-unknown} and its ref at the merge point (current head ${_rtm_gate_head_sha:-unknown})."
+		  _rtm_gate_class_ref="${_rtm_gate_head_ref}"
+		  if [ -z "${_rtm_gate_class_ref}" ]; then
+		    _rtm_gate_class_ref="${_rtm_head_ref}"
+		  fi
+		  if [ -z "${_rtm_gate_class_ref}" ]; then
+		    echo "  Deferring merge of PR #${RTM_PR} for issue #${rtm_issue}: could not determine its head ref at the merge point."
 		    continue
 		  fi
-		  if [[ "${_rtm_gate_head_ref}" == claude/* ]]; then
+		  if [[ "${_rtm_gate_class_ref}" == claude/* ]]; then
+		    if [ -z "${_rtm_gate_head_sha}" ] || [ "${_rtm_gate_head_sha}" != "${_rtm_head_sha}" ] || [ -z "${_rtm_gate_head_ref}" ]; then
+		      echo "  Deferring merge of claude/* PR #${RTM_PR} for issue #${rtm_issue}: could not confirm head ${_rtm_head_sha:-unknown} and its ref at the merge point (current head ${_rtm_gate_head_sha:-unknown})."
+		      continue
+		    fi
 		    if ! [[ "${_rtm_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
 		      || ! _orch_claude_merge_hold_gate_allows "${RTM_PR}" "${_rtm_head_sha}" "${_rtm_gate_pr_json}"; then
 		      echo "  Deferring merge of claude/* PR #${RTM_PR} for issue #${rtm_issue}: merge hold gate did not allow head ${_rtm_head_sha:-unknown}."

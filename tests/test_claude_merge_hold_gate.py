@@ -589,7 +589,7 @@ def test_deterministic_skip_checks_out_the_gate_for_claude_heads():
 
 def test_deterministic_skip_runs_the_gate_before_every_merge_call():
 	run = _step(_jobs()["deterministic-skip-merge"], "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")["run"]
-	branch = 'elif ! deterministic_skip_head_is_current "deterministic-skip auto-merge enablement" "Auto-merge not enabled"; then'
+	branch = 'elif ! deterministic_skip_head_is_current "deterministic-skip auto-merge enablement" "Auto-merge not enabled" "true"; then'
 	assert branch in run
 	assert run.index(branch) < run.index("gh_retry gh pr merge"), "the hold gate branch must precede every merge call"
 	# PR #5572 review round 2: the merge path no longer classifies on the
@@ -644,6 +644,10 @@ def test_deterministic_skip_gates_a_head_renamed_to_claude_before_enabling_auto_
 	assert proc.returncode == 0, proc.stderr
 	assert merges == []
 	assert f"AUTOFIX_AUTO_MERGE_SKIPPED pr=42 head_sha={HEAD} reason=hold_claim" in proc.stdout, proc.stdout
+	# PR #5572 review round 3: the refusal names the ref that met the gate,
+	# not the gate job's pre-rename snapshot.
+	assert "Auto-merge not enabled on PR #42 (head ref 'claude/implement-plan-x-phase-1')" in proc.stdout, proc.stdout
+	assert "(head ref 'ai/issue-42')" not in proc.stdout, proc.stdout
 	assert _label_posts(tmp_path) == []
 
 
@@ -665,11 +669,62 @@ def test_deterministic_skip_refuses_auto_merge_when_the_head_moved(tmp_path):
 
 
 def test_deterministic_skip_refuses_auto_merge_when_the_refresh_fails(tmp_path):
-	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(fail=[f"repos/{REPO}/pulls/42"]), head_ref="ai/issue-42")
+	# A claude/* snapshot ref fails closed when the refresh cannot be read.
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(fail=[f"repos/{REPO}/pulls/42"]))
 	assert proc.returncode == 0, proc.stderr
 	assert merges == []
 	assert "Could not refresh the current head for PR #42; refusing deterministic-skip auto-merge enablement." in proc.stdout, proc.stdout
 	assert _label_posts(tmp_path) == []
+
+
+def test_deterministic_skip_enables_auto_merge_for_other_heads_when_the_refresh_fails(tmp_path):
+	# PR #5572 review round 3: a transient read error must not hold back a
+	# non-claude/* merge. The snapshot ref classifies, and the merge stays
+	# bound to the gate-observed head by --match-head-commit.
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(fail=[f"repos/{REPO}/pulls/42"]), head_ref="ai/issue-42")
+	assert proc.returncode == 0, proc.stderr
+	assert merges == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
+	assert "AUTOFIX_MERGE_HOLD_GATE" not in proc.stdout
+	assert "AUTOFIX_AUTO_MERGE_SKIPPED" not in proc.stdout
+	assert len(_label_posts(tmp_path)) == 1
+
+
+def test_deterministic_skip_enables_auto_merge_for_other_heads_when_the_refresh_has_no_ref(tmp_path):
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(pr=_pr(ref="")), head_ref="ai/issue-42")
+	assert proc.returncode == 0, proc.stderr
+	assert merges == [["pr", "merge", "42", "--repo", REPO, "--squash", "--auto", "--match-head-commit", HEAD]]
+	assert "AUTOFIX_MERGE_HOLD_GATE" not in proc.stdout
+
+
+def test_deterministic_skip_gates_a_renamed_claude_head_when_the_refresh_has_no_sha(tmp_path):
+	# A read that names a claude/* ref but no head SHA cannot confirm the
+	# head, and must not fall back to the non-claude/* snapshot ref.
+	pr = _pr()
+	pr["head"]["sha"] = None
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(pr=pr), head_ref="ai/issue-42")
+	assert proc.returncode == 0, proc.stderr
+	assert merges == []
+	assert "no longer points at gate-observed head" in proc.stdout, proc.stdout
+	assert _label_posts(tmp_path) == []
+
+
+def test_deterministic_skip_refuses_auto_merge_for_a_claude_snapshot_when_the_refresh_has_no_ref(tmp_path):
+	proc, merges = _run_deterministic_skip_step(tmp_path, _fixture(pr=_pr(ref="")))
+	assert proc.returncode == 0, proc.stderr
+	assert merges == []
+	assert "Could not determine the head ref of PR #42" in proc.stdout + proc.stderr
+	assert _label_posts(tmp_path) == []
+
+
+def test_deterministic_skip_forward_merge_manual_mode_rechecks_a_head_the_shared_check_did_not_confirm():
+	# The manual forward-merge mode enables no head-bound merge, so a shared
+	# check that fell back to the snapshot ref must not authorize its labels.
+	run = _step(_jobs()["deterministic-skip-merge"], "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")["run"]
+	assert 'if [ "${deterministic_skip_head_verified}" = "true" ] || deterministic_skip_head_is_current; then' in run
+	start = run.index("deterministic_skip_head_is_current()")
+	body = run[start:run.index("\n}\n", start)]
+	assert body.index('[[ "${PR_HEAD_REF}" != claude/* ]]') < body.index("return 0")
+	assert body.rindex('deterministic_skip_head_verified="true"') > body.index("merge_hold_gate_allows")
 
 
 def _label_posts(tmp_path):
@@ -832,8 +887,8 @@ def test_poller_gate_fails_closed_on_a_read_error(tmp_path):
 
 
 @pytest.mark.parametrize("merge_var,ref_var,sha_var,json_var", [
-	("RTM_PR", "_rtm_gate_head_ref", "_rtm_head_sha", "_rtm_gate_pr_json"),
-	("PW_PR", "_pw_head_ref", "_pw_head_sha", "_pw_gate_pr_json"),
+	("RTM_PR", "_rtm_gate_class_ref", "_rtm_head_sha", "_rtm_gate_pr_json"),
+	("PW_PR", "_pw_gate_class_ref", "_pw_head_sha", "_pw_gate_pr_json"),
 ])
 def test_poller_ready_to_merge_merges_run_the_gate_and_bind_the_head(merge_var, ref_var, sha_var, json_var):
 	text = POLLER.read_text(encoding="utf-8")
@@ -854,7 +909,13 @@ def test_poller_ready_to_merge_merges_run_the_gate_and_bind_the_head(merge_var, 
 	refresh = f'{json_var}="$(_fetch_pr_json "${{{merge_var}}}")"'
 	refresh_at = text.rindex(refresh, 0, gate_at)
 	assert text.rindex(f'_pr_checks_completed "${{{merge_var}}}"', 0, gate_at) < refresh_at
-	assert text.index(f'{ref_var}="$(_jq_field "${{{json_var}}}" \'.head.ref\')"', refresh_at) < gate_at
+	fresh_ref_var = "_rtm_gate_head_ref" if merge_var == "RTM_PR" else "_pw_head_ref"
+	assert text.index(f'{fresh_ref_var}="$(_jq_field "${{{json_var}}}" \'.head.ref\')"', refresh_at) < gate_at
+	# PR #5572 review round 3: the fresh ref classifies; the earlier read's
+	# ref is only the fallback when the re-read has no head ref.
+	class_at = text.index(f'{ref_var}="${{{fresh_ref_var}}}"', refresh_at)
+	fallback_at = text.index(f'if [ -z "${{{ref_var}}}" ]; then', class_at)
+	assert class_at < fallback_at < text.index(f'if [[ "${{{ref_var}}}" == claude/* ]]; then', refresh_at)
 	gate_sha_var = "_rtm_gate_head_sha" if merge_var == "RTM_PR" else "_pw_gate_head_sha"
 	assert text.index(f'[ "${{{gate_sha_var}}}" != "${{{sha_var}}}" ]', refresh_at) < gate_at
 

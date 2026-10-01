@@ -11,7 +11,7 @@ With the `ENABLE_AUTO_MERGE` repo variable off, or on the `e2e-smoke-test` path,
 | Extra API calls per poller ready-to-merge attempt | 1 `pulls/{n}` read (reused by the gate as `--pr-json`) |
 | New log key | `ORCH_MERGE_HOLD_GATE pr=<n> head_sha=<sha> action=allow\|refuse reason=<…>` |
 
-What this means for operators: a held `claude/*` PR stays unlabelled and unmerged until a push lifts the hold, whatever `ENABLE_AUTO_MERGE` is set to. `orchestrate_poll.yml` now reads `vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`, so holds count the same way in the poller as in the review workflow. A support checkout without the gate refuses these merges (fail closed). If that re-read fails, or the head moved since the checks ran, the deterministic skip does not enable auto-merge and the poller defers the merge to its next tick.
+What this means for operators: a held `claude/*` PR stays unlabelled and unmerged until a push lifts the hold, whatever `ENABLE_AUTO_MERGE` is set to. `orchestrate_poll.yml` now reads `vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`, so holds count the same way in the poller as in the review workflow. A support checkout without the gate refuses these merges (fail closed). If that re-read fails for a `claude/*` PR, or its head moved since the checks ran, the deterministic skip does not enable auto-merge and the poller defers the merge to its next tick. A failed re-read never holds back a PR from any other branch: it merges as before.
 
 ### For contributors
 

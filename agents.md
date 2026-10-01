@@ -1050,14 +1050,19 @@ reviews, comments, and conflicts stay a direct §12 request.
   `deterministic_skip_head_is_current` before it enables auto-merge too
   (PR #5572 review round 2), so every deterministic-skip merge or label
   path makes that one read and refuses when the head moved, its ref is
-  unreadable, or the read fails. The poller
+  unreadable, or the read fails. On the auto-merge path only, a failed or
+  incomplete read falls back to the snapshot ref when neither that ref nor a
+  ref the read returned is `claude/*`, and the `--match-head-commit` merge proceeds as before (PR
+  #5572 review round 3). The poller
   (`_orch_claude_merge_hold_gate_allows` in
   `scripts/orchestrate_poll_process.sh`) re-reads the PR once right before
   each of its two ready-to-merge merges (current wave, prior-wave backward
-  scan), defers the merge when the head is no longer the one the checks saw
-  or its ref is unreadable, runs the gate for a `claude/*` current ref with
-  that PR object as `--pr-json`, and then merges with
-  `--match-head-commit` on that head; the gate comes
+  scan) and classifies on that read's ref, or on its earlier read's ref when
+  the re-read returns no head ref. For a `claude/*` ref it defers the
+  merge when the re-read failed or the head is no longer the one the checks
+  saw, runs the gate with that PR object as `--pr-json`, and then merges
+  with `--match-head-commit` on that head; other refs merge exactly as
+  before (PR #5572 review round 3); the gate comes
   from `CLAUDE_MERGE_HOLD_GATE_SCRIPT`, else `.codex-workflow-src/scripts/`
   (missing refuses; `.codex-workflow-src-main` is no fallback, since the
   staging step deletes it before the poller runs), and
