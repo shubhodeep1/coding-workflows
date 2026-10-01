@@ -15,13 +15,16 @@ This hook answers `permissionDecision: deny` for such a command, with a reason
 that redirects to the Edit and Write tools. A deny needs no human: the session
 reads the reason and retries with Edit or Write in the same turn.
 
-Denied, when a segment's command word (past assignments, `env`, `sudo`,
-`doas`, `timeout N`, `nice`, and the shell keywords) is the interpreter:
+Denied, when a segment's command word (past assignments, the shell keywords,
+and the wrappers `env`, `command`, `exec`, `time`, `sudo`, `doas`,
+`timeout N`, and `nice` with their options) is the interpreter:
   - `python` / `python3` / `pythonX.Y` running a program from `-c` or from a
     heredoc on stdin (`python3 - <<'EOF'`, `python3 <<'EOF'`) that writes:
     `write_text` / `write_bytes`, `open(` (or `fdopen(`, `.open(`) with a
-    `w` / `a` / `x` / `+` mode, `os.replace`, `os.rename`, `os.remove`, a
-    mutating `shutil` call, or `.unlink(`;
+    `w` / `a` / `x` / `+` mode, `os.replace`, `os.rename`, `os.renames`,
+    `os.remove`, a mutating `shutil` call (`copy`, `copy2`, `copyfile`,
+    `copyfileobj`, `copytree`, `copymode`, `copystat`, `move`, `rmtree`,
+    `chown`, `make_archive`, `unpack_archive`), or `.unlink(`;
   - `sed -i` / `--in-place`, `perl -i` / `-pi`, `ruby -i`, and
     `awk` / `gawk -i inplace`: those flags exist only to edit files in place.
 The same applies to a command inside a substitution Bash runs within one word
@@ -100,9 +103,15 @@ _AWK_NAMES = frozenset({"awk", "gawk"})
 
 # Wrappers that run the command after them, with the options that take a
 # separate value. `timeout` also takes a duration before the command, and
-# `env` also takes `NAME=VALUE` assignments.
+# `env` also takes `NAME=VALUE` assignments. `command`, `exec`, and `time` are
+# shell prefix words the tokenizer skips only when no option follows them
+# (`command -p python3`, `exec -a name python3`, `time -p python3`); `time`'s
+# value options are GNU `/usr/bin/time`'s.
 _WRAPPER_VALUE_OPTIONS = {
 	"env": frozenset({"-u", "--unset", "-C", "--chdir"}),
+	"command": frozenset(),
+	"exec": frozenset({"-a"}),
+	"time": frozenset({"-o", "-f", "--output", "--format"}),
 	"sudo": frozenset(
 		{
 			"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "-R",
@@ -114,6 +123,10 @@ _WRAPPER_VALUE_OPTIONS = {
 	"timeout": frozenset({"-s", "-k", "--signal", "--kill-after"}),
 	"nice": frozenset({"-n", "--adjustment"}),
 }
+# Prefix words the tokenizer skips that can also take options.
+_PREFIX_WRAPPERS = frozenset({"env", "command", "exec", "time"})
+# `command -v` / `-V` only describes the command after it; it does not run it.
+_COMMAND_LOOKUP_FLAGS = frozenset("vV")
 
 # Program text that writes, renames, or deletes a file.
 _MODE_WRITES = r"[rRbBuU]?(['\"])[rbt]*[wax+][rwaxbt+]*\1"
@@ -178,12 +191,13 @@ def program_writes(program: str) -> bool:
 
 
 def _skip_prefix_words(tokens: list[str], index: int, tokenizer) -> int:
-	"""Index past the keywords and assignments from `index`, stopping at `env`'s options."""
+	"""Index past the keywords and assignments from `index`, stopping at a prefix wrapper's options."""
 	start = index
 	index += tokenizer._command_word_index(tokens[index:])
-	# The tokenizer skips a bare `env` as a prefix word but stops at its first
-	# option (`env -i`, `env -u NAME`); step back so the caller skips its options.
-	if start < index < len(tokens) and tokens[index - 1] == "env" and tokens[index].startswith("-"):
+	# The tokenizer skips a bare `env` (or `command`, `exec`, `time`) as a prefix
+	# word but stops at its first option (`env -i`, `command -p`); step back so
+	# the caller skips its options.
+	if start < index < len(tokens) and tokens[index - 1] in _PREFIX_WRAPPERS and tokens[index].startswith("-"):
 		index -= 1
 	return index
 
@@ -202,6 +216,8 @@ def _command_start(tokens: list[str], tokenizer) -> int:
 			if tokens[index] == "--":
 				index += 1
 				break
+			if word == "command" and _COMMAND_LOOKUP_FLAGS.intersection(tokens[index][1:]):
+				return len(tokens)
 			index += 2 if tokens[index] in options else 1
 		if word == "timeout" and index < len(tokens):
 			index += 1
