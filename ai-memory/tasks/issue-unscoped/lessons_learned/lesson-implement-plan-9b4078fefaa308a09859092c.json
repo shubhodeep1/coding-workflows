@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T02:39:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a status helper moves a read earlier so a new check can outrank an existing early return, the early-return path pays that read too; state the per-path API cost in the docstring and changelog instead of claiming zero new calls.",
+  "phase": "implement_plan",
+  "pr_number": 5716,
+  "record_id": "lesson-implement-plan-9b4078fefaa308a09859092c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5667-checker-waits-on-held-head",
+    "file:.claude/scripts/check_in_status.py",
+    "file:changelog.d/5667-checker-waits-on-held-head.md"
+  ]
+}

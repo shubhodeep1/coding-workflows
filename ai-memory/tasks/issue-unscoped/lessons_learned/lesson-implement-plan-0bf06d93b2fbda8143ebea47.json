@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T02:39:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a review round corrects a claim in the changelog or docstring (such as an API-cost row), correct the same claim in the PR description in that round; the reviewer panel reads the description and flags the stale copy in the next round.",
+  "phase": "implement_plan",
+  "pr_number": 5716,
+  "record_id": "lesson-implement-plan-0bf06d93b2fbda8143ebea47",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5667-checker-waits-on-held-head",
+    "file:changelog.d/5667-checker-waits-on-held-head.md"
+  ]
+}

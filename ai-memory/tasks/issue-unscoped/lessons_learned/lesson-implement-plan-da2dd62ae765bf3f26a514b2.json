@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T02:39:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A review run's stale failed check stays on the PR head after the outage that caused it ends, and the next review round hands it off as a finding; a new head (a base merge) clears it, while a same-head re-review cannot.",
+  "phase": "implement_plan",
+  "pr_number": 5716,
+  "record_id": "lesson-implement-plan-da2dd62ae765bf3f26a514b2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5667-checker-waits-on-held-head",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}
