@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_016vfvJu7J6F4Y3sRhBoQPFf   safety net and hand-back: see the latest stage report
 - Last updated: 2026-10-01
-- Last note: review round 2 on PR #5857 (head 703472b444b0): the one finding (agents.md:658, the four `GITHUB_WORKSPACE` readers it names were unpinned) was valid as a coverage gap; the prose was already accurate, and a new test now pins all four readers. Nothing rejected.
+- Last note: review round 3 on PR #5857 (head bee70a7d753f): the one finding (a push between the workspace checkout and "Checkout PR head branch" leaves the reviewers on the older files while auto-merge binds to the new tip) was valid; "Checkout PR head branch" now soft-exits through `AUTOFIX_STALE_BASE_SKIP` with `AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED` when the tip moved. Nothing rejected.
 
 ## Phases
-1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 2; interventions: 0
+1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 3; interventions: 0
    - gate exports `review_checkout_sha` from the existing `/pulls/<n>` fetch (same-repo heads only)
    - `codex-agent` → "Checkout repo" uses `pull_request.head.sha || review_checkout_sha || github.sha`
    - regression test `tests/test_review_autofix_dispatch_pr_head_checkout.py`; updated `tests/test_review_autofix_merge_precheck.py`
@@ -40,6 +40,7 @@
 ## Lessons
 - [source:intervention] A workflow change that emits a new stable log prefix must add it to both `agents.md` inventories (the "Stable log prefixes (contractual)" bullet list and the `LOG_PREFIX.name=` block) in the same PR, and a test should pin both entries. (files: agents.md, .github/workflows/review_autofix.yml)
 - [source:intervention] When `agents.md` prose says which files or directories a set of scripts reads, a test should pin each named reader, not just one, or reviewers flag the unverified ones. (files: agents.md, tests/test_review_autofix_dispatch_pr_head_checkout.py)
+- [source:intervention] A step that checks out one commit for file reads and later resets the branch to its live tip must compare the two SHAs and soft-exit (or re-align) when they differ, or reviewers read one tree while merge gates bind to another. (files: .github/workflows/review_autofix.yml)
 
 ## Notes
 - Security pass: run (`security_pass_skip.py`: no skip label).

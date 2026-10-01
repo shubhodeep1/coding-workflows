@@ -3533,6 +3533,10 @@ jobs:
           # Live PR metadata may already point at a newer, unreviewed head.
           INITIAL_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
           echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"
+          # No step before this one moves HEAD, so this is also the commit
+          # whose files "Checkout repo" left in GITHUB_WORKSPACE, which the
+          # reviewers read. The reset below moves only WORKSPACE_PATH.
+          review_workspace_sha="${INITIAL_HEAD_SHA}"
 
           if [ -z "${HEAD_REF}" ] || [ "${HEAD_REF}" = "null" ]; then
             echo "Unable to determine PR head branch"
@@ -3619,6 +3623,17 @@ jobs:
           INITIAL_HEAD_SHA="$(git rev-parse HEAD)"
           echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"
           echo "Captured INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA} for stale-base detection."
+          # A push between the checked-out commit (the gate's or the event's
+          # head) and the fetch above leaves GITHUB_WORKSPACE, where the
+          # reviewers read files, on the older commit while the diff, the
+          # hand-off, and the auto-merge head bind to the new tip
+          # (PR #5857 review round 3). Soft-exit through the stale-base skip
+          # instead; the run for the new head reviews it.
+          if [ "${INITIAL_HEAD_SHA}" != "${review_workspace_sha}" ]; then
+            echo "AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED pr=${PR_NUMBER:-} workspace_sha=${review_workspace_sha:-unknown} head_sha=${INITIAL_HEAD_SHA} target_branch=${HEAD_REF} action=soft_exit"
+            echo "::warning::${HEAD_REF} moved from ${review_workspace_sha:-unknown} to ${INITIAL_HEAD_SHA} after the workspace checkout; skipping this run so no review or auto-merge pairs the new head with the old files."
+            echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Detect preexisting Serena project config
         if: env.PR_CLOSED != 'true'

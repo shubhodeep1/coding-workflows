@@ -282,6 +282,100 @@ def test_invalid_head_sha_is_not_used(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Head moved after the workspace checkout (PR #5857 review round 3)
+# ---------------------------------------------------------------------------
+
+
+def _codex_agent_step(name: str) -> dict:
+	steps = _workflow_yaml()["jobs"]["codex-agent"]["steps"]
+	return next(step for step in steps if step.get("name") == name)
+
+
+def _head_moved_fragment() -> str:
+	"""The "Checkout PR head branch" comparison block, from its `if` to its `fi`."""
+	lines = _codex_agent_step("Checkout PR head branch")["run"].splitlines()
+	start = next(
+		(i for i, line in enumerate(lines) if line.strip() == 'if [ "${INITIAL_HEAD_SHA}" != "${review_workspace_sha}" ]; then'),
+		-1,
+	)
+	assert start >= 0, "workspace/head comparison not found in Checkout PR head branch"
+	indent = len(lines[start]) - len(lines[start].lstrip(" "))
+	end = next(
+		(i for i in range(start + 1, len(lines)) if lines[i].strip() == "fi" and len(lines[i]) - len(lines[i].lstrip(" ")) == indent),
+		-1,
+	)
+	assert end > start, "closing fi of the workspace/head comparison not found"
+	return textwrap.dedent("\n".join(lines[start : end + 1]))
+
+
+def _run_head_moved_fragment(tmp_path: Path, *, workspace_sha: str, head_sha: str) -> tuple[str, str]:
+	env_file = tmp_path / "github_env"
+	env_file.write_text("", encoding="utf-8")
+	script = "set -euo pipefail\n" + _head_moved_fragment() + "\n"
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"PR_NUMBER": "5857",
+		"HEAD_REF": "claude/feature",
+		"review_workspace_sha": workspace_sha,
+		"INITIAL_HEAD_SHA": head_sha,
+		"GITHUB_ENV": str(env_file),
+	}
+	result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True)
+	return env_file.read_text(encoding="utf-8"), result.stdout
+
+
+def test_checkout_pr_head_branch_records_workspace_sha_before_reset():
+	run = _codex_agent_step("Checkout PR head branch")["run"]
+	capture = run.index('review_workspace_sha="${INITIAL_HEAD_SHA}"')
+	first_head = run.index('INITIAL_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"')
+	fetch = run.index('git fetch --no-tags --prune origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}"')
+	reset = run.index('git reset --hard "refs/remotes/origin/${HEAD_REF}"')
+	recapture = run.index('INITIAL_HEAD_SHA="$(git rev-parse HEAD)"')
+	compare = run.index('if [ "${INITIAL_HEAD_SHA}" != "${review_workspace_sha}" ]; then')
+	assert first_head < capture < fetch < reset < recapture < compare
+
+
+def test_head_moved_skip_gates_reviewers_handoff_and_auto_merge():
+	"""AUTOFIX_STALE_BASE_SKIP is what keeps the run from reviewing or merging the moved head."""
+	for name in (
+		"Run reviewer models",
+		"Hand review round to Claude session (Claude-fixer mode)",
+		"Enable auto-merge on PR",
+	):
+		assert "env.AUTOFIX_STALE_BASE_SKIP != 'true'" in str(_codex_agent_step(name)["if"]), name
+
+
+def test_unmoved_head_keeps_running(tmp_path):
+	env_text, stdout = _run_head_moved_fragment(tmp_path, workspace_sha=HEAD, head_sha=HEAD)
+	assert env_text == ""
+	assert stdout == ""
+
+
+def test_moved_head_soft_exits(tmp_path):
+	moved = "c" * 40
+	env_text, stdout = _run_head_moved_fragment(tmp_path, workspace_sha=HEAD, head_sha=moved)
+	assert env_text == "AUTOFIX_STALE_BASE_SKIP=true\n"
+	assert (
+		f"AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED pr=5857 workspace_sha={HEAD} head_sha={moved} "
+		"target_branch=claude/feature action=soft_exit"
+	) in stdout
+	assert "::warning::claude/feature moved from" in stdout
+
+
+def test_unknown_workspace_sha_soft_exits(tmp_path):
+	env_text, stdout = _run_head_moved_fragment(tmp_path, workspace_sha="", head_sha=HEAD)
+	assert env_text == "AUTOFIX_STALE_BASE_SKIP=true\n"
+	assert "workspace_sha=unknown" in stdout
+
+
+def test_head_moved_log_prefix_is_registered_in_agents_md():
+	assert "AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED pr=" in _workflow_text()
+	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	assert "\n- `AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED`\n" in agents_text
+	assert "\nLOG_PREFIX.name=AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED\n" in agents_text
+
+
+# ---------------------------------------------------------------------------
 # End to end on a scratch repository
 # ---------------------------------------------------------------------------
 

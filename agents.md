@@ -675,8 +675,19 @@ a new value, add it to the appropriate overrides file with a
   run's secrets; the gate logs `AUTOFIX_GATE_REVIEW_CHECKOUT ...
   checkout=event_sha reason=cross_repo_head` with a warning. A resolved
   checkout logs `checkout=pr_head`.
+- "Checkout PR head branch" records the commit `GITHUB_WORKSPACE` holds
+  before it fetches and resets `WORKSPACE_PATH` to the branch tip. When the
+  tip moved in between (a push after the gate read the head, or after a
+  `pull_request` event), the reviewers' files would be the older commit while
+  the diff, the hand-off, and the auto-merge head check bind to the newer
+  one. The step then logs `AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED ...
+  action=soft_exit` with a warning and sets `AUTOFIX_STALE_BASE_SKIP=true`,
+  so the run skips the reviewers, the Claude-fixer hand-off, and auto-merge;
+  the run that the push started reviews the new head. A push that starts no
+  run (one made with `GITHUB_TOKEN`) waits for the next event or the hourly
+  sweep.
 - `tests/test_review_autofix_dispatch_pr_head_checkout.py` pins the wiring and
-  runs the gate fragment for each event shape.
+  runs the gate fragment and the moved-head check for each case.
 
 ## Test-suite git environment isolation
 
@@ -1818,6 +1829,7 @@ and shipped:
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
 - `AUTOFIX_GATE_REVIEW_CHECKOUT`
+- `AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -2011,6 +2023,7 @@ LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 LOG_PREFIX.name=AUTOFIX_GATE_REVIEW_CHECKOUT
+LOG_PREFIX.name=AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED
 
 ---
 
