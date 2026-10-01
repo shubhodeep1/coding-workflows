@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5608-run-twin-guard-from-base-plan.md (moved from docs/plans/ by the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5608
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-4785-twin-first-claude-sync
-- Project branch: claude/implement-plan-issue-5608-run-twin-guard-from-base   Final PR: #5653 draft
+- Project branch: claude/implement-plan-issue-5608-run-twin-guard-from-base   Final PR: #5653 ready
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round 1
 - Activation: pending verify-activation (n/a if the base is still claude/implement-plan-issue-4785-twin-first-claude-sync when the final PR merges; Issue Mode)
-- Waiting on: completion PR (claude/implement-plan-issue-5608-run-twin-guard-from-base-complete)
+- Waiting on: PR #5653 (final PR, review round 2 after the round-1 push)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_011j2At372XRi9gKjH5qhqW4 (project checker, reused)   safety net and hand-back re-armed at the end of the completion stage
-- Last updated: 2026-09-30
-- Last note: validation cycle 1 (run 36748287842) passed 10/10 against the project branch tip d023432; conformance run 1 CONFORMANT; security skipped; completion PR moves the plan to docs/completed/
+- Last updated: 2026-10-01
+- Last note: final PR #5653 review round 1 (head b2d943a): 1 doc gap fixed (bootstrap window spelled out in agents.md and the changelog), 4 findings rejected (test is exercised, AD-2 bootstrap by design, empty provenance unreachable, temp dir on an ephemeral runner, ci.yml gap is AD-3); issue base merged in
 
 ## Phases
 1. [x] Phase 1 — run the twin sync-state guard from the base commit (protected paths: none)   — PR #5656 merged 2026-09-30 (d023432); review rounds: 1; interventions: 0
@@ -26,8 +26,8 @@
 - Cycle 1 — run 36748287842 2026-09-30 (target_ref: claude/implement-plan-issue-5608-run-twin-guard-from-base, head d023432): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 290s)
 
 ## Completion
-- Completion PR (branch claude/implement-plan-issue-5608-run-twin-guard-from-base-complete) open — doc moved to docs/completed/issue-5608-run-twin-guard-from-base-plan.md
-- Final PR #5653 draft (base claude/implement-plan-issue-4785-twin-first-claude-sync)
+- PR #5750 merged — doc moved to docs/completed/issue-5608-run-twin-guard-from-base-plan.md
+- Final PR #5653 ready — review rounds: 1 (base claude/implement-plan-issue-4785-twin-first-claude-sync)
 
 ## Activation
 
@@ -38,7 +38,9 @@
 
 ## Lessons
 - [source:intervention] In a fail-closed workflow step, give every git read its own `if ! …; then echo "::error::…"; exit 1; fi` even under `set -e`, so the job log names the read that failed instead of ending on a bare git exit code. (files: .github/workflows/ci.yml)
+- [source:intervention] When a security fix keeps a bootstrap fallback to the untrusted copy, write down who can reach that fallback and which event ends it, in the docs and the changelog, so reviewers do not read the fallback as an open hole. (files: agents.md, .github/workflows/ci.yml)
 
 ## Notes
 - Issue progress comment: 5911158781.
 - Issue mode: base is not the default branch, so the final-merge stage closes #5608 with `state_reason: completed` and `ai:merged`; Activation n/a.
+- 2026-10-01 final-merge review round 1: merged the issue base (claude/implement-plan-issue-4785-twin-first-claude-sync, still unmerged into main via #4804) into the project branch. The earlier `review / codex-agent` failures on b2d943a were reviewer-provider HTTP 402 errors, not this project's code.

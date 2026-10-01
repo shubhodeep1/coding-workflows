@@ -1282,7 +1282,13 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   that cannot be resolved or read fails the step. Only when every trusted
   commit resolves and none carries the script yet (`main` before #4804
   merges, `stable` before its next promotion) does it run the
-  checkout's copy, with a `::warning::` (bootstrap). Tests load the twin and call
+  checkout's copy, with a `::warning::` (bootstrap). In that window the PR's
+  own copy decides the check, so a PR can still weaken it. That adds nothing
+  to the `.github/workflows/ci.yml` gap below: neither `main` nor `stable`
+  carries this step yet, so only a PR whose own `ci.yml` adds the step
+  reaches the bootstrap, and that PR controls the workflow file anyway
+  (AD-2 of the #5608 plan). The window closes for `main` when #4804 merges
+  and for `stable` at its first promotion after that. Tests load the twin and call
   `tests/claude_twin_state.py::assert_claude_not_ahead`, which skips a
   differing pair in a shallow clone.
 - **Guard paths fail closed in the sync-state check** (issue #5246):
