@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5643
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net and hand-back re-armed after the round 1 push (ids in the stage report)
-- Last updated: 2026-09-30
-- Last note: review round 1 on PR #5643: 1 finding fixed (README row wording on unmerged closes), 7 rejected with reasons on the PR; project branch synced with its issue base.
+- Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net and hand-back re-armed after the round 3 intervention push (ids in the stage report)
+- Last updated: 2026-10-01
+- Last note: resumed on #5619 Q1: A after the OpenRouter credit outage; review round 3's only finding (the outage's failed `review / codex-agent` check) rejected, and the project branch merged into PR #5643 as `[claude-intervention]` for a fresh head.
 
 ## Phases
-1. [ ] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 open (waiting); review rounds: 1; interventions: 0
+1. [ ] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 open (waiting); review rounds: 3; interventions: 1 (2026-10-01: merged the project branch after the reviewer outage, Q1: A)
 
 ## Conformance
 
@@ -37,8 +37,12 @@
 
 ## Lessons
 - [source:plan-deviation] A bash list built from `$(...)` output has no trailing newline, so appending with `+="<n>"$'\n'` fuses numbers (`5` + `10` → `510`) and silently breaks `grep -qxF` membership; merge list items with a helper such as `merge_issue_number_list`. (files: .github/workflows/issue_pr_status.yml)
+- [source:intervention] When the reviewer provider fails (for example out of credits), the failed review check stays on the head and the next reviewer run reports it as a finding; no code change fixes it, so give the PR a new head (sync the base branch in) instead of a code edit. (files: .github/workflows/review_autofix.yml)
 
 ## Notes
+- 2026-10-01 review round 3 (head 2b0a1f9, run 36794127294, ledger f59789f9…): one consensus finding, the failed `review / codex-agent` check from runs 36741838875 / 36752333871 / 36760232242, all "Insufficient credits" at OpenRouter. Rejected as not a code defect. Per the owner's Q1: A on #5619, merged the project branch into the phase branch (`[claude-intervention]`, brings #5304) for a fresh head.
+- 2026-09-30 blocked: after round 2 every review run failed on the OpenRouter credit outage and the identical-failure cap labelled PR #5643 `ai:review-blocked`; asked on #5619 (Q1). The owner topped up the credits and answered Q1: A on 2026-10-01.
+- 2026-09-30 review round 2 (head 614b026, catch-all fixer session_01EKhL3MUGUcSQzmGtsY67RV): 1 finding fixed (the rejected-finding count in this log).
 - 2026-09-30 review round 1 (head 9b450c8, two reviewer runs, ledgers afd8b85b… and ae6fb495…): fixed the README `issue_pr_status.yml` row's unmerged-close wording; rejected the rest (helper scope, `+=` on a newline-terminated list, alias names kept per AD-5, `ORCH_INTEGRATION_BRANCH_PATTERN`, defensive `-n` guard, env defaults, body-URL-only test gap).
 - Issue mode: the session started in `auto` permission mode (no start-up check needed).
 - Base branch `claude/implement-plan-issue-4813-close-sweep-target-branch-merges` is project #4813's branch (final PR #4826, open draft into main at start).
