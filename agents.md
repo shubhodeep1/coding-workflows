@@ -1477,7 +1477,20 @@ ID. The validated block is placed ahead of the review-blocked footer
 (`REISSUE_ORCHESTRATOR_METADATA_CARRIED` / `_ABSENT`), and its spot-fix
 `files_touched` allowlist unions the judge's cited files with the closed PR's
 changed files that still exist at its head (`REISSUE_FILES_TOUCHED_UNION`,
-fail-open on a failed `pulls/<n>/files` listing).
+fail-open on a failed `pulls/<n>/files` listing), then with the new files the
+judge declares in `new_output_paths` (`REISSUE_FILES_TOUCHED_NEW_OUTPUTS`).
+A declared path is kept only when it passes the path validator, is
+printable ASCII with no leading or trailing space (the scope guard trims
+entries and splits lines on Unicode separators), carries no
+glob character or trailing `/`, has no `.git` segment (any depth or
+letter case), does not exist at the
+closed head (a failed lookup there skips it too), and ends in a segment with
+a file extension (`no_extension` otherwise: the scope guard lets a bare entry
+cover everything beneath it, so a new directory-shaped path would exempt a
+new subtree); at most 10 are read,
+and a rejected one is skipped, never a fallback to `redo`. Incident: #4664's
+reissue needed a new changelog fragment and four new fixtures that neither
+source could list (heal #4665).
 Before that block is appended, canonical tracking-issue, integration-branch,
 and local-ID lines are removed from the judge-generated issue prose, so only
 the PR-base-validated block can supply successor-adoption lineage. Incident:
@@ -1675,6 +1688,7 @@ and shipped:
 - `REISSUE_BASELINE_DISCARDED`
 - `REISSUE_MODE`
 - `REISSUE_FILES_TOUCHED_UNION`
+- `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
 - `REISSUE_ORCHESTRATOR_METADATA_CARRIED`
 - `REISSUE_ORCHESTRATOR_METADATA_ABSENT`
 - `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
@@ -1868,6 +1882,7 @@ LOG_PREFIX.name=REISSUE_BASELINE_PRESERVED
 LOG_PREFIX.name=REISSUE_BASELINE_DISCARDED
 LOG_PREFIX.name=REISSUE_MODE
 LOG_PREFIX.name=REISSUE_FILES_TOUCHED_UNION
+LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_CARRIED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_ABSENT
 LOG_PREFIX.name=FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1
@@ -2187,6 +2202,14 @@ depend on it.
   a bounded scope-feedback retry only after the pre-attempt state is restored
   and verified; an unsafe restore fails closed. Consumer repos retain the
   previous path, and the final `check_resolver_diff.sh` commit gate is unchanged.
+  The model itself runs on a private copy of the captured merge index
+  (`GIT_INDEX_FILE=${RUNTIME_DIR}/resolver_model_index`, refreshed before every
+  attempt by `_resolver_model_index_prepare`), so a `git add` of the file it
+  resolved no longer changes the real index that both scope guards require to
+  stay unchanged (#5627). The script stages the accepted resolution itself; a
+  model that bypasses the copy still fails closed. Because OpenCode's snapshot
+  tracking runs git with the inherited environment, the resolver's own OpenCode
+  config sets `snapshot: false`. Both changes apply to the source repo only.
 
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
 - `.github/workflows/review_autofix.yml` stages required and main-primary helpers from the verified reusable-workflow SHA; PR-head copies are review data, not runtime code. `render_prompt.py`, `review_conflict_resolve.sh` and their dependencies ship with that same workflow commit. Embedded PR-diff template syntax is still handled by `render_prompt.sh` with `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` after assembly, while static templates retain strict validation. Optional support missing from that commit skips the feature; required support fails closed. The model catalog comes from the same commit as the reviewer roster, never from a PR branch or a separately resolved main snapshot.
