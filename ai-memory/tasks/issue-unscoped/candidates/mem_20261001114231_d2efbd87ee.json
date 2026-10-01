@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/implement-plan/issue-5609-guard-synced-claude-scripts.md:45 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The lesson overgeneralizes that `workflow_dispatch` review runs attach checks to the default branch and that only a new push can clear the stale check, although conflict-recovery dispatches can target the PR head.\n  WHY: `_dispatch_review_for_conflicts` at `scripts/orchestrate_poll_process.sh:17341` dispatches with `--ref \"${head_ref}\"`, so a future session may make an unnecessary commit instead of using the valid conflict-recovery dispatch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Scope the lesson's opening to sweep re-dispatches instead of all `workflow_dispatch` review runs.\n  expected_change_site: docs/implement-plan/issue-5609-guard-synced-claude-scripts.md:45\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  EVIDENCE: Line 45 opens with \"A `workflow_dispatch` review run (sweep re-dispatch) attaches its check runs to the default branch's SHA\"; `scripts/orchestrate_poll_process.sh:17341` passes `--ref \"${head_ref}\"`, proving conflict-recovery workflow_dispatch runs attach to the PR head. `_dispatch_review_for_conflicts` at `scripts/orchestrate_poll_process.sh:17338-17344` calls `gh workflow run \u2026 --ref \"${head_ref}\"`, so those conflict-recovery dispatches attach to the PR head SHA, not the default branch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/implement-plan/issue-5609-guard-synced-claude-scripts.md:45 | severity=NIT | confidence=4\n  PROBLEM: The lesson's opening phrase \"A `workflow_dispatch` review run\" overgeneralizes because `_dispatch_review_for_conflicts` in `scripts/orchestrate_poll_process.sh:17341` dispatches via `workflow_dispatch` with `--ref \"${head_ref}\"`, and those check runs attach to the PR head; the claim that only a run on the PR head (a new push) clears it is also incomplete.\n  WHY: A future session reading only the first clause may conclude no workflow_dispatch run can clear a stale PR-head check and create an unnecessary commit or avoid a valid conflict-recovery dispatch.\n\n- Requirement: Copilot inline review (entry[47]) asks the lesson at `docs/implement-plan/issue-5609-guard-synced-claude-scripts.md:45` to scope its opening to sweep re-dispatches instead of all `workflow_dispatch` runs.\n  Expected change site: docs/implement-plan/issue-5609-guard-synced-claude-scripts.md:45\n  Evidence of absence: Line 45 reads \"A `workflow_dispatch` review run (sweep re-dispatch) attaches its check runs to the default branch's SHA\"; the qualifier is in parentheses while the opening noun phrase overgeneralizes. `scripts/orchestrate_poll_process.sh:17341` (`_dispatch_review_for_conflicts`) passes `--ref \"${head_ref}\"`, proving conflict-recovery workflow_dispatch runs attach to the PR head. The sentence should lead with \"A sweep re-dispatch\" rather than \"A `workflow_dispatch` review run\" so an AI memory retrieval reading only the first clause does not misattribute the behavior.\n  Severity: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The progress log lesson that this PR adds to AI memory at `docs/implement-plan/issue-5609-guard-synced-claude-scripts.md:45` overgeneralizes its opening clause to all `workflow_dispatch` review runs; it should scope the lesson to sweep re-dispatches because conflict-recovery dispatches via `_dispatch_review_for_conflicts` in `scripts/orchestrate_poll_process.sh:17341` pass `--ref \"${head_ref}\"` and attach check runs to the PR head, not the default branch.\n  Expected change site: docs/implement-plan/issue-5609-guard-synced-claude-scripts.md:45\n  Evidence of absence: Line 45 opens with \"A `workflow_dispatch` review run (sweep re-dispatch) attaches its check runs to the default branch's SHA, not the PR head, so a failed `review / codex-agent` from an earlier outage stays on the head even after a clean re-review; only a run on the PR head (a new push) clears it.\" The parenthetical \"(sweep re-dispatch)\" is a weak qualifier that appears after the broad opening phrase. `_dispatch_review_for_conflicts` at `scripts/orchestrate_poll_process.sh:17338-17344` (the comment also names it at line 17378 as a sibling helper) calls `gh workflow run \u2026 --ref \"${head_ref}\"`, so those conflict-recovery dispatches attach to the PR head SHA, not the default branch. The Copilot inline review (entry[47]) and four reviewers (deepseek, qwen, openai/gpt-6-luna, glm consensus finding) flag the same overgeneralization; the lesson will be ingested into AI memory by `scripts/ingest_implement_plan_lessons.py` and surfaced to future sessions as a soft prior, so an AI reading only the opening clause may skip a valid conflict-recovery dispatch in favor of an unnecessary empty push.\n  Severity: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/implement-plan/issue-5609-guard-synced-claude-scripts.md:45 | severity=NIT | confidence=4\n  PROBLEM: The lesson says that only a run on the PR head \u201c(a new push)\u201d clears the stale check, but conflict recovery also dispatches the review workflow with `--ref \"${head_ref}\"` at `scripts/orchestrate_poll_process.sh:17339-1743`, without requiring a new push.\n  WHY: A session relying on this lesson may make an unnecessary commit to trigger a head-bound review instead of using the existing conflict-recovery dispatch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/implement-plan/issue-5609-guard-synced-claude-scripts.md:45 | severity=NIT | confidence=4\n  PROBLEM: The lesson opens \"A `workflow_dispatch` review run (sweep re-dispatch) attaches its check runs to the default branch's SHA, not the PR head.\" The parenthetical narrows it, but the leading clause overgeneralizes: `_dispatch_review_for_conflicts` at `scripts/orchestrate_poll_process.sh:17341` also dispatches via `gh workflow run` with `--ref \"${head_ref}\"`, and those check runs attach to the PR head, not the default branch.\n  WHY: This lesson is ingested into AI memory by `scripts/ingest_implement_plan_lessons.py`. A future session that reads only the leading clause may conclude that no `workflow_dispatch` run can clear a stale check on a PR head, and avoid a valid conflict-recovery dispatch that would attach checks to the head correctly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "376e48f95332defa921cced6e1b10ac7e589114ef1c33aacfd629d2986247d1c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5699,
+    "run_id": "36854487961",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36854487961",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001114231_d2efbd87ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5699,
+    "run_id": "36854487961"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T11:42:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
