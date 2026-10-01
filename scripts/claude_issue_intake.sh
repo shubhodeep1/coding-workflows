@@ -58,6 +58,10 @@
 #   CLAUDE_ISSUE_QUEUE_BINDING_FILE  default ${RUNTIME_DIR}/claude-issue-queue-binding/claude_issue_queue_binding.json
 #   GITHUB_RUN_ID                 set by Actions; without it no binding is written
 #   RUN_URL, RUNTIME_DIR
+#   CLAUDE_ISSUE_ROUTED_ALERT_LEVEL  threshold for the success-only "issue queued"
+#                                 Telegram DEBUG ping (default SILENT, so it is
+#                                 dropped; set DEBUG to get it). Failure ERRORs
+#                                 still honour ALERT_MSG_LEVEL.
 
 set -euo pipefail
 
@@ -314,5 +318,7 @@ Queue item: ${QUEUE_URL}"
 [ -z "${RUN_URL}" ] || BODY+=$'\n'"Intake run: ${RUN_URL}"
 gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || \
 	log "warn dispatched_comment_failed repo=${REPO} issue=${ISSUE_NUMBER}"
-tg_send_msg "Claude issue queued for ${REPO}#${ISSUE_NUMBER} (${TRIGGER})."$'\n'"Queue item: ${QUEUE_URL}" "DEBUG" >/dev/null 2>&1 || true
+# Success-only ping: thresholded by CLAUDE_ISSUE_ROUTED_ALERT_LEVEL (default
+# SILENT), not the global ALERT_MSG_LEVEL. Mirrors PR_PROCESSED_ALERT_LEVEL.
+ALERT_MSG_LEVEL="${CLAUDE_ISSUE_ROUTED_ALERT_LEVEL:-SILENT}" tg_send_msg "Claude issue queued for ${REPO}#${ISSUE_NUMBER} (${TRIGGER})."$'\n'"Queue item: ${QUEUE_URL}" "DEBUG" >/dev/null 2>&1 || true
 exit 0
