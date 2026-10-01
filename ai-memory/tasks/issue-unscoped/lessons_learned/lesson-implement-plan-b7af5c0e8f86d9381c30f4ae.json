@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:48:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a poll loop caches an item and re-reads it by ID, a failed by-ID read needs the same throttle as a failed list read, or the fallback full walk runs on every poll cycle.",
+  "phase": "implement_plan",
+  "pr_number": 5712,
+  "record_id": "lesson-implement-plan-b7af5c0e8f86d9381c30f4ae",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5693-scope-implement-terminal-check",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

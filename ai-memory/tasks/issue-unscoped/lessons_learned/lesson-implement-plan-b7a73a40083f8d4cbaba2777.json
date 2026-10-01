@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:48:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A poll loop that walks paged results only at a terminal decision must also remember an inconclusive walk (a page cap, an unreadable page), or the walk repeats on every poll cycle; a cap over a window that only grows is final for the phase.",
+  "phase": "implement_plan",
+  "pr_number": 5712,
+  "record_id": "lesson-implement-plan-b7a73a40083f8d4cbaba2777",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5693-scope-implement-terminal-check",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

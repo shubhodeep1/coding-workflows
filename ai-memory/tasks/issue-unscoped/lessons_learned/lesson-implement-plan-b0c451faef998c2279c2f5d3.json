@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:48:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A terminal check that fails on an empty issue-scoped lookup must ride out the same listing race as the run-ID capture: confirm the empty result with a second complete lookup after a bounded delay before failing.",
+  "phase": "implement_plan",
+  "pr_number": 5712,
+  "record_id": "lesson-implement-plan-b0c451faef998c2279c2f5d3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5693-scope-implement-terminal-check",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:48:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Time a retry or confirmation interval in a poll loop from a clock read taken when the guarded action runs or finishes, not from the iteration's start: the sleep and API reads in between vary per iteration and can shorten the interval.",
+  "phase": "implement_plan",
+  "pr_number": 5712,
+  "record_id": "lesson-implement-plan-8a15059cc3946c4f34b4571e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5693-scope-implement-terminal-check",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}
