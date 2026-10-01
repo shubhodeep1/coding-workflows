@@ -1138,7 +1138,9 @@ reviews, comments, and conflicts stay a direct §12 request.
     `scripts/protected_path_gate.sh`.
 
   Paths are compared case-insensitively. A rename source counts, and a
-  truncated file list counts as protected.
+  truncated file list counts as protected, as does one with an entry whose
+  paths cannot be read (not an object, no `filename` string, or a rename
+  without a `previous_filename` string).
   - **The approval** is a PR comment whose whole body is
     `/authorize-protected-paths <40-hex head sha>`. It counts only when all
     of these hold:
@@ -1173,6 +1175,10 @@ reviews, comments, and conflicts stay a direct §12 request.
       `disabled`, `none pending`, or `disable failed: …`. A failure still
       refuses the merge and adds a `::error::` annotation, because GitHub
       can still land the pending auto-merge once checks pass.
+    - The gate writes these lines to stderr, so no guarded call may
+      discard stderr (`2>/dev/null`, `>/dev/null 2>&1`); capturing it into a
+      variable is fine. `tests/test_protected_path_authorization.py` checks
+      every call.
     - The PR's current head decides the auto-merge. A call bound to an older
       head (`--match-head-commit`) is refused for the move, and a pending
       auto-merge is still turned off when the current head is protected and

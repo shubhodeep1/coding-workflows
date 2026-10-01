@@ -31,6 +31,9 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 
+# A redirect that throws away stderr (capturing it with `2>&1 >/dev/null` does not).
+STDERR_DISCARD_RE = re.compile(r"(?<![>&\d])2>\s*/dev/null|>\s*/dev/null\s+2>&1|&>\s*/dev/null")
+
 HEAD = "a" * 40
 OTHER = "b" * 40
 
@@ -199,6 +202,41 @@ def test_truncated_file_list_counts_as_protected():
 	assert ppa.evaluate_pr(_pr(), [{"filename": "README.md"}], False, [])["decision"] == "block"
 	allowed = ppa.evaluate_pr(_pr(changed_files=5000), [{"filename": "README.md"}], True, [_comment()])
 	assert allowed["decision"] == "allow"
+
+
+@pytest.mark.parametrize("entry", [
+	{"filename": "docs/moved.md", "status": "renamed"},
+	{"filename": "docs/moved.md", "status": "renamed", "previous_filename": None},
+	{"filename": "docs/moved.md", "status": "renamed", "previous_filename": ""},
+	{"filename": "docs/moved.md", "previous_filename": 7},
+	{"status": "modified"},
+	{"filename": None},
+	"README.md",
+	None,
+])
+def test_malformed_file_entry_counts_as_protected(entry):
+	# A complete list whose count matches `changed_files` can still hide a
+	# protected path in an entry it cannot read (review round 1 after
+	# intervention 1, PR #4973), so the gate fails closed on it.
+	files = [entry]
+	assert ppa.malformed_file_entries(files) == 1
+	blocked = ppa.evaluate_pr(_pr(changed_files=1), files, True, [])
+	assert blocked["decision"] == "block" and blocked["protected"] is True
+	assert blocked["reason"].startswith("file list has 1 malformed entry;")
+	assert "file list truncated or unreadable" in ppa.instruction_body(HEAD, ppa.protected_files(files))
+	allowed = ppa.evaluate_pr(_pr(changed_files=1), files, True, [_comment()])
+	assert allowed["decision"] == "allow" and allowed["authorized"] is True
+
+
+def test_well_formed_entries_are_not_malformed():
+	files = [
+		{"filename": "README.md", "status": "modified"},
+		{"filename": "docs/new.md", "status": "renamed", "previous_filename": "docs/old.md"},
+		{"filename": "docs/added.md"},
+	]
+	assert ppa.malformed_file_entries(files) == 0
+	decision = ppa.evaluate_pr(_pr(changed_files=3), files, True, None)
+	assert decision["decision"] == "allow" and decision["protected"] is False
 
 
 def test_head_mismatch_and_missing_head_block():
@@ -1097,6 +1135,38 @@ def test_every_scripted_gh_pr_merge_is_wrapped():
 		problems += path_problems
 	assert found >= 20, found
 	assert not problems, "gh pr merge call(s) the gate cannot guard:\n" + "\n".join(problems)
+
+
+def test_guarded_merge_calls_keep_the_gate_diagnostics():
+	# The gate writes its refusal warning, its PROTECTED_PATH_GATE line, and
+	# the `::error::` for a pending auto-merge it could not turn off to
+	# stderr; a call that discards stderr hides them from the workflow log
+	# (review round 1 after intervention 1, PR #4973). Capturing stderr
+	# (`2>&1 >/dev/null` into a variable) keeps them and is allowed.
+	calls = 0
+	problems = []
+	for path in sorted(SCRIPTS_DIR.glob("*.sh")):
+		if path.name == GATE_PATH.name:
+			continue
+		for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+			if "protected_path_guarded_merge gh" not in line or line.lstrip().startswith("#"):
+				continue
+			calls += 1
+			if STDERR_DISCARD_RE.search(line):
+				problems.append(f"{path.name}:{number}: {line.strip()}")
+	assert calls >= 20, calls
+	assert not problems, "guarded merge call(s) discard the gate's stderr:\n" + "\n".join(problems)
+
+
+@pytest.mark.parametrize("line, expected", [
+	('protected_path_guarded_merge gh_retry gh pr merge "${PR}" --squash --auto >/dev/null 2>&1', True),
+	('if protected_path_guarded_merge gh pr merge "${PR}" --squash 2>/dev/null; then', True),
+	('protected_path_guarded_merge gh pr merge "${PR}" --squash &>/dev/null', True),
+	('protected_path_guarded_merge gh_retry gh pr merge "${PR}" --squash --auto >/dev/null', False),
+	('err="$(protected_path_guarded_merge gh_retry gh pr merge "${PR}" --squash 2>&1 >/dev/null)"', False),
+])
+def test_stderr_discard_pattern(line, expected):
+	assert bool(STDERR_DISCARD_RE.search(line)) is expected
 
 
 @pytest.mark.parametrize("line, calls, expected", [

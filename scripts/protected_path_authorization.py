@@ -17,7 +17,8 @@ fails closed):
   - this script and `scripts/protected_path_gate.sh` (the gate itself).
 
 A rename counts when either side is protected, and a PR whose file list is
-truncated counts as protected.
+truncated, or carries an entry whose paths cannot be read (a rename without
+`previous_filename`, for example), counts as protected.
 
 Authorization is a comment on the PR that only a person can post. It counts
 when all of these hold:
@@ -191,6 +192,29 @@ def protected_files(files: list[Any]) -> list[str]:
 	return sorted(found)
 
 
+def malformed_file_entries(files: list[Any]) -> int:
+	"""Count PR file entries whose paths cannot be read.
+
+	An entry that is not an object, has no filename string, carries a
+	non-string `previous_filename`, or is a rename (`status: renamed`) without
+	a `previous_filename` string could hide a protected path, so
+	`evaluate_pr` treats such a list like a truncated one (fail closed)."""
+	malformed = 0
+	for entry in files:
+		if not isinstance(entry, dict):
+			malformed += 1
+			continue
+		filename = entry.get("filename")
+		previous = entry.get("previous_filename")
+		if not isinstance(filename, str) or not filename:
+			malformed += 1
+		elif previous is not None and not isinstance(previous, str):
+			malformed += 1
+		elif entry.get("status") == "renamed" and not previous:
+			malformed += 1
+	return malformed
+
+
 def comment_authorizes(comment: Any, head_sha: str) -> str:
 	"""Return "" when `comment` authorizes `head_sha`, else why it does not."""
 	if not isinstance(comment, dict):
@@ -257,7 +281,8 @@ def evaluate_pr(
 		return result
 	paths = protected_files(files)
 	changed = pr.get("changed_files")
-	truncated = not files_complete or (isinstance(changed, int) and changed > len(files))
+	malformed = malformed_file_entries(files)
+	truncated = not files_complete or (isinstance(changed, int) and changed > len(files)) or malformed > 0
 	result["paths"] = paths[:PATHS_IN_OUTPUT]
 	if not paths and not truncated:
 		# An unprotected merge runs exactly as before (§5); a head SHA is
@@ -271,7 +296,10 @@ def evaluate_pr(
 		result["reason"] = "comments were not read"
 		return result
 	comment = authorizing_comment(comments, head)
-	protected_reason = "file list is truncated" if truncated and not paths else f"{len(paths)} protected-equivalent path(s) changed"
+	if truncated and not paths:
+		protected_reason = f"file list has {malformed} malformed entr{'y' if malformed == 1 else 'ies'}" if malformed else "file list is truncated"
+	else:
+		protected_reason = f"{len(paths)} protected-equivalent path(s) changed"
 	if comment is None:
 		result["reason"] = f"{protected_reason}; no owner {AUTHORIZE_COMMAND} {head} comment"
 		return result
@@ -287,7 +315,7 @@ def evaluate_pr(
 def instruction_body(head: str, paths: list[str]) -> str:
 	"""The comment asking the owner for authorization; never a bare command."""
 	# Capped like the JSON output: GitHub rejects a comment over 65,536 characters.
-	listed = "\n".join(f"- `{path}`" for path in paths[:PATHS_IN_OUTPUT]) or "- (file list truncated; treated as protected)"
+	listed = "\n".join(f"- `{path}`" for path in paths[:PATHS_IN_OUTPUT]) or "- (file list truncated or unreadable; treated as protected)"
 	if len(paths) > PATHS_IN_OUTPUT:
 		listed += f"\n- … and {len(paths) - PATHS_IN_OUTPUT} more"
 	return (
