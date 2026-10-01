@@ -24,18 +24,26 @@ outage and undoes its effects once the provider recovers:
     it resumes:
       - re-dispatches review for every open PR, in this repository and the
         registered consumers, whose latest trusted failure marker on its
-        current head is `provider_unavailable`;
+        current head is `provider_unavailable` (PRs updated since
+        RESUME_CANDIDATE_LOOKBACK_HOURS before the marker opened, so the PR
+        that first hit the outage is included);
       - removes `ai:review-blocked` only where the label's latest `labeled`
         event lies inside the outage window and was made by the workflow
         account, on a resumed PR or an issue it references;
       - releases a `hold` claim on a resumed PR's head only when the hold was
         posted inside the window, every failed check on the head belongs to an
-        outage run, and the PR is not conflicted;
+        outage run, and the PR is not conflicted (a merge state GitHub has
+        not computed yet keeps the hold and counts as an error);
       - re-runs the newest recorded release run when
         PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED is true, and otherwise reports
         it;
     then it records what it handled (`ai:provider-outage-resume:v1`), closes
-    the marker and returns the "recovered" alert text.
+    the marker and returns the "recovered" alert text. When a read or write
+    failed, the marker stays open so the next tick retries only the work not
+    yet recorded; the MAX_RESUME_ATTEMPTS-th resume tick closes it anyway and
+    the alert names the errors.
+  * `status` prints the open marker (read-only, 1 marker list and, when one
+    is open, 1 `gh api user`); operators and sessions use it to diagnose.
 
 Trust: a marker issue counts only when the workflow account (`gh api user`,
 the GH_PAT login) opened it with the `ai:provider-outage:v1` body marker, and
@@ -52,7 +60,8 @@ Batching contract (CLAUDE.md §15):
           comments; per resumed PR, 1 dispatch; per label candidate, 1 events
           read and at most 1 label delete; per held resumed PR, 1 PR read,
           1 check-run read and at most 1 claim comment; 1 release re-run when
-          enabled; 1 resume comment and 1 close per open marker.
+          enabled; 1 resume comment, and 1 close per open marker once the
+          resume has no errors or reached MAX_RESUME_ATTEMPTS.
           `record`: 1 marker list and 1 `gh api user`; on create, 1 label
           create, 1 issue create and 1 re-list; on a release run, 1 comment
           read and at most 1 comment.
@@ -105,6 +114,16 @@ DEFAULT_PROBE_MODEL = "openai/gpt-6-luna"
 PROBE_TIMEOUT_SECONDS = 30
 MAX_PAGES = 10
 RELEASE_CLAIM_BY_PREFIX = "provider-outage-probe-"
+# The PR that first hit the outage posts its failure comment (its last
+# `updated_at`) before the heal intake opens the marker, so the candidate scan
+# looks this far behind the marker's `created_at`. Labels and holds keep the
+# marker's own window.
+RESUME_CANDIDATE_LOOKBACK_HOURS = 6
+# A resume that hit a read or write error keeps the marker open so the next
+# tick retries the work not yet recorded; after this many resume ticks it
+# closes anyway and the alert names the errors, so one unreachable repository
+# cannot pause the sweep for good.
+MAX_RESUME_ATTEMPTS = 3
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _MARKER_RE = re.compile(
@@ -246,6 +265,15 @@ def handled_keys(comments: list, workflow_login: str) -> set[str]:
 		for match in _RESUME_RE.finditer(heal.sanitize_text(comment.get("body"))):
 			handled.update(key for key in match.group("handled").split(",") if _HANDLED_KEY_RE.match(key))
 	return handled
+
+
+def resume_attempts(comments: list, workflow_login: str) -> int:
+	"""How many resume comments the workflow account already posted on this marker."""
+	login = (workflow_login or "").casefold()
+	return sum(
+		1 for comment in _ordered(comments)
+		if login and _login(comment) == login and _RESUME_RE.search(heal.sanitize_text(comment.get("body")))
+	)
 
 
 def latest_review_outcome(comments: list, head_sha: str, workflow_login: str) -> dict[str, Any] | None:
@@ -391,6 +419,8 @@ def render_resume_comment(summary: dict[str, Any], handled: list[str]) -> str:
 	]
 	if summary["errors"]:
 		lines.append(f"- Not resumed (read or write failed): {'; '.join(summary['errors'])}")
+	if summary.get("marker"):
+		lines.append(f"- Marker: {summary['marker']}")
 	lines += ["", f"<!-- {RESUME_MARKER_TAG} handled={','.join(sorted(set(handled)))} -->"]
 	return "\n".join(lines)
 
@@ -584,15 +614,21 @@ def _dispatch_review(gh: GitHub, repo: str, self_repo: str, pr: dict, allow_work
 
 
 def resume_repo(gh: GitHub, repo: str, *, self_repo: str, login: str, window_start: dt.datetime, handled: set[str],
-	summary: dict[str, Any], new_handled: list[str], allow_workflow_edits: str, run_id: str) -> None:
-	"""Resume one repository (see the module docstring); appends to `summary` / `new_handled`."""
+	summary: dict[str, Any], new_handled: list[str], allow_workflow_edits: str, run_id: str,
+	candidate_since: dt.datetime | None = None) -> None:
+	"""Resume one repository (see the module docstring); appends to `summary` / `new_handled`.
+
+	`candidate_since` bounds the PR scan by `updated_at` (default
+	`window_start`); labels and holds always use `window_start`.
+	"""
+	scan_since = candidate_since or window_start
 	prs = gh.get_list(f"repos/{repo}/pulls?state=open")
 	referenced: set[int] = set()
 	for pr in prs:
 		if not isinstance(pr, dict) or pr.get("draft") or type(pr.get("number")) is not int:
 			continue
 		updated = parse_time(pr.get("updated_at"))
-		if updated is None or updated < window_start:
+		if updated is None or updated < scan_since:
 			continue
 		head_sha = str((pr.get("head") or {}).get("sha") or "").lower()
 		if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
@@ -620,8 +656,16 @@ def resume_repo(gh: GitHub, repo: str, *, self_repo: str, login: str, window_sta
 				pull = gh.get(f"repos/{repo}/pulls/{number}") or {}
 				check_runs = gh.get_list(f"repos/{repo}/commits/{head_sha}/check-runs", "check_runs")
 				failed_runs, unnamed = failed_check_run_ids(check_runs)
-				if unnamed == 0 and hold_is_outage_only(claim, window_start=window_start, failed_check_run_ids=failed_runs,
-					outage_runs=outage_run_ids(comments, head_sha, login), conflicted=pull.get("mergeable_state") == "dirty"):
+				merge_state = pull.get("mergeable_state")
+				conflicted = merge_state == "dirty" or pull.get("mergeable") is False
+				outage_only = unnamed == 0 and hold_is_outage_only(claim, window_start=window_start,
+					failed_check_run_ids=failed_runs, outage_runs=outage_run_ids(comments, head_sha, login),
+					conflicted=conflicted)
+				if outage_only and (not isinstance(merge_state, str) or merge_state in ("", "unknown")):
+					# GitHub has not computed mergeability yet: a conflict cannot be
+					# ruled out, so keep the hold and let the next tick retry it.
+					raise GitHubError(f"merge state of PR #{number} not computed yet; hold kept for the next tick")
+				if outage_only:
 					by = f"{RELEASE_CLAIM_BY_PREFIX}{run_id or 'manual'}"
 					gh.send("POST", f"repos/{repo}/issues/{number}/comments", {"body": render_release_claim(head_sha, by)})
 					summary["holds_released"].append(f"{repo}#{number}")
@@ -694,15 +738,18 @@ def _resume(gh: GitHub, self_repo: str, repos: list[str], now: dt.datetime, *, m
 	"""The recovery half of `tick`: resume every repository, record, close, alert."""
 	primary = markers[0]
 	window_start = parse_time(primary.get("created_at")) or now
+	candidate_since = window_start - dt.timedelta(hours=RESUME_CANDIDATE_LOOKBACK_HOURS)
 	marker_comments = gh.get_list(f"repos/{self_repo}/issues/{primary['number']}/comments")
 	handled = handled_keys(marker_comments, login)
+	attempt = resume_attempts(marker_comments, login) + 1
 	summary: dict[str, Any] = {"recovered_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "dispatched": [],
 		"labels_removed": [], "holds_released": [], "release": "none recorded", "errors": []}
 	new_handled: list[str] = []
 	for repo in repos:
 		try:
 			resume_repo(gh, repo, self_repo=self_repo, login=login, window_start=window_start, handled=handled,
-				summary=summary, new_handled=new_handled, allow_workflow_edits=allow_workflow_edits, run_id=run_id)
+				summary=summary, new_handled=new_handled, allow_workflow_edits=allow_workflow_edits, run_id=run_id,
+				candidate_since=candidate_since)
 		except GitHubError as exc:
 			summary["errors"].append(f"{repo}: {heal.single_line(exc, 160)}")
 			log(f"error repo={repo} detail={heal.single_line(exc, 160)}")
@@ -719,18 +766,29 @@ def _resume(gh: GitHub, self_repo: str, repos: list[str], now: dt.datetime, *, m
 				new_handled.append(release_key)
 			except GitHubError as exc:
 				summary["release"] = f"run {newest} re-run failed: {heal.single_line(exc, 120)}"
+				summary["errors"].append(f"release run {newest}: {heal.single_line(exc, 120)}")
 		else:
 			summary["release"] = f"run {newest} not re-run (PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED is off)"
 			new_handled.append(release_key)
+	keep_open = bool(summary["errors"]) and attempt < MAX_RESUME_ATTEMPTS
+	if keep_open:
+		summary["marker"] = (f"kept open; the next tick retries the work not handled yet "
+			f"(resume attempt {attempt} of {MAX_RESUME_ATTEMPTS})")
+	elif summary["errors"]:
+		summary["marker"] = f"closed after {attempt} resume attempts with errors left; resume them by hand"
 	gh.send("POST", f"repos/{self_repo}/issues/{primary['number']}/comments",
 		{"body": render_resume_comment(summary, sorted(handled) + new_handled)})
+	result.update({"recovered": True, "summary": summary, "skip_review_dispatch": True, "marker_closed": not keep_open})
+	if keep_open:
+		log(f"resume_incomplete issue=#{primary['number']} attempt={attempt} max={MAX_RESUME_ATTEMPTS} "
+			f"errors={len(summary['errors'])} (marker kept open)")
+		return result
 	for marker in markers:
 		gh.send("PATCH", f"repos/{self_repo}/issues/{marker['number']}", {"state": "closed", "state_reason": "completed"})
-	result.update({"recovered": True, "summary": summary, "alert_text": render_recovered_alert(primary, summary),
-		"skip_review_dispatch": True})
+	result["alert_text"] = render_recovered_alert(primary, summary)
 	log(f"recovered issue=#{primary['number']} dispatched={len(summary['dispatched'])} "
 		f"labels_removed={len(summary['labels_removed'])} holds_released={len(summary['holds_released'])} "
-		f"errors={len(summary['errors'])}")
+		f"errors={len(summary['errors'])} attempt={attempt}")
 	return result
 
 
@@ -774,6 +832,12 @@ def _cmd_record(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_status(args: argparse.Namespace) -> int:
+	markers, _ = _open_markers(GitHub(), args.repo)
+	print(json.dumps({"outage_open": bool(markers), "markers": markers}))
+	return 0
+
+
 def _cmd_tick(args: argparse.Namespace) -> int:
 	repos = load_repos(Path(args.registry), args.repo)
 	model = args.probe_model or DEFAULT_PROBE_MODEL
@@ -803,6 +867,10 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--release-run-url", default="")
 	p.add_argument("--only-if-open", action="store_true", help="record a release run on an open marker; never open one")
 	p.set_defaults(func=_cmd_record)
+
+	p = sub.add_parser("status", help="Print the open outage marker(s) as JSON (read-only)")
+	p.add_argument("--repo", required=True, help="OWNER/REPO that holds the marker (coding-workflows)")
+	p.set_defaults(func=_cmd_status)
 
 	p = sub.add_parser("tick", help="One sweep tick: probe while a marker is open, resume and close on recovery")
 	p.add_argument("--repo", required=True)

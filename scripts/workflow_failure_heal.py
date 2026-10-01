@@ -145,6 +145,9 @@ PROVIDER_LOG_TAIL_BYTES = 4_194_304
 PROVIDER_LOG_MAX_TOTAL_BYTES = 33_554_432
 PROVIDER_LOG_MAX_FILES = 200
 PROVIDER_LOG_GLOBS: tuple[str, ...] = ("*.log", "*.err", "*stderr*.txt", "status_*.txt")
+# Reviewer status files hold one word; they are read before any log and
+# outside the log budget, so large logs can never hide a `success`.
+PROVIDER_STATUS_FILE_MAX_BYTES = 4096
 
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
@@ -1389,9 +1392,11 @@ def read_provider_logs(dirs: Iterable[str] = (), files: Iterable[str] = ()) -> t
 
 	``dirs`` are scanned non-recursively for PROVIDER_LOG_GLOBS (reviewer and
 	editor ``*.log`` / ``*.err``, stage ``*stderr*.txt``, reviewer
-	``status_*.txt``), at most PROVIDER_LOG_MAX_FILES files in name order;
-	``files`` are read as given. Each file contributes its last
-	PROVIDER_LOG_TAIL_BYTES, and reading stops once
+	``status_*.txt``); ``files`` are read as given. Status files are read
+	first, each up to its last PROVIDER_STATUS_FILE_MAX_BYTES, and count
+	toward neither cap below, so a reviewer's ``success`` is never missed.
+	Logs follow, at most PROVIDER_LOG_MAX_FILES files in name order; each
+	contributes its last PROVIDER_LOG_TAIL_BYTES, and reading stops once
 	PROVIDER_LOG_MAX_TOTAL_BYTES have been read. Missing paths are skipped.
 	Returns ``(log_texts, status_values)``.
 	"""
@@ -1407,10 +1412,18 @@ def read_provider_logs(dirs: Iterable[str] = (), files: Iterable[str] = ()) -> t
 			found.update(path for path in base.glob(pattern) if path.is_file())
 		paths.extend(sorted(found))
 	paths.extend(Path(path) for path in files if path)
+	status_paths = [path for path in paths if path.name.startswith("status_") and path.suffix == ".txt"]
+	log_paths = [path for path in paths if path not in status_paths]
 	texts: list[str] = []
 	statuses: list[str] = []
+	for path in status_paths:
+		try:
+			data = path.read_bytes()
+		except OSError:
+			continue
+		statuses.append(data[-PROVIDER_STATUS_FILE_MAX_BYTES:].decode("utf-8", errors="replace").strip())
 	total = 0
-	for path in paths[:PROVIDER_LOG_MAX_FILES]:
+	for path in log_paths[:PROVIDER_LOG_MAX_FILES]:
 		if total >= PROVIDER_LOG_MAX_TOTAL_BYTES:
 			break
 		try:
@@ -1419,11 +1432,7 @@ def read_provider_logs(dirs: Iterable[str] = (), files: Iterable[str] = ()) -> t
 			continue
 		data = data[-PROVIDER_LOG_TAIL_BYTES:]
 		total += len(data)
-		text = data.decode("utf-8", errors="replace")
-		if path.name.startswith("status_") and path.suffix == ".txt":
-			statuses.append(text.strip())
-		else:
-			texts.append(text)
+		texts.append(data.decode("utf-8", errors="replace"))
 	return texts, statuses
 
 

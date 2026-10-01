@@ -15,4 +15,4 @@ What this means for operators: when the provider account runs dry, top it up and
 
 ### For contributors
 
-The classifier lives in `scripts/workflow_failure_heal.py` (`detect_provider_outage`, `autofix-failure-fingerprint --provider-log-dir`, `provider-outage-detect`). The marker, probe and resume live in `scripts/provider_outage.py` (`record` from the heal intake, `tick` from the sweep). The `.claude/scripts/check_in_status.py` change, the `provider-unavailable` wait state, ships through its `workflow-templates/.claude/` twin and reaches `.claude/` with the twin sync.
+The classifier lives in `scripts/workflow_failure_heal.py` (`detect_provider_outage`, `autofix-failure-fingerprint --provider-log-dir`, `provider-outage-detect`). The marker, probe and resume live in `scripts/provider_outage.py` (`record` from the heal intake, `tick` from the sweep, `status` for diagnosis). The `.claude/scripts/check_in_status.py` change, the `provider-unavailable` wait state, ships through its `workflow-templates/.claude/` twin and reaches `.claude/` with the twin sync.

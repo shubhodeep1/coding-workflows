@@ -105,9 +105,11 @@ jobs:
   # run, closes the marker, and sends one "recovered" alert. With no marker
   # it costs one REST read. Decision, API budget and fail-open rules:
   # scripts/provider_outage.py. PROVIDER_OUTAGE_PROBE_ENABLED=false turns
-  # the job off and the sweep runs as before.
+  # the job off and the sweep runs as before. A manual dry_run dispatch skips
+  # it too: its resume writes (dispatches, label removals, claims, closing the
+  # marker) are live mutations.
   provider-outage-probe:
-    if: github.event.schedule != '17 * * * *' && vars.PROVIDER_OUTAGE_PROBE_ENABLED != 'false'
+    if: github.event.schedule != '17 * * * *' && vars.PROVIDER_OUTAGE_PROBE_ENABLED != 'false' && inputs.dry_run != true
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:

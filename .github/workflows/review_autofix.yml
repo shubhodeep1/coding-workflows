@@ -5048,8 +5048,9 @@ jobs:
             # "Assemble failure evidence", so every failure comment of one run
             # carries one fingerprint. Empty when the helper is unavailable.
             AUTOFIX_FAILURE_MARKER_SUFFIX=""
+            noop_provider_outage=""
             if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-              autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+              noop_fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
                 --failure-reason "${autofix_empty_failure_reason}" \
                 --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
@@ -5059,12 +5060,32 @@ jobs:
                 --provider-log-dir "${PREVIOUS_REVIEWS_DIR:-}" \
                 --provider-log-dir "${RUNTIME_DIR:-}" \
                 --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
-                --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+                --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
+              autofix_failure_marker_line="$(printf '%s\n' "${noop_fingerprint_out}" | sed -n 's/^marker=//p' | head -n 1 || true)"
               if [ -n "${autofix_failure_marker_line}" ]; then
                 AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
               fi
+              # Model-provider outage (issue #5773): a failed reviewer panel
+              # ends here, so this branch posts the paused comment itself.
+              if [ "$(printf '%s\n' "${noop_fingerprint_out}" | sed -n 's/^reason=//p' | head -n 1 || true)" = "provider_unavailable" ]; then
+                noop_provider_outage="$(printf '%s\n' "${noop_fingerprint_out}" | sed -n 's/^provider_outage=//p' | head -n 1 || true)"
+              fi
             fi
-            NOOP_BODY="$(cat <<EOF
+            if [ -n "${noop_provider_outage}" ]; then
+              {
+                echo "AUTOFIX_PROVIDER_UNAVAILABLE=true"
+                echo "AUTOFIX_PROVIDER_OUTAGE=${noop_provider_outage}"
+              } >> "$GITHUB_ENV"
+              NOOP_BODY="$(cat <<EOF
+          **AI review/autofix paused: model provider unavailable**
+
+          The model calls of this run failed because the provider is down (\`${noop_provider_outage}\`). This is not a defect in this pull request. No \`ai:review-blocked\` label was applied, this failure does not count toward the identical-failure cap, and no Claude fixer is started for it. The review sweep probes the provider every 30 minutes and re-runs this review once it recovers.
+
+          [View workflow run](${RUN_URL}) for details.
+          EOF
+          )"
+            else
+              NOOP_BODY="$(cat <<EOF
           **AI review/autofix produced no output — will retry**
 
           ${noop_explanation} No \`ai:review-blocked\` label is being applied for this run.
@@ -5072,6 +5093,7 @@ jobs:
           [View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
           EOF
           )"
+            fi
             NOOP_BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${NOOP_BODY}" >/dev/null 2>&1 || true
             echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"

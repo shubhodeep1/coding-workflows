@@ -62,6 +62,21 @@ def test_outage_runs_label_nothing_and_send_no_per_pr_alert():
 	assert "**AI review/autofix paused: model provider unavailable**" in post
 
 
+def test_the_empty_noop_branch_posts_the_paused_comment_for_an_outage():
+	# A failed reviewer panel skips the editor and ends in this branch, which
+	# sets AUTOFIX_EDITOR_EMPTY_NOOP and so skips the later paused comment step.
+	run = _step(REVIEW, "Post editor summary comment")["run"]
+	noop = run[run.index('autofix_empty_failure_reason="editor_empty_noop"'):run.index('echo "AUTOFIX_EDITOR_EMPTY_NOOP=true"')]
+	assert "sed -n 's/^reason=//p'" in noop and "sed -n 's/^provider_outage=//p'" in noop
+	assert 'echo "AUTOFIX_PROVIDER_UNAVAILABLE=true"' in noop
+	assert 'echo "AUTOFIX_PROVIDER_OUTAGE=${noop_provider_outage}"' in noop
+	paused = noop.index("**AI review/autofix paused: model provider unavailable**")
+	assert paused < noop.index("**AI review/autofix produced no output — will retry**")
+	assert noop.index('if [ -n "${noop_provider_outage}" ]; then') < paused
+	# Both bodies still carry the run's failure marker.
+	assert noop.index('NOOP_BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"') > paused
+
+
 def test_review_workflow_stays_under_the_size_guard():
 	assert (WORKFLOWS / "review_autofix.yml").stat().st_size < 480_000
 
@@ -70,6 +85,8 @@ def test_sweep_probe_job_wiring():
 	probe = SWEEP["jobs"]["provider-outage-probe"]
 	assert "github.event.schedule != '17 * * * *'" in probe["if"]
 	assert "vars.PROVIDER_OUTAGE_PROBE_ENABLED != 'false'" in probe["if"]
+	# A manual dry run never performs the resume's live writes.
+	assert "inputs.dry_run != true" in probe["if"]
 	assert probe["outputs"]["skip_review_dispatch"] == "${{ steps.tick.outputs.skip_review_dispatch }}"
 	step = _step(SWEEP, "Probe the model provider while an outage marker is open")
 	assert step["env"]["OPENROUTER_API_KEY"] == "${{ secrets.OPENROUTER_API_KEY }}"

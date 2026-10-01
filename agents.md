@@ -93,15 +93,19 @@ Phases of the unattended pipeline (each is a separate workflow file under
    default `XPOLL_SUMMARISER_MODEL` or `openai/gpt-6-luna`) and the `sweep`
    job skips its dispatches (`AUTOFIX_SWEEP_SKIP_ALL reason=provider_outage`).
    On HTTP 200 it resumes and then closes the marker:
-   - re-dispatches review for every open PR updated since the outage whose
-     latest trusted failure marker on its head is `provider_unavailable`
-     (`internal-review.yml` here, `ai-review.yml` in registered consumers);
+   - re-dispatches review for every open PR updated since 6 hours before the
+     marker opened (`RESUME_CANDIDATE_LOOKBACK_HOURS`, so the PR that first
+     hit the outage is included) whose latest trusted failure marker on its
+     head is `provider_unavailable` (`internal-review.yml` here,
+     `ai-review.yml` in registered consumers);
    - removes `ai:review-blocked` only where its latest `labeled` event lies
      in the outage window and was made by the workflow account (on those PRs
      and the issues they reference);
    - releases a hold claim only when it was posted in the window, every
      failed check on the head is an outage run, and the PR is not conflicted
-     (it posts a newer `kind=review` claim by `provider-outage-probe-<run>`);
+     (it posts a newer `kind=review` claim by `provider-outage-probe-<run>`;
+     a merge state GitHub has not computed yet keeps the hold and counts as
+     an error, so the next tick retries it);
    - re-runs the newest recorded release run when
      `PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED=true` (default `false`, a §23.C
      dispatch) and otherwise reports it;
@@ -113,6 +117,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
      open (`PROVIDER_OUTAGE … probe status=<n>`); an operator may close it
      by hand, which re-enables the sweep but resumes nothing.
    - A failed tick fails open: the sweep runs.
+   - A resume read or write that fails (a consumer repo, a dispatch, a
+     release re-run) keeps the marker open after its resume comment, so the
+     next tick retries only the work not yet recorded. The third resume tick
+     (`MAX_RESUME_ATTEMPTS`) closes the marker anyway, and the "recovered"
+     alert names the errors left.
+   - A manual `dry_run` dispatch of the sweep skips the probe job, because
+     the resume writes are live.
+   - `python3 scripts/provider_outage.py status --repo <owner>/<repo>`
+     prints the open marker as JSON (read-only) for diagnosis.
 
    Switches: `PROVIDER_OUTAGE_PROBE_ENABLED=false` turns the probe and the
    skip off. Marker creation rides `WORKFLOW_HEAL_ENABLED`.

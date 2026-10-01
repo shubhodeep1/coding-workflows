@@ -110,6 +110,19 @@ def test_read_provider_logs_reads_dirs_and_status_files(tmp_path):
 	assert statuses == ["failed"] and len(texts) == 1
 
 
+def test_status_files_are_read_even_when_logs_exhaust_the_budget(tmp_path, monkeypatch):
+	monkeypatch.setattr(heal, "PROVIDER_LOG_MAX_TOTAL_BYTES", 10)
+	monkeypatch.setattr(heal, "PROVIDER_LOG_MAX_FILES", 1)
+	# "a_…" and "r_…" sort before "status_…"; they alone exceed both caps.
+	(tmp_path / "a_reviewer.log").write_text("x" * 100 + "\nHTTP 429 rate limit openrouter\n", encoding="utf-8")
+	(tmp_path / "r_reviewer.log").write_text("y" * 100, encoding="utf-8")
+	(tmp_path / "status_pass1_a.txt").write_text("failed\n", encoding="utf-8")
+	(tmp_path / "status_pass1_b.txt").write_text("success\n", encoding="utf-8")
+	texts, statuses = heal.read_provider_logs([str(tmp_path)], [])
+	assert statuses == ["failed", "success"] and len(texts) == 1
+	assert heal.detect_provider_outage(texts, status_values=statuses)["zero_success"] is False
+
+
 def _fingerprint(tmp_path, *extra):
 	return subprocess.run(
 		[sys.executable, str(ROOT / "scripts" / "workflow_failure_heal.py"), "autofix-failure-fingerprint",
@@ -475,9 +488,101 @@ def test_a_failing_consumer_repo_is_reported_and_does_not_stop_the_resume():
 	gh = _recovery_github()
 	gh.fail.add(f"repos/{CONSUMER}/pulls?state=open")
 	result = _tick(gh)
-	assert result["recovered"] is True
+	assert result["recovered"] is True and result["marker_closed"] is False and result["skip_review_dispatch"] is True
 	assert result["summary"]["errors"] and CONSUMER in result["summary"]["errors"][0]
+	# The rest of the resume still ran and was recorded; the marker stays open for a retry, with no alert yet.
+	assert result["summary"]["dispatched"] == [f"{SELF}#1", f"{SELF}#6"]
+	resume = gh.sent("POST", f"repos/{SELF}/issues/10/comments")[0][2]["body"]
+	assert f"pr:{SELF}#1@{HEAD[:12]}" in resume and "resume attempt 1 of 3" in resume
+	assert not gh.sent("PATCH") and "alert_text" not in result
+
+
+def _retry_marker_comments(gh, *bodies):
+	gh.lists[f"repos/{SELF}/issues/10/comments"] = [
+		{"id": index + 5, "user": {"login": LOGIN}, "body": body} for index, body in enumerate(bodies)
+	]
+	gh.calls.clear()
+
+
+def test_a_retry_tick_redoes_only_the_failed_work_and_closes_when_it_succeeds():
+	gh = _recovery_github()
+	gh.fail.add(f"repos/{CONSUMER}/pulls?state=open")
+	_tick(gh)
+	_retry_marker_comments(gh, gh.sent("POST", f"repos/{SELF}/issues/10/comments")[0][2]["body"])
+	gh.fail.clear()
+	result = _tick(gh)
+	assert result["summary"]["dispatched"] == [f"{CONSUMER}#7"] and not result["summary"]["errors"]
+	assert result["marker_closed"] is True
+	assert ("PATCH", f"repos/{SELF}/issues/10", {"state": "closed", "state_reason": "completed"}) in gh.calls
+	assert result["alert_text"].startswith("Model provider recovered: openrouter")
+
+
+def test_the_last_resume_attempt_closes_the_marker_and_names_the_errors():
+	gh = _recovery_github()
+	gh.fail.add(f"repos/{CONSUMER}/pulls?state=open")
+	earlier = []
+	for _ in range(outage.MAX_RESUME_ATTEMPTS - 1):
+		result = _tick(gh)
+		assert result["marker_closed"] is False
+		earlier.append(gh.sent("POST", f"repos/{SELF}/issues/10/comments")[-1][2]["body"])
+		_retry_marker_comments(gh, *earlier)
+	result = _tick(gh)
+	assert result["marker_closed"] is True
+	assert ("PATCH", f"repos/{SELF}/issues/10", {"state": "closed", "state_reason": "completed"}) in gh.calls
 	assert "Not resumed: 1 error(s)" in result["alert_text"]
+	resume = gh.sent("POST", f"repos/{SELF}/issues/10/comments")[-1][2]["body"]
+	assert f"closed after {outage.MAX_RESUME_ATTEMPTS} resume attempts with errors left" in resume
+
+
+def test_resume_attempts_count_only_the_workflow_accounts_resume_comments():
+	resume = outage.render_resume_comment({"recovered_at": "t", "dispatched": [], "labels_removed": [],
+		"holds_released": [], "release": "none", "errors": []}, [])
+	comments = [{"id": 1, "user": {"login": LOGIN}, "body": resume}, {"id": 2, "user": {"login": "someone"}, "body": resume},
+		{"id": 3, "user": {"login": LOGIN}, "body": "unrelated"}]
+	assert outage.resume_attempts(comments, LOGIN) == 1
+	assert outage.resume_attempts(comments, "") == 0
+
+
+def test_the_pr_that_first_hit_the_outage_is_resumed_although_it_predates_the_marker():
+	gh = _recovery_github()
+	# PR 8 failed (and was last updated) ten minutes before the intake opened the marker at 17:20.
+	gh.lists[f"repos/{SELF}/pulls?state=open"].append(_pr(8, updated="2026-09-30T17:10:00Z"))
+	gh.lists[f"repos/{SELF}/issues/8/comments"] = [_outage_failure(81, 1001)]
+	# PR 9 also failed for the provider but was last updated beyond the lookback.
+	gh.lists[f"repos/{SELF}/pulls?state=open"].append(_pr(9, updated="2026-09-30T11:00:00Z"))
+	gh.lists[f"repos/{SELF}/issues/9/comments"] = [_outage_failure(91, 1002)]
+	summary = _tick(gh)["summary"]
+	assert f"{SELF}#8" in summary["dispatched"] and f"{SELF}#9" not in summary["dispatched"]
+	assert ("LIST", f"repos/{SELF}/issues/9/comments") not in gh.calls
+
+
+def test_a_hold_is_kept_while_github_has_not_computed_the_merge_state():
+	gh = _recovery_github()
+	gh.objects[f"repos/{SELF}/pulls/1"] = {"mergeable_state": "unknown", "mergeable": None}
+	# PR 6's hold has another cause (a failed check that is not its outage run): no retry is needed for it.
+	gh.objects[f"repos/{SELF}/pulls/6"] = {"mergeable_state": "unknown", "mergeable": None}
+	result = _tick(gh)
+	assert result["summary"]["holds_released"] == []
+	assert [error for error in result["summary"]["errors"] if "not computed yet" in error] == [
+		f"{SELF}#1: merge state of PR #1 not computed yet; hold kept for the next tick"]
+	assert not gh.sent("POST", f"repos/{SELF}/issues/1/comments") and result["marker_closed"] is False
+
+
+def test_a_hold_is_kept_when_github_reports_the_pr_unmergeable():
+	gh = _recovery_github()
+	gh.objects[f"repos/{SELF}/pulls/1"] = {"mergeable_state": "blocked", "mergeable": False}
+	result = _tick(gh)
+	assert result["summary"]["holds_released"] == [] and not result["summary"]["errors"]
+
+
+def test_a_failed_release_rerun_is_an_error_and_is_retried():
+	gh = _recovery_github(release_runs=(36760421499,))
+	gh.fail.add(("POST", f"repos/{SELF}/actions/runs/36760421499/rerun-failed-jobs"))
+	result = _tick(gh, rerun=True)
+	assert result["summary"]["release"].startswith("run 36760421499 re-run failed")
+	assert any(error.startswith("release run 36760421499") for error in result["summary"]["errors"])
+	resume = gh.sent("POST", f"repos/{SELF}/issues/10/comments")[0][2]["body"]
+	assert "release:36760421499" not in resume and result["marker_closed"] is False
 
 
 def test_hold_release_rules():
@@ -512,6 +617,20 @@ def test_cli_record_reads_the_reporters_evidence_line(tmp_path, monkeypatch):
 	created = gh.sent("POST", f"repos/{SELF}/issues")[0][2]
 	assert created["title"] == "Model provider outage: openrouter HTTP 402 (credits)"
 	assert created["labels"] == [outage.OUTAGE_LABEL]
+
+
+def test_cli_status_prints_the_open_marker(monkeypatch, capsys):
+	gh = FakeGitHub(lists={MARKERS: [_marker_issue(10)]}, objects={"user": {"login": LOGIN}})
+	monkeypatch.setattr(outage, "GitHub", lambda: gh)
+	assert outage.main(["status", "--repo", SELF]) == 0
+	printed = json.loads(capsys.readouterr().out)
+	assert printed["outage_open"] is True and printed["markers"][0]["number"] == 10
+	assert printed["markers"][0]["kind"] == "credits"
+	assert not [call for call in gh.calls if call[0] not in ("GET", "LIST")]
+	empty = FakeGitHub()
+	monkeypatch.setattr(outage, "GitHub", lambda: empty)
+	assert outage.main(["status", "--repo", SELF]) == 0
+	assert json.loads(capsys.readouterr().out) == {"outage_open": False, "markers": []}
 
 
 def test_cli_rejects_bad_input(capsys):
