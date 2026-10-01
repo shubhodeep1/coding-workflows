@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-10-01T02:44:23Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A project whose PRs target a project branch never runs `ci.yml` (it triggers only on PRs into `main`/`stable`), so roster checks such as `tests/inventory_parity.py` stay silent until the final merge: a new `scripts/` file needs its `docs/INVENTORY.md` entry in the same PR, and a stage should run `ci.yml`'s standalone checks itself.",
+  "phase": "implement_plan",
+  "pr_number": 5864,
+  "record_id": "lesson-implement-plan-2745587e1379116ee1a219cf",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:docs/INVENTORY.md",
+    "file:tests/inventory_parity.py",
+    "file:.github/workflows/ci.yml"
+  ]
+}
