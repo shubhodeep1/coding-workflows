@@ -187,6 +187,7 @@ changelog.d/4470-trusted-security-audit-exclusions.md
 changelog.d/4472-resolver-symlink-touched-set.md
 changelog.d/4476-pipeline-failure-guards.md
 changelog.d/4481-validation-renderer-dependency-preflight.md
+changelog.d/5259-verify-loaded-settings-after-asset-sync.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
@@ -226,6 +227,7 @@ docs/how-it-works.md
 docs/implement-plan/README.md
 docs/implement-plan/e2e-dummy-implement-plan-claude.md
 docs/implement-plan/heal-deterministic-autofix-failures.md
+docs/implement-plan/issue-5259-restart-after-settings-sync.md
 docs/plans/apply-ai-tools-learnings-plan.md
 docs/plans/claude-code-tooling-learnings-plan.md
 docs/plans/complete-squad-improvements-plan.md
@@ -234,6 +236,7 @@ docs/plans/gsd-inspired-improvements-plan.md
 docs/plans/gstack-learnings-plan.md
 docs/plans/heal-deterministic-autofix-failures-plan.md
 docs/plans/integration-sync-resolver-self-heal-plan.md
+docs/plans/issue-5259-restart-after-settings-sync-plan.md
 docs/plans/open-agents-learnings-plan.md
 docs/plans/opencode-clarify-cutover-plan.md
 docs/plans/orchestrator-prerequisite-gate-automation-plan.md
