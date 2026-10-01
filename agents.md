@@ -876,8 +876,8 @@ in Auto mode, which is why the checker is Sonnet. Progress between
 stages is persisted in `docs/implement-plan/<slug>.md`
 (`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions (one exception: the
 Claude issue pickup's session sweep, CLAUDE.md §26.I, archives an idle
-issue-start session once a later stage session exists or its issue is
-closed; it never touches a checker or a stage session): the project checker
+issue-start session once its issue is closed, never because a later stage
+session exists (#5664); it never touches a checker or a stage session): the project checker
 holds the project's only pending check-in, so archiving it by hand stalls the
 project until the 24h safety net fires. To nudge a stalled project, start the
 next stage session by hand with a `— resume.` block; to stop one, delete its
@@ -1105,10 +1105,10 @@ reviews, comments, and conflicts stay a direct §12 request.
     - a fixer is archived 2 h after its PR merged or closed
       (`--fixer-grace-hours`); normally it archived itself on the terminal
       hand-back (`fix-claude-pr.md` step 2);
-    - an issue-start session is archived once a later
-      `implement-plan issue-<n>-… — <stage>` session (not a checker,
-      `waiting:`, or `deploy-activate`) is on the page, or once the issue is
-      closed;
+    - an issue-start session is archived once its issue is closed. A later
+      `implement-plan issue-<n>-… — <stage>` session does not count (#5664):
+      the checker archives a stage whose start failed, and archiving the
+      issue-start session would disable its safety net;
     - a report is archived after 7 idle days by `updated_at`
       (`--report-days`), unless it is `need_input`.
   - Never archived: `RUNNING`, `REQUIRES_ACTION`, `…_WORKING`, the pickup
