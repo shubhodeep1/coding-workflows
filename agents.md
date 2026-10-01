@@ -1145,11 +1145,19 @@ reviews, comments, and conflicts stay a direct §12 request.
     for the dispatch (`matched_by: dispatch_response`; one best-effort run
     read fills `status` / `created_at`). Only without a returned id does it
     fall back to the recent `workflow_dispatch` run ids recorded before the
-    POST and poll every 5 s (90 s max) for a run that was not there before:
+    POST and poll every 5 s (90 s max) for a run that was not there before
+    and was dispatched from the same ref (its `head_branch`; a run started
+    from another ref is never a match or a candidate, issue #5841):
     one new run is `matched_by: new_run` (unverified: the caller confirms its
-    target ref), several are exit 2 with `ambiguous: true` and
+    target ref and audited commit), several are exit 2 with `ambiguous: true` and
     `candidate_run_ids`, never a guess (issue #5016: two sessions
     dispatching the same workflow seconds apart each took the newest run).
+    The `/implement-plan-claude` read-result stages (steps 9–10) use a run's
+    verdict only when its log shows the project branch and, in project mode,
+    an audited commit (`SECURITY_AUDIT_TARGET … ..<sha>`, validate's
+    `HEAD commit:`) equal to the project head before that stage's sync
+    merge, for every match type; they wait for every recorded candidate and
+    count every matching run, and re-dispatch once on a mismatch.
     A failed pre-dispatch run-list read no longer cancels the dispatch: with
     a returned id the result is exact, and without one it is exit 2 with
     `dispatched: true` and no polling, since every recent run would look new.

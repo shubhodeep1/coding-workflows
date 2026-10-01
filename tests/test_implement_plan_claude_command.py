@@ -408,3 +408,55 @@ def test_interim_twin_first_default_is_removed_when_the_4785_sync_lands():
 	assert INTERIM_TWIN_FIRST_AGENTS_MD_MARKER not in _flat(AGENTS_MD), "remove the #4948 interim sentence from agents.md"
 	assert INTERIM_TWIN_FIRST_AGENTS_MD_CLOSER not in _flat(AGENTS_MD), "remove the #4948 interim closing sentence from agents.md"
 	assert INTERIM_TWIN_FIRST_MASTER_SESSION_MARKER not in _flat(MASTER_SESSION_MD), "remove the #4948 interim clause from the Q40 row of docs/operations/master-session.md"
+
+
+# Issue #5841: a read-result stage must use only a run that covered the
+# project's current code, never the first candidate whose log names the
+# branch. These tests read the workflow-templates twin, which this change
+# edits first (twin-first); `.claude/` catches up through the
+# [claude-twin-sync] copy.
+def _step_twin(start: str, end: str) -> str:
+	return _flat(TEMPLATE_COMMAND).split(start, 1)[1].split(end, 1)[0]
+
+
+def test_step_2_records_the_pre_sync_head_for_read_result_stages():
+	step = _step_twin("2. **Pick the mode", "3. **Build the phase checklist")
+	assert "In a `security-pass <k>/5 — read result` or `validation <k>/3 — read result` stage, first write down the sha that the mode check's `git ls-remote --heads origin claude/implement-plan-<slug>` printed" in step
+	assert "that is the **pre-sync head**" in step
+	assert "Also write down whether this sync needed a conflict resolution." in step
+
+
+def test_step_9_requires_the_project_branch_and_the_pre_sync_head():
+	step = _step_twin("9. **Security pass", "10. **Runtime validation")
+	assert "**first confirm the run audited this project's current code**" in step
+	assert "`SECURITY_AUDIT_TARGET: branch <project branch> range <base>..<sha>`" in step
+	assert "that `<sha>` must be the pre-sync head step 2 recorded" in step
+	assert "This check applies to every recorded run, a `dispatch_response` match included." in step
+	assert "A run that audited another commit of the project branch never counts (issue #5841" in step
+	assert "A step 2 sync that needed a conflict resolution changed the project's code after every recorded run, so none of them counts." in step
+	# The old first-match rule is gone.
+	assert "check each of them in order" not in step
+	assert "a completed candidate whose log shows the project branch is this project's run" not in step
+
+
+def test_step_9_waits_for_every_candidate_and_counts_every_match():
+	step = _step_twin("9. **Security pass", "10. **Runtime validation")
+	assert "decide only once every recorded run has completed" in step
+	assert "When more than one does, all of them count: the pass is clean only when each concluded `success` and opened no follow-up, and the follow-ups of each are this project's." in step
+	assert "Only when every recorded run has completed and none matches: use no verdict, re-dispatch once in this cycle through the helper, and arm the wait on the new run. A second mismatch stops with `Status: BLOCKED` and asks." in step
+
+
+def test_step_10_applies_the_same_commit_check_to_validation():
+	step = _step_twin("10. **Runtime validation", "11. **Completion PR")
+	assert "first confirm the run validated this project's current code" in step
+	assert "in project mode `HEAD commit: <sha>` must be the pre-sync head step 2 recorded" in step
+	assert "every recorded run, `dispatch_response` included" in step
+	assert "decide only once every recorded run has completed" in step
+	assert "act on the worst verdict among them (a terminal class over `needs_fixes` over `pass`)" in step
+
+
+def test_dispatch_helper_section_names_the_same_ref_filter_and_commit_check():
+	section = _step_twin("### Dispatch helper", "### Comment helper")
+	assert "was dispatched from the same ref (its `head_branch`; a run started from another ref runs another copy of the workflow file, issue #5841)" in section
+	assert "confirm its target ref and the commit it covered once the run has completed" in section
+	assert "whose audited commit is the project's pre-sync head" in section

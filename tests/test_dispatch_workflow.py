@@ -22,14 +22,18 @@ TEMPLATE_SCRIPT_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "scripts" 
 SETTINGS_PATHS = [REPO_ROOT / ".claude" / "settings.json", REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"]
 
 
-def _load():
-	spec = importlib.util.spec_from_file_location("dispatch_workflow", SCRIPT_PATH)
+def _load(path=SCRIPT_PATH, name="dispatch_workflow"):
+	spec = importlib.util.spec_from_file_location(name, path)
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
 
 
 dw = _load()
+# Issue #5841 changed the twin first (CLAUDE.md §28.C interim twin-first
+# default); its tests load the twin, which `.claude/` matches after the
+# `[claude-twin-sync]` copy (test_template_parity).
+dw_twin = _load(TEMPLATE_SCRIPT_PATH, "dispatch_workflow_twin")
 
 
 class FakeGitHub:
@@ -76,8 +80,25 @@ def fake(monkeypatch):
 	return install
 
 
-def _run(run_id, status="queued"):
-	return {"id": run_id, "html_url": f"https://github.com/o/r/actions/runs/{run_id}", "status": status, "created_at": "2026-09-27T03:00:00Z"}
+@pytest.fixture
+def fake_twin(monkeypatch):
+	def install(run_lists, **kwargs):
+		github = FakeGitHub(run_lists, **kwargs)
+		monkeypatch.setattr(dw_twin.check_in_status, "gh_api", github.gh_api)
+		monkeypatch.setattr(dw_twin, "_post_dispatch", github.post_dispatch)
+		return github
+
+	return install
+
+
+def _run(run_id, status="queued", head_branch="main"):
+	return {
+		"id": run_id,
+		"html_url": f"https://github.com/o/r/actions/runs/{run_id}",
+		"status": status,
+		"created_at": "2026-09-27T03:00:00Z",
+		"head_branch": head_branch,
+	}
 
 
 def test_returns_the_new_run_not_the_previous_one(fake):
@@ -148,8 +169,54 @@ def test_fallback_never_guesses_between_several_new_runs(fake):
 	assert len(github.dispatches) == 1
 
 
+# Issue #5841: a run another session started from a different ref runs that
+# ref's copy of the workflow file, so the fallback must never take it as this
+# dispatch's run, alone or as an ambiguous candidate.
+def test_fallback_ignores_a_new_run_dispatched_from_another_ref(fake_twin):
+	github = fake_twin([[_run(100, "completed")], [_run(301, head_branch="evil"), _run(100, "completed")], [_run(302), _run(301, head_branch="evil"), _run(100, "completed")]])
+	sleeps: list[int] = []
+	code, result = dw_twin.dispatch("o/r", "security-audit.yml", "main", {"ref": "claude/a"}, 90, sleep=sleeps.append)
+	assert code == 0
+	assert result["run_id"] == 302 and result["matched_by"] == "new_run"
+	assert "ambiguous" not in result
+	assert len(sleeps) == 2 and len(github.dispatches) == 1
+
+
+def test_fallback_candidates_exclude_runs_from_another_ref(fake_twin):
+	fake_twin([[], [_run(403), _run(402, head_branch="claude/other"), _run(401)]])
+	code, result = dw_twin.dispatch("o/r", "internal-validate.yml", "main", {"target_ref": "claude/a"}, 90, sleep=lambda _s: None)
+	assert code == 2
+	assert result["ambiguous"] is True and result["candidate_run_ids"] == [403, 401]
+	assert "dispatched from main" in result["error"] and "audited commit" in result["error"]
+
+
+def test_fallback_times_out_when_only_other_refs_start_runs(fake_twin):
+	fake_twin([[], [_run(501, head_branch="stable")]])
+	sleeps: list[int] = []
+	code, result = dw_twin.dispatch("o/r", "ai-validate.yml", "main", {}, 15, sleep=sleeps.append)
+	assert code == 2
+	assert result["dispatched"] is True and "run_id" not in result
+	assert "no new ai-validate.yml run dispatched from main" in result["error"]
+	assert sleeps == [dw_twin.POLL_INTERVAL_SECONDS] * 3
+
+
+def test_fallback_drops_a_run_without_head_branch(fake_twin):
+	run_without_branch = {"id": 601, "status": "queued"}
+	fake_twin([[], [run_without_branch]])
+	code, result = dw_twin.dispatch("o/r", "ai-validate.yml", "main", {}, 5, sleep=lambda _s: None)
+	assert code == 2 and "run_id" not in result
+
+
+def test_new_runs_keeps_every_new_run_without_a_dispatched_ref(fake_twin):
+	# The keyword is optional, so callers of the old signature see every new run.
+	fake_twin([[_run(3), _run(5, head_branch="stable"), _run(4)]])
+	assert [run["id"] for run in dw_twin.new_runs("o/r", "security-audit.yml", {3})] == [5, 4]
+	assert [run["id"] for run in dw_twin.new_runs("o/r", "security-audit.yml", {3}, dispatched_ref="main")] == [4]
+	assert dw_twin.find_new_run("o/r", "security-audit.yml", {3})["id"] == 5
+
+
 def test_explicit_ref_skips_the_repository_read(fake):
-	github = fake([[], [_run(7)]])
+	github = fake([[], [_run(7, head_branch="stable")]])
 	code, result = dw.dispatch("o/r", "internal-validate.yml", "stable", {}, 90, sleep=lambda _s: None)
 	assert code == 0 and result["run_id"] == 7
 	assert all("/actions/workflows/" in path for path in github.reads)
@@ -172,7 +239,7 @@ def test_poll_failure_after_the_post_reports_dispatched_true(fake, monkeypatch):
 	github = fake([[_run(1)]])
 	calls = {"n": 0}
 
-	def flaky_find(repo, workflow, known_ids):
+	def flaky_find(repo, workflow, known_ids, dispatched_ref=None):
 		calls["n"] += 1
 		raise dw.check_in_status.ReadError("proxy 502")
 
@@ -229,7 +296,7 @@ def test_run_list_read_failure_without_a_response_id_never_guesses(fake, monkeyp
 def test_main_keeps_dispatched_true_on_a_failed_poll(fake, monkeypatch, capsys):
 	fake([[_run(1)]])
 
-	def flaky_find(repo, workflow, known_ids):
+	def flaky_find(repo, workflow, known_ids, dispatched_ref=None):
 		raise dw.check_in_status.ReadError("proxy 502")
 
 	monkeypatch.setattr(dw, "new_runs", flaky_find)
