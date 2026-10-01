@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01BjYNqoKcxG8jz4wxY4r8co   safety net and hand-back: see the stage report (re-armed each stage)
 - Last updated: 2026-10-01
-- Last note: review round 3 on PR #5712: fixed the empty-walk finding (a walk that finds no run of ours is confirmed by a second walk 120 s later, AD-9) and the cached-read wording nit, rejected two findings with reasons; 35/35 guard tests pass
+- Last note: review round 4 on PR #5712: fixed the one finding (the 120 s retry and confirmation intervals were timed from the poll's NOW instead of from clock reads at the terminal check and at the end of the walk); 36/36 guard tests pass
 
 ## Phases
-1. [ ] Phase 1 — confirm the issue's own Implement runs finished before failing `wait-implement`   — PR #5712 opened 2026-09-30 (waiting); review rounds: 3; interventions: 0
+1. [ ] Phase 1 — confirm the issue's own Implement runs finished before failing `wait-implement`   — PR #5712 opened 2026-09-30 (waiting); review rounds: 4; interventions: 0
    - [x] `summarize_scoped_impl_runs` helper in the `wait-implement` step (`.github/workflows/test-and-mark-stable.yml`)
    - [x] terminal branch: cached active-run read, issue-scoped walk, fail only on a complete walk with no active issue-scoped run; unknown falls through to the inactivity check
    - [x] behavioural tests in `tests/test_test_and_mark_stable_plan_polling_guard.py`
@@ -48,6 +48,7 @@
 - [source:intervention] A poll loop that walks paged results only at a terminal decision must also remember an inconclusive walk (a page cap, an unreadable page), or the walk repeats on every poll cycle; a cap over a window that only grows is final for the phase. (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] When a poll loop caches an item and re-reads it by ID, a failed by-ID read needs the same throttle as a failed list read, or the fallback full walk runs on every poll cycle. (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] A terminal check that fails on an empty issue-scoped lookup must ride out the same listing race as the run-ID capture: confirm the empty result with a second complete lookup after a bounded delay before failing. (files: .github/workflows/test-and-mark-stable.yml)
+- [source:intervention] Time a retry or confirmation interval in a poll loop from a clock read taken when the guarded action runs or finishes, not from the iteration's start: the sleep and API reads in between vary per iteration and can shorten the interval. (files: .github/workflows/test-and-mark-stable.yml)
 
 ## Notes
 - Issue mode: base branch `stable` from the issue's `Target branch:` line. The final PR targets `stable`, so steps 12–13 do not run (`Activation: n/a (base stable)`), and `forward-merge-stable-to-main.yml` carries the fix to `main`.
