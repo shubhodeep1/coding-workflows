@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The \u00a721 merged-PR guard must judge the repository each guarded git command runs in (via `cd`, `git -C`, `GIT_DIR`/`--git-dir`) and for a push must judge the target ref (`<src>:<dst>`), not the session checkout branch.\n  expected_change_site: `workflow-templates/.claude/hooks/pr_merge_status_guard.py`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  EVIDENCE: The PR diff contains only the plan and progress-log documentation files, with Phase 1 still unchecked; no hunk in `workflow-templates/.claude/hooks/pr_merge_status_guard.py` exists in the diff; the hook, command walker, push refspec parser, per-target judge, and `_evaluate_bash` rewrite described in the plan are absent.\n- requirement: Tests covering the acceptance list from issue #5144 in `tests/test_pr_merge_status_guard.py` \u2014 worktree push to open-PR branch allowed, push of merged history to merged branch blocked, `git -C` behavior, unresolvable directory fallback with warning.\n  expected_change_site: `tests/test_pr_merge_status_guard.py`\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No hunk in `tests/test_pr_merge_status_guard.py` exists in the PR diff.\n- requirement: CLAUDE.md \u00a721.B and \u00a721.D must document the effective repository, push target ref, unresolvable fallback, and per-pair budget rules.\n  expected_change_site: `CLAUDE.md` (\u00a721.B and \u00a721.D sections)\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No hunk in `CLAUDE.md` exists in the PR diff.\n- requirement: A `changelog.d/5144-merge-guard-effective-repo.md` fragment with a `fixed` entry.\n  expected_change_site: `changelog.d/5144-merge-guard-effective-repo.md` (new file)\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No such file exists in the PR diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: From the PR body \u2014 \"Project integration PR for issue #5144 ... The \u00a721 merged-PR guard judges the repository each guarded git command runs in (`cd <path>`, `git -C`, `GIT_DIR` / `--git-dir`), and for a push it judges the target ref (`<src>:<dst>`), not the session checkout branch.\"\n  Expected change site: Per the plan's Implementation Steps, the PR must contain: `workflow-templates/.claude/hooks/pr_merge_status_guard.py` (steps 1\u20133 \u2014 command walker for effective directory across `cd`, `git -C`, `GIT_DIR`, `--git-dir`; push refspec parser; per-target judge with per-`(slug, branch)` PR-list memoisation), `tests/test_pr_merge_status_guard.py` (step 4 \u2014 the acceptance list of #5144 reading the twin, plus parser units, `GIT_DIR`, deletion/tag refspecs, and one-REST-call-per-pair budget tests), `CLAUDE.md` \u00a721.B / \u00a721.D (step 5 \u2014 the effective repository, target ref, unresolvable fallback, and per-pair budget rules), and `changelog.d/5144-merge-guard-effective-repo.md` [new] (step 6, `fixed` category).\n  Evidence of absence: PR DIFF contains only two new files \u2014 `docs/implement-plan/issue-5144-merge-guard-effective-repo.md` (49 lines, the implement-plan log with phase 1 still `[ ]` unchecked) and `docs/plans/issue-5144-merge-guard-effective-repo-plan.md` (108 lines, the plan itself). The hook, tests, CLAUDE.md updates, and changelog fragment named in the plan are absent from the diff. `last_commit_stat.txt` shows the project branch's most recent commit is `Merge remote-tracking branch 'origin/main' into claude/implement-plan-issue-5144-merge-guard-effective-repo`, with only `analysis/validation-selftest-status.json | 4 ++--` in its stat \u2014 no phase 1 implementation commits have landed on the project branch yet. The PR is in draft state (`pr_is_draft: true`), and the implement-plan log lists status `IN_PROGRESS`, stage `phase 1/1`, `Final PR: pending`, and `Last note: project branch opened from main; phase 1 starts twin-first.`\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: The \u00a721 merged-PR guard must judge the repository each guarded git command runs in (via `cd`, `git -C`, `GIT_DIR`/`--git-dir`) and for a push must judge the target ref (`<src>:<dst>`), not the session checkout branch.\n  Expected change site: `workflow-templates/.claude/hooks/pr_merge_status_guard.py` \u2014 the command walker, push refspec parser, per-target judge, and `_evaluate_bash` rewrite described in plan implementation steps 1-3.\n  Evidence of absence: The PR diff contains only `docs/implement-plan/issue-5144-merge-guard-effective-repo.md` and `docs/plans/issue-5144-merge-guard-effective-repo-plan.md`. No hunk in `workflow-templates/.claude/hooks/pr_merge_status_guard.py` exists in the diff. The progress log marks Phase 1 as unchecked `[ ]` with `Status: IN_PROGRESS`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: Tests covering the acceptance list from issue #5144 in `tests/test_pr_merge_status_guard.py` \u2014 worktree push to open-PR branch allowed, push of merged history to merged branch blocked, `git -C` behavior, unresolvable directory fallback with warning.\n  Expected change site: `tests/test_pr_merge_status_guard.py`\n  Evidence of absence: No hunk in `tests/test_pr_merge_status_guard.py` exists in the PR diff.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: CLAUDE.md \u00a721.B and \u00a721.D must document the effective repository, push target ref, unresolvable fallback, and per-pair budget rules.\n  Expected change site: `CLAUDE.md` (\u00a721.B and \u00a721.D sections)\n  Evidence of absence: No hunk in `CLAUDE.md` exists in the PR diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: A `changelog.d/5144-merge-guard-effective-repo.md` fragment with a `fixed` entry.\n  Expected change site: `changelog.d/5144-merge-guard-effective-repo.md` (new file)\n  Evidence of absence: No such file exists in the PR diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "83f70f0617f9be65590d0bc9dfa5c6bf4f6e585e64fbbf3fcf819faeee8a5770",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36813501162",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36813501162",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001042402_cb50ddfc57",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36813501162"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T04:24:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
