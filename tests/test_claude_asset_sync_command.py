@@ -596,7 +596,7 @@ def test_outside_conflict_checks_the_merged_settings_before_any_resolution(loade
 		encoding="utf-8",
 	)
 	command = check.group(1).replace(".claude/scripts/loaded_settings_check.py", str(TWIN_DIR.parent / "scripts" / "loaded_settings_check.py"))
-	result = subprocess.run(["bash", "-c", command], cwd=clone, env={**env, "CLAUDE_CODE_SESSION_ID": "session-1"}, capture_output=True, text=True)
+	result = subprocess.run(["bash", "-c", command], cwd=clone, env={**env, "CLAUDE_CODE_SESSION_ID": "session-1", "LOADED_SETTINGS_CHECK_WAIT_SECONDS": "0"}, capture_output=True, text=True)
 	verdict = json.loads(result.stdout)
 	assert verdict["before_recorder_wired"] is False
 	if loaded == "merged":

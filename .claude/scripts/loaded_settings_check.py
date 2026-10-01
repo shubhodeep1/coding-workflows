@@ -12,6 +12,7 @@ record with the file on disk now.
 Usage:
 
   loaded_settings_check.py [--session-id ID] [--settings PATH] [--before REV]
+                           [--wait-seconds N]
 
 `--session-id` defaults to `CLAUDE_CODE_SESSION_ID` (the session's transcript
 id, which is the `session_id` every hook receives); `--settings` defaults to
@@ -25,6 +26,14 @@ whether it wired the recorder under `ConfigChange`. Claude Code runs
 recorded; the reason then says so instead of claiming the file was not
 loaded, and also when no record exists at all (such a branch wires no
 recorder at SessionStart either). It never changes the verdict.
+
+Claude Code's file watcher applies a change, and runs `ConfigChange`, a few
+seconds after the file changes on disk. So when the record is missing or names
+another hash, the check re-reads it every half second for up to
+`--wait-seconds` (default `LOADED_SETTINGS_CHECK_WAIT_SECONDS`, else 10) before
+it reports "not current" (PR #5283 review round 2). It never waits when waiting
+cannot change the answer: no session id, no readable `settings.json`, an
+unreadable or malformed record, or a pre-recorder branch. `0` checks once.
 
 Output is one JSON line: `current` (bool), `loaded_sha256` (from the record,
 or null), `file_sha256` (the file now, or `absent`), `record` (the record
@@ -44,10 +53,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -58,6 +69,10 @@ _SESSION_FILE_RE = re.compile(r"[^A-Za-z0-9_.-]")
 RECORDER_SCRIPT_NAME = "settings_load_recorder.py"
 RECORDER_CONFIG_SOURCE = "project_settings"
 NOT_LOADED_REASON = "the session has not loaded this settings.json"
+NO_RECORD_REASON = "no record for this session: the settings load recorder hook has not run"
+WAIT_SECONDS_ENV = "LOADED_SETTINGS_CHECK_WAIT_SECONDS"
+DEFAULT_WAIT_SECONDS = 10.0
+POLL_INTERVAL_SECONDS = 0.5
 UNOBSERVABLE_REASON = (
 	"the session has not recorded loading this settings.json: before the merge ({rev}) the branch's"
 	" settings.json wired no ConfigChange recorder, and Claude Code runs ConfigChange with the hooks"
@@ -148,7 +163,7 @@ def check(session_id: str | None, settings: Path, directory: Path, before: str |
 		if result["before_recorder_wired"] is False:
 			result["reason"] = UNOBSERVABLE_REASON.format(rev=before)
 		else:
-			result["reason"] = "no record for this session: the settings load recorder hook has not run"
+			result["reason"] = NO_RECORD_REASON
 		return result
 	except (OSError, ValueError):
 		result["reason"] = "record unreadable"
@@ -171,16 +186,54 @@ def check(session_id: str | None, settings: Path, directory: Path, before: str |
 	return result
 
 
+def check_with_wait(
+	session_id: str | None,
+	settings: Path,
+	directory: Path,
+	before: str | None = None,
+	wait_seconds: float = 0.0,
+	clock=time.monotonic,
+	pause=time.sleep,
+) -> dict:
+	"""`check`, re-run every POLL_INTERVAL_SECONDS for up to `wait_seconds`
+	while the record is missing or names another hash: the only answers a
+	late `ConfigChange` from the file watcher can still turn into "current"."""
+	deadline = clock() + max(wait_seconds, 0.0)
+	while True:
+		result = check(session_id, settings, directory, before)
+		if result["current"] or result["reason"] not in (NOT_LOADED_REASON, NO_RECORD_REASON):
+			return result
+		remaining = deadline - clock()
+		if remaining <= 0:
+			return result
+		pause(min(POLL_INTERVAL_SECONDS, remaining))
+
+
+def default_wait_seconds() -> float:
+	raw = os.environ.get(WAIT_SECONDS_ENV)
+	if raw is None or not raw.strip():
+		return DEFAULT_WAIT_SECONDS
+	try:
+		value = float(raw)
+	except ValueError:
+		return DEFAULT_WAIT_SECONDS
+	return value if math.isfinite(value) and value >= 0 else DEFAULT_WAIT_SECONDS
+
+
 def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
 	parser.add_argument("--session-id", default=None)
 	parser.add_argument("--settings", default=str(DEFAULT_SETTINGS))
 	parser.add_argument("--before", default=None)
+	parser.add_argument("--wait-seconds", type=float, default=None)
 	parser.add_argument("--record-dir", default=None, help=argparse.SUPPRESS)
 	args = parser.parse_args(argv)
 	session_id = args.session_id if args.session_id is not None else os.environ.get("CLAUDE_CODE_SESSION_ID")
 	directory = Path(args.record_dir) if args.record_dir else Path.home().joinpath(*RECORD_DIR_PARTS)
-	result = check(session_id, Path(args.settings), directory, args.before)
+	wait_seconds = default_wait_seconds() if args.wait_seconds is None else args.wait_seconds
+	if not math.isfinite(wait_seconds) or wait_seconds < 0:
+		parser.error("--wait-seconds must be a finite number, 0 or more")
+	result = check_with_wait(session_id, Path(args.settings), directory, args.before, wait_seconds)
 	print(json.dumps(result, sort_keys=True))
 	return 0 if result["current"] else 1
 

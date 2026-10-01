@@ -69,7 +69,8 @@ def _run_recorder(claude_dir: Path, payload, home: Path, project_dir: Path | Non
 
 
 def _run_check(claude_dir: Path, cwd: Path, home: Path, *args: str, session_env: str | None = None) -> subprocess.CompletedProcess[str]:
-	env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+	# 0 keeps the not-current cases fast; the wait has its own tests below.
+	env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "LOADED_SETTINGS_CHECK_WAIT_SECONDS": "0"}
 	if session_env is not None:
 		env["CLAUDE_CODE_SESSION_ID"] = session_env
 	return subprocess.run(
@@ -428,3 +429,89 @@ def test_settings_wire_the_recorder_and_allow_the_check(claude_dir: Path):
 	allow = settings["permissions"]["allow"]
 	assert "Bash(python3 .claude/scripts/loaded_settings_check.py *)" in allow
 	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py *)" in allow
+
+
+class _FakeClock:
+	"""A monotonic clock that only `pause` advances, so wait tests never sleep."""
+
+	def __init__(self):
+		self.now = 0.0
+		self.pauses: list[float] = []
+
+	def clock(self) -> float:
+		return self.now
+
+	def pause(self, seconds: float) -> None:
+		self.pauses.append(seconds)
+		self.now += seconds
+
+
+def test_check_waits_for_a_late_config_change(claude_dir: Path, project: Path, tmp_path: Path):
+	"""The watcher runs `ConfigChange` a few seconds after the file changes, so
+	the check re-reads a stale record before it reports not current (PR #5283
+	review round 2)."""
+	module = _load(claude_dir / CHECK)
+	settings = project / ".claude" / "settings.json"
+	directory = tmp_path / "records"
+	directory.mkdir()
+	record = directory / "s-1.json"
+	record.write_text(json.dumps({"sha256": "0" * 64, "event": "SessionStart"}), encoding="utf-8")
+	fake = _FakeClock()
+
+	def pause(seconds: float) -> None:
+		fake.pause(seconds)
+		if fake.now >= 2.0:
+			record.write_text(json.dumps({"sha256": _sha(settings), "event": "ConfigChange"}), encoding="utf-8")
+
+	result = module.check_with_wait("s-1", settings, directory, wait_seconds=10, clock=fake.clock, pause=pause)
+	assert result["current"] is True and result["recorded_event"] == "ConfigChange"
+	assert fake.now == 2.0 and all(step == module.POLL_INTERVAL_SECONDS for step in fake.pauses)
+
+
+@pytest.mark.parametrize("missing_record", (False, True), ids=("stale-record", "no-record"))
+def test_check_gives_up_after_the_wait(claude_dir: Path, project: Path, tmp_path: Path, missing_record: bool):
+	module = _load(claude_dir / CHECK)
+	directory = tmp_path / "records"
+	directory.mkdir()
+	if not missing_record:
+		(directory / "s-1.json").write_text(json.dumps({"sha256": "0" * 64}), encoding="utf-8")
+	fake = _FakeClock()
+	result = module.check_with_wait("s-1", project / ".claude" / "settings.json", directory, wait_seconds=3, clock=fake.clock, pause=fake.pause)
+	assert result["current"] is False
+	assert result["reason"] == (module.NO_RECORD_REASON if missing_record else module.NOT_LOADED_REASON)
+	assert fake.now == 3.0
+
+
+@pytest.mark.parametrize("case", ("no-session", "no-settings", "malformed-record", "current"))
+def test_check_never_waits_when_waiting_cannot_help(claude_dir: Path, project: Path, tmp_path: Path, case: str):
+	module = _load(claude_dir / CHECK)
+	settings = project / ".claude" / "settings.json"
+	directory = tmp_path / "records"
+	directory.mkdir()
+	session = None if case == "no-session" else "s-1"
+	if case == "no-settings":
+		settings.unlink()
+		(directory / "s-1.json").write_text(json.dumps({"sha256": "0" * 64}), encoding="utf-8")
+	elif case == "malformed-record":
+		(directory / "s-1.json").write_text("[]", encoding="utf-8")
+	elif case == "current":
+		(directory / "s-1.json").write_text(json.dumps({"sha256": _sha(settings)}), encoding="utf-8")
+	fake = _FakeClock()
+	result = module.check_with_wait(session, settings, directory, wait_seconds=10, clock=fake.clock, pause=fake.pause)
+	assert result["current"] is (case == "current")
+	assert fake.pauses == []
+
+
+@pytest.mark.parametrize(("raw", "expected"), ((None, 10.0), ("", 10.0), ("0", 0.0), ("2.5", 2.5), ("-1", 10.0), ("x", 10.0), ("inf", 10.0), ("nan", 10.0)))
+def test_wait_default_comes_from_the_environment(claude_dir: Path, monkeypatch, raw, expected):
+	module = _load(claude_dir / CHECK)
+	if raw is None:
+		monkeypatch.delenv(module.WAIT_SECONDS_ENV, raising=False)
+	else:
+		monkeypatch.setenv(module.WAIT_SECONDS_ENV, raw)
+	assert module.default_wait_seconds() == expected
+
+
+@pytest.mark.parametrize("value", ("-1", "inf", "nan", "soon"))
+def test_bad_wait_seconds_is_a_usage_error(claude_dir: Path, project: Path, tmp_path: Path, value: str):
+	assert _run_check(claude_dir, project, tmp_path, "--wait-seconds", value, session_env="s-1").returncode == 2

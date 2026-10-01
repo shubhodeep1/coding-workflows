@@ -7,6 +7,7 @@ The Claude-asset sync merges the default branch's hook fixes and hook wiring int
 | --- | --- |
 | New hook and helper | `.claude/hooks/settings_load_recorder.py`, `.claude/scripts/loaded_settings_check.py` |
 | Record | `~/.claude/loaded-settings/<session id>.json`, outside the repository |
+| Wait for a late watcher reload, per check | up to 10 s (`LOADED_SETTINGS_CHECK_WAIT_SECONDS`, `--wait-seconds`) |
 | Restarts per stage or fix | 1, then a §28.C escalation |
 | GitHub API calls added | 0 |
 

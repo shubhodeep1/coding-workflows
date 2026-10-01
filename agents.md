@@ -1247,7 +1247,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py --before HEAD^1`
   (one JSON line; exit 0 current, 1 not current, 2 usage error; the session
   id defaults to `CLAUDE_CODE_SESSION_ID`; a missing record, or no readable
-  `settings.json` on disk, is not current). Claude Code runs `ConfigChange`
+  `settings.json` on disk, is not current). The watcher applies a change a
+  few seconds after it lands on disk, so while the record is missing or
+  names another hash the check re-reads it every half second for up to
+  `--wait-seconds` (env `LOADED_SETTINGS_CHECK_WAIT_SECONDS`, default `10`;
+  `0` checks once) before it reports not current. Claude Code runs `ConfigChange`
   with the hooks loaded before a change, so on a branch whose
   `settings.json` predates the recorder the merged file's reload is never
   recorded: `--before HEAD^1` then reports `"before_recorder_wired": false`
