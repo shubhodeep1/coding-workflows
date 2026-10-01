@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Keep shipped workflow-template copies aligned with their source implementations.",
   "timestamps": {
     "created_at": "2026-10-01T01:09:44Z",
