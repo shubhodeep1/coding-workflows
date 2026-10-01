@@ -428,6 +428,12 @@ def _settings(tmp_path, allow):
 		("Bash(git:*)", "git", True),
 		("Bash(python3 [x].py *)", "python3 [x].py a", True),
 		("Bash(python3 [x].py *)", "python3 x.py a", False),
+		("Bash(* --help *)", "npm --help x", True),
+		("Bash(* --help *)", "npm --help", False),
+		("Bash(ls * *)", "ls *", False),
+		("Bash(git:* push)", "git:x push", True),
+		("Bash(git:* push)", "git status push", False),
+		("Bash(git push:*)", "git pushx", False),
 	],
 )
 def test_allow_rule_for_uses_the_documented_wildcards(tmp_path, rule, command, matches):
@@ -544,3 +550,48 @@ def test_claude_md_lists_the_sync_merge_as_a_routine_write():
 	section = text[text.index("### B) Routine Repository Writes") : text.index("### C) Destructive & Administrative Writes")]
 	assert "local `git merge` of `origin/<default>`" in section
 	assert "(issue #5899)" in section
+
+
+def _write_log(directory, name, records):
+	directory.mkdir(parents=True, exist_ok=True)
+	(directory / name).write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+
+def _record(command, ts, cwd="/home/user/coding-workflows"):
+	return {"ts": ts, "event": "PermissionDenied", "tool_name": "Bash", "tool_input": {"command": command}, "permission_mode": "auto", "cwd": cwd}
+
+
+def test_latest_occurrence_is_the_newest_record_across_session_files(tmp_path):
+	directory = tmp_path / "log"
+	# The file that sorts first by name holds the newer occurrence.
+	_write_log(directory, "a-session.jsonl", [_record("git merge --no-edit origin/newer", "2026-10-01T08:00:00Z")])
+	_write_log(directory, "b-session.jsonl", [_record("git merge --no-edit origin/older", "2026-09-30T08:00:00Z")])
+	records = pp_twin.load_records(directory)
+	assert [record["ts"] for record in records] == ["2026-09-30T08:00:00Z", "2026-10-01T08:00:00Z"]
+	pattern = pp_twin.group_patterns(records, _settings(tmp_path, ["Bash(git merge --no-edit origin/newer)"]))[0]
+	assert pattern["first_ts"] == "2026-09-30T08:00:00Z" and pattern["last_ts"] == "2026-10-01T08:00:00Z"
+	assert "origin/newer" in pattern["example"]
+	assert pattern["allow_rule"] == "Bash(git merge --no-edit origin/newer)"
+
+
+def test_records_from_another_checkout_are_not_checked(tmp_path):
+	settings_dir = tmp_path / "repo" / ".claude"
+	settings_dir.mkdir(parents=True)
+	settings = _settings(settings_dir, ["Bash(git merge *)"])
+	inside = str(tmp_path / "repo" / "sub")
+	cases = {str(tmp_path / "repo"): "Bash(git merge *)", inside: "Bash(git merge *)", "": "Bash(git merge *)", str(tmp_path / "repo-other"): None, str(tmp_path / "elsewhere"): None}
+	for cwd, expected in cases.items():
+		pattern = pp_twin.group_patterns([_record("git merge x", "2026-10-01T08:00:00Z", cwd=cwd)], settings)[0]
+		assert pattern["allow_rule"] == expected, cwd
+	# A settings file outside a `.claude/` directory names no checkout, so every record is checked.
+	assert pp_twin.group_patterns([_record("git merge x", "t", cwd="/elsewhere")], _settings(tmp_path, ["Bash(git merge *)"]))[0]["allow_rule"] == "Bash(git merge *)"
+
+
+def test_group_patterns_reads_the_settings_once(tmp_path, monkeypatch):
+	calls = []
+	real = pp_twin._bash_allow_rules
+	monkeypatch.setattr(pp_twin, "_bash_allow_rules", lambda path: calls.append(path) or real(path))
+	records = [_record(f"git merge --no-edit origin/x{n}", f"2026-10-01T08:0{n}:00Z") for n in range(5)]
+	pattern = pp_twin.group_patterns(records, _settings(tmp_path, ["Bash(git merge *)"]))[0]
+	assert pattern["count"] == 5 and pattern["allow_rule"] == "Bash(git merge *)"
+	assert len(calls) == 1

@@ -41,8 +41,12 @@ modes its occurrences were logged under) and `allow_rule`, the first
 `Bash(...)` entry of the checkout's `.claude/settings.json`
 `permissions.allow` that matches the latest command as a whole (`*` matches
 any run of characters, and a trailing ` *` or `:*` also matches the bare
-command), or None. Only a single command is checked: one with a shell
-operator, a newline, a backtick, or `$(` never matches. The issue body and
+command, when that is the rule's only wildcard), or None. Only a single
+command is checked: one with a shell operator, a newline, a backtick, or `$(`
+never matches. A record whose `cwd` lies outside the checkout that holds the
+settings file is not checked either, since that checkout's rules did not
+apply to it. Records are ordered by their `ts`, so "latest" is the newest
+occurrence across session files. The issue body and
 the "Seen again" comment show the permission mode and, when a rule matches,
 say the call was decided despite the rule, so reshaping the command or adding
 another allow rule cannot clear it. `report` lists `allow_rule` per pattern.
@@ -63,6 +67,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -262,22 +267,41 @@ def _bash_allow_rules(settings_path: Path) -> list[str]:
 	return [rule for rule in allow if isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")")]
 
 
+def _checkout_root(settings_path: Path) -> str | None:
+	"""The checkout that owns a `<root>/.claude/settings.json`, or None for a settings file elsewhere."""
+	path = Path(settings_path)
+	return os.path.realpath(path.parent.parent) if path.parent.name == ".claude" else None
+
+
+def _cwd_in_checkout(cwd: str, root: str | None) -> bool:
+	"""False only when the record's `cwd` is known and lies outside the checkout."""
+	if root is None or not cwd:
+		return True
+	cwd = os.path.realpath(cwd)
+	return cwd == root or cwd.startswith(root.rstrip(os.sep) + os.sep)
+
+
 def _allow_pattern_matches(pattern: str, command: str) -> bool:
-	for suffix in (" *", ":*"):
-		if pattern.endswith(suffix):
-			prefix = pattern[: -len(suffix)]
-			if command == prefix or (suffix == ":*" and command.startswith(prefix + " ")):
-				return True
+	if pattern.endswith(":*"):
+		# The legacy `:*` suffix is another spelling of a trailing ` *`.
+		pattern = pattern[: -len(":*")] + " *"
+	if pattern.endswith(" *") and pattern.count("*") == 1 and command == pattern[: -len(" *")]:
+		# A trailing ` *` that is the rule's only wildcard also matches the bare command.
+		return True
 	regex = ".*".join(re.escape(part) for part in pattern.split("*"))
 	return re.fullmatch(regex, command, re.DOTALL) is not None
 
 
 def allow_rule_for(command: str, settings_path: Path | None = None) -> str | None:
 	"""The first allow rule that matches this single command as a whole, or None (diagnostic only)."""
+	return _matching_allow_rule(command, _bash_allow_rules(SETTINGS_PATH if settings_path is None else settings_path))
+
+
+def _matching_allow_rule(command: str, rules: list[str]) -> str | None:
 	command = command.strip()
 	if not command or _COMPOUND_COMMAND_RE.search(command):
 		return None
-	for rule in _bash_allow_rules(SETTINGS_PATH if settings_path is None else settings_path):
+	for rule in rules:
 		if _allow_pattern_matches(rule[len("Bash(") : -1], command):
 			return rule
 	return None
@@ -320,11 +344,17 @@ def load_records(log_dir: Path) -> list[dict]:
 				continue
 			if isinstance(record, dict) and record.get("event") in ("PermissionRequest", "PermissionDenied"):
 				records.append(record)
+	# Session files are named by session id, not by time. Order by timestamp so
+	# "first" and "latest" hold across files; the stable sort keeps file order on ties.
+	records.sort(key=lambda record: str(record.get("ts") or ""))
 	return records
 
 
 def group_patterns(records: list[dict], settings_path: Path | None = None) -> list[dict]:
 	"""Group records into patterns, ordered by first occurrence."""
+	settings_file = SETTINGS_PATH if settings_path is None else settings_path
+	allow_rules = _bash_allow_rules(settings_file)
+	checkout_root = _checkout_root(settings_file)
 	patterns: dict[str, dict] = {}
 	for record in records:
 		event = str(record.get("event"))
@@ -351,7 +381,8 @@ def group_patterns(records: list[dict], settings_path: Path | None = None) -> li
 		pattern["example"] = record_example(record)
 		if tool == "Bash":
 			tool_input = record.get("tool_input") if isinstance(record.get("tool_input"), dict) else {}
-			pattern["allow_rule"] = allow_rule_for(str(tool_input.get("command") or ""), settings_path)
+			in_checkout = _cwd_in_checkout(str(record.get("cwd") or ""), checkout_root)
+			pattern["allow_rule"] = _matching_allow_rule(str(tool_input.get("command") or ""), allow_rules) if in_checkout else None
 		mode = str(record.get("permission_mode") or "")
 		if mode and mode not in pattern["permission_modes"] and len(pattern["permission_modes"]) < 3:
 			pattern["permission_modes"].append(redact(mode)[:40])

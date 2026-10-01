@@ -1179,7 +1179,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   call was decided despite the rule, so reshaping it or adding another rule
   cannot clear the pattern (issue #5899). `report` lists the matching rule
   as `allow_rule` (or `null`) per pattern. The check reads only the local
-  settings file and issues no API calls.
+  settings file and issues no API calls. A call logged from a directory
+  outside that checkout is not checked, and "latest" is the newest
+  occurrence by timestamp across all session logs.
 - `/implement-plan-claude` step 0 now refuses to run outside Auto mode
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md

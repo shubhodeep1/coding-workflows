@@ -7,20 +7,22 @@
 - Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #5918: twin sync
+- Waiting on: PR #5918: twin sync (review round 1)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: phase PR #5918 opened twin-first; hold claim posted; twin-sync blocker on #5899 (ai:claude-blocked) — awaiting [claude-twin-sync] copy and /reclarify
+- Last note: review round 1 on PR #5918: 3 valid findings fixed in the twin (record order, cross-checkout cwd, settings read once), 1 task gap fixed (this log), matcher findings rejected (documented Claude Code semantics); hold claim and second twin-sync blocker on #5899 — awaiting [claude-twin-sync] copy and /reclarify
 
 ## Phases
-1. [ ] Phase 1 — report allowlisted denials and document the sync merge — PR #5918 open (twin sync pending); review rounds: 0; interventions: 0 — protected paths: .claude/scripts/permission_prompts.py
-   - [x] twin `workflow-templates/.claude/scripts/permission_prompts.py`: `allow_rule_for`, `allow_rule` / `permission_modes` on patterns, report key, occurrence-block lines (twin sha256 f1a4aabbeb0c202ebcb3b335800bfaedbc6af818e6039000cbfdc93342b9ec01)
-   - [x] `tests/test_permission_prompts.py`: matcher, grouping, body/comment, real-settings tests against the twin (78 passed; `test_template_parity` red until the twin sync)
+1. [ ] Phase 1 — report allowlisted denials and document the sync merge — PR #5918 open (round-1 twin sync pending); review rounds: 1; interventions: 0 — protected paths: .claude/scripts/permission_prompts.py
+   - [x] twin `workflow-templates/.claude/scripts/permission_prompts.py`: `allow_rule_for`, `allow_rule` / `permission_modes` on patterns, report key, occurrence-block lines (first twin sha256 f1a4aabbeb0c202ebcb3b335800bfaedbc6af818e6039000cbfdc93342b9ec01, synced in b8fea25)
+   - [x] `tests/test_permission_prompts.py`: matcher, grouping, body/comment, real-settings tests against the twin (78 passed at phase PR; 87 passed after review round 1, `test_template_parity` red until the round-1 twin sync)
    - [x] `CLAUDE.md` §23.B routine sync-merge bullet
    - [x] `agents.md` prompt-report bullet
    - [x] `changelog.d/5899-flag-allowlisted-classifier-denials.md`
-   - [ ] `[claude-twin-sync]` copy of the twin into `.claude/scripts/permission_prompts.py` (supervising session)
+   - [x] `[claude-twin-sync]` copy of the twin into `.claude/scripts/permission_prompts.py` (b8fea25)
+   - [x] review round 1 (2026-10-01): records ordered by `ts`, cross-checkout `cwd` not checked, settings read once per run, `:*` and only-wildcard bare-command rule in the matcher; 3 new tests
+   - [ ] `[claude-twin-sync]` copy of the round-1 twin into `.claude/scripts/permission_prompts.py` (supervising session; twin sha256 c9d10651b4b9eeef07e313b9490d5980a7b4b2f2d30ae18ed208dd5549aca0ae)
    - Done: new tests pass on the twin; after twin sync the full permission-prompt suite and section-number test pass
 
 ## Conformance
@@ -39,6 +41,7 @@
 - AD-3 [plan, 2026-10-01] How should filed issues present an allowlisted denial? — Picked: A — a conditional "Already allowlisted" paragraph and a permission-mode line in the occurrence block, leaving the generic "How to fix" list unchanged. Alternatives: B — rewrite the generic guidance for every issue; C — a separate label for allowlisted denials. Why: smallest change (§5) with no effect on other patterns; a new label would need a label-contract change (§6). Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A report that groups records from several session log files must order them by timestamp, because the files are named by session id; and a check against one checkout's settings must skip records whose `cwd` lies outside that checkout. (files: workflow-templates/.claude/scripts/permission_prompts.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-01)
