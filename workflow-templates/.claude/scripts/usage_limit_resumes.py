@@ -30,7 +30,7 @@ Output: one JSON object on stdout, e.g.
 
   {"resume": [{"session_id": "session_…", "kind": "checker", "issue": 5660,
                "signal": "text", "trigger_name": "Resume after usage limit (#5660)",
-               "prompt": "…"}],
+               "fire_offset_minutes": 2, "prompt": "…"}],
    "pending": [{"session_id": "session_…", "kind": "other", "issue": null}],
    "skipped": [{"session_id": "session_…", "signal": "text", "reason": "wake_pending"}],
    "not_reset": false, "limit": 20, "considered": 187, "errors": []}
@@ -59,12 +59,23 @@ wake it anyway (`wake_pending`: for a checker, any, because its triggers
 are its own check-ins and one means its chain is alive; for another
 session, one due within 30 minutes, overdue, or with an unreadable time,
 because a stage session keeps a 7-day hand-back Routine). A pending
-`Resume after usage limit (…)` trigger counts, so a session is never resumed
-twice for the same stop.
+`Resume after usage limit (…)` trigger counts whatever its time, so a session
+is never resumed twice for the same stop. A trigger's time is its
+`next_run_at`, else its `run_once_at`. A resume trigger that has fired is
+disabled and no longer counts: when the resumed turn fails on the limit or
+on a rate limit again, the next wake picks the session again.
 
 Selected sessions are ordered checkers first (title contains `— checker` or
 `status check-in`), then oldest `updated_at`. The first `limit` go to
 `resume`; the rest go to `pending` for the next wake.
+
+Fire spacing: waking every stopped session at once makes the resumed turns
+fail again ("Server is temporarily limiting requests", or the usage limit
+itself; issue #5660, 2026-09-30 16:05Z). Each `resume` entry therefore
+carries `fire_offset_minutes`: 2 for the first 4, then 3 minutes later for
+each further group of 4 (2, 2, 2, 2, 5, 5, 5, 5, 8, …), in `resume` order,
+so checkers fire first. The pickup sets each trigger's `run_once_at` to the
+time it creates the trigger plus that offset.
 
 Hold-off: `allowed` and `allowed_warning` count as allowed. A `rate_limit_info`
 with any other status holds while its `resetsAt` is still in the future. When
@@ -89,6 +100,9 @@ RESUME_LIMIT_MIN = 1
 RESUME_LIMIT_MAX = 40
 RESUME_LIMIT_ENV = "CLAUDE_USAGE_LIMIT_RESUME_LIMIT"
 WAKE_WINDOW_MINUTES = 30
+RESUME_FIRE_FIRST_OFFSET_MINUTES = 2
+RESUME_FIRE_GROUP_SIZE = 4
+RESUME_FIRE_GROUP_SPACING_MINUTES = 3
 RESUME_TRIGGER_PREFIX = "Resume after usage limit"
 ALLOWED_RATE_LIMIT_STATUSES = frozenset({"allowed", "allowed_warning"})
 SESSION_STATUS_PREFIX = "SESSION_STATUS_"
@@ -118,10 +132,12 @@ CHECKER_PROMPT = (
 	"Resume after usage limit (issue #5660): {why} The limit has reset. "
 	"Repeat the steps in your most recent checker-instructions message now, starting at step 1 "
 	"(for a `PR #<n> status check-in` checker: your instructions message together with every later subscriber message). "
-	"Before any step creates a session, call list_sessions (mine: true, limit: 20). If a session that is not archived "
-	"has exactly the title that step would use and was created after your most recent checker-instructions message, "
-	"the step already ran before the limit stopped you: do not create another, treat that session as the one the step "
-	"created, and continue as the step says after creating it. "
+	"Before any step creates a session, call list_sessions (mine: true, limit: 100), and repeat it with after_id = the "
+	"previous page's last_id while has_more is true and that page's oldest session was created after your most recent "
+	"checker-instructions message, at most 5 pages. If a session that is not archived has exactly the title that step "
+	"would use, was created after that message, and has this repository as its source (its session_context.sources; "
+	"call get_session on it when the listing omits them), the step already ran before the limit stopped you: do not "
+	"create another, treat that session as the one the step created, and continue as the step says after creating it. "
 	"Wherever those instructions run check_in_status.py, set CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN={login} (never empty). "
 	"If a delete_trigger or archive_session call is refused, skip it and do not retry (#5068). "
 	"Edit files with the Edit or Write tools, never with python3 heredocs (#4858)."
@@ -270,8 +286,16 @@ def resume_prompt(kind: str, signal: str, login: str) -> str:
 	return template.format(why=SIGNAL_REASONS[signal], login=login)
 
 
+def fire_offset_minutes(position: int) -> int:
+	"""Minutes after its creation that the `position`-th resume trigger (0-based) fires: 4 every 3 minutes, from 2."""
+	return RESUME_FIRE_FIRST_OFFSET_MINUTES + RESUME_FIRE_GROUP_SPACING_MINUTES * (position // RESUME_FIRE_GROUP_SIZE)
+
+
 def _bound_wakes(triggers: list, errors: list) -> dict:
-	"""Map session id → the `next_run_at` of every enabled trigger bound to it (None when unreadable)."""
+	"""Map session id → `(wake time, is a resume trigger)` for every enabled trigger bound to it.
+
+	The wake time is `next_run_at`, else `run_once_at`, and None when neither is readable.
+	"""
 	wakes: dict = {}
 	for position, trigger in enumerate(triggers):
 		if not isinstance(trigger, dict):
@@ -282,7 +306,9 @@ def _bound_wakes(triggers: list, errors: list) -> dict:
 		session_id = trigger.get("persistent_session_id")
 		if not isinstance(session_id, str) or not session_id:
 			continue
-		wakes.setdefault(session_id, []).append(_parse_time(trigger.get("next_run_at")))
+		is_resume = _text(trigger.get("name")).startswith(RESUME_TRIGGER_PREFIX)
+		wake_time = _parse_time(trigger.get("next_run_at") or trigger.get("run_once_at"))
+		wakes.setdefault(session_id, []).append((wake_time, is_resume))
 	return wakes
 
 
@@ -291,15 +317,17 @@ def _wake_pending(next_runs: list, kind: str, now: dt.datetime) -> bool:
 
 	Any enabled trigger counts for a checker: its triggers are its own
 	check-ins (at most an hour out), so one means its chain is alive and a
-	resume would start a second chain. Other sessions count only a trigger
-	due within 30 minutes: a stage session keeps a 7-day hand-back Routine.
+	resume would start a second chain. Other sessions count a pending resume
+	trigger whatever its time (fire spacing can put one more than 30 minutes
+	out), and any other trigger only when it is due within 30 minutes: a
+	stage session keeps a 7-day hand-back Routine.
 	"""
 	if not next_runs:
 		return False
 	if kind == "checker":
 		return True
 	window_end = now + dt.timedelta(minutes=WAKE_WINDOW_MINUTES)
-	return any(next_run is None or next_run <= window_end for next_run in next_runs)
+	return any(is_resume or next_run is None or next_run <= window_end for next_run, is_resume in next_runs)
 
 
 def _signal(session: dict, kind: str, next_runs: list, now: dt.datetime) -> str | None:
@@ -386,6 +414,7 @@ def select(sessions: list, triggers: list, pickup_session: str, login: str, limi
 				"issue": issue,
 				"signal": signal,
 				"trigger_name": resume_trigger_name(session_id, title),
+				"fire_offset_minutes": fire_offset_minutes(len(resume)),
 				"prompt": resume_prompt(kind, signal, login),
 			}
 		)

@@ -317,9 +317,14 @@ def test_pickup_resumes_sessions_stopped_by_the_usage_limit(pickup_cmd):
 	# One self-contained one-shot trigger per session, copied from the script.
 	assert "`name` = its `trigger_name`, copied exactly" in pickup_cmd
 	assert "`prompt` = its `prompt`, copied exactly" in pickup_cmd
-	assert "`run_once_at` = two minutes from now" in pickup_cmd
-	# Pacing: 10 per minute across the wake, a background wait, bounded retries.
-	assert "After every 10th `create_trigger` call of this wake" in pickup_cmd
+	# Fire spacing (owner comment, 16:39Z): each trigger fires at its script-given offset from its creation.
+	assert "`run_once_at` = its `fire_offset_minutes` from now, read when you create that trigger" in pickup_cmd
+	assert "spaces the wakes at 4 every 3 minutes" in pickup_cmd
+	assert "a session whose resumed turn fails on a limit again is picked again on the next wake" in pickup_cmd
+	# Pacing (owner comment, 16:13Z): 8 per minute across the wake, a background wait, bounded retries.
+	assert "After every 8th `create_trigger` call of this wake" in pickup_cmd
+	assert "they count toward the same 8 per minute" in pickup_cmd
+	assert "10 per minute" not in pickup_cmd
 	assert "`Trigger creation rate limit reached. Try again in <n>s`" in pickup_cmd
 	assert "run `sleep 60` as its own Bash call with `run_in_background: true`" in pickup_cmd
 	assert "A call refused three times is left for the next wake." in pickup_cmd

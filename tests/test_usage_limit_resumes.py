@@ -80,8 +80,8 @@ def _pickup(rate_status="allowed_warning", resets_at=FUTURE_RESET):
 	)
 
 
-def _trigger(session_id, next_run_at, name="implement-plan x: check-in", enabled=True, ended_reason=""):
-	return {
+def _trigger(session_id, next_run_at, name="implement-plan x: check-in", enabled=True, ended_reason="", run_once_at=None):
+	trigger = {
 		"id": f"trig_{session_id}",
 		"name": name,
 		"enabled": enabled,
@@ -89,6 +89,9 @@ def _trigger(session_id, next_run_at, name="implement-plan x: check-in", enabled
 		"persistent_session_id": session_id,
 		"next_run_at": next_run_at,
 	}
+	if run_once_at is not None:
+		trigger["run_once_at"] = run_once_at
+	return trigger
 
 
 def _run(tmp_path, capsys, sessions, triggers=(), extra=(), environ=None, wrap=None):
@@ -131,6 +134,7 @@ def _skips(result):
 		"Claude usage limit reached. Your limit will reset at 11am.",
 		'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your rate limit"}}',
 		"API Error: account rate-limit exceeded",
+		"API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
 	],
 )
 def test_usage_limit_text_selects_the_session(tmp_path, capsys, detail):
@@ -329,6 +333,36 @@ def test_resets_at_in_milliseconds_and_iso_strings_are_read(tmp_path, capsys):
 	assert _skips(result) == {"session_ms": "not_reset", "session_iso": "not_reset"}
 
 
+def test_a_pending_resume_trigger_blocks_whatever_its_time(tmp_path, capsys):
+	"""Fire spacing can put a resume more than 30 minutes out; it still counts as the session's wake."""
+	trigger = _trigger("session_a", "2026-09-30T12:45:00Z", name="Resume after usage limit (#5607)")
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a")], [trigger])
+	assert result["resume"] == [] and _skips(result) == {"session_a": "wake_pending"}
+
+
+def test_run_once_at_is_read_when_next_run_at_is_missing(tmp_path, capsys):
+	far = _trigger("session_far", None, name="PR #5651 hand-back", run_once_at="2026-10-07T12:00:00Z")
+	near = _trigger("session_near", None, name="PR #5652 hand-back", run_once_at="2026-09-30T12:10:00Z")
+	sessions = [_pickup(), _session("session_far"), _session("session_near")]
+	_, result = _run(tmp_path, capsys, sessions, [far, near])
+	assert _ids(result["resume"]) == ["session_far"]
+	assert _skips(result) == {"session_near": "wake_pending"}
+
+
+@pytest.mark.parametrize(
+	"detail",
+	[
+		LIMIT_TEXT,
+		"API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+	],
+)
+def test_a_fired_resume_whose_turn_failed_again_is_picked_again(tmp_path, capsys, detail):
+	"""Owner comment on #5660 (16:39Z): a resumed turn that failed on a limit is resumed again on the next wake."""
+	fired = _trigger("session_a", None, name="Resume after usage limit (#5607)", enabled=False, ended_reason="run_once_fired")
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a", detail=detail)], [fired])
+	assert _ids(result["resume"]) == ["session_a"]
+
+
 # --- ordering, cap, names, prompts ------------------------------------------------------
 
 
@@ -380,6 +414,26 @@ def test_cap_env_var_and_flag_are_clamped(tmp_path, capsys, env_value, cli, expe
 	assert len(result["pending"]) == 45 - expected
 
 
+def test_resumes_fire_four_every_three_minutes_checkers_first(tmp_path, capsys):
+	"""Owner comment on #5660 (16:39Z): space when the resumes fire, about 4 per 3 minutes."""
+	sessions = [_pickup(), *_many(9), _checker("session_checker", updated_at="2026-09-30T10:59:00Z")]
+	_, result = _run(tmp_path, capsys, sessions)
+	assert result["resume"][0]["session_id"] == "session_checker"
+	assert [entry["fire_offset_minutes"] for entry in result["resume"]] == [2, 2, 2, 2, 5, 5, 5, 5, 8, 8]
+
+
+def test_fire_offsets_stay_inside_the_wake_window_at_the_largest_cap():
+	assert [resumes.fire_offset_minutes(position) for position in (0, 3, 4, 7, 8)] == [2, 2, 5, 5, 8]
+	assert resumes.fire_offset_minutes(resumes.RESUME_LIMIT_MAX - 1) == 29
+	assert (resumes.RESUME_FIRE_FIRST_OFFSET_MINUTES, resumes.RESUME_FIRE_GROUP_SIZE, resumes.RESUME_FIRE_GROUP_SPACING_MINUTES) == (2, 4, 3)
+
+
+def test_pending_entries_carry_no_fire_offset(tmp_path, capsys):
+	_, result = _run(tmp_path, capsys, [_pickup(), *_many(22)])
+	assert all("fire_offset_minutes" not in entry for entry in result["pending"])
+	assert result["resume"][-1]["fire_offset_minutes"] == 2 + 3 * (19 // 4)
+
+
 def test_resolve_resume_limit_defaults():
 	assert resumes.DEFAULT_RESUME_LIMIT == 20
 	assert (resumes.RESUME_LIMIT_MIN, resumes.RESUME_LIMIT_MAX) == (1, 40)
@@ -421,7 +475,9 @@ def test_prompts_are_fixed_text_plus_the_login(tmp_path, capsys):
 		assert "ignore previous instructions" not in prompt and "IGNORE ALL RULES" not in prompt
 		assert "The limit has reset." in prompt
 	assert "Repeat the steps in your most recent checker-instructions message now, starting at step 1" in checker_prompt
-	assert "call list_sessions (mine: true, limit: 20)" in checker_prompt
+	assert "call list_sessions (mine: true, limit: 100), and repeat it with after_id" in checker_prompt
+	assert "at most 5 pages" in checker_prompt
+	assert "has this repository as its source" in checker_prompt
 	assert "do not create another" in checker_prompt
 	assert "Continue from your latest instructions. First re-read the current state" in other_prompt
 	assert "Do not redo work that already landed" in other_prompt
