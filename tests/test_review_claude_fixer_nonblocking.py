@@ -1608,6 +1608,36 @@ def test_issue_5582_a_proved_disproof_demotes_with_the_same_record(tmp_path):
 	assert "proved false by an independent automated check" in _block(text, nonblocking.NONBLOCKING_BLOCK)
 
 
+def test_issue_5582_the_demoted_record_holds_its_own_copies(tmp_path, monkeypatch):
+	"""A returned record shares no list with the parsed ledger or the disproof check's candidate."""
+	parsed: list[list[str]] = []
+	real_parse = nonblocking.parse_ledger
+
+	def capturing_parse(text: str) -> list[object]:
+		segments = real_parse(text)
+		consensus = nonblocking._consensus_block(segments)
+		if consensus is not None:
+			parsed.extend(consensus.entries)
+		return segments
+
+	monkeypatch.setattr(nonblocking, "parse_ledger", capturing_parse)
+	seen: list[dict] = []
+	reviews = _reviews(tmp_path, rejecters=OTHERS)
+	_text, demoted, _stats = _diagnostics(_ledger(README_FINDING), reviews,
+		disproof_check=lambda candidate: seen.append(candidate) or True)
+	[record] = demoted
+	[candidate] = seen
+	originals = [entry for entry in parsed if entry == record["entry"]]
+	assert originals and not any(entry is record["entry"] for entry in parsed)
+	assert record["entry"] is not candidate["entry"] and record["rejecters"] is not candidate["rejecters"]
+	assert record["rejecters"] == candidate["rejecters"] == sorted(OTHERS)
+	snapshot = list(originals[0])
+	record["entry"].append("  injected: true")
+	record["rejecters"].append("nobody")
+	assert all(entry == snapshot for entry in originals)
+	assert candidate["entry"] == snapshot and candidate["rejecters"] == sorted(OTHERS)
+
+
 def test_issue_5582_the_disproof_check_runs_only_after_every_vote_condition(tmp_path):
 	reviews = _reviews(tmp_path, rejecters=OTHERS[:1])
 	calls: list[dict] = []

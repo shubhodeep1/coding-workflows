@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01EbGhNnCvS36xDxb7uEq7sz   safety net (re-armed by the final-merge — review round 2 stage)   hand-back (re-armed by the final-merge — review round 2 stage)
 - Last updated: 2026-10-01
-- Last note: final PR #5605 review round 2 (head bf878b7, run 36832619840): 1 consensus finding (the demoted record shares `entry` / `rejecters` with the gate's locals), fixed as hardening in one [claude-autofix] commit, AD-7 (stage session session_01Dj5aBmHZqGEsJHt6NXNsx4)
+- Last note: final PR #5605 review round 3 (head 087e32a, run 36846564089): 1 consensus finding (no test observed that the demoted record holds its own `entry` / `rejecters` copies), valid; fixed with a regression test in one [claude-autofix] commit (stage session session_01QATHZE54gUavEKgs5YFD82)
 
 ## Phases
 1. [x] Phase 1 — votes alone never demote a single-reviewer finding   — PR #5611 merged 2026-09-30 (cb8a7aa); review rounds: 2; interventions: 0
@@ -29,7 +29,7 @@
 
 ## Completion
 - PR #5900 merged 2026-10-01 (ae9eb47) — doc moved to docs/completed/issue-5582-rejection-votes-need-automated-proof-plan.md
-- Final PR #5605 ready 2026-10-01 — review rounds: 2 (into `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`)
+- Final PR #5605 ready 2026-10-01 — review rounds: 3 (into `claude/implement-plan-issue-4586-rejected-singleton-findings-hold-reason`)
 
 ## Activation
 
@@ -58,3 +58,4 @@
 - 2026-10-01 (validation 1/3 — read result stage): the step 2 `git merge --no-edit origin/<issue base>` was denied by the Auto-mode classifier (`[Modify Shared Resources]`); no merge was needed, because `git rev-list --count HEAD..origin/<issue base>` was 0.
 - 2026-10-01 (final-merge — review round stage): final PR #5605 review round 1 handed 5 consensus findings on ae9eb47 (two themes: the run log holds only aggregate vote diagnostics, and verdict-bot convergence needs `CLAUDE_FIXER_VERDICT_BOT_LOGIN`, empty by default). All valid; fixed in the changelog fragment, README, the pass-2 header in `scripts/review_run_reviewers.sh`, and the archived plan. No new auto-decision.
 - 2026-10-01 (final-merge — review round 2 stage): two review runs on bf878b7 (36832092673, 36832619840) each handed round 2 to Claude with the same theme; the later hand-off (ledger b89d6aa6…) was answered. Fix in `scripts/review_claude_fixer_nonblocking.py` (the `demoted.append` line); no test can observe the aliasing from outside the function, so the existing 383 tests in `tests/test_review_claude_fixer_nonblocking.py` and `tests/test_review_autofix_claude_fixer_mode.py` were the check (all pass).
+- 2026-10-01 (final-merge — review round 3 stage): round 3 on 087e32a (run 36846564089, ledger d8c9b40d…) raised one consensus finding: no test checked AD-7's copies. Valid, and it corrects the round-2 note above: the aliasing is observable by wrapping `parse_ledger` to capture the parsed consensus entries. Added `test_issue_5582_the_demoted_record_holds_its_own_copies`, which fails with the copies reverted and passes with them; 384 tests pass across the two suites. No new auto-decision.
