@@ -1408,13 +1408,16 @@ guard, turns this rule (the wording issue #4678 adds to this section) into an
 enforced one (issue #4858):
 
 - It answers `permissionDecision: deny`, not `ask`, when a command's
-  interpreter (past assignments, `env`, `sudo`, `timeout N`, `nice`) is
+  interpreter (past assignments and the wrappers `env`, `command`, `exec`,
+  `time`, `sudo`, `doas`, `timeout N`, and `nice` with their options) is
   `python` / `python3` running a program from `-c` or from a heredoc on stdin
   that writes (`write_text`, `write_bytes`, `open(` with a `w` / `a` / `x` /
-  `+` mode, `os.replace`, `os.rename`, `os.remove`, a mutating `shutil` call,
-  `.unlink(`), or is `sed -i` / `--in-place`, `perl -i`, `ruby -i`, or
-  `awk -i inplace`, including inside a double-quoted `$(…)` or a backtick
-  substitution that Bash runs.
+  `+` mode, `os.replace`, `os.rename`, `os.renames`, `os.remove`, a mutating
+  `shutil` call (`copy`, `copy2`, `copyfile`, `copyfileobj`, `copytree`,
+  `copymode`, `copystat`, `move`, `rmtree`, `chown`, `make_archive`,
+  `unpack_archive`), `.unlink(`), or is `sed -i` / `--in-place`, `perl -i`,
+  `ruby -i`, or `awk -i inplace`, including inside a double-quoted `$(…)` or
+  a backtick substitution that Bash runs.
   The reason tells the session to use the Edit tool (exact `old_string` /
   `new_string`) or the Write tool, and to edit the
   `workflow-templates/.claude/**` twin of a protected `.claude/**` file (the

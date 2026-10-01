@@ -379,6 +379,9 @@ def test_only_guard_denies_means_no_api_calls(tmp_path, issues):
 def test_other_denials_with_a_source_are_still_filed():
 	assert not pp.is_expected_deny({"event": "PermissionDenied", "source": "something_else", "reason": "blocked"})
 	assert not pp.is_expected_deny({"event": "PermissionRequest", "reason": "Edit files with the Edit tool (exact old_string/new_string) or the Write tool"})
+	# A prompt is always filed, even one carrying the guard's source (final PR #4877 review round 4).
+	assert not pp.is_expected_deny({"event": "PermissionRequest", "source": "inline_edit_guard", "reason": "needs approval"})
+	assert not pp.is_expected_deny({"source": "inline_edit_guard"})
 
 
 def test_main_rejects_bad_session_label(capsys):

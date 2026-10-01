@@ -285,11 +285,17 @@ def load_records(log_dir: Path) -> list[dict]:
 
 
 def is_expected_deny(record: dict) -> bool:
-	"""True for a deny a guard hook issued on purpose (never filed)."""
+	"""True for a deny a guard hook issued on purpose (never filed).
+
+	Only a `PermissionDenied` record qualifies: a prompt (`PermissionRequest`)
+	is always filed, whatever its `source` or reason says.
+	"""
+	if record.get("event") != "PermissionDenied":
+		return False
 	if record.get("source") in EXPECTED_DENY_SOURCES:
 		return True
 	reason = str(record.get("reason") or "")
-	return record.get("event") == "PermissionDenied" and reason.startswith(EXPECTED_DENY_REASON_PREFIXES)
+	return reason.startswith(EXPECTED_DENY_REASON_PREFIXES)
 
 
 def split_expected_denies(records: list[dict]) -> tuple[list[dict], list[dict]]:

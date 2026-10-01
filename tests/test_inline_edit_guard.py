@@ -209,6 +209,16 @@ def test_observed_prompts_are_denied(name):
 		("python3 -c \"import shutil; shutil.unpack_archive('a.zip', 'd')\"", "python"),
 		("python3 -c \"import shutil; shutil.chown('a', 'me')\"", "python"),
 		("python3 -c \"import os; os.rename('a', 'b')\"", "python"),
+		("python3 -c \"import os; os.renames('a', 'b/c')\"", "python"),
+		# Prefix words with options (final PR #4877 review round 4).
+		("command -p python3 -c \"open('x','w').write('y')\"", "python"),
+		("command -p sed -i 's/a/b/' f", "sed"),
+		("command -- perl -pi -e 's/a/b/' f", "perl"),
+		("exec -a name python3 -c \"open('x','w').write('y')\"", "python"),
+		("exec -c sed -i 's/a/b/' f", "sed"),
+		("time -p sed -i 's/a/b/' f", "sed"),
+		("/usr/bin/time -o t.log perl -pi -e 's/a/b/' f", "perl"),
+		("sudo command -p sed -i 's/a/b/' f", "sed"),
 	],
 )
 def test_inline_writes_are_denied(command, kind):
@@ -264,6 +274,12 @@ def test_deny_message_is_the_issue_text():
 		"echo \"\\$(sed -i s/a/b/ f)\"",
 		"python3 - <<'EOF'\nprint(`x`)\nEOF",
 		"python3 -c \"import shutil; print(shutil.get_archive_formats())\"",
+		# `command -v` / `-V` only looks the command up; nothing runs.
+		"command -v python3 >/dev/null && python3 -c \"print(1)\"",
+		"command -V sed -i",
+		"command -pv perl -pi",
+		"command -p sed -n 1p f",
+		"time -p python3 -c \"print(1)\"",
 	],
 )
 def test_reads_scripts_and_data_get_no_decision(command):
