@@ -2062,12 +2062,15 @@ jobs:
       #   pytest_unavailable       — pip + apt fallback both failed (infra error)
       #   pr_head_fetch_failed     — pulls/<n> API failed; refused to fail-open commit guard
       #   retry_dispatch_failed    — run discovery/dispatch/registration failed, or wait-review id non-numeric
-      #   retry_timeout            — pinned retry run did not complete in 25 min
+      #   retry_timeout            — pinned retry run did not complete in 25 min (including
+      #                              when rate-limit waits ran the deadline out)
       #   retry_workflow_failed    — retry run completed but conclusion != success
       #   pr_closed_during_retry   — PR closed/merged while waiting for the retry run
       #   pr_state_check_failed    — fetch_pr_state returned "unknown" 4 consecutive times
       #                              (~60s of GitHub API outage); poll loop bails to avoid
-      #                              burning the full 25-min retry window
+      #                              burning the full 25-min retry window. A rate-limited
+      #                              read ("rate_limited") is not counted: the loop waits
+      #                              for the reset within the deadline instead (#5858)
       # Aggregator hard-fails on anything except success / success_after_retry. Phase 3c's
       # pr_already_closed (test-setup race) is hard-failed in the aggregator separately.
       #
@@ -2141,31 +2144,53 @@ jobs:
           fi
 
           # gh api wrapper with a small retry budget so a transient
-          # 429/5xx doesn't bypass the editor-flake retry budget. Used
+          # 5xx doesn't bypass the editor-flake retry budget. Used
           # by every gh api call in this step (fetch helpers + poll
           # loop) so any single API blip gets up to 3 attempts with
           # 2s/4s backoff before being treated as terminal. On final
           # failure ALL attempts' stderr is surfaced (not just the
           # last) so triage can spot patterns like "first 2 were
-          # rate-limited then 3rd was 5xx".
+          # 5xx then 3rd was a 404".
+          #
+          # A rate-limited attempt (stderr matches "rate limit",
+          # case-insensitive, as gh_api_safe in
+          # scripts/comprehensive_test_and_release_gh_api.sh matches it)
+          # is not retried: a 2s/4s retry cannot succeed before the limit
+          # resets. The helper returns GH_API_RATE_LIMITED_RC instead, so
+          # the poll loop can wait for the reset within its deadline
+          # rather than count the read as an unresolvable PR. Every
+          # `if !` / `||` caller still sees a failure. Release run
+          # 36797692597 (issue #5858) failed `pr_state_check_failed`
+          # after four rate-limited PR-state reads, each spending ~21s on
+          # retries, while the adopted review run was still in progress.
+          GH_API_RATE_LIMITED_RC=75
           gh_api_with_retry() {
             local out
             local rc=0
             local err_file
+            local attempt_err_file
             err_file="$(mktemp)"
+            attempt_err_file="$(mktemp)"
             for try in 1 2 3; do
               # Tag each attempt's stderr so they're distinguishable
               # in the final warning and append (>>) — overwriting
               # would lose earlier diagnostics.
               echo "--- attempt ${try} stderr ---" >> "${err_file}"
-              out=$(gh api "$@" 2>>"${err_file}") && {
-                rm -f "${err_file}"
+              out=$(gh api "$@" 2>"${attempt_err_file}") && {
+                rm -f "${err_file}" "${attempt_err_file}"
                 printf '%s' "${out}"
                 return 0
               }
               rc=$?
+              cat "${attempt_err_file}" >> "${err_file}"
+              if grep -qi "rate limit" "${attempt_err_file}" 2>/dev/null; then
+                echo "::warning::gh api rate-limited on attempt ${try} (rc=${rc}); not retrying before the limit resets: $(tr '\n' ' ' < "${attempt_err_file}" | head -c 300)" >&2
+                rm -f "${err_file}" "${attempt_err_file}"
+                return "${GH_API_RATE_LIMITED_RC}"
+              fi
               [ "${try}" -lt 3 ] && sleep $((try * 2))
             done
+            rm -f "${attempt_err_file}"
             if [ -s "${err_file}" ]; then
               echo "::warning::gh api failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "${err_file}" | head -c 1000)" >&2
             fi
@@ -2224,17 +2249,57 @@ jobs:
             return 0
           }
 
-          # Returns the PR's state ("open" / "closed") or "unknown" on
-          # API failure. Used by the retry poll loop to bail out if
+          # Returns the PR's state ("open" / "closed"), "rate_limited"
+          # when the read hit a GitHub rate limit, or "unknown" on any
+          # other API failure. Used by the retry poll loop to bail out if
           # the PR is closed/merged mid-wait — no point polling for a
-          # review run that won't fire on a closed PR.
+          # review run that won't fire on a closed PR. A rate-limited
+          # read says nothing about the PR, so the loop waits for the
+          # reset instead of counting it toward PR_STATE_FAILURE_LIMIT.
           fetch_pr_state() {
             local state
-            state=$(gh_api_with_retry "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.state // "unknown"') || {
+            local state_rc=0
+            state=$(gh_api_with_retry "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.state // "unknown"') || state_rc=$?
+            if [ "${state_rc}" -eq "${GH_API_RATE_LIMITED_RC}" ]; then
+              echo "rate_limited"
+              return 0
+            fi
+            if [ "${state_rc}" -ne 0 ]; then
               echo "unknown"
               return 0
-            }
+            fi
             echo "${state:-unknown}"
+          }
+
+          # Prints how many seconds to wait after a rate-limited read,
+          # never past the epoch deadline in $1. GET /rate_limit does not
+          # count against the REST limit (scripts/workflow_retro.py reads
+          # it the same way): core.remaining == 0 means the primary limit
+          # is spent, so wait until core.reset + 1s. Otherwise the limit
+          # was a secondary one (or the read failed), so wait 60s, the
+          # minimum GitHub documents for secondary limits.
+          phase4b_rate_limit_wait_seconds() {
+            local wait_deadline="$1"
+            local now_epoch
+            local limits=""
+            local core_remaining=""
+            local core_reset=""
+            local wait_seconds=60
+            now_epoch=$(date +%s)
+            if limits=$(gh api rate_limit --jq '"\(.resources.core.remaining) \(.resources.core.reset)"' 2>/dev/null); then
+              read -r core_remaining core_reset <<< "${limits}"
+              if [[ "${core_remaining}" =~ ^[0-9]+$ ]] && [[ "${core_reset}" =~ ^[0-9]+$ ]] \
+                && [ "${core_remaining}" -eq 0 ] && [ "${core_reset}" -gt "${now_epoch}" ]; then
+                wait_seconds=$(( core_reset - now_epoch + 1 ))
+              fi
+            fi
+            if [ $(( now_epoch + wait_seconds )) -gt "${wait_deadline}" ]; then
+              wait_seconds=$(( wait_deadline - now_epoch ))
+            fi
+            if [ "${wait_seconds}" -lt 0 ]; then
+              wait_seconds=0
+            fi
+            echo "${wait_seconds}"
           }
 
           run_pytest() {
@@ -2439,8 +2504,16 @@ jobs:
           # we're effectively polling blind and the closed-PR guard
           # above is inactive. Bail out instead of burning the full
           # 25-min retry window during a GitHub outage.
+          # A "rate_limited" state is not an outage: it neither counts
+          # toward nor resets the breaker. The loop waits for the limit
+          # to reset (phase4b_rate_limit_wait_seconds), capped at
+          # DEADLINE, and at the 90s registration window while no run
+          # is registered yet, then keeps polling the review run. If the
+          # deadline expires first, the step still fails closed with
+          # retry_timeout below (issue #5858).
           PR_STATE_FAILURES=0
           PR_STATE_FAILURE_LIMIT=4  # ~60s of consecutive unknowns
+          PR_STATE_RATE_LIMIT_WAITS=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             sleep 15
             # Bail out if the PR closed/merged during the wait — no
@@ -2452,7 +2525,16 @@ jobs:
               echo "status=pr_closed_during_retry" >> "$GITHUB_OUTPUT"
               exit 1
             fi
-            if [ "${PR_STATE}" = "unknown" ]; then
+            if [ "${PR_STATE}" = "rate_limited" ]; then
+              PR_STATE_RATE_LIMIT_WAITS=$((PR_STATE_RATE_LIMIT_WAITS + 1))
+              RATE_LIMIT_WAIT_DEADLINE="${DEADLINE}"
+              if [ -z "${RETRY_RUN_ID}" ] && [ "${RETRY_REGISTRATION_DEADLINE}" -lt "${RATE_LIMIT_WAIT_DEADLINE}" ]; then
+                RATE_LIMIT_WAIT_DEADLINE="${RETRY_REGISTRATION_DEADLINE}"
+              fi
+              RATE_LIMIT_WAIT=$(phase4b_rate_limit_wait_seconds "${RATE_LIMIT_WAIT_DEADLINE}")
+              echo "::notice::PR #${PR_NUMBER} state read was rate-limited (wait ${PR_STATE_RATE_LIMIT_WAITS}); not counted as an unresolvable state — waiting ${RATE_LIMIT_WAIT}s for the limit to reset, within the ${EDITOR_RETRY_BUDGET_MINUTES}-minute retry deadline"
+              sleep "${RATE_LIMIT_WAIT}"
+            elif [ "${PR_STATE}" = "unknown" ]; then
               PR_STATE_FAILURES=$((PR_STATE_FAILURES + 1))
               if [ "${PR_STATE_FAILURES}" -ge "${PR_STATE_FAILURE_LIMIT}" ]; then
                 echo "::error::PR state unresolvable after ${PR_STATE_FAILURES} consecutive attempts (likely GitHub API outage) — bailing out instead of burning the full retry window"
@@ -2528,6 +2610,9 @@ jobs:
 
           if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
             echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
+            if [ "${PR_STATE_RATE_LIMIT_WAITS}" -gt 0 ]; then
+              echo "::error::PR-state reads were rate-limited ${PR_STATE_RATE_LIMIT_WAITS} time(s) during the retry wait (see the rate-limit notices above)"
+            fi
             echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
             exit 1
           fi

@@ -26,6 +26,7 @@ The stable release gate (`.github/workflows/test-and-mark-stable.yml`, step `Pha
 ## Non-goals
 
 - No change to `EDITOR_RETRY_BUDGET_MINUTES`, the 90-second registration window, the aggregator's status list, Phase 4 / Phase 6 / Phase 7 polling, or `scripts/comprehensive_test_and_release_gh_api.sh`.
+- No rate-limit wait for Phase 4b's one-shot reads outside the poll loop: the attempt-1 and attempt-2 canary fetches, the PR-head read, and the pre-dispatch branch and run-list reads. They still fail on a rate limit, as before, now after one request instead of three.
 - No reduction in the release gate's GitHub API usage. Whatever spent the token's budget on 2026-10-01 is outside this issue.
 - No claim that the editor would have restored the canary in run 36797692597. The log ends before the adopted run's result.
 
