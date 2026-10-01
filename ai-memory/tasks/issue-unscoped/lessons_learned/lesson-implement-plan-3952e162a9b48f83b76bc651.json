@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:48:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a review round changes behaviour that the plan describes (a default, a fail-open case turned fail-closed), correct the plan doc in the same commit: the archived plan is reviewed with the final PR, and a stale statement there comes back as a finding.",
+  "phase": "implement_plan",
+  "pr_number": 5356,
+  "record_id": "lesson-implement-plan-3952e162a9b48f83b76bc651",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5328-settings-guard-wiring-check",
+    "file:docs/completed/issue-5328-settings-guard-wiring-check-plan.md"
+  ]
+}

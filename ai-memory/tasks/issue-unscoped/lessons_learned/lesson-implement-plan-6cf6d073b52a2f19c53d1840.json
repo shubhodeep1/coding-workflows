@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T07:48:58Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Every `subprocess.run(..., timeout=\u2026)` in a script with a documented error exit must catch `TimeoutExpired` (and `OSError` for a missing binary) and map it to that exit; a timeout is not a `CalledProcessError` and escapes a handler that only knows the script's own error type.",
+  "phase": "implement_plan",
+  "pr_number": 5356,
+  "record_id": "lesson-implement-plan-6cf6d073b52a2f19c53d1840",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5328-settings-guard-wiring-check",
+    "file:scripts/guard_differential.py"
+  ]
+}
