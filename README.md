@@ -1090,9 +1090,10 @@ not delete wrappers that are already present in `.github/workflows/`.
 > issue routed to the Claude issue implementer. `/implement-plan-claude` now
 > requires Auto mode. In coding-workflows, unattended sessions edit only the
 > `workflow-templates/.claude/**` twin, and `claude-twin-sync.yml` copies it
-> into `.claude/**` through a sync PR after merge (hooks and settings wait for
-> the repository owner); it stops before a phase only when it must edit a
-> `.claude/` file that has no twin, to ask how to run it (CLAUDE.md §28.C).
+> into `.claude/**` through a sync PR after merge (hooks, scripts, and settings
+> wait for the repository owner); it stops before a phase only when it must
+> edit a `.claude/` file that has no twin, to ask how to run it (CLAUDE.md
+> §28.C).
 
 > **Audit identity and regeneration:**
 > `scripts/security/check-npm-audit.js` matches findings on
