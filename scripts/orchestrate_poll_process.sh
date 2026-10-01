@@ -2733,6 +2733,34 @@ refresh_validation_dispatch_wave_gate() {
     ahead_by="0"
   fi
 
+  # Target-branch rule (issue #5618): `linked_pr` is the newest
+  # closing-keyword link, from any PR into any base. A merged link counts
+  # only when _pr_json_merged_into_issue_target accepts it (default branch,
+  # or this project's integration branch from a same-repository automation
+  # head for the issue); otherwise its entry falls back to "no linked PR"
+  # and the issue's labels decide. The link can come from another
+  # repository, so base_repo must be this one (reason=foreign_base_repo).
+  # No API call: the batch above already carries base_ref, base_repo,
+  # head_ref, head_repo, and default_branch.
+  local _vdg_inum _vdg_pr_json
+  for _vdg_inum in $(printf '%s' "${candidate_details_json}" | jq -r 'to_entries[] | select((.value.linked_pr.merged // false) == true) | .key' 2>/dev/null || true); do
+    [[ "${_vdg_inum}" =~ ^[0-9]+$ ]] || continue
+    _vdg_pr_json="$(printf '%s' "${candidate_details_json}" | jq -c --arg key "${_vdg_inum}" '
+      .[$key].linked_pr
+      | {
+          number: .number,
+          base: {ref: (.base_ref // ""), repo: {full_name: (.base_repo // ""), default_branch: (.default_branch // "")}},
+          head: {ref: (.head_ref // ""), repo: {full_name: (.head_repo // "")}}
+        }
+    ' 2>/dev/null || echo '{}')"
+    if ! _pr_json_merged_into_issue_target "${_vdg_inum}" "${_vdg_pr_json}" "${integration_branch}"; then
+      echo "LINKED_PR_CROSS_REF_REJECTED issue=${_vdg_inum} pr=$(_jq_field "${_vdg_pr_json}" '.number') base=$(_jq_field "${_vdg_pr_json}" '.base.ref') base_repo=$(_jq_field "${_vdg_pr_json}" '.base.repo.full_name') head=$(_jq_field "${_vdg_pr_json}" '.head.ref') head_repo=$(_jq_field "${_vdg_pr_json}" '.head.repo.full_name') project_base=${integration_branch:-none} reason=${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base} path=validation_dispatch_gate" >&2
+      # Fail closed: if the downgrade cannot be written, drop every linked-PR
+      # signal rather than keep the rejected merge.
+      pr_states_json="$(printf '%s' "${pr_states_json}" | jq -c --arg key "${_vdg_inum}" '. + {($key): {state: "unknown", merged: false}}' 2>/dev/null || echo '{}')"
+    fi
+  done
+
   wave_status="$(python3 scripts/orchestrate_lib.py check-wave-status \
     --state-file "${STATE_FILE}" \
     --labels-json "${labels_json}" \
@@ -14754,9 +14782,18 @@ _fetch_standalone_marker_issues_graphql() {
 #             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
 #                           "merged_at":"ISO8601"|null,"merge_commit_sha":"<oid>"|null,
 #                           "head_ref":"branch"|null,"head_sha":"<oid>"|null,
+#                           "base_ref":"branch"|null,"head_repo":"owner/repo"|null,
+#                           "base_repo":"owner/repo"|null,"default_branch":"branch"|null,
 #                           "mergeable":"<enum>"|null,"merge_state_status":"<enum>"|null,
 #                           "headPushedAt":"ISO8601"|null} | null },
 #     ... }
+# `head_repo`, `base_repo`, and `default_branch` (the head repository, the
+# base repository, and the base repository's default branch) let
+# refresh_validation_dispatch_wave_gate apply
+# _pr_json_merged_into_issue_target to a merged link without a REST read
+# per issue (issue #5618, §15). The link can be a cross-repository closing
+# PR, so `base_repo` is what tells a merge into this repository apart from
+# a merge into another repository's same-named branch.
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null, e.g. for squashed commits).
 # `mergeable` and `merge_state_status` mirror GitHub's GraphQL enum strings.
@@ -14834,6 +14871,8 @@ _fetch_candidate_issue_details_graphql() {
 	                    headRefName
 	                    baseRefName
 	                    headRefOid
+                    headRepository { nameWithOwner }
+                    baseRepository { nameWithOwner defaultBranchRef { name } }
                     mergeable
                     mergeStateStatus
                     mergeCommit { oid }
@@ -14895,6 +14934,9 @@ _fetch_candidate_issue_details_graphql() {
 	                      head_ref: (.headRefName // null),
 	                      base_ref: (.baseRefName // null),
 	                      head_sha: (.headRefOid // null),
+                      head_repo: (.headRepository.nameWithOwner // null),
+                      base_repo: (.baseRepository.nameWithOwner // null),
+                      default_branch: (.baseRepository.defaultBranchRef.name // null),
                       mergeable: (.mergeable // null),
                       merge_state_status: (.mergeStateStatus // null),
                       headPushedAt: (
@@ -15160,6 +15202,83 @@ _pr_json_is_issue_implementation_pr() {
     return 0
   fi
   if _pr_json_closes_issue "${issue_num}" "${pr_json}"; then
+    return 0
+  fi
+  return 1
+}
+
+# _pr_json_merged_into_issue_target — decide whether a merged PR that
+# already passed _pr_json_is_issue_implementation_pr finished the issue,
+# judged by where it merged and who pushed its head (issue #5618).
+#
+# Every poller path that turns "a linked PR is merged" into merged state —
+# the current-wave reconcile loop (PR_MERGED → reconcile_managed_issue_labels
+# and check-wave-status), refresh_validation_dispatch_wave_gate,
+# _reconcile_merged_pr_issue (stall recovery's ai:merged tag), and the
+# backward-scan ready-to-merge promotion — used to adopt any merged PR with
+# a closing keyword, whatever its base. An unrelated PR saying `Fixes #<n>`
+# merged into the wrong branch therefore marked child <n> merged and could
+# advance its wave, although close_merged_issues_sweep rejects exactly that
+# merge. This is the sweep's rule (issues #4813, #5226), shared, behind one
+# repository check:
+#   - .base.repo.full_name must be this repository (GITHUB_REPOSITORY);
+#     empty or different returns 1 with reason `foreign_base_repo`. The
+#     REST paths read `repos/${GITHUB_REPOSITORY}/pulls/<n>`, so they always
+#     pass it; the GraphQL batch behind refresh_validation_dispatch_wave_gate
+#     also carries cross-repository closing PRs, whose base and default
+#     branch belong to another repository (review round 1 on PR #5646);
+#   - base.ref equals .base.repo.default_branch of the same JSON (empty
+#     fails closed): the closing keyword is identity enough there, since
+#     GitHub closes the issue on that merge anyway;
+#   - base.ref equals one of the non-empty <target branch> arguments (the
+#     project's integration branch, the issue's `Integration branch:` line,
+#     a managed child's project branch) AND .head.repo.full_name is this
+#     repository AND the head is an automation branch for the issue
+#     (pr_head_ref_is_issue_automation_branch in scripts/gh_helpers.sh).
+# Anything else returns 1 with ISSUE_TARGET_MERGE_REJECT_REASON set to
+# `unverified_identity` (the base was a target branch) or `non_target_base`.
+# A missing helper, head repository, base repository, or base fails closed.
+#
+# Input: the REST `pulls/<n>` shape (.base.ref, .base.repo.full_name,
+# .base.repo.default_branch, .head.ref, .head.repo.full_name). Issues no
+# API call.
+declare -g ISSUE_TARGET_MERGE_REJECT_REASON=''
+_pr_json_merged_into_issue_target() {
+  local issue_num="$1"
+  local pr_json="$2"
+  shift 2 || true
+  ISSUE_TARGET_MERGE_REJECT_REASON="non_target_base"
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+    return 1
+  fi
+  local _itm_base _itm_base_repo _itm_default _itm_head _itm_head_repo _itm_target _itm_base_is_target=false
+  _itm_base="$(printf '%s' "${pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+  _itm_base_repo="$(printf '%s' "${pr_json}" | jq -r '.base.repo.full_name // ""' 2>/dev/null || echo "")"
+  _itm_default="$(printf '%s' "${pr_json}" | jq -r '.base.repo.default_branch // ""' 2>/dev/null || echo "")"
+  [ -n "${_itm_base}" ] || return 1
+  if [ -z "${_itm_base_repo}" ] || [ "${_itm_base_repo}" != "${GITHUB_REPOSITORY:-}" ]; then
+    ISSUE_TARGET_MERGE_REJECT_REASON="foreign_base_repo"
+    return 1
+  fi
+  if [ -n "${_itm_default}" ] && [ "${_itm_base}" = "${_itm_default}" ]; then
+    ISSUE_TARGET_MERGE_REJECT_REASON=""
+    return 0
+  fi
+  for _itm_target in "$@"; do
+    if [ -n "${_itm_target}" ] && [ "${_itm_base}" = "${_itm_target}" ]; then
+      _itm_base_is_target=true
+      break
+    fi
+  done
+  [ "${_itm_base_is_target}" = "true" ] || return 1
+  ISSUE_TARGET_MERGE_REJECT_REASON="unverified_identity"
+  _itm_head="$(printf '%s' "${pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+  _itm_head_repo="$(printf '%s' "${pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
+  if [ -n "${_itm_head_repo}" ] && [ "${_itm_head_repo}" = "${GITHUB_REPOSITORY:-}" ] \
+    && type pr_head_ref_is_issue_automation_branch >/dev/null 2>&1 \
+    && pr_head_ref_is_issue_automation_branch "${issue_num}" "${_itm_head}"; then
+    ISSUE_TARGET_MERGE_REJECT_REASON=""
     return 0
   fi
   return 1
@@ -15538,11 +15657,64 @@ _check_open_pr_conflict_guard() {
 # by both stall recovery paths when _check_merged_pr_guard fires.
 # Fails open: label-edit errors are swallowed so a transient label
 # hiccup never blocks the stall recovery short-circuit.
+#
+# Target-branch rule (issue #5618): the linked PR its callers pass is the
+# newest closing-keyword link (or a REST fallback), from any PR into any
+# base, and ai:merged makes check-wave-status count the issue as merged.
+# The tag is added only when the PR is merged, is the issue's
+# implementation PR (_pr_json_is_issue_implementation_pr), and merged into
+# the issue's target branch (_pr_json_merged_into_issue_target): the
+# default branch, or — from a same-repository automation head — the
+# branch the issue body names on its `Integration branch:` /
+# `Target branch:` line, or a labelled ai:orchestrator-managed child's
+# project branch (the targets close_merged_issues_sweep uses). Otherwise
+# it logs `STALL_MERGED_LABEL_REJECTED issue=<n> pr=<p> reason=<r> …` and
+# adds no label; the caller still skips the stall action. A failed fetch
+# adds no label either (fail closed).
+# §15 audit: the callers' cache shapes (GraphQL linked_pr, the synthesised
+# {number,state,merged}, the managed-path cache) lack the base's default
+# branch, the head repository, and the issue body, so this issues one
+# `pulls/<n>` and one `issues/<n>` REST read, only on a merged-PR hit.
 _reconcile_merged_pr_issue() {
   local issue_num="$1"
   local phase="$2"
   local action="$3"
   local pr_num="$4"
+
+  local _rmpi_pr_json _rmpi_issue_json _rmpi_body _rmpi_issue_base="" _rmpi_project_branch=""
+  local _rmpi_reason=""
+  _rmpi_pr_json="$(_fetch_pr_json "${pr_num}")"
+  if [ -z "${_rmpi_pr_json}" ] || [ "${_rmpi_pr_json}" = "{}" ]; then
+    _rmpi_reason="pr_fetch_failed"
+  elif [ "$(_jq_field "${_rmpi_pr_json}" '.merged_at != null' 'true|false')" != "true" ]; then
+    _rmpi_reason="not_merged"
+  elif ! _pr_json_is_issue_implementation_pr "${issue_num}" "${_rmpi_pr_json}"; then
+    _rmpi_reason="not_implementation_pr"
+  else
+    _rmpi_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" 2>/dev/null || echo "")"
+    if [ -z "${_rmpi_issue_json}" ] || ! printf '%s' "${_rmpi_issue_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      _rmpi_reason="issue_fetch_failed"
+    else
+      _rmpi_body="$(printf '%s' "${_rmpi_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+      if type issue_body_integration_branch >/dev/null 2>&1; then
+        _rmpi_issue_base="$(issue_body_integration_branch "${_rmpi_body}")"
+      fi
+      if printf '%s' "${_rmpi_issue_json}" | jq -e '[.labels[]?.name] | index("ai:orchestrator-managed") != null' >/dev/null 2>&1 \
+        && type issue_body_orchestrator_project_branch >/dev/null 2>&1; then
+        _rmpi_project_branch="$(issue_body_orchestrator_project_branch "${_rmpi_body}")"
+      fi
+      if ! _pr_json_merged_into_issue_target "${issue_num}" "${_rmpi_pr_json}" "${_rmpi_issue_base}" "${_rmpi_project_branch}"; then
+        _rmpi_reason="${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}"
+      fi
+    fi
+  fi
+  if [ -n "${_rmpi_reason}" ]; then
+    echo "STALL_MERGED_LABEL_REJECTED issue=${issue_num} pr=${pr_num} phase=${phase} action=${action} base=$(_jq_field "${_rmpi_pr_json}" '.base.ref') head=$(_jq_field "${_rmpi_pr_json}" '.head.ref') head_repo=$(_jq_field "${_rmpi_pr_json}" '.head.repo.full_name') issue_base=${_rmpi_issue_base:-none} project_base=${_rmpi_project_branch:-none} reason=${_rmpi_reason}" >&2
+    if declare -F add_healing_note >/dev/null 2>&1; then
+      add_healing_note "Issue #${issue_num}: skipped stall recovery '${action}' (phase=${phase}) — linked PR #${pr_num} reads merged but is not verified as the issue's merge into its target branch (${_rmpi_reason}); not tagged ai:merged"
+    fi
+    return 0
+  fi
 
   if declare -F ensure_label_exists >/dev/null 2>&1; then
     ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
@@ -19234,7 +19406,22 @@ The poller will resume processing on the next cycle."
             # GitHub's REST API returns .state == "closed" for merged
             # PRs (not "merged") — same convention as the standalone
             # stall-recovery merged-PR guard at line ~6463.
+            # Target-branch rule (issue #5618): the PR comes from a branch
+            # name, a body reference, or GitHub's closing-PR link, so a
+            # merge promotes only when it is this issue's implementation PR
+            # and landed on the default branch or this project's integration
+            # branch (from a same-repository automation head for the issue).
+            _pw_pr_target_reject=""
             if [ "${PW_PR_MERGED}" = "true" ]; then
+              if ! _pr_json_is_issue_implementation_pr "${pw_inum}" "${_pw_pr_json}"; then
+                _pw_pr_target_reject="not_implementation_pr"
+              elif ! _pr_json_merged_into_issue_target "${pw_inum}" "${_pw_pr_json}" "$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"; then
+                _pw_pr_target_reject="${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}"
+              fi
+            fi
+            if [ -n "${_pw_pr_target_reject}" ]; then
+              echo "  [backward-scan] #${pw_inum} ai:ready-to-merge; linked PR #${PW_PR} is merged but rejected=${_pw_pr_target_reject} base=$(_jq_field "${_pw_pr_json}" '.base.ref') head=$(_jq_field "${_pw_pr_json}" '.head.ref') head_repo=$(_jq_field "${_pw_pr_json}" '.head.repo.full_name') — not promoting."
+            elif [ "${PW_PR_MERGED}" = "true" ]; then
               echo "  [backward-scan] #${pw_inum} ai:ready-to-merge but linked PR #${PW_PR} is already merged — promoting to ai:merged."
               ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
               gh_retry gh issue edit "${pw_inum}" --repo "${GITHUB_REPOSITORY}" \
@@ -19632,9 +19819,19 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} head=$(_jq_field "${_linked_pr_candidate_json}" '.head.ref') reason=not_implementation_pr" >&2
         continue
       fi
-      LINKED_PR_NUM="${_linked_pr_candidate}"
       _linked_pr_candidate_state="$(_jq_field "${_linked_pr_candidate_json}" '.state' 'open|closed|merged')"
       _linked_pr_candidate_merged="$(_jq_field "${_linked_pr_candidate_json}" '.merged_at != null' 'true|false')"
+      # Target-branch rule (issue #5618): a merge counts only into the
+      # default branch or this project's integration branch (state file,
+      # CWS_INTEGRATION_BRANCH), and off the default branch only from a
+      # same-repository automation head for the issue. A rejected merge is
+      # not this issue's work: try the next candidate, never fall back to it.
+      if [ "${_linked_pr_candidate_merged}" = "true" ] \
+        && ! _pr_json_merged_into_issue_target "${inum}" "${_linked_pr_candidate_json}" "${CWS_INTEGRATION_BRANCH:-}"; then
+        echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} base=$(_jq_field "${_linked_pr_candidate_json}" '.base.ref') head=$(_jq_field "${_linked_pr_candidate_json}" '.head.ref') head_repo=$(_jq_field "${_linked_pr_candidate_json}" '.head.repo.full_name') project_base=${CWS_INTEGRATION_BRANCH:-none} reason=${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}" >&2
+        continue
+      fi
+      LINKED_PR_NUM="${_linked_pr_candidate}"
       PR_STATE="${_linked_pr_candidate_state:-unknown}"
       PR_MERGED="${_linked_pr_candidate_merged:-false}"
       if [ "${PR_MERGED}" = "true" ]; then

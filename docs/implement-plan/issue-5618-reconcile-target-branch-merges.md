@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5618-reconcile-target-branch-merges-plan.md
 - Source issue: shubhodeep1/coding-workflows#5618
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5618-reconcile-target-branch-merges   Final PR: pending
+- Project branch: claude/implement-plan-issue-5618-reconcile-target-branch-merges   Final PR: #5633 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log update)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: recorded in the stage report and the next stage's resume block
 - Last updated: 2026-09-30
-- Last note: project branch opened from claude/implement-plan-issue-4813-close-sweep-target-branch-merges; phase 1 starting.
+- Last note: phase 1 implemented and verified (38/38 guard tests; poller suite 456 passed + 4 fixtures fixed + 3 new end-to-end tests); phase PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — gate every poller path that marks an issue merged (current-wave reconcile, validation-dispatch wave gate, stall-recovery `ai:merged` tag, backward-scan promotion) on the issue's target branch, with tests, README and changelog
+1. [ ] Phase 1 — gate every poller path that marks an issue merged (current-wave reconcile, validation-dispatch wave gate, stall-recovery `ai:merged` tag, backward-scan promotion) on the issue's target branch, with tests, README and changelog — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -38,8 +38,12 @@
 - AD-9 [plan, 2026-09-30] Where does path 3 get the base, head repository, and targets? — Picked: A — `_reconcile_merged_pr_issue` fetches `pulls/<n>` and `issues/<n>` on a merged hit. Alternatives: B — thread full PR JSON through six callers; C — accept only default-branch merges. Why: one change in the single label writer. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A finding that names one path that marks an issue merged is rarely the only one: search for every writer of the terminal label and every producer of the wave-status merged signal (`ai:merged` adds, `--pr-states-json` builders), and gate them all with one shared predicate in the same change. (files: scripts/orchestrate_poll_process.sh)
+- [source:plan-deviation] Poller test fixtures that model a merged PR must set `baseRefName`: the mock `pulls/<n>` payload returns an empty base otherwise, which any target-branch rule rightly rejects. (files: tests/test_orchestrate_poll_process.py)
 
 ## Notes
 - Security pass: skip (`security_pass_skip.py`: ai:security, created and labelled by the issue automation).
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5618#issuecomment-5909984944
+- Plan widened during planning (AD-1): the finding names the reconcile loop, but the #4813 project checker's context recorded that conformance run 1 had flagged `_reconcile_merged_pr_issue` too; tracing every `ai:merged` writer found four paths.
+- Final PR #5633 (draft into claude/implement-plan-issue-4813-close-sweep-target-branch-merges, `Refs #5618`; the final-merge stage closes #5618 and labels it `ai:merged`).
 - Out of scope, seen while tracing: `validation_fix_issue_has_merged_pr_evidence` checks the base only when a base is passed (not on the validation fix-up path) and never checks head identity (AD-7). Worth its own issue.
