@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:270 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Backtick command substitutions are not parsed as command boundaries, so credential flags inside them are missed and secrets can remain unmasked in permission-prompt reports and issue titles.\n  WHY: The unmasked credential reaches reports; severity was BLOCKER from openai_gpt-6-luna and qwen_qwen3_7-plus and MAJOR from z-ai_glm-5_2, so the highest severity is retained.\n- .claude/scripts/permission_prompts.py:270 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Backtick command substitutions are not parsed as command boundaries, so credential flags inside them are missed and secrets can remain unmasked in permission-prompt reports and issue titles.\n  WHY: The unmasked credential reaches reports; severity was BLOCKER from qwen_qwen3_7-plus and MAJOR from z-ai_glm-5_2, so the highest severity is retained.\n- tests/test_permission_prompts.py:354-359 | severity=high | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The expected shapes for unattached PowerShell forms are inconsistent with the spaced form, potentially allowing a credential-masking regression to pass.\n  WHY: If masking is broken for unattached forms such as `pwsh -C`, credentials inside those commands could remain unmasked in the posted example.\n- docs/implement-plan/issue-5124-mask-credentials-in-prompt-reports.md:7-14 | severity=low | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The progress log still says the work is blocked and waiting for a twin sync that has already happened.\n  WHY: Operators following the log are directed to wait on an already-satisfied condition.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nReviewer deepseek/deepseek-v4-pro failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/permission_prompts.py: _SHELL_PUNCTUATION_CHARS (line 270), _command_line_credentials() (lines 611\u2013633), command_shape() (lines 477\u2013513) | severity=critical | confidence=[5]\n  PROBLEM: Backtick command substitutions are not parsed as command boundaries, so credential flags inside them are missed.\n  WHY: For `echo `mysql -pS3cretPass app``, the lexer keeps the backtick attached to `mysql`. The credential scanner therefore does not recognize that command\u2019s `-p` flag, and `record_example()` returns the command without masking the password. `command_shape()` also leaves `-pS3cretPass` in the shape used for the issue title.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/permission_prompts.py (and workflow-templates/.claude/scripts/permission_prompts.py): _SHELL_PUNCTUATION_CHARS at line 270, _command_line_credentials() at lines 620-630 | severity=critical | confidence=[5]\n  PROBLEM: Backtick command substitution characters are omitted from _SHELL_PUNCTUATION_CHARS, so commands inside backtick substitutions are tokenized with attached backticks and credential values are missed.\n  WHY: The sanitizer leaves the secret unmasked in the posted command example, and command_shape leaves the flag and secret in the pattern used in the issue title, leaking raw passwords into permission-prompt reports.\n- tests/test_permission_prompts.py: Lines 354-359 (test_example_masks_credentials parameterized cases) | severity=high | confidence=[3]\n  PROBLEM: The expected shape strings for unattached PowerShell forms are inconsistent with the spaced form, potentially allowing a credential-masking regression to pass.\n  WHY: If the implementation is broken for unattached forms such as `pwsh -C` or `pwsh -COMMAND`, credentials inside these commands are not masked in the posted example.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py (and .claude/scripts/permission_prompts.py twin): line 270, `_SHELL_PUNCTUATION_CHARS = \";&|\\n<>()\"` | severity=high | confidence=[4]\n  PROBLEM: Backtick command substitution is not treated as a command boundary, so credential flags inside backticks are never recognized.\n  WHY: A denied Bash command using backtick command substitution with a credential flag has its credential posted verbatim in the permission-prompt report. This is pre-existing (the constant was `\";&|\\n<>()\"` before this PR and is unchanged), but this PR significantly expands credential masking to wrapper commands and shell `-c` command lines without addressing this parallel form of command nesting. The PR's accepted residual risk (\"a secret in a form no rule names\") does not clearly cover this case, since `mysql -p` IS a named rule \u2014 the backtick tokenization prevents the parser from recognizing it.\n- docs/implement-plan/issue-5124-mask-credentials-in-prompt-reports.md: lines 7-14 (Status, Stage, Waiting on, Last note) | severity=low | confidence=[5]\n  PROBLEM: The progress log still says `Status: BLOCKED` and `Waiting on: PR #5401: twin sync of the review-round-1 fix` but the last commit on this PR (`b5c7df8535b9`, `[claude-twin-sync] Sync #5124 review round 2 twin into .claude/`) has already synced the twin.\n  WHY: No automation reads these log lines (no script under `.claude/scripts/` or `scripts/` parses them), so this halts nothing. But operators following the log are directed to wait on an already-satisfied condition.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0c6c7e0330d3e6c63b933c719722040fe177676194cc3919f09f35d8418da2fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "36812756015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36812756015",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001042756_02b20ae03d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "36812756015"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T04:27:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
