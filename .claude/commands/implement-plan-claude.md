@@ -291,7 +291,7 @@ The chain has nobody to answer a question mid-project, so CLAUDE.md §28 replace
 
 ## Escalations
 
-A CLAUDE.md §28.C failure escalation (a cap reached, a security or validation run that did not succeed, a terminal validation class, a security follow-up closed unmerged or blocked, a defective fix check) does not wait for a human. The stop hands the project checker an **escalation wait**, and the checker starts the **escalation judge** (`.claude/commands/escalation-judge.md`, CLAUDE.md §28.G) as the next stage within one checker cycle. The judge picks one choice from a fixed menu (`budget`, `descope`, or `close`), never the same one twice for the same failure (`.claude/scripts/escalation_ledger.py`), and hands the checker the next stage.
+A CLAUDE.md §28.C failure escalation (a cap reached, a security or validation run that did not succeed, a terminal validation class, a security follow-up closed unmerged or blocked, a defective fix check) does not wait for a human. The stop hands the project checker an **escalation wait**, and the checker starts the **escalation judge** (`.claude/commands/escalation-judge.md`, CLAUDE.md §28.G) as the next stage within one checker cycle. The judge picks one choice from a fixed menu (`budget`, `descope`, or `close`), never `budget` or `descope` twice for the same failure (`.claude/scripts/escalation_ledger.py`; the fingerprint of a PR-scoped stop includes the PR number), and hands the checker the next stage.
 
 **Stop ids.** Every escalation stop in this file names one of these ten ids:
 

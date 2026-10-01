@@ -6,9 +6,9 @@ cap reached, a security or validation run that did not succeed, a terminal
 validation class, a security follow-up closed unmerged, a defective fix
 check). Instead of waiting for a human, the stop hands its project checker
 an `escalation` wait, and the checker starts `/escalation-judge` (CLAUDE.md
-§28.G). The judge picks one choice from a fixed menu and never picks the
-same choice twice for the same failure. This script is that memory; the
-judge decides nothing without it.
+§28.G). The judge picks one choice from a fixed menu and never picks
+`budget` or `descope` twice for the same failure (`close` stays available).
+This script is that memory; the judge decides nothing without it.
 
 The menu, in the order `allowed` returns it:
 
@@ -16,8 +16,8 @@ The menu, in the order `allowed` returns it:
   descope  remove the failing part from the project (an `AD-<n>` entry)
   close    close the chain's PRs and the source issue as not planned
 
-`close` is always available. A choice already recorded for the same stop id
-and fingerprint is never offered again, so once `budget` and `descope` are
+`close` is always available. A `budget` or `descope` already recorded for the
+same stop id and fingerprint is never offered again, so once both are
 used for a failure, only `close` remains. A different failure (a different
 fingerprint) starts with the full menu.
 
@@ -33,21 +33,26 @@ Subcommands:
       12 hex characters of the SHA-1 of the canonical JSON of the stop id
       and the evidence. Evidence is a JSON object with any of these keys:
       `checks` (failing check names), `findings` (finding ids), `issues`
-      (follow-up issue numbers), `validation_class`, `validation_status`.
-      Strings are trimmed, lower-cased and whitespace-collapsed; lists are
-      de-duplicated and sorted, so the order the evidence was read in never
-      changes the fingerprint. Any other key is refused.
+      (follow-up issue numbers), `validation_class`, `validation_status`,
+      and `pr` (the number of the PR the stop is about, as `5164` or
+      `#5164`). Strings are trimmed, lower-cased and whitespace-collapsed;
+      lists are de-duplicated and sorted, so the order the evidence was read
+      in never changes the fingerprint. Any other key is refused. `pr` is
+      required for the PR-scoped stops (`intervention-cap`,
+      `fix-check-defective`), so two PRs that fail the same way never share
+      a fingerprint and never use up each other's choices.
   allowed --log <path> --stop <id> --fingerprint <fp>
       Parse `## Escalations` and print the choices not yet used for that
       stop and fingerprint, in the order budget, descope, close.
   record --log <path> --stop <id> --fingerprint <fp> --choice <c> --why <text> [--date YYYY-MM-DD]
       Print the `ES-<n>` line to append, with `n` one more than the highest
       id in the log. It never writes a file: the session adds the line to
-      the log with its Edit tool. A choice already used for that stop and
-      fingerprint is refused.
+      the log with its Edit tool. A `budget` or `descope` already used for
+      that stop and fingerprint is refused.
 
 Output is one JSON line. Exit 0 on success; 1 on bad arguments (an unknown
-stop id, a malformed fingerprint or evidence, a used choice); 2 when the
+stop id, a malformed fingerprint or evidence, a PR-scoped stop without
+`pr`, a used choice); 2 when the
 log cannot be read or an `## Escalations` line is malformed (a line that
 starts `- ` but does not match the format, a date that is not a real
 calendar date, or a repeated `ES-<n>` id). A log without an
@@ -89,6 +94,13 @@ CHOICES = ("budget", "descope", "close")
 
 EVIDENCE_LIST_KEYS = ("checks", "findings", "issues")
 EVIDENCE_SCALAR_KEYS = ("validation_class", "validation_status")
+# The PR the stop is about. Without it, two PRs that fail the same way would
+# share a fingerprint, and one PR's `budget` / `descope` would use up the
+# other's choices.
+EVIDENCE_PR_KEY = "pr"
+# Stops that are about one PR: their fingerprint must carry `pr`.
+PR_SCOPED_STOP_IDS = ("intervention-cap", "fix-check-defective")
+PR_NUMBER_RE = re.compile(r"^#?([1-9][0-9]*)$")
 
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{12}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -134,9 +146,10 @@ def normalise_evidence(evidence: object) -> dict:
 	"""Return the canonical form of the failure evidence."""
 	if not isinstance(evidence, dict):
 		raise UsageError("evidence must be a JSON object")
-	unknown = sorted(set(evidence) - set(EVIDENCE_LIST_KEYS) - set(EVIDENCE_SCALAR_KEYS))
+	known = EVIDENCE_LIST_KEYS + EVIDENCE_SCALAR_KEYS + (EVIDENCE_PR_KEY,)
+	unknown = sorted(set(evidence) - set(known))
 	if unknown:
-		raise UsageError(f"unknown evidence keys: {unknown}; allowed: {list(EVIDENCE_LIST_KEYS + EVIDENCE_SCALAR_KEYS)}")
+		raise UsageError(f"unknown evidence keys: {unknown}; allowed: {list(known)}")
 	canonical: dict = {}
 	for key in EVIDENCE_LIST_KEYS:
 		if key not in evidence:
@@ -153,7 +166,17 @@ def normalise_evidence(evidence: object) -> dict:
 		value = _normalise_text(evidence[key])
 		if value:
 			canonical[key] = value
+	if evidence.get(EVIDENCE_PR_KEY) is not None:
+		canonical[EVIDENCE_PR_KEY] = _normalise_pr(evidence[EVIDENCE_PR_KEY])
 	return canonical
+
+
+def _normalise_pr(value: object) -> str:
+	"""The PR number as plain digits: `5164`, `"5164"` and `"#5164"` are the same PR."""
+	match = PR_NUMBER_RE.match(_normalise_text(value))
+	if not match:
+		raise UsageError(f"evidence key 'pr' must be a PR number such as 5164 or '#5164', got {value!r}")
+	return match.group(1)
 
 
 def _check_stop(stop: str) -> str:
@@ -173,6 +196,8 @@ def _check_fingerprint(fingerprint: str) -> str:
 def fingerprint(stop: str, evidence: object) -> str:
 	"""The failure fingerprint: 12 hex characters of SHA-1 over stop id and evidence."""
 	payload = {"stop": _check_stop(stop), "evidence": normalise_evidence(evidence)}
+	if stop in PR_SCOPED_STOP_IDS and EVIDENCE_PR_KEY not in payload["evidence"]:
+		raise UsageError(f"stop {stop!r} is about one PR: the evidence must name it as 'pr'")
 	canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
 	return hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:12]
 
