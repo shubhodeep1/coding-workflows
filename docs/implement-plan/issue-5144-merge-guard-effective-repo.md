@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5144
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5144-merge-guard-effective-repo   Final PR: #5163 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5173: twin sync
+- Waiting on: PR #5173
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_012bXVKFrhBSuPGD6croSjLV (kept for the next wait)   safety net none   hand-back none   (the review-round 6 stage holds the PR for the twin sync, so no wait is armed)
+- Check-in: checker session_012bXVKFrhBSuPGD6croSjLV   safety net trig_01RP2KhR9JbLBzUcw6grxKSj   hand-back trig_01Fjv8W8mmrB1x4cjoELtP4c
 - Last updated: 2026-10-01
-- Last note: review round 6 (workflow round 1 on head 0f20e449ffde, run 36799863702, ledger `ddc54be8…052f`): twin sync `0f20e44` had landed (both copies `46091219…f878`). Fixed in the twin: a `cd`/`-C`/`GIT_DIR` directory the process cannot enter now falls back to the session checkout with a warning (it was probed and allowed silently), `--ta` / `--tag` count as the tags-only `--tags`, and an empty-destination refspec judges the checked-out branch with HEAD; the redirect-after-`cd` finding was rejected (safe fallback with a warning, by design); this header was refreshed. New twin sha256 `10546fc776a604556b712dd8f6168cdd2cb2e4b65411e58bea287c60bd11be8f` (the `.claude/` copy is still `46091219…f878`); hold claim and twin-sync blocker posted; waiting on the `[claude-twin-sync]` copy and `/reclarify` on #5144.
+- Last note: review round 7 (workflow round 1 on head b6a2a6f4a806, run 36813093085, ledger `6543b32c…8b85`): twin sync `b6a2a6f` had landed (both copies `10546fc7…be8f`, `test_template_copies_are_identical` passes), so the hold is lifted and this header no longer says the PR waits on a sync. Rejected: the empty-destination refspec finding (git rejects `<src>:` for push with `fatal: invalid refspec`), the `GIT_DIR` inspection finding (git run from inside a linked worktree's git dir reads that worktree's HEAD; a new end-to-end test pins it), and the `cd … 2>/dev/null` finding (safe fallback with a warning, by design). No hook change this round; waiting on the next review round.
 
 ## Phases
-1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (twin sync pending); review rounds: 6; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (waiting on review); review rounds: 7; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Command walker: effective directory across `cd`, `git -C`, `GIT_DIR=`, `--git-dir`; unresolvable constructs fall back with a warning
    - Push refspec parser: `<src>:<dst>` judged on `<dst>` with `<src>` as tip; deletions and tags skipped; no refspec judges the current branch
    - Per-target judge with one cached REST call per `(slug, branch)`; one merged hook result
@@ -69,3 +69,4 @@
 - Review round 4 (session_0146fXPsUDiKGDB3rQ1gtfAp, 2026-09-30): workflow round 1 on head 420ccd0b770b (ledger `2707b9ef…afc1`); both code findings fixed, the task gap rejected. New twin sha256 `76c3aa18f065f262e13f678c19af351054e59f5e144f93605f8f0d533f4a3a33` (the `.claude/` copy is still `2eadc36a…4cf3`); new blocker posted on #5144.
 - Review round 5 (session_01EENJBCUqspaRDh83wPseSh, 2026-09-30): three reviewer runs on head f1c6650e5be6 after twin sync `f1c6650` (the `.claude/` copy and the twin were both `76c3aa18…3a33`); answered the latest hand-off (run 36725288304, ledger `728535fe…d1f2`). Project branch synced with main at 1b0c74e (clean). New twin sha256 `46091219ee440267a0df1b48782846f8a8543609b9f04e66c95b01bc27bcf878` (the `.claude/` copy is still `76c3aa18…3a33`); new blocker posted on #5144.
 - Review round 6 (session_01MDVSYJFYwKFE8sXRsED47p, 2026-10-01): workflow round 1 on head 0f20e449ffde (ledger `ddc54be8…052f`); three code findings fixed in the twin, the redirect finding rejected, the stale header refreshed. New twin sha256 `10546fc7…be8f` (the `.claude/` copy is still `46091219…f878`); new blocker posted on #5144.
+- Review round 7 (session_01Mm4vPcFoXxqihGf1c1VGDX, 2026-10-01): workflow round 1 on head b6a2a6f4a806 (ledger `6543b32c…8b85`) after twin sync `b6a2a6f`. Fixed the stale header (the task gap) and added `test_e2e_linked_worktree_git_dir_is_judged_by_its_own_head`; rejected the empty-destination refspec, `GIT_DIR` inspection and `cd … 2>/dev/null` findings. Neither hook copy changed (both `10546fc7…be8f`), so no twin sync is needed; checker session_012bXVKFrhBSuPGD6croSjLV reused.

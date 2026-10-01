@@ -1565,6 +1565,28 @@ def test_e2e_git_dir_prefix_is_judged_even_from_outside_any_repository(worktree_
 	assert "pull/41" in proc.stderr
 
 
+def test_e2e_linked_worktree_git_dir_is_judged_by_its_own_head(worktree_repo) -> None:
+	"""A linked worktree's git dir sits under the main checkout's `.git/worktrees/`.
+	Git run from inside it reads that worktree's HEAD, never the enclosing
+	checkout's, so the guard judges the commit the push actually sends."""
+	repo, worktree, stub_bin, merged_sha, _ = worktree_repo
+	linked_git_dir = Path(_git(worktree, "rev-parse", "--absolute-git-dir"))
+	assert linked_git_dir.parent.name == "worktrees"
+	command = f"GIT_DIR={linked_git_dir} git push origin HEAD:feature/x"
+	# The main checkout is stranded on the merged branch; the worktree carries
+	# fresh work rebuilt from main, so the push is allowed.
+	allowed = _run_twin_hook(repo, stub_bin, command)
+	assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+	# The main checkout is rebuilt from main; the worktree sits on the merged
+	# head, so the push stacks on merged history and is blocked.
+	_git(repo, "checkout", "-q", "--detach", "main")
+	_git(worktree, "checkout", "-q", "--detach", merged_sha)
+	blocked = _run_twin_hook(repo, stub_bin, command)
+	assert blocked.returncode == 2, blocked.stdout + blocked.stderr
+	assert "pull/41" in blocked.stderr
+	assert f"Judged in: {linked_git_dir}" in blocked.stderr
+
+
 def test_e2e_unresolvable_directory_keeps_todays_behaviour_and_warns(worktree_repo) -> None:
 	repo, worktree, stub_bin, _, _ = worktree_repo
 	# The session checkout is stranded, so today's behaviour blocks.
