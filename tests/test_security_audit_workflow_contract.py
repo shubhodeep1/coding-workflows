@@ -801,7 +801,7 @@ def test_internal_clarify_skips_source_repo_tracker_issues() -> None:
 
 def test_clarify_skips_consumer_tracker_issues() -> None:
 	content = CLARIFY_PATH.read_text(encoding="utf-8")
-	assert "(github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro'))" in content
+	assert "(github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage'))" in content
 
 
 def test_security_audit_gate_disabled_skips_without_side_effects() -> None:
