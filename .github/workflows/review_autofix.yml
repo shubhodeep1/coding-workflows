@@ -5056,6 +5056,8 @@ jobs:
                 --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+                --provider-log-dir "${PREVIOUS_REVIEWS_DIR:-}" \
+                --provider-log-dir "${RUNTIME_DIR:-}" \
                 --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
                 --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
               if [ -n "${autofix_failure_marker_line}" ]; then
@@ -7023,12 +7025,15 @@ jobs:
             --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
             --evidence-out "${evidence_out}" \
+            --provider-log-dir "${PREVIOUS_REVIEWS_DIR:-}" \
+            --provider-log-dir "${RUNTIME_DIR:-}" \
             --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
             --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
           failure_fp="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1)"
           failure_degraded="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^degraded=//p' | head -n 1)"
           failure_reason="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^reason=//p' | head -n 1)"
           failure_marker="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^marker=//p' | head -n 1)"
+          provider_outage="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^provider_outage=//p' | head -n 1)"
           if ! [[ "${failure_fp}" =~ ^[0-9a-f]{64}$ ]]; then
             echo "AUTOFIX_FAILURE_MARKER=" >> "$GITHUB_ENV"
             echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_failed"
@@ -7039,10 +7044,19 @@ jobs:
             echo "AUTOFIX_FAILURE_REASON=${failure_reason}"
             echo "AUTOFIX_FAILURE_MARKER=${failure_marker}"
           } >> "$GITHUB_ENV"
+          # Model-provider outage (issue #5773): no ai:review-blocked label, no
+          # per-PR alert; the heal reporter opens the one outage marker.
+          if [ "${failure_reason}" = "provider_unavailable" ] && [ -n "${provider_outage}" ]; then
+            {
+              echo "AUTOFIX_PROVIDER_UNAVAILABLE=true"
+              echo "AUTOFIX_PROVIDER_OUTAGE=${provider_outage}"
+            } >> "$GITHUB_ENV"
+            echo "AUTOFIX_PROVIDER_UNAVAILABLE pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} ${provider_outage}"
+          fi
           echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${failure_reason} fp=${failure_fp} degraded=${failure_degraded:-1}"
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.AUTOFIX_PROVIDER_UNAVAILABLE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -7112,7 +7126,7 @@ jobs:
         # reported as the step that failed the job — the job's red status
         # already reflects the original failure that triggered this path.
         continue-on-error: true
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.AUTOFIX_PROVIDER_UNAVAILABLE != 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -7153,7 +7167,17 @@ jobs:
           # itself prove editor execution succeeded (fallback summaries
           # can also be posted). Keep this branch wording limited to
           # that invariant.
-          if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
+          if [ "${AUTOFIX_PROVIDER_UNAVAILABLE:-false}" = "true" ]; then
+            # Model-provider outage (issue #5773): nothing was labelled.
+            BODY="$(cat <<EOF
+          **AI review/autofix paused: model provider unavailable**
+
+          The model calls of this run failed because the provider is down (\`${AUTOFIX_PROVIDER_OUTAGE:-unknown}\`). This is not a defect in this pull request. No \`ai:review-blocked\` label was applied, this failure does not count toward the identical-failure cap, and no Claude fixer is started for it. The review sweep probes the provider every 30 minutes and re-runs this review once it recovers.
+
+          [View workflow run](${RUN_URL}) for details.
+          EOF
+          )"
+          elif [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
             BODY="$(cat <<EOF
           **AI review/autofix encountered a post-editor failure — needs human intervention**
 
@@ -7195,7 +7219,7 @@ jobs:
           gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram failure
-        if: failure() && env.PR_CLOSED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_PROVIDER_UNAVAILABLE != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

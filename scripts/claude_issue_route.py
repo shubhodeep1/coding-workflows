@@ -51,7 +51,8 @@ Routing order (first match wins):
   1. orchestrator-managed issue (``ai:orchestrator-managed`` label or the
      ``Managed by: AI Orchestrator`` body marker) -> codex
   2. issue types clarify never auto-handles (``ai:orchestrator-tracking``,
-     ``ai:security-audit``, ``ai:retro``) -> codex (unchanged behaviour)
+     ``ai:security-audit``, ``ai:retro``, ``ai:provider-outage``) -> codex
+     (unchanged behaviour; clarify never auto-handles them either)
   3. release-gate fixture issue (title starts with ``[E2E ``) -> codex
   4. ``ai:codex`` label -> codex (per-issue switch; wins over ``ai:claude``)
   5. ``ai:claude`` label -> claude (per-issue pin, also the claim label)
@@ -118,6 +119,8 @@ CODEX_ONLY_LABELS: tuple[str, ...] = (
 	"ai:orchestrator-tracking",
 	"ai:security-audit",
 	"ai:retro",
+	# The model-provider outage marker (scripts/provider_outage.py, #5773).
+	"ai:provider-outage",
 )
 
 # Labels whose issues skip their own security pass in the Claude project

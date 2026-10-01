@@ -1,0 +1,36 @@
+Reviewer slot openai/gpt-6-luna (openai/gpt-6-luna) execution failed on attempt 1 (exit=1).
+Reviewer slot openai/gpt-6-luna (openai/gpt-6-luna) OpenCode stderr on attempt 1:
+  | opencode_agent_start role=reviewer expected_provider=openrouter expected_model=openai/gpt-6-luna variant=xhigh
+  | timestamp=2026-09-30T17:10:57.888Z level=INFO run=51fb65b1 message="creating instance" directory=/home/runner/work/coding-workflows/coding-workflows
+  | timestamp=2026-09-30T17:10:57.892Z level=INFO run=51fb65b1 message=fromDirectory directory=/home/runner/work/coding-workflows/coding-workflows
+  | timestamp=2026-09-30T17:10:58.105Z level=INFO run=51fb65b1 message=bootstrapping directory=/home/runner/work/coding-workflows/coding-workflows
+  | timestamp=2026-09-30T17:10:58.163Z level=INFO run=51fb65b1 message=loading path=/home/runner/.config/opencode/config.json
+  | timestamp=2026-09-30T17:10:58.216Z level=INFO run=51fb65b1 message=loading path=/home/runner/.config/opencode/opencode.json
+  | timestamp=2026-09-30T17:10:58.245Z level=INFO run=51fb65b1 message=loading path=/home/runner/.config/opencode/opencode.jsonc
+  | timestamp=2026-09-30T17:10:58.299Z level=INFO run=51fb65b1 message=loading path=/home/runner/work/_temp/opencode_reviewers/reviewer.openai_gpt-6-luna.2SXYrf/opencode.json
+  | timestamp=2026-09-30T17:10:58.800Z level=INFO run=51fb65b1 message="all LSPs are disabled"
+  | timestamp=2026-09-30T17:10:58.810Z level=INFO run=51fb65b1 message="all formatters are disabled"
+  | timestamp=2026-09-30T17:10:58.811Z level=INFO run=51fb65b1 message=init
+  | timestamp=2026-09-30T17:10:59.543Z level=INFO run=51fb65b1 message=created id=ses_f0cb3b128ffev76iWn5lVVwKXH slug=hidden-cactus version=1.18.23 projectID=93e70d49c163de3d23f4471c7be5c8365abaa6c3 directory=/home/runner/work/coding-workflows/coding-workflows path=../../../coding-workflows/coding-workflows workspaceID=undefined parentID=undefined title=coding-workflows-agent-run agent=undefined m
+  | timestamp=2026-09-30T17:10:59.849Z level=INFO run=51fb65b1 message="event connected"
+  | timestamp=2026-09-30T17:11:01.386Z level=INFO run=51fb65b1 message=loop session.id=ses_f0cb3b128ffev76iWn5lVVwKXH step=0
+  | timestamp=2026-09-30T17:11:01.678Z level=INFO run=51fb65b1 message=tracking hash=2de0b6e6f8444e845a336a7ace46d516d706b36e cwd=/home/runner/work/coding-workflows/coding-workflows git=/home/runner/.local/share/opencode/snapshot/93e70d49c163de3d23f4471c7be5c8365abaa6c3/b5697cb67d81c766a53a8f98800ecc0d064369e9
+  | timestamp=2026-09-30T17:11:01.715Z level=INFO run=51fb65b1 message="shell tool using shell" shell=/bin/bash
+  | timestamp=2026-09-30T17:11:01.753Z level=INFO run=51fb65b1 message=init count=1
+  | timestamp=2026-09-30T17:11:02.167Z level=INFO run=51fb65b1 message="watcher backend" directory=/home/runner/work/coding-workflows/coding-workflows platform=linux backend=inotify
+  | timestamp=2026-09-30T17:11:02.178Z level=INFO run=51fb65b1 message="project copy refresh started" projectID=93e70d49c163de3d23f4471c7be5c8365abaa6c3
+  | timestamp=2026-09-30T17:11:03.284Z level=INFO run=51fb65b1 message="project copy refresh done" projectID=93e70d49c163de3d23f4471c7be5c8365abaa6c3 updated=[] removed=[]
+  | timestamp=2026-09-30T17:11:03.287Z level=INFO run=51fb65b1 message="booting location services" directory=/home/runner/work/coding-workflows/coding-workflows workspaceID=undefined
+  | timestamp=2026-09-30T17:11:03.327Z level=INFO run=51fb65b1 message=process session.id=ses_f0cb3b128ffev76iWn5lVVwKXH messageID=msg_0f34c561f001P0Fl6JOm6k6NLQ
+  | timestamp=2026-09-30T17:11:03.340Z level=INFO run=51fb65b1 message=stream providerID=openrouter modelID=openai/gpt-6-luna session.id=ses_f0cb3b128ffev76iWn5lVVwKXH small=false agent=reviewer mode=primary
+  | timestamp=2026-09-30T17:11:03.363Z level=INFO run=51fb65b1 message="llm runtime selected" llm.runtime=ai-sdk llm.provider=openrouter llm.model=openai/gpt-6-luna
+  | timestamp=2026-09-30T17:11:03.690Z level=ERROR run=51fb65b1 message="stream error" providerID=openrouter modelID=openai/gpt-6-luna session.id=ses_f0cb3b128ffev76iWn5lVVwKXH small=false agent=reviewer mode=primary error.error="AI_APICallError: Insufficient credits. Add more using https://openrouter.ai/settings/credits"
+  | timestamp=2026-09-30T17:11:03.696Z level=ERROR run=51fb65b1 message=process session.id=ses_f0cb3b128ffev76iWn5lVVwKXH messageID=msg_0f34c561f001P0Fl6JOm6k6NLQ error="Insufficient credits. Add more using https://openrouter.ai/settings/credits" stack="AI_APICallError: Insufficient credits. Add more using https://openrouter.ai/settings/credits\n    at <anonymous> (/$bunfs/root/chunk-62f16210.js:1
+  | timestamp=2026-09-30T17:11:03.725Z level=INFO run=51fb65b1 message="disposing instance" directory=/home/runner/work/coding-workflows/coding-workflows
+LLM keyword extraction failed on attempt 1/3: HTTP Error 402: Payment Required
+LLM keyword extraction failed on attempt 2/3: HTTP Error 402: Payment Required
+LLM keyword extraction failed on attempt 3/3: HTTP Error 402: Payment Required
+summariser (pass1): attempt 1 exited rc=1.
+summariser (pass1): backing off 5s before attempt 2/10.
+summariser (pass1): attempt 2/10 — model=openai/gpt-6-luna reasoning=medium
+summariser (pass1): attempt 2 exited rc=1.

@@ -94,8 +94,75 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Model-provider outage probe (issue #5773). While an `ai:provider-outage`
+  # marker issue is open (the heal intake opens it from the first
+  # `provider_unavailable` review failure), this job makes one 1-token
+  # provider call per tick and the `sweep` job below skips its review
+  # dispatches. On the first successful probe it resumes on its own:
+  # re-dispatches the paused reviews (this repo and the registered
+  # consumers), removes the outage's ai:review-blocked labels, releases
+  # outage-caused holds, re-runs (opt-in) or reports the recorded release
+  # run, closes the marker, and sends one "recovered" alert. With no marker
+  # it costs one REST read. Decision, API budget and fail-open rules:
+  # scripts/provider_outage.py. PROVIDER_OUTAGE_PROBE_ENABLED=false turns
+  # the job off and the sweep runs as before.
+  provider-outage-probe:
+    if: github.event.schedule != '17 * * * *' && vars.PROVIDER_OUTAGE_PROBE_ENABLED != 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      skip_review_dispatch: ${{ steps.tick.outputs.skip_review_dispatch }}
+    steps:
+      - name: Check out the probe script and the consumer registry
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Probe the model provider while an outage marker is open
+        id: tick
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PROVIDER_OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || vars.XPOLL_SUMMARISER_MODEL || 'openai/gpt-6-luna' }}
+          PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED: ${{ vars.PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -uo pipefail
+          tick_out=""
+          if ! tick_out="$(python3 scripts/provider_outage.py tick \
+            --repo "${REPOSITORY}" \
+            --probe-model "${PROVIDER_OUTAGE_PROBE_MODEL}" \
+            --release-rerun-enabled "${PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED}" \
+            --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS}" \
+            --run-id "${GITHUB_RUN_ID}")"; then
+            # Fail open: a broken tick never stops the review sweep.
+            echo "::warning::PROVIDER_OUTAGE_TICK failed: $(printf '%s' "${tick_out}" | head -c 300)"
+            echo "skip_review_dispatch=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "PROVIDER_OUTAGE_TICK $(printf '%s' "${tick_out}" | jq -c '{outage_open, skip_review_dispatch, issue, recovered, probe, error}' 2>/dev/null || printf '%s' "${tick_out}")"
+          skip="$(printf '%s' "${tick_out}" | jq -r '.skip_review_dispatch // false' 2>/dev/null || echo false)"
+          [ "${skip}" = "true" ] || skip="false"
+          echo "skip_review_dispatch=${skip}" >> "${GITHUB_OUTPUT}"
+          alert_text="$(printf '%s' "${tick_out}" | jq -r '.alert_text // ""' 2>/dev/null || echo "")"
+          if [ -n "${alert_text}" ] && [ -f scripts/tg_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/tg_helpers.sh
+            tg_send_msg "${alert_text}" "WARNING" >/dev/null || true
+          fi
+
   sweep:
-    if: github.event.schedule != '17 * * * *'
+    # Runs after the provider-outage probe, and also when the probe job was
+    # skipped or failed (fail open); it only stands down when the probe says so.
+    needs: provider-outage-probe
+    if: "!cancelled() && github.event.schedule != '17 * * * *'"
     runs-on: ubuntu-24.04
     steps:
       - name: Enumerate open PRs and dispatch internal-review.yml
@@ -106,8 +173,17 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
           SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
+          PROVIDER_OUTAGE_SKIP_REVIEW_DISPATCH: ${{ needs.provider-outage-probe.outputs.skip_review_dispatch || 'false' }}
         run: |
           set -euo pipefail
+
+          # Model-provider outage (issue #5773): while the outage marker is
+          # open, or on the tick that resumed after it, the probe job owns the
+          # review dispatches; this tick spends no review runs.
+          if [ "${PROVIDER_OUTAGE_SKIP_REVIEW_DISPATCH:-false}" = "true" ]; then
+            echo "AUTOFIX_SWEEP_SKIP_ALL reason=provider_outage repo=${REPOSITORY}"
+            exit 0
+          fi
 
           # Fetch all open PRs, then filter to non-draft client-side.
           # `gh` rejects `--slurp` combined with `--jq`, so pipe the
