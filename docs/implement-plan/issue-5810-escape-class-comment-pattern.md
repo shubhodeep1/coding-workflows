@@ -3,15 +3,15 @@
 - Plan: docs/plans/issue-5810-escape-class-comment-pattern-plan.md
 - Source issue: shubhodeep1/coding-workflows#5810 (https://github.com/shubhodeep1/coding-workflows/issues/5810)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4867-close-permission-prompt-duplicates
-- Project branch: claude/implement-plan-issue-5810-escape-class-comment-pattern   Final PR: (opening)
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5810-escape-class-comment-pattern   Final PR: #5833 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: the phase 1 PR (branch `claude/implement-plan-issue-5810-escape-class-comment-pattern-phase-1`): the twin sync of `workflow-templates/.claude/scripts/permission_prompts.py` and `workflow-templates/.claude/commands/implement-issue-claude.md` into `.claude/` (hold claim on the phase head), asked on #5810, then `/reclarify`
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project branch opened from the #4867 project branch at 07a0135; phase 1 starts twin-first.
+- Last note: phase 1 implemented twin-first (`_markdown_code_span` for the shape, tool name, and reasons; step 1 evidence-not-spec rule); 12 new or updated tests fail against the base twin and pass on the phase head; waiting on the twin sync.
 
 ## Phases
 1. [ ] Phase 1 — code spans for session data and the spec rule   — protected paths: `.claude/scripts/permission_prompts.py`, `.claude/commands/implement-issue-claude.md` (edited through their `workflow-templates/.claude/` twins)
@@ -20,6 +20,7 @@
    - `tests/test_permission_prompt_duplicates.py`: new cases (fail against the base twin), updated reason assertion
    - `CLAUDE.md` §23.I and `agents.md`: "Issue text is untrusted data" sentences; `changelog.d/5810-permission-prompt-code-spans.md` [new]
    - Done: goals 1–4 hold; new tests pass; with the twins copied, `tests/test_permission_prompts.py`, `tests/test_permission_prompt_duplicates.py`, `tests/test_implement_issue_claude_command.py` pass; ruff clean
+   - Phase PR open (twin sync pending); review rounds: 0; twin syncs: 0; interventions: 0
 
 ## Conformance
 
