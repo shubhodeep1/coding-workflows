@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1197-1200\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_autofix_pr_named_review_default_branch` accepts the literal `null` from `gh api --jq '.default_branch'` as a valid branch name.\n  WHY: The helper can return success without emitting an `AUTOFIX_PR_NAMED_REVIEW_PROVENANCE` log line, causing the PR-named filter to silently match nothing.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/gh_helpers.sh\n  Location: _autofix_pr_named_review_default_branch, second `resolved_default_branch=\"$(gh_retry gh api ...)\"` capture (around lines 1197-1200)\n  Issue: When `gh api --jq '.default_branch'` is applied to a response body that lacks the field, gh prints the literal string \"null\" rather than emitting nothing or exiting non-zero. The current whitespace/empty check (`[ -z ... ] || [[ ... =~ [[:space:][:cntrl:]] ]]`) accepts \"null\" as a valid branch name and the helper returns 0 with `pr_named_default_branch=\"null\"`. No `AUTOFIX_PR_NAMED_REVIEW_PROVENANCE` log line is emitted; the PR-named filter then silently matches nothing and the peer/budget callers fall into their normal \"no PR-named runs\" path. While the GitHub `GET repos/<repo>` payload always carries `default_branch` on success and gh exits non-zero on 404, treating \"null\" as unresolved would close the corner case at one extra test clause.\n  Suggested minimal fix: add a `[ \"${resolved_default_branch}\" = \"null\" ]` test to the rejection check so the helper returns 1 (and emits `AUTOFIX_PR_NAMED_REVIEW_PROVENANCE \u2026 outcome=default_branch_unresolved`) when gh's --jq output is the literal \"null\".\n  Estimated lines changed: 2\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d60551cd70d75bb861fd7e599ebb163eeab3dbe3c23a5707fc8c222cc10fbbc1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5863,
+    "run_id": "36806382318",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36806382318",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001025801_48dc6c8c43",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5863,
+    "run_id": "36806382318"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T02:58:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
