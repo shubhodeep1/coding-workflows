@@ -52,7 +52,7 @@ Add three helpers to `scripts/security_audit.sh`. Call them only in the `codex-e
    - padded base64 `[A-Za-z0-9+/]{40,}={1,2}`.
    It prints the masked line. The caller then passes it through `security_audit_sanitize_log_value`, which adds the existing masks and `%q` quoting.
 2. **`security_audit_emit_codex_stderr_tail <stderr-file> <prompt-file>`**:
-   - reads at most the last 64 KiB of the stderr file (`tail -c`). When the file is larger, it drops the first, partial line, so a token cut at the boundary is never printed without its prefix;
+   - reads at most the last 64 KiB of the stderr file (`tail -c`). When the file is larger, it replaces the leading non-space run of the cut first line with `[cut]`, so a token cut at the boundary is never printed without its prefix and the rest of that line still counts;
    - drops blank lines and lines that exactly match a line of the rendered prompt (`grep -vxF -f`);
    - keeps the last 40 lines, then masks and sanitizes each one;
    - walks from the newest line back, keeping lines while their total sanitized size is at most 4096 bytes. When the newest line alone is larger, it keeps the first 4096 bytes of that line;
@@ -160,12 +160,12 @@ The change ships with the next `@stable` sync. Consumer runs stage `scripts/` fr
   - Applied in: phase 1 PR. Status: pending review.
 - AD-6 [plan, 2026-10-01] How should input be bounded and the 4 KiB cap applied?
   - Picked: A:
-    - read at most the last 64 KiB, dropping the partial first line when the file is larger;
+    - read at most the last 64 KiB, replacing the cut leading token of the first line with `[cut]` when the file is larger;
     - drop blank lines;
     - count the 4096-byte budget over sanitized line content, keeping the newest lines;
     - truncate a single over-budget newest line to its first 4096 bytes.
   - Alternatives: B, cap the raw bytes before sanitizing.
-  - Why: issue item 3 says sanitize first, then cap; dropping the partial line stops a boundary-cut token from escaping the prefix masks.
+  - Why: issue item 3 says sanitize first, then cap; replacing the cut token stops a boundary-cut token from escaping the prefix masks, and keeps the error text of a single over-long line.
   - Applied in: phase 1 PR. Status: pending review.
 
 ## References

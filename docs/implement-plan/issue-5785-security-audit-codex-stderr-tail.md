@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5785-security-audit-codex-stderr-tail-plan.md
 - Source issue: shubhodeep1/coding-workflows#5785
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5785-security-audit-codex-stderr-tail   Final PR: (opening) draft
+- Project branch: claude/implement-plan-issue-5785-security-audit-codex-stderr-tail   Final PR: #5806 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (this PR)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project branch opened by /implement-issue-claude (issue mode); phase 1 starting.
+- Last note: phase 1 implemented and verified (contract tests, shellcheck); phase 1 PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures
+1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -32,9 +32,10 @@
 - AD-3 [plan, 2026-10-01] How are provider failures matched? — Picked: A — reason phrases plus 401/402/429/5xx codes only in `http|status|code|error` context; latest matching line wins; within a line 402 > 401 > 429 > 5xx. Alternatives: B — bare numbers anywhere. Why: bare 3-digit numbers (token counts, ids) would misclassify, and the newest error is the cause. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-10-01] Where do the tests go? — Picked: A — extend `tests/test_security_audit_workflow_contract.py`. Alternatives: B — new `tests/test_security_audit_codex_stderr_tail.py` registered in `ci.yml`. Why: it already has the fake-Codex harness, runs in CI, and holds the codex-failure test that must change anyway (§5). Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-10-01] The issue asks for an `agents.md` note only if the security-audit section describes failure output, which it does not. Add one? — Picked: A — add a one-sentence note to the security-audit bullet. Alternatives: B — no `agents.md` change. Why: §7 requires documenting failure-mode changes. Applied in: phase 1 PR. Status: pending review
-- AD-6 [plan, 2026-10-01] How are input bounding and the 4 KiB cap applied? — Picked: A — read at most the last 64 KiB (drop the partial first line when larger), drop blank lines, count the 4096-byte budget over sanitized line content keeping the newest lines, truncate a single over-budget newest line to its first 4096 bytes. Alternatives: B — cap raw bytes before sanitizing. Why: the issue's "sanitize first, then cap"; dropping the partial line stops a boundary-cut token from escaping the prefix masks. Applied in: phase 1 PR. Status: pending review
+- AD-6 [plan, 2026-10-01] How are input bounding and the 4 KiB cap applied? — Picked: A — read at most the last 64 KiB (replace the cut leading token of the first line with `[cut]` when larger), drop blank lines, count the 4096-byte budget over sanitized line content keeping the newest lines, truncate a single over-budget newest line to its first 4096 bytes. Alternatives: B — cap raw bytes before sanitizing. Why: the issue's "sanitize first, then cap"; replacing the cut token stops a boundary-cut token from escaping the prefix masks and keeps the error text of a single over-long line. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] When a log tail is bounded by bytes, replace the cut leading token of the first line instead of dropping the whole line: a single over-long line otherwise loses its error text, while a token has no whitespace, so replacing the leading non-space run still removes any cut secret fragment. (files: scripts/security_audit.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude from #5785; base branch main; security pass: run (`security_pass_skip.py`: no skip label).
