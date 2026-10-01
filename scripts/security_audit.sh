@@ -100,9 +100,10 @@ SECURITY_AUDIT_CODEX_PROVIDER="unknown"
 
 # Masks token-shaped values in one Codex stderr line before it reaches
 # security_audit_sanitize_log_value: the literal value of every non-empty
-# exported variable whose name looks secret (8+ chars anywhere in the line,
-# shorter values where they stand as a whole word, so a short setting such as
-# MAX_THINKING_TOKENS=5 does not rewrite every digit; a multiline value is
+# exported variable whose name looks secret, in any letter case (8+ chars
+# anywhere in the line, shorter values where they stand as a whole word, so a
+# short setting such as MAX_THINKING_TOKENS=5 does not rewrite every digit; a
+# multiline value is
 # split into its lines, CR removed as in the stderr stream, and each non-empty
 # line is masked by the same rule), sk- keys, 32+ hex runs,
 # and 40+ base64 or token runs in either alphabet, padded or not. Values are
@@ -120,7 +121,9 @@ security_audit_mask_stderr_line() {
 	local secret_word_before
 	local secret_word_after
 	while IFS= read -r secret_env_name; do
-		case "${secret_env_name}" in
+		# Match the name case-insensitively (api_key, Client_Secret), but read
+		# the value through the original name.
+		case "${secret_env_name^^}" in
 			*TOKEN*|*API_KEY*|*SECRET*|*PASSWORD*|PAT|*_PAT|PAT_*|*_PAT_*)
 				;;
 			*)

@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01SLmbVzcitKU2aiKHq634QY   (triggers in the intervention-1 stage report)
 - Last updated: 2026-10-01
-- Last note: review round 6 (workflow round 1 after intervention 1) on head a9b6dcc: fixed multiline secret-named env values (masked line by line) and provider-status context words matching inside longer words; rejected the `review_autofix.yml:345` retry finding as out of scope (file not in this PR).
+- Last note: review round 7 (workflow round 2 after intervention 1) on head b788da3: secret-named env vars are now matched by name in any letter case (`api_key`, `Client_Secret`), value still read through the original name; regression test added. No finding rejected.
 
 ## Phases
-1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 6; interventions: 1 (2026-10-01: autofix-iteration cap reached on 22c5180 with the reviewers skipped; `[claude-intervention]` commit to re-run review, label removed)
+1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 7; interventions: 1 (2026-10-01: autofix-iteration cap reached on 22c5180 with the reviewers skipped; `[claude-intervention]` commit to re-run review, label removed)
 
 ## Conformance
 
@@ -46,6 +46,7 @@
 - [source:intervention] When an exact-line filter (`grep -vxF -f <patterns>`) compares a normalised stream against a pattern file, normalise the pattern file the same way (`-f <(tr -d '\000\r' < file)`): stripping CR from only one side lets every line of a CRLF input escape the match. (files: scripts/security_audit.sh)
 - [source:intervention] In Claude-fixer mode the review run on the head carrying the `MAX_AUTOFIX_ITERATIONS`-th consecutive `[claude-autofix]` commit skips the reviewer panel and labels the PR `ai:review-blocked`, so that round's fix is never reviewed; a `[claude-intervention]` commit (with the log update) ends the run and gets it reviewed. (files: .github/workflows/review_autofix.yml)
 - [source:intervention] A per-line secret mask must split each multiline secret value into its lines (normalised the way the log stream is, CR removed) and mask every non-empty line: a value matched as one string never matches a single log line, so a PEM key's lines all print. (files: scripts/security_audit.sh)
+- [source:intervention] Bash `case` globs are case-sensitive: match secret-looking env var names on `${name^^}` so lowercase and mixed-case names (`api_key`, `Client_Secret`) are masked too, and keep reading the value through the original name. (files: scripts/security_audit.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude from #5785; base branch main; security pass: run (`security_pass_skip.py`: no skip label).

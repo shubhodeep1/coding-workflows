@@ -1110,6 +1110,43 @@ def test_security_audit_codex_stderr_tail_masks_short_secrets_and_unpadded_base6
 		assert secret_fragment not in proc.stderr, secret_fragment
 
 
+def test_security_audit_codex_stderr_masks_lowercase_and_mixed_case_secret_names() -> None:
+	# Review round 2 on PR #5816 head b788da3: secret-named env vars are
+	# matched by name in any letter case, in the tail and in
+	# captured_path_error=, while a non-secret lowercase name stays unmasked.
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "5",
+			"api_key": "lowerKeyValue71",
+			"Client_Secret": "m1x",
+			"auth_token": "authTokenVal88",
+			"plain_setting": "visibleSetting42",
+			"MOCK_CODEX_STDERR": (
+				"auth lowerKeyValue71 No such file or directory\n"
+				"client m1x rejected, keep xm1xy\n"
+				"bearer-less authTokenVal88 and visibleSetting42\n"
+			),
+		},
+	)
+	assert proc.returncode == 5, proc.stderr
+	_, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == [
+		"auth\\ \\[redacted\\]\\ No\\ such\\ file\\ or\\ directory",
+		"client\\ \\[redacted\\]\\ rejected\\,\\ keep\\ xm1xy",
+		"bearer-less\\ \\[redacted\\]\\ and\\ visibleSetting42",
+	], tail_payloads
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "\\[redacted\\]" in path_error_lines[0], path_error_lines
+	for secret_fragment in ("lowerKeyValue71", " m1x ", "authTokenVal88"):
+		assert secret_fragment not in proc.stderr, secret_fragment
+
+
 def test_security_audit_codex_stderr_masks_each_line_of_multiline_secrets() -> None:
 	# Review round 1 on PR #5816 head a9b6dcc: a multiline secret-named value
 	# (a PEM key, CRLF or LF) is masked line by line in the tail and in
