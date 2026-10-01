@@ -4401,6 +4401,19 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 	assert broken_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "fallback_full_random_pick_failed"
 	assert broken_result["active_models"] == reviewer_models
 
+	# A sha256sum that prints junk (same text for every model) must fail open
+	# too, rather than ranking models by name.
+	with tempfile.TemporaryDirectory(prefix="review-tier-junksha-") as fake_bin:
+		fake_sha = Path(fake_bin) / "sha256sum"
+		fake_sha.write_text("#!/bin/sh\necho deadbeef\n", encoding="utf-8")
+		fake_sha.chmod(0o755)
+		junk_result = _run_review_tier_harness(
+			diff_text=standard_diff,
+			extra_env={**unpinned, "PR_NUMBER": "4242", "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+		)
+	assert junk_result["REVIEW_TIER_REASON"] == "random_reviewer_pick_failed"
+	assert junk_result["active_models"] == reviewer_models
+
 	# A repo that sets the variables keeps exactly those reviewers.
 	pinned_result = _run_review_tier_harness(
 		diff_text=standard_diff,
@@ -4432,6 +4445,46 @@ def test_review_tier_protected_paths_match_deterministic_skip_gate() -> None:
 		match = re.search(rf'^{constant} = \(\n\t"([^"]+)"\n\)\.split\("\|"\)', reviewers, flags=re.MULTILINE)
 		assert match, f"{constant} not found in scripts/review_run_reviewers.sh"
 		assert match.group(1) == gate_pattern.strip(), constant
+
+	# Same strings are not enough: the matchers must agree too. Run the gate's
+	# own bash `case` patterns and the resolver's Python matcher on the same
+	# paths, nested ones included.
+	start = reviewers.index("PROTECTED_BASENAMES = (")
+	end = reviewers.index("def diff_side_paths(")
+	namespace: dict[str, object] = {}
+	exec("from fnmatch import fnmatchcase\n" + reviewers[start:end], namespace)
+	is_protected_path = namespace["is_protected_path"]
+	basenames, path_globs, basename_globs, root_globs = (pattern.strip() for pattern in gate_patterns)
+	bash_check = (
+		"check() {\n"
+		"\tlc_fname=\"${1,,}\"; lc_base=\"${lc_fname##*/}\"; result=false\n"
+		f"\tcase \"${{lc_base}}\" in {basenames}) result=true ;; esac\n"
+		f"\tcase \"${{lc_fname}}\" in {path_globs}) result=true ;; esac\n"
+		f"\tcase \"${{lc_base}}\" in {basename_globs}) result=true ;; esac\n"
+		"\tif [ \"${lc_fname}\" = \"${lc_base}\" ]; then\n"
+		f"\t\tcase \"${{lc_base}}\" in {root_globs}) result=true ;; esac\n"
+		"\tfi\n"
+		"\tprintf '%s\\n' \"${result}\"\n"
+		"}\n"
+		"for path in \"$@\"; do check \"${path}\"; done\n"
+	)
+	sample_paths = [
+		"scripts/sub/README.md", "scripts/x.py", ".github/CODEOWNERS", ".github/workflows/ci.yml",
+		".claude/hooks/a.py", "db/contracts/x/y.yml", "docs/AGENTS.md", "CLAUDE.md", "src/app.py",
+		"src/lib/util.ts", "docs/guide.md", "README.md", "src/Dockerfile", "web/package.json",
+		"package.json", "pyproject.toml", "src/pyproject.toml", "src/config.yaml", "app/run.sh",
+		"src/.eslintrc.json", "tests/test_x.py", "lib/settings.gradle.kts", "notes/todo.txt",
+	]
+	bash_result = subprocess.run(
+		["bash", "-c", bash_check, "check", *sample_paths],
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	bash_verdicts = bash_result.stdout.split()
+	assert len(bash_verdicts) == len(sample_paths)
+	for path, bash_verdict in zip(sample_paths, bash_verdicts):
+		assert is_protected_path(path) == (bash_verdict == "true"), path
 
 
 def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:

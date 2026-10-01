@@ -1451,6 +1451,10 @@ PROTECTED_ROOT_BASENAME_GLOBS = (
 ).split("|")
 
 
+# fnmatchcase is not path-aware: its "*" also matches "/" (unlike glob or
+# pathlib), the same as the gate's bash `case`, so "scripts/*" covers nested
+# paths such as scripts/sub/README.md. The parity test checks this against the
+# gate's own patterns.
 def is_protected_path(path):
 	lower_path = path.lower()
 	lower_base = lower_path.rsplit("/", 1)[-1]
@@ -1476,7 +1480,7 @@ def diff_side_paths(diff_path):
 		return side_paths
 	with open(diff_path, encoding="utf-8", errors="replace") as handle:
 		for line in handle:
-			line = line.rstrip("\n")
+			line = line.rstrip("\r\n")
 			# git wraps paths with special characters in double quotes
 			# ("--- \"a/x y\"", "rename from \"x y\""); drop them so the
 			# globs still see the path.
@@ -1570,16 +1574,25 @@ reviewer_pick_seeded_models() {
   local seed="$2"
   shift 2
   local model
+  local model_hash
+  local ranked_rows=""
   local -A picked_map=()
+
+  # Every hash must be a real sha256 digest; anything else (sha256sum
+  # missing or failing) prints nothing, and the caller's count check then
+  # fails open to the full panel.
+  for model in "$@"; do
+    model_hash="$(printf '%s:%s' "${seed}" "${model}" | sha256sum 2>/dev/null | cut -c1-64)" || model_hash=""
+    if [[ ! "${model_hash}" =~ ^[0-9a-f]{64}$ ]]; then
+      return 0
+    fi
+    ranked_rows+="${model_hash} ${model}"$'\n'
+  done
 
   while IFS= read -r model; do
     [ -z "${model}" ] && continue
     picked_map["${model}"]=1
-  done < <(
-    for model in "$@"; do
-      printf '%s %s\n' "$(printf '%s:%s' "${seed}" "${model}" | sha256sum | cut -c1-64)" "${model}"
-    done | LC_ALL=C sort | awk -v limit="${count}" 'NR <= limit { print $2 }'
-  )
+  done < <(printf '%s' "${ranked_rows}" | LC_ALL=C sort | awk -v limit="${count}" 'NR <= limit { print $2 }')
 
   for model in "$@"; do
     if [ -n "${picked_map["${model}"]:-}" ]; then
