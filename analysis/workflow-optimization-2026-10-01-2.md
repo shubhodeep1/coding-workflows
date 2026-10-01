@@ -122,3 +122,122 @@ The available `run_started_at` values do not provide an independent job-queue me
 Serena tool calls and per-tool response-byte breakdown: **zero; no tools observed**. **Other MCP servers observed:** none with a validated `<NAME>_QUERY`, `<NAME>_FALLBACK`, or `<NAME>_PROBE` event; `ORCH_QUERY` in an echoed issue-status script is a shell variable, not an MCP event.
 
 **GH API summary:** observed quota failures: **one** trusted-gate run (36823474603); observed successful sweep dispatches: **38** in run 36827159870; documented per-candidate PR reads: **62 candidates** in run 36826677118. **Actual API calls by endpoint, pagination, retries, and rate-limit remaining: not collected.** Collector coverage is **30 downloaded full-log runs** versus **123 context rows with log telemetry**; **962 runs were not selected for log download**, and 919 of those have no `log_summary`. Collect unique usage-event IDs, endpoint-class counters, queue timestamps, and terminal-failure usage before projecting fleet-wide savings.
+
+## Deep Audit — Workflows & Scripts (2026-10-01)
+
+### Section 1: Bug & Correctness Sweep
+
+Read-only coverage: all 52 workflow YAML files parsed; all 97 shell scripts passed `bash -n`; all 62 Python scripts passed AST parsing. The findings below trace specific execution paths. They do not repeat the resolver, reviewer-latency, cost-deduplication, or trusted-gate failures already covered in the report.
+
+- **ID:** SEC-001 · **File:** `scripts/review_merge_train.sh:410-418`; `.github/workflows/internal-review.yml:25-73` · **Severity:** High · **Category:** `security`  
+  **Description:** Merge-train release tries `internal-review.yml` with `--ref "${head}"`. That selects the workflow definition on an unmerged PR branch, while `internal-review.yml` has write permissions and inherits secrets. The sweep explicitly avoids this same head-ref dispatch because an unmerged branch could supply its own workflow code (`.github/workflows/review_autofix_sweep.yml:318-337`). This is an inference about the release path’s exposure, not an observed exploit.  
+  **Recommended fix:** Dispatch `internal-review.yml` from the trusted default ref, passing only the validated PR number and existing inputs. Retain head-bound review inside the trusted reusable workflow; test release from a PR branch that changes its workflow file.
+
+- **ID:** BUG-001 · **File:** `.github/workflows/review_autofix_sweep.yml:177-240` · **Severity:** High · **Category:** `bug`  
+  **Description:** Each of six active-run status reads ends in `|| true`. A failed read can therefore produce a successful but incomplete—or empty—snapshot; the sweep then treats omitted active runs as absent and can dispatch another review.  
+  **Recommended fix:** Record success separately for every status read. On a failed snapshot, make the smallest fresh per-PR active-run lookup before dispatch; if that lookup also fails, skip that PR for this tick rather than asserting that no run exists.
+
+- **ID:** BUG-002 · **File:** `scripts/claude_pr_sweep.py:146-156`; `scripts/claude_issue_intake.sh:264-270`; `scripts/claude_issue_route.py:1176-1196` · **Severity:** Medium · **Category:** `bug`  
+  **Description:** Three open-queue readers request `per_page=100` without fetching subsequent pages. If the queue exceeds 100 open items, deduplication or pickup can miss an existing item. The separate PR-candidate listing already uses a paginated reader (`scripts/claude_pr_sweep.py:115-129`).  
+  **Recommended fix:** Centralize bounded, complete queue pagination in `claude_issue_route.fetch_open_queue`, preserving the queue-token identity where required. Fail the dedupe read rather than treating an incomplete queue as complete; test an item on page two.
+
+- **ID:** BUG-003 · **File:** `scripts/review_merge_train.sh:402-430,434-448`; `.github/workflows/internal-review.yml:1-8` · **Severity:** Medium · **Category:** `bug`  
+  **Description:** Release checks only the first 100 *repository-wide* runs and keeps only `head_branch`. A trusted default-branch `workflow_dispatch` review is instead identified by `pr:<N>` in its display title. Such a review can be absent from this guard even while active.  
+  **Recommended fix:** Reuse the sweep’s workflow/status-scoped, paginated snapshot and its validated `pr:<N>` key; match queued PRs by number as well as head branch. Preserve the existing leave-queued behavior when the read fails.
+
+- **ID:** BUG-004 · **File:** `scripts/review_merge_train.sh:275-291` · **Severity:** Medium · **Category:** `bug`  
+  **Description:** `_mt_upsert_comment` returns success after a failed marker PATCH or POST because both writes end in `|| true`. Its callers cannot distinguish a persisted queue/release marker from one that was never written.  
+  **Recommended fix:** Return the write status. Have callers warn and retain their existing conservative label/dispatch handling when marker persistence fails.
+
+- **ID:** BUG-005 · **File:** `scripts/claude_pr_sweep.py:159-173,176-194,251-265` · **Severity:** Medium · **Category:** `bug`  
+  **Description:** A successful queue POST with missing or invalid response JSON returns `None`; `sweep` still increments `queued`, adds the PR to its dedupe set, and attempts a binding that refuses a missing queue number. A binding failure likewise leaves a reported queued item the pickup cannot trust. The frequency of either response or binding failure needs verification. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Distinguish `posted_unbound` from `queued`. Validate the returned issue number, reconcile an ambiguous successful POST before any retry, and count success only after the binding is written; retain an observable recovery path for unbound items.
+
+- **ID:** SEC-002 · **File:** `scripts/gh_helpers.sh:439-492,610-660`; `.github/workflows/review_autofix.yml:5110-5121` · **Severity:** Medium · **Category:** `security`  
+  **Description:** Retry failures print full command arguments (`$*`), and invalid-JSON retries print the first 50 response lines. One unsuppressed caller passes an editor comment body as a command argument. If that body or a malformed API response contains sensitive material, the helper repeats it in workflow logs; the contents of failing live responses were not verified. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Log command/endpoint class, status, and attempt—not argument values or response bodies. Keep bounded diagnostic details in protected temporary files and use fixed reason codes in annotations.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are **code-path estimates**, not measured requests. Pagination, retries, and failures can increase them. The prior report already covers the per-candidate read in `claude_pr_sweep.py` and the trusted review-gate read; neither is reissued as a finding here.
+
+- **ID:** API-001 · **File:** `scripts/review_merge_train.sh:255-290` · **Severity:** Medium · **Category:** `api-redundancy`  
+  **Description:** For an existing marker, a paginated comments read returns only its ID, then `_mt_upsert_comment` performs a second GET solely for its body. **Calls:** two reads per existing marker → one; pagination pages remain unchanged.  
+  **Recommended fix:** Return `{id, body}` from the existing comments read and pass that snapshot into `_mt_upsert_comment`, retaining PATCH failure handling. Extend the script’s existing per-PR comment lookup; no new GraphQL batching helper is needed.
+
+- **ID:** API-002 · **File:** `scripts/gh_helpers.sh:610-660,678-727` · **Severity:** Medium · **Category:** `api-redundancy`  
+  **Description:** Unlike `gh_retry`, `gh_api_json_to_file` does not apply `_is_gh_permanent_failure` to a failed command; `curl_gh_api` retries non-rate-limited HTTP failures indiscriminately. **Calls:** on a permanent 404/422, up to five attempts by default → one.  
+  **Recommended fix:** Reuse `_is_gh_permanent_failure` for the JSON wrapper and classify permanent HTTP statuses in the curl wrapper. Preserve bounded backoff for transient errors and rate limits. **Batching pattern:** none; this is retry hygiene within `gh_helpers.sh`.
+
+- **ID:** BATCH-001 · **File:** `scripts/review_merge_train.sh:123-136,194-230` · **Severity:** Medium · **Category:** `api-batching`  
+  **Description:** Blocker evaluation reads changed files through a REST request for each distinct older PR, even though its cache prevents repeat reads within the run. **Calls:** one open-PR listing plus approximately `N` file-list reads for `N` eligible PRs with at most 100 files each → one listing plus `ceil(N/25)` aliased GraphQL reads, with extra calls for file pagination or REST fallback. Query cost and file-list parity need verification. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Trial a 25-PR alias batch using the input/output and cache-miss contract of `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh:14686-14716`). Check each PR’s file-list `pageInfo`; fall back to the existing `_mt_pr_files_into` read for a missing, failed, or over-page entry.
+
+- **ID:** BATCH-002 · **File:** `scripts/review_resolve_review_threads.sh:165-207,267-339` · **Severity:** Medium · **Category:** `api-batching`  
+  **Description:** After a paginated thread read, each eligible thread gets its own `resolveReviewThread` mutation; ignored dispositions can additionally require one REST reply. **Calls:** `ceil(T/100) + N + R` for `T` thread-list pages’ items, `N` eligible resolutions, and `R` required replies → potentially `ceil(T/100) + ceil(N/25) + R` with aliased mutation batches. Alias behavior and partial-error isolation need verification. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Extend the 25-item alias construction pattern of `_fetch_linked_pr_status_graphql` (`scripts/orchestrate_poll_process.sh:14837-14861`) for mutations. Batch only threads whose required replies succeeded, verify each alias result independently, and fall back to individual mutations for an ambiguous batch.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID:** DUP-001 · **File:** `.github/workflows/clarify.yml:61-131`; `.github/workflows/orchestrate_clarify_respond.yml:115-185`; `.github/workflows/implement.yml:445-515` · **Severity:** Low · **Category:** `duplication`  
+  **Description:** These three integration-ref staging `run:` bodies are identical in the workflow inventory.  
+  **Recommended fix:** Put the staging and trusted-ref fallback in a new `scripts/resolve_integration_ref_bootstrap.sh` function `resolve_integration_ref_bootstrap(issue_number, repository, support_ref, stage_root)`, returning the resolved ref on stdout. Update all three callers while preserving their trusted-source checkout and default-ref fallback.
+
+- **ID:** DUP-002 · **File:** `.github/workflows/mark-stable.yml:698-848`; `.github/workflows/test-and-mark-stable.yml:5728-5878` · **Severity:** Low · **Category:** `duplication`  
+  **Description:** The two tag-and-stable-pointer step bodies are identical, including `publish_tag_with_remote_verification`; a publication-safety change must currently be synchronized twice. `scripts/mark-stable.sh:1-7` documents a related CLI path.  
+  **Recommended fix:** Extract `publish_release_tags(version_tag, source_branch)` into a new `scripts/release_tag_publish.sh`, invoked by both workflow steps. Compare the CLI path before sharing it, and preserve immutable-tag versus moving-pointer semantics and remote verification.
+
+- **ID:** DUP-003 · **File:** `.github/workflows/review_autofix.yml:1839-1842,5689-5708,5880-5894,7053-7063`; `scripts/label_helpers.sh:149-182` · **Severity:** Low · **Category:** `duplication`  
+  **Description:** Four inline label-creation fallbacks repeat parts of the canonical label catalog, with different locally specified colors and descriptions.  
+  **Recommended fix:** Use the existing `ensure_label_exists(label_name, repo)` from `scripts/label_helpers.sh` at each caller from a verified support location. Where late cleanup makes that helper unavailable, put one minimal fallback in a shared `scripts/review_label_fallbacks.sh` rather than maintaining four divergent definitions.
+
+- **ID:** DUP-004 · **File:** `.github/workflows/plan.yml:92-120`; `.github/workflows/workflow-log-analysis.yml:232-253,720-746,1407-1433,1919-1945` · **Severity:** Low · **Category:** `duplication`  
+  **Description:** Codex tool-cache save bodies repeat five times and restore bodies repeat across the same workflows. The plan job currently performs this work before its repository checkout (`.github/workflows/plan.yml:71-90`), so simply calling a local script would change staging order. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Stage a trusted new `scripts/codex_tool_cache.sh` before use, with `codex_tool_cache_save(cache_dir)` and `codex_tool_cache_restore(cache_dir)`. Update those steps only after testing the pre-checkout plan path and its cache-hit behavior.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+The YAML-scalar scan found 225 interpolated `run:` bodies. Counts are current **template characters**, not unknowable runtime expansion of repository variables. Only one exceeds 15,000; none exceeds 18,000. The longest `if:` scalar is 859 characters (`.github/workflows/internal-clarify.yml:15`).
+
+- **ID:** EXPR-001 · **File:** `.github/workflows/implement.yml:986-1342` · **Severity:** Medium · **Category:** `expression-limit`  
+  **Description:** The interpolated support-staging `run:` body is approximately **16,985 characters**, leaving approximately **4,015** before the stated 21,000-character expression threshold, prior to runtime substitution. Its three `${{ }}` references make it eligible for this assessment; exact expanded length depends on runtime values. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Extract the body to a verified script under `scripts/`, passing its three expression values through step `env:`. Preserve the staged-support ledger and support-ref checks when doing so.
+
+- **ID:** DEBT-001 · **File:** `.github/workflows/review_autofix.yml:1-20,467-468`; `CLAUDE.md:2163-2188` · **Severity:** Medium · **Category:** `tech-debt`  
+  **Description:** `review_autofix.yml` is **455,461 bytes**, only **24,539 bytes** below this repository’s 480,000-byte CI split guard. The repository contract documents a measured 512,000-byte loading limit, stricter than the 1 MB limit stated for this audit. No workflow exceeds 800 KB. Its large noninterpolated gate body is **not** an expression-limit finding.  
+  **Recommended fix:** Before adding substantial gate logic, move the largest remaining inline step body into a verified `review_autofix_step_<slug>.sh`, following the staged-script and registry procedure in `CLAUDE.md:2173-2188`; retain the 480,000-byte guard.
+
+Large bodies **without** `${{ }}` were excluded from expression counts, including `.github/workflows/implement.yml:2033-3164` and `.github/workflows/review_autofix.yml:467-1563`. No large `if:` or qualifying interpolated inline prompt/heredoc was identified by this scan.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID:** DEAD-001 · **File:** `scripts/review_rb_judge.sh:2121-2144,2204-2222,2254-2263` · **Severity:** Low · **Category:** `dead-code`  
+  **Description:** `PR_HEAD_SHA` is assigned from the PR payload but never subsequently read; merge binding actually uses `RB_JUDGED_HEAD_SHA`. The adjacent comment attributes the eventual binding to the unused capture.  
+  **Recommended fix:** Remove the unused assignment and correct the comment. Keep the existing judged-SHA validation, check-run gate, and `--match-head-commit` binding unchanged.
+
+- **ID:** SHELL-001 · **File:** `scripts/orchestrate_poll_process.sh:9262-9267,9281-9311` · **Severity:** Low · **Category:** `shellcheck`  
+  **Description:** ShellCheck flags `local now_epoch="$(date +%s)"` as SC2155: `local` masks a failed command substitution. The later arithmetic and JSON update assume a numeric epoch. The effect of a `date` failure in a live run is unverified. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Declare `now_epoch` separately, check the `date` result and its numeric shape, then skip this advisory staleness update on failure.
+
+The target-file scan found no `TODO`, `FIXME`, or `HACK` markers. ShellCheck reported 40 warnings across the shell scripts; warnings involving intentional glob-pattern matching or dynamically assigned output variables were not promoted to findings without a demonstrated defect.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | SEC-001, BUG-001 |
+| Medium | 11 | BUG-002, BUG-003, BUG-004, BUG-005, SEC-002, API-001, API-002, BATCH-001, BATCH-002, EXPR-001, DEBT-001 |
+| Low | 6 | DUP-001, DUP-002, DUP-003, DUP-004, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 3: `review_merge_train.sh`, `review_autofix_sweep.yml`, `internal-review.yml` | Medium |
+| API call optimization | 3 existing scripts: `review_merge_train.sh`, `gh_helpers.sh`, `review_resolve_review_threads.sh` | Large |
+| Code modularization | 7 workflow files, existing helpers, and up to 4 new shared scripts | Large |
+| Expression size reduction | `implement.yml`, `review_autofix.yml`, and extracted support scripts | Medium |
+| Medium/Low fixes | Queue producer/readers, `review_rb_judge.sh`, `orchestrate_poll_process.sh`, and logging callers | Medium |
