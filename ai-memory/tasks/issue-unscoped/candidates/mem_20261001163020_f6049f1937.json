@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:569-570 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: The bound-review filter admits push-triggered internal-review.yml runs from the PR head branch as reviews of the PR, allowing a successful no-PR push run to mask a failed PR review and permit auto-merge.\n  WHY: The reviewers rate this BLOCKER (Gemini and OpenAI) versus MAJOR (DeepSeek); using the highest severity, these runs can be selected as the latest successful review and cause the pending-checks evaluator to enable auto-merge despite a failed PR review.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py:569-570 | severity=high | confidence=3\n  PROBLEM: The filter admits push-triggered internal-review.yml runs as bound reviews; a successful no-PR push review can let an older pending-checks marker enable auto-merge despite a real failed PR review.\n  WHY: internal-review.yml fires on push events to claude/** branches (lines 22-24 of internal-review.yml). The resolve-claude-branch-pr job uses raw gh api without gh_retry (line 138). If a transient API failure persists through the grace window, the successful no-PR push run can pass the filter and become the newest bound review, masking a failed review.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/claude_fixer_pending_checks.py:569-570 | severity=critical | confidence=5\n  PROBLEM: The branch_runs filter admits internal-review.yml push runs as bound PR reviews; a successful no-op push run can be selected as the latest review and allow auto-merge despite a failed real review.\n  WHY: In .github/workflows/internal-review.yml:22-24, pushes to claude/** branches trigger the workflow on push events in addition to pull_request events. When an open pull request already exists, resolve-claude-branch-pr outputs proceed=false and exits 0 (lines 158-167), skipping the review job and completing the workflow run with conclusion \"success\". Because line 570 only checks run.get(\"event\") != \"workflow_dispatch\", this no-op push run is treated as a valid bound review of the PR. If a real review run (such as the parallel pull_request event run) failed, but the push event run received a higher Actions run ID or ran on a subsequent push to the branch, max(newer, key=lambda run: run[\"id\"]) selects the push run as the latest review. Since its conclusion is \"success\", check_review_runs() returns None instead of review_superseded, allowing evaluate() to enable auto-merge on a PR whose actual review failed. Only runs with run.get(\"event\") == \"pull_request\" should be admitted from branch_runs as bound PR reviews.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_fixer_pending_checks.py:569-570 | severity=critical | confidence=5\n  PROBLEM: A successful no-PR push review can be counted as a review of the PR because it ran from the PR's head branch using internal-review.yml.\n  WHY: scripts/claude_fixer_pending_checks.py:569-570 includes every matching head-branch run except `workflow_dispatch` as a bound review. In `.github/workflows/internal-review.yml:138-156,172,182-194`, failed PR lookups are treated as \u201cno PR\u201d and the push route proceeds to the no-PR review. `.github/workflows/review_autofix.yml:591-609` runs that route as reviewer-panel and commit-comment-only. When the PR lookup fails through the grace window, a successful `push` run can become the latest bound review, masking a newer failed PR review; the pending-checks evaluator can then enable auto-merge using the older marker.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "30a5a2d4cdeb8f4395a377a2fa171ac03f3c33c2ea4e14fbbb714ea638e1b159",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5929,
+    "run_id": "36881144161",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36881144161",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001163020_f6049f1937",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5929,
+    "run_id": "36881144161"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T16:30:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
