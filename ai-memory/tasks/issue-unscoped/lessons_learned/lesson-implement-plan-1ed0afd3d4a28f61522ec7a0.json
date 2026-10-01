@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T08:45:11Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A merged PR's `base.sha` from the REST API is a stale snapshot, not the tip it merged onto (#5637: `base.sha` 1084dfd, merge parent 5aa792d), so it cannot prove which base commit a merge used; and a revoke that follows a separate read needs one more read to rule out a merge in between.",
+  "phase": "implement_plan",
+  "pr_number": 5917,
+  "record_id": "lesson-implement-plan-1ed0afd3d4a28f61522ec7a0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5905-pending-merge-base-retarget-race",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}

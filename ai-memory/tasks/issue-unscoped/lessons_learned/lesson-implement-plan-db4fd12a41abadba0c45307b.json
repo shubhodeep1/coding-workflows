@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T08:45:11Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A read-compare guard placed in a caller is only as fresh as its read: re-check the guarded value in the helper that makes the final read before the write, and verify again after a write that the API cannot bind atomically.",
+  "phase": "implement_plan",
+  "pr_number": 5917,
+  "record_id": "lesson-implement-plan-db4fd12a41abadba0c45307b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-5905-pending-merge-base-retarget-race",
+    "file:scripts/claude_fixer_pending_checks.py",
+    "file:scripts/review_enable_auto_merge.sh"
+  ]
+}
