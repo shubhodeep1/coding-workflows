@@ -616,6 +616,7 @@ jobs:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
           # ISSUE_TITLE scopes the run-ID capture to OUR Clarify run via
           # display_title (the issue title for issues / issue_comment runs).
+          # Release run 36374918973 recorded another issue's Clarify run without it.
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
         run: |
           set -euo pipefail
@@ -628,7 +629,9 @@ jobs:
 
           # The run-ID capture below matches runs by display_title, so an
           # empty title is a missing input: fail before polling, as wait-plan
-          # does (PR #5035 review).
+          # does (PR #5035 review). An empty title would also turn off the
+          # lookup's title filter and bring back the unscoped lookup of run
+          # 36374918973.
           if [ -z "${ISSUE_TITLE}" ]; then
             echo "::error::Missing issue title for Clarify run scoping"
             echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
@@ -652,36 +655,18 @@ jobs:
             local name_re="$1"
             local result=""
             local _attempt
-            local scoped_lookup_page=1
-            local scoped_lookup_json=""
-            local scoped_lookup_count=""
-            local scoped_lookup_capped=0
+            local scoped_lookup_rc=0
             for _attempt in 1 2 3 4 5; do
-              scoped_lookup_page=1
-              scoped_lookup_capped=0
-              while [ "$scoped_lookup_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
-                scoped_lookup_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${scoped_lookup_page}&created=>${{ steps.create-issue.outputs.created_after }}" || echo "")
-                # gh_api_safe_print prints its ::error:: line to stdout on a failed
-                # read, so shape-check the page before trusting it.
-                if ! printf '%s' "$scoped_lookup_json" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1; then
-                  break
-                fi
-                result=$(printf '%s' "$scoped_lookup_json" \
-                  | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
-                if [ -n "$result" ] && [ "$result" != "null" ]; then
-                  printf '%s' "$result"
-                  return 0
-                fi
-                scoped_lookup_count=$(printf '%s' "$scoped_lookup_json" | jq -r '.workflow_runs | length' 2>/dev/null || echo "")
-                if ! [[ "$scoped_lookup_count" =~ ^[0-9]+$ ]] || [ "$scoped_lookup_count" -lt 100 ]; then
-                  break
-                fi
-                if [ "$scoped_lookup_page" -eq "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; then
-                  scoped_lookup_capped=1
-                fi
-                scoped_lookup_page=$((scoped_lookup_page + 1))
-              done
-              if [ "$scoped_lookup_capped" -eq 1 ]; then
+              scoped_lookup_rc=0
+              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${{ steps.create-issue.outputs.created_after }}" "${name_re}" "${ISSUE_TITLE:-}" "id" "${SCOPED_RUN_LOOKUP_MAX_PAGES}") || scoped_lookup_rc=$?
+              if [ -n "$result" ] && [ "$result" != "null" ]; then
+                printf '%s' "$result"
+                return 0
+              fi
+              # Exit 2: every page up to the cap was full and none held our
+              # run, so a retry would repeat the same reads. A short or
+              # unreadable window (exit 0 or 1) is retried.
+              if [ "$scoped_lookup_rc" -eq 2 ]; then
                 break
               fi
               sleep 2
@@ -824,37 +809,18 @@ jobs:
           # matching run from the first page that holds a match, so the common
           # case stays one API call. Stops at a short page (end of the window)
           # or after the optional third argument's page count (default
-          # PLAN_RUN_LOOKUP_MAX_PAGES). Returns 1 when a page cannot be read,
-          # and 2 when every page up to the cap was full and none matched.
+          # PLAN_RUN_LOOKUP_MAX_PAGES). Returns 1 when a page cannot be read
+          # (find_latest_scoped_run_field shape-checks each page, because
+          # gh_api_safe_print echoes its "::error::gh api call failed" line to
+          # stdout; PR #4730 conformance audit), and 2 when every page up to
+          # the cap was full and none matched. The paging itself lives in
+          # find_latest_scoped_run_field in
+          # scripts/comprehensive_test_and_release_gh_api.sh.
           latest_scoped_run_field() {
             local name_re="$1"
             local field="$2"
             local lookup_max_pages="${3:-$PLAN_RUN_LOOKUP_MAX_PAGES}"
-            local runs_json=""
-            local lookup_page=1
-            local page_value=""
-            local page_count=""
-            while [ "$lookup_page" -le "$lookup_max_pages" ]; do
-              runs_json=$(fetch_plan_runs_page_json "$lookup_page" || echo "")
-              [ -n "$runs_json" ] || return 1
-              # gh_api_safe_print echoes its "::error::gh api call failed"
-              # line to stdout, so a failed read arrives here as text, not as
-              # an empty string; without this check it ended the walk as a
-              # short page (PR #4730 conformance audit).
-              printf '%s' "$runs_json" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 || return 1
-              page_value=$(printf '%s' "$runs_json" \
-                | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" --arg field "$field" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .[$field] // empty' 2>/dev/null || echo "")
-              if [ -n "$page_value" ] && [ "$page_value" != "null" ]; then
-                printf '%s' "$page_value"
-                return 0
-              fi
-              page_count=$(printf '%s' "$runs_json" | jq -r '.workflow_runs | length' 2>/dev/null || echo "")
-              if ! [[ "$page_count" =~ ^[0-9]+$ ]] || [ "$page_count" -lt 100 ]; then
-                return 0
-              fi
-              lookup_page=$((lookup_page + 1))
-            done
-            return 2
+            find_latest_scoped_run_field "${TEST_REPO}" "${{ steps.create-issue.outputs.created_after }}" "$name_re" "$ISSUE_TITLE" "$field" "$lookup_max_pages"
           }
 
           # Both success exits need the issue-scoped Plan run ID: without it
@@ -1111,6 +1077,7 @@ jobs:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
           # ISSUE_TITLE scopes the run-ID capture to OUR Implement run via
           # display_title (the issue title for issues / issue_comment runs).
+          # Release run 36374918973 recorded another issue's Clarify run without it.
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
         run: |
           set -euo pipefail
@@ -1130,7 +1097,9 @@ jobs:
 
           # The run-ID capture below matches runs by display_title, so an
           # empty title is a missing input: fail before polling, as wait-plan
-          # does (PR #5035 review).
+          # does (PR #5035 review). An empty title would also turn off the
+          # lookup's title filter and bring back the unscoped lookup of run
+          # 36374918973.
           if [ -z "${ISSUE_TITLE}" ]; then
             echo "::error::Missing issue title for Implement run scoping"
             echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
@@ -1163,36 +1132,18 @@ jobs:
             local name_re="$1"
             local result=""
             local _attempt
-            local scoped_lookup_page=1
-            local scoped_lookup_json=""
-            local scoped_lookup_count=""
-            local scoped_lookup_capped=0
+            local scoped_lookup_rc=0
             for _attempt in 1 2 3 4 5; do
-              scoped_lookup_page=1
-              scoped_lookup_capped=0
-              while [ "$scoped_lookup_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
-                scoped_lookup_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${scoped_lookup_page}&created=>${IMPL_CREATED_AFTER}" || echo "")
-                # gh_api_safe_print prints its ::error:: line to stdout on a failed
-                # read, so shape-check the page before trusting it.
-                if ! printf '%s' "$scoped_lookup_json" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1; then
-                  break
-                fi
-                result=$(printf '%s' "$scoped_lookup_json" \
-                  | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
-                if [ -n "$result" ] && [ "$result" != "null" ]; then
-                  printf '%s' "$result"
-                  return 0
-                fi
-                scoped_lookup_count=$(printf '%s' "$scoped_lookup_json" | jq -r '.workflow_runs | length' 2>/dev/null || echo "")
-                if ! [[ "$scoped_lookup_count" =~ ^[0-9]+$ ]] || [ "$scoped_lookup_count" -lt 100 ]; then
-                  break
-                fi
-                if [ "$scoped_lookup_page" -eq "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; then
-                  scoped_lookup_capped=1
-                fi
-                scoped_lookup_page=$((scoped_lookup_page + 1))
-              done
-              if [ "$scoped_lookup_capped" -eq 1 ]; then
+              scoped_lookup_rc=0
+              result=$(find_latest_scoped_run_field "${TEST_REPO}" "${IMPL_CREATED_AFTER}" "${name_re}" "${ISSUE_TITLE:-}" "id" "${SCOPED_RUN_LOOKUP_MAX_PAGES}") || scoped_lookup_rc=$?
+              if [ -n "$result" ] && [ "$result" != "null" ]; then
+                printf '%s' "$result"
+                return 0
+              fi
+              # Exit 2: every page up to the cap was full and none held our
+              # run, so a retry would repeat the same reads. A short or
+              # unreadable window (exit 0 or 1) is retried.
+              if [ "$scoped_lookup_rc" -eq 2 ]; then
                 break
               fi
               sleep 2
