@@ -29,7 +29,7 @@ $ARGUMENTS
    - **Fresh code** (`— wake.` and `— arm-check-in` mode). When `git status --porcelain` is empty, run `git fetch origin main` and `git checkout -B main origin/main`, so the wake reads the current command file and scripts.
    - **Mode `— arm-check-in`** → skip steps 1–4 and go to step 5.
 
-1. **Keep exactly one pickup.** Call `list_triggers` (`enabled: true`, `limit: 100`; step 3b reuses this result). The pickup's trigger is named `Claude issue pickup: hourly`.
+1. **Keep exactly one pickup.** Call `list_triggers` (`enabled: true`, `limit: 100`; step 3b reuses this result). While the last page read has `has_more`, call it again with the same arguments and `cursor` = that page's `next_cursor`, at most 5 pages in all. With more than 100 enabled Routines, one page cannot show whether a checker has a pending trigger, and the pickup's own trigger can sit on a later page (issue #4910). Every use of step 1's result below reads every page. The pickup's trigger is named `Claude issue pickup: hourly`.
    - **`start`**: if one exists whose `persistent_session_id` is not this session and `$ARGUMENTS` has no `— restart`, report `already running: trigger <id> → session <persistent_session_id>` and end the turn. If one already targets this session, report `already running here` and end the turn. With `— restart`, `delete_trigger` each one bound to another session (and each enabled `Claude issue pickup: catch-up` trigger bound to another session) and `archive_session` that session unless `get_session` shows it `blocked` or waiting on the user. Then create this session's trigger: `create_trigger` with `persistent_session_id` = your session id, `cron_expression` `0 * * * *` (hourly; the server anchors it to the creation minute), `name` `Claude issue pickup: hourly`, `initiation` `human_request`, and the prompt:
      ```
      Read .claude/commands/claude-issue-pickup.md in full and follow it with these arguments:
@@ -59,12 +59,12 @@ $ARGUMENTS
    3. If `create_session` fails twice for an entry, leave its queue issues open (the next wake retries) and record the error for the report. A `lineage depth` refusal means this pickup sits too deep: send one `PushNotification` (`Claude issue pickup: session depth limit — run /claude-issue-pickup start — restart from a new app session`) and stop starting sessions this wake.
 
 3b. **Restart dead project checkers** (issue #4910, operator rule Q63). An `/implement-plan-claude` project checker keeps its chain alive by re-arming itself with `send_later`; when a re-arm fails, nothing is pending and the project stalls. Every `— wake.` and `start` runs this step, also when step 2 found nothing or its read failed.
-   1. **Read the sessions once.** Call `list_sessions` with `mine: true` and `limit: 100`: the newest page, never an `after_id`. When the harness saves the result to a file, pass that file as it is. Otherwise write the result, unchanged, to a file in your scratchpad with the file tool. Do the same with step 1's `list_triggers` result.
+   1. **Read the sessions once.** Call `list_sessions` with `mine: true` and `limit: 100`: the newest page, never an `after_id`. When the harness saves the result to a file, pass that file as it is. Otherwise write the result, unchanged, to a file in your scratchpad with the file tool. Do the same with each `list_triggers` page step 1 read, one file per page.
    2. **Scan**, exactly as written:
       ```
       PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_checker_restart.py scan --sessions-file <sessions file> --triggers-file <triggers file> --repo shubhodeep1/coding-workflows --self <your session id> --state-out <scratchpad>/checker-restart-state.json
       ```
-      The script decides; do not interpret sessions, Routines, or logs yourself. It prints `lookup`: the checker ids to look up, at most 8.
+      When step 1 read more than one page, repeat `--triggers-file` once per page, in the order read. The script treats the listing as complete only when the last file's `has_more` is false, and an incomplete listing restarts and re-queues nothing. The script decides; do not interpret sessions, Routines, or logs yourself. It prints `lookup`: the checker ids to look up, at most 8.
    3. **Look up.** When `lookup` is not empty, call `get_session` on each id. Then write one JSON object to `<scratchpad>/checker-restart-lookup.json` with the file tool. Map each id to:
       - the `get_session` result as returned;
       - `"not_found"` when `get_session` answered that the resource was not found;
@@ -104,6 +104,7 @@ $ARGUMENTS
 - **Only start sessions.** The pickup never reads target issues or pull requests, edits code, comments, labels them, or implements or fixes anything; each target's own session does that under `/implement-issue-claude` or `/fix-claude-pr`. Step 3b is the one exception. For the checkers and issues `scripts/claude_checker_restart.py` prints, the pickup wakes a checker with a one-shot trigger and tags it, or re-queues an issue with one `/reclarify` comment; the script reads the open `ai:claude` issues and their progress logs to decide. A checker it creates in `— arm-check-in` mode gets its instructions from the session that asked for it, never from the pickup.
 - **One pickup, never deeper.** Step 1 keeps a single `Claude issue pickup: hourly` trigger, bound to the pickup session itself. The pickup never creates a session for its own next wake. Its only other wake is the step 4 catch-up: at most one pending at a time, scheduled only by a `start` or hourly wake, never by a catch-up wake, and bound to the pickup session itself. Stop it with `/claude-issue-pickup stop`; move it to a new session with `/claude-issue-pickup start — restart` from that session. Never delete its trigger or archive the pickup session by hand without restarting it, or queued issues wait until the watchdog alerts.
 - **Stay lean.** Each wake is one script call plus, per item, one `create_session`, one `create_trigger`, and one `issue_write`, and at most one `send_later` for the catch-up. Step 3b adds:
+  - up to 4 more `list_triggers` pages in step 1, read only while a page has `has_more`;
   - one `list_sessions` call and two script calls;
   - at most 8 `get_session` calls;
   - one `create_trigger` and one `set_session_tags` per restart;
