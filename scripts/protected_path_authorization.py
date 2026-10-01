@@ -660,6 +660,27 @@ def check_release(
 	if head is None:
 		raise ReadError(f"release head {head_ref} does not resolve to a commit")
 	base = _resolve(base_ref, git_dir)
+	# `base..head` only lists what the candidate adds. A candidate behind the
+	# previous release (or diverged from it) would also roll back protected
+	# changes that release shipped, which no commit in the range shows, so
+	# the release only moves forward: ship a rollback as a revert commit.
+	if base is not None and not _is_ancestor(base, head, git_dir):
+		return {
+			"decision": "block",
+			"checked": 0,
+			"authorized": 0,
+			"grandfathered": 0,
+			"blocked": [{
+				"commit": head,
+				"prs": [],
+				"reason": f"release head {head_ref} does not contain the previous release {base_ref} ({base}); "
+					+ "a release must move forward, so ship a rollback as a revert commit on top of it",
+			}],
+			"base": base,
+			"base_ref": base_ref,
+			"head": head,
+			"gate_arrival": None,
+		}
 	arrival = gate_arrival_commit(head, git_dir)
 	if arrival is None:
 		raise ReadError(f"{GATE_SCRIPT_PATH} has no first-parent history on {head_ref}; cannot place the grandfather boundary")

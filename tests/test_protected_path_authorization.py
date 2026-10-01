@@ -811,6 +811,30 @@ def test_check_release_refuses_a_shallow_checkout(tmp_path):
 		ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(shallow), get=_release_get({}, {}))
 
 
+def test_check_release_blocks_a_head_that_does_not_contain_the_previous_release(tmp_path):
+	# `base..head` is empty for a candidate behind the previous release, so a
+	# release that rolls protected changes back would pass with nothing checked.
+	repo, _arrival = _release_repo(tmp_path)
+	before = _git(repo, "rev-parse", "HEAD")
+	_commit(repo, ".claude/commands/a.md", "two\n", "authorized change")
+	_git(repo, "tag", "-f", "stable")
+	get = _release_get({}, {})
+	same = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=get)
+	assert same["decision"] == "pass" and same["checked"] == 0, "re-releasing the tagged commit ships nothing new"
+
+	rollback = ppa.check_release("o/r", "refs/tags/stable", before, git_dir=str(repo), get=get)
+	assert rollback["decision"] == "block" and rollback["checked"] == 0
+	assert [entry["commit"] for entry in rollback["blocked"]] == [before]
+	assert "does not contain the previous release" in rollback["blocked"][0]["reason"]
+
+	# A diverged candidate drops the previous release's protected change too.
+	_git(repo, "checkout", "-q", "-b", "diverged", before)
+	diverged = _commit(repo, "README.md", "readme\n", "unprotected change on an old base")
+	result = ppa.check_release("o/r", "refs/tags/stable", "HEAD", git_dir=str(repo), get=get)
+	assert result["decision"] == "block" and [entry["commit"] for entry in result["blocked"]] == [diverged]
+	assert ppa.main(["release", "--repo", "o/r", "--base", "refs/tags/stable", "--head", diverged, "--git-dir", str(repo)]) == ppa.EXIT_BLOCKED
+
+
 def test_check_release_without_the_gate_script_fails_closed(tmp_path):
 	repo = tmp_path / "repo"
 	repo.mkdir()

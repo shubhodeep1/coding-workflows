@@ -1224,6 +1224,10 @@ reviews, comments, and conflicts stay a direct §12 request.
       script.
     - A shallow checkout fails the check: its boundary commit would stand in
       for the arrival commit and be grandfathered.
+    - A release only moves forward. A head that does not contain the
+      previous `stable` tag (a rollback, or a history that diverged from
+      it) is blocked with no API read, because the range would hide the
+      protected changes it drops. Ship a rollback as a revert commit.
     - A commit with no merged PR is blocked.
     - To unblock a release, the owner posts the command with the SHA each
       blocked entry's `reason` names (the merged head, or the merge commit
