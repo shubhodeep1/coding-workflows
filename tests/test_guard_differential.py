@@ -19,6 +19,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -659,11 +660,11 @@ def test_guard_differential_steps_find_the_shipped_ci_steps() -> None:
 	steps = gd.guard_differential_steps(CI_WORKFLOW.read_text(encoding="utf-8"))
 	names = [step.splitlines()[0].strip() for step in steps]
 	assert names == [
-		'- name: "Guard differential tests (issue #5174)"',
 		'- name: "Guard differential check (issue #5174)"',
+		'- name: "Guard differential tests (issue #5174)"',
 	]
-	assert "FETCH_HEAD:scripts/guard_differential.py" in steps[1]
-	assert "check-in reminder" not in steps[1]
+	assert "FETCH_HEAD:scripts/guard_differential.py" in steps[0]
+	assert "Event mirror shell tests" not in steps[0]
 
 
 def test_cli_reports_a_verifier_script_change_without_failing(verifier_repo: Path) -> None:
@@ -891,9 +892,11 @@ def _fake_verifier(label: str, code: int) -> str:
 	)
 
 
-def _run_check_step(tmp_path: Path, base_has_verifier: bool) -> subprocess.CompletedProcess:
+def _run_check_step(tmp_path: Path, base_has_verifier: bool, pr_files: dict[str, str] | None = None) -> subprocess.CompletedProcess:
 	"""Run the real `Guard differential check` step body in a checkout of a
-	PR branch whose own verifier exits 3, against a local `origin`."""
+	PR branch whose own verifier exits 3, against a local `origin`.
+	`pr_files` adds further files (path relative to the checkout: text) to
+	the PR's commit."""
 	origin = tmp_path / "origin"
 	origin.mkdir()
 	_git(origin, "init", "-q", "-b", "main")
@@ -914,6 +917,9 @@ def _run_check_step(tmp_path: Path, base_has_verifier: bool) -> subprocess.Compl
 	_git(workspace, "checkout", "-q", "-b", "pr")
 	(workspace / "scripts").mkdir(exist_ok=True)
 	(workspace / "scripts" / "guard_differential.py").write_text(_fake_verifier("head", 3), encoding="utf-8")
+	for relative_path, text in (pr_files or {}).items():
+		(workspace / relative_path).parent.mkdir(parents=True, exist_ok=True)
+		(workspace / relative_path).write_text(text, encoding="utf-8")
 	_git(workspace, "add", "-A")
 	_git(workspace, "commit", "-q", "-m", "pr edits the verifier")
 	runner_temp = tmp_path / "runner-temp"
@@ -956,6 +962,386 @@ def test_ci_step_falls_back_to_the_prs_verifier_with_a_warning(tmp_path: Path) -
 	assert proc.returncode == 3, proc.stdout + proc.stderr
 	assert "VERIFIER=head" in proc.stdout
 	assert "::warning::GUARD_DIFFERENTIAL verifier=head reason=base-has-no-verifier base=main" in proc.stdout
+
+
+def test_ci_step_does_not_import_modules_from_the_checkout(tmp_path: Path) -> None:
+	"""Issue #5327 review round 2: `python3 -c` puts the working directory,
+	the PR's checkout, first on sys.path, so a PR's json.py would run inside
+	the step before the pinned verifier. The step runs it with -P."""
+	marker = tmp_path / "checkout-code-ran"
+	proc = _run_check_step(
+		tmp_path,
+		base_has_verifier=True,
+		pr_files={"json.py": f"open({str(marker)!r}, 'w').close()\n"},
+	)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert not marker.exists()
+	assert "VERIFIER=base" in proc.stdout
+	assert "body='the pr body'" in proc.stdout
+
+
+# The packages `Install Python CI dependencies` installs before the guard
+# differential check (issue #5327). A package's build or install code runs
+# before the check, so the list is pinned here.
+CI_INSTALL_PACKAGES = ("yamllint", "coverage", "pyyaml", "jsonschema", "jinja2", "pytest", "ruff")
+
+# A Python interpreter word in a shell `run:` body: `python3`, `python`,
+# `python3.12`, or a path to one (`/usr/bin/python3`), wherever it sits on a
+# line (after `env`, an assignment, `$(`, a pipe, ...).
+_PYTHON_INTERPRETER_WORD = re.compile(r"(?<![\w.${}/-])(?:[\w.${}-]*/)*python[0-9.]*(?![\w.${}/-])")
+# CPython long options that print and exit without running any code.
+_PYTHON_NO_CODE_LONG_OPTIONS = frozenset({"--help", "--help-all", "--help-env", "--help-xoptions", "--version"})
+
+
+def _is_pinned_script(word: str, script_dir_prefix: str) -> bool:
+	"""A plain file name directly under `script_dir_prefix`: no `..`, no
+	subdirectory, no expansion (issue #5327 review round 4)."""
+	name = word[len(script_dir_prefix):] if word.startswith(script_dir_prefix) else ""
+	return re.fullmatch(r"[\w.-]+", name) is not None and name not in {".", ".."}
+
+
+def _python_invocation_problems(run: str, script_dir_prefix: str) -> list[str]:
+	"""Every Python invocation in a `run:` body that could import code from the
+	checkout (issue #5327 review rounds 2 and 3).
+
+	Parses each invocation's options the way CPython does: short options
+	cluster (`-BP`), `-W` and `-X` take an argument (the rest of the cluster
+	or the next word), and `-c` / `-m` end the options. A `-c` / `-m` call is
+	safe only when `-P` or `-I` came before it; reading the program from stdin
+	(no argument, or `-`) likewise. A script is safe only under
+	`script_dir_prefix`, the pinned verifier's directory. A line the scan
+	cannot parse is reported, never skipped.
+	"""
+	problems = []
+	for line in run.replace("\\\n", " ").splitlines():
+		for match in _PYTHON_INTERPRETER_WORD.finditer(line):
+			call = line[match.start():].strip()
+			lexer = shlex.shlex(line[match.end():], posix=True, punctuation_chars=True)
+			lexer.whitespace_split = True
+			lexer.commenters = ""
+			safe_path = False
+			problem = None
+			try:
+				while True:
+					word = lexer.get_token()
+					if word is None or (word and set(word) <= set(lexer.punctuation_chars)):
+						# Program read from stdin: sys.path[0] is the working directory.
+						problem = None if safe_path else "reads the program from stdin without -P or -I"
+						break
+					if word == "-":
+						problem = None if safe_path else "reads the program from stdin without -P or -I"
+						break
+					if word == "--":
+						word = lexer.get_token() or ""
+						problem = None if _is_pinned_script(word, script_dir_prefix) else f"runs a script outside {script_dir_prefix}: {word!r}"
+						break
+					if word.startswith("--"):
+						name, _, value = word.partition("=")
+						if name in _PYTHON_NO_CODE_LONG_OPTIONS:
+							break
+						if name == "--check-hash-based-pycs":
+							if not value:
+								lexer.get_token()
+							continue
+						problem = f"unknown option {name!r}"
+						break
+					if word.startswith("-"):
+						cluster = word[1:]
+						options_end = False
+						for index, flag in enumerate(cluster):
+							if flag in "PI":
+								safe_path = True
+							elif flag in "cm":
+								problem = None if safe_path else f"runs -{flag} without -P or -I"
+								options_end = True
+								break
+							elif flag in "WX":
+								# The rest of the cluster, or else the next word, is its argument.
+								if index == len(cluster) - 1:
+									lexer.get_token()
+								break
+							elif flag in "hV":
+								options_end = True
+								break
+						if options_end:
+							break
+						continue
+					problem = None if _is_pinned_script(word, script_dir_prefix) else f"runs a script outside {script_dir_prefix}: {word!r}"
+					break
+			except ValueError as error:
+				problem = f"cannot parse: {error}"
+			if problem is not None:
+				problems.append(f"{problem}: {call}")
+	return problems
+
+
+# What the guard differential check step may assign and run (issue #5327
+# review round 4). `-P` does not stop PYTHONPATH, and a PATH, PYTHONSTARTUP,
+# or exported variable reaches the verifier's interpreter, so every
+# assignment and command in the step is allow-listed, not deny-listed.
+# Extend a list only with a name that runs no code from the checkout.
+_CHECK_STEP_ASSIGNMENTS = frozenset({"guard_differential_verifier_dir", "guard_differential_base_verifier", "PYTHONDONTWRITEBYTECODE"})
+_CHECK_STEP_COMMANDS = frozenset({"set", "git", "python3", "mkdir", "cp", "echo", "["})
+# The check step's whole `run:` body (issue #5327 review round 6). Every
+# scan above works one word at a time, and an allowed word still runs
+# anything: `python3 -P -c '<code>'`, `git -c alias.x='!sh' x`, or `cp` of
+# a checkout file into site-packages. Pinning the text closes that class:
+# a change to the step is a change to this copy too, in the same diff, and
+# the scans still state the rules a new body must follow.
+CI_CHECK_STEP_RUN = "\n".join((
+	'set -euo pipefail',
+	'git fetch --no-tags --depth=1 origin "${GUARD_DIFFERENTIAL_BASE_REF}"',
+	'python3 -P -c \'import json, os, sys; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); sys.stdout.write((event.get("pull_request") or {}).get("body") or "")\' > "${RUNNER_TEMP}/guard-differential-pr-body.md"',
+	'guard_differential_verifier_dir="${RUNNER_TEMP}/guard-differential-verifier"',
+	'mkdir -p "${guard_differential_verifier_dir}"',
+	'guard_differential_base_verifier="$(git ls-tree --name-only FETCH_HEAD -- scripts/guard_differential.py)"',
+	'if [ -n "${guard_differential_base_verifier}" ]; then',
+	'  git show "FETCH_HEAD:scripts/guard_differential.py" > "${guard_differential_verifier_dir}/guard_differential.py"',
+	'  echo "GUARD_DIFFERENTIAL verifier=base source=$(git rev-parse FETCH_HEAD):scripts/guard_differential.py"',
+	'else',
+	'  cp scripts/guard_differential.py "${guard_differential_verifier_dir}/guard_differential.py"',
+	'  echo "::warning::GUARD_DIFFERENTIAL verifier=head reason=base-has-no-verifier base=${GUARD_DIFFERENTIAL_BASE_REF}"',
+	'fi',
+	'PYTHONDONTWRITEBYTECODE=1 python3 "${guard_differential_verifier_dir}/guard_differential.py" \\',
+	'  --base-ref FETCH_HEAD \\',
+	'  --pr-body-file "${RUNNER_TEMP}/guard-differential-pr-body.md"',
+))
+# Words that keep the shell at a command position.
+_SHELL_RESERVED_WORDS = frozenset({"if", "then", "elif", "else", "fi", "!", "{", "}", "while", "until", "do", "done"})
+
+
+def _command_substitutions(word: str) -> list[str]:
+	"""The bodies of the `$(...)` substitutions in one shell word."""
+	bodies = []
+	start = word.find("$(")
+	while start != -1:
+		depth, index = 1, start + 2
+		while index < len(word) and depth:
+			depth += {"(": 1, ")": -1}.get(word[index], 0)
+			index += 1
+		bodies.append(word[start + 2:index - 1] if depth == 0 else word[start + 2:])
+		start = word.find("$(", index)
+	return bodies
+
+
+def _shell_command_problems(run: str, allowed_assignments: frozenset[str], allowed_commands: frozenset[str]) -> list[str]:
+	"""Every assignment or command in a `run:` body outside the allow-lists
+	(issue #5327 review round 4).
+
+	Walks the body's simple commands: leading `NAME=value` words must name an
+	allowed variable, and the command word must be an allowed command, which
+	rules out `env`, `export`, `source`, and anything run from the checkout.
+	`set` may not turn on allexport. `$(...)` bodies, quoted or not, are
+	scanned the same way; a backtick substitution or a body the scan cannot
+	parse is reported, never skipped.
+	"""
+	lexer = shlex.shlex(run.replace("\\\n", " ").replace("\n", " ; "), posix=True, punctuation_chars=True)
+	lexer.whitespace_split = True
+	lexer.commenters = ""
+	try:
+		words = list(lexer)
+	except ValueError as error:
+		return [f"cannot parse: {error}"]
+	problems = []
+	operators = set(lexer.punctuation_chars)
+	command_start = True
+	redirect_operand = False
+	command = None
+	for word in words:
+		if word and set(word) <= operators:
+			if "(" in word:
+				# A subshell, `$(`, or a process substitution (`<(`, `>(`,
+				# which shlex returns as one word): its first word is a command
+				# that runs, not a redirection target (review round 5).
+				command_start = True
+				redirect_operand = False
+			elif set(word) & {"<", ">"}:
+				# A redirection: the next word is its target, not a command.
+				redirect_operand = True
+			else:
+				command_start = True
+			continue
+		if "`" in word:
+			problems.append(f"uses a backtick substitution: {word!r}")
+		for body in _command_substitutions(word):
+			problems.extend(_shell_command_problems(body, allowed_assignments, allowed_commands))
+		if redirect_operand:
+			redirect_operand = False
+			continue
+		if command_start:
+			if word in _SHELL_RESERVED_WORDS:
+				continue
+			assignment = re.fullmatch(r"([A-Za-z_]\w*)=.*", word, re.DOTALL)
+			if assignment:
+				if assignment.group(1) not in allowed_assignments:
+					problems.append(f"assigns {assignment.group(1)!r}")
+				continue
+			command_start = False
+			command = word
+			if word not in allowed_commands:
+				problems.append(f"runs {word!r}")
+			continue
+		if command == "set" and (word == "allexport" or re.fullmatch(r"[-+][A-Za-z]*a[A-Za-z]*", word)):
+			problems.append(f"turns on allexport: set {word}")
+	return problems
+
+
+@pytest.mark.parametrize(
+	("run", "expected"),
+	[
+		("set -euo pipefail", None),
+		('PYTHONDONTWRITEBYTECODE=1 python3 "${guard_differential_verifier_dir}/guard_differential.py" \\\n  --base-ref FETCH_HEAD', None),
+		('guard_differential_base_verifier="$(git ls-tree --name-only FETCH_HEAD -- scripts/guard_differential.py)"', None),
+		('git show "FETCH_HEAD:x.py" > "${guard_differential_verifier_dir}/x.py"', None),
+		('if [ -n "${x}" ]; then\n  echo "a=b source=$(git rev-parse FETCH_HEAD)"\nelse\n  cp a b\nfi', None),
+		("python3 -P -c 'import json; json.dumps(1)' > out.txt", None),
+		('PYTHONPATH="${GITHUB_WORKSPACE}" python3 -P -c \'x\'', "assigns 'PYTHONPATH'"),
+		('PYTHONSTARTUP=x PYTHONDONTWRITEBYTECODE=1 python3 -P -c \'x\'', "assigns 'PYTHONSTARTUP'"),
+		('PATH=".:${PATH}"', "assigns 'PATH'"),
+		("guard_differential_verifier_dir=x; PYTHONPATH=. python3 -P -c 'x'", "assigns 'PYTHONPATH'"),
+		('PYTHONPATH="a;b" python3 -P -c \'x\'', "assigns 'PYTHONPATH'"),
+		('guard_differential_base_verifier="$(PYTHONPATH=. python3 -P -c \'x\')"', "assigns 'PYTHONPATH'"),
+		('echo "$(PYTHONPATH=. python3 -P -c \'x\')"', "assigns 'PYTHONPATH'"),
+		("env PYTHONPATH=. python3 -P -c 'x'", "runs 'env'"),
+		("export PYTHONPATH=.", "runs 'export'"),
+		("declare -x PYTHONPATH=.", "runs 'declare'"),
+		("source scripts/x.sh", "runs 'source'"),
+		(". scripts/x.sh", "runs '.'"),
+		("bash tests/evil.sh", "runs 'bash'"),
+		("echo ok && ./scripts/x.sh", "runs './scripts/x.sh'"),
+		("set -a", "turns on allexport"),
+		("set -o allexport", "turns on allexport"),
+		("echo `id`", "backtick"),
+		("echo \"unterminated", "cannot parse"),
+		("echo x 2>&1", None),
+		("echo <(bash tests/evil.sh)", "runs 'bash'"),
+		("echo x >(bash tests/evil.sh)", "runs 'bash'"),
+		("echo x > >(bash tests/evil.sh)", "runs 'bash'"),
+		("(bash tests/evil.sh)", "runs 'bash'"),
+	],
+)
+def test_shell_command_scan(run: str, expected: str | None) -> None:
+	"""Issue #5327 review round 4: an assignment before the interpreter
+	(`PYTHONPATH=... python3 -P`) or anywhere else in the step must not slip
+	past the scan."""
+	problems = _shell_command_problems(run, _CHECK_STEP_ASSIGNMENTS, _CHECK_STEP_COMMANDS)
+	if expected is None:
+		assert problems == []
+	else:
+		assert len(problems) == 1 and expected in problems[0], problems
+
+
+@pytest.mark.parametrize(
+	("run", "expected"),
+	[
+		("python3 -P -c 'import json'", None),
+		("python3 -I -m json.tool", None),
+		("python3 -BPc 'x'", None),
+		("python3 -W ignore -P -c 'x'", None),
+		("python3 -X dev -I -m json.tool", None),
+		('PYTHONDONTWRITEBYTECODE=1 python3 "${guard_differential_verifier_dir}/guard_differential.py" \\\n  --base-ref FETCH_HEAD', None),
+		("python3 --version", None),
+		("python3 -W ignore -c 'import json'", "runs -c without -P or -I"),
+		("python3 -Wignore -c 'x'", "runs -c without -P or -I"),
+		("python3 -X dev -m json.tool", "runs -m without -P or -I"),
+		("python3 --check-hash-based-pycs always -m json.tool", "runs -m without -P or -I"),
+		("python3 -WP -c 'x'", "runs -c without -P or -I"),
+		("python3 -c 'x' -P", "runs -c without -P or -I"),
+		('out="$(python3 -W ignore -c \'x\')"', "runs -c without -P or -I"),
+		("env python3 -m json.tool", "runs -m without -P or -I"),
+		("/usr/bin/python3.12 -c 'x'", "runs -c without -P or -I"),
+		("python -B -c 'x'", "runs -c without -P or -I"),
+		("echo x | python3 -", "reads the program from stdin"),
+		("python3 <<'EOF'", "reads the program from stdin"),
+		("python3 scripts/guard_differential.py", "runs a script outside"),
+		("python3 -P scripts/guard_differential.py", "runs a script outside"),
+		("python3 -- scripts/x.py", "runs a script outside"),
+		('python3 "${guard_differential_verifier_dir}/../checkout/evil.py"', "runs a script outside"),
+		("python3 -P -- ${guard_differential_verifier_dir}/../x.py", "runs a script outside"),
+		("python3 ${guard_differential_verifier_dir}/sub/x.py", "runs a script outside"),
+		("python3 ${guard_differential_verifier_dir}/", "runs a script outside"),
+		("python3 --unknown -c 'x'", "unknown option"),
+		("python3 -P -W \"unterminated", "cannot parse"),
+	],
+)
+def test_python_invocation_scan(run: str, expected: str | None) -> None:
+	"""Issue #5327 review round 3: an option that takes an argument (-W, -X)
+	before `-c` / `-m` must not hide an unisolated call from the scan."""
+	problems = _python_invocation_problems(run, "${guard_differential_verifier_dir}/")
+	if expected is None:
+		assert problems == []
+	else:
+		assert len(problems) == 1 and expected in problems[0], problems
+
+
+def test_ci_check_runs_before_any_pr_code() -> None:
+	"""Issue #5327 conformance run 3: PR code that runs earlier in the same
+	job runs as the same user, so it could plant a `.pth` file in the
+	interpreter's site-packages and decide the pinned verifier's exit code.
+	Only the checkout, the Python setup, and the fixed dependency install may
+	run before the check."""
+	yaml = pytest.importorskip("yaml")
+	workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+	for job in workflow["jobs"].values():
+		names = [step.get("name") for step in job.get("steps", [])]
+		if "Guard differential check (issue #5174)" in names:
+			before = job["steps"][: names.index("Guard differential check (issue #5174)")]
+			break
+	else:
+		raise AssertionError("step 'Guard differential check (issue #5174)' not found")
+	check = job["steps"][len(before)]
+	# No environment that could make the shell, the loader, Python, or pip
+	# run checkout code (BASH_ENV, LD_PRELOAD, PATH, VIRTUAL_ENV, PIP_*,
+	# PYTHON*, HOME, ...): workflow and job `env` may carry only the listed
+	# keys, and the check step only its base ref. Extend a list only with a
+	# key that runs no code.
+	for scope, allowed in (
+		(workflow, {"FORCE_JAVASCRIPT_ACTIONS_TO_NODE24"}),
+		(job, set()),
+		(check, {"GUARD_DIFFERENTIAL_BASE_REF"}),
+	):
+		env = scope.get("env") or {}
+		assert isinstance(env, dict), env
+		assert set(env) <= allowed, sorted(set(env) - allowed)
+	# No default shell or working directory, no job or service container, and
+	# nothing that lets the job pass when the check fails.
+	assert "defaults" not in workflow
+	assert not {"defaults", "container", "services", "continue-on-error"} & set(job)
+	# The check step itself: no `shell` (a checkout script as the shell runs
+	# before the body), `working-directory`, `continue-on-error`, or other
+	# key, and it runs on every pull request (review round 5).
+	assert set(check) <= {"name", "if", "env", "run"}, sorted(set(check) - {"name", "if", "env", "run"})
+	assert check.get("if") == "github.event_name == 'pull_request'", check.get("if")
+	assert [step.get("uses", "").split("@")[0] for step in before[:2]] == ["actions/checkout", "actions/setup-python"]
+	assert set(before[0]) <= {"name", "uses", "with"}
+	assert set(before[0].get("with") or {}) <= {"fetch-depth"}
+	assert set(before[1]) <= {"name", "uses", "with"}
+	assert set(before[1].get("with") or {}) == {"python-version"}
+	assert [step.get("name") for step in before[2:]] == ["Install Python CI dependencies"]
+	assert set(before[2]) == {"name", "run"}
+	# Exactly one pip install of the fixed package set and nothing else: no
+	# flag (-r, --requirement, -e, --editable, -c, ...), no local path,
+	# archive, URL, or VCS spec, no other package, no second command. -P
+	# keeps the checkout off sys.path, where a PR's pip/ package would run.
+	# A new dependency is added here too.
+	lines = [line.strip() for line in before[2]["run"].splitlines() if line.strip() and line.strip() != "set -euo pipefail"]
+	assert len(lines) == 1, lines
+	install_prefix = "python3 -P -m pip install "
+	assert lines[0].startswith(install_prefix), lines[0]
+	assert sorted(lines[0][len(install_prefix):].split(" ")) == sorted(CI_INSTALL_PACKAGES), lines[0]
+	# The check step's own `python3 -c` / `-m` calls keep the checkout off
+	# sys.path too (-P, or -I which implies it), or a PR's json.py would run
+	# inside the step; its only script is the pinned verifier copy.
+	assert _python_invocation_problems(check["run"], "${guard_differential_verifier_dir}/") == []
+	assert "python3 -P -c " in check["run"]
+	# Only allow-listed assignments and commands, so nothing sets PYTHONPATH,
+	# PATH, or an exported variable for the verifier, and the verifier
+	# directory is the RUNNER_TEMP copy, never the checkout (review round 4).
+	assert _shell_command_problems(check["run"], _CHECK_STEP_ASSIGNMENTS, _CHECK_STEP_COMMANDS) == []
+	assert re.findall(r"guard_differential_verifier_dir=.*", check["run"]) == ['guard_differential_verifier_dir="${RUNNER_TEMP}/guard-differential-verifier"']
+	# The body itself is pinned, so no allowed command can carry new code
+	# (review round 6).
+	assert check["run"] == CI_CHECK_STEP_RUN + "\n", check["run"]
 
 
 def test_ci_runs_the_unit_tests() -> None:

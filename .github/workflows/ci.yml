@@ -395,9 +395,61 @@ jobs:
           python-version: "3.12"
 
       - name: Install Python CI dependencies
+        # -P: without it `python3 -m` puts the checkout (the working
+        # directory) first on sys.path, so a PR's pip/ package would run
+        # here, before the guard differential check below (issue #5327).
         run: |
           set -euo pipefail
-          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+          python3 -P -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      - name: "Guard differential check (issue #5174)"
+        # Runs every tests/guard_corpus/<hook>.txt shape through the base
+        # branch's hook and this PR's hook (scripts/guard_differential.py) and
+        # fails on a shape the PR's hook now treats less strictly (for example
+        # the base blocked it and the PR allows it), with or without a
+        # warning (issue #5325), unless the PR body lists it under
+        # `Intended loosening:`. Skips when no
+        # .claude/hooks/*.py file (or its workflow-templates twin) changed.
+        # The base branch's corpus runs too. #5173's review found three such
+        # shapes that the reviewer panel missed. No GitHub API calls: the base
+        # comes through git and the PR body from the event payload, so a body
+        # edited after the last push needs a new push to be read.
+        #
+        # The verifier runs from the base branch (issue #5327): the step copies
+        # scripts/guard_differential.py out of the fetched base commit into
+        # RUNNER_TEMP and runs that copy, so a PR cannot weaken a guard and
+        # edit the verifier to pass in the same change. The PR's hooks,
+        # corpora, and body are only the data it checks. A base without the
+        # script yet runs the PR's copy with a warning. Pass only flags the
+        # base verifier already accepts: a new flag lands in the script first.
+        #
+        # Keep this step right after the dependency install, before every step
+        # that runs code from the checkout (tests, shell scripts): that code
+        # runs as the same user and could plant a .pth file in the Python
+        # install the verifier runs under and decide its exit code. For the
+        # same reason every `python3 -c` / `-m` here and in the install step
+        # runs with -P, so the checkout (the working directory) is not on
+        # sys.path: a PR's json.py would otherwise run inside this step.
+        if: github.event_name == 'pull_request'
+        env:
+          GUARD_DIFFERENTIAL_BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${GUARD_DIFFERENTIAL_BASE_REF}"
+          python3 -P -c 'import json, os, sys; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); sys.stdout.write((event.get("pull_request") or {}).get("body") or "")' > "${RUNNER_TEMP}/guard-differential-pr-body.md"
+          guard_differential_verifier_dir="${RUNNER_TEMP}/guard-differential-verifier"
+          mkdir -p "${guard_differential_verifier_dir}"
+          guard_differential_base_verifier="$(git ls-tree --name-only FETCH_HEAD -- scripts/guard_differential.py)"
+          if [ -n "${guard_differential_base_verifier}" ]; then
+            git show "FETCH_HEAD:scripts/guard_differential.py" > "${guard_differential_verifier_dir}/guard_differential.py"
+            echo "GUARD_DIFFERENTIAL verifier=base source=$(git rev-parse FETCH_HEAD):scripts/guard_differential.py"
+          else
+            cp scripts/guard_differential.py "${guard_differential_verifier_dir}/guard_differential.py"
+            echo "::warning::GUARD_DIFFERENTIAL verifier=head reason=base-has-no-verifier base=${GUARD_DIFFERENTIAL_BASE_REF}"
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 "${guard_differential_verifier_dir}/guard_differential.py" \
+            --base-ref FETCH_HEAD \
+            --pr-body-file "${RUNNER_TEMP}/guard-differential-pr-body.md"
 
       - name: Event mirror shell tests
         run: |
@@ -484,47 +536,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_guard_differential.py
-
-      - name: "Guard differential check (issue #5174)"
-        # Runs every tests/guard_corpus/<hook>.txt shape through the base
-        # branch's hook and this PR's hook (scripts/guard_differential.py) and
-        # fails on a shape the PR's hook now treats less strictly (for example
-        # the base blocked it and the PR allows it), with or without a
-        # warning (issue #5325), unless the PR body lists it under
-        # `Intended loosening:`. Skips when no
-        # .claude/hooks/*.py file (or its workflow-templates twin) changed.
-        # The base branch's corpus runs too. #5173's review found three such
-        # shapes that the reviewer panel missed. No GitHub API calls: the base
-        # comes through git and the PR body from the event payload, so a body
-        # edited after the last push needs a new push to be read.
-        #
-        # The verifier runs from the base branch (issue #5327): the step copies
-        # scripts/guard_differential.py out of the fetched base commit into
-        # RUNNER_TEMP and runs that copy, so a PR cannot weaken a guard and
-        # edit the verifier to pass in the same change. The PR's hooks,
-        # corpora, and body are only the data it checks. A base without the
-        # script yet runs the PR's copy with a warning. Pass only flags the
-        # base verifier already accepts: a new flag lands in the script first.
-        if: github.event_name == 'pull_request'
-        env:
-          GUARD_DIFFERENTIAL_BASE_REF: ${{ github.base_ref }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 origin "${GUARD_DIFFERENTIAL_BASE_REF}"
-          python3 -c 'import json, os, sys; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); sys.stdout.write((event.get("pull_request") or {}).get("body") or "")' > "${RUNNER_TEMP}/guard-differential-pr-body.md"
-          guard_differential_verifier_dir="${RUNNER_TEMP}/guard-differential-verifier"
-          mkdir -p "${guard_differential_verifier_dir}"
-          guard_differential_base_verifier="$(git ls-tree --name-only FETCH_HEAD -- scripts/guard_differential.py)"
-          if [ -n "${guard_differential_base_verifier}" ]; then
-            git show "FETCH_HEAD:scripts/guard_differential.py" > "${guard_differential_verifier_dir}/guard_differential.py"
-            echo "GUARD_DIFFERENTIAL verifier=base source=$(git rev-parse FETCH_HEAD):scripts/guard_differential.py"
-          else
-            cp scripts/guard_differential.py "${guard_differential_verifier_dir}/guard_differential.py"
-            echo "::warning::GUARD_DIFFERENTIAL verifier=head reason=base-has-no-verifier base=${GUARD_DIFFERENTIAL_BASE_REF}"
-          fi
-          PYTHONDONTWRITEBYTECODE=1 python3 "${guard_differential_verifier_dir}/guard_differential.py" \
-            --base-ref FETCH_HEAD \
-            --pr-body-file "${RUNNER_TEMP}/guard-differential-pr-body.md"
 
       - name: PR status check-in reminder hook tests (CLAUDE.md §26)
         run: |
