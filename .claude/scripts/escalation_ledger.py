@@ -44,17 +44,21 @@ Subcommands:
   allowed --log <path> --stop <id> --fingerprint <fp>
       Parse `## Escalations` and print the choices not yet used for that
       stop and fingerprint, in the order budget, descope, close.
-  record --log <path> --stop <id> --fingerprint <fp> --choice <c> --why <text> [--date YYYY-MM-DD]
+  record --log <path> --stop <id> --fingerprint <fp> --choice <c> (--why <text> | --why-file <path>) [--date YYYY-MM-DD]
       Print the `ES-<n>` line to append, with `n` one more than the highest
       id in the log. It never writes a file: the session adds the line to
-      the log with its Edit tool. A `budget` or `descope` already used for
+      the log with its Edit tool. `--why-file` reads the rationale from a
+      UTF-8 file, so text drawn from failure evidence never passes through
+      shell quoting (a `$(...)` or backtick in a double-quoted `--why` would
+      run before this script sees it). A `budget` or `descope` already used for
       that stop and fingerprint is refused, and so is a PR-scoped stop
-      whose `--why` does not start with `PR #<N>: ` (the intervention cap
+      whose reason does not start with `PR #<N>: ` (the intervention cap
       counts an entry only for the PR its `why` names).
 
 Output is one JSON line. Exit 0 on success; 1 on bad arguments (an unknown
 stop id, a malformed fingerprint or evidence, a PR-scoped stop without
-`pr` or without the `PR #<N>: ` prefix on `--why`, a used choice); 2 when the
+`pr` or without the `PR #<N>: ` prefix on its reason, not exactly one
+readable `--why` / `--why-file`, a used choice); 2 when the
 log cannot be read or an `## Escalations` line is malformed (a line that
 starts `- ` but does not match the format, a date that is not a real
 calendar date, or a repeated `ES-<n>` id). A log without an
@@ -294,6 +298,17 @@ def _load_evidence(args: argparse.Namespace) -> object:
 		raise UsageError(f"evidence is not valid JSON: {exc}") from exc
 
 
+def _load_why(args: argparse.Namespace) -> str:
+	if (args.why is None) == (args.why_file is None):
+		raise UsageError("pass exactly one of --why or --why-file")
+	if args.why_file is None:
+		return args.why
+	try:
+		return Path(args.why_file).read_text(encoding="utf-8")
+	except (OSError, UnicodeDecodeError) as exc:
+		raise UsageError(f"cannot read --why-file: {exc}") from exc
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = _Parser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
@@ -310,7 +325,8 @@ def build_parser() -> argparse.ArgumentParser:
 	record_cmd.add_argument("--stop", required=True)
 	record_cmd.add_argument("--fingerprint", required=True)
 	record_cmd.add_argument("--choice", required=True)
-	record_cmd.add_argument("--why", required=True)
+	record_cmd.add_argument("--why")
+	record_cmd.add_argument("--why-file")
 	record_cmd.add_argument("--date")
 	return parser
 
@@ -330,7 +346,7 @@ def run(argv: list[str] | None = None, today: dt.date | None = None) -> dict:
 			"used": used_choices(entries, stop, fp),
 		}
 	date = args.date or (today or dt.datetime.now(dt.timezone.utc).date()).isoformat()
-	return record_line(entries, stop, fp, args.choice, args.why, date)
+	return record_line(entries, stop, fp, args.choice, _load_why(args), date)
 
 
 def main(argv: list[str] | None = None, today: dt.date | None = None) -> int:
