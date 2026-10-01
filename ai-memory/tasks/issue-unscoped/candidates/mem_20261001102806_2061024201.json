@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_release_smoke_run_lookup.py:201 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The test expects three `find_latest_scoped_run_field \"${TEST_REPO}\"` occurrences in `.github/workflows/test-and-mark-stable.yml`, but the workflow contains none, causing `tests-release-and-log-analysis` to fail.\n  WHY: This is a test/workflow mismatch reported as pre-existing on `main`, not introduced by the PR's documentation-only changes; severity disagreement: only z-ai_glm-5_2 assigned severity (MAJOR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description names three implementation deliverables: a deterministic selector, `.claude/scripts/usage_limit_resumes.py`, to pick stopped sessions; a pickup step to send each one a `Resume after usage limit (#<N>)` trigger, capped per wake and paced under the trigger-creation rate limit; and stale Routine sweep support to delete those triggers once ended.\n  expected_change_site: `workflow-templates/.claude/scripts/usage_limit_resumes.py`, `workflow-templates/.claude/scripts/stale_routines.py`, `workflow-templates/.claude/settings.json`, `.claude/commands/claude-issue-pickup.md`, plus tests and docs listed in the plan's Files & Modules section\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The PR diff contains only two new documentation files (`docs/implement-plan/issue-5660-resume-usage-limit-stops.md` and `docs/plans/issue-5660-resume-usage-limit-stops-plan.md`); none of the implementation files listed in the plan's Files & Modules section are present in the diff. The implement-plan log shows \"Status: IN_PROGRESS\" and \"Stage: phase 1/1\" with the phase checkbox unchecked.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_release_smoke_run_lookup.py:201 | Problem: `test_capture_sites_use_the_paged_lookup` asserts that `find_latest_scoped_run_field \"${TEST_REPO}\"` appears exactly 3 times in `.github/workflows/test-and-mark-stable.yml`, but the current workflow has 0 occurrences of that exact string; the actual function name is `latest_scoped_run_field`. The test/workflow mismatch is pre-existing on `main`, not introduced by this PR's diff. Suggested minimal fix: reconcile the test with the actual function name or update the workflow call sites.\n- review / gate check-run, run 36846858966, job 110318963286 | Issue: GitHub REST API returned HTTP 403 (\"API rate limit exceeded for user ID 11442166\") during the gate's `gh api` lookup of branch protection on `main`. This is a transient infrastructure failure, not a defect in the PR diff. Suggested minimal fix: rely on the existing retry path; optionally verify whether `gh_retry` already backs off on HTTP 403 rate-limit responses.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_release_smoke_run_lookup.py:201 | severity=MAJOR | confidence=5\n  PROBLEM: The test asserts that `find_latest_scoped_run_field \"${TEST_REPO}\"` appears exactly 3 times in `.github/workflows/test-and-mark-stable.yml`, but the workflow contains 0 occurrences.\n  WHY: The merge commit `8983f84` brought in workflow changes from `main` that apparently removed or restructured the call sites, while the test was not updated; this pre-existing failure from `main` is exposed by the merge and is not a defect in this PR's documentation-only changes.\n- Requirement: The PR description names three implementation deliverables: (1) \"A deterministic selector, `.claude/scripts/usage_limit_resumes.py`, picks the stopped sessions\"; (2) \"A new pickup step 1a sends each one a `Resume after usage limit (#<N>)` trigger, capped per wake and paced under the trigger-creation rate limit\"; (3) \"The stale Routine sweep deletes those triggers once they have ended.\"\n  Expected change site: `workflow-templates/.claude/scripts/usage_limit_resumes.py` [new], `workflow-templates/.claude/scripts/stale_routines.py`, `workflow-templates/.claude/settings.json`, `.claude/commands/claude-issue-pickup.md`, plus tests and docs as listed in the plan's Files & Modules section.\n  Evidence of absence: The PR diff contains only two new documentation files (`docs/implement-plan/issue-5660-resume-usage-limit-stops.md` and `docs/plans/issue-5660-resume-usage-limit-stops-plan.md`). None of the implementation files listed in the plan's Files & Modules section are present in the diff. The implement-plan log shows \"Status: IN_PROGRESS\" and \"Stage: phase 1/1\" with the phase checkbox unchecked, confirming the project is at the planning stage. The PR description explicitly states: \"This PR stays a draft. It is marked ready only after every stage has passed on the project branch.\" This is an in-progress draft project integration PR, so the missing implementation is expected at this stage and not a deferral \u2014 the implementation will be added to this PR as phase 1 progresses.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0d9c8e7dd9649c4597aac9acee1458accdec86dbcf7eb8a1651e72ba21cd7288",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36846855456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36846855456",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001102806_2061024201",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36846855456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T10:28:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
