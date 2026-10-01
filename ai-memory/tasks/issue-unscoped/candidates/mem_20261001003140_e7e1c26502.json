@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4402 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The \u201cRun reviewer models\u201d step repeatedly failed because `review_run_reviewers.sh` returned nonzero, leaving the `review / codex-agent` check unsuccessful and triggering the identical-failure cap.\n  WHY: The available log tail does not identify the underlying cause or tie it to this PR\u2019s changes; severity was BLOCKER (Qwen) versus MAJOR (Gemini and OpenAI), so the highest severity is retained.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/review_autofix.yml:4402 | severity=MAJOR | confidence=5\n  PROBLEM: The review / codex-agent check failed at step \"Run reviewer models\" on head 2b0a1f92189c11af1328c65ada7a8964fc112871, and repeated failures caused the identical-failure cap to mark the PR ai:review-blocked.\n  WHY: The reviewer execution in review_run_reviewers.sh returned non-zero in workflow run 36741838875 and subsequent retries. Although the provided log tail does not establish a root cause in this PR's diff, the check-run failure is recorded in the PR check-runs context and prevents review completion.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:4402 | severity=MAJOR | confidence=5\n  PROBLEM: The `review / codex-agent` check failed at the reviewer step on the PR head. The supplied PR discussion reports repeated identical failures that reached the failure cap; the provided log tail does not identify the underlying cause.\n  WHY: `review_run_reviewers.sh` returned nonzero, and this step propagates that exit code, leaving the review check unsuccessful. The failure needs investigation before this PR has a successful review run; the available evidence does not establish a cause in the changed code.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml (step \"Run reviewer models\") | severity=BLOCKER | confidence=5\n  PROBLEM: The reviewer step failed repeatedly on this head (runs 36741838875, 36752333871, 36760232242), tripping the identical-failure cap and labeling the PR ai:review-blocked. The log tail shows environment setup but not the actual reviewer error.\n  WHY: The reviewer script returned nonzero, but the provided log tail (last 16 KB) contains only environment variable dumps and post-job git-submodule cleanup warnings, not the failure cause. The diff itself (issue_pr_status.yml gate logic, tests, README, changelog) does not touch reviewer infrastructure, so the failure is not caused by this PR's changes.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "92cad5ba5320a548e967c145d4668b803acc04f0bbeac82b2818b35ddff0c359",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5643,
+    "run_id": "36794127294",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794127294",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001003140_e7e1c26502",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5643,
+    "run_id": "36794127294"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T00:31:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
