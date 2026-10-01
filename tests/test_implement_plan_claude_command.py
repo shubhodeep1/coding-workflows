@@ -368,6 +368,20 @@ def test_claude_md_26i_covers_the_per_stage_delete_and_rename(twin_text):
 	assert "**Rename when you open a PR.**" in twin_text
 
 
+def test_command_rules_cover_the_per_stage_delete_and_rename(twin_text):
+	# PR #5856 review round 1: sessions read the command, so its Rules bullet and
+	# both call sites must name these cleanup calls as §26.I does, not CLAUDE.md alone.
+	rules = twin_text[twin_text.index("## Rules"):]
+	bullet = rules[rules.index("**A denied cleanup call is skipped, never retried**"):]
+	bullet = bullet[:bullet.index(" - **")]
+	assert "the step 2 delete of stale Routines from the previous design" in bullet
+	assert "the rename when a stage opens a PR" in bullet
+	assert "a failed two-step start" in bullet
+	assert "the checker prompt are housekeeping" in bullet
+	assert "so two check-ins never race (these deletes are cleanup calls, CLAUDE.md §26.I: after a denied one, delete no more and record `cleanup skipped`)" in twin_text
+	assert "The rename is a cleanup call (CLAUDE.md §26.I): a denied one is never retried." in twin_text
+
+
 def test_resume_hygiene_skips_a_denied_cleanup_call(twin_text):
 	hygiene = _section(twin_text, "**Resume hygiene**", "**No claude-code-remote tools**")
 	assert "each only after `get_trigger` shows it is this project's own" in hygiene
