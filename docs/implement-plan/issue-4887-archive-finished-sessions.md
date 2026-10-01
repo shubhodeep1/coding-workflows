@@ -1,17 +1,17 @@
 # Implement-Plan Log — Archive finished fixer, issue-start and report sessions automatically
 
-- Plan: docs/plans/issue-4887-archive-finished-sessions-plan.md
+- Plan: docs/completed/issue-4887-archive-finished-sessions-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#4887 (https://github.com/shubhodeep1/coding-workflows/issues/4887)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-4887-archive-finished-sessions   Final PR: #4924 draft
-- Status: IN_PROGRESS
-- Stage: conformance 2/3 — review round
-- Activation: not started
-- Waiting on: PR #5543 (conformance fix 2/3)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (claude/implement-plan-issue-4887-archive-finished-sessions-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_019gAFuNuVjyEnPRhyvMWZzG   safety net and hand-back: re-armed by the conformance 2/3 — review round stage (ids in the issue progress comment)
-- Last updated: 2026-09-30
-- Last note: conformance 2/3 — review round (session_01C6skaRvgXckf7AjUiSUoHn): PR #5543 round 1 on 261382e fixed both reviewer items: the consensus task gap (CLAUDE.md §26.I and agents.md now list `#<n> · PR #<pr> — implement-issue-claude`, pinned by tests) and the `_REPO` dot-segment hardening suggestion (the run 1/2 HYPOTHESIS), which now keeps such a session with an error and no read.
+- Check-in: checker session_019gAFuNuVjyEnPRhyvMWZzG   safety net and hand-back: armed by the validation 1/3 — read result stage (ids in its report and the issue progress comment)
+- Last updated: 2026-10-01
+- Last note: validation 1/3 — read result (session_01LEFhMBrnVhnMciNDCgMhnU): run 36848767538 passed (10/10 tests) on project-branch head 42c0575 with no validation-fix PR, so no post-validation conformance re-run is needed; step 2 synced main into the project branch (16feac7); this completion PR moves the plan to docs/completed/. Next: final-merge 1/1 (final PR #4924 marked ready).
 
 ## Phases
 1. [x] Phase 1 — session sweep, fixer self-archive, docs   — PR #4937 merged 2026-09-30 by the operator's master session (947de10, bound to 656fd7f; issue #4887 Q1: B); review rounds: 3 (b7443b5: all rejected; e0d90bb: 2 nits fixed in 529ead3, 4 rejected; 656fd7f: 4 rejected, verdict unposted); twin syncs e0d90bb, 656fd7f; interventions: 0 — protected paths: `.claude/commands/fix-claude-pr.md`, `.claude/settings.json` (edited through their `workflow-templates/.claude/` twins), `.claude/commands/claude-issue-pickup.md` (no twin; exact edit in the blocked comment)
@@ -24,13 +24,20 @@
 
 ## Conformance
 - Run 1 — 2026-09-30: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS) — conformance fix PR from claude/implement-plan-issue-4887-archive-finished-sessions-conformance-fix-1 (pre-security): 2 EVIDENCE-BASED CONCERNs fixed (untested #4886 session titles in tests/test_claude_session_janitor.py; stale "Only the chain archives its own sessions" in agents.md:876); 1 not fixed (AD-12); 1 HYPOTHESIS kept (see Notes); PR #5468 review rounds: 2 (775a8c3, 2026-09-30: 0 findings, handed off only because the check snapshot was not ready; AD-13), merged 2026-09-30 (3bc94be)
-- Run 2 — 2026-09-30: INCOMPLETE (Implemented PARTIAL after Correctness FAIL) — conformance fix PR 2 from claude/implement-plan-issue-4887-archive-finished-sessions-conformance-fix-2 (pre-security): 1 EVIDENCE-BASED BLOCKER fixed. A dry run of `scripts/claude_session_janitor.py` on a live `list_sessions` page (100 sessions, 2026-09-30 07:27 UTC) named 0 sessions and counted every one `not_ours`: the pickup titles its sessions `#<N> · implement-issue-claude` / `#<N> · PR #<P> — implement-issue-claude` (15 idle on that page) and `PR#<N> · fix-claude-pr`, which no janitor pattern matched. After the fix the same page names the 4 idle issue-start sessions whose issues are closed (#5479, #5472, #5470, #5461) and keeps all RUNNING / REQUIRES_ACTION ones (AD-14). The run 1 HYPOTHESIS (`_REPO` path segments) stands, unfixed (see Notes). Checks: janitor suite 98 passed; 20 related instruction-text suites plus section numbers 1425 passed, 1 skipped; ruff clean; inventory parity OK. PR #5543 review rounds: 1 (261382e, 2026-09-30: 1 consensus task gap fixed — the docs omitted the `#<n> · PR #<pr> — implement-issue-claude` form; 1 per-reviewer HARDENING_SUGGESTION fixed — `.`/`..` repository segments are now rejected before any read, closing the run 1 HYPOTHESIS).
+- Run 2 — 2026-09-30: INCOMPLETE (Implemented PARTIAL after Correctness FAIL) — conformance fix PR 2 from claude/implement-plan-issue-4887-archive-finished-sessions-conformance-fix-2 (pre-security): 1 EVIDENCE-BASED BLOCKER fixed. A dry run of `scripts/claude_session_janitor.py` on a live `list_sessions` page (100 sessions, 2026-09-30 07:27 UTC) named 0 sessions and counted every one `not_ours`: the pickup titles its sessions `#<N> · implement-issue-claude` / `#<N> · PR #<P> — implement-issue-claude` (15 idle on that page) and `PR#<N> · fix-claude-pr`, which no janitor pattern matched. After the fix the same page names the 4 idle issue-start sessions whose issues are closed (#5479, #5472, #5470, #5461) and keeps all RUNNING / REQUIRES_ACTION ones (AD-14). The run 1 HYPOTHESIS (`_REPO` path segments) stands, unfixed (see Notes). Checks: janitor suite 98 passed; 20 related instruction-text suites plus section numbers 1425 passed, 1 skipped; ruff clean; inventory parity OK. PR #5543 review rounds: 1 (261382e, 2026-09-30: 1 consensus task gap fixed — the docs omitted the `#<n> · PR #<pr> — implement-issue-claude` form; 1 per-reviewer HARDENING_SUGGESTION fixed — `.`/`..` repository segments are now rejected before any read, closing the run 1 HYPOTHESIS); merged 2026-09-30 (990c9b5).
+- Run 3 — 2026-09-30: CONFORMANT (Implemented COMPLETE, Correctness CONCERNS: only the AD-12 lines at .claude/commands/implement-plan-claude.md:161 and :420 stand, by decision) — no fix PR (pre-security); checks: 23 related suites 1438 passed, 1 skipped; ruff clean; inventory parity OK; live janitor dry run on a 100-session page named 3 (#4723 closed, #5246 closed, #5068 superseded), 0 errors; list_sessions confirmed sorted by created_at desc, so the horizon rule holds.
 
 ## Security pass
+- Cycle 1 — run 36716001469 2026-09-30 (ref: claude/implement-plan-issue-4887-archive-finished-sessions, range d1e530e..54474cb, 16 files): success; tracker #3576 findings=1 followups_created=1 — follow-up #5664 (medium, STRIDE-DoS, scripts/claude_session_janitor.py:288: a stage the checker archived after a failed start still counted as superseding an idle issue-start session) resolved via final PR #5674 into this project branch (merged 2026-10-01 08:58 UTC, 55514f6; #5664 closed completed + ai:merged 08:59 UTC). Its issue-mode project (plan docs/plans/issue-5664-archived-stage-disables-recovery-plan.md) archives an issue-start session only once its issue is closed.
+- Cycle 2 — run 36841489472 2026-10-01 (ref: claude/implement-plan-issue-4887-archive-finished-sessions, range 41a1cf9..ac78da1, 19 files): success; tracker #3576 findings=0 followups_created=0 — clean.
 
 ## Validation
+- Cycle 1 — run 36848767538 dispatched 2026-10-01 10:22 UTC (target_ref: claude/implement-plan-issue-4887-archive-finished-sessions, head 42c0575): completed success; status=pass raw_status=pass — "Runtime validation passed (10/10 tests, 294s)"; no fix issues, no validation-fix PR.
 
 ## Completion
+- Completion PR from claude/implement-plan-issue-4887-archive-finished-sessions-complete (2026-10-01) — doc moved to docs/completed/issue-4887-archive-finished-sessions-plan.md
+- Merged into the project branch: phase PR #4937 (947de10), conformance fix PRs #5468 (3bc94be) and #5543 (990c9b5), security follow-up project PR #5674 (55514f6)
+- Final PR #4924 draft — marked ready at final-merge 1/1
 
 ## Activation
 
@@ -52,6 +59,7 @@
 - AD-14 [conformance 2/3, 2026-09-30] The Claude issue pickup names the sessions it starts `#<N> · implement-issue-claude` and `PR#<N> · fix-claude-pr`, not the titles its step 3 documents, so the janitor skipped all of them. How should the sweep catch them? — Picked: A — the janitor also accepts those two forms, taking the number from the prefix and the repository from the session source, and CLAUDE.md §26.I / agents.md list them. Alternatives: B — tighten the pickup's title instruction instead (an edit to `.claude/commands/claude-issue-pickup.md`, which has no twin and would stop the project for a twin sync, and sessions already open keep their titles); C — both. Why: covers the sessions already open with no protected-path edit; a pickup-instruction fix can follow as its own issue. Applied in: conformance fix PR 2. Status: pending review
 
 ## Lessons
+- [source:security] A sweep that archives sessions on a "superseded by a later session" signal must verify the later session actually started and the earlier one's recovery triggers were disarmed; when a list page cannot show that, keep the earlier session. (files: scripts/claude_session_janitor.py)
 - [source:conformance] A sweep that matches session titles must pin the title forms the creating commands produce, with a test that reads those command files, so a title change there cannot silently take sessions out of the sweep. (files: tests/test_claude_session_janitor.py, .claude/commands/claude-issue-dispatch.md, .claude/commands/fix-claude-pr.md)
 - [source:conformance] When a new mechanism archives or deletes sessions from outside the chain, update every doc that says only the chain does (agents.md, the implement-plan command) in the same change. (files: agents.md, .claude/commands/implement-plan-claude.md)
 
@@ -59,6 +67,7 @@
 - [source:conformance] Check a title-matching sweep against a live `list_sessions` page, not only against the command files: the low-effort pickup names sessions after the command it starts (`#<N> · implement-issue-claude`) rather than the title its instructions give, so doc-pinned patterns alone matched nothing in production. (files: scripts/claude_session_janitor.py, tests/test_claude_session_janitor.py, .claude/commands/claude-issue-pickup.md)
 
 ## Notes
+- 2026-10-01 step 2 syncs merged main into the project branch cleanly: 54474cb (conformance 3/3), 7a54d72 (security-pass 1/5, 510 related tests passed, 1 skipped; inventory parity OK), ac78da1 (security-pass 2/5, 454 related tests passed, 1 skipped; inventory parity OK), 42c0575 (security-pass 2/5 — read result, CHANGELOG assembly only; 234 related tests passed, 1 skipped), and 16feac7 (validation 1/3 — read result; 294 related tests passed, 1 skipped; inventory parity OK).
 - 2026-09-30 conformance 2/3: the live page of 100 sessions spanned only about 3 hours (the plan measured about 16 on 2026-09-29), so walking back to the 30-day horizon takes roughly 240 hourly wakes (about 10 days) before the cursor resets. A report session is still reached, only later than 7 days. This is the AD-2 design, not a defect; recorded for the activation review. The run 1 HYPOTHESIS on `_REPO` path segments was fixed in PR #5543 review round 1: a repository with a `.` or `..` segment is kept with an error and never read.
 - 2026-09-30 conformance 2/3: the pickup session (session_01ArxJDkmfCGHBaW5Ph9zoHN) titles its starts differently from `claude-issue-pickup.md` step 3 (`#<N> · issue <repo>#<N> — implement`, `PR <repo>#<N> — fix <kind>`). The janitor now tolerates both; aligning the pickup is a separate fix (AD-14 B), not done here.
 - 2026-09-30 conformance 1/3: step 2 sync `1c09c53` merged main into the project branch. It conflicted in `.claude/commands/claude-issue-pickup.md` (#4990's catch-up wake and `send_later` vs this project's step 3a sweep and `list_sessions`) and in `fix-claude-pr.md` and its twin (#4886's `#<I> · ` title prefix vs this project's step 8 archive wording). Both sides kept: step 3a sits before main's `Catch-up, then report` step 4, the report line keeps `oldest_waiting`/`catch_up` and adds `archived <a> (next …)`, the twins stay byte-identical, and the #4990 test that pins the report line now includes the archived part. Auto mode allowed the root `.claude/` merge edits, so no twin-sync stop was needed. Checks on the merged tree: 514 + 855 related tests passed, CI ruff selection clean, inventory parity OK.
