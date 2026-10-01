@@ -91,6 +91,12 @@ UPSTREAM_ONLY_PATHS = frozenset({
 # only by the repository owner's hand.
 GUARD_PATH_PREFIXES = ("hooks/",)
 GUARD_PATH_FILES = frozenset({"settings.json", "settings.local.json"})
+# The sync-state guard itself. CI runs the copy on the protected base commit
+# and falls back to the checkout's copy only while no trusted commit carries
+# one (issue #5608), so `check` refuses a range that removes it: once a base
+# carries the guard, a PR can drop it only by also dropping the CI step, the
+# `.github/workflows/ci.yml` gap agents.md documents.
+GUARD_SCRIPT_PATH = "scripts/claude_twin_sync.py"
 SYNC_BRANCH_PREFIX = "claude/claude-twin-sync-"
 APPROVAL_LABEL = "ai:claude-sync-approval"
 APPROVAL_LABEL_COLOR = "b60205"
@@ -409,6 +415,12 @@ def check_not_ahead(
 	rule replaces the issue #5246 guard rule for that range: a backport of guard
 	content already on the default branch is allowed there, and the #5246 rule
 	on the default branch is what keeps that content owner-reviewed.
+
+	`GUARD_SCRIPT_PATH` fails closed too, on every event (issue #5608 review):
+	when it is a regular file on `base`, it must still be one on `head`. A
+	delete, a rename (`--no-renames` makes it a delete), or a swap for a
+	symlink or directory would leave a later base without the guard, and CI
+	then runs the checkout's copy, which that later PR controls.
 	"""
 	sync_pr = is_sync_pr_head(pr_head_ref, pr_head_repo, base_repo)
 	out = run_git(repo, ["diff", "--name-only", "--no-renames", "-z", base, head, "--", CLAUDE_ROOT])
@@ -447,6 +459,11 @@ def check_not_ahead(
 			violations.append({"path": path, "reason": f"deleted while {TWIN_ROOT}/{rel} still exists; the sync never copies a deletion, so delete both copies together"})
 		elif local.sha != twin.sha:
 			violations.append({"path": path, "reason": f"changed to content that differs from {TWIN_ROOT}/{rel}; edit the twin and let the sync PR copy it"})
+	guard_at_base = blob_at(repo, base, GUARD_SCRIPT_PATH)
+	if guard_at_base is not None and guard_at_base.kind == "blob" and guard_at_base.mode in REGULAR_MODES:
+		guard_at_head = blob_at(repo, head, GUARD_SCRIPT_PATH)
+		if guard_at_head is None or guard_at_head.kind != "blob" or guard_at_head.mode not in REGULAR_MODES:
+			violations.append({"path": GUARD_SCRIPT_PATH, "reason": "the sync-state guard script is removed or no longer a regular file; CI would then run a later PR's own copy, so it is retired only together with the CI step that runs it (docs/scripts-pending-removal.md)"})
 	return {"base": base, "head": head, "event": event, "sync_pr": sync_pr, "guard_provenance_ref": guard_provenance_ref, "checked": checked, "violations": violations, "ok": not violations}
 
 
@@ -905,7 +922,8 @@ def main(argv: list[str] | None = None) -> int:
 				# The path comes from the checked commit range (a PR's content):
 				# escaped, so a line break in a file name cannot start a command.
 				path = escape_command_property(item["path"])
-				message = escape_command_data(f".claude/ is ahead of its twin: {item['reason']} (CLAUDE.md §28.C)")
+				violation_prefix = ".claude/ is ahead of its twin" if item["path"].startswith(CLAUDE_ROOT + "/") else "twin sync guard"
+				message = escape_command_data(f"{violation_prefix}: {item['reason']} (CLAUDE.md §28.C)")
 				print(f"::error file={path}::{message}", flush=True)
 			_print(result)
 			return 0 if result["ok"] else 1
