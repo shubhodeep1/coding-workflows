@@ -231,7 +231,9 @@ Unit tests use a stubbed `gh_api`:
   1 hour ago is kept, and on an open PR is kept;
 - a `need_input` hold on a merged PR is archived;
 - an issue-start session is superseded by a later stage, not by a checker or
-  an earlier stage, and not by a newer issue-start session;
+  an earlier stage, and not by a newer issue-start session (removed by
+  security follow-up #5664: a later stage no longer archives an issue-start
+  session, and the test now asserts that it is kept; see Notes);
 - an issue-start session on a closed issue is archived, and on an open one is
   kept;
 - a report session 8 days old is archived, 6 days old is kept, and a
@@ -287,8 +289,9 @@ coding-workflows-only script, which is harmless there.
   "superseded by a later stage session" rule from the Goals above. A stage
   the checker archived after a failed start counted as superseding, and
   archiving the issue-start session disabled its safety net. An issue-start
-  session is now archived only once its issue is closed. The Goals keep the
-  original text as history; do not restore the rule
+  session is now archived only once its issue is closed. The Summary, Goals,
+  Tests, Risks & Mitigations, AD-3 and AD-4 keep the original text as
+  history; do not restore the rule
   (`docs/completed/issue-5664-archived-stage-disables-recovery-plan.md`).
 - Overlap: phase 4 of `docs/plans/claude-fixer-unattended-convergence-plan.md`
   plans `.claude/scripts/stale_sessions.py` with overlapping rules, in the same

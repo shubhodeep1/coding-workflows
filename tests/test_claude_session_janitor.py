@@ -375,8 +375,8 @@ def test_pickup_named_sessions_are_swept(monkeypatch):
 		_session("session_c", "#5070 · implement-issue-claude", created_hours=10),
 	]
 	result = janitor.classify(sessions, NOW)
-	# session_a's stage is live, but only a closed issue ends an issue-start
-	# session (issue #5664).
+	# A stage for session_a's issue (#5126) is live, but only a closed issue
+	# ends an issue-start session (issue #5664).
 	assert _archived_ids(result) == ["session_f", "session_b"]
 	assert result["kept"] == 2 and result["not_ours"] == 1 and result["errors"] == []
 	assert sorted(calls) == ["repos/o/r/issues/5068", "repos/o/r/issues/5070", "repos/o/r/issues/5126", "repos/o/r/pulls/4546"]

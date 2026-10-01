@@ -3,15 +3,15 @@
 - Plan: docs/completed/issue-5664-archived-stage-disables-recovery-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5664 (https://github.com/shubhodeep1/coding-workflows/issues/5664)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4887-archive-finished-sessions
-- Project branch: claude/implement-plan-issue-5664-archived-stage-disables-recovery   Final PR: #5674 draft
+- Project branch: claude/implement-plan-issue-5664-archived-stage-disables-recovery   Final PR: #5674 ready
 - Status: COMPLETE
-- Stage: final-merge
+- Stage: final-merge — review round
 - Activation: pending verify-activation
-- Waiting on: completion PR
+- Waiting on: PR #5674
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01PVfNdjDT88NAoRDkrYdBzR
 - Last updated: 2026-10-01
-- Last note: validation cycle 1/3 (run 36808191924) read: status=pass raw_status=pass, 10/10 tests on project-branch head e828160; completion PR moves the plan to docs/completed/ (session_013naezmvKCXFMazFpTWRf6A).
+- Last note: final PR #5674 review round 1 (head 4aba356): fixed 2 findings (the #4887 plan's #5664 note now names every section that keeps the old rule as history, and the Tests bullet is annotated; a janitor test comment reworded), rejected 3 no-defect notes (session_01PPkA93M1tZv19KJt6pCjRk).
 
 ## Phases
 1. [x] Phase 1 — issue-start sessions archive only on a closed issue
@@ -33,8 +33,8 @@
 - Cycle 1 — run 36808191924 2026-10-01 (target_ref: claude/implement-plan-issue-5664-archived-stage-disables-recovery, head e828160): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 271s); no fix issues
 
 ## Completion
-- Completion PR — doc moved to docs/completed/issue-5664-archived-stage-disables-recovery-plan.md
-- Final PR #5674 draft (base claude/implement-plan-issue-4887-archive-finished-sessions)
+- Completion PR #5890 merged 2026-10-01 — doc moved to docs/completed/issue-5664-archived-stage-disables-recovery-plan.md
+- Final PR #5674 ready — review rounds: 1 (base claude/implement-plan-issue-4887-archive-finished-sessions)
 
 ## Activation
 - n/a until the final merge: the issue base is project #4887's branch, so this project ends with `Activation: n/a (base claude/implement-plan-issue-4887-archive-finished-sessions)` after #5674 merges, unless that base moves to `main` first (Issue Mode)
@@ -47,6 +47,7 @@
 
 ## Lessons
 - [source:intervention] When a rule changes, grep every operator-facing doc for its old wording, including docs/operations/master-session.md standing decisions, not only the files the plan lists. (files: docs/operations/master-session.md)
+- [source:intervention] A note that marks superseded plan text as history must name every section that still states the old rule (summary, goals, tests, risks, auto-decisions), or annotate those lines inline; reviewers and later conformance runs read each section on its own. (files: docs/plans/issue-4887-archive-finished-sessions-plan.md)
 - [source:intervention] When a rule narrows, update the summary paragraph at the top of each description (module docstring, section intro, changelog lead) as well as the detailed rule below it; reviewers read the two against each other. (files: scripts/claude_session_janitor.py, CLAUDE.md)
 
 ## Notes
