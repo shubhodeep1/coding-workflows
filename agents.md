@@ -1092,7 +1092,15 @@ reviews, comments, and conflicts stay a direct §12 request.
   (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
   every `gh api` write that is not a §23.B routine write to the local
   repository (routine includes dispatching the six workflows allowed as
-  `gh workflow run <file> *`, kept equal by a test), allows reads and
+  `gh workflow run <file> *`, kept equal by a test) and for every call with
+  a file-backed `-F`/`--field` value (`@<file>` or `@-`) or `--input` on any
+  method, endpoint, or repository, GraphQL included, because `gh` reads that
+  file and sends it (issue #4619; `-f` values are literal, so post bodies
+  through the GitHub MCP tools or an inline `-f body=...`). It also prompts
+  for an `-F` word the shell could rewrite into `@<file>` (`$`, a backtick,
+  `~`, or a glob character in it) and for any command that uses ANSI-C
+  quoting (`$'...'`), an unquoted `#` comment, or brace expansion, which
+  Bash parses unlike the guard. It allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
   to the allow list or the Auto-mode classifier beside anything else (loops,
@@ -2117,6 +2125,7 @@ depend on it.
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | Age past which a still-`queued` review run stops suppressing a sweep dispatch (wedged-run recovery). `in_progress` runs are never discounted; `0` disables the cutoff. |
+| `CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS` | `300` | `internal-review.yml` push route only: when a `claude/**` push finds no open PR, re-check every 60s for up to this many seconds and skip the no-PR reviewer run once a PR appears (its `pull_request` run reviews the same commit). `0` restores the single lookup; values outside 0-3600 fall back to `300` with a warning; a failed lookup counts as no PR and the review runs when the window ends. Logs `RESOLVE_CLAUDE_BRANCH_PR_WAIT` / `RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED` (the latter with gh's error text as `error="..."`: one line, at most 200 characters). |
 | `REVIEW_TIER_RESOLVER_ENABLED` | `false` | Enable the additive Phase I `lite \| standard \| full` review-tier resolver. While `false`, existing reviewer routing is unchanged. |
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for `lite` review-tier resolution. `lite` also requires the existing doc-only path set. |
 | `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.7-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
@@ -2161,6 +2170,14 @@ depend on it.
   a bounded scope-feedback retry only after the pre-attempt state is restored
   and verified; an unsafe restore fails closed. Consumer repos retain the
   previous path, and the final `check_resolver_diff.sh` commit gate is unchanged.
+  The model itself runs on a private copy of the captured merge index
+  (`GIT_INDEX_FILE=${RUNTIME_DIR}/resolver_model_index`, refreshed before every
+  attempt by `_resolver_model_index_prepare`), so a `git add` of the file it
+  resolved no longer changes the real index that both scope guards require to
+  stay unchanged (#5627). The script stages the accepted resolution itself; a
+  model that bypasses the copy still fails closed. Because OpenCode's snapshot
+  tracking runs git with the inherited environment, the resolver's own OpenCode
+  config sets `snapshot: false`. Both changes apply to the source repo only.
 
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
 - `.github/workflows/review_autofix.yml` stages required and main-primary helpers from the verified reusable-workflow SHA; PR-head copies are review data, not runtime code. `render_prompt.py`, `review_conflict_resolve.sh` and their dependencies ship with that same workflow commit. Embedded PR-diff template syntax is still handled by `render_prompt.sh` with `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` after assembly, while static templates retain strict validation. Optional support missing from that commit skips the feature; required support fails closed. The model catalog comes from the same commit as the reviewer roster, never from a PR branch or a separately resolved main snapshot.
