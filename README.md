@@ -1427,7 +1427,8 @@ GPT editor never runs on it, the GPT conflict resolver runs only for a
 conflict that touches `.claude/**`
 (`CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED`), and the
 review-blocked judge runs only in its Claude mode (below). A Claude
-session fixes everything else (CLAUDE.md §26 and §26.H). A clean review
+session fixes the rest, except the findings that judge upholds and fixes
+itself (CLAUDE.md §26 and §26.H). A clean review
 whose checks are still running is not handed to anyone: the workflow posts
 a "clean, waiting for checks" comment and the 30-minute review sweep merges
 the PR once they are green, or hands a failing check to the session

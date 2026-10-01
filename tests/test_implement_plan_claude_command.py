@@ -550,3 +550,5 @@ def test_conformance_run_2_readme_claude_fixer_summary():
 	assert "the GPT conflict resolver runs only for a conflict that touches `.claude/**`" in readme
 	assert "the review-blocked judge runs only in its Claude mode (below)" in readme
 	assert "GPT editor, conflict resolver, and review-blocked judge never run on it" not in readme
+	assert "A Claude session fixes the rest, except the findings that judge upholds and fixes itself" in readme
+	assert "session fixes everything else" not in readme
