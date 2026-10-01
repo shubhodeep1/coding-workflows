@@ -223,6 +223,10 @@ jobs:
           #   - the compare itself fails (cmp exit 2+, a read error) →
           #     nothing is changed for that file;
           #   - otherwise the .claude/<rel> copy is synced as usual.
+          # A guard in the .claude/ tree with no twin (a twin deletion still
+          # waiting for the owner) counts as a differing twin: a consumer
+          # that lacks the file gets the .claude/<rel> copy, and one that has
+          # it keeps its file.
           # Each skipped or kept guard gets a ::warning:: line. In a shell
           # `case` pattern `*` also matches `/`, so `hooks/*` below covers
           # nested hooks (hooks/lib/x.py) like the Python startswith check.
@@ -284,6 +288,33 @@ jobs:
               printf '%s\n' "${local_path}" >> /tmp/claude_changed_files.txt
             fi
           done < <(LC_ALL=C find "${CLAUDE_UPSTREAM_DIR}" -type f | LC_ALL=C sort)
+
+          # Guards in the .claude/ tree that the twin loop above never saw
+          # (no regular-file twin). Same pattern as the loop's guard arm.
+          if [ -d "${CLAUDE_REVIEWED_DIR}" ]; then
+            while IFS= read -r reviewed_guard_path; do
+              [ -n "${reviewed_guard_path}" ] || continue
+              rel="${reviewed_guard_path#${CLAUDE_REVIEWED_DIR}/}"
+              case "${rel}" in
+                hooks/*|settings.json|settings.local.json) ;;
+                *) continue ;;
+              esac
+              guard_twin_path="${CLAUDE_UPSTREAM_DIR}/${rel}"
+              if [ -f "${guard_twin_path}" ] && [ ! -L "${guard_twin_path}" ]; then
+                continue
+              fi
+              local_path="${CLAUDE_LOCAL_DIR}/${rel}"
+              if [ -e "${local_path}" ] || [ -L "${local_path}" ]; then
+                printf '::warning::claude-guard-sync: .claude/%s has no workflow-templates twin on stable (owner sync pending); kept the existing file.\n' "${rel}"
+                continue
+              fi
+              mkdir -p "$(dirname "${local_path}")"
+              cp "${reviewed_guard_path}" "${local_path}"
+              CHANGED_COUNT=$((CHANGED_COUNT + 1))
+              printf '%s\n' "${local_path}" >> /tmp/claude_changed_files.txt
+              printf '::warning::claude-guard-sync: .claude/%s has no workflow-templates twin on stable (owner sync pending); installed the .claude/ copy.\n' "${rel}"
+            done < <(LC_ALL=C find "${CLAUDE_REVIEWED_DIR}" -type f | LC_ALL=C sort)
+          fi
 
           echo "claude_changed=${CHANGED_COUNT}" >> "$GITHUB_OUTPUT"
           if [ "${CHANGED_COUNT}" -gt 0 ]; then

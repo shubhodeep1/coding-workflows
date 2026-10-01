@@ -1061,7 +1061,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > The hooks, `settings.json`, and `settings.local.json` come from the
 > `stable` commit's own `.claude/` tree, not its `workflow-templates/.claude/`
 > twin. When the two differ, because an owner-only sync PR is still pending,
-> a consumer keeps the guard file it already has (issue #5607).
+> a consumer keeps the guard file it already has; a guard with no twin is
+> installed from `.claude/` only where the consumer lacks it (issue #5607).
 > `.claude/scripts/stale_routines.py` sweeps the Routines these check-ins
 > leave behind (fired reminders, dead-session Routines, finished hand-backs)
 > each time one is armed or reported, and never touches any other Routine.

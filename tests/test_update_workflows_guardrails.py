@@ -459,6 +459,39 @@ def test_claude_sync_guard_compare_error_is_not_reported_as_a_difference() -> No
 	assert outputs["claude_changed"] == "1"
 
 
+def test_claude_sync_installs_reviewed_guard_whose_twin_is_missing() -> None:
+	"""A guard in .claude/ with no twin counts as a differing twin (PR #5654 review)."""
+	twins = {"commands/foo.md": "twin command\n", "hooks/kept.py": "kept\n"}
+	reviewed = {
+		"commands/foo.md": "reviewed command\n",
+		"commands/only_reviewed.md": "not a guard\n",
+		"hooks/kept.py": "kept\n",
+		"hooks/twin_deleted.py": "reviewed hook\n",
+		"hooks/lib/twin_deleted_nested.py": "reviewed nested hook\n",
+		"hooks/twin_deleted_local.py": "reviewed hook 3\n",
+		"settings.local.json": "{\"reviewed\": true}\n",
+	}
+	local = {"hooks/twin_deleted_local.py": "consumer hook\n"}
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, local)
+	# The consumer lacks it: the reviewed copy is installed, with a warning.
+	assert tree["hooks/twin_deleted.py"] == "reviewed hook\n"
+	assert tree["hooks/lib/twin_deleted_nested.py"] == "reviewed nested hook\n"
+	assert tree["settings.local.json"] == "{\"reviewed\": true}\n"
+	for rel in ("hooks/twin_deleted.py", "hooks/lib/twin_deleted_nested.py", "settings.local.json"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} has no workflow-templates twin on stable (owner sync pending); installed the .claude/ copy." in stdout
+	# The consumer has it: kept, with a warning.
+	assert tree["hooks/twin_deleted_local.py"] == "consumer hook\n"
+	assert "::warning::claude-guard-sync: .claude/hooks/twin_deleted_local.py has no workflow-templates twin on stable (owner sync pending); kept the existing file." in stdout
+	# Non-guard .claude/ files still come from the twin tree only.
+	assert tree["commands/foo.md"] == "twin command\n"
+	assert "commands/only_reviewed.md" not in tree
+	# A guard with a twin is handled once, by the twin loop.
+	assert "hooks/kept.py has no workflow-templates twin" not in stdout
+	assert outputs["claude_changed"] == "5"
+	changed = [line for line in stdout.splitlines() if "installed the .claude/ copy" in line]
+	assert len(changed) == 3
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
@@ -476,6 +509,7 @@ def main() -> int:
 	test_claude_sync_takes_guard_files_from_the_reviewed_claude_tree()
 	test_claude_sync_with_matching_guards_behaves_as_before()
 	test_claude_sync_guard_compare_error_is_not_reported_as_a_difference()
+	test_claude_sync_installs_reviewed_guard_whose_twin_is_missing()
 	return 0
 
 
