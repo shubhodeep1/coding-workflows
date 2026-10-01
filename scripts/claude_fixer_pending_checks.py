@@ -62,6 +62,14 @@ Fail closed. Auto-merge is enabled only when ALL of these hold:
     an unreadable variable does not merge).
 `review_enable_auto_merge.sh` keeps its own guards on top: `--match-head-commit`
 on the reviewed head, the e2e-smoke-test label, and integration-branch heads.
+It also gets the reviewed base (REVIEWED_BASE_REF / REVIEWED_BASE_SHA) and
+refuses, from the PR read it makes right before the merge call, a PR that was
+retargeted after the binding check above (issue #5905: that check reads the
+PR minutes and a dozen calls earlier). GitHub's merge APIs bind only the head,
+so after the helper enabled auto-merge the PR is read once more: a head or
+base that moved in between, or a re-read that fails, disables auto-merge again
+(`gh pr merge --disable-auto`), and the gate's stale-binding rule (#5147) lets
+the next review sweep review the PR against its new base.
 
 A check that finishes failed is not handled here: `check_in_status.py
 --hand-back` reports it as `ci-failed` like any other `claude/*` head, and a
@@ -81,7 +89,9 @@ for each of the 5 run statuses but `completed` (1 call per 100 runs,
 usually 1, at most 10), 1
 read per 100 comments again, 1 repository-variable read, then
 `review_enable_auto_merge.sh` (1 paginated labels read, 1 PR read, 1 merge
-call). Every read goes through `gh api` with
+call), and after a merge call that succeeded, 1 more PR read plus, only when
+the reviewed head or base no longer holds, 1 `gh pr merge --disable-auto`
+(GraphQL) write. Every read goes through `gh api` with
 GH_TOKEN; nothing is retried in a loop, and a failed read raises
 `check_in_status.ReadError` for the caller to log (fail open per PR).
 """
@@ -135,6 +145,11 @@ SUBPROCESS_TIMEOUT_SECS = 180
 # pins it against the helper, so a wording change fails CI instead of turning
 # every merge into `merge_failed`.
 AUTO_MERGE_ENABLED_LINE_PREFIX = "Auto-merge enabled."
+# The line review_enable_auto_merge.sh prints when the PR no longer targets
+# the REVIEWED_BASE_REF / REVIEWED_BASE_SHA it was given (issue #5905);
+# pinned against the helper by the tests like the success line above.
+AUTO_MERGE_BASE_REFUSED_LINE_PREFIX = "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr="
+AUTO_MERGE_BASE_REFUSED_LINE_SUFFIX = " action=refuse reason=base_changed"
 # The forms `gh api` (and the GitHub error body it prints to stdout) use for a
 # 404; scripts/gh_helpers.sh recognises the same set.
 NOT_FOUND_RE = re.compile(r"HTTP 404|gh: Not Found|404 Not Found|status code 404|\"status\":\s*\"404\"", re.IGNORECASE)
@@ -525,8 +540,16 @@ def read_enable_auto_merge(repo: str) -> str | None:
 	return value if isinstance(value, str) else None
 
 
-def enable_auto_merge(repo: str, number: int, head_sha: str, enable_flag: str) -> dict:
-	"""Run review_enable_auto_merge.sh for the reviewed head; {"enabled": bool, "output": str}."""
+def enable_auto_merge(repo: str, number: int, head_sha: str, enable_flag: str,
+	base_ref: str = "", base_sha: str = "") -> dict:
+	"""Run review_enable_auto_merge.sh for the reviewed head (and base); {"enabled", "base_refused", "output"}.
+
+	`base_ref` / `base_sha` are the base the review ran against, already
+	checked against the marker's v2 binding. They go to the helper as
+	REVIEWED_BASE_REF / REVIEWED_BASE_SHA, which it compares with its own PR
+	read right before the merge call (issue #5905); `base_refused` is True
+	when it refused for that reason. Both empty keeps the head-only helper.
+	"""
 	env = {
 		**os.environ,
 		"GITHUB_REPOSITORY": repo,
@@ -535,6 +558,8 @@ def enable_auto_merge(repo: str, number: int, head_sha: str, enable_flag: str) -
 		"FORWARD_MERGE_FALLBACK_AUTO_MERGE": DEFAULT_FORWARD_MERGE_FALLBACK_AUTO_MERGE,
 		"ORCH_INTEGRATION_BRANCH_PATTERN": DEFAULT_ORCH_INTEGRATION_BRANCH_PATTERN,
 		"INITIAL_HEAD_SHA": head_sha,
+		"REVIEWED_BASE_REF": base_ref,
+		"REVIEWED_BASE_SHA": base_sha,
 	}
 	# The helper records AUTO_MERGE_READY_LABELS_ALLOWED for later workflow
 	# steps; the sweep has none, so keep it out of the job environment.
@@ -543,10 +568,62 @@ def enable_auto_merge(repo: str, number: int, head_sha: str, enable_flag: str) -
 		proc = subprocess.run(["bash", str(AUTO_MERGE_SCRIPT)], env=env, capture_output=True, text=True,
 			timeout=SUBPROCESS_TIMEOUT_SECS, check=False)
 	except (OSError, subprocess.TimeoutExpired) as exc:
-		return {"enabled": False, "output": f"review_enable_auto_merge.sh did not run: {exc}"}
+		return {"enabled": False, "base_refused": False, "output": f"review_enable_auto_merge.sh did not run: {exc}"}
 	output = "\n".join(part for part in (proc.stdout.strip(), proc.stderr.strip()) if part)
-	enabled = proc.returncode == 0 and any(line.startswith(AUTO_MERGE_ENABLED_LINE_PREFIX) for line in proc.stdout.splitlines())
-	return {"enabled": enabled, "output": output}
+	stdout_lines = proc.stdout.splitlines()
+	enabled = proc.returncode == 0 and any(line.startswith(AUTO_MERGE_ENABLED_LINE_PREFIX) for line in stdout_lines)
+	base_refused = not enabled and any(line.startswith(AUTO_MERGE_BASE_REFUSED_LINE_PREFIX) and line.endswith(AUTO_MERGE_BASE_REFUSED_LINE_SUFFIX)
+		for line in stdout_lines)
+	return {"enabled": enabled, "base_refused": base_refused, "output": output}
+
+
+def recheck_reviewed_pair(repo: str, number: int, head_sha: str, base_ref: str, base_sha: str) -> dict:
+	"""Re-read PR `number` after auto-merge was enabled and compare it with the reviewed head and base (issue #5905).
+
+	The helper's PR read and its `gh pr merge --auto` call are separate, so
+	a retarget in between still gets auto-merge for the new base. One PR
+	read. Output: {"outcome": "held" | "moved" | "merged_elsewhere" |
+	"unreadable", "detail": str}. `held`: the PR still has the reviewed head
+	and base (merged or not). `moved`: not merged, and its head or base is no
+	longer the reviewed one. `merged_elsewhere`: already merged, into a base
+	other than the reviewed one. `unreadable`: the read failed or returned no
+	usable head and base; the caller treats it like `moved` (fail closed).
+	"""
+	try:
+		pr = check_in_status.gh_api(f"repos/{repo}/pulls/{number}")
+	except check_in_status.ReadError as exc:
+		return {"outcome": "unreadable", "detail": f"could not re-read the PR: {exc}"}
+	if not isinstance(pr, dict):
+		return {"outcome": "unreadable", "detail": "the PR re-read was not a JSON object"}
+	head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+	base = pr.get("base") if isinstance(pr.get("base"), dict) else {}
+	current_head = head.get("sha") if isinstance(head.get("sha"), str) else ""
+	current_ref = base.get("ref") if isinstance(base.get("ref"), str) else ""
+	current_sha = base.get("sha") if isinstance(base.get("sha"), str) else ""
+	if not current_head or not current_ref or not current_sha:
+		return {"outcome": "unreadable", "detail": "the PR re-read carried no head sha, base ref, or base sha"}
+	detail = f"head {current_head[:12]}, base {current_ref} at {current_sha[:12]}"
+	if pr.get("merged") is True:
+		# A merge may refresh the PR's base.sha snapshot to the base tip it
+		# merged onto, so a merged PR is judged by its head and base ref: a
+		# retarget always changes the ref.
+		if current_head == head_sha and current_ref == base_ref:
+			return {"outcome": "held", "detail": detail}
+		return {"outcome": "merged_elsewhere", "detail": detail}
+	if current_head == head_sha and current_ref == base_ref and current_sha == base_sha:
+		return {"outcome": "held", "detail": detail}
+	return {"outcome": "moved", "detail": detail}
+
+
+def revoke_auto_merge(repo: str, number: int) -> dict:
+	"""Disable auto-merge on PR `number` (`gh pr merge --disable-auto`, 1 GraphQL write); {"revoked": bool, "output": str}."""
+	try:
+		proc = subprocess.run(["gh", "pr", "merge", str(number), "--repo", repo, "--disable-auto"],
+			capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_SECS, check=False)
+	except (OSError, subprocess.TimeoutExpired) as exc:
+		return {"revoked": False, "output": f"gh pr merge --disable-auto did not run: {exc}"}
+	output = "\n".join(part for part in (proc.stdout.strip(), proc.stderr.strip()) if part)
+	return {"revoked": proc.returncode == 0, "output": output}
 
 
 def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False) -> dict:
@@ -561,7 +638,14 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	(a newer review of the PR may still be running), `review_superseded`
 	(a newer review of the PR did not succeed, or the marker changed while
 	this ran), `auto_merge_setting_unreadable`, `auto_merge_disabled`, `ready` (dry run),
-	`merge_enabled`, `merge_failed`. Only `merge_enabled` changed anything.
+	`merge_enabled`, `merge_failed`, and, after the merge call (issue #5905):
+	`base_changed` again when review_enable_auto_merge.sh refused a base that
+	moved since the first read, `merge_revoked` (auto-merge was enabled, but
+	the re-read PR no longer had the reviewed head and base, or could not be
+	read, so it was disabled again), `merge_revoke_failed` (that disable
+	failed; auto-merge may still be on), and `merged_unreviewed_base` (the PR
+	had already merged with another head or base ref). Only `merge_enabled`,
+	`merge_revoke_failed`, and `merged_unreviewed_base` leave a change behind.
 	Raises `check_in_status.ReadError` when a read fails, and `OSError` when
 	the snapshot's temp directory cannot be written; the sweep logs both per PR.
 	"""
@@ -638,7 +722,27 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 		return {"state": "auto_merge_disabled", "head_sha": head_sha, "reason": f"ENABLE_AUTO_MERGE={enable_flag}"}
 	if dry_run:
 		return {"state": "ready", "head_sha": head_sha, "reason": f"{snapshot['detail']}; dry run, auto-merge not enabled"}
-	result = enable_auto_merge(repo, number, head_sha, enable_flag)
-	return {"state": "merge_enabled" if result["enabled"] else "merge_failed", "head_sha": head_sha,
-		"reason": snapshot["detail"] if result["enabled"] else result["output"][-500:]}
+	result = enable_auto_merge(repo, number, head_sha, enable_flag, base_ref=base_ref, base_sha=base_sha)
+	if result["base_refused"]:
+		return {"state": "base_changed", "head_sha": head_sha,
+			"reason": "the PR was retargeted before the merge call; review_enable_auto_merge.sh refused it "
+				f"(reviewed base {base_ref} at {base_sha[:12]}); the next review sweep reviews this head again"}
+	if not result["enabled"]:
+		return {"state": "merge_failed", "head_sha": head_sha, "reason": result["output"][-500:]}
+	# Issue #5905: the helper's PR read and its merge call are separate, so a
+	# retarget in between still got auto-merge. Re-read once and take the
+	# authorization back unless the reviewed head and base still hold.
+	pair = recheck_reviewed_pair(repo, number, head_sha, base_ref, base_sha)
+	if pair["outcome"] == "held":
+		return {"state": "merge_enabled", "head_sha": head_sha, "reason": snapshot["detail"]}
+	if pair["outcome"] == "merged_elsewhere":
+		return {"state": "merged_unreviewed_base", "head_sha": head_sha,
+			"reason": f"the PR merged as {pair['detail']}, not the reviewed base {base_ref} at {base_sha[:12]}"}
+	revoke = revoke_auto_merge(repo, number)
+	if not revoke["revoked"]:
+		return {"state": "merge_revoke_failed", "head_sha": head_sha,
+			"reason": f"{pair['detail']}; disabling auto-merge failed: {revoke['output'][-300:]}"}
+	return {"state": "merge_revoked", "head_sha": head_sha,
+		"reason": f"auto-merge disabled again: {pair['detail']} after the merge call, reviewed {head_sha[:12]} "
+			f"into {base_ref} at {base_sha[:12]}; the next sweep or review run decides this head again"}
 

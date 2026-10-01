@@ -1506,6 +1506,26 @@ again rather than left with neither a merge nor a review. A review
 run whose PR snapshot has no valid base posts the ordinary findings hand-off
 instead of a pending-checks comment.
 
+The sweep's base check comes from its first PR read, minutes and a dozen
+calls before the merge, so the base is checked again at merge time
+(issue #5905). The sweep passes the reviewed base to
+`review_enable_auto_merge.sh` as `REVIEWED_BASE_REF` / `REVIEWED_BASE_SHA`,
+and the helper refuses, from the PR read it makes right before
+`gh pr merge`, a PR that no longer targets it
+(`AUTOFIX_AUTO_MERGE_HEAD_BOUND ... action=refuse reason=base_changed`;
+the sweep logs `state=base_changed`). The workflow's own auto-merge step
+sets neither input and behaves as before. GitHub's merge APIs bind only the
+head, so after enabling auto-merge the sweep reads the PR once more:
+
+- the head or base moved, or the read fails → it runs
+  `gh pr merge --disable-auto` (`state=merge_revoked`), and the next review
+  sweep reviews the PR against its new base;
+- that disable fails → `merge_revoke_failed`;
+- the PR already merged with another head or base ref →
+  `merged_unreviewed_base`.
+
+Both of the last two are also printed as `::warning::` lines.
+
 **Claims** (`.claude/scripts/claude_fix_claim.py`) stop two fixers racing:
 one PR comment ending in
 `<!-- ai:claude-fix-claim:v1 head=<sha> kind=<conflict|ci|review|blocked|hold> by=<claimant> -->`,
