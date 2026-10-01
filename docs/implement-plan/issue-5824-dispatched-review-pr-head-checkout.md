@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5857
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_016vfvJu7J6F4Y3sRhBoQPFf   safety net and hand-back: see the latest stage report (round 5 stage: session_0145RCULW96ibF4Nm8vVDesf)
+- Check-in: checker session_016vfvJu7J6F4Y3sRhBoQPFf   safety net and hand-back: see the latest stage report (stage session: session_0145RCULW96ibF4Nm8vVDesf)
 - Last updated: 2026-10-01
-- Last note: review round 5 on PR #5857 (head 6da94e12c753): the one consensus finding (a dispatched run on a fork head checks out `github.sha` per AD-2, skips the metadata comparison, and its fork exit sets only `CAN_PUSH=false`, which no reviewer step checks, so reviewers read default-branch files against the fork diff) was valid; "Checkout PR head branch" now logs `AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP … action=soft_exit` and sets `AUTOFIX_STALE_BASE_SKIP` for that case before any exit (AD-4). Nothing rejected.
+- Last note: intervention 1 on PR #5857 (2026-10-01): run 36832014224 labelled it `ai:review-blocked` with `CLAUDE_FIXER_REVIEW_BLOCKED reason=max_autofix_iterations` on head 1df055f because five consecutive `[claude-autofix]` commits hit `MAX_AUTOFIX_ITERATIONS`; the gate skipped the reviewers, so the round-5 fix was never reviewed and no finding is open. This `[claude-intervention]` commit resets the count and the label is removed so the panel reviews the head.
 
 ## Phases
-1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 5; interventions: 0
+1. [ ] Phase 1 — check out the gate-verified PR head on dispatched review runs   — PR #5857 open (waiting); review rounds: 5; interventions: 1 (2026-10-01: `MAX_AUTOFIX_ITERATIONS` block with no open finding; reset with a `[claude-intervention]` commit)
    - gate exports `review_checkout_sha` from the existing `/pulls/<n>` fetch (same-repo heads only)
    - `codex-agent` → "Checkout repo" uses `pull_request.head.sha || review_checkout_sha || github.sha`
    - regression test `tests/test_review_autofix_dispatch_pr_head_checkout.py`; updated `tests/test_review_autofix_merge_precheck.py`
@@ -44,6 +44,7 @@
 - [source:intervention] A step that checks out one commit for file reads and later resets the branch to its live tip must compare the two SHAs and soft-exit (or re-align) when they differ, or reviewers read one tree while merge gates bind to another. (files: .github/workflows/review_autofix.yml)
 - [source:intervention] A moved-head guard must run before every early exit of the step that holds it (fork heads, rejected branch names), comparing against the head the diff was collected for, or the early-exit paths pair old files with a newer diff. (files: .github/workflows/review_autofix.yml, scripts/review_collect_pr_metadata.sh)
 - [source:intervention] An exit that only sets `CAN_PUSH=false` does not stop `review_autofix.yml` from reviewing or merging; a run whose workspace cannot hold the PR head must set `AUTOFIX_STALE_BASE_SKIP` (the flag the reviewer, hand-off, and auto-merge steps check). (files: .github/workflows/review_autofix.yml)
+- [source:intervention] In Claude-fixer mode the fifth consecutive `[claude-autofix]` commit is never reviewed: the gate counts it, reaches `MAX_AUTOFIX_ITERATIONS`, and labels the PR `ai:review-blocked` before the reviewers run, so a block right after a last-round fix needs a `[claude-intervention]` commit to get that fix reviewed, not another fix. (files: .github/workflows/review_autofix.yml)
 
 ## Notes
 - Security pass: run (`security_pass_skip.py`: no skip label).
