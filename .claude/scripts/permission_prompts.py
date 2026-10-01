@@ -57,11 +57,12 @@ the failed `reasons`, and the evidence fields (`signature`, `class`,
 `target_class`, `occurrences`, `target_occurrences`). Evidence that the
 cause is the same (condition 3) stays with the session.
 
-Issue text is untrusted data: the tool name; the `**Pattern:**` shape and
-the prompt reason, each written as one line with `<!--` escaped (the
-signature is taken from the shape before it is escaped), inside a code span
-longer than any backtick run in it, in issue bodies and in both kinds of
-"Seen again" comment (issue #5810); and the command
+Issue text is untrusted data: the tool name and the `**Pattern:**` shape
+(in issue bodies and the class "Seen again" comment) and the prompt reason
+(in issue bodies and both kinds of "Seen again" comment), each written as
+one line with `<!--` escaped (the signature is taken from the shape before
+it is escaped), inside a code span longer than any backtick run in it
+(issue #5810); and the command
 truncated to MAX_COMMAND_CHARS with heredoc bodies removed and token-like strings masked (REDACTION_PATTERNS),
 inside a fenced block longer than any backtick run in it. The markers
 (signature, class, "Filed by" line) and the `**Occurrences:**` evidence are
