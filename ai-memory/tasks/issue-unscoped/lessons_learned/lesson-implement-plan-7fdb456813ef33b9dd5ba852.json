@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T01:40:13Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When the reviewer provider fails (for example out of credits), the failed review check stays on the head and the next reviewer run reports it as a finding; no code change fixes it, so give the PR a new head (sync the base branch in) instead of a code edit.",
+  "phase": "implement_plan",
+  "pr_number": 5643,
+  "record_id": "lesson-implement-plan-7fdb456813ef33b9dd5ba852",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5619-tracking-lineage-completion-pr-only",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

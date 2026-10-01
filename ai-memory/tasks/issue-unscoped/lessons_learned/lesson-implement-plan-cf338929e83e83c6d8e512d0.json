@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T01:40:13Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A bash list built from `$(...)` output has no trailing newline, so appending with `+=\"<n>\"$'\\n'` fuses numbers (`5` + `10` \u2192 `510`) and silently breaks `grep -qxF` membership; merge list items with a helper such as `merge_issue_number_list`.",
+  "phase": "implement_plan",
+  "pr_number": 5643,
+  "record_id": "lesson-implement-plan-cf338929e83e83c6d8e512d0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5619-tracking-lineage-completion-pr-only",
+    "file:.github/workflows/issue_pr_status.yml"
+  ]
+}
