@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T04:40:53Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Before trusting a read-result run, confirm its `target_ref` input in the run log: two stage sessions that dispatch `internal-validate.yml` seconds apart can each record the other's run id (#5016).",
+  "phase": "implement_plan",
+  "pr_number": 5885,
+  "record_id": "lesson-implement-plan-e5af19f8c15504530e8dcf1f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:validation",
+    "plan:issue-5618-reconcile-target-branch-merges",
+    "file:.claude/scripts/dispatch_workflow.py",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}
