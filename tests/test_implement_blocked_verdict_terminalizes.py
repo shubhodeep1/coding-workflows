@@ -110,6 +110,9 @@ def test_blocked_verdict_moves_issue_to_ai_blocked_and_explains_resume() -> None
 	assert "Reason: BLOCKED: Required production credentials" in bodies[0]
 	assert "stall recovery and re-issuance are paused" in bodies[0]
 	assert "comment /answer to re-plan" in bodies[0]
+	# Issue #5309: an automation marker closes the comment, after the model's
+	# reason, so clarify never reads a /reclarify line in it as a command.
+	assert bodies[0].rstrip().endswith("\n\n<!-- ai:implement-blocked:v1 -->")
 	assert "AI implementation workflow failed" not in bodies[0]
 
 

@@ -1437,6 +1437,10 @@ jobs:
             printf '%s\n' "Provide the required input, then reply with /answer."
             printf '\n'
             printf '%s\n' "Run: ${RUN_URL}"
+            # Automation marker, last and outside the model's blocked reason
+            # (issue #5309): clarify never treats a /reclarify line here as
+            # a command.
+            printf '\n%s\n' "<!-- ai:plan-blocked:v1 -->"
           } > "${PLAN_COMMENT_FILE}"
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
@@ -1859,6 +1863,14 @@ jobs:
             echo
             echo "Reply with:"
             echo "/answer"
+            if [ "${IS_ORCHESTRATOR_MANAGED}" != 'true' ]; then
+              # The orchestrated variant starts with its marker; this one
+              # copies raw model output, so it gets one as its last line
+              # (issue #5309). The `^Clarification required` lookup is
+              # unchanged.
+              echo
+              echo "<!-- ai:clarification-required:v1 -->"
+            fi
           } > "${PLAN_COMMENT_FILE}"
 
           CLARIFICATION_COMMENT_LEN="$(wc -c < "${PLAN_COMMENT_FILE}")"

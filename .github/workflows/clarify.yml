@@ -18,7 +18,7 @@ jobs:
   clarify:
     if: >-
       ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
-      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && (contains(toJson(github.event.issue.labels.*.name), '"ai:claude-blocked"') || contains(toJson(github.event.issue.labels.*.name), '"ai:claude-handoff-failed"') || contains(toJson(github.event.issue.labels.*.name), '"ai:blocked"')))))
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!--') && !contains(toJson(github.event.issue.labels.*.name), '"ai:orchestrator-tracking"') && !contains(toJson(github.event.issue.labels.*.name), '"ai:orchestrator-managed"') && !contains(github.event.issue.body, 'Managed by: AI Orchestrator') && (contains(toJson(github.event.issue.labels.*.name), '"ai:claude-blocked"') || contains(toJson(github.event.issue.labels.*.name), '"ai:claude-handoff-failed"') || contains(toJson(github.event.issue.labels.*.name), '"ai:blocked"')))))
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
@@ -436,11 +436,18 @@ jobs:
           # case-insensitive like startsWith/contains. A comment is a
           # /reclarify command when it starts with `/reclarify`, or when a
           # later line starts with `/reclarify`, the comment carries no
-          # `<!-- ai:` automation marker (automation posts as the same
-          # trusted User and often says "comment `/reclarify`"), and the
-          # issue is waiting on a human answer (`ai:claude-blocked`,
-          # `ai:claude-handoff-failed`, or `ai:blocked`), so model text in an
-          # unmarked automation comment elsewhere cannot start clarify. Any
+          # `<!--` HTML comment (automation posts as the same trusted User,
+          # and every automation marker is one), and the issue is waiting on
+          # a human answer (`ai:claude-blocked`, `ai:claude-handoff-failed`,
+          # or `ai:blocked`) and is not an orchestrator tracking or managed
+          # issue, so model text in an unmarked automation comment cannot
+          # start clarify. A managed issue is recognised by its label or,
+          # like scripts/claude_issue_route.py, by its `Managed by: AI
+          # Orchestrator` body line (case-insensitive, like the predicate's
+          # contains). Issue #5309: this step also ignores a `/reclarify`
+          # line inside a fenced code block (``` or ~~~), where automation
+          # quotes model output and untrusted excerpts; the expression
+          # language cannot see fences, so only this step checks them. Any
           # other comment that reaches this step does nothing.
           IS_RECLARIFY_COMMAND="true"
           if [ "${EVENT_NAME}" = "issue_comment" ]; then
@@ -448,9 +455,35 @@ jobs:
             COMMENT_BODY_LC="${COMMENT_BODY,,}"
             if [[ "${COMMENT_BODY_LC}" == /reclarify* ]]; then
               IS_RECLARIFY_COMMAND="true"
-            elif [[ "${COMMENT_BODY_LC}" == *$'\n'/reclarify* && "${COMMENT_BODY_LC}" != *'<!-- ai:'* ]] && \
-              jq -e '[(.labels // [])[]?.name] | any(. == "ai:claude-blocked" or . == "ai:claude-handoff-failed" or . == "ai:blocked")' "${ISSUE_META_FILE}" >/dev/null; then
-              IS_RECLARIFY_COMMAND="true"
+            elif [[ "${COMMENT_BODY_LC}" == *$'\n'/reclarify* && "${COMMENT_BODY_LC}" != *'<!--'* ]] && \
+              jq -e '([(.labels // [])[]?.name] | any(. == "ai:claude-blocked" or . == "ai:claude-handoff-failed" or . == "ai:blocked") and (any(. == "ai:orchestrator-tracking" or . == "ai:orchestrator-managed") | not)) and ((.body // "") | ascii_downcase | contains("managed by: ai orchestrator") | not)' "${ISSUE_META_FILE}" >/dev/null; then
+              # CommonMark fences: an opening line of 0-3 spaces and 3+
+              # backticks or tildes (a backtick fence's info string has no
+              # backtick, so ```x``` is inline code, not a fence); the
+              # closing line uses the same character, at least as many, and
+              # nothing else but trailing spaces or tabs. An unclosed fence
+              # runs to the end of the comment.
+              # shellcheck disable=SC2016
+              RECLARIFY_FENCE_OPEN_RE='^ {0,3}((`{3,})[^`]*$|(~{3,}))'
+              RECLARIFY_FENCE_CLOSE_RE='^ {0,3}(`{3,}|~{3,})[[:blank:]]*$'
+              RECLARIFY_OPEN_FENCE=""
+              RECLARIFY_LINE_NO=0
+              while IFS= read -r RECLARIFY_SCAN_LINE || [ -n "${RECLARIFY_SCAN_LINE}" ]; do
+                RECLARIFY_SCAN_LINE="${RECLARIFY_SCAN_LINE%$'\r'}"
+                RECLARIFY_LINE_NO=$((RECLARIFY_LINE_NO + 1))
+                if [ -z "${RECLARIFY_OPEN_FENCE}" ]; then
+                  if [[ "${RECLARIFY_SCAN_LINE}" =~ ${RECLARIFY_FENCE_OPEN_RE} ]]; then
+                    RECLARIFY_OPEN_FENCE="${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+                  elif [ "${RECLARIFY_LINE_NO}" -gt 1 ] && [[ "${RECLARIFY_SCAN_LINE}" == /reclarify* ]]; then
+                    IS_RECLARIFY_COMMAND="true"
+                    break
+                  fi
+                elif [[ "${RECLARIFY_SCAN_LINE}" =~ ${RECLARIFY_FENCE_CLOSE_RE} ]] && \
+                  [ "${BASH_REMATCH[1]:0:1}" = "${RECLARIFY_OPEN_FENCE:0:1}" ] && \
+                  [ "${#BASH_REMATCH[1]}" -ge "${#RECLARIFY_OPEN_FENCE}" ]; then
+                  RECLARIFY_OPEN_FENCE=""
+                fi
+              done <<< "${COMMENT_BODY_LC}"
             fi
           fi
 
@@ -519,7 +552,7 @@ jobs:
           fi
           RELEASE_CLAUDE_CLAIM="false"
           if [ "${ISSUE_IMPLEMENTER}" = "codex" ] && [ "${ISSUE_IMPLEMENTER_REASON}" != "not_routed" ] && [ "${IS_CLOSED}" != "true" ] && \
-            jq -e '[(.labels // [])[]?.name] | index("ai:claude") != null' "${ISSUE_META_FILE}" >/dev/null; then
+            jq -e '[(.labels // [])[]?.name] | any(. == "ai:claude" or . == "ai:claude-blocked" or . == "ai:claude-handoff-failed")' "${ISSUE_META_FILE}" >/dev/null; then
             RELEASE_CLAUDE_CLAIM="true"
           fi
 
@@ -551,8 +584,54 @@ jobs:
           # A Codex route on an issue that still carries the ai:claude claim
           # (the user added `ai:codex` and commented /reclarify) hands it back
           # to Codex: drop the claim so plan / implement / stall recovery act
-          # on it again.
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai%3Aclaude" >/dev/null 2>&1 || true
+          # on it again. Issue #5309: the Claude "waiting on a human answer"
+          # labels go too, or the later-line /reclarify form would stay open
+          # while the Codex pipeline posts unmarked model text on the issue.
+          # §15: only delete a label the issue carries, read from the issue
+          # metadata the route step already fetched (the same snapshot that
+          # set release_claude_claim), so no call is spent on absent labels.
+          # Review round 4 (§15): the present labels go in ONE GraphQL
+          # removeLabelsFromLabelable call. REST has no multi-label remove,
+          # and a PUT of the whole label set would drop any label added since
+          # the snapshot. If the snapshot lacks node ids or the call fails,
+          # fall back to one REST DELETE per present label, as before.
+          RELEASE_CLAUDE_LABELS_JSON="$(jq -c '[(.labels // [])[]? | select(.name == "ai:claude" or .name == "ai:claude-blocked" or .name == "ai:claude-handoff-failed")]' "${ISSUE_META_FILE}")"
+          if [ "$(jq 'length' <<<"${RELEASE_CLAUDE_LABELS_JSON}")" -gt 0 ]; then
+            RELEASE_CLAUDE_BATCHED="false"
+            RELEASE_ISSUE_NODE_ID="$(jq -r '.node_id // ""' "${ISSUE_META_FILE}")"
+            if [ -n "${RELEASE_ISSUE_NODE_ID}" ] && jq -e 'all(.[]; (.node_id // "") != "")' <<<"${RELEASE_CLAUDE_LABELS_JSON}" >/dev/null; then
+              RELEASE_BATCH_RESULT="$(jq -n --arg id "${RELEASE_ISSUE_NODE_ID}" --argjson labels "${RELEASE_CLAUDE_LABELS_JSON}" \
+                '{query: "mutation($id: ID!, $labelIds: [ID!]!) { removeLabelsFromLabelable(input: {labelableId: $id, labelIds: $labelIds}) { clientMutationId } }", variables: {id: $id, labelIds: [$labels[].node_id]}}' \
+                | gh api graphql --input - --jq '(.errors // [] | length == 0) and (.data.removeLabelsFromLabelable != null)' 2>/dev/null || true)"
+              if [ "${RELEASE_BATCH_RESULT}" = "true" ]; then
+                RELEASE_CLAUDE_BATCHED="true"
+              fi
+            fi
+            if [ "${RELEASE_CLAUDE_BATCHED}" != "true" ]; then
+              echo "CLAUDE_ISSUE_HANDOFF release_batch_fallback issue=${ISSUE_NUMBER} transport=rest"
+              # Fail closed (PR #5324 review): a Claude label left behind here
+              # keeps the later-line /reclarify form open while Codex posts
+              # unmarked text (ai:claude-blocked / ai:claude-handoff-failed),
+              # or stops plan / implement (ai:claude). A 404 means the label
+              # went since the snapshot, which is the goal; any other failure
+              # stops the Codex route, and the next /reclarify retries it.
+              RELEASE_CLAUDE_REMAINING=""
+              while IFS=$'\t' read -r release_label_encoded release_label_name; do
+                if release_delete_stderr="$(gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${release_label_encoded}" 2>&1 >/dev/null)"; then
+                  continue
+                fi
+                if grep -qF '(HTTP 404)' <<<"${release_delete_stderr}"; then
+                  continue
+                fi
+                RELEASE_CLAUDE_REMAINING="${RELEASE_CLAUDE_REMAINING:+${RELEASE_CLAUDE_REMAINING},}${release_label_name}"
+              done < <(jq -r '.[] | [(.name | @uri), .name] | @tsv' <<<"${RELEASE_CLAUDE_LABELS_JSON}")
+              if [ -n "${RELEASE_CLAUDE_REMAINING}" ]; then
+                echo "CLAUDE_ISSUE_HANDOFF release_incomplete issue=${ISSUE_NUMBER} labels=${RELEASE_CLAUDE_REMAINING}"
+                echo "::error::Could not remove ${RELEASE_CLAUDE_REMAINING} from issue #${ISSUE_NUMBER}; stopping the Codex route so a stale Claude label cannot keep the later-line /reclarify form open. Comment /reclarify again to retry."
+                exit 1
+              fi
+            fi
+          fi
           echo "CLAUDE_ISSUE_HANDOFF released issue=${ISSUE_NUMBER} reason=${{ steps.clarify_route.outputs.issue_implementer_reason }}"
 
       - name: Claude issue handoff
@@ -1274,6 +1353,10 @@ jobs:
             printf '%s\n' "Provide the required input, then run /reclarify or continue with /answer as appropriate."
             printf '\n'
             printf '%s\n' "Run: ${RUN_URL}"
+            # Automation marker, last and outside the model's blocked reason
+            # (issue #5309): clarify never treats a /reclarify line here as
+            # a command.
+            printf '\n%s\n' "<!-- ai:clarify-blocked:v1 -->"
           } > "${BLOCKED_COMMENT_FILE}"
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \

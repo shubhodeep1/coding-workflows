@@ -89,35 +89,57 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 # Issue #5243: the /reclarify command clause of the clarify predicate. A
 # comment starting with /reclarify behaves as before; a /reclarify at the
 # start of a later line counts only in a comment without an automation
-# marker, on an issue that waits on a human answer.
+# marker, on an issue that waits on a human answer. Issue #5309: any `<!--`
+# HTML comment marks automation, and orchestrator tracking and managed
+# issues never take the later-line form. An orchestrator-managed issue is
+# recognised by its label or by the `Managed by: AI Orchestrator` body line,
+# as scripts/claude_issue_route.py does.
 RECLARIFY_COMMAND_CLAUSE = (
 	"(startsWith(github.event.comment.body, '/reclarify') || "
 	"(contains(github.event.comment.body, fromJson('\"\\n/reclarify\"')) && "
-	"!contains(github.event.comment.body, '<!-- ai:') && "
+	"!contains(github.event.comment.body, '<!--') && "
+	"!contains(toJson(github.event.issue.labels.*.name), '\"ai:orchestrator-tracking\"') && "
+	"!contains(toJson(github.event.issue.labels.*.name), '\"ai:orchestrator-managed\"') && "
+	"!contains(github.event.issue.body, 'Managed by: AI Orchestrator') && "
 	"(contains(toJson(github.event.issue.labels.*.name), '\"ai:claude-blocked\"') || "
 	"contains(toJson(github.event.issue.labels.*.name), '\"ai:claude-handoff-failed\"') || "
 	"contains(toJson(github.event.issue.labels.*.name), '\"ai:blocked\"'))))"
 )
 
 AWAITING_ANSWER_LABELS = ("ai:claude-blocked", "ai:claude-handoff-failed", "ai:blocked")
+ORCHESTRATOR_LABELS = ("ai:orchestrator-tracking", "ai:orchestrator-managed")
 
 
-def _reclarify_clause_matches(body: str, labels: list[str]) -> bool:
+def _reclarify_clause_matches(body: str, labels: list[str], issue_body: str | None = "") -> bool:
 	"""Evaluate RECLARIFY_COMMAND_CLAUSE the way GitHub expressions do.
 
 	startsWith and contains compare case-insensitively; toJson renders the
-	label names as a pretty-printed JSON array of quoted strings.
+	label names as a pretty-printed JSON array of quoted strings; a null
+	issue body coerces to an empty string.
 	"""
 	body_lc = body.lower()
+	issue_body_lc = (issue_body or "").lower()
 	labels_json = json.dumps(labels, indent=2).lower()
 	newline_command = json.loads('"\\n/reclarify"')
 	if body_lc.startswith("/reclarify"):
 		return True
 	return (
 		newline_command in body_lc
-		and "<!-- ai:" not in body_lc
+		and "<!--" not in body_lc
+		and not any(f'"{label}"' in labels_json for label in ORCHESTRATOR_LABELS)
+		and "managed by: ai orchestrator" not in issue_body_lc
 		and any(f'"{label}"' in labels_json for label in AWAITING_ANSWER_LABELS)
 	)
+
+
+# Issue #5309: the orchestrator's clarify escalation adds ai:blocked, then
+# posts model text; before the fix it carried no marker.
+ORCHESTRATOR_ESCALATION_TEXT = (
+	"Autonomous resolution not possible for issue #42.\n\n"
+	"The clarify-resolve phase determined that one or more questions require data that cannot be derived from the repository.\n\n"
+	"ESCALATION: the maintainer must pick the region.\n/reclarify\n\n"
+	"- Clarify comment ID: 1\n- Cycle: 3/3"
+)
 
 
 RECLARIFY_COMMENT_CASES = (
@@ -152,6 +174,43 @@ RECLARIFY_COMMENT_CASES = (
 		False,
 	),
 	("no command", "Thanks!", ["ai:claude-blocked"], False),
+	# Issue #5309 cases.
+	("trailing line, orchestrator-managed ai:blocked", "Use v2.\n/reclarify", ["ai:orchestrator-managed", "ai:blocked"], False),
+	("trailing line, orchestrator-tracking ai:blocked", "Judge: retry.\n/reclarify", ["ai:orchestrator-tracking", "ai:blocked"], False),
+	(
+		"escalation model text, unmarked, orchestrator-managed",
+		ORCHESTRATOR_ESCALATION_TEXT,
+		["ai:orchestrator-managed", "ai:blocked"],
+		False,
+	),
+	(
+		"escalation model text with its marker, standalone ai:blocked",
+		ORCHESTRATOR_ESCALATION_TEXT + "\n\n<!-- ai:clarify-escalation:v1 -->",
+		["ai:blocked"],
+		False,
+	),
+	(
+		"heal occurrence marker without the ai: prefix",
+		"<!-- workflow-failure-heal:occurrence -->\nAnother occurrence:\n/reclarify",
+		["ai:claude-blocked"],
+		False,
+	),
+	("any HTML comment", "Answer A\n/reclarify\n<!-- note -->", ["ai:claude-blocked"], False),
+)
+
+
+# Issue #5309 review round 3: an orchestrator child issue is also recognised
+# by its `Managed by: AI Orchestrator` body line when the label is missing.
+ORCHESTRATOR_CHILD_BODY = "## Task\n\nFix it.\n\n## Metadata\n- Managed by: AI Orchestrator\n- Parent: #41"
+
+RECLARIFY_ISSUE_BODY_CASES = (
+	# (description, comment body, labels, issue body, expected)
+	("trailing line, body-marked orchestrator issue", "Use v2.\n/reclarify", ["ai:blocked"], ORCHESTRATOR_CHILD_BODY, False),
+	("escalation model text, body-marked issue", ORCHESTRATOR_ESCALATION_TEXT, ["ai:blocked"], ORCHESTRATOR_CHILD_BODY, False),
+	("trailing line, body marker in another case", "Use v2.\n/reclarify", ["ai:blocked"], "managed BY: ai orchestrator", False),
+	("first line, body-marked orchestrator issue", "/reclarify", ["ai:blocked"], ORCHESTRATOR_CHILD_BODY, True),
+	("trailing line, null issue body", "Use v2.\n/reclarify", ["ai:blocked"], None, True),
+	("trailing line, unrelated issue body", "Use v2.\n/reclarify", ["ai:blocked"], "Managed by: the platform team", True),
 )
 
 
@@ -161,6 +220,8 @@ def test_clarify_predicate_accepts_reclarify_on_any_line_with_guards() -> None:
 	assert json.loads('"\\n/reclarify"') == "\n/reclarify"
 	for description, body, labels, expected in RECLARIFY_COMMENT_CASES:
 		assert _reclarify_clause_matches(body, labels) is expected, description
+	for description, body, labels, issue_body, expected in RECLARIFY_ISSUE_BODY_CASES:
+		assert _reclarify_clause_matches(body, labels, issue_body) is expected, description
 
 
 def test_plan_predicate_preserves_trusted_human_and_bot_answer_routes() -> None:
