@@ -84,9 +84,11 @@ def test_project_base_is_verified_and_other_bases_merge_their_own_base(commands)
 	assert "With default drift only, skip the merge" in section
 	assert "`<source>` is the default branch, the project branch, or the PR's base, per step 3" in section
 	# PR #5282 review round 1: routing, both-drift, and failed-fetch cases.
-	assert "any non-zero exit → step 3" in section
+	# PR #5280 final-merge review round 1 (head 77fe220b91ff): only exit 1 is drift.
+	assert "a check that exits 1 found drift → step 3" in section
+	assert "any non-zero exit → step 3" not in section
 	assert "Up to two checks" in section
-	assert "When the default check failed too, run it again after step 4's merge" in section
+	assert "When the default check found drift too, run it again after step 4's merge" in section
 	assert "When `git fetch origin <project branch>` itself fails, it is the same stop" in section
 	# PR #5282 review round 3: a moved or missing plan never ends in a raw `git show` error.
 	assert "or `git show origin/<base>:docs/completed/<slug>-plan.md` once its completion PR moved it there" in section
@@ -478,3 +480,48 @@ def test_failed_base_fetch_leaves_a_stale_ref_that_reports_no_drift(tmp_path: Pa
 	(tmp_path / "origin-moved").rename(origin)
 	assert _exit_code(clone, env, fetch) == 0
 	assert _exit_code(clone, env, base_check) == 1
+
+
+def test_failed_comparison_is_a_stop_not_drift():
+	"""PR #5280 final-merge review round 1 (head 77fe220b91ff): a drift check
+	that exits above 1 could not compare, so it stops instead of routing to the
+	merge or recording `claude_assets=stale`."""
+	section = _section(_flat(TWIN_DIR / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	step2 = _section(section, "2. **Stale?**", "3. **Which branch is merged in?**")
+	assert "Any other exit status is not drift but a failed comparison" in step2
+	assert "A failed comparison is a stop with the caller's blocker as in step 5, naming the check and its error line" in step2
+	assert "never route it to step 3 or record it as `claude_assets=stale`" in step2
+	step3 = _section(section, "3. **Which branch is merged in?**", "4. **Merge.**")
+	assert "if it still exits 1 (the base itself lacks that default-branch change)" in step3
+	assert "any other non-zero exit is step 2's failed-comparison stop" in step3
+	assert "and so is an exit above 1 from the check (a failed comparison, as in step 2), naming its error line" in step3
+	fixer = _section(_flat(TWIN_DIR / "fix-claude-pr.md"), "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
+	assert "When one of its drift checks cannot compare at all (its step 2: an exit above 1, such as `no merge base`), stop the same way" in fixer
+	assert ".claude/ asset sync could not compare with <ref> — decision needed" in fixer
+
+
+def test_drift_check_without_a_merge_base_exits_above_1(tmp_path: Path):
+	"""Why exit 1 alone is drift: with no merge base the documented default-drift
+	check exits 128, not 1, although the guard differs; a real drift exits 1."""
+	section = _section(_flat(TWIN_DIR / "implement-plan-claude.md"), "### Claude-asset sync", "### Permission prompt report")
+	default_check = _documented(section, r"`(git diff --quiet HEAD\.\.\.origin/<default> -- [^`]*)`", default="main")
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/hooks/guard.py", "v1\n", "guard v1")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	# An unrelated history: the working branch shares no commit with main.
+	_git(clone, env, "checkout", "-q", "--orphan", "work")
+	_commit(clone, env, ".claude/hooks/guard.py", "v0\n", "unrelated guard")
+	_commit(origin, env, ".claude/hooks/guard.py", "v2\n", "main guard fix")
+	_git(clone, env, "fetch", "-q", "origin", "main")
+	result = subprocess.run(["bash", "-c", default_check], cwd=clone, env=env, capture_output=True, text=True)
+	assert result.returncode > 1
+	assert "no merge base" in result.stderr
+	# With a merge base, the same check reports the drift as exit 1.
+	_git(clone, env, "checkout", "-q", "-b", "related", "origin/main~1")
+	assert _exit_code(clone, env, default_check) == 1

@@ -1195,7 +1195,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   the unsynced head (issue #5258). A failed `git fetch` of the default
   branch or the PR's base also stops with that blocker, because a drift
   check against a ref the fetch did not refresh can report a stale head
-  as fresh. A merged `settings.json`
+  as fresh. Only exit 1 from a drift check counts as drift: an exit above
+  1 (`git diff` could not compare, for example `no merge base` in a
+  shallow clone) stops with the same blocker. A merged `settings.json`
   change applies from the next session. Local git only, no GitHub API
   calls. The SessionStart hook logs the drift against the default branch
   only (it cannot learn a PR's base without an API call) as
