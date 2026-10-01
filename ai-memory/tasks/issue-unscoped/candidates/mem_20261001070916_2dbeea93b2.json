@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:608-611 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The `$(` check treats single-quoted literal text containing `$(` as a command substitution and masks credentials in that literal text.\n  WHY: This over-masks the reported command text but does not leak credentials; both reviewers rate it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Mask credentials in permission-prompt reports before they are posted\" (including backtick and `$(\u2026)` command substitutions)\n  expected_change_site: workflow-templates/.claude/scripts/permission_prompts.py and .claude/scripts/permission_prompts.py\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: Both files now contain `_backticks_as_substitutions()`, the `$(` check in `_segment_credentials()`, and attached substitution handling in `_segment_shape()`. Tests cover backticks, `$(\u2026)`, nested substitutions, and escaped backticks. The implementation is complete.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/permission_prompts.py, lines 609-611, the \"$(\" in word check inside _segment_credentials() | severity=low | confidence=3\n  PROBLEM: The check \"$(\" in word parses a word holding $( as a command line of its own, but the lexer strips quotes, so a single-quoted literal $( (which is not a command substitution) is treated as one. For input like echo '$(mysql -pS3cretPass)', the display text echo '$(mysql -p***)' masks a credential that was literal text, not a command substitution.\n  WHY: Over-masking alters the reported command text, showing a masked credential where none existed. No credential leaks, but the false positive changes the command display. The plan G1 explicitly accepts over-masking as safe and documents it in the changelog.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after reaching the slot retryable-failure limit (3).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/permission_prompts.py, `_segment_credentials()` at lines 608-610, the `if \"$(\" in word:` check | severity=low | confidence=3\n  PROBLEM: The code parses any word containing `$(` as a command line, but cannot distinguish between `$(` inside double quotes (actual command substitution) vs single quotes (literal text). After the lexer strips quotes, `'$(mysql -pS3cretPass)'` and `\"$(mysql -pS3cretPass)\"` both produce the same token, so literal text in single quotes is treated as executable code.\n  WHY: For `echo '$(mysql -pS3cretPass)'`, the code extracts `S3cretPass` as a credential and masks it, even though it's literal text. This is over-masking (false positive), not under-masking, so no credential leaks. The code's design principle (documented in the progress log lessons) is \"over-masking is safe, a wrong single guess leaks.\" While safe, this case is undocumented and untested.\n- Requirement: \"Mask credentials in permission-prompt reports before they are posted\" (including backtick and `$(\u2026)` command substitutions)\n  Expected change site: workflow-templates/.claude/scripts/permission_prompts.py and .claude/scripts/permission_prompts.py\n  Evidence of absence: Both files now contain `_backticks_as_substitutions()`, the `$(` check in `_segment_credentials()`, and attached substitution handling in `_segment_shape()`. Tests cover backticks, `$(\u2026)`, nested substitutions, and escaped backticks. The implementation is complete.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "50ac11e2aa8714806b4546888add5ea24362c001a2284f278d71680fe572854e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "36823147737",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36823147737",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001070916_2dbeea93b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "36823147737"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T07:09:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
