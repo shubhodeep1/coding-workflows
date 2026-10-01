@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T18:01:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change narrows a skip or exemption, grep CLAUDE.md and agents.md for every sentence that still describes the old trigger (for example \"the gate skips `<branch prefix>`\"): CLAUDE.md is synced to consumers and Claude sessions act on it.",
+  "phase": "implement_plan",
+  "pr_number": 5912,
+  "record_id": "lesson-implement-plan-19c75e1c33564efff1a05f38",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5610-limit-twin-sync-review-skip",
+    "file:CLAUDE.md",
+    "file:agents.md"
+  ]
+}

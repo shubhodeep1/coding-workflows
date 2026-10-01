@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-01T18:01:28Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fail-closed fallback that relies on a PR-body marker such as `[skip ai]` only works on `pull_request` runs: `workflow_dispatch` callers pass no PR title or body to the review gate, so docs must not promise the fallback for every run.",
+  "phase": "implement_plan",
+  "pr_number": 5912,
+  "record_id": "lesson-implement-plan-b5dc7dba3191dad0d17b84e9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5610-limit-twin-sync-review-skip",
+    "file:.github/workflows/review_autofix.yml",
+    "file:.github/workflows/internal-review.yml"
+  ]
+}
