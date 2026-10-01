@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5825
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01Rqqfni66CCQPdBzVGK14Nh   safety net and hand-back: see the round-4 stage report (session_0118cTK7yVihfRpGo8noXVqq)
+- Check-in: checker session_01Rqqfni66CCQPdBzVGK14Nh   safety net and hand-back: see the round-5 stage report (session_01Twzhja7rcfhtf2RQWJ6HMW)
 - Last updated: 2026-10-01
-- Last note: review round 4 on PR #5825: fixed the consensus finding (the URL tail ran into an adjacent issue link, so `[one](…/issues/1?q=1),[two](…/issues/2)` yielded only 1, and a `#` on the second link dropped both) by breaking the line before each repo-scoped issue link; regression tests, doc comment, README row, changelog row, and plan updated; waiting on round 5 or merge.
+- Last note: review round 5 on PR #5825: fixed the consensus finding (the `__main__` runner, which `ci.yml` invokes directly, skipped `test_adjacent_issue_links_each_count_on_their_own`); all 11 tests now run in definition order. This push is the fifth consecutive `[claude-autofix]` commit, so further findings will block the PR (`MAX_AUTOFIX_ITERATIONS` = 5); waiting on the round-6 review, a block, or merge.
 
 ## Phases
-1. [ ] Phase 1 — narrow `extract_repo_scoped_issue_refs_from_text` so `/issues/N#…` URLs are not linked issues; runtime tests pinning the target-branch gate for Claude project PRs; ci.yml, README row, changelog fragment   — PR #5825 open (waiting); review rounds: 4; interventions: 0
+1. [ ] Phase 1 — narrow `extract_repo_scoped_issue_refs_from_text` so `/issues/N#…` URLs are not linked issues; runtime tests pinning the target-branch gate for Claude project PRs; ci.yml, README row, changelog fragment   — PR #5825 open (waiting); review rounds: 5; interventions: 0
 
 ## Conformance
 
@@ -41,6 +41,7 @@
 - [source:intervention] A matcher that must reject URLs with a `#` fragment has to look past the path and query, not just the character after the id: GitHub notification links put `?notification_referrer_id=…` before `#issuecomment-…`. Match the whole URL tail, then drop matches that end in `#`, and read the id from its own position rather than the last number. (files: scripts/gh_helpers.sh)
 - [source:intervention] A URL tail matcher that must see a later `#` should stop only at characters a URL cannot contain unencoded (whitespace, `<`, `>`, `#`); stopping at `(` or `)` to respect Markdown link syntax hides a fragment after a parenthesised query value. A Markdown link's closing `)` can safely join the tail when only a trailing `#` drops the match. (files: scripts/gh_helpers.sh)
 - [source:intervention] A matcher whose URL tail may run through `)`, `,`, or `[` must still stop where the next link starts, or adjacent links merge into one match: split the text before each link (a line break, not a space, since `grep -o` consumes a trailing delimiter that the next match needs as its prefix), and test adjacent links with no whitespace between them. (files: scripts/gh_helpers.sh)
+- [source:intervention] A test module that CI runs as a script (`python3 tests/<module>.py`) calls its tests from a hand-written `__main__` list: every new `test_*` function must be added there too, or the CI step silently skips it while pytest still passes. (files: tests/test_issue_pr_status_comment_url_links.py, .github/workflows/ci.yml)
 
 ## Notes
 - Issue progress comment: 5922355476.
@@ -52,3 +53,4 @@
 - Round 2 (2026-10-01): six reviewers agreed the boundary only checked the character right after the issue number. Fixed in `extract_repo_scoped_issue_refs_from_text`; README row, changelog fragment, and the plan's Goals/Approach updated to match. Base check: still no merged PR with head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`; project branch already up to date with it.
 - Round 3 (2026-10-01): six reviewers agreed the URL tail stopped at `(` or `)`, so `…/issues/12?q=(a)#issuecomment-1` still linked #12. The tail now runs through parentheses; doc comment, the plan's Approach sentence, and a new parentheses test (red on the round-2 helper, green now) updated. Base check: still no merged PR with head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`; project branch already up to date with it.
 - Round 4 (2026-10-01): six reviewers agreed the widened tail swallowed an adjacent issue link (`[one](…/issues/1?q=1),[two](…/issues/2)` → `[1]`; with a `#` on the second link, `[]`). The helper now puts a line break before each repo-scoped `<repo>/issues/<n>` that follows a non-word character, so each link is matched on its own; new test `test_adjacent_issue_links_each_count_on_their_own` (red on the round-3 helper, green now). Rejected: the `grep -viE 'issues/[0-9]+.*#$'` filter concern, because the tail excludes `#`, so a fragment can only be a match's last character. Base check: still no merged PR with head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`; project branch already up to date with it.
+- Round 5 (2026-10-01): six reviewers agreed the `__main__` runner omitted the round-4 test `test_adjacent_issue_links_each_count_on_their_own`, so the direct `ci.yml` step never ran it. Added the call in definition order; a parity check confirms all 11 `test_*` functions are called. No valid finding rejected. Checked the cap first: 4 consecutive `[claude-autofix]` commits and no `ai:review-blocked` label before this push. Base check: PR #4826 (head `claude/implement-plan-issue-4813-close-sweep-target-branch-merges`) is still an open draft into `main`; project branch already up to date with the base.

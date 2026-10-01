@@ -254,6 +254,7 @@ if __name__ == "__main__":
 	test_any_fragment_after_the_issue_number_is_not_a_link()
 	test_fragment_after_a_query_or_slash_is_not_a_link()
 	test_fragment_after_parentheses_in_the_tail_is_not_a_link()
+	test_adjacent_issue_links_each_count_on_their_own()
 	test_bare_urls_paths_and_closing_keywords_still_link()
 	test_mixed_text_keeps_only_the_real_links()
 	test_claude_project_merge_with_refs_and_comment_url_leaves_issue_untouched()
