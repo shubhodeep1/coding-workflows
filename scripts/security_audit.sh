@@ -71,6 +71,7 @@ security_audit_emit_path_diagnostic() {
 	# Optional: the rendered prompt. With it, lines that echo the prompt
 	# verbatim are dropped first, as the codex-stderr-tail does, because
 	# `codex exec` echoes the prompt (project spec included) to stderr.
+	# Both sides lose NUL and CR, so a CRLF project spec still matches.
 	local diagnostic_prompt_file="${3:-}"
 	local path_diagnostic
 	if [ -n "${diagnostic_prompt_file}" ]; then
@@ -79,7 +80,7 @@ security_audit_emit_path_diagnostic() {
 		fi
 		path_diagnostic="$(LC_ALL=C tr -d '\000\r' 2>/dev/null < "${diagnostic_file}" \
 			| LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' \
-			| LC_ALL=C grep -vxF -f "${diagnostic_prompt_file}" \
+			| LC_ALL=C grep -vxF -f <(LC_ALL=C tr -d '\000\r' 2>/dev/null < "${diagnostic_prompt_file}") \
 			| tail -n 20 || true)"
 	else
 		path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
@@ -210,6 +211,8 @@ security_audit_emit_codex_stderr_tail() {
 		# cut line, or only the newline before a complete one. Never rewrite a
 		# cut line: a fragment of a prompt line would no longer match the
 		# exact prompt filter below, and a token fragment would lose its prefix.
+		# The prompt loses NUL and CR like the stderr lines, so an echoed line
+		# of a CRLF project spec still matches it.
 		mapfile -t stderr_window_lines < <(
 			if [ "${stderr_file_bytes}" -gt "${stderr_tail_read_bytes}" ]; then
 				tail -c "$(( stderr_tail_read_bytes + 1 ))" -- "${stderr_tail_file}" 2>/dev/null | LC_ALL=C sed '1d'
@@ -218,7 +221,7 @@ security_audit_emit_codex_stderr_tail() {
 			fi \
 				| LC_ALL=C tr -d '\000\r' \
 				| LC_ALL=C grep -v '^[[:space:]]*$' \
-				| LC_ALL=C grep -vxF -f "${stderr_prompt_file}" \
+				| LC_ALL=C grep -vxF -f <(LC_ALL=C tr -d '\000\r' 2>/dev/null < "${stderr_prompt_file}") \
 				| tail -n "${stderr_tail_max_lines}"
 		)
 	fi

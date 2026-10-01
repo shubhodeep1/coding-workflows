@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5816
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01SLmbVzcitKU2aiKHq634QY   (triggers in the round-4 stage report)
+- Check-in: checker session_01SLmbVzcitKU2aiKHq634QY   (triggers in the round-5 stage report)
 - Last updated: 2026-10-01
-- Last note: review round 4 on PR #5816: the codex-execution `captured_path_error=` diagnostic now also drops lines that echo the rendered prompt (`grep -vxF -f`), so a project-spec line with a path-error phrase no longer reaches the job log before the tail's prompt filter.
+- Last note: review round 5 on PR #5816: both prompt-echo filters (`captured_path_error=` and the tail) now strip NUL and CR from the rendered prompt as well as from stderr, so an echoed line of a CRLF project spec is dropped instead of printed (and can no longer set `provider=`).
 
 ## Phases
-1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 4; interventions: 0
+1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 5; interventions: 0
 
 ## Conformance
 
@@ -42,6 +42,7 @@
 - [source:intervention] A token-run mask must use one character class covering both base64 alphabets (`[[:alnum:]+/_-]{40,}={0,2}`): two ordered patterns (URL-safe, then padded standard) let an unpadded `/`-bearing value through or mask only its prefix. Mask secret env values of any length, matching short ones only as whole words. (files: scripts/security_audit.sh)
 - [source:intervention] When a change adds a stronger mask for one log source, apply it to every line printed from that source, including older diagnostics that run first (`captured_path_error=`): the first unmasked print leaks the secret no matter what the later output masks. (files: scripts/security_audit.sh)
 - [source:intervention] An early diagnostic that prints lines from the same source as a filtered tail needs every filter the tail applies, not only its masks: prompt-echo exclusion too, or an echoed spec line matching the diagnostic's own pattern prints first. (files: scripts/security_audit.sh)
+- [source:intervention] When an exact-line filter (`grep -vxF -f <patterns>`) compares a normalised stream against a pattern file, normalise the pattern file the same way (`-f <(tr -d '\000\r' < file)`): stripping CR from only one side lets every line of a CRLF input escape the match. (files: scripts/security_audit.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude from #5785; base branch main; security pass: run (`security_pass_skip.py`: no skip label).

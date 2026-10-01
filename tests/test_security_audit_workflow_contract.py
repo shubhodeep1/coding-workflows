@@ -1169,6 +1169,42 @@ def test_security_audit_codex_path_diagnostic_drops_prompt_echo_lines() -> None:
 	assert "vault" not in proc.stderr
 
 
+def test_security_audit_codex_prompt_echo_filters_match_crlf_project_spec() -> None:
+	# Review round 5 on PR #5816: both prompt-echo filters strip CR from stderr,
+	# so they must strip it from the rendered prompt too, or an echoed line of a
+	# CRLF project spec escapes the exact-line match (and sets provider=).
+	path_spec_line = "Spec note: the vault said No such file or directory for confidential-plan-zeta"
+	provider_spec_line = "Spec note: billing HTTP Error 402: Payment Required for confidential-plan-eta"
+	with tempfile.TemporaryDirectory(prefix="security-audit-crlf-prompt-") as td:
+		spec_path = Path(td) / "project-spec.md"
+		spec_path.write_bytes(f"{path_spec_line}\r\n{provider_spec_line}\r\n".encode("utf-8"))
+		proc, _ = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(Path(td) / "findings.json"),
+				"MOCK_CODEX_EXIT_CODE": "5",
+				# One echo with the CR dropped, one with it kept.
+				"MOCK_CODEX_STDERR": f"{path_spec_line}\n{provider_spec_line}\r\nError: open config.toml: ENOENT\n",
+			},
+			script_args=(str(spec_path),),
+		)
+	assert proc.returncode == 5, proc.stderr
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "ENOENT" in path_error_lines[0], path_error_lines
+	_, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == ["Error:\\ open\\ config.toml:\\ ENOENT"], tail_payloads
+	assert failure_line.endswith(" provider=unknown"), failure_line
+	assert "confidential" not in proc.stderr
+	assert "vault" not in proc.stderr
+	assert "Payment" not in proc.stderr
+
+
 def test_security_audit_codex_stderr_tail_byte_cap_holds_for_multibyte_text() -> None:
 	# The sanitizer keeps printable ASCII only, so the 4096 budget is in bytes.
 	proc, _ = _run_security_audit(
