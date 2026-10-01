@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5874
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net trig_01SMZVo7i29NbMV7u1oqmfqf   hand-back trig_01M2uQsqdx2af7WGLWoFeeH6
+- Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net (re-armed by the round 3 stage, see its report)   hand-back (re-armed by the round 3 stage)
 - Last updated: 2026-10-01
-- Last note: review round 2 on PR #5874: 1 consensus finding fixed (after a rate-limit wait the loop now reads again before its next 15s poll sleep or deadline check, so a limit that clears at a deadline still gets its read; AD-9).
+- Last note: review round 3 on PR #5874: the consensus finding and its two companions fixed (a PR-state rate-limit wait that slept now goes back to the PR-state read, so a run that completed during the wait never skips `pr_closed_during_retry`; the owed-read flag is cleared before that wait so the loop stays finite; AD-10).
 
 ## Phases
-1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 2; interventions: 0 (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
+1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 3; interventions: 0 (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
    - [x] `gh_api_with_retry` returns `GH_API_RATE_LIMITED_RC` (75) on a rate-limited attempt without the short retries
    - [x] `fetch_pr_state` reports `rate_limited` separately from `unknown`
    - [x] `phase4b_rate_limit_wait_seconds` derives the wait from `GET /rate_limit`, capped at the deadline
@@ -23,6 +23,7 @@
    - [x] changelog fragment
    - [x] review round 1: every read in the poll loop (PR state, post-dispatch run list, pinned run status) waits out a rate limit (`phase4b_wait_out_rate_limit`)
    - [x] review round 2: a wait that slept is followed by one read before the next 15s poll sleep or deadline check (`RETRY_READ_AFTER_RATE_LIMIT_WAIT`)
+   - [x] review round 3: a PR-state wait that slept is followed by a PR-state read, not a run read (`PR_STATE_RATE_LIMIT_READ_OWED`)
    - Done when: the plan's Phase 1 "done" condition holds.
 
 ## Conformance
@@ -46,10 +47,12 @@
 - AD-7 [plan, 2026-10-01] Which docs change? — Picked: A — the step's own comments plus a changelog fragment; README.md and agents.md do not describe Phase 4b polling. Alternatives: B — also add an agents.md note. Why: §5 minimal change; the behaviour is documented where operators read it (the step log and comments). Applied in: phase 1 PR. Status: pending review
 - AD-8 [phase 1/1 — review round 1, 2026-10-01] Should the post-dispatch run-list read wait out a rate limit, given the 90-second registration window? — Picked: A — yes, the same wait as every other poll-loop read, capped at the registration deadline. Alternatives: B — wait only on the pinned-run status read and keep re-reading the run list every 15 s; C — extend the registration window by the wait. Why: GitHub documents a minimum 60 s wait for secondary limits and re-reading a limited endpoint can prolong it; AD-6 keeps the window fixed, so a sustained limit still fails closed with `retry_dispatch_failed`. Applied in: PR #5874. Status: pending review
 - AD-9 [phase 1/1 — review round 2, 2026-10-01] How should the loop make sure a rate-limit wait that ends at (or within 15s of) a deadline is followed by a read? — Picked: A — a wait that slept owes one read: the loop skips its next 15s poll sleep and lets that read through the registration-window and retry-deadline checks; a zero wait (deadline already reached) owes nothing. Alternatives: B — cap every wait 15s short of the deadline; C — reject the finding. Why: B still loses the read when the limit clears in the last 15s and shortens every wait; A adds at most one read per deadline and keeps the loop finite. Applied in: PR #5874. Status: pending review
+- AD-10 [phase 1/1 — review round 3, 2026-10-01] After a rate-limited PR-state read has waited, which read comes next? — Picked: A — the PR-state read again (`continue` to the loop top), clearing the owed-read flag before the wait and, on a zero wait, restoring a read an earlier wait owed so the registration-window run-list read is never lost. Alternatives: B — keep falling through to the run read and re-check the PR state only before breaking on a completed run; C — reject the finding as unchanged from the old `unknown` handling. Why: a wait can now last up to the whole deadline, so a PR-state read taken before it is stale; A is the smallest fail-closed change and keeps one loop exit, and it departs from the plan's Approach ("falls through to the run read in the same iteration") only after a wait that slept. Applied in: PR #5874. Status: pending review
 
 ## Lessons
 - [source:intervention] When a helper starts returning a distinct exit code for a failure class, audit every caller in the same loop, not only the one the incident hit: a caller that keeps treating the new code as a generic failure silently skips the new handling. (files: .github/workflows/test-and-mark-stable.yml)
 - [source:intervention] When a poll loop gains a variable-length wait (rate limit, backoff), make the read that follows the wait run before the loop's fixed poll sleep and its deadline checks; otherwise a wait capped at a deadline is never followed by the read it waited for. (files: .github/workflows/test-and-mark-stable.yml)
+- [source:intervention] A long wait inside a poll loop makes every guard checked before it stale: after the wait, go back to the loop top so the guards run again before any later read can end the loop, and clear a carried-over "read owed" flag before the wait so a zero wait cannot keep the loop alive. (files: .github/workflows/test-and-mark-stable.yml)
 
 ## Notes
 - Issue mode: started by the Claude issue dispatcher (routine "PR dispatch: #5858", trigger trig_01Mjrhnyrr1MrJ7ar8r3ViaM) in session session_01KSbUQQrXpu9Y6S3y5WG4mb, permission mode auto.

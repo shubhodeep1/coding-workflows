@@ -471,7 +471,7 @@ def test_phase4b_consecutive_rate_limits_then_a_good_read_keep_verifying_the_ado
 	result = _run_phase4b_retry(
 		pr_states=["open"],
 		run_statuses=["in_progress"] * 7 + ["completed"],
-		limited_for=375,
+		limited_for=315,
 		limit_kind="secondary",
 	)
 	assert result["rc"] == 0, result["transcript"]
@@ -481,9 +481,12 @@ def test_phase4b_consecutive_rate_limits_then_a_good_read_keep_verifying_the_ado
 	assert f"Adopting active review run #{_PHASE4B_ADOPTED_RUN}" in result["transcript"]
 	assert result["transcript"].count("not counted as an unresolvable state") == 5
 	assert f"retry run #{_PHASE4B_ADOPTED_RUN}: status=completed conclusion=success" in result["transcript"]
-	# One request per rate-limited read (5) plus one per later read (3):
-	# the 2s/4s retries are skipped for a rate limit.
-	assert len(_pr_state_calls(result)) == 8
+	# One request per rate-limited read (5, at +15s ... +255s) plus one per
+	# later poll (8, one per run read): the 2s/4s retries are skipped for a
+	# rate limit, and each wait is followed by a PR-state read, not a run
+	# read (PR #5874 review round 3).
+	assert len(_pr_state_calls(result)) == 13
+	assert result["sleeps"][:6] == [15] + [60] * 5, result["sleeps"]
 	assert result["sleeps"].count(60) == 5
 	assert 2 not in result["sleeps"] and 4 not in result["sleeps"]
 
@@ -505,6 +508,12 @@ def test_phase4b_primary_rate_limit_waits_for_the_reset_then_continues() -> None
 
 
 def test_phase4b_rate_limit_until_the_deadline_fails_closed_with_retry_timeout() -> None:
+	"""The read a wait owes at the deadline is made once, and the loop ends.
+
+	PR #5874 review round 3: the PR-state read at the deadline is limited
+	again with nothing left to wait. A flag left set by the earlier wait
+	would keep the loop running forever (the subprocess timeout catches it).
+	"""
 	result = _run_phase4b_retry(
 		pr_states=["open"],
 		run_statuses=["in_progress"],
@@ -519,6 +528,10 @@ def test_phase4b_rate_limit_until_the_deadline_fails_closed_with_retry_timeout()
 	# step past it before the loop condition ends the wait.
 	assert result["clock"] < _PHASE4B_DEADLINE + 15, result["clock"] - _PHASE4B_DEADLINE
 	assert max(result["sleeps"]) <= _PHASE4B_DEADLINE - _PHASE4B_START_EPOCH
+	# One wait to the deadline, then the owed PR-state read (limited, zero
+	# wait) and one run read before the loop ends.
+	assert result["sleeps"] == [15, _PHASE4B_DEADLINE - _PHASE4B_START_EPOCH - 15, 0], result["sleeps"]
+	assert len(_calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_ADOPTED_RUN}")) == 1
 
 
 def test_phase4b_closed_pr_is_still_detected_after_rate_limits() -> None:
@@ -530,7 +543,55 @@ def test_phase4b_closed_pr_is_still_detected_after_rate_limits() -> None:
 	)
 	assert result["rc"] == 1, result["transcript"]
 	assert result["output"] == "status=pr_closed_during_retry\n", result["output"]
-	assert result["sleeps"].count(60) == 2
+	# Limited reads at +15s, +75s and +135s, each followed at once by the
+	# next PR-state read; the read at +195s sees the closed PR.
+	assert result["sleeps"] == [15, 60, 60, 60], result["sleeps"]
+
+
+def test_phase4b_pr_closed_during_a_rate_limit_wait_beats_a_completed_run() -> None:
+	"""PR #5874 review round 3: a wait is followed by a PR-state read.
+
+	The PR-state read is rate-limited, the PR closes during the wait, and the
+	adopted run has completed by then. The old loop fell through to the run
+	read after the wait, broke on `completed`, and went on to attempt 2
+	without re-checking `pr_closed_during_retry`.
+	"""
+	result = _run_phase4b_retry(
+		pr_states=["closed"],
+		run_statuses=["completed"],
+		limited_for=60,
+		limit_kind="secondary",
+	)
+	assert result["rc"] == 1, result["transcript"]
+	assert result["output"] == "status=pr_closed_during_retry\n", result["output"]
+	assert _PHASE4B_REACHED not in result["transcript"]
+	assert not _calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_ADOPTED_RUN}"), result["calls"]
+	assert result["sleeps"] == [15, 60], result["sleeps"]
+
+
+def test_phase4b_sustained_pr_state_limit_still_reads_the_registration_list_at_the_window_end() -> None:
+	"""A PR-state wait never costs the run-list read at the 90s window end.
+
+	PR-state reads stay rate-limited past the registration window while the
+	run list answers. The waits run to the window's end; the PR-state read
+	there is limited with nothing left to wait, so the loop falls through to
+	the run-list read that the earlier wait owed, instead of failing
+	`retry_dispatch_failed` without reading the list.
+	"""
+	result = _run_phase4b_retry(
+		pr_states=["open"],
+		run_statuses=["completed"],
+		limited_for=3600,
+		limit_kind="secondary",
+		dispatch=True,
+	)
+	assert result["rc"] == 0, result["transcript"]
+	assert _PHASE4B_REACHED in result["transcript"]
+	assert result["output"] == "", result["output"]
+	assert f"Registered retry review run #{_PHASE4B_DISPATCHED_RUN}" in result["transcript"]
+	assert result["transcript"].count("not counted as an unresolvable state") == 3
+	assert result["sleeps"] == [15, 60, 15, 0], result["sleeps"]
+	assert result["clock"] == _PHASE4B_START_EPOCH + 90
 
 
 def test_phase4b_plain_pr_state_failures_still_trip_the_breaker() -> None:
@@ -723,6 +784,17 @@ def test_phase4b_rate_limit_branch_contract() -> None:
 	)
 	assert "PR_STATE_FAILURES" not in rate_limited_branch
 	assert "phase4b_wait_out_rate_limit" in rate_limited_branch
+	# PR #5874 review round 3: the flag is cleared before the wait, a wait
+	# that slept goes back to the PR-state read (`continue`), and a zero
+	# wait restores the read an earlier wait owed before falling through.
+	assert re.search(
+		r'PR_STATE_RATE_LIMIT_READ_OWED="\$\{RETRY_READ_AFTER_RATE_LIMIT_WAIT\}"\s+'
+		r"RETRY_READ_AFTER_RATE_LIMIT_WAIT=0\s+phase4b_wait_out_rate_limit ",
+		rate_limited_branch,
+	)
+	slept = rate_limited_branch[rate_limited_branch.index('if [ "${RETRY_READ_AFTER_RATE_LIMIT_WAIT}" -eq 1 ]; then'):]
+	assert re.match(r'if \[ "\$\{RETRY_READ_AFTER_RATE_LIMIT_WAIT\}" -eq 1 \]; then\s+(?:#[^\n]*\s+)*continue\s+fi\b', slept)
+	assert 'RETRY_READ_AFTER_RATE_LIMIT_WAIT="${PR_STATE_RATE_LIMIT_READ_OWED}"' in slept
 	# The run-list and run-status reads wait out a rate limit too, before
 	# their generic-failure `continue`.
 	for read_call in ('gh_api_with_retry "${RETRY_RUNS_QUERY}") || RETRY_READ_RC=$?', 'gh_api_with_retry "repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}") || RETRY_READ_RC=$?'):

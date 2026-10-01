@@ -2552,12 +2552,16 @@ jobs:
           # rate-limited run-list or run-status read waits the same way
           # instead of re-reading every 15s. After a wait the loop reads
           # again at once, even when the wait ran up to a deadline, so the
-          # 15s poll sleep never crosses a deadline before that read. If a
+          # 15s poll sleep never crosses a deadline before that read. A
+          # PR-state wait that slept is followed by a fresh PR-state read
+          # before any run read, so a run that completed during the wait
+          # never ends the loop on a PR that closed meanwhile. If a
           # deadline expires first, the step still fails closed
           # (retry_dispatch_failed or retry_timeout below; issue #5858).
           PR_STATE_FAILURES=0
           PR_STATE_FAILURE_LIMIT=4  # ~60s of consecutive unknowns
           PR_STATE_RATE_LIMIT_WAITS=0
+          PR_STATE_RATE_LIMIT_READ_OWED=0
           RETRY_RATE_LIMIT_WAITS=0
           RETRY_READ_RC=0
           RETRY_READ_AFTER_RATE_LIMIT_WAIT=0
@@ -2576,7 +2580,22 @@ jobs:
             fi
             if [ "${PR_STATE}" = "rate_limited" ]; then
               PR_STATE_RATE_LIMIT_WAITS=$((PR_STATE_RATE_LIMIT_WAITS + 1))
+              # This read was the one a previous wait owed; clear the flag
+              # so it shows whether this wait slept (PR #5874 review round 3).
+              PR_STATE_RATE_LIMIT_READ_OWED="${RETRY_READ_AFTER_RATE_LIMIT_WAIT}"
+              RETRY_READ_AFTER_RATE_LIMIT_WAIT=0
               phase4b_wait_out_rate_limit "PR #${PR_NUMBER} state read (not counted as an unresolvable state)"
+              if [ "${RETRY_READ_AFTER_RATE_LIMIT_WAIT}" -eq 1 ]; then
+                # The wait slept, so the PR may have closed meanwhile: the
+                # owed read is the PR-state read at the top of the loop.
+                # Falling through could break on a completed run without
+                # re-checking pr_closed_during_retry.
+                continue
+              fi
+              # A zero wait (a deadline was reached) owes no new read: fall
+              # through to the run reads, keeping a read an earlier wait
+              # owed so the registration-window check still allows it.
+              RETRY_READ_AFTER_RATE_LIMIT_WAIT="${PR_STATE_RATE_LIMIT_READ_OWED}"
             elif [ "${PR_STATE}" = "unknown" ]; then
               PR_STATE_FAILURES=$((PR_STATE_FAILURES + 1))
               if [ "${PR_STATE_FAILURES}" -ge "${PR_STATE_FAILURE_LIMIT}" ]; then
