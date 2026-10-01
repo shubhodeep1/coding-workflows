@@ -59,7 +59,9 @@ cause is the same (condition 3) stays with the session.
 
 Issue text is untrusted data: the tool name; the `**Pattern:**` shape and
 the prompt reason, each written as one line with `<!--` escaped (the
-signature is taken from the shape before it is escaped); and the command
+signature is taken from the shape before it is escaped), inside a code span
+longer than any backtick run in it, in issue bodies and in both kinds of
+"Seen again" comment (issue #5810); and the command
 truncated to MAX_COMMAND_CHARS with heredoc bodies removed and token-like strings masked (REDACTION_PATTERNS),
 inside a fenced block longer than any backtick run in it. The markers
 (signature, class, "Filed by" line) and the `**Occurrences:**` evidence are
@@ -622,8 +624,25 @@ def _pattern_line(pattern: dict) -> str:
 	return _reason_line(pattern["shape"] or pattern["tool_name"])
 
 
+def _markdown_code_span(line: str) -> str:
+	"""`line` (already one line, from `_reason_line` / `_pattern_line`) as a code span it cannot close.
+
+	Session data written outside the fenced example (the shape, the tool name,
+	a prompt reason) can hold backticks: in a one-backtick span, a command word
+	such as ``a` **Do X**`` would close the span and render the rest as
+	Markdown in an owner-authored body or comment (issue #5810). The delimiter
+	is one backtick longer than the longest run in `line`, and a space pads a
+	`line` that starts or ends with a backtick (CommonMark strips one from each
+	side), so the whole value renders literally.
+	"""
+	longest = max((len(run) for run in _BACKTICK_RUN_RE.findall(line)), default=0)
+	delimiter = "`" * (longest + 1)
+	padding = " " if line.startswith("`") or line.endswith("`") else ""
+	return f"{delimiter}{padding}{line}{padding}{delimiter}"
+
+
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
-	reasons = "\n".join(f"- {_reason_line(reason)}" for reason in pattern["reasons"]) or "- (none given)"
+	reasons = "\n".join(f"- {_markdown_code_span(_reason_line(reason))}" for reason in pattern["reasons"]) or "- (none given)"
 	fence = _example_fence(pattern["example"])
 	return (
 		f"**Occurrences:** {new_count} ({pattern['first_ts']} – {pattern['last_ts']}), session `{session_label}`\n\n"
@@ -636,10 +655,10 @@ def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
 def issue_body(pattern: dict, new_count: int, session_label: str) -> str:
 	return (
 		f"A Claude Code session in this repository hit a **{_event_label(pattern['event'])}** "
-		f"for `{pattern['tool_name']}`, so an unattended stage waited for a human "
+		f"for {_markdown_code_span(_reason_line(pattern['tool_name']))}, so an unattended stage waited for a human "
 		"(or, for a denial, went on without the call). Filed by "
 		"`.claude/scripts/permission_prompts.py` (CLAUDE.md §23.I).\n\n"
-		f"**Pattern:** `{_pattern_line(pattern)}`\n\n"
+		f"**Pattern:** {_markdown_code_span(_pattern_line(pattern))}\n\n"
 		+ _occurrence_block(pattern, new_count, session_label)
 		+ "\n**How to fix** (in this order, never widening a permission for a destructive or administrative action):\n"
 		"1. Change the command file that produced the call so it uses an allowlisted helper "
@@ -673,7 +692,7 @@ def class_comment_body(pattern: dict, new_count: int, session_label: str) -> str
 	return (
 		f"Seen again: a new pattern of the same command class (`{pattern['class']}`), added here instead of "
 		"a new issue (CLAUDE.md §23.I).\n\n"
-		f"**Pattern:** `{pattern['shape'] or pattern['tool_name']}` (`{pattern['tool_name']}`, "
+		f"**Pattern:** {_markdown_code_span(_pattern_line(pattern))} ({_markdown_code_span(_reason_line(pattern['tool_name']))}, "
 		f"{_event_label(pattern['event'])}, signature `{pattern['signature']}`)\n\n"
 		+ _occurrence_block(pattern, new_count, session_label)
 	)
