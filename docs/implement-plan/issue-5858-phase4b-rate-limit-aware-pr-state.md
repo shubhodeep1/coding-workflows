@@ -9,12 +9,12 @@
 - Activation: not started
 - Waiting on: PR #5874
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net (re-armed by the round 5 stage, see its report)   hand-back (re-armed by the round 5 stage)
+- Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net (re-armed by the intervention 1 stage, see its report)   hand-back (re-armed by the intervention 1 stage)
 - Last updated: 2026-10-01
-- Last note: review round 5 on PR #5874: both consensus findings fixed (the completed-run guard now requires a PR-state read in the same poll that confirmed the PR `open`, so an `unknown` read no longer lets a completed run skip `pr_closed_during_retry`; consecutive unknowns still trip the 4-read breaker; contract and three behavioural tests cover `unknown`; AD-12).
+- Last note: blocked-PR intervention 1 on PR #5874: the workflow labelled it `ai:review-blocked` at the 5-round autofix cap right after the round 5 fix (2aebc32) was pushed, without reviewing that head; both round 5 findings were already fixed and no check failed, so this `[claude-intervention]` commit restarts the round count and the label is removed so the reviewer panel reviews the fix.
 
 ## Phases
-1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 5; interventions: 0 (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
+1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 5; interventions: 1 (2026-10-01: `ai:review-blocked` from the `MAX_AUTOFIX_ITERATIONS`=5 cap right after round 5's fix 2aebc32, with no new findings and no failing check on that head; label removed so the reviewers run on the round-5 fix) (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
    - [x] `gh_api_with_retry` returns `GH_API_RATE_LIMITED_RC` (75) on a rate-limited attempt without the short retries
    - [x] `fetch_pr_state` reports `rate_limited` separately from `unknown`
    - [x] `phase4b_rate_limit_wait_seconds` derives the wait from `GET /rate_limit`, capped at the deadline
