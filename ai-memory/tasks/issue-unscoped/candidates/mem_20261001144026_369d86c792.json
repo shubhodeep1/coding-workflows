@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_release_smoke_run_lookup.py:199-201 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: CI run 36861225149 failed because the merge-result checkout did not have exactly three matching calls in `.github/workflows/test-and-mark-stable.yml`.\n  WHY: `test_capture_sites_use_the_paged_lookup` failed and caused the aggregate `lint` check to fail, although the current PR checkout has three matches.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_release_smoke_run_lookup.py:201 | severity=high | confidence=5\n  PROBLEM: CI check-run tests-release-and-log-analysis failed in CI run 36861225149 on this assertion, which also caused the aggregate lint check to fail.\n  WHY: During execution in CI against the merge-result checkout, test_capture_sites_use_the_paged_lookup raised an AssertionError. Neither this test file nor .github/workflows/test-and-mark-stable.yml was modified in this PR; the current branch checkout contains three matching occurrences, but in the CI merge environment the count differed, failing the required check.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_release_smoke_run_lookup.py:199-201 | severity=high | confidence=5\n  PROBLEM: The supplied CI run 36861225149 failed `test_capture_sites_use_the_paged_lookup` at the assertion that `.github/workflows/test-and-mark-stable.yml` contains exactly three matching calls.\n  WHY: `tests-release-and-log-analysis` exited with an assertion failure, which caused the aggregate `lint` check to fail. The current checkout has three matches, so this failure is not reproduced against the checked-out PR files; the failed check still needs reconciliation with the version tested by CI.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "687352fecf5a80c30ed22688f9604721d5115b66de0d695d39d0df51f663f56b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5509,
+    "run_id": "36861226374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36861226374",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001144026_369d86c792",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5509,
+    "run_id": "36861226374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T14:40:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
