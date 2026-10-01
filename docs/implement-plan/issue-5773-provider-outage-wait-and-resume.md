@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5773-provider-outage-wait-and-resume-plan.md
 - Source issue: shubhodeep1/coding-workflows#5773 (progress comment 5921914621)
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5773-provider-outage-wait-and-resume   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-5773-provider-outage-wait-and-resume   Final PR: #5775 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5871: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project branch opened; phase 1 starting
+- Last note: phase 1 PR #5871 opened twin-first; hold claim posted and twin-sync blocker on #5773; the wait is armed by the /reclarify stage after the [claude-twin-sync] copy
 
 ## Phases
-1. [ ] Phase 1 — classify provider outages, wait, mark once, probe and resume   — protected paths: .claude/scripts/check_in_status.py, .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md (via workflow-templates/.claude/** twins)
+1. [ ] Phase 1 — classify provider outages, wait, mark once, probe and resume   — PR #5871 open (twin sync pending); review rounds: 0; interventions: 0 — protected paths: .claude/scripts/check_in_status.py, .claude/commands/fix-claude-pr.md, .claude/commands/implement-plan-claude.md (via workflow-templates/.claude/** twins)
 
 ## Conformance
 
@@ -45,7 +45,9 @@
 - AD-16 [plan, 2026-10-01] What does the intake trust for an autofix report? — Picked: A — `failure_reason` plus the reporter's `provider_outage` evidence line. Alternatives: B — a signature in the job log. Why: the job log is not readable while the job runs. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A whole Actions job log carries reviewer stderr thousands of lines before its end, so a log classifier must read far more than a 64 KB tail and must drop the echoed step script lines first. (files: scripts/workflow_failure_heal.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-01)
 - security_pass_skip.py: {"skip": false, "label": null, "reason": "no skip label"} → Security pass: run.
+- Verification: 3860 tests in the 131 test files that reference a changed file pass; 11 fail: 8 twin-parity tests (expected until the twin sync), 2 clarify predicate pins (fixed in 60b26e2), and 1 environmental (`gawk` missing; also fails on main). The full suite exceeds the container's run time; tests/test_workflow_retro.py needs Python 3.12 (CI uses 3.12).
