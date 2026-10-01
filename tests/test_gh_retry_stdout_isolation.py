@@ -20,11 +20,23 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import textwrap
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
+REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+
+# The two steps of review_autofix.yml that define their own retry loop
+# instead of sourcing scripts/gh_helpers.sh (the first only as a fallback
+# when the source fails). Both capture gh_retry output with $(...).
+INLINE_GH_RETRY_STEPS = (
+	"Dispatch standalone validate for orchestrator short-circuit issues",
+	"Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge",
+)
 
 ISSUE_BODY = json.dumps({"number": 5016, "title": "real issue"}) + "\n"
 RATE_LIMIT_BODY = (
@@ -229,3 +241,92 @@ def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> No
 	rc_line = result.stdout.strip()
 	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr)
 	assert _leftover_temp_files(tmp_path) == []
+
+
+def _inline_gh_retry(step_name: str) -> str:
+	"""Return the inline ``gh_retry() { ... }`` defined in a review_autofix.yml step."""
+	lines = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8").splitlines()
+	step_idx = next(
+		(i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}"), None,
+	)
+	assert step_idx is not None, f"step not found in review_autofix.yml: {step_name}"
+	start = next(
+		(i for i in range(step_idx + 1, len(lines)) if lines[i].strip() == "gh_retry() {"), None,
+	)
+	assert start is not None, f"no inline gh_retry() in step: {step_name}"
+	indent = lines[start][: len(lines[start]) - len(lines[start].lstrip(" "))]
+	end = next(i for i in range(start + 1, len(lines)) if lines[i] == f"{indent}}}")
+	return textwrap.dedent("\n".join(lines[start : end + 1])) + "\n"
+
+
+def _run_inline(
+	tmp_path: Path, env: dict[str, str], step_name: str, body: str,
+) -> subprocess.CompletedProcess[str]:
+	"""Define the step's inline gh_retry with sleep stubbed, then run ``body``."""
+	script = (
+		"set -euo pipefail\n"
+		f"{_inline_gh_retry(step_name)}"
+		"sleep() { :; }\n"
+		f"{body}\n"
+	)
+	return subprocess.run(
+		["bash", "-c", script], env=env, capture_output=True, text=True, cwd=tmp_path, timeout=60,
+	)
+
+
+def _all_temp_files(tmp_path: Path) -> list[str]:
+	return sorted(p.name for p in (tmp_path / "tmpdir").iterdir())
+
+
+@pytest.mark.parametrize("step_name", INLINE_GH_RETRY_STEPS)
+def test_inline_wrapper_capture_holds_only_the_successful_body(
+	tmp_path: Path, step_name: str,
+) -> None:
+	env = _setup(tmp_path, RATE_LIMITED_TWICE_THEN_OK)
+	captured = tmp_path / "captured.json"
+	result = _run_inline(
+		tmp_path,
+		env,
+		step_name,
+		'meta="$(gh_retry gh api repos/o/r/pulls/1 --jq .head.sha)"\n'
+		f"printf '%s' \"${{meta}}\" > '{captured}'",
+	)
+	assert result.returncode == 0, result.stderr
+	assert captured.read_text(encoding="utf-8") == ISSUE_BODY.rstrip("\n")
+	assert _calls(tmp_path) == 3
+	size = len(RATE_LIMIT_BODY.encode("utf-8"))
+	assert f"gh_retry: dropped {size} bytes of stdout from failed attempt 1/4" in result.stderr
+	assert f"gh_retry: dropped {size} bytes of stdout from failed attempt 2/4" in result.stderr
+	assert "BODY-MARKER" not in result.stderr
+	assert _all_temp_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("step_name", INLINE_GH_RETRY_STEPS)
+def test_inline_wrapper_exhausted_retries_leave_stdout_empty(
+	tmp_path: Path, step_name: str,
+) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1)])
+	result = _run_inline(
+		tmp_path,
+		env,
+		step_name,
+		'if gh_retry gh api repos/o/r/pulls/1; then echo "rc=0"; else echo "rc=$?"; fi',
+	)
+	assert result.stdout == "rc=1\n", result.stderr
+	assert _calls(tmp_path) == 4
+	assert "BODY-MARKER" not in result.stdout + result.stderr
+	assert _all_temp_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("step_name", INLINE_GH_RETRY_STEPS)
+def test_inline_wrapper_first_try_success_passes_stdout_through_unchanged(
+	tmp_path: Path, step_name: str,
+) -> None:
+	payload = "line one\nlast line without newline"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run_inline(tmp_path, env, step_name, "gh_retry gh api repos/o/r")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == payload
+	assert result.stderr == ""
+	assert _calls(tmp_path) == 1
+	assert _all_temp_files(tmp_path) == []
