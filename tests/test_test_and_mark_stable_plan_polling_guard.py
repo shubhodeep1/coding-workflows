@@ -79,7 +79,11 @@ elif "/actions/runs?" in path:
 		sys.exit(1)
 	payload = {"workflow_runs": pages[page - 1] if page <= len(pages) else []}
 elif re.fullmatch(r"repos/[^/]+/[^/]+/actions/runs/\d+", path):
-	# wait-implement's cached run read: the run as the current pages show it.
+	# wait-implement's cached run read: the run as the current pages show it,
+	# or a failed read when STUB_RUN_BY_ID_FAILS is set.
+	if os.environ.get("STUB_RUN_BY_ID_FAILS"):
+		sys.stderr.write("HTTP 502: Bad Gateway\n")
+		sys.exit(1)
 	run_id = int(path.rsplit("/", 1)[1])
 	found = [run for page_runs in run_pages() for run in (page_runs or []) if run.get("id") == run_id]
 	if not found:
@@ -443,7 +447,7 @@ def _phase_step_script(step_id: str) -> str:
 	raise AssertionError(f"{step_id} step not found")
 
 
-def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, pr_after: int | None = None, pages_later: list | None = None, switch_after: int = 0, fail_page: int | None = None, phase_timeout: str = "60", fake_clock: bool = False) -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, pr_after: int | None = None, pages_later: list | None = None, switch_after: int = 0, fail_page: int | None = None, phase_timeout: str = "60", fake_clock: bool = False, run_by_id_fails: bool = False) -> tuple[int, dict[str, str], list[list[str]], str]:
 	# Runs the real wait-clarify / wait-implement script against the stub gh
 	# and returns its exit code, GITHUB_OUTPUT, gh calls, and combined output.
 	# fake_clock puts a stub `date` on PATH whose `date +%s` advances 100 s
@@ -493,6 +497,8 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 			env["STUB_RUN_PAGES_SWITCH_AFTER"] = str(switch_after)
 		if fail_page is not None:
 			env["STUB_RUN_PAGE_FAILS"] = str(fail_page)
+		if run_by_id_fails:
+			env["STUB_RUN_BY_ID_FAILS"] = "1"
 		proc = subprocess.run(["bash", "-c", _phase_step_script(step_id)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
 		outputs: dict[str, str] = {}
 		for line in output_file.read_text(encoding="utf-8").splitlines():
@@ -700,6 +706,24 @@ def test_implement_walks_again_once_the_cached_run_completes() -> None:
 	assert f"Implement run {OUR_IMPL_RUN_ID} for issue #4712 is still active" in log, log
 	assert f"newest Implement run {OUR_IMPL_RUN_ID} concluded failure" in log, log
 	assert len(_run_by_id_reads(calls)) == 1, _run_by_id_reads(calls)
+
+
+def test_implement_throttles_the_walk_when_the_cached_run_cannot_be_read() -> None:
+	# PR #5712 review round 2: a read of the cached run that keeps failing must
+	# not send every poll back to a full walk. PHASE_TIMEOUT=5 gives four
+	# terminal checks 100 s apart: walk (caches our active run), by-ID read
+	# fails (throttled), fails again 100 s later (throttled), walk again at
+	# 200 s; then the inactivity limit.
+	pages = [_other_issue_completed_impl_page(), _our_impl_run_page()]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, phase_timeout="5", fake_clock=True, run_by_id_fails=True)
+	assert rc == 1, log
+	assert outputs.get("status") == "timeout", outputs
+	assert "no PR was created" not in log, log
+	assert f"Implement run {OUR_IMPL_RUN_ID} could not be read 0s ago — walking again after 120s, waiting" in log, log
+	assert f"Implement run {OUR_IMPL_RUN_ID} could not be read 100s ago — walking again after 120s, waiting" in log, log
+	assert log.count(f"Implement run {OUR_IMPL_RUN_ID} for issue #4712 is still active") == 2, log
+	assert len(_run_by_id_reads(calls)) == 3, _run_by_id_reads(calls)
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 2, _run_pages_requested(calls)
 
 
 def main() -> int:

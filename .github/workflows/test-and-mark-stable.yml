@@ -1287,6 +1287,7 @@ jobs:
           # walk is retried, but not before IMPL_SCOPED_RETRY_SECONDS.
           IMPL_SCOPED_CAPPED=0
           IMPL_SCOPED_UNREADABLE_AT=""
+          IMPL_SCOPED_UNREADABLE_READ=""
           IMPL_SCOPED_RETRY_SECONDS=120
 
           while true; do
@@ -1374,6 +1375,16 @@ jobs:
               if [ -n "$IMPL_SCOPED_ACTIVE_RUN_ID" ]; then
                 IMPL_SCOPED_CACHED_STATUS=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs/${IMPL_SCOPED_ACTIVE_RUN_ID}" \
                   --jq '.status // ""' || echo "")
+                # A failed read by ID is an unreadable read too, so the walk
+                # it falls back to takes the same retry interval (PR #5712
+                # review round 2); otherwise a run that keeps failing to read
+                # would be walked past on every poll.
+                if [[ "$IMPL_SCOPED_CACHED_STATUS" =~ ^[a-z_]+$ ]]; then
+                  IMPL_SCOPED_UNREADABLE_AT=""
+                elif [ -z "$IMPL_SCOPED_UNREADABLE_AT" ]; then
+                  IMPL_SCOPED_UNREADABLE_AT="$NOW"
+                  IMPL_SCOPED_UNREADABLE_READ="Implement run ${IMPL_SCOPED_ACTIVE_RUN_ID}"
+                fi
               fi
               if [ -n "$IMPL_SCOPED_CACHED_STATUS" ] && [ "$IMPL_SCOPED_CACHED_STATUS" != "completed" ] \
                 && [[ "$IMPL_SCOPED_CACHED_STATUS" =~ ^[a-z_]+$ ]]; then
@@ -1381,7 +1392,7 @@ jobs:
               elif [ "$IMPL_SCOPED_CAPPED" -eq 1 ]; then
                 echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: an earlier walk found every page up to ${SCOPED_RUN_LOOKUP_MAX_PAGES} full — treating as unknown, waiting"
               elif [ -n "$IMPL_SCOPED_UNREADABLE_AT" ] && [ $((NOW - IMPL_SCOPED_UNREADABLE_AT)) -lt "$IMPL_SCOPED_RETRY_SECONDS" ]; then
-                echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: a runs page could not be read $((NOW - IMPL_SCOPED_UNREADABLE_AT))s ago — walking again after ${IMPL_SCOPED_RETRY_SECONDS}s, waiting"
+                echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: ${IMPL_SCOPED_UNREADABLE_READ} could not be read $((NOW - IMPL_SCOPED_UNREADABLE_AT))s ago — walking again after ${IMPL_SCOPED_RETRY_SECONDS}s, waiting"
               else
                 IMPL_SCOPED_ACTIVE_RUN_ID=""
                 IMPL_SCOPED_UNREADABLE_AT=""
@@ -1405,6 +1416,7 @@ jobs:
                   echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: every page up to ${SCOPED_RUN_LOOKUP_MAX_PAGES} was full — treating as unknown, waiting"
                 else
                   IMPL_SCOPED_UNREADABLE_AT="$NOW"
+                  IMPL_SCOPED_UNREADABLE_READ="a runs page"
                   echo "  ⏳ Unable to confirm issue #${ISSUE_NUMBER}'s Implement runs finished: a runs page could not be read — treating as unknown, waiting"
                 fi
               fi
