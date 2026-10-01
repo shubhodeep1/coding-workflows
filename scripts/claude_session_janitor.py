@@ -109,8 +109,9 @@ ISSUE_START_TITLE_PATTERNS = (
 	re.compile(r"^#(?P<issue>\d+) · (?:PR #\d+ — )?implement-issue-claude(?![\w-])"),
 )
 STAGE_TITLE_PATTERN = re.compile(r"^implement-plan issue-(?P<issue>\d+)-\S* — (?P<stage>.+)$")
-# No longer used for archiving: since issue #5664 no stage supersedes an
-# issue-start session. Kept so the module's names do not change (CLAUDE.md §6).
+# Unused: since issue #5664 no stage supersedes an issue-start session, so
+# nothing reads this. CLAUDE.md §6 requires asking before an identifier is
+# removed, so it stays until that review (AD-2 of the #5664 plan).
 NON_SUPERSEDING_STAGE_PATTERN = re.compile(r"^(?:checker|waiting:|deploy-activate)")
 ISSUE_PREFIX_PATTERN = re.compile(r"^#\d+ · ")
 PR_PREFIX_PATTERN = re.compile(r"^PR #\d+ — ")

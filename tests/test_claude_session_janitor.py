@@ -297,11 +297,13 @@ def test_each_pr_is_read_once(monkeypatch):
 @pytest.mark.parametrize(
 	("stage_status", "stage_bucket"),
 	[
-		# The checker archives a stage whose start trigger failed (issue #5664).
+		# Archived: the checker archives a stage whose start trigger failed
+		# (issue #5664), so the issue-start session is the only recovery left.
 		("SESSION_STATUS_ARCHIVED", "SESSION_STATUS_BUCKET_COMPLETED"),
-		# A live stage may not have run its step 0 yet, so the issue-start
-		# session's safety net may still be its only recovery.
+		# Idle: a stage created but not yet started by its start trigger, or
+		# one between turns; it may never run its step 0.
 		(IDLE, "SESSION_STATUS_BUCKET_REVIEW_READY"),
+		# Running: a stage in its first turn, before its step 0 has run.
 		("SESSION_STATUS_RUNNING", "SESSION_STATUS_BUCKET_WORKING"),
 	],
 )

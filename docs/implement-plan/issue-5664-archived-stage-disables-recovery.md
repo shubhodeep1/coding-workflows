@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01PVfNdjDT88NAoRDkrYdBzR
 - Last updated: 2026-10-01
-- Last note: final PR #5674 review round 1 (head 4aba356): fixed 2 findings (the #4887 plan's #5664 note now names every section that keeps the old rule as history, and the Tests bullet is annotated; a janitor test comment reworded), rejected 3 no-defect notes (session_01PPkA93M1tZv19KJt6pCjRk).
+- Last note: final PR #5674 review round 2 (head 96c44fc): fixed 2 low-severity clarity findings (each janitor test case's comment now matches its session state; `NON_SUPERSEDING_STAGE_PATTERN`'s comment states it is unused and kept for the §6 ask-first review, AD-2), rejected none (session_01J9TnUgbTByroQyeUk7gnkq).
 
 ## Phases
 1. [x] Phase 1 — issue-start sessions archive only on a closed issue
@@ -34,7 +34,7 @@
 
 ## Completion
 - Completion PR #5890 merged 2026-10-01 — doc moved to docs/completed/issue-5664-archived-stage-disables-recovery-plan.md
-- Final PR #5674 ready — review rounds: 1 (base claude/implement-plan-issue-4887-archive-finished-sessions)
+- Final PR #5674 ready — review rounds: 2 (base claude/implement-plan-issue-4887-archive-finished-sessions)
 
 ## Activation
 - n/a until the final merge: the issue base is project #4887's branch, so this project ends with `Activation: n/a (base claude/implement-plan-issue-4887-archive-finished-sessions)` after #5674 merges, unless that base moves to `main` first (Issue Mode)
