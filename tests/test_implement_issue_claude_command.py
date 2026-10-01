@@ -387,6 +387,24 @@ def test_pickup_reads_every_trigger_page(pickup_cmd):
 	assert "up to 4 more `list_triggers` pages in step 1, read only while a page has `has_more`" in pickup_cmd
 
 
+def test_pickup_step_one_fails_safe_on_an_incomplete_trigger_listing(pickup_cmd):
+	"""Review round 2 on PR #5755 (AD-22): the read stops at 5 pages, so with more than 500
+	enabled Routines `start`, `— wake.`, `stop`, and the catch-up must not treat a trigger
+	they did not see as absent."""
+	assert "When the fifth page still has `has_more`, the listing is **incomplete**: a trigger on a later page is invisible, so no branch below treats a trigger it did not see as absent." in pickup_cmd
+	# start: no new pickup and no deletion without a complete listing.
+	assert "report `claude-issue-pickup: blocked (list_triggers still has more after 5 pages; cannot prove no other pickup exists)` and end the turn without deleting or creating anything, with or without `— restart`." in pickup_cmd
+	start = pickup_cmd.index("- **`start`**: if one exists")
+	assert start < pickup_cmd.index("cannot prove no other pickup exists") < pickup_cmd.index("With `— restart`, `delete_trigger` each one bound to another session")
+	# wake: own trigger first, and nothing deleted unless it is seen.
+	wake = pickup_cmd.index("- **`— wake.`** (hourly or catch-up): first check whether an enabled `Claude issue pickup: hourly` trigger targets your own session.")
+	assert wake < pickup_cmd.index("report `claude-issue-pickup: not the active pickup` and end the turn") < pickup_cmd.index("Otherwise delete every enabled `Claude issue pickup: hourly` trigger whose `persistent_session_id` is not your own session")
+	assert "report `claude-issue-pickup: blocked (list_triggers still has more after 5 pages; cannot find this pickup's trigger)` and end the turn. Either way delete nothing" in pickup_cmd
+	# stop and catch-up.
+	assert "add `; listing incomplete after 5 pages, a pickup trigger on a later page may still be enabled` to the report." in pickup_cmd
+	assert "When it is `true` but step 1's listing was incomplete, a pending catch-up may sit on a page not read, so schedule nothing: `catch_up=none`" in pickup_cmd
+
+
 def test_pickup_restart_tools_are_allowlisted():
 	import json as _json
 

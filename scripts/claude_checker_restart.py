@@ -327,13 +327,13 @@ def load_trigger_pages(paths: list[str], cursors: list[str] | None = None, probl
 	there is one fewer cursor than pages. The routines of every page are
 	joined (a repeated id is kept once). The returned `has_more` is false, a
 	complete listing, only when all of these hold:
-	  - at least one page was given;
-	  - every page carries a boolean `has_more` (a bare array, or a page
-	    without the field, cannot show where the listing ends);
-	  - every page but the last has `has_more` and a `next_cursor`, and the
-	    last page has no `has_more`;
-	  - there is exactly one cursor per page after the first, and each equals
-	    the `next_cursor` of the page before it.
+	- at least one page was given;
+	- every page carries a boolean `has_more` (a bare array, or a page
+		without the field, cannot show where the listing ends);
+	- every page but the last has `has_more` and a `next_cursor`, and the
+		last page has no `has_more`;
+	- there is exactly one cursor per page after the first, and each equals
+		the `next_cursor` of the page before it.
 	Otherwise it is true, which restarts and re-queues nothing (fail safe).
 	The cursor check is what catches a page left out between two others: the
 	page after the gap was read with the missing page's `next_cursor`, not
