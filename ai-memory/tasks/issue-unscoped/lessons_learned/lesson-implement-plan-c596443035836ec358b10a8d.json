@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-01T03:54:37Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a security fix has an end-to-end regression goal, the end-to-end test must use the exploit's own input shape (here, a vote quoting the defective line), not a benign variant the gate happens to treat the same.",
+  "phase": "implement_plan",
+  "pr_number": 5741,
+  "record_id": "lesson-implement-plan-c596443035836ec358b10a8d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5582-rejection-votes-need-automated-proof",
+    "file:tests/test_review_autofix_claude_fixer_mode.py"
+  ]
+}
