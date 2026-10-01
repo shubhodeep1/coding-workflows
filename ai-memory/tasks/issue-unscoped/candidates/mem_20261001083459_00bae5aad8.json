@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_judge.py:177, 221 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, z-ai_glm-5_2]\n  PROBLEM: `model_action` is stripped but not lowercased, so case-sensitive action checks can let capitalized hold actions bypass the hold guard and route to ruling-based logic.\n  WHY: Reviewers disagreed on severity (NIT to MAJOR); the highest severity is retained because the reported outcomes include routing a request to hold into `merge_with_followup` or `merge`, or into `ai:review-blocked` instead of holding for a human.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_claude_fixer_judge.py:177, 221 | severity=MAJOR | confidence=3\n  PROBLEM: `model_action` is case-sensitive. Line 177 strips but does not lowercase: `str(model.get(\"action\") or \"\").strip()`. Line 221 compares case-sensitively: `if model_action in (\"hold\", \"close_and_reissue\")`. A model returning \"Hold\" or \"CLOSE_AND_REISSUE\" bypasses the hold guard and falls through to ruling-based logic.\n  WHY: With upheld security or data-loss findings at the judge-fix cap, a capitalized \"Hold\" would route to `merge_with_followup` rather than `hold`, silently allowing a PR the plan says must wait for a human to proceed. The model is prompted with lowercase values, so this requires a model deviation, but the guard is case-sensitive with no defense-in-depth normalisation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_claude_fixer_judge.py:line 177 | severity=MAJOR | confidence=4\n  PROBLEM: model_action is stripped of whitespace but not normalized to lowercase before action evaluation.\n  WHY: The action check at line 221 (if model_action in (\"hold\", \"close_and_reissue\"):) performs exact case-sensitive matching against lowercase strings. If the judge model outputs a capitalized action such as \"Hold\" or \"Close_and_reissue\", the condition evaluates to False. When findings are unruled or omitted, decide() falls through to error (\"no_usable_rulings\"), causing review_rb_judge.sh to flag the PR with ai:review-blocked instead of ai:needs-human. If findings were present and evaluated as invalid, it bypasses the hold and mistakenly resolves to decision=\"merge\".\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after reaching the slot retryable-failure limit (3).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nReviewer openai/gpt-6-luna failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nReviewer qwen/qwen3.7-plus failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_claude_fixer_judge.py:line 177 (`model_action = str(model.get(\"action\") or \"\").strip()`) and line 221 (`if model_action in (\"hold\", \"close_and_reissue\")`) | severity=NIT | confidence=3\n  PROBLEM: `model_action` is stripped but never lowercased or validated against the declared `MODEL_ACTIONS` tuple (line 86, unused in `decide`), even though the adjacent model-supplied fields are normalized: ruling at line 184 and category at line 194 both `.strip().lower()`. A case variant from the judge model (`\"Hold\"`, `\"HOLD\"`) bypasses the case-sensitive hold guard and falls through to ruling-based logic: with no usable rulings it yields `decision=error / no_usable_rulings` (line 223-224), which labels the PR `ai:review-blocked` instead of holding for a human \u2014 exactly the misroute this PR's own round-1 fix (`test_model_hold_without_rulings_is_still_a_hold`) eliminated for the lowercase path; with all-invalid rulings it can yield `merge` on a model that asked to hold.\n  WHY: the judge model returns JSON parsed verbatim from the model output (`--model-json`), and LLM outputs deviate from the prompted lowercase action casing; the decision then routes to the wrong branch of `review_rb_judge.sh` (`decision` drives merge/fix/hold/ai:review-blocked).\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "af8371e2e722845181edeb96165fc7a52a978e920225816a0b2561d375485012",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5893,
+    "run_id": "36831046657",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36831046657",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001083459_00bae5aad8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5893,
+    "run_id": "36831046657"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T08:34:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
