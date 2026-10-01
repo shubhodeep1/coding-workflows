@@ -222,15 +222,21 @@ jobs:
           ISSUE_INTEGRATION_BRANCHES=""
           ISSUE_MANAGED_PROJECT_BRANCHES=""
           # Issue #5227: the issues whose lineage the next step may finalize.
-          # An issue is added only on a path the target-branch gate accepts
-          # (or, unchanged, an orchestrator-tracking issue), so a PR merged
-          # into a non-target branch never writes that issue's AI-memory
-          # lineage as `merged`. A positive list fails closed.
+          # An issue is added only on a path the target-branch gate accepts,
+          # so a PR merged into a non-target branch never writes that
+          # issue's AI-memory lineage as `merged`. A positive list fails
+          # closed. Issue #5619: an orchestrator-tracking issue <T> is added
+          # only for its completion PR — merged into the default branch from
+          # the head `orchestrator/project-<T>` in this repository — because
+          # any other PR that links it (a child merged into the project
+          # branch, an unrelated merge, an unmerged close) leaves the
+          # project active.
           LINEAGE_FINALIZE_ISSUE_NUMBERS=""
           # Issues put in TRACKING_ISSUES only because their classification
-          # lookup failed. The gate never read their body, so their lineage
-          # is finalized only when no target branch is needed: an unmerged
-          # close or a default-branch merge (fail closed, #5227).
+          # lookup failed. The gate never read their labels or body, so
+          # they may be tracking issues: their lineage follows the same
+          # completion-PR rule (fail closed, #5227, #5619). This list only
+          # picks the log line.
           LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS=""
           if ! type issue_body_integration_branch >/dev/null 2>&1; then
             # Older gh_helpers.sh: no parser, so only default-branch
@@ -520,7 +526,11 @@ jobs:
                   # issue as managed would re-introduce #1469.
                   echo "::warning::Orchestrator fallback lookup failed for issue #${_orch_num}; conservatively treating as tracking (skip)."
                   ORCHESTRATOR_CLASSIFICATION_COMPLETE="false"
-                  TRACKING_ISSUES+="${_orch_num}"$'\n'
+                  # merge_issue_number_list, not `+=`: TRACKING_ISSUES from
+                  # the closingIssuesReferences payload has no trailing
+                  # newline, so appending "10" to "5" made "510" and dropped
+                  # tracking issue #5 from the skip list (issue #5619).
+                  TRACKING_ISSUES="$(merge_issue_number_list "${TRACKING_ISSUES}" "${_orch_num}")"
                   LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS+="${_orch_num}"$'\n'
                   continue
                 fi
@@ -533,12 +543,12 @@ jobs:
                   ISSUE_MANAGED_PROJECT_BRANCHES+="${_orch_num}"$'\t'"${_orch_meta_project_branch}"$'\n'
                 fi
                 if printf '%s' "${_orch_meta}" | jq -e '((.labels // []) | index("ai:orchestrator-tracking")) != null' >/dev/null 2>&1; then
-                  TRACKING_ISSUES+="${_orch_num}"$'\n'
+                  TRACKING_ISSUES="$(merge_issue_number_list "${TRACKING_ISSUES}" "${_orch_num}")"
                 elif printf '%s' "${_orch_meta}" | jq -e '
                   ((.labels // []) | index("ai:orchestrator-managed")) != null
                   or ((.body // "") | contains("Managed by: AI Orchestrator"))
                 ' >/dev/null 2>&1; then
-                  MANAGED_ISSUES+="${_orch_num}"$'\n'
+                  MANAGED_ISSUES="$(merge_issue_number_list "${MANAGED_ISSUES}" "${_orch_num}")"
                 fi
               done <<< "${LOOKUP_ISSUE_NUMBERS}"
             fi
@@ -549,12 +559,18 @@ jobs:
 
             if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
               echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
-              if [ -n "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" ] \
-                && printf '%s\n' "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" | grep -qxF "${issue_number}" \
-                && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${DEFAULT_BRANCH_NAME}" ]; then
-                echo "Issue #${issue_number} could not be classified and PR merged into ${PR_BASE_REF}, not the default branch ${DEFAULT_BRANCH_NAME}; skipping its lineage finalization."
-              else
+              # Issue #5619: only the project's completion PR finishes a
+              # tracking issue. Head ref, head repository, base, and merged
+              # flag all come from the event payload (no API call, §15).
+              if [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" = "${DEFAULT_BRANCH_NAME}" ] \
+                && [ -n "${PR_HEAD_REPO_FULL_NAME:-}" ] && [ "${PR_HEAD_REPO_FULL_NAME}" = "${REPOSITORY}" ] \
+                && [ "${PR_HEAD_REF:-}" = "orchestrator/project-${issue_number}" ]; then
                 LINEAGE_FINALIZE_ISSUE_NUMBERS+="${issue_number}"$'\n'
+              elif [ -n "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" ] \
+                && printf '%s\n' "${LINEAGE_UNCLASSIFIED_ISSUE_NUMBERS}" | grep -qxF "${issue_number}"; then
+                echo "Issue #${issue_number} could not be classified and PR #${PR_NUMBER} is not its completion PR (merged ${PR_MERGED}, base ${PR_BASE_REF}, head ${PR_HEAD_REF:-none}, head repo ${PR_HEAD_REPO_FULL_NAME:-none}); skipping its lineage finalization."
+              else
+                echo "PR #${PR_NUMBER} is not orchestrator-tracking issue #${issue_number}'s completion PR (merged ${PR_MERGED}, base ${PR_BASE_REF}, head ${PR_HEAD_REF:-none}, head repo ${PR_HEAD_REPO_FULL_NAME:-none}; expected a merge of orchestrator/project-${issue_number} from ${REPOSITORY} into ${DEFAULT_BRANCH_NAME}); skipping its lineage finalization."
               fi
               continue
             fi
