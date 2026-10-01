@@ -653,6 +653,54 @@ a new value, add it to the appropriate overrides file with a
 - The `.codex-workflow-src` fallback is the verified workflow-commit checkout;
   a missing required script never falls back to a PR-head or moving-ref copy.
 
+## Review checkout on dispatched runs
+
+- `codex-agent` → "Checkout repo" in `review_autofix.yml` checks out
+  `github.event.pull_request.head.sha || needs.gate.outputs.review_checkout_sha || github.sha`
+  into `GITHUB_WORKSPACE`. The reviewer panel, the summariser, the slop scan,
+  and the reviewer file-context helpers read files from `GITHUB_WORKSPACE`,
+  while "Activate workspace shell context" points `GIT_DIR` at
+  `GITHUB_WORKSPACE/.git` and `GIT_WORK_TREE` at `WORKSPACE_PATH`, where
+  "Checkout PR head branch" lands the head.
+- `review_checkout_sha` is the gate's PR head SHA when the head is in this
+  repository, read from the gate's single `/pulls/<n>` fetch (no extra API
+  call). It covers runs with no `pull_request` payload: the sweep's
+  `workflow_dispatch` re-runs and the Claude-fixer
+  `claude_fixer_converged_head` dispatch. Before issue #5824 those runs
+  reviewed the default branch's files against the PR's diff and handed off
+  false "missing at HEAD" findings (run 36794195824, PR #5097).
+- `pull_request` runs keep the event's head SHA, and the no-PR `claude/**`
+  push path keeps `github.sha` (the pushed commit). A dispatched run on a
+  fork head keeps `github.sha` too, so fork code never lands next to the
+  run's secrets; the gate logs `AUTOFIX_GATE_REVIEW_CHECKOUT ...
+  checkout=event_sha reason=cross_repo_head` with a warning. A resolved
+  checkout logs `checkout=pr_head`. Because `GITHUB_WORKSPACE` then holds
+  `github.sha` and not the PR head, "Checkout PR head branch" logs
+  `AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP ... action=soft_exit` with a
+  warning, before any of its exits, and sets `AUTOFIX_STALE_BASE_SKIP=true`:
+  the run skips the reviewers, the Claude-fixer hand-off, and auto-merge
+  instead of reviewing the default branch's files against the fork PR's
+  diff. Its `CAN_PUSH=false` fork exit alone gates none of those steps.
+- "Checkout PR head branch" records the commit `GITHUB_WORKSPACE` holds
+  before it fetches and resets `WORKSPACE_PATH` to the branch tip. When the
+  tip moved in between (a push after the gate read the head, or after a
+  `pull_request` event), the reviewers' files would be the older commit while
+  the diff, the hand-off, and the auto-merge head check bind to the newer
+  one. The step then logs `AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED ...
+  action=soft_exit` with a warning and sets `AUTOFIX_STALE_BASE_SKIP=true`,
+  so the run skips the reviewers, the Claude-fixer hand-off, and auto-merge;
+  the run that the push started reviews the new head. A push that starts no
+  run (one made with `GITHUB_TOKEN`) waits for the next event or the hourly
+  sweep. Before any of the step's exits, the step also compares that commit
+  with the head "Collect PR metadata" read (`PR_PAYLOAD_FILE` `.head.sha`,
+  the head of the diff the reviewers get), and soft-exits the same way with
+  `source=pr_metadata` in the log line when they differ. This covers fork
+  heads on `pull_request` runs and rejected branch names, which exit before
+  the fetch. A dispatched run on a fork head is not compared; it skips the
+  review instead (`AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP` above).
+- `tests/test_review_autofix_dispatch_pr_head_checkout.py` pins the wiring and
+  runs the gate fragment and the moved-head check for each case.
+
 ## Test-suite git environment isolation
 
 - `tests/conftest.py` strips the repo-pinning git variables (`GIT_DIR`,
@@ -1792,6 +1840,9 @@ and shipped:
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `AUTOFIX_GATE_REVIEW_CHECKOUT`
+- `AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED`
+- `AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1984,6 +2035,9 @@ LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=AUTOFIX_GATE_REVIEW_CHECKOUT
+LOG_PREFIX.name=AUTOFIX_REVIEW_WORKSPACE_HEAD_MOVED
+LOG_PREFIX.name=AUTOFIX_REVIEW_CROSS_REPO_DISPATCH_SKIP
 
 ---
 

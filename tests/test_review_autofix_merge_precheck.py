@@ -58,8 +58,12 @@ def test_workflow_checks_out_pr_head_ref_for_judge_context():
     assert "uses: actions/checkout@v5" in wf, (
         "Expected review_autofix workflow to use actions/checkout@v5"
     )
-    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in wf, (
-        "Expected checkout ref to prefer pull_request.head.sha (PR head context)"
+    assert (
+        "ref: ${{ github.event.pull_request.head.sha || needs.gate.outputs.review_checkout_sha || github.sha }}"
+        in wf
+    ), (
+        "Expected checkout ref to prefer pull_request.head.sha, then the gate's "
+        "same-repo PR head for dispatched runs (issue #5824), then github.sha"
     )
 
 
