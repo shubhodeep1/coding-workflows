@@ -61,7 +61,9 @@ that session and is listed in `errors`), 2 when an input file is missing or
 not the expected JSON shape.
 
 Only automation sessions are ever eligible, matched by title (after one
-optional `#<N> · ` prefix):
+optional `#<N> · ` prefix, and, before the `issue …` and `implement-plan …`
+forms only, one optional `PR #<pr> — ` prefix, which numbers-first titles
+carry once the session opened its PR):
 
   * `PR [<owner>/<repo>]#<N> — fix …` / `— fixed …` / `— on hold …`
                                    (`/fix-claude-pr` fixers)
@@ -142,6 +144,9 @@ MAX_STALL_STATE_KEYS = 500
 
 _REPO = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 TITLE_PREFIX_PATTERN = re.compile(r"^#\d+ · ")
+# Numbers-first titles (#4943) put `PR #<pr> — ` in front of a stage or issue session once it opens its
+# PR; strip it only before those two forms, so fixer, check-in, and terminal titles keep their own match.
+NUMBERED_PR_TITLE_PREFIX_PATTERN = re.compile(r"^PR #\d+ — (?=implement-plan |[Ii]ssue )")
 FIXER_TITLE_PATTERN = re.compile(rf"^PR (?:(?P<repo>{_REPO}))?#(?P<number>\d+) — (?:fix|fixed|on hold)(?![\w-])")
 CHECK_IN_TITLE_PATTERN = re.compile(r"^PR #(?P<number>\d+) status check-in")
 TERMINAL_TITLE_PATTERN = re.compile(r"^PR #(?P<number>\d+) (?:merged|closed) — ")
@@ -278,6 +283,7 @@ def classify_title(title: str) -> dict | None:
 	`target` is `pr`, `issue`, or None (an implement-plan slug that names no PR or issue).
 	"""
 	title = TITLE_PREFIX_PATTERN.sub("", title, count=1)
+	title = NUMBERED_PR_TITLE_PREFIX_PATTERN.sub("", title, count=1)
 	match = FIXER_TITLE_PATTERN.match(title)
 	if match:
 		return {"kind": "fixer", "target": "pr", "repo": match.group("repo"), "number": int(match.group("number"))}
