@@ -393,6 +393,22 @@ def test_step_2_sweep_is_skipped_after_a_denied_delete(twin_text):
 	assert "0. **Sweep, then the hand-back Routine.** Run the stale Routine sweep (CLAUDE.md §26.G)." in twin_text
 
 
+def test_later_sweep_leaves_out_a_trigger_denied_earlier():
+	# PR #5856 review round on head be4b64d: an ended Routine whose step 2 delete was
+	# denied matches the sweep's `implement-plan <slug>: ` rule, so the Arming-the-wait
+	# sweep (and the §26.D sweep after the fired hand-back's delete) must not retry it.
+	claude_md = _flat(CLAUDE_MD)
+	sweep = _section(claude_md, "### G) Stale Routine sweep", "### H) Claude-fixer mode")
+	assert "leave out every id whose `delete_trigger` was already denied earlier in this session" in sweep
+	assert "a `/implement-plan-claude` step 2 delete of a stale Routine" in sweep
+	assert "the §26.D delete of the fired hand-back" in sweep
+	assert "`cleanup skipped: <trigger id> denied earlier`" in sweep
+	section = _section(claude_md, "### I) Denied cleanup calls are skipped, never retried", "## §27.")
+	assert "in that step or a later one (a later §26.G sweep leaves its id out)" in section
+	agents = _flat(AGENTS_MD)
+	assert "in that step or a later one (a later stale Routine sweep leaves the denied trigger id out)" in agents
+
+
 def test_agents_md_lists_every_26i_implement_plan_cleanup_site():
 	# PR #5856 review round 1: agents.md mirrors the §26.I list for /implement-plan-claude.
 	agents = _flat(AGENTS_MD)

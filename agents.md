@@ -1091,8 +1091,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   rename on opening a PR, hand-back, end-of-project archives, checker
   prompt),
   `/fix-claude-pr`, and `/claude-issue-pickup` are housekeeping. A denied
-  one is never retried: the step's remaining cleanup is skipped,
-  `cleanup skipped: <tool> denied (<reason>)` goes into the report (and
+  one is never retried, in that step or a later one (a later stale Routine
+  sweep leaves the denied trigger id out): the step's remaining cleanup is
+  skipped, `cleanup skipped: <tool> denied (<reason>)` goes into the report (and
   the progress log's `Last note`), and the stage continues. Without this,
   the third consecutive classifier refusal turns into a human prompt that
   nobody answers. Before deleting a trigger named by id, the flow reads it
