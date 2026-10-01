@@ -443,6 +443,17 @@ def test_next_after_id_walks_pages_until_the_end_or_the_horizon():
 	assert janitor.next_after_id(sessions, True, "session_b", NOW, 1) is None
 
 
+def test_next_after_id_skips_an_unreadable_timestamp():
+	# One bad created_at must not reset the walk to the newest page (PR #4924 review round 1).
+	sessions = [_session("session_a", "x", created_hours=5), _session("session_b", "y", created_hours=48)]
+	for bad in (None, 7, "not a time", "2026-09-29T01:00:00"):
+		sessions[0]["created_at"] = bad
+		assert janitor.next_after_id(sessions, True, "session_b", NOW, 30) == "session_b", bad
+		assert janitor.next_after_id(sessions, True, "session_b", NOW, 1) is None, bad
+	sessions[1]["created_at"] = None
+	assert janitor.next_after_id(sessions, True, "session_b", NOW, 30) is None
+
+
 # --- CLI and input shapes ----------------------------------------------------
 
 

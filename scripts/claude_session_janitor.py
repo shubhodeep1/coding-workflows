@@ -325,7 +325,7 @@ def classify(sessions: list[dict], now: dt.datetime, self_id: str | None = None,
 					terminal = _terminal_pr_age_hours(repo, fields["pr"], now, cache)
 					if terminal is not None and terminal[1] >= fixer_grace_hours:
 						reason = f"fixer: {repo}#{fields['pr']} {terminal[0]} {terminal[1]:.1f}h ago (>= {fixer_grace_hours:g}h)"
-				elif _issue_closed(repo, fields["issue"], cache):
+				elif kind == "issue_start" and _issue_closed(repo, fields["issue"], cache):
 					# Only a closed issue ends an issue-start session: a later
 					# stage session may be one that never started (issue #5664).
 					reason = f"issue-start: {repo}#{fields['issue']} closed"
@@ -344,10 +344,17 @@ def next_after_id(sessions: list[dict], has_more: bool, last_id: str | None, now
 	"""The cursor for the next wake's page, or None to start again from the newest page."""
 	if not has_more or not last_id or not sessions:
 		return None
-	try:
-		oldest = min(_parse_time(session.get("created_at")) for session in sessions)
-	except ValueError:
+	# Skip a session whose timestamp cannot be read: failing the whole page
+	# would reset the walk to the newest page on every wake that reaches it.
+	created = []
+	for session in sessions:
+		try:
+			created.append(_parse_time(session.get("created_at")))
+		except (AttributeError, ValueError):
+			continue
+	if not created:
 		return None
+	oldest = min(created)
 	return last_id if (now - oldest).total_seconds() < horizon_days * 86400 else None
 
 
