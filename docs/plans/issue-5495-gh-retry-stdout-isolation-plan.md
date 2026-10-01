@@ -29,7 +29,7 @@ The other wrappers in `scripts/gh_helpers.sh` were audited (see AD-1):
 - `gh_retry CMD > file` leaves only the successful attempt's stdout in `file`, whatever failed before it.
 - `$(gh_retry CMD)` captures only the successful attempt's stdout.
 - A failure that never succeeds (permanent, or retries exhausted) writes nothing to stdout and returns 1, as it does today.
-- Return codes, the retry and rate-limit logic (attempt count, backoff, `/rate_limit` wait, Telegram alert, circuit breaker), and the existing stderr lines stay the same.
+- Return codes, the retry and rate-limit logic (attempt count, backoff, `/rate_limit` wait, Telegram alert, circuit breaker), and the existing stderr lines stay the same, with one exception (AD-4): when the reader closes the pipe before the successful output is delivered, `gh_retry` returns `cat`'s non-zero status without re-running the command.
 - No call-site changes.
 - The two inline `gh_retry()` copies in `.github/workflows/review_autofix.yml` (the "Dispatch standalone validate for orchestrator short-circuit issues" fallback and the deterministic-skip-merge step) buffer stdout the same way (AD-3, changed to B in review round 1).
 
