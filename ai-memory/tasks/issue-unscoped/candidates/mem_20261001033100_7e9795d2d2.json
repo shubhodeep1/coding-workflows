@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:Lines 2592-2594 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The retry-run status read treats rate-limit exit code 75 as a generic read failure and continues polling, rather than waiting for the rate limit to reset.\n  WHY: If `actions/runs/<id>` is rate-limited while PR-state reads still succeed, the loop retries that endpoint every 15 seconds without consulting `/rate_limit`; a sustained limit can consume the retry deadline and produce `retry_timeout` while the adopted run is still in progress.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:Lines 2592-2594 | severity=NIT | confidence=4\n  PROBLEM: The retry-run status read treats rate-limit exit code 75 as a generic read failure and continues polling, rather than waiting for the rate limit to reset.\n  WHY: If `actions/runs/<id>` is rate-limited while PR-state reads still succeed, the loop retries that endpoint every 15 seconds without consulting `/rate_limit`. A sustained limit can consume the retry deadline and produce `retry_timeout` while the adopted run is still in progress.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a8e9fa4822c9b7a286e7589ef7c9772882eb6ead2dfb3f1aa26ccceb12efaf0f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5874,
+    "run_id": "36809337234",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36809337234",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001033100_7e9795d2d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5874,
+    "run_id": "36809337234"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T03:31:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
