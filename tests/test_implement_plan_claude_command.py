@@ -307,6 +307,104 @@ def test_third_conformance_fix_gets_a_fix_check_not_a_fourth_run(text):
 	assert "conformance 3/3 — fix check | security-pass" in text
 
 
+# --- Denied cleanup calls are skipped, never retried (issue #5068) ------------------------
+# The #4755 resume stage retried a refused resume-hygiene delete_trigger until
+# Claude Code's third consecutive classifier block turned into a human prompt
+# nobody answered. These read the workflow-templates twin (the command is a
+# protected path, synced into .claude/ by [claude-twin-sync]) and CLAUDE.md.
+
+
+@pytest.fixture(scope="module")
+def twin_text() -> str:
+	return _flat(TEMPLATE_COMMAND)
+
+
+def _section(text: str, start: str, end: str) -> str:
+	return text[text.index(start):text.index(end)]
+
+
+def test_claude_md_26i_defines_the_denied_cleanup_rule():
+	claude_md = _flat(CLAUDE_MD)
+	section = _section(claude_md, "### I) Denied cleanup calls are skipped, never retried", "## §27.")
+	assert claude_md.index("### H) Claude-fixer mode") < claude_md.index("### I) Denied cleanup calls")
+	assert "**Never retry a cleanup call.**" in section
+	assert "Skip the remaining cleanup calls of that step." in section
+	assert "`cleanup skipped: <tool> denied (<reason>)`" in section
+	assert "A not-found result means the cleanup is already done." in section
+	assert "**Essential calls** may be retried, at most once" in section
+	assert "read it with `get_trigger`" in section
+	assert "(`implement-plan <slug>: …`, `PR #<n> …`)" in section
+	assert "`persistent_session_id` is a session of that project or pull request" in section
+	assert "state what the check found" in section
+	assert "trig_012QFMb1nQkFFs1JyPsnZVsE" in section and "issue #5068" in section
+	for flow in ("`/implement-plan-claude`", "`/fix-claude-pr`", "`/claude-issue-pickup`", "§26.G"):
+		assert flow in section, flow
+
+
+def test_claude_md_26_flows_point_to_26i():
+	claude_md = _flat(CLAUDE_MD)
+	check_in = _section(claude_md, "### C) What each check-in does", "### D) What the pushing session does")
+	assert "Every `delete_trigger` and `set_session_title` in this step is a cleanup call (§26.I)" in check_in
+	# Review round 1 on PR #5097: every delete of a trigger named by id reads it first.
+	assert "only when `get_trigger` (the read at the start of this step serves) shows its `name` is `PR #<n> hand-back` and its `persistent_session_id` is that fixer's session (§26.I;" in check_in
+	pushing = _section(claude_md, "### D) What the pushing session does", "### E) Enforcement")
+	assert "The rename, the archive, and the delete are cleanup calls (§26.I)" in pushing
+	assert "after `get_trigger` shows it is this session's own: its `name` is `PR #<n> hand-back` and its `persistent_session_id` is this session (§26.I)." in pushing
+	assert "Not found means it is already gone, so skip the delete; any other owner means it is not this session's" in pushing
+	assert "a denied archive therefore skips the delete, which keeps the order safe" in pushing
+	assert "The sweep's deletes and the rename are cleanup calls (§26.I)" in pushing
+	sweep = _section(claude_md, "### G) Stale Routine sweep", "### H) Claude-fixer mode")
+	assert "These deletes are cleanup calls (§26.I): after the first denial, skip the rest of the list" in sweep
+
+
+def test_resume_hygiene_skips_a_denied_cleanup_call(twin_text):
+	hygiene = _section(twin_text, "**Resume hygiene**", "**No claude-code-remote tools**")
+	assert "each only after `get_trigger` shows it is this project's own" in hygiene
+	assert "its `name` starts with `implement-plan <slug>:` and its `persistent_session_id` is the previous stage session or the checker" in hygiene
+	assert "Not found means it is already gone, so skip the delete." in hygiene
+	assert "Say what the check found in the text before the call." in hygiene
+	assert "**Every archive and delete here is a cleanup call** (CLAUDE.md §26.I)" in hygiene
+	assert "If one is denied, never retry it: skip the rest of this cleanup, the zombie-checker cleanup included" in hygiene
+	assert "record `cleanup skipped: <tool> denied (<reason>)` in the log's `Last note` and the report" in hygiene
+
+
+def test_zombie_and_rearm_cleanup_skip_a_denied_call(twin_text):
+	zombie = _section(twin_text, "### Zombie-checker cleanup", "**What counts as \"done waiting\"**")
+	assert "Each archive is a cleanup call (CLAUDE.md §26.I). After the first denied one, archive no more" in zombie
+	arming = _section(twin_text, "**Arming the wait**", "**Refused at the depth limit.**")
+	assert "The listing's `name` and `persistent_session_id` are the ownership check (CLAUDE.md §26.I)." in arming
+	assert "After the first denial, skip the rest of them, record `cleanup skipped: <tool> denied (<reason>)`, and continue with step 3." in arming
+	assert "the checker ignores a wake for an older wait (checker prompt step 0)" in arming
+	assert "may be retried, at most once" in arming
+
+
+def test_other_cleanup_sites_skip_a_denied_call(twin_text):
+	start = _section(twin_text, "### Two-step start", "## Helpers")
+	assert "a cleanup call, CLAUDE.md §26.I, so a denied archive is noted and never retried" in start
+	hand_back = _section(twin_text, "### Hand-back", "### Fallbacks")
+	assert "This delete and the rename in step 2 are cleanup calls (CLAUDE.md §26.I)" in hand_back
+	assert "A denied delete skips the rename too, because a denial skips the rest of the cleanup." in hand_back
+	assert "The re-read, the `PushNotification`, and the intervention still run." in hand_back
+	assert "first `get_trigger` the id it recorded when it armed the wait" in hand_back
+	assert "`delete_trigger` it only when its `name` starts with `implement-plan <slug>:` and its `persistent_session_id` is this session" in hand_back
+	assert "Not found means it is already gone, so skip the delete" in hand_back
+	assert "Say what the check found in the text before the call." in hand_back
+	assert "That archive is a cleanup call (CLAUDE.md §26.I): if it is denied, note `cleanup skipped` in the report and stop anyway." in twin_text
+	assert "Both archives are cleanup calls (CLAUDE.md §26.I): a denied one is noted in the report, never retried." in twin_text
+	checker = _section(twin_text, "### Checker prompt", "### Hand-back")
+	assert "Cleanup calls (delete_trigger, archive_session, set_session_title) are never retried" in checker
+	assert "write `cleanup skipped: <tool> denied (<reason>)` in your reply" in checker
+	assert "call delete_trigger on it (ignore not-found) only when your last get_trigger showed a name starting with `implement-plan <slug>:` and persistent_session_id <stage session id>" in checker
+
+
+def test_rules_and_report_carry_the_denied_cleanup_rule(twin_text):
+	rules = twin_text[twin_text.index("## Rules"):]
+	assert "**A denied cleanup call is skipped, never retried** (CLAUDE.md §26.I, issue #5068)" in rules
+	assert "Before deleting a trigger named by id, `get_trigger` it and delete only this project's own." in rules
+	output = _section(twin_text, "## Output Format", "## Tool Access")
+	assert "Cleanup: <done | cleanup skipped: <tool> denied (<reason>)" in output
+
+
 # Issue #4948: interim automatic twin-first default for protected-path phases.
 # These tests read the workflow-templates twin, which this change edits first
 # (twin-first); `.claude/` catches up through the [claude-twin-sync] copy.

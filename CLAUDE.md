@@ -1955,11 +1955,18 @@ hand-back trigger id, a session id, and a role. There is at most one
        resume step 2. The sweep starts the fixer from the pickup.
      - **Terminal, fixer gone** → **fall back**: write the §26.D report in
        this session from the fallback next steps in the prompt, delete the
-       fixer's hand-back Routine (`delete_trigger`, ignoring not-found),
-       rename this session (your own id from Bash, as above) with the
-       §26.D title plus
+       fixer's hand-back Routine (`delete_trigger`, ignoring not-found)
+       only when `get_trigger` (the read at the start of this step serves)
+       shows its `name` is `PR #<n> hand-back` and its
+       `persistent_session_id` is that fixer's session (§26.I; not found →
+       already gone, any other owner → leave it and note `cleanup skipped:
+       <trigger id> not this PR's`), rename this session (your own id
+       from Bash, as above) with the §26.D title plus
        ` (pushing session unreachable)`, and send the §26.D
        `PushNotification`. A gone `notify` subscriber needs nothing.
+   - Every `delete_trigger` and `set_session_title` in this step is a
+     cleanup call (§26.I): a denied one is skipped and noted in the reply,
+     never retried.
 
 ### D) What the pushing session does when handed back
 
@@ -1984,7 +1991,12 @@ verdict; a woken `notify` subscriber does the same). Then, by `action`
   checker (its id is in this session's arming report) to
   `PR #<n> <state> — handed to <this session's id>` and archives it
   (`archive_session`), and only then deletes the fired Routine
-  (`delete_trigger`, ignoring not-found). **Check the target first:**
+  (`delete_trigger`, ignoring not-found) after `get_trigger` shows it is
+  this session's own: its `name` is `PR #<n> hand-back` and its
+  `persistent_session_id` is this session (§26.I). Not found means it is
+  already gone, so skip the delete; any other owner means it is not this
+  session's, so leave it and note `cleanup skipped: <trigger id> not this
+  PR's`. **Check the target first:**
   call `get_session` on the checker id and rename or archive it only
   when its title is exactly `PR #<n> status check-in` or already starts
   `PR #<n> merged — handed to ` or `PR #<n> closed — handed to `, it is
@@ -1998,7 +2010,10 @@ verdict; a woken `notify` subscriber does the same). Then, by `action`
   the checker archived first, its 10-minute check (§26.C step 5) never
   runs, so it cannot misread the deleted Routine. The wake itself proves
   the hand-back arrived, so that check is no longer needed; its leftover
-  reminder is removed by the sweep.
+  reminder is removed by the sweep. The rename, the archive, and the
+  delete are cleanup calls (§26.I): if one is denied, skip the ones after
+  it (a denied archive therefore skips the delete, which keeps the order
+  safe), record `cleanup skipped: …` in the report, and still write it.
 - **Still open, claimed, or held** (any other `wait`) → the checker
   stopped renewing the Routine for 7 days, or the fix is already owned:
   re-arm from §26.B step 1 (a new hand-back Routine, registered with the
@@ -2028,7 +2043,8 @@ line, under 200 characters) with the terminal state and whether action is
 needed, since the user is unlikely to be watching hours after the push.
 It sends it only for a terminal verdict, never on a non-terminal
 check-in, and it does not archive itself: its report is what the user
-opens.
+opens. The sweep's deletes and the rename are cleanup calls (§26.I): a
+denied one is skipped and noted in the report, never retried.
 
 ### E) Enforcement
 
@@ -2075,7 +2091,9 @@ sweep runs in the sessions that create them, never in Actions:
   `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_routines.py
   --triggers <file>`; call `delete_trigger` on every id in its `delete`
   list, ignoring not-found. The script decides; the model does not pick
-  Routines to delete. Later pages are left for later sweeps.
+  Routines to delete. Later pages are left for later sweeps. These deletes
+  are cleanup calls (§26.I): after the first denial, skip the rest of the
+  list and record `cleanup skipped: delete_trigger denied (<reason>)`.
 - **What it deletes**: only Routines these flows create, matched by name
   (`PR #<n> status check-in…`, `PR #<n> hand-back`,
   `implement-plan <slug>: …`, and the start trigger of a session the
@@ -2157,6 +2175,58 @@ sweep runs in the sessions that create them, never in Actions:
   Without a queue token it only logs each due PR as a warning, and an open
   queue item for the same PR is never duplicated. `tests/test_claude_pr_sweep.py` and
   `tests/test_check_in_status_hand_back.py` cover the rules.
+
+### I) Denied cleanup calls are skipped, never retried
+
+After three consecutive actions the Auto-mode classifier blocks, Claude
+Code stops asking the classifier and waits for a human, and nobody watches
+the sessions these flows run in. Incident (issue #5068): on 2026-09-29 the
+#4755 resume stage `session_019PaJAyxWrJjeWb93aYofLY` stopped for more than
+an hour at `3 consecutive actions were blocked … [Interfere With
+Workloads]`. It was retrying the resume-hygiene `delete_trigger` on
+`trig_012QFMb1nQkFFs1JyPsnZVsE`, a trigger that no longer existed.
+
+- **Cleanup calls** are `delete_trigger`, `archive_session`, and
+  `set_session_title` in the §26 flows (§26.C step 5, §26.D, the §26.G
+  sweep), in `/implement-plan-claude` (resume hygiene, the zombie-checker
+  cleanup, the re-arm cleanup, a failed two-step start, the hand-back, the
+  end-of-project archives, and its checker prompt), in `/fix-claude-pr`,
+  and in `/claude-issue-pickup`. They are housekeeping: every leftover is
+  also handled elsewhere. An archived session's triggers auto-disable
+  (`auto_disabled_session_gone`), the stale Routine sweep (§26.G) deletes
+  ended ones, and a reused checker ignores stale waits.
+- **Never retry a cleanup call.** When one is denied (by the Auto-mode
+  classifier, a permission rule, or a hook), do not repeat it or reach
+  the same result with another call. Skip the remaining cleanup calls of
+  that step. Record `cleanup skipped: <tool> denied (<reason>)` in the
+  stage report, and in the progress log where the flow keeps one. Then
+  continue with the stage's real work. A not-found result means the
+  cleanup is already done. Any other failure is recorded as
+  `cleanup skipped: <tool> failed (<error>)` and is not retried either;
+  only a denial skips the rest of the step.
+- **Essential calls** may be retried, at most once: starting the next
+  stage, a checker, or a fixer (`create_session` and its start
+  `create_trigger`), and arming or renewing a wait (`create_trigger`,
+  `update_trigger`, `send_later`). A refusal after that follows the
+  flow's own refusal path (for example `/implement-plan-claude`'s
+  "Refused at the depth limit").
+- **Delete only what is yours, and say so first.** Before a
+  `delete_trigger` on a trigger named by id (a `— resume.` block, the
+  progress log, an arming report, a checker's own hand-back trigger),
+  read it with `get_trigger`. Not found → already done; skip the delete.
+  Delete it only when its `name` is one the flow creates for this project
+  or pull request (`implement-plan <slug>: …`, `PR #<n> …`) and its
+  `persistent_session_id` is a session of that project or pull request
+  (the previous stage session, the checker, or this session); otherwise
+  leave it and record `cleanup skipped: <trigger id> not this project's`.
+  A trigger picked from a `list_triggers` result in the same step is
+  checked on that listing's `name` and `persistent_session_id`, with no
+  extra read (§15); the §26.G sweep deletes the list its script chose. In
+  the text just before each cleanup call, state what the check found (for
+  example: `trig_… is this project's own implement-plan <slug>: safety
+  net, bound to previous stage session session_…; deleting it`), so the
+  call reads as the flow cleaning up its own leftover, not as interfering
+  with another workload.
 
 ---
 

@@ -719,3 +719,17 @@ def test_fix_claude_pr_routes_on_action():
 		assert "2. **Route on `state`.**" not in text
 	assert ((ROOT / ".claude" / "commands" / "fix-claude-pr.md").read_bytes()
 		== (ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md").read_bytes())
+
+
+def test_fix_claude_pr_skips_a_denied_cleanup_call():
+	"""Issue #5068: a denied cleanup call is skipped, never retried (CLAUDE.md §26.I).
+
+	Reads the workflow-templates twin; the root copy lands through [claude-twin-sync].
+	"""
+	text = _flat_text(ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md")
+	assert "The rename is a cleanup call (CLAUDE.md §26.I): if it is denied, never retry it." in text
+	assert "`cleanup skipped: set_session_title denied (<reason>)`" in text
+	rules = text[text.index("## Rules"):]
+	assert "**A denied cleanup call is skipped, never retried** (CLAUDE.md §26.I, issue #5068)" in rules
+	assert "`get_trigger` it and delete it only when it is this PR's own" in rules
+	assert "Only arming the check-in may be retried, at most once." in rules

@@ -356,3 +356,57 @@ def test_pickup_starts_fixer_sessions_for_pr_fix_items(pickup_cmd):
 	assert "`item_type` `pr_fix`" in pickup_cmd
 	assert "title `PR <repo>#<N> — fix <kind>`" in pickup_cmd
 	assert "`/fix-claude-pr` re-reads the PR and stops when the fix is no longer due" in pickup_cmd
+
+
+def test_pickup_skips_a_denied_cleanup_call(pickup_cmd):
+	"""Issue #5068: the pickup never retries a denied cleanup call (CLAUDE.md §26.I).
+
+	The pickup has no workflow-templates twin, so this reads the root file and
+	passes once the supervising session applies the twin-sync diff.
+	"""
+	keep_one = pickup_cmd[pickup_cmd.index("**Keep exactly one pickup.**"):pickup_cmd.index("**Read the queue.**")]
+	assert "**Cleanup calls** (all three modes)." in keep_one
+	assert "act only on triggers named exactly `Claude issue pickup: hourly` from the listing above" in keep_one
+	assert "They are cleanup calls (CLAUDE.md §26.I): if one is denied, never retry it." in keep_one
+	assert "in `start` mode create this session's trigger anyway, and in `— wake.` mode read the queue anyway" in keep_one
+	# PR #5097 review round: a denied delete leaves two pickups, so only the
+	# one with the newest trigger reads the queue, and a stale wake deletes nothing.
+	wake = keep_one[keep_one.index("**`— wake.`**"):keep_one.index("**`stop`**")]
+	assert wake.index("end the turn, deleting nothing") < wake.index("Otherwise delete every enabled")
+	assert "If one bound to another session has a later `created_at` than yours, a newer pickup replaced you" in wake
+	assert "report `claude-issue-pickup: not the active pickup (newer trigger <id> → session <persistent_session_id>)`" in wake
+	# PR #5097 review round 2: the stand-down, not a repeated delete, is what
+	# keeps one reader, and a wake already running when the restart comes is
+	# not stopped.
+	assert "The pickup left behind reads no queue item" not in keep_one
+	assert "A not-found result means that cleanup is already done." in keep_one
+	assert "Any other failure is recorded as `cleanup skipped: <tool> failed (<error>)` and is not retried" in keep_one
+	assert "The `created_at` check keeps a single queue reader, not the delete." in keep_one
+	assert "That is a new cleanup call, skipped the same way when it is denied, and nothing depends on it succeeding." in keep_one
+	# PR #5097 review round on head 987fa9a: the non-atomic fixer claim cannot
+	# keep two queue readers apart, so a restart that leaves the older pickup's
+	# session unarchived defers its first queue read to its first hourly wake.
+	assert "For that one wake both pickups can read the queue." not in keep_one
+	start = keep_one[keep_one.index("**`start`**"):keep_one.index("**`— wake.`**")]
+	# PR #5097 review round on head f0ca697: the three create_trigger outcomes
+	# are separate branches, so the deferred read is tied to the success path
+	# and the failure path reads no queue either.
+	failed = start.index("- **It failed twice** →")
+	deferred = start.index("- **It succeeded, and this step left another pickup's session unarchived** →")
+	drained = start.index("- **It succeeded, and no other pickup's session is left unarchived** →")
+	assert failed < deferred < drained
+	assert "report the error and end the turn without reading the queue" in start[failed:deferred]
+	assert "do not read the queue in this turn. Report `claude-issue-pickup: restarted; first queue read at the next hourly wake`" in start[deferred:drained]
+	assert "continue with step 2 now, so the queue is drained immediately." in start[drained:]
+	assert "restarted; first queue read at the next hourly wake" not in start[failed:deferred]
+	assert "unless this step left another pickup's session unarchived" not in start
+	assert "So a `start — restart` that leaves any other pickup's session unarchived creates its trigger but reads no queue in that turn." in keep_one
+	assert "the two pickups never read the queue at the same time" in keep_one
+	assert "A `/fix-claude-pr` claim is a read and then a separate comment, not an atomic lock" in keep_one
+	rules_one = pickup_cmd[pickup_cmd.index("**One pickup, never deeper.**"):pickup_cmd.index("**Stay lean.**")]
+	assert "only the pickup whose trigger has the latest `created_at` reads the queue, from the older pickup's next wake on" in rules_one
+	assert "A restart that leaves the older pickup's session unarchived reads nothing until its own first hourly wake" in rules_one
+	assert "; cleanup skipped: set_session_title denied (<reason>)" in pickup_cmd
+	assert "; cleanup skipped: archive_session denied (<reason>)" in pickup_cmd
+	rules = pickup_cmd[pickup_cmd.index("## Rules"):]
+	assert "**A denied cleanup call is skipped, never retried** (CLAUDE.md §26.I, issue #5068)" in rules

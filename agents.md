@@ -1084,6 +1084,24 @@ reviews, comments, and conflicts stay a direct §12 request.
   so it cannot run from Actions. A byte-identical copy lives under
   `workflow-templates/.claude/scripts/`; `tests/test_stale_routines.py` has
   its own `ci.yml` step.
+- Denied cleanup calls (CLAUDE.md §26.I, issue #5068): `delete_trigger`,
+  `archive_session`, and `set_session_title` in the §26 flows,
+  `/implement-plan-claude` (resume hygiene, zombie-checker cleanup, re-arm
+  cleanup, hand-back, end-of-project archives, checker prompt),
+  `/fix-claude-pr`, and `/claude-issue-pickup` are housekeeping. A denied
+  one is never retried: the step's remaining cleanup is skipped,
+  `cleanup skipped: <tool> denied (<reason>)` goes into the report (and
+  the progress log's `Last note`), and the stage continues. Without this,
+  the third consecutive classifier refusal turns into a human prompt that
+  nobody answers. Before deleting a trigger named by id, the flow reads it
+  with `get_trigger` and deletes only its own (`implement-plan <slug>: …`
+  or `PR #<n> …`, bound to a session of that project or PR). Not found
+  counts as done. Only starting a stage, checker, or fixer, and arming a
+  wait, may be retried, at most once. Leftovers are caught by
+  `auto_disabled_session_gone`, the stale Routine sweep, and the checker's
+  stale-wait check. Tests: `tests/test_implement_plan_claude_command.py`,
+  `tests/test_check_in_status_hand_back.py`,
+  `tests/test_implement_issue_claude_command.py`.
 - Permissions: `.claude/settings.json` `permissions.allow` pre-approves the
   tools the check-in and `/implement-plan-claude` call (file edits,
   `claude/*` pushes, `gh` REST and run reads, the security-audit / validate
