@@ -670,11 +670,31 @@ def test_release_queries_each_active_status_in_lifecycle_order(tmp_path: Path) -
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
 	runs_calls = [line for line in log_text.splitlines() if "actions/runs" in line]
-	assert len(runs_calls) == 3, runs_calls
-	for call, status in zip(runs_calls, ("pending", "queued", "in_progress")):
+	assert len(runs_calls) == 5, runs_calls
+	for call, status in zip(runs_calls, ("requested", "pending", "queued", "waiting", "in_progress")):
 		assert f"actions/runs?status={status}&per_page=100&page=1" in call
 		assert "-X GET" in call
 	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+@pytest.mark.parametrize("status", ["requested", "waiting"])
+def test_release_holds_pr_for_review_run_in_requested_or_waiting_status(tmp_path: Path, status: str) -> None:
+	"""PR #5451 review round 3 (AD-12): every non-terminal status counts as active.
+
+	A review run that is still `requested` (not yet queued) or `waiting` (held by
+	a deployment environment) holds its PR instead of being missed by a listing
+	that only read pending, queued, and in_progress.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 5000, "status": status, "head_branch": "ai/issue-4064",
+		"event": "pull_request", "path": ".github/workflows/internal-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
 
 
 def _run_created_at(index: int) -> str:
@@ -728,7 +748,7 @@ def test_release_leaves_pr_queued_when_run_listing_fails(tmp_path: Path) -> None
 	assert result.stdout.count("::warning::") == 1
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077 head=ai/issue-4064 action=leave_queued" in result.stdout
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4085 head=ai/issue-4069 action=leave_queued" in result.stdout
-	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=page_failed status=pending page=1" in result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=page_failed status=requested page=1" in result.stderr
 	assert log_text.count("actions/runs") == 1, "the listing is read once per release invocation"
 	assert "gh workflow run" not in log_text
 	assert "DELETE" not in log_text
@@ -743,7 +763,7 @@ def test_release_leaves_pr_queued_on_malformed_run_listing(tmp_path: Path) -> No
 	(fixtures / "malformed_runs").touch()
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
-	assert "reason=malformed_page status=pending page=1" in result.stderr
+	assert "reason=malformed_page status=requested page=1" in result.stderr
 	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 
