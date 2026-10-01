@@ -7,14 +7,14 @@
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5874
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01LmB1TgVqo23aKNYHw34Stg   safety net trig_01HbKixLfqPMRBiidfZobmJq   hand-back trig_01FQNFxAcgixbFbaswSyFrsp
 - Last updated: 2026-10-01
 - Last note: phase 1 implemented and verified; phase PR opened against the project branch.
 
 ## Phases
-1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
+1. [ ] Phase 1 — rate-limit-aware Phase 4b PR-state polling — PR #5874 open (waiting); review rounds: 0; interventions: 0 (`.github/workflows/test-and-mark-stable.yml`, `tests/test_test_and_mark_stable_review_blocked_budget.py`, `changelog.d/5858-phase4b-rate-limit-aware-pr-state.md`)
    - [x] `gh_api_with_retry` returns `GH_API_RATE_LIMITED_RC` (75) on a rate-limited attempt without the short retries
    - [x] `fetch_pr_state` reports `rate_limited` separately from `unknown`
    - [x] `phase4b_rate_limit_wait_seconds` derives the wait from `GET /rate_limit`, capped at the deadline
