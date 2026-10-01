@@ -2,19 +2,19 @@
 
 - Plan: docs/plans/issue-5904-block-merge-on-any-failed-newer-review-plan.md
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5904-block-merge-on-any-failed-newer-review   Final PR: pending
+- Project branch: claude/implement-plan-issue-5904-block-merge-on-any-failed-newer-review   Final PR: #5914 draft
 - Source issue: shubhodeep1/coding-workflows#5904   Issue base: claude/implement-plan-issue-4900-claude-fixer-pending-checks-auto-merge
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (number in the stage report and the checker's resume block)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: armed after the phase 1 PR opened (ids in the stage report)
 - Last updated: 2026-10-01
-- Last note: project branch opened from the issue base; implementing phase 1
+- Last note: phase 1 implemented and verified (142 pending-checks tests; the new #5904 cases fail on the old code); phase PR opened, waiting on its review
 
 ## Phases
-1. [ ] Phase 1 — any unsuccessful newer bound review blocks the pending-checks merge
+1. [ ] Phase 1 — any unsuccessful newer bound review blocks the pending-checks merge   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
