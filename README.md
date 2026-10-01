@@ -1497,7 +1497,9 @@ marker's own run keeps its id when re-run, so its attempts that started
 after the marker was posted must have succeeded too (read only when it was
 re-run after the marker, back to the attempt that posted it, at most 5); an
 attempt that failed before the re-run that posted the marker does not
-count. Only a
+count, but the attempt that posted it must have succeeded. A re-run of the
+marker's run between the sweep's reads blocks until the next hourly
+check. Only a
 newer marker from a successful full review clears it, so after a failed review a push, a base change, or the
 `force-review` label sends the head through a new review. A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read

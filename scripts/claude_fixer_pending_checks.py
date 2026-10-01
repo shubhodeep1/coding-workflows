@@ -558,13 +558,16 @@ def marker_run_attempt_problem(repo: str, marker: dict, marker_run: dict) -> str
 	Only attempts that started after the marker was posted count: the
 	attempt that posted it started before it, and an attempt that failed
 	before a re-run posted the marker came before the review it records.
+	The attempt that posted it (the newest that started before it) must
+	have concluded `success` itself, or the reason names it.
 	No call when the run has 1 attempt or its newest attempt started before
 	the marker was posted (the usual case: the newest attempt posted it).
 	Otherwise the earlier attempts are read newest first
 	(`_read_review_run_attempt`, 1 call each, at most
 	MAX_EARLIER_REVIEW_RUN_ATTEMPTS) until one started before the marker was
-	posted (""), or one that started after it did not conclude `success`
-	(the reason). Reaching that cap with every attempt read started after
+	posted ("" when that attempt concluded `success`, the reason when it did
+	not), or one that started after it did not conclude `success` (the
+	reason). Reaching that cap with every attempt read started after
 	the marker is reported too (fail closed). A `run_attempt` that is not an
 	integer of at least 1, a missing or malformed `run_started_at` or marker
 	`created_at` when it is needed, a failed or mismatched attempt read, and
@@ -592,6 +595,14 @@ def marker_run_attempt_problem(repo: str, marker: dict, marker_run: dict) -> str
 	for attempt_number in range(attempt - 1, max(attempt - 1 - MAX_EARLIER_REVIEW_RUN_ATTEMPTS, 0), -1):
 		earlier = _read_review_run_attempt(repo, run_id, attempt_number)
 		if _attempt_started_at(earlier, f"review run {run_id} attempt {attempt_number}") < posted_at:
+			# The newest attempt that started before the marker was posted is
+			# the one that posted it. It must have succeeded too: an attempt
+			# that posts the marker and then fails left the run failed, and a
+			# later gate-skipped re-run must not hide that (review of 904ac0f).
+			if earlier.get("conclusion") != "success":
+				return (f"the marker's review run {run_id} ({_run_path(marker_run)}) concluded "
+					f"{earlier.get('conclusion')} on attempt {attempt_number}, the attempt that posted the marker, "
+					f"before re-run attempt {attempt} succeeded")
 			return ""
 		if earlier.get("conclusion") != "success":
 			return (f"the marker's review run {run_id} ({_run_path(marker_run)}) concluded {earlier.get('conclusion')} "
@@ -603,7 +614,8 @@ def marker_run_attempt_problem(repo: str, marker: dict, marker_run: dict) -> str
 		f"{marker.get('comment_id')} was posted, so none of them posted it")
 
 
-def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int) -> dict | None:
+def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int,
+	marker_run_attempt: int | None = None) -> dict | None:
 	"""Return why a newer review of PR `number` blocks the marker's merge, or None (issue #5148).
 
 	A forced or judge review dispatched from the default branch, or any other
@@ -660,6 +672,12 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	failed one. A re-run of the marker's own run keeps its id, so this
 	function never sees it: `evaluate` checks its attempts after this
 	returns None (`marker_run_attempt_problem`, issue #5904 review round 2).
+	With `marker_run_attempt` (the attempt `evaluate` verified), the
+	listings' copy of the marker's run must still be that attempt and
+	`success`, or this returns `review_superseded`: the run was re-run
+	between the verification read and these listings (review of 904ac0f).
+	No call; without the argument, or when no listing holds the run, no
+	check.
 	"""
 	branch_path = f"repos/{repo}/actions/runs?branch={quote(head_ref, safe='/')}&per_page={REVIEW_RUNS_PER_PAGE}"
 	branch_runs = _read_review_runs_to_marker(branch_path, marker_run_id)
@@ -686,6 +704,19 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	# A titled internal-review.yml dispatch on the head branch is in both
 	# listings; count it once, so its attempts are not read twice.
 	bound_reviews = list({run["id"]: run for run in bound_reviews}.values())
+	# The marker's run was verified from an earlier read. A re-run of it that
+	# started and finished before these listings were read is excluded from
+	# `newer` by its id, so compare the listing's copy with the attempt that
+	# was verified (review of 904ac0f): another attempt, or a conclusion other
+	# than `success`, means it was re-run while this ran. The next sweep
+	# re-reads it (`verify_review_run`, `marker_run_attempt_problem`).
+	if marker_run_attempt is not None:
+		for run in bound_reviews:
+			if run["id"] == marker_run_id and (run.get("run_attempt") != marker_run_attempt
+				or run.get("conclusion") != "success"):
+				return {"state": "review_superseded", "reason": f"the marker's review run {marker_run_id} "
+					f"({_run_path(run)}) was re-run while this check ran: attempt {run.get('run_attempt')!r} concluded "
+					f"{run.get('conclusion')}, verified attempt {marker_run_attempt}; the next sweep re-checks it"}
 	# Keep the id filter: the marker's own run is the review it records and
 	# older runs came before it, so only a strictly newer run can supersede it.
 	newer = [run for run in bound_reviews if run["id"] > marker_run_id]
@@ -910,7 +941,8 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 		number=number, default_branch=check_in_status._pr_default_branch(pr))
 	if run_problem:
 		return {"state": "run_unverified", "head_sha": head_sha, "reason": run_problem}
-	newer_review = check_review_runs(repo, number, head_ref, marker["run_id"])
+	newer_review = check_review_runs(repo, number, head_ref, marker["run_id"],
+		marker_run_attempt=marker_run.get("run_attempt"))
 	if newer_review is not None:
 		return {"state": newer_review["state"], "head_sha": head_sha, "reason": newer_review["reason"]}
 	# check_review_runs counts only runs newer than the marker's, so a failed

@@ -1094,7 +1094,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   most 5, only when its newest attempt started after the marker was
   posted, and only back to the attempt that posted it; an attempt that
   failed before the re-run that posted the marker does not count, and a
-  missing `run_started_at` or marker `created_at` is a failed read. After a failed review, a push, a base change, or
+  missing `run_started_at` or marker `created_at` is a failed read. The
+  attempt that posted the marker must itself have concluded `success`, and
+  when the run listings show the marker's run on another attempt than the
+  one verified, or not `success` (a re-run between the reads), the result is
+  `review_superseded` until the next hourly check. After a failed review, a push, a base change, or
   the `force-review` label sends the head through a new review.
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
