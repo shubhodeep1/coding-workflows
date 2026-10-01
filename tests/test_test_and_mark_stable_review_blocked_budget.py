@@ -645,6 +645,49 @@ def test_phase4b_completed_registered_run_fails_closed_when_the_pr_state_stays_l
 	assert result["clock"] == _PHASE4B_DEADLINE
 
 
+def test_phase4b_completed_run_never_ends_the_wait_on_an_unknown_pr_state() -> None:
+	"""PR #5874 review round 5: an `unknown` PR state confirms nothing either.
+
+	The first PR-state read fails with a 502 on all three attempts
+	(`unknown`) in the same poll as a completed run read. The old guard
+	rejected only `rate_limited`, so it accepted the run and went on to
+	attempt 2 without seeing that the PR had closed; the next poll's read
+	must catch it.
+	"""
+	result = _run_phase4b_retry(
+		pr_states=["error", "error", "error", "closed"],
+		run_statuses=["completed"],
+	)
+	assert result["rc"] == 1, result["transcript"]
+	assert result["output"] == "status=pr_closed_during_retry\n", result["output"]
+	assert _PHASE4B_REACHED not in result["transcript"]
+	assert "was unknown, not open; re-reading the PR state before attempt 2" in result["transcript"]
+	assert len(_pr_state_calls(result)) == 4
+
+
+def test_phase4b_completed_run_ends_the_wait_once_an_unknown_pr_state_reads_open() -> None:
+	"""After an `unknown` poll, the next poll that reads the PR open accepts the completed run."""
+	result = _run_phase4b_retry(
+		pr_states=["error", "error", "error", "open"],
+		run_statuses=["completed"],
+	)
+	assert result["rc"] == 0, result["transcript"]
+	assert result["output"] == "", result["output"]
+	assert _PHASE4B_REACHED in result["transcript"]
+	assert "was unknown, not open" in result["transcript"]
+	assert len(_calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_ADOPTED_RUN}")) == 2
+
+
+def test_phase4b_completed_run_with_unknown_pr_states_still_trips_the_breaker() -> None:
+	"""A completed run never outlasts the 4-unknown breaker: the step fails `pr_state_check_failed`."""
+	result = _run_phase4b_retry(pr_states=["error"], run_statuses=["completed"])
+	assert result["rc"] == 1, result["transcript"]
+	assert result["output"] == "status=pr_state_check_failed\n", result["output"]
+	assert _PHASE4B_REACHED not in result["transcript"]
+	assert len(_pr_state_calls(result)) == 12
+	assert len(_calls_to(result, f"repos/example/repo/actions/runs/{_PHASE4B_ADOPTED_RUN}")) == 3
+
+
 def test_phase4b_plain_pr_state_failures_still_trip_the_breaker() -> None:
 	result = _run_phase4b_retry(pr_states=["error"], run_statuses=["in_progress"])
 	assert result["rc"] == 1, result["transcript"]
@@ -862,15 +905,18 @@ def test_phase4b_rate_limit_branch_contract() -> None:
 	assert retry.index('if [ "${PR_STATE}" = "closed" ]; then') < retry.index(
 		'if [ "${PR_STATE}" = "rate_limited" ]; then'
 	)
-	# PR #5874 review round 4: a completed run ends the loop only after a
-	# PR-state read in that poll that was not rate-limited, and the post-loop
-	# check fails closed unless the loop accepted the completion.
+	# PR #5874 review rounds 4 and 5: a completed run ends the loop only
+	# after a PR-state read in that poll confirmed the PR open (so neither
+	# `rate_limited` nor `unknown` accepts it), and the post-loop check
+	# fails closed unless the loop accepted the completion.
 	completed = _slice_between(retry, 'if [ "${RETRY_STATUS}" = "completed" ]; then', "done\n")
 	assert re.search(
-		r'if \[ "\$\{PR_STATE\}" = "rate_limited" \]; then\s+echo "[^"\n]*"\s+continue\s+fi\s+'
+		r'if \[ "\$\{PR_STATE\}" != "open" \]; then\s+echo "[^"\n]*"\s+continue\s+fi\s+'
 		r"RETRY_RUN_COMPLETION_ACCEPTED=1\s+break\s+fi\s*$",
 		completed,
 	), completed
+	assert '"${PR_STATE}" = "rate_limited" ]' not in completed
+	assert '"${PR_STATE}" = "unknown" ]' not in completed
 	assert retry.count("RETRY_RUN_COMPLETION_ACCEPTED=1") == 1
 	assert retry.index("RETRY_RUN_COMPLETION_ACCEPTED=0") < retry.index("while [")
 	assert '|| [ "${RETRY_RUN_COMPLETION_ACCEPTED}" -ne 1 ]; then' in retry

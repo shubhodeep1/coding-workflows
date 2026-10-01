@@ -2557,7 +2557,7 @@ jobs:
           # before any run read, so a run that completed during the wait
           # never ends the loop on a PR that closed meanwhile. A completed
           # run ends the loop only after a PR-state read in the same poll
-          # that was not rate-limited (RETRY_RUN_COMPLETION_ACCEPTED). If a
+          # confirmed the PR open (RETRY_RUN_COMPLETION_ACCEPTED). If a
           # deadline expires first, the step still fails closed
           # (retry_dispatch_failed or retry_timeout below; issue #5858).
           PR_STATE_FAILURES=0
@@ -2686,13 +2686,16 @@ jobs:
             echo "  retry run #${RETRY_RUN_ID}: status=${RETRY_STATUS} conclusion=${RETRY_CONCL}"
             if [ "${RETRY_STATUS}" = "completed" ]; then
               # A completed run ends the loop only after a PR-state read in
-              # this poll that was not rate-limited. A rate-limited one gets
-              # here only after a zero wait at a deadline, when the last
-              # confirmed state may predate a long wait, so the PR may have
-              # closed meanwhile (PR #5874 review round 4). Poll again; if
-              # the deadline has passed, the check below fails closed.
-              if [ "${PR_STATE}" = "rate_limited" ]; then
-                echo "::warning::Retry review run #${RETRY_RUN_ID} completed, but the PR #${PR_NUMBER} state read in this poll was rate-limited; re-reading the PR state before attempt 2"
+              # this poll confirmed the PR open. A rate-limited one gets here
+              # only after a zero wait at a deadline, when the last confirmed
+              # state may predate a long wait (PR #5874 review round 4), and
+              # an "unknown" one (any other read failure) confirms nothing
+              # either, so the PR may have closed meanwhile (review round 5).
+              # Poll again: consecutive unknowns still trip the breaker
+              # above, and if the deadline has passed, the check below fails
+              # closed.
+              if [ "${PR_STATE}" != "open" ]; then
+                echo "::warning::Retry review run #${RETRY_RUN_ID} completed, but the PR #${PR_NUMBER} state read in this poll was ${PR_STATE}, not open; re-reading the PR state before attempt 2"
                 continue
               fi
               RETRY_RUN_COMPLETION_ACCEPTED=1
