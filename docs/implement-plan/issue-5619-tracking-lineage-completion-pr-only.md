@@ -1,31 +1,36 @@
 # Implement-Plan Log — Finalize tracking-issue lineage only from the orchestrator completion PR
 
-- Plan: docs/plans/issue-5619-tracking-lineage-completion-pr-only-plan.md
+- Plan: docs/completed/issue-5619-tracking-lineage-completion-pr-only-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#5619
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only   Final PR: #5632 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round
-- Activation: not started
-- Waiting on: PR #5643
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: n/a (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges; the change goes live with that branch's own lifecycle)
+- Waiting on: completion PR (branch claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only-complete)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net and hand-back re-armed after the round 3 intervention push (ids in the stage report)
+- Check-in: checker session_01LHayV9tdHEAgtpejcbwf7v   safety net and hand-back: ids in the validation 1/3 stage report
 - Last updated: 2026-10-01
-- Last note: resumed on #5619 Q1: A after the OpenRouter credit outage; review round 3's only finding (the outage's failed `review / codex-agent` check) rejected, and the project branch merged into PR #5643 as `[claude-intervention]` for a fresh head.
+- Last note: validation cycle 1 passed (10/10, run 36804710635); the step 2 sync merged #5617 from the issue base (conflicts resolved keeping both rules, `[claude-merge-resolve]` 372f5e5); plan moved to docs/completed/ in the completion PR.
 
 ## Phases
-1. [ ] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 open (waiting); review rounds: 3; interventions: 1 (2026-10-01: merged the project branch after the reviewer outage, Q1: A)
+1. [x] Phase 1 — completion-PR gate for tracking-issue lineage (issue_pr_status.yml + tests + README + changelog)   — PR #5643 merged 2026-10-01T01:39:03Z (merge 7d3cb06); review rounds: 3; interventions: 1 (2026-10-01: merged the project branch after the reviewer outage, Q1: A)
 
 ## Conformance
+- Run 1 — 2026-10-01: CONFORMANT — no fixes (pre-security); Correctness PASS (session_01FgrdwNWCUfM5sKooEFiZhr)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue; `security_pass_skip.py` verified)
 
 ## Validation
+- Cycle 1 — run 36804710635 2026-10-01 (target_ref: claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 275s)
 
 ## Completion
+- Completion PR (branch claude/implement-plan-issue-5619-tracking-lineage-completion-pr-only-complete) open 2026-10-01 — doc moved to docs/completed/issue-5619-tracking-lineage-completion-pr-only-plan.md
+- Final PR #5632 draft (into claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
 
 ## Activation
+- n/a: issue base is claude/implement-plan-issue-4813-close-sweep-target-branch-merges, not the default branch (Issue Mode); steps 12–13 run only if the base moves onto main before the final merge.
 
 ## Auto-decisions
 - AD-1 [plan, 2026-09-30] Which PR may finalize an orchestrator-tracking issue's lineage? — Picked: A — only its completion PR: merged, base the default branch, head `orchestrator/project-<T>` in this repository. Alternatives: B — none; never finalize tracking-issue lineage in `issue_pr_status.yml`; C — any PR merged into the default branch. Why: A is the audit's recommendation; B drops the legitimate path, C still lets an arbitrary linked PR finalize the project. Applied in: phase 1 PR. Status: pending review
@@ -40,6 +45,7 @@
 - [source:intervention] When the reviewer provider fails (for example out of credits), the failed review check stays on the head and the next reviewer run reports it as a finding; no code change fixes it, so give the PR a new head (sync the base branch in) instead of a code edit. (files: .github/workflows/review_autofix.yml)
 
 ## Notes
+- 2026-10-01 validation 1/3 stage: the issue base's PR #4826 had not merged (no base move). The step 2 sync merged #5617 (unmerged-close automation-identity gate) into the project branch with conflicts in issue_pr_status.yml, README.md, and the gate tests; resolved keeping #5617's gate for managed/standalone issues and #5619's stricter completion-PR rule for tracking/unclassified issues; #5617's tracking/unclassified test now expects the #5619 skip messages. Gate test script, payload-fallback contract, and file-size tests pass. Validation ran on the pre-sync head 7d3cb06; the final PR's whole-project review covers the merge.
 - 2026-10-01 review round 3 (head 2b0a1f9, run 36794127294, ledger f59789f9…): one consensus finding, the failed `review / codex-agent` check from runs 36741838875 / 36752333871 / 36760232242, all "Insufficient credits" at OpenRouter. Rejected as not a code defect. Per the owner's Q1: A on #5619, merged the project branch into the phase branch (`[claude-intervention]`, brings #5304) for a fresh head.
 - 2026-09-30 blocked: after round 2 every review run failed on the OpenRouter credit outage and the identical-failure cap labelled PR #5643 `ai:review-blocked`; asked on #5619 (Q1). The owner topped up the credits and answered Q1: A on 2026-10-01.
 - 2026-09-30 review round 2 (head 614b026, catch-all fixer session_01EKhL3MUGUcSQzmGtsY67RV): 1 finding fixed (the rejected-finding count in this log).
