@@ -1654,8 +1654,8 @@ low effort that reads the PR's state and acts on nothing itself. It hands
 two things back to the pushing session, which holds the context:
 
 - **A due Claude fix.** Every PR-backed `claude/*` head runs in
-  Claude-fixer mode (§26.H), so the GPT editor and conflict resolver never
-  fix it. When such a PR has a merge conflict, a failed check with nothing
+  Claude-fixer mode (§26.H), so the GPT editor never fixes it and the GPT
+  conflict resolver takes only a conflict that touches `.claude/**`. When such a PR has a merge conflict, a failed check with nothing
   running, a review hand-off from the reviewer panel, or a block label, the
   checker wakes the pushing session, which fixes it with
   `/fix-claude-pr` and pushes.
@@ -1981,7 +1981,8 @@ verdict; a woken `notify` subscriber does the same). Then, by `action`
   (`archive_session`), and only then deletes the fired Routine
   (`delete_trigger`, ignoring not-found). **Check the target first:**
   call `get_session` on the checker id and rename or archive it only
-  when its title is exactly `PR #<n> status check-in` or already starts
+  when its title is exactly `PR #<n> status check-in` (or that title
+  followed by ` — ` and a state note, §26.C) or already starts
   `PR #<n> merged — handed to ` or `PR #<n> closed — handed to `, it is
   not archived, and the id is not this session's own (Bash
   `echo "session_${CLAUDE_CODE_REMOTE_SESSION_ID#cse_}"`). Otherwise
@@ -2092,8 +2093,10 @@ sweep runs in the sessions that create them, never in Actions:
 - **Claude fixes every `claude/*` PR.** `review_autofix.yml` runs every
   PR-backed `claude/*` head in Claude-fixer mode (gate case `claude/*)`;
   `vars.CLAUDE_FIXER_ENABLED=false` turns it off everywhere): the reviewer
-  panel still reviews, but the GPT editor, conflict resolver, and
-  review-blocked judge never run. The workflow posts a hand-off comment
+  panel still reviews, but the GPT editor never runs, the GPT conflict
+  resolver runs only for a conflict that touches `.claude/**`
+  (`vars.CLAUDE_FIXER_PROTECTED_CONFLICT_RESOLVER_ENABLED`, default on),
+  and the review-blocked judge runs only in its Claude mode (below). The workflow posts a hand-off comment
   for findings, failing checks, or a pre-review conflict, and auto-merges
   only after a clean review with fresh, ready checks. A `claude/*` PR that
   qualifies for the deterministic doc-only or small-diff skip takes it like

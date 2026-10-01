@@ -93,7 +93,7 @@ def test_instructions_prompt_restates_the_session_rules(claude_md):
 
 def test_fixer_checks_the_checker_before_renaming_or_archiving(section_d):
 	assert "**Check the target first:** call `get_session` on the checker id" in section_d
-	assert "its title is exactly `PR #<n> status check-in` or already starts `PR #<n> merged — handed to ` or `PR #<n> closed — handed to `" in section_d
+	assert "its title is exactly `PR #<n> status check-in` (or that title followed by ` — ` and a state note, §26.C) or already starts `PR #<n> merged — handed to ` or `PR #<n> closed — handed to `" in section_d
 	assert "the id is not this session's own" in section_d
 	assert OWN_ID in section_d
 	assert "skip both calls and say so in one line" in section_d

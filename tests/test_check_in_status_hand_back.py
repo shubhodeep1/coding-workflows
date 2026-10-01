@@ -473,6 +473,27 @@ def test_hold_reason_is_one_clean_line_of_at_most_300_chars():
 	assert len([line for line in body.splitlines() if checker.FIX_CLAIM_RE.fullmatch(line)]) == 1
 
 
+def _load_template(name):
+	# The twin is edited first (CLAUDE.md §28.C twin-first); template parity keeps the two equal.
+	spec = importlib.util.spec_from_file_location(f"{name}_template", TEMPLATE_SCRIPTS / f"{name}.py")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+@pytest.mark.parametrize("reason", ["x <!<!---- y", "x <!<!<!------ y", "<!-<!---- z"])
+def test_hold_reason_strips_nested_comment_openers(reason):
+	cleaned = _load_template("claude_fix_claim").clean_hold_reason(reason)
+	assert "<!--" not in cleaned
+
+
+def test_held_retry_minutes_survive_an_infinite_value(monkeypatch):
+	template_checker = _load_template("check_in_status")
+	for raw in ("inf", "-inf", "1e999"):
+		monkeypatch.setenv("CLAUDE_CHECK_IN_HELD_RETRY_MINUTES", raw)
+		assert template_checker.retry_after_minutes({"state": "held"}) == 180
+
+
 @pytest.mark.parametrize("kind", ["conflict", "ci", "review", "blocked"])
 def test_reason_with_a_non_hold_kind_is_rejected(kind, capsys):
 	with pytest.raises(ValueError):
