@@ -43,7 +43,10 @@ Batching contract (CLAUDE.md §15):
           the 5 run statuses but `completed` (usually 1 call, at most 10),
           when every newer bound review run succeeded 1 attempt read per
           earlier attempt of each re-run one (usually none, at most 5 per
-          run; issue #5904), and 1 per 100 comments
+          run; issue #5904), when the marker's own run was re-run after
+          the marker was posted 1 attempt read per earlier attempt back to
+          the one that posted it (usually none, at most 5), and 1 per 100
+          comments
           again (issue #5148), 1 variable read and the auto-merge helper's
           calls);
   output  one `CLAUDE_PR_SWEEP` log line per decision plus a summary line;

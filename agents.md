@@ -1085,7 +1085,14 @@ reviews, comments, and conflicts stay a direct §12 request.
   (`actions/runs/<id>/attempts/<n>`, only when no newer review failed
   outright, at most `MAX_EARLIER_REVIEW_RUN_ATTEMPTS` = 5 per run; more
   counts as failed, and a malformed `run_attempt` or attempt read is a
-  failed read). After a failed review, a push, a base change, or
+  failed read). The marker's own run is checked the same way
+  (`marker_run_attempt_problem`, review round 2): an attempt of it that
+  started after the marker was posted and did not conclude `success`
+  returns `review_superseded`. Its attempts are read, newest first and at
+  most 5, only when its newest attempt started after the marker was
+  posted, and only back to the attempt that posted it; an attempt that
+  failed before the re-run that posted the marker does not count, and a
+  missing `run_started_at` or marker `created_at` is a failed read. After a failed review, a push, a base change, or
   the `force-review` label sends the head through a new review.
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still

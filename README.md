@@ -1491,7 +1491,12 @@ gate skipped also concludes `success`. Neither does a successful re-run: a
 re-run keeps its run's id and the runs listings show only its newest
 attempt, so a newer review that was re-run has its earlier attempts read
 (`actions/runs/<id>/attempts/<n>`, none in the usual case, at most 5 per
-run; a run with more earlier attempts than that counts as failed). Only a
+run; a run with more earlier attempts than that counts as failed). The
+marker's own run keeps its id when re-run, so its attempts that started
+after the marker was posted must have succeeded too (read only when it was
+re-run after the marker, back to the attempt that posted it, at most 5); an
+attempt that failed before the re-run that posted the marker does not
+count. Only a
 newer marker from a successful full review clears it, so after a failed review a push, a base change, or the
 `force-review` label sends the head through a new review. A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read

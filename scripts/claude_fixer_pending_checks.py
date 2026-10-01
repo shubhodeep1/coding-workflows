@@ -57,7 +57,12 @@ Fail closed. Auto-merge is enabled only when ALL of these hold:
     run concluded `success` (issue #5904: a later gate-skipped `success`
     does not clear an earlier failure; only a newer marker does), and on
     every attempt, since a re-run keeps the run's id and its listing shows
-    only the newest attempt; and
+    only the newest attempt; no attempt of the marker's own run that was
+    re-run after the marker was posted concluded anything but `success`
+    (issue #5904 review round 2: a failed forced re-run of that run, then a
+    gate-skipped re-run that succeeds, must not let the older marker merge;
+    an attempt that failed before the re-run that posted the marker does
+    not count); and
     a re-read of the comments, after those run reads, still finds the same
     marker (a newer review that finished in between has posted its own
     comment by then);
@@ -83,7 +88,11 @@ for a listing whose last page read was full, 1 status-filtered listing
 for each of the 5 run statuses but `completed` (1 call per 100 runs,
 usually 1, at most 10), only when every newer bound review run succeeded,
 1 attempt read per earlier attempt of each one that was re-run (none in
-the usual case, at most MAX_EARLIER_REVIEW_RUN_ATTEMPTS per run), 1
+the usual case, at most MAX_EARLIER_REVIEW_RUN_ATTEMPTS per run), then,
+only when the marker's own run was re-run after the marker was posted,
+1 attempt read per earlier attempt of it back to the one that posted the
+marker (the review run read above is reused; none in the usual case, at
+most MAX_EARLIER_REVIEW_RUN_ATTEMPTS), 1
 read per 100 comments again, 1 repository-variable read, then
 `review_enable_auto_merge.sh` (1 paginated labels read, 1 PR read, 1 merge
 call). Every read goes through `gh api` with
@@ -93,6 +102,7 @@ GH_TOKEN; nothing is retried in a loop, and a failed read raises
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import importlib.util
 import json
@@ -334,6 +344,17 @@ def verify_review_run(repo: str, marker: dict, head_sha: str, head_ref: str,
 	read, plus one compare read when a head-branch run's trigger commit
 	differs.
 	"""
+	return read_verified_review_run(repo, marker, head_sha, head_ref, number=number, default_branch=default_branch)[0]
+
+
+def read_verified_review_run(repo: str, marker: dict, head_sha: str, head_ref: str,
+	number: int | None = None, default_branch: str | None = None) -> tuple[str, dict]:
+	"""`verify_review_run`'s reason ("" when verified), plus the run object it read.
+
+	The run object is the marker's run as `actions/runs/<id>` returns it (its
+	newest attempt), so `marker_run_attempt_problem` can use it without a
+	second read. Same calls as `verify_review_run`.
+	"""
 	run = check_in_status.gh_api(f"repos/{repo}/actions/runs/{marker['run_id']}")
 	run_repo = run.get("repository")
 	run_path = run.get("path")
@@ -342,12 +363,12 @@ def verify_review_run(repo: str, marker: dict, head_sha: str, head_ref: str,
 		or not isinstance(run_repo, dict) or run_repo.get("full_name") != repo
 		or not isinstance(run_path, str) or run_path.split("@", 1)[0] not in check_in_status.FIXER_WORKFLOW_PATHS
 		or (not dispatched and run.get("head_branch") != head_ref)):
-		return f"review run {marker['run_id']} does not match this PR's review workflow"
+		return f"review run {marker['run_id']} does not match this PR's review workflow", run
 	if run.get("status") != "completed" or run.get("conclusion") != "success":
-		return f"review run {marker['run_id']} is {run.get('status')}/{run.get('conclusion')}"
+		return f"review run {marker['run_id']} is {run.get('status')}/{run.get('conclusion')}", run
 	if not dispatched and not check_in_status._review_run_head_on_branch_history(repo, run.get("head_sha"), head_sha):
-		return f"review run {marker['run_id']} was not triggered from this head's history"
-	return ""
+		return f"review run {marker['run_id']} was not triggered from this head's history", run
+	return "", run
 
 
 def _read_review_run_listing(path: str, missing_ok: bool = False, title_bound: bool = False) -> list[dict] | None:
@@ -464,14 +485,94 @@ def _earlier_unsuccessful_attempt(repo: str, run: dict) -> str:
 		return (f"succeeded on attempt {attempt}, after more than {MAX_EARLIER_REVIEW_RUN_ATTEMPTS} "
 			f"earlier attempts that were not read")
 	for attempt_number in range(attempt - 1, 0, -1):
-		path = f"repos/{repo}/actions/runs/{run['id']}/attempts/{attempt_number}"
-		earlier = check_in_status.gh_api(path)
-		if (earlier.get("id") != run["id"] or earlier.get("run_attempt") != attempt_number
-			or earlier.get("status") != "completed"):
-			raise check_in_status.ReadError(f"gh api {path} did not return completed attempt {attempt_number} of run {run['id']}")
+		earlier = _read_review_run_attempt(repo, run["id"], attempt_number)
 		if earlier.get("conclusion") != "success":
 			return f"concluded {earlier.get('conclusion')} on attempt {attempt_number} before re-run attempt {attempt} succeeded"
 	return ""
+
+
+def _read_review_run_attempt(repo: str, run_id: int, attempt_number: int) -> dict:
+	"""One completed attempt of a review run: `repos/<repo>/actions/runs/<id>/attempts/<n>`, 1 call.
+
+	A failed read, or one that is not the completed attempt `<n>` of run
+	`run_id`, raises `check_in_status.ReadError` (fail closed).
+	"""
+	path = f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt_number}"
+	earlier = check_in_status.gh_api(path)
+	if (earlier.get("id") != run_id or earlier.get("run_attempt") != attempt_number
+		or earlier.get("status") != "completed"):
+		raise check_in_status.ReadError(f"gh api {path} did not return completed attempt {attempt_number} of run {run_id}")
+	return earlier
+
+
+def _attempt_started_at(run: dict, where: str) -> dt.datetime:
+	"""The timezone-aware `run_started_at` of one run attempt; a missing or malformed one raises `check_in_status.ReadError`."""
+	value = run.get("run_started_at")
+	try:
+		started_at = check_in_status._parse_time(value)
+	except (TypeError, ValueError):
+		started_at = None
+	if started_at is None or started_at.tzinfo is None:
+		raise check_in_status.ReadError(f"{where} has no valid run_started_at: {value!r}")
+	return started_at
+
+
+def marker_run_attempt_problem(repo: str, marker: dict, marker_run: dict) -> str:
+	"""Why an attempt of the marker's own review run, run after the marker was posted, blocks the merge, or "".
+
+	Issue #5904 review round 2. `check_review_runs` counts only runs newer
+	than the marker's run, but a re-run keeps the run's id: the marker's run
+	can be re-run with the `force-review` label, fail without posting a
+	hand-off, and be re-run again after the label is gone, when the review
+	gate skips it and it concludes `success`. `verify_review_run` sees only
+	that newest attempt. Input: the live marker (`created_at` is when its
+	comment was posted) and `marker_run`, the run object `verify_review_run`
+	already read (its newest attempt, already verified `completed` /
+	`success`).
+
+	Only attempts that started after the marker was posted count: the
+	attempt that posted it started before it, and an attempt that failed
+	before a re-run posted the marker came before the review it records.
+	No call when the run has 1 attempt or its newest attempt started before
+	the marker was posted (the usual case: the newest attempt posted it).
+	Otherwise the earlier attempts are read newest first
+	(`_read_review_run_attempt`, 1 call each, at most
+	MAX_EARLIER_REVIEW_RUN_ATTEMPTS) until one started before the marker was
+	posted (""), or one that started after it did not conclude `success`
+	(the reason). Reaching that cap with every attempt read started after
+	the marker is reported too (fail closed). A `run_attempt` that is not an
+	integer of at least 1, a missing or malformed `run_started_at` or marker
+	`created_at` when it is needed, a failed or mismatched attempt read, and
+	an attempt 1 that started after the marker was posted raise
+	`check_in_status.ReadError`.
+	"""
+	attempt = marker_run.get("run_attempt")
+	if type(attempt) is not int or attempt < 1:
+		raise check_in_status.ReadError(f"review run {marker_run.get('id')} has no valid run_attempt: {attempt!r}")
+	if attempt == 1:
+		return ""
+	posted_value = marker.get("created_at")
+	try:
+		posted_at = check_in_status._parse_time(posted_value)
+	except (TypeError, ValueError):
+		posted_at = None
+	if posted_at is None or posted_at.tzinfo is None:
+		raise check_in_status.ReadError(f"pending-checks comment {marker.get('comment_id')} has no valid created_at: {posted_value!r}")
+	run_id = marker_run["id"]
+	if _attempt_started_at(marker_run, f"review run {run_id} attempt {attempt}") < posted_at:
+		return ""
+	for attempt_number in range(attempt - 1, max(attempt - 1 - MAX_EARLIER_REVIEW_RUN_ATTEMPTS, 0), -1):
+		earlier = _read_review_run_attempt(repo, run_id, attempt_number)
+		if _attempt_started_at(earlier, f"review run {run_id} attempt {attempt_number}") < posted_at:
+			return ""
+		if earlier.get("conclusion") != "success":
+			return (f"the marker's review run {run_id} ({_run_path(marker_run)}) concluded {earlier.get('conclusion')} "
+				f"on attempt {attempt_number}, re-run after the marker was posted, before attempt {attempt} succeeded")
+	if attempt - 1 > MAX_EARLIER_REVIEW_RUN_ATTEMPTS:
+		return (f"the marker's review run {run_id} ({_run_path(marker_run)}) succeeded on attempt {attempt}, after more than "
+			f"{MAX_EARLIER_REVIEW_RUN_ATTEMPTS} attempts re-run after the marker was posted that were not all read")
+	raise check_in_status.ReadError(f"every attempt of review run {run_id} started after pending-checks comment "
+		f"{marker.get('comment_id')} was posted, so none of them posted it")
 
 
 def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int) -> dict | None:
@@ -527,7 +628,9 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 	newer review that posted findings or a newer marker is caught by
 	`find_pending_marker`; a newer marker also moves `marker_run_id` past
 	every run before it, which is how a successful full review clears a
-	failed one.
+	failed one. A re-run of the marker's own run keeps its id, so this
+	function never sees it: `evaluate` checks its attempts after this
+	returns None (`marker_run_attempt_problem`, issue #5904 review round 2).
 	"""
 	branch_path = f"repos/{repo}/actions/runs?branch={quote(head_ref, safe='/')}&per_page={REVIEW_RUNS_PER_PAGE}"
 	branch_runs = _read_review_runs_to_marker(branch_path, marker_run_id)
@@ -551,6 +654,9 @@ def check_review_runs(repo: str, number: int, head_ref: str, marker_run_id: int)
 		names = ", ".join(sorted({f"{_run_path(run) or 'unknown workflow'} run {run.get('id')} ({run.get('status')})" for run in active}))
 		return {"state": "review_active", "reason": f"a newer review of this PR may still be running: {names}"}
 	bound_reviews = [run for run in branch_runs if _run_path(run) in check_in_status.FIXER_WORKFLOW_PATHS] + bound_dispatches
+	# A titled internal-review.yml dispatch on the head branch is in both
+	# listings; count it once, so its attempts are not read twice.
+	bound_reviews = list({run["id"]: run for run in bound_reviews}.values())
 	# Keep the id filter: the marker's own run is the review it records and
 	# older runs came before it, so only a strictly newer run can supersede it.
 	newer = [run for run in bound_reviews if run["id"] > marker_run_id]
@@ -629,8 +735,9 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 	from the binding; issue #5147), `waiting` (checks still running),
 	`checks_failed`, `snapshot_invalid`, `run_unverified`, `review_active`
 	(a newer review of the PR may still be running), `review_superseded`
-	(a newer review of the PR did not succeed, or the marker changed while
-	this ran), `auto_merge_setting_unreadable`, `auto_merge_disabled`, `ready` (dry run),
+	(a newer review of the PR did not succeed, an attempt of the marker's
+	own run re-run after the marker was posted did not succeed, or the
+	marker changed while this ran), `auto_merge_setting_unreadable`, `auto_merge_disabled`, `ready` (dry run),
 	`merge_enabled`, `merge_failed`. Only `merge_enabled` changed anything.
 	Raises `check_in_status.ReadError` when a read fails, and `OSError` when
 	the snapshot's temp directory cannot be written; the sweep logs both per PR.
@@ -677,13 +784,20 @@ def evaluate(repo: str, number: int, *, author_login: str, dry_run: bool = False
 		return {"state": "checks_failed", "head_sha": head_sha, "reason": f"failed check runs (left to the ci-failed hand-back): {snapshot['detail']}"}
 	if snapshot["state"] != "ready":
 		return {"state": "snapshot_invalid", "head_sha": head_sha, "reason": snapshot["detail"]}
-	run_problem = verify_review_run(repo, marker, head_sha, head_ref,
+	run_problem, marker_run = read_verified_review_run(repo, marker, head_sha, head_ref,
 		number=number, default_branch=check_in_status._pr_default_branch(pr))
 	if run_problem:
 		return {"state": "run_unverified", "head_sha": head_sha, "reason": run_problem}
 	newer_review = check_review_runs(repo, number, head_ref, marker["run_id"])
 	if newer_review is not None:
 		return {"state": newer_review["state"], "head_sha": head_sha, "reason": newer_review["reason"]}
+	# check_review_runs counts only runs newer than the marker's, so a failed
+	# re-run of the marker's own run is checked here (issue #5904 review
+	# round 2), only after no newer run blocked: the usual case costs no call.
+	rerun_problem = marker_run_attempt_problem(repo, marker, marker_run)
+	if rerun_problem:
+		return {"state": "review_superseded", "head_sha": head_sha,
+			"reason": f"{rerun_problem}; only a newer marker from a successful full review clears it"}
 	# A newer review that completed after the first comment read has already
 	# posted its hand-off or marker, so authorize only a marker that is still
 	# the live one now that no newer review is running (issue #5148). A review
