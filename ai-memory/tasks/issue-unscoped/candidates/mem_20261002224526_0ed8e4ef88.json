@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:20187-20306 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The timeline lookup failure is swallowed as an empty candidate list without recording the failed read, so the wave-hold guard can be skipped.\n  WHY: With stale `ai:merged` or stored `merged` state, no candidate is processed, failure flags remain unset, and the wave can advance based on the stale merged signal.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:20187 | severity=MAJOR | confidence=5\n  PROBLEM: The timeline API read exit code from _issue_cross_ref_pr_numbers_unique is masked by `|| echo \"\"`, leaving the candidate list empty and the failure flag unset.\n  WHY: With a stale ai:merged label, the wave-hold and heal guards do not fire, and check-wave-status can mark the child merged and advance the wave despite unfinished work.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/orchestrate_poll_process.sh:20187, 20288-20306 | severity=MAJOR | confidence=5\n  PROBLEM: A failed timeline lookup is converted to an empty candidate list without recording a failed read.\n  WHY: Failure flags remain unset, so the fallback hold does not run and stale merged state can let the wave complete and advance without a verified merge.\n- scripts/orchestrate_poll_process.sh:20289\n  PROBLEM: The wave-hold fallback condition does not test `_rcl_issue_state_confirmed != \"true\"` in its outer `elif` test, although the branch handles `issue_state_unread`.\n  WHY: An unread issue state may not reach the hold branch.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:20187 \u2014 `LINKED_PR_CANDIDATES=\"$(_issue_cross_ref_pr_numbers_unique \"${inum}\" 2>/dev/null || echo \"\")\"` | severity=MAJOR | confidence=4\n  PROBLEM: The `|| echo \"\"` fallback masks timeline lookup failure, leaving the candidate list empty and the failure flags unset.\n  WHY: A stale `ai:merged` label and stored `merged` status survive reconciliation, allowing the wave to advance; the existing test covers PR-fetch failure but not timeline failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:20187; `_issue_cross_ref_pr_numbers_unique` returns failure on timeline lookup errors at lines 3334\u20133345; the wave-hold guard is at lines 20288\u201320305. | severity=MAJOR | confidence=5\n  PROBLEM: The timeline lookup\u2019s nonzero status is masked by `|| echo \"\"` without recording that the read failed.\n  WHY: With stale merged state, the wave-hold guard is skipped and label reconciliation preserves the existing `ai:merged` label, allowing the wave to advance despite the unreadable timeline.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:20187 (the `|| echo \"\"` that masks the timeline failure), 20197 (initialization of `_rcl_candidate_fetch_failed`), 20288-20305 (the wave-hold branch that never fires) | severity=MAJOR | confidence=5\n  PROBLEM: A timeline read failure is masked as an empty candidate list, leaving `_rcl_candidate_fetch_failed` false and preventing the wave-hold branch from firing.\n  WHY: A stale merged label or stored status can then be treated as merged by check-wave-status, advancing the wave with the child's work unfinished.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh:20187 (`LINKED_PR_CANDIDATES=\"$(_issue_cross_ref_pr_numbers_unique \"${inum}\" 2>/dev/null || echo \"\")\"`) and 20288-20306 (the wave-hold `elif` branch) | severity=MAJOR | confidence=4\n  PROBLEM: A failed timeline lookup is masked as an empty candidate list, leaving the candidate-fetch, rejected-merge, and merge-unverified flags unset.\n  WHY: A stale `ai:merged` label or stored merged status can therefore pass check-wave-status and allow the wave to advance.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5cf91155515a95d267eb66395c5f6337c26a21c829fdf33d920507224e02e8f9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "37072387049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37072387049",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002224526_0ed8e4ef88",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "37072387049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T22:45:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
