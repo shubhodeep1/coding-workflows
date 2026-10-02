@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:23:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A guard that must see every active workflow run reads all five non-terminal statuses (`requested`, `pending`, `queued`, `waiting`, `in_progress`): a freshly dispatched run can still be `requested`, and a run held by a deployment environment is `waiting`, so a three-status listing fails open on both.",
+  "phase": "implement_plan",
+  "pr_number": 5451,
+  "record_id": "lesson-implement-plan-1e623189b62271b32e9d3691",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5443-merge-train-complete-run-listing",
+    "file:scripts/review_merge_train.sh",
+    "file:tests/test_review_merge_train.py"
+  ]
+}

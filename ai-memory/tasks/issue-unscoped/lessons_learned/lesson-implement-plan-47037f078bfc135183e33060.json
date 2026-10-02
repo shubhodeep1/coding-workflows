@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:23:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Sequential status-filtered queries miss a run that leaves a status after it was read and enters one read before it; `waiting` is re-entrant (it can follow `in_progress`), so no lifecycle order is safe. Read every status again after the first read of every other status, and test each status change at every point between two queries.",
+  "phase": "implement_plan",
+  "pr_number": 5451,
+  "record_id": "lesson-implement-plan-47037f078bfc135183e33060",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5443-merge-train-complete-run-listing",
+    "file:scripts/review_merge_train.sh",
+    "file:tests/test_review_merge_train.py"
+  ]
+}

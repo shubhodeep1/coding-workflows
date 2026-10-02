@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:23:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Never default a response's list field with `// []` before validating it: the default turns a missing or null list into a valid empty one, so the shape check can no longer fail. Pass a non-array value through and let the validator reject it.",
+  "phase": "implement_plan",
+  "pr_number": 5451,
+  "record_id": "lesson-implement-plan-2a14c980f5bba0efce4b60d9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5443-merge-train-complete-run-listing",
+    "file:scripts/review_merge_train.sh",
+    "file:tests/test_review_merge_train.py"
+  ]
+}

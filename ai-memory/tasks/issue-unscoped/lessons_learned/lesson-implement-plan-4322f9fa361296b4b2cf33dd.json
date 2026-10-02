@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:23:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A `workflow_dispatch` run's head_branch is the ref the workflow ran from, never the PR it acts on: attribute a dispatch run only by an identifier the dispatcher put in its name (`run-name`), and treat a dispatch without one as unattributed.",
+  "phase": "implement_plan",
+  "pr_number": 5451,
+  "record_id": "lesson-implement-plan-4322f9fa361296b4b2cf33dd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5443-merge-train-complete-run-listing",
+    "file:scripts/review_merge_train.sh",
+    "file:tests/test_review_merge_train.py"
+  ]
+}

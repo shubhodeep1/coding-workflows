@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:23:25Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Validate every field a listing deduplicates or classifies on (`id`, `path`, timestamps) before trusting it: a missing field silently drops a run instead of failing, and an inclusive time bound must round fractional seconds up, never down.",
+  "phase": "implement_plan",
+  "pr_number": 5451,
+  "record_id": "lesson-implement-plan-c705a22df6ca19e191c30392",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5443-merge-train-complete-run-listing",
+    "file:scripts/review_merge_train.sh",
+    "file:tests/test_review_merge_train.py"
+  ]
+}
