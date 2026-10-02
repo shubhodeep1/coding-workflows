@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01CoJMFhaTmz26Vbz9TbiV3b   safety net none   hand-back none (held for the twin sync; the stage after /reclarify arms the wait)
 - Last updated: 2026-10-02
-- Last note: review round 3 on PR #5918 (workflow round 1 on the synced head f0393e2): agents.md describes the quote-aware allow-rule check; log refreshed after the round-2 twin sync. Earlier: review round 2 on PR #5918 (workflow round 1 on head aef35b2): quoted or escaped operators no longer block the allow-rule match (AD-4), legacy-pattern test asserts the rendered text, this log updated; hold claim and third twin-sync blocker on #5899 — awaiting [claude-twin-sync] copy and /reclarify
+- Last note: review round 5 on PR #5918 (workflow round 3 on be778ae): this log's header and phase row now match its checklist. Earlier: review round 4 (workflow round 2 on 5bf0391): the docstring (live and twin) and agents.md also name backslash-escaped operators. Review round 3 on PR #5918 (workflow round 1 on the synced head f0393e2): agents.md describes the quote-aware allow-rule check; log refreshed after the round-2 twin sync. Earlier: review round 2 on PR #5918 (workflow round 1 on head aef35b2): quoted or escaped operators no longer block the allow-rule match (AD-4), legacy-pattern test asserts the rendered text, this log updated; hold claim and third twin-sync blocker on #5899 — awaiting [claude-twin-sync] copy and /reclarify
 
 ## Phases
-1. [ ] Phase 1 — report allowlisted denials and document the sync merge — PR #5918 open (round-2 twin sync done; review round 3 on the synced head); review rounds: 3; interventions: 0 — protected paths: .claude/scripts/permission_prompts.py
+1. [ ] Phase 1 — report allowlisted denials and document the sync merge — PR #5918 open (round-2 twin sync done; review round 5 done); review rounds: 5; interventions: 0 — protected paths: .claude/scripts/permission_prompts.py
    - [x] twin `workflow-templates/.claude/scripts/permission_prompts.py`: `allow_rule_for`, `allow_rule` / `permission_modes` on patterns, report key, occurrence-block lines (first twin sha256 f1a4aabbeb0c202ebcb3b335800bfaedbc6af818e6039000cbfdc93342b9ec01, synced in b8fea25)
    - [x] `tests/test_permission_prompts.py`: matcher, grouping, body/comment, real-settings tests against the twin (78 passed at phase PR; 87 passed after review round 1, `test_template_parity` red until the round-1 twin sync)
    - [x] `CLAUDE.md` §23.B routine sync-merge bullet
@@ -27,6 +27,7 @@
    - [x] `[claude-twin-sync]` copy of the round-2 twin into `.claude/scripts/permission_prompts.py` (f0393e2, pushed by the owner's supervising session 2026-10-02; twin sha256 da9092663e0a84b657acd9a848091657adf53cf35095cdd155b79edadee042b7; 137 tests passed incl. template parity)
    - [x] review round 3 (2026-10-02, workflow round 1 on f0393e2): `agents.md` "Already allowlisted" bullet states the quote-aware single-command rule; this log refreshed
    - [x] review round 4 (2026-10-02, workflow round 2 on 5bf0391): the docstring (live and twin) and `agents.md` also name backslash-escaped operators; "Waiting on" no longer pins a head
+   - [x] review round 5 (2026-10-02, workflow round 3 on be778ae): the "Last note" and the phase row now match the checklist (round count 5)
    - Done: new tests pass on the twin; after twin sync the full permission-prompt suite and section-number test pass
 
 ## Conformance
