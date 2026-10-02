@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:442\u2013455, 1716\u20131729 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Git commands inside a shell case arm are not detected when the arm begins in the same segment as the case statement.\n  WHY: For `case x in x) git push origin HEAD:feature/merged ;; esac`, `_shell_segments()` does not split at `)`, so the segment starts with `case`; `git_subcommands()` returns no guarded subcommand and `_evaluate_bash()` allows the push without checking whether it targets a merged PR branch.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:425-468, 848-1089 | severity=high | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Git commands inside shell case arms are not detected by either `git_subcommands()` or `guard_targets()`, allowing them to bypass the merged-PR guard entirely.\n  WHY: The tokenizer produces a segment starting with `case`, which both functions skip, so a git push inside the case arm executes without any guard check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py: git_subcommands() lines 442\u2013455; _evaluate_bash() lines 1716\u20131729 | severity=high | confidence=5\n  PROBLEM: Git commands inside a shell case arm are not detected when the arm begins in the same segment as the case statement.\n  WHY: For `case x in x) git push origin HEAD:feature/merged ;; esac`, `_shell_segments()` does not split at `)`, so the segment starts with `case`. `git_subcommands()` only recognizes Git when it is the first command in a segment and returns no guarded subcommand. `_evaluate_bash()` then returns early at lines 1728\u20131729, allowing the push without checking whether it targets a merged PR branch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: git_subcommands(), lines 425-468; guard_targets(), lines 848-1089 | severity=high | confidence=5\n  PROBLEM: Git commands inside shell case arms are not detected by either git_subcommands() or guard_targets(), allowing them to bypass the merged-PR guard entirely.\n  WHY: When the tokenizer encounters `case a in a) git push origin HEAD:x;; esac`, it produces one segment starting with `case`. Both git_subcommands() and guard_targets() check if the first token is `git` (after skipping reserved words and assignments), and since it's `case`, they skip the entire segment. The git push inside the case arm executes without any guard check.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ac788a94bb873824f79a301e0130ad4ecf950034b2ad2a09ec40b6006e537944",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5173,
+    "run_id": "36954666577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36954666577",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002033109_fc48256ab6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5173,
+    "run_id": "36954666577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T03:31:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
