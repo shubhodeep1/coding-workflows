@@ -940,6 +940,21 @@ turned into one branch (a variable, a glob or brace pattern, a `heads/` /
 `tags/` / `remotes/` shorthand, a word starting with `-`), that call is
 judged on the session checkout as before and the guard emits a warning naming
 the reason; it never fails open silently.
+The one exception is a `cd` or `pushd` (also run as `builtin cd` or
+`command cd`) that **`CDPATH`** may redirect (issue #6090). Bash looks an operand that does not start with `/`, `.` or `..` up in
+`CDPATH` before the current directory, so `CDPATH=.. cd .git` enters the
+parent repository's `.git`. The guard treats `CDPATH` as possibly set when the
+hook's environment holds a non-empty one, when any word of an earlier segment
+contains `CDPATH` (an assignment, `export`, even `unset`: nothing clears it,
+since an earlier command may not have run), and, for that `cd` alone, when it
+carries a non-empty `CDPATH=` prefix. An empty `CDPATH=` prefix turns it off
+for that `cd`. After such a `cd`, Bash may be in another repository altogether,
+so judging the session checkout could judge the wrong one. Every later guarded
+call that writes a branch is therefore **blocked**, with no API call and
+whatever the branch, and the message names the fix: `cd ./<dir>` or an
+absolute path, which Bash never looks up in `CDPATH`, or `git -C <absolute
+path>`. A `CDPATH` set only as an unexported variable in a profile the Bash
+tool sources is invisible to the hook.
 Several guarded calls in one command are each judged: any block blocks,
 otherwise the warnings and at most one confirmation prompt are merged into one
 hook result.
