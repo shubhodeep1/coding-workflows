@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:627-688 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Credentials in a command passed through GNU `env -S` are not detected, allowing the unmasked secret to be posted in a report.\n  WHY: The quoted split-string argument is treated as one word instead of a nested command line, so credential extraction misses the password and sanitization returns the original command; severity varied from BLOCKER to MAJOR to NIT, and the highest rating is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/permission_prompts.py: _segment_credentials() lines 627-688; _segment_flag_letters() line 386; constants at lines 242-247 | severity=MAJOR | confidence=4\n  PROBLEM: Credentials passed through GNU `env -S` are not masked.\n  WHY: The quoted command remains one word, is not recursively parsed, and `_word_credentials()` does not find the password, so `_sanitize_bash_command()` returns the command with the password intact.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- workflow-templates/.claude/scripts/permission_prompts.py: lines 245-247 and 251-260\n  PROBLEM: Commands executed via GNU env's split-string option are not recursively parsed for nested credential short flags.\n  WHY: The split-string command line is supplied as one option argument; the suggested future fix is to add `env` to `_SHELL_COMMAND_RUNNERS` and recognize `-S` / `--split-string`.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/permission_prompts.py: _segment_credentials() lines 639-655 and _sanitize_bash_command() lines 756-765 | severity=BLOCKER | confidence=5\n  PROBLEM: Credentials in commands passed through GNU `env -S` are not detected.\n  WHY: The quoted command string is treated as one word, so the parser collects no credential and returns the original command for the report.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/permission_prompts.py: _segment_credentials() lines 627-688; _SHELL_COMMAND_RUNNERS line 245-247 | severity=NIT | confidence=4\n  PROBLEM: GNU `env -S` does not recursively parse the quoted command line, so the credential is not masked and the raw token can reach the issue title and report.\n  WHY: `_word_credentials()` does not parse a word as a nested command line; this was assessed as a hardening gap rather than a defect in the documented scope.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py: _SHELL_COMMAND_RUNNERS (line ~243), _segment_credentials (lines ~688-762), _command_line_credentials (lines ~691-762) | severity=MAJOR | confidence=4\n  PROBLEM: GNU `env -S` is not parsed, so a password can be posted to the issue body and shape.\n  WHY: `env` is not recognized as a command-line runner and `-S` is not recognized as a command flag, so the quoted command is treated as a bare positional and no credential is collected.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "752c2f05e1c73d8ade63608a01dfba738e3a99cabbf0a7f4542018ddd5fdeba1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "36957153751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36957153751",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002031021_d784c3f057",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "36957153751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T03:10:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
