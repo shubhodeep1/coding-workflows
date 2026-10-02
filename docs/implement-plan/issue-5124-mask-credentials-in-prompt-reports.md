@@ -7,7 +7,7 @@
 - Status: IN_PROGRESS
 - Stage: conformance 1/3 — review round on PR #5401 head 28b58a2 (the twin sync of the round on 6247969); the fix changes the live file and its twin together, so no sync is pending
 - Activation: not started
-- Waiting on: PR #5401 review on its current head (a review round after the env -S fix)
+- Waiting on: PR #5401 review on its current head (after intervention 1, which restarts the review count)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01Cm4tzQ6puzR8RdWUi6ZggJ (idle, kept for reuse; no wait armed while held)   safety net none   hand-back none
 - Last updated: 2026-10-02
@@ -39,6 +39,7 @@
   - Review round on head 6935e44 (2026-10-02, owner's supervising session): fixed — `_command_line_credentials` parses each word of the simple command before a `|` / `|&` as a command line when the command after it runs a shell (gpt-6-luna), and the shape keeps a word with whitespace out even when it ends like a script name (proactive, same leak in the title); rejected — qwen's failing-test report (the test passes; outer-shell quotes); 6 new test cases (4 fail against the old twin); no twin sync needed
   - Review round on head dc45904 (2026-10-02, owner's supervising session; consensus of deepseek, gemini, minimax, gpt-6-luna, qwen, glm): fixed — a command whose pipeline feeds a shell reading stdin raises in `_command_line_credentials` and is withheld (multi-stage pipelines and split `printf` arguments made a word scan unsound; AD-18); `_segment_runs_a_shell` replaces the any-word runner check on the pipe and here-string paths (command word, or a shell behind `sudo`/`env`/…); agents.md and the changelog fragment name the rule; 16 test cases fail against the old twin; no twin sync needed
   - Review round on head 39c380b (2026-10-02, owner's supervising session): fixed — `_segment_runs_a_shell` passes over a leading fd digit, `{`, and `!`, and `xargs` joins `_SHELL_RUNNER_WRAPPERS`; the pipe state survives an empty segment (a newline or `(` after `|`), `|` inside a grouped token counts (not `||`), and a `>(` or `<(` read by a shell is withheld too; rejected — attached `sh -c'…'` (masked by the cluster rule) and `|&` (one token); 12 test cases fail against the old twin; no twin sync needed
+  - Intervention 1 on head 36abc06 (2026-10-02, owner's supervising session): the review workflow reached MAX_AUTOFIX_ITERATIONS (5) and labelled the PR `ai:review-blocked` before reviewing 36abc06, so the round-7 fixes were never reviewed and no finding is open. This `[claude-intervention]` commit restarts the iteration count so the panel reviews the current code; `ai:review-blocked` is removed after the push.
 
 ## Security pass
 
