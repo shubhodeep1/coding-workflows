@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-6057-recheck-claude-label-at-dispatch-plan.md
 - Source issue: shubhodeep1/coding-workflows#6057
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-6057-recheck-claude-label-at-dispatch   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-6057-recheck-claude-label-at-dispatch   Final PR: #6067 draft
+- Status: BLOCKED
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: none (held for the twin sync; the stage `/reclarify` resumes arms the wait)
 - Last updated: 2026-10-02
-- Last note: project branch opened; implementing phase 1
+- Last note: phase 1 implemented and verified; PR opened with a hold claim; `.claude/commands/claude-issue-pickup.md` (no twin) waits for the twin-sync copy
 
 ## Phases
-1. [ ] Phase 1 — re-check the `ai:claude` claim at dispatch time   — protected paths: .claude/commands/claude-issue-pickup.md (no twin)
+1. [ ] Phase 1 — re-check the `ai:claude` claim at dispatch time   — protected paths: .claude/commands/claude-issue-pickup.md (no twin); PR open, held for twin sync; review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -38,7 +38,11 @@
 - AD-9 [plan, 2026-10-02] `/claude-issue-dispatch` (named by the issue as a call site). — Picked: A — leave it unchanged. Alternatives: B — make it read the issue. Why: it never reads the issue by design, and the pickup now checks before following its step 2. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:plan-deviation] A gate that must hold "at dispatch time" needs a read at the moment of dispatch: checking only where the payload is first validated (the intake) leaves every later state change of the target invisible to the session starter. (files: scripts/claude_issue_route.py, .claude/commands/claude-issue-pickup.md)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)
 - `.claude/commands/claude-issue-pickup.md` has no `workflow-templates/.claude/` twin: its diff and sha256 go into the twin-sync blocker; the phase PR is held until a supervising session copies it.
+- Pickup file after the sync: sha256 `e35c2ed22ca18988dc5276378faa1717262154f33dbe087177a552c92c7095d1` (the diff is in the twin-sync blocker comment on #6057).
+- Verified 2026-10-02 in the phase session: `tests/test_claude_issue_route.py` 261 passed; the six suites that read the pickup file passed against a copy with the synced file (one copy-only failure: the `workflow-templates/CLAUDE.md` symlink is not preserved by the copy; the test passes in the checkout); ruff and `shellcheck --severity=error` clean.
+- Plan deviation: `_dispatch_refusal` also refuses `target_repo_mismatch` (a transferred issue), the same family as AD-4's `target_not_issue`; it matches the intake's `authorize_target()` check.
