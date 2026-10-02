@@ -285,6 +285,7 @@ docs/implement-plan/issue-5627-resolver-private-model-index.md
 docs/implement-plan/issue-5664-archived-stage-disables-recovery.md
 docs/operations/master-session.md
 docs/plans/apply-ai-tools-learnings-plan.md
+docs/plans/claude-actions-worker-pool-plan.md
 docs/plans/claude-code-tooling-learnings-plan.md
 docs/plans/claude-codex-process-parity-plan.md
 docs/plans/claude-fixer-unattended-convergence-plan.md
