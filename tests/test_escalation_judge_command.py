@@ -191,11 +191,20 @@ def test_judge_close_checks_the_head_ref_before_closing(judge):
 	close = judge[judge.index("**`close`** → close the project yourself"):judge.index("9. **Report**")]
 	assert "Its head repository (`head.repo.full_name`) must be this repository" in close
 	assert "(a) the final PR: head exactly `claude/implement-plan-<slug>`;" in close
-	assert "(b) project mode, any other PR: head starts with `claude/implement-plan-<slug>-` and base is exactly `claude/implement-plan-<slug>`;" in close
-	assert "(c) a PR whose base is the default branch (project mode: only an activation fix; legacy mode: every PR): head is exactly `claude/implement-plan-<slug>-<kind>`, optionally followed by a `-<digits>` collision suffix" in close
-	for kind in ("`activation-fix-<k>`", "`phase-<n>`", "`complete`", "`conformance-fix-<k>`", "`conformance-fix-budget-<n>`", "`validation-fix-<cycle>`", "`descope-<n>`"):
-		assert kind in close, kind
+	# Rule (b) names the exact project-branch kinds too: a head such as
+	# `claude/implement-plan-<slug>-unrelated` into the project branch is not
+	# the chain's (review round on 3ab4439).
+	rule_b = close[close.index("(b) project mode, any other PR:"):close.index("(c) a PR whose base is the default branch")]
+	assert "base is exactly `claude/implement-plan-<slug>` and head is exactly `claude/implement-plan-<slug>-<kind>`, optionally followed by a `-<digits>` collision suffix" in rule_b
+	for kind in ("`phase-<n>`", "`complete`", "`conformance-fix-<k>`", "`conformance-fix-budget-<n>`", "`validation-fix-<cycle>`", "`descope-<n>`"):
+		assert kind in rule_b, kind
+	assert "head starts with `claude/implement-plan-<slug>-`" not in close
+	assert "(c) a PR whose base is the default branch (project mode: only an activation fix; legacy mode: every PR): head is exactly `claude/implement-plan-<slug>-<kind>`, with the same optional suffix" in close
+	# Step 12 opens activation-fix PRs into the default branch in legacy mode
+	# too, so the legacy list covers them (review rounds on 025967a).
+	assert "`activation-fix-<k>` in project mode and, in legacy mode, one of the project-branch kinds or `activation-fix-<k>`" in close
 	assert "A plain prefix is not enough: another project's slug can start with this one's (`foo` and `foo-bar`)" in close
+	assert "any other PR can be opened against the project branch from a head named `claude/implement-plan-<slug>-<anything>`" in close
 	assert "A PR that fails this check is not closed: go on with the rest, and list its number, head ref, and base ref in the report so a human can decide." in close
 	# The old prefix-only rule is gone.
 	assert "its head ref is exactly `claude/implement-plan-<slug>` or starts with `claude/implement-plan-<slug>-`, and its head repository" not in close
