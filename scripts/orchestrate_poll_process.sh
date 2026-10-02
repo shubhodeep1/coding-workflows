@@ -15765,7 +15765,8 @@ _check_open_pr_conflict_guard() {
 # sends nothing: `why=alert_marker_write_failed`, retried next cycle). With
 # no wave entry (`why=no_state_entry`) there is nowhere to record the
 # marker, so it only logs.
-# A failed state write changes nothing. A failed label edit keeps the
+# A failed state write changes nothing but holds the wave this cycle
+# (`MERGED_HEAL_WAVE_HOLD`). A failed label edit keeps the
 # stored status at `in_progress` (with `.merged_state_heal_pending`, written
 # together with it, so the next cycle retries even when `ai:merged` was
 # never on the issue) and holds the wave this cycle (`wave_hold=true`).
@@ -15859,7 +15860,11 @@ _heal_rejected_merged_state() {
       MERGED_HEAL_STATE_CHANGED="true"
     else
       rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-      echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=retry why=state_write_failed" >&2
+      # The stored `merged` status is still there, so check-wave-status would
+      # count it this cycle: hold the wave until the retry rewrites it (PR
+      # #5633 review round 11).
+      MERGED_HEAL_WAVE_HOLD="true"
+      echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=retry why=state_write_failed wave_hold=true" >&2
       return 0
     fi
   fi

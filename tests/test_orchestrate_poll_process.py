@@ -15619,6 +15619,15 @@ def test_heal_defers_its_comment_and_alerts_when_the_marker_write_fails_with_a_p
 	assert retry < body.index("add_healing_note", retry) and retry < body.index("tg_notify", retry)
 
 
+def test_heal_state_write_failure_holds_the_wave():
+	"""PR #5633 review round 11: when the stored-status rewrite fails, the stored `merged` is still there, so the heal
+	sets MERGED_HEAL_WAVE_HOLD before returning and check-wave-status cannot count it this cycle."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = script.split("_heal_rejected_merged_state() {", 1)[1].split("\n}\n", 1)[0]
+	failed = body.index("why=state_write_failed wave_hold=true")
+	branch_start = body.rindex("else", 0, failed)
+	assert branch_start < body.index('MERGED_HEAL_WAVE_HOLD="true"', branch_start) < failed < body.index("return 0", failed)
+
 def test_alert_only_branch_records_its_marker_before_alerting():
 	"""PR #5633 review round 8: the alert-only branch stores `.merged_state_heal.alerted` first and sends the
 	Telegram alert and healing note only after that write succeeded, so a failed write never repeats them."""
