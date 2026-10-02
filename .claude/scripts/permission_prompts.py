@@ -104,6 +104,13 @@ REDACTION_PATTERNS = (
 	(re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AKIA***"),
 	(re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer ***"),
 	(re.compile(r"(?i)\b(token|secret|password|passwd|api[_-]?key)(\s*[=:]\s*)[^\s'\"]+"), r"\1\2***"),
+	# The same keywords as a command-line option whose value follows a space
+	# (`--password plainsecret`, `--api-key 'a b'`); a following option or a
+	# lone `*` wildcard (an allow rule's) is not a value (PR #5918 review round 9).
+	(
+		re.compile(r"(?i)((?<![A-Za-z0-9_])--?[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key)[A-Za-z0-9_-]*)(\s+)(?!-)(?!\*(?:[\s)]|$))('[^']*'|\"[^\"]*\"|[^\s'\"]+)"),
+		r"\1\2***",
+	),
 	# Long random-looking strings (hex keys, base64 secrets): 40+ letters,
 	# digits, `+`, `_`, `=` with both letters and digits. `/` and `-` are left
 	# out so API paths and branch names survive.

@@ -538,6 +538,20 @@ def test_report_redacts_the_matched_rule(tmp_path):
 	assert "abcdefghijklmnop" not in json.dumps(report["patterns"][0]["allow_rule"])
 
 
+def test_report_and_issue_redact_a_space_delimited_credential_option(tmp_path):
+	"""PR #5918 review round 9: `--password plainsecret` (no `=` or `:`) is masked in the matched rule, in the report
+	JSON, and in the issue text, while a following option and the rule's `*` wildcard stay."""
+	command = "curl --password plainsecret --api-key 'two words' https://a.b"
+	rule = "Bash(curl --password plainsecret *)"
+	directory = _log(tmp_path, [_payload(command, event="PermissionDenied")])
+	report = pp_twin.report(directory, _settings(tmp_path, [rule]))
+	assert [p["allow_rule"] for p in report["patterns"]] == ["Bash(curl --password *** *)"]
+	pattern = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, [rule]))[0]
+	for text in (json.dumps(report), pp_twin.issue_body(pattern, 1, "s1"), pp_twin.comment_body(pattern, 1, "s1")):
+		assert "plainsecret" not in text and "two words" not in text
+	assert pp_twin.redact("Bash(curl --password *)") == "Bash(curl --password *)"
+	assert pp_twin.redact("tool --password -v") == "tool --password -v"
+
 def test_signature_and_title_do_not_depend_on_the_rule(tmp_path):
 	directory = _log(tmp_path, [_payload(ISSUE_5899_COMMAND, event="PermissionDenied")])
 	with_rule = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, ["Bash(git merge *)"]))[0]
