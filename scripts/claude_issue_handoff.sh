@@ -73,9 +73,15 @@ ISSUE_URL="https://github.com/${REPO}/issues/${ISSUE_NUMBER}"
 
 # --- 1. Claim the issue ------------------------------------------------------
 
+# The claim is mandatory (issue #6057): `ai:claude` is the live claim the
+# intake and the pickup re-check, so its absence must reliably mean "parked".
+# An issue that could not be claimed is never dispatched; it takes the
+# failure path below instead.
+CLAIM_OK="true"
 ensure_label_exists "ai:claude" "${REPO}" || true
 if ! gh_retry gh api -X POST "repos/${REPO}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:claude' >/dev/null 2>&1; then
-	log "warn claim_label_failed issue=${ISSUE_NUMBER}"
+	CLAIM_OK="false"
+	log "error claim_label_failed issue=${ISSUE_NUMBER}"
 fi
 # Label removals go one REST call each so a label the repo never created
 # (404) cannot abort the others, which `gh issue edit --remove-label` would.
@@ -96,7 +102,9 @@ log "claimed issue=${ISSUE_NUMBER} trigger=${TRIGGER} reason=${ROUTE_REASON}"
 DISPATCH_FILE="${RUNTIME_DIR}/claude_issue_dispatch.json"
 DISPATCH_ERROR_FILE="${RUNTIME_DIR}/claude_issue_dispatch_error.txt"
 DISPATCH_OK="false"
-if python3 "${ROUTE_PY}" build-dispatch \
+if [ "${CLAIM_OK}" != "true" ]; then
+	printf 'could not add the ai:claude claim label to %s#%s, so no dispatch was sent\n' "${REPO}" "${ISSUE_NUMBER}" > "${DISPATCH_ERROR_FILE}"
+elif python3 "${ROUTE_PY}" build-dispatch \
 	--repo "${REPO}" \
 	--issue-json "${ISSUE_META_FILE}" \
 	--trigger "${TRIGGER}" \
@@ -131,14 +139,20 @@ fi
 DETAIL="$(head -c 300 "${DISPATCH_ERROR_FILE}" 2>/dev/null | tr '\n' ' ' || true)"
 log "error dispatch_failed issue=${ISSUE_NUMBER} trigger=${TRIGGER} upstream=${UPSTREAM_REPO} detail=${DETAIL}"
 echo "::error::Claude issue handoff failed for #${ISSUE_NUMBER}: ${DETAIL}"
+FAILURE_SUMMARY="the \`claude-issue\` dispatch to \`${UPSTREAM_REPO}\` was rejected"
+TG_FAILURE_SUMMARY="dispatch to ${UPSTREAM_REPO} rejected"
+if [ "${CLAIM_OK}" != "true" ]; then
+	FAILURE_SUMMARY="the \`ai:claude\` claim label could not be added, so no dispatch was sent"
+	TG_FAILURE_SUMMARY="ai:claude claim label could not be added; no dispatch sent"
+fi
 ensure_label_exists "ai:claude-handoff-failed" "${REPO}" || true
 gh_retry gh api -X POST "repos/${REPO}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:claude-handoff-failed' >/dev/null 2>&1 || true
 BODY="<!-- ai:claude-handoff-failed:v1 -->
-⚠️ **Claude handoff failed** — the \`claude-issue\` dispatch to \`${UPSTREAM_REPO}\` was rejected, so no Claude session was started.
+⚠️ **Claude handoff failed** — ${FAILURE_SUMMARY}, so no Claude session was started.
 
 - Retry: comment \`/reclarify\`.
 - Switch this issue to the Codex pipeline: add the \`ai:codex\` label, then comment \`/reclarify\`."
 [ -z "${RUN_URL}" ] || BODY+=$'\n\n'"Run: ${RUN_URL}"
 gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
-tg_send_msg "Claude issue handoff FAILED for ${REPO}#${ISSUE_NUMBER} (${TRIGGER}): dispatch to ${UPSTREAM_REPO} rejected."$'\n'"Issue: ${ISSUE_URL}"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+tg_send_msg "Claude issue handoff FAILED for ${REPO}#${ISSUE_NUMBER} (${TRIGGER}): ${TG_FAILURE_SUMMARY}."$'\n'"Issue: ${ISSUE_URL}"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 exit 0

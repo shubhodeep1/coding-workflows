@@ -24,7 +24,10 @@ Shell drivers:
     reads the queue (``queue-pending``) and starts one Opus
     ``/implement-issue-claude`` session per queued issue with
     ``create_session``. A claude.ai routine run cannot do this: it gets no
-    claude-code-remote tools (issue #4525).
+    claude-code-remote tools (issue #4525). ``queue-pending`` re-reads each
+    pending target issue first and lists a closed, re-routed (``ai:codex``),
+    or parked (``ai:claude`` removed) one under ``refused`` instead, so the
+    pickup closes its queue item rather than starting it (issue #6057).
   * ``scripts/claude_issue_queue_watchdog.sh`` flags queue issues nobody picked
     up (``queue-stale``).
   * A session too deep in the session lineage to create its own CLAUDE.md
@@ -144,6 +147,14 @@ TRUSTED_ISSUE_AUTHOR_ASSOCIATIONS: tuple[str, ...] = ("OWNER", "MEMBER", "COLLAB
 TRUSTED_ISSUE_BOT_AUTHOR = "github-actions[bot]"
 DISPATCHER_ALLOWED_PERMISSIONS: tuple[str, ...] = ("admin", "write")
 RECLARIFY_COMMAND_PREFIX = "/reclarify"
+
+# Claim-label refusals (issue #6057): `ai:claude` is the live claim, so an
+# issue whose label was removed after it was queued is parked, and one that
+# gained `ai:codex` belongs to the Codex pipeline. The intake
+# (`authorize_target`) and the pickup (`apply_dispatch_claim_check`) both
+# apply `claim_label_refusal`; the pickup also refuses a closed target.
+CLAIM_REFUSAL_UNCLAIMED = "claude_label_removed"
+CLAIM_REFUSAL_CODEX = "codex_label_added"
 
 ORCHESTRATOR_BODY_MARKER_RE = re.compile(r"(?mi)^\s*(?:[-*]\s*)?Managed by:\s*AI Orchestrator\b")
 E2E_FIXTURE_TITLE_RE = re.compile(r"(?i)^\[E2E ")
@@ -344,6 +355,24 @@ def has_trusted_reclarify(comments: list[Any]) -> bool:
 	return False
 
 
+def claim_label_refusal(issue: Any) -> str:
+	"""The claim-label refusal reason for a live issue, or ``""`` (issue #6057).
+
+	``ai:claude`` is the live claim: removing it parks a queued issue. An
+	``ai:codex`` label wins, as in ``route_issue`` rule 4. Returns
+	``CLAIM_REFUSAL_CODEX`` when ``ai:codex`` is present, else
+	``CLAIM_REFUSAL_UNCLAIMED`` when ``ai:claude`` is absent, else ``""``.
+	Pure; used by ``authorize_target`` (intake) and
+	``apply_dispatch_claim_check`` (pickup).
+	"""
+	labels = _label_names(issue) if isinstance(issue, dict) else []
+	if CODEX_LABEL in labels:
+		return CLAIM_REFUSAL_CODEX
+	if CLAUDE_LABEL not in labels:
+		return CLAIM_REFUSAL_UNCLAIMED
+	return ""
+
+
 def authorize_target(
 	validated: dict[str, Any],
 	issue: Any,
@@ -362,7 +391,10 @@ def authorize_target(
 	Output: ``{"authorized": bool, "reason": str, "needs_comments": bool}``.
 	``needs_comments`` is true only when every other check passed and the
 	caller has not supplied ``comments`` yet; the caller reads them and asks
-	again. Pure: no API calls.
+	again. An open issue that no longer carries the ``ai:claude`` claim, or
+	carries ``ai:codex``, is refused (``claim_label_refusal``, issue #6057)
+	before its author is checked. Pure: no API calls; the labels come from the
+	same issue read.
 	"""
 	def _result(authorized: bool, reason: str, needs_comments: bool = False) -> dict[str, Any]:
 		return {"authorized": authorized, "reason": reason, "needs_comments": needs_comments}
@@ -382,6 +414,9 @@ def authorize_target(
 		return _result(False, "target_repo_mismatch")
 	if issue.get("state") != "open":
 		return _result(False, "issue_closed")
+	refusal = claim_label_refusal(issue)
+	if refusal:
+		return _result(False, refusal)
 	if is_trusted_issue_author(issue):
 		return _result(True, "trusted_author")
 	if comments is None:
@@ -836,6 +871,113 @@ def queue_pending(
 		"limit": limit,
 		"oldest_waiting_minutes": _oldest_waiting_minutes(waiting_since, now),
 	}
+
+
+def _dispatch_target_key(repo: str, issue_number: Any) -> str:
+	return f"{(repo or '').lower()}#{issue_number}"
+
+
+def _dispatch_refusal(entry: dict[str, Any], issue: Any) -> str:
+	"""Why the pickup must not start ``entry`` given its live ``issue``, or ``""``."""
+	if not isinstance(issue, dict) or "pull_request" in issue or issue.get("number") != entry.get("issue_number"):
+		return "target_not_issue"
+	repository_url = issue.get("repository_url")
+	if not isinstance(repository_url, str) or repository_url.lower() != f"https://api.github.com/repos/{entry.get('repo', '')}".lower():
+		return "target_repo_mismatch"
+	if issue.get("state") != "open":
+		return "issue_closed"
+	return claim_label_refusal(issue)
+
+
+def apply_dispatch_claim_check(result: dict[str, Any], targets: dict[str, Any] | None) -> dict[str, Any]:
+	"""Re-check each pending issue target against its live issue (issue #6057).
+
+	Input: a ``queue_pending`` result and the ``fetch_dispatch_targets``
+	output (``{"<repo lower>#<N>": {"issue": {...}} | {"error": str}}``), or
+	``None`` to skip the check. Output: a copy of ``result`` with two more
+	keys. ``refused``: one entry per ``item_type`` ``issue`` target whose
+	live issue is closed (``issue_closed``), not that issue
+	(``target_not_issue``, ``target_repo_mismatch``), or fails
+	``claim_label_refusal`` (``claude_label_removed``, ``codex_label_added``);
+	each carries ``repo``, ``issue_number``, ``issue_url``, ``trigger``,
+	``reason``, and the ``queue_issues`` to close, and is removed from
+	``pending``. ``claim_check_failed``: ``{"repo", "issue_number", "error"}``
+	for each target whose read failed or is missing; those stay in
+	``pending`` (fail-open: the intake already checked the claim when it
+	queued them). ``pr_fix`` entries are never checked. ``remaining``,
+	``deferred``, and ``limit`` are unchanged. Pure.
+	"""
+	checked = dict(result)
+	checked["refused"] = []
+	checked["claim_check_failed"] = []
+	if targets is None:
+		return checked
+	pending: list[dict[str, Any]] = []
+	for entry in result.get("pending") or []:
+		if entry.get("item_type") != "issue":
+			pending.append(entry)
+			continue
+		record = targets.get(_dispatch_target_key(entry.get("repo", ""), entry.get("issue_number"))) if isinstance(targets, dict) else None
+		if not isinstance(record, dict) or "issue" not in record:
+			error = record.get("error") if isinstance(record, dict) and isinstance(record.get("error"), str) else "target not read"
+			checked["claim_check_failed"].append({"repo": entry.get("repo"), "issue_number": entry.get("issue_number"), "error": error})
+			pending.append(entry)
+			continue
+		reason = _dispatch_refusal(entry, record["issue"])
+		if not reason:
+			pending.append(entry)
+			continue
+		checked["refused"].append({
+			"item_type": "issue",
+			"repo": entry.get("repo"),
+			"issue_number": entry.get("issue_number"),
+			"issue_url": entry.get("issue_url"),
+			"trigger": entry.get("trigger"),
+			"reason": reason,
+			"queue_issues": entry.get("queue_issues", []),
+		})
+	checked["pending"] = pending
+	return checked
+
+
+def fetch_dispatch_targets(entries: list[Any], gh_read: Any = None) -> dict[str, Any]:
+	"""Read the live issue of each pending ``issue`` target (issue #6057).
+
+	Input: the ``pending`` list of a ``queue_pending`` result. Output:
+	``{"<repo lower>#<N>": {"issue": <issue JSON>} | {"error": str}}`` for
+	``apply_dispatch_claim_check``.
+
+	Calls (CLAUDE.md §15): one REST ``GET repos/<repo>/issues/<N>`` per
+	distinct ``issue`` target, so at most the pickup's start limit (20 by
+	default, 30 at most) per wake; none for ``pr_fix`` entries or an empty
+	list. Audited: the queue read and the binding reads of
+	``fetch_open_queue`` / ``fetch_queue_bindings`` cover coding-workflows'
+	queue issues and Actions runs only and never the target issue, and the
+	intake's issue read happened when the item was queued, which is exactly
+	the stale answer this check replaces. GraphQL is not used: the Claude
+	Code Web proxy the pickup runs behind refuses it. Fail-open per call: a
+	failed read (a consumer repository not attached to the pickup session
+	answers 403) records ``error`` for that target only; nothing is retried.
+	"""
+	read = gh_read or _gh_api_read
+	targets: dict[str, Any] = {}
+	for entry in entries or []:
+		if not isinstance(entry, dict) or entry.get("item_type") != "issue":
+			continue
+		repo = entry.get("repo")
+		number = entry.get("issue_number")
+		if not isinstance(repo, str) or not REPO_SLUG_RE.match(repo) or isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+			continue
+		key = _dispatch_target_key(repo, number)
+		if key in targets:
+			continue
+		try:
+			issue = read(f"repos/{repo}/issues/{number}")
+		except RuntimeError as exc:
+			targets[key] = {"error": str(exc)}
+			continue
+		targets[key] = {"issue": issue} if isinstance(issue, dict) else {"error": "issue read returned a non-object"}
+	return targets
 
 
 def _oldest_waiting_minutes(waiting_since: list[datetime], now: datetime | None) -> int | None:
@@ -1408,6 +1550,20 @@ def _cmd_queue_pending(args: argparse.Namespace) -> int:
 	else:
 		bindings = {"repo": queue_repo, "runs": {}}
 	result = queue_pending(issues, allowed, args.trusted_author, limit, bindings=bindings, now=now)
+	# Dispatch-time claim check (issue #6057): the live target issue decides,
+	# not the answer the intake read when it queued the item. Fetched for
+	# --fetch-repo, read from --targets-json otherwise; without either the
+	# check is skipped (an offline hand run).
+	if args.fetch_repo:
+		targets = fetch_dispatch_targets(result["pending"])
+	elif args.targets_json:
+		targets = _read_json(args.targets_json)
+		if not isinstance(targets, dict):
+			print("targets JSON is not an object", file=sys.stderr)
+			return 2
+	else:
+		targets = None
+	result = apply_dispatch_claim_check(result, targets)
 	result["catch_up_due"] = catch_up_due(args.wake, result["remaining"])
 	print(json.dumps(result))
 	return 0
@@ -1502,6 +1658,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_pending.add_argument("--limit", type=int, default=None, help=f"targets to start this wake (default: {QUEUE_PICKUP_LIMIT_ENV}, else {QUEUE_PICKUP_LIMIT})")
 	p_pending.add_argument("--bindings-json", default="", help="binding records (fetch_queue_bindings output) for --issues-json mode")
 	p_pending.add_argument("--default-branch", default="", help="skip the default-branch read of --fetch-repo")
+	p_pending.add_argument("--targets-json", default="", help="live target issues (fetch_dispatch_targets output) for --issues-json mode; without it the claim check is skipped")
 	p_pending.add_argument("--wake", choices=QUEUE_WAKE_KINDS, default="hourly", help="the pickup wake reading the queue; decides catch_up_due")
 	p_pending.add_argument("--now", default="", help="reference time for oldest_waiting_minutes (default: now)")
 	p_pending.set_defaults(func=_cmd_queue_pending)

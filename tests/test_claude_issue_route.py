@@ -247,6 +247,10 @@ if [ -n "${{GH_STUB_FAIL_DISPATCH:-}}" ] && [[ "$*" == *dispatches* ]]; then
   echo "HTTP 404: Not Found" >&2
   exit 1
 fi
+if [ -n "${{GH_STUB_FAIL_CLAIM:-}}" ] && [[ "$*" == *"/labels -f labels[]=ai:claude" ]]; then
+  echo "HTTP 403: Forbidden" >&2
+  exit 1
+fi
 if [[ "$*" == *"issues?labels=ai:claude-issue-queue"* ]]; then
   [ -z "${{GH_STUB_FAIL_QUEUE_READ:-}}" ] || {{ echo "HTTP 500" >&2; exit 1; }}
   printf '%s' "${{GH_STUB_QUEUE_JSON:-[]}}"
@@ -276,7 +280,7 @@ if [[ "$*" =~ ^api\\ repos/([^/]+/[^/]+)/issues/([0-9]+)$ ]]; then
   if [ -n "${{GH_STUB_ISSUE_JSON:-}}" ]; then
     printf '%s' "${{GH_STUB_ISSUE_JSON}}"
   else
-    printf '{{"number":%s,"state":"open","repository_url":"https://api.github.com/repos/%s","author_association":"OWNER","user":{{"login":"owner","type":"User"}}}}' "${{BASH_REMATCH[2]}}" "${{BASH_REMATCH[1]}}"
+    printf '{{"number":%s,"state":"open","repository_url":"https://api.github.com/repos/%s","author_association":"OWNER","user":{{"login":"owner","type":"User"}},"labels":[{{"name":"ai:claude"}}]}}' "${{BASH_REMATCH[2]}}" "${{BASH_REMATCH[1]}}"
   fi
   exit 0
 fi
@@ -354,6 +358,31 @@ def test_handoff_failure_marks_issue_and_exits_zero(stubs):
 	assert "labels[]=ai:claude-handoff-failed" in calls
 	assert "ai:claude-handoff-failed:v1" in calls
 	assert "CLAUDE_ISSUE_HANDOFF error dispatch_failed issue=42" in result.stdout
+
+
+def test_handoff_does_not_dispatch_an_issue_it_could_not_claim(stubs):
+	# Issue #6057: ai:claude is the live claim the intake and the pickup
+	# re-check, so an unclaimed issue is never dispatched.
+	issue_file = stubs["tmp"] / "issue.json"
+	issue_file.write_text(json.dumps(_issue(number=43)))
+	env = {
+		**stubs["env"],
+		"GITHUB_REPOSITORY": "o/r",
+		"ISSUE_NUMBER": "43",
+		"ISSUE_META_FILE": str(issue_file),
+		"GH_TOKEN": "x",
+		"GH_STUB_FAIL_CLAIM": "1",
+	}
+	result = _run("claude_issue_handoff.sh", env)
+	assert result.returncode == 0, result.stderr
+	calls = stubs["log"].read_text()
+	assert "repos/o/r/issues/43/labels -f labels[]=ai:claude" in calls
+	assert "dispatches" not in calls
+	assert "labels[]=ai:claude-handoff-failed" in calls
+	assert "the `ai:claude` claim label could not be added, so no dispatch was sent" in calls
+	assert "CLAUDE_ISSUE_HANDOFF error claim_label_failed issue=43" in result.stdout
+	assert "CLAUDE_ISSUE_HANDOFF error dispatch_failed issue=43" in result.stdout
+	assert "ai:claude-issue-routed:v1" not in calls
 
 
 
@@ -627,13 +656,16 @@ def test_intake_logs_deprecated_routine_id_without_firing(stubs):
 # --- intake authorization (issue #4620) ------------------------------------------------------
 
 
-def _target(number=9, repo="shubhodeep1/digital_pa", state="open", association="OWNER", user_type="User", login="owner", **extra):
+def _target(number=9, repo="shubhodeep1/digital_pa", state="open", association="OWNER", user_type="User", login="owner", labels=("ai:claude",), **extra):
+	# A routed issue carries the ai:claude claim (issue #6057); pass
+	# labels=() for a parked one.
 	issue = {
 		"number": number,
 		"state": state,
 		"repository_url": f"https://api.github.com/repos/{repo}",
 		"author_association": association,
 		"user": {"login": login, "type": user_type},
+		"labels": [{"name": name} for name in labels],
 	}
 	issue.update(extra)
 	return issue
@@ -745,6 +777,53 @@ def test_authorize_target_checks_dispatcher_before_reading_comments():
 	assert result["reason"] == "dispatcher_not_authorized"
 
 
+def test_authorize_target_refuses_an_issue_without_the_claim_label():
+	# Issue #6057 acceptance: an open, trusted-author issue without ai:claude.
+	result = route.authorize_target(_validated(), _target(labels=()), _AUTHORIZED_DISPATCHER)
+	assert result == {"authorized": False, "reason": "claude_label_removed", "needs_comments": False}
+
+
+def test_authorize_target_allows_an_issue_with_the_claim_label():
+	result = route.authorize_target(_validated(), _target(labels=("ai:claude",)), _AUTHORIZED_DISPATCHER)
+	assert result == {"authorized": True, "reason": "trusted_author", "needs_comments": False}
+
+
+@pytest.mark.parametrize("labels", [("ai:claude", "ai:codex"), ("ai:codex",)])
+def test_authorize_target_refuses_an_issue_switched_to_codex(labels):
+	result = route.authorize_target(_validated(), _target(labels=labels), _AUTHORIZED_DISPATCHER)
+	assert result == {"authorized": False, "reason": "codex_label_added", "needs_comments": False}
+
+
+def test_authorize_target_refuses_an_unclaimed_issue_before_reading_comments():
+	# An untrusted author would otherwise need the comments read; the claim
+	# check decides first, so no read is asked for.
+	issue = _target(association="NONE", login="stranger", labels=())
+	result = route.authorize_target(_validated(), issue, _AUTHORIZED_DISPATCHER)
+	assert result == {"authorized": False, "reason": "claude_label_removed", "needs_comments": False}
+
+
+def test_authorize_target_reports_closed_before_the_claim_label():
+	result = route.authorize_target(_validated(), _target(state="closed", labels=()), _AUTHORIZED_DISPATCHER)
+	assert result["reason"] == "issue_closed"
+
+
+@pytest.mark.parametrize(
+	("issue", "reason"),
+	[
+		({"labels": [{"name": "ai:claude"}]}, ""),
+		({"labels": ["ai:claude"]}, ""),
+		({"labels": []}, "claude_label_removed"),
+		({}, "claude_label_removed"),
+		({"labels": None}, "claude_label_removed"),
+		({"labels": [{"name": "ai:codex"}, {"name": "ai:claude"}]}, "codex_label_added"),
+		(None, "claude_label_removed"),
+		([], "claude_label_removed"),
+	],
+)
+def test_claim_label_refusal(issue, reason):
+	assert route.claim_label_refusal(issue) == reason
+
+
 def test_cli_authorize_target(tmp_path):
 	validated = tmp_path / "validated.json"
 	validated.write_text(json.dumps(_validated()))
@@ -820,6 +899,8 @@ def test_intake_checks_a_distinct_triggering_actor_too(stubs):
 		({"GH_STUB_FAIL_PERMISSION": "1"}, "authorization_read_failed"),
 		({"GH_STUB_FAIL_ISSUE_READ": "1"}, "authorization_read_failed"),
 		({"GH_STUB_ISSUE_JSON": json.dumps(_target(state="closed"))}, "issue_closed"),
+		({"GH_STUB_ISSUE_JSON": json.dumps(_target(labels=()))}, "claude_label_removed"),
+		({"GH_STUB_ISSUE_JSON": json.dumps(_target(labels=("ai:claude", "ai:codex")))}, "codex_label_added"),
 		({"GH_STUB_ISSUE_JSON": json.dumps(_target(pull_request={}))}, "target_not_issue"),
 		({"GH_STUB_ISSUE_JSON": json.dumps(_target(repo="shubhodeep1/elsewhere"))}, "target_repo_mismatch"),
 		({"GH_STUB_ISSUE_JSON": json.dumps(_target(association="NONE", login="stranger"))}, "untrusted_issue_author"),
@@ -1429,6 +1510,8 @@ def test_cli_queue_pending_fetches_the_queue_and_its_bindings(tmp_path):
 		"api repos/shubhodeep1/coding-workflows/actions/artifacts?name=claude-issue-queue-binding&per_page=100",
 		f"api repos/shubhodeep1/coding-workflows/compare/{'a' * 40}...refs/heads/main?per_page=1 --jq .status",
 		"api repos/shubhodeep1/coding-workflows/actions/artifacts/501/zip",
+		# The dispatch-time claim check: one read of the live target (#6057).
+		"api repos/shubhodeep1/digital_pa/issues/9",
 	]
 	# An edited item is refused through the CLI too.
 	edited = dict(item, body=item["body"].replace("issue: 9", "issue: 8").replace("issues/9", "issues/8"), title="[claude-issue-queue] shubhodeep1/digital_pa#8")
@@ -1437,6 +1520,184 @@ def test_cli_queue_pending_fetches_the_queue_and_its_bindings(tmp_path):
 	assert result["pending"] == [] and result["ignored"] == [{"queue_issue": 10, "reason": "binding_mismatch"}]
 	gh["env"]["GH_STUB_FAIL_QUEUE_READ"] = "1"
 	assert subprocess.run(cmd, capture_output=True, text=True, env=gh["env"]).returncode == 3
+
+
+@pytest.mark.parametrize(
+	("target", "reason"),
+	[
+		(_target(labels=()), "claude_label_removed"),
+		(_target(labels=("ai:claude", "ai:codex")), "codex_label_added"),
+		(_target(state="closed"), "issue_closed"),
+	],
+)
+def test_cli_queue_pending_refuses_a_parked_target_at_dispatch_time(tmp_path, target, reason):
+	# Issue #6057: #6038 lost ai:claude after it was queued and was still
+	# eligible. The pickup's read of the live issue now refuses it.
+	gh = _binding_gh(tmp_path)
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	item = _queue_item(10)
+	gh["queue"].write_text(json.dumps([item]))
+	gh["zip"].write_bytes(_binding_zip({10: item}, run_id=1))
+	gh["target"].write_text(json.dumps(target))
+	cmd = [sys.executable, str(ROOT / "scripts" / "claude_issue_route.py"), "queue-pending", "--fetch-repo", "shubhodeep1/coding-workflows", "--registry", str(registry)]
+	out = subprocess.run(cmd, capture_output=True, text=True, env=gh["env"])
+	assert out.returncode == 0, out.stderr
+	result = json.loads(out.stdout)
+	assert result["pending"] == []
+	assert result["claim_check_failed"] == []
+	assert result["refused"] == [{
+		"item_type": "issue",
+		"repo": "shubhodeep1/digital_pa",
+		"issue_number": 9,
+		"issue_url": "https://github.com/shubhodeep1/digital_pa/issues/9",
+		"trigger": "opened",
+		"reason": reason,
+		"queue_issues": [{"number": 10, "body": item["body"]}],
+	}]
+	# A refusal frees no queue slot for this wake and schedules nothing.
+	assert result["remaining"] == 0 and result["catch_up_due"] is False
+
+
+def test_cli_queue_pending_starts_the_target_when_its_read_fails(tmp_path):
+	# Fail-open: a consumer repo the pickup session cannot reach (proxy 403)
+	# is started as before, and the failure is reported.
+	gh = _binding_gh(tmp_path)
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	item = _queue_item(10)
+	gh["queue"].write_text(json.dumps([item]))
+	gh["zip"].write_bytes(_binding_zip({10: item}, run_id=1))
+	gh["env"]["GH_STUB_FAIL_TARGET_READ"] = "1"
+	cmd = [sys.executable, str(ROOT / "scripts" / "claude_issue_route.py"), "queue-pending", "--fetch-repo", "shubhodeep1/coding-workflows", "--registry", str(registry)]
+	out = subprocess.run(cmd, capture_output=True, text=True, env=gh["env"])
+	assert out.returncode == 0, out.stderr
+	result = json.loads(out.stdout)
+	assert [entry["issue_number"] for entry in result["pending"]] == [9]
+	assert result["refused"] == []
+	assert len(result["claim_check_failed"]) == 1
+	failed = result["claim_check_failed"][0]
+	assert failed["repo"] == "shubhodeep1/digital_pa" and failed["issue_number"] == 9 and "403" in failed["error"]
+
+
+def test_cli_queue_pending_reads_targets_from_a_file(tmp_path):
+	queue = tmp_path / "queue.json"
+	item = _queue_item(10)
+	queue.write_text(json.dumps([item]))
+	bindings = tmp_path / "bindings.json"
+	bindings.write_text(json.dumps(_bindings({"1": _ok_record({10: item})})))
+	registry = tmp_path / "registry.json"
+	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
+	base = ["queue-pending", "--issues-json", str(queue), "--bindings-json", str(bindings), "--registry", str(registry)]
+	# Without --targets-json the check is skipped and the new keys are empty.
+	result = json.loads(_cli(*base).stdout)
+	assert [entry["issue_number"] for entry in result["pending"]] == [9]
+	assert result["refused"] == [] and result["claim_check_failed"] == []
+	targets = tmp_path / "targets.json"
+	targets.write_text(json.dumps({"shubhodeep1/digital_pa#9": {"issue": _target(labels=())}}))
+	result = json.loads(_cli(*base, "--targets-json", str(targets)).stdout)
+	assert result["pending"] == [] and [entry["reason"] for entry in result["refused"]] == ["claude_label_removed"]
+	targets.write_text(json.dumps(["not", "an", "object"]))
+	assert _cli(*base, "--targets-json", str(targets)).returncode == 2
+
+
+def _pending_entry(number=9, repo="shubhodeep1/digital_pa", item_type="issue"):
+	if item_type == "pr_fix":
+		return {"item_type": "pr_fix", "repo": repo, "pr_number": number, "queue_issues": [{"number": 50, "body": "b"}]}
+	return {
+		"item_type": "issue",
+		"repo": repo,
+		"issue_number": number,
+		"issue_url": f"https://github.com/{repo}/issues/{number}",
+		"trigger": "opened",
+		"fire_text": "x",
+		"queue_issues": [{"number": 40 + number, "body": "b"}],
+	}
+
+
+@pytest.mark.parametrize(
+	("issue", "reason"),
+	[
+		(_target(), ""),
+		(_target(labels=("ai:claude", "other")), ""),
+		(_target(labels=()), "claude_label_removed"),
+		(_target(labels=("ai:planning",)), "claude_label_removed"),
+		(_target(labels=("ai:codex",)), "codex_label_added"),
+		(_target(labels=("ai:claude", "ai:codex")), "codex_label_added"),
+		(_target(state="closed"), "issue_closed"),
+		(_target(state="closed", labels=()), "issue_closed"),
+		(_target(pull_request={"url": "x"}), "target_not_issue"),
+		(_target(number=10), "target_not_issue"),
+		(_target(repo="someone/else"), "target_repo_mismatch"),
+		(_target(repository_url="https://api.github.com/repos/Shubhodeep1/Digital_PA"), ""),
+	],
+)
+def test_apply_dispatch_claim_check_reasons(issue, reason):
+	result = {"pending": [_pending_entry()], "ignored": [], "remaining": 0, "deferred": 0, "limit": 20}
+	checked = route.apply_dispatch_claim_check(result, {"shubhodeep1/digital_pa#9": {"issue": issue}})
+	if reason:
+		assert checked["pending"] == []
+		assert [(entry["issue_number"], entry["reason"]) for entry in checked["refused"]] == [(9, reason)]
+		assert "fire_text" not in checked["refused"][0]
+	else:
+		assert checked["pending"] == result["pending"] and checked["refused"] == []
+	assert checked["claim_check_failed"] == []
+	# The input is not modified.
+	assert "refused" not in result and len(result["pending"]) == 1
+
+
+def test_apply_dispatch_claim_check_keeps_order_skips_pr_fixes_and_fails_open():
+	entries = [_pending_entry(9), _pending_entry(7, item_type="pr_fix"), _pending_entry(11), _pending_entry(12)]
+	result = {"pending": entries, "remaining": 3, "deferred": 1}
+	targets = {
+		"shubhodeep1/digital_pa#9": {"issue": _target(9)},
+		"shubhodeep1/digital_pa#11": {"issue": _target(11, labels=())},
+		"shubhodeep1/digital_pa#12": {"error": "gh api repos/shubhodeep1/digital_pa/issues/12 exited 1: HTTP 403"},
+	}
+	checked = route.apply_dispatch_claim_check(result, targets)
+	assert [entry.get("issue_number", entry.get("pr_number")) for entry in checked["pending"]] == [9, 7, 12]
+	assert [entry["issue_number"] for entry in checked["refused"]] == [11]
+	assert checked["claim_check_failed"] == [{"repo": "shubhodeep1/digital_pa", "issue_number": 12, "error": targets["shubhodeep1/digital_pa#12"]["error"]}]
+	assert checked["remaining"] == 3 and checked["deferred"] == 1
+	# A target missing from the reads fails open too.
+	checked = route.apply_dispatch_claim_check({"pending": [_pending_entry(13)]}, {})
+	assert [entry["issue_number"] for entry in checked["pending"]] == [13]
+	assert checked["claim_check_failed"] == [{"repo": "shubhodeep1/digital_pa", "issue_number": 13, "error": "target not read"}]
+	# None skips the check entirely.
+	checked = route.apply_dispatch_claim_check({"pending": [_pending_entry(13)]}, None)
+	assert len(checked["pending"]) == 1 and checked["refused"] == [] and checked["claim_check_failed"] == []
+
+
+def test_fetch_dispatch_targets_reads_each_issue_target_once():
+	calls = []
+
+	def fake_read(path, binary=False, jq=""):
+		calls.append(path)
+		if path.endswith("/issues/12"):
+			raise RuntimeError("HTTP 403")
+		if path.endswith("/issues/13"):
+			return ["not", "an", "object"]
+		return _target(int(path.rsplit("/", 1)[1]))
+
+	entries = [
+		_pending_entry(9),
+		_pending_entry(9),
+		_pending_entry(7, item_type="pr_fix"),
+		_pending_entry(12),
+		_pending_entry(13),
+		{"item_type": "issue", "repo": "bad slug", "issue_number": 5},
+		{"item_type": "issue", "repo": "o/r", "issue_number": True},
+	]
+	targets = route.fetch_dispatch_targets(entries, gh_read=fake_read)
+	assert calls == [
+		"repos/shubhodeep1/digital_pa/issues/9",
+		"repos/shubhodeep1/digital_pa/issues/12",
+		"repos/shubhodeep1/digital_pa/issues/13",
+	]
+	assert targets["shubhodeep1/digital_pa#9"]["issue"]["number"] == 9
+	assert targets["shubhodeep1/digital_pa#12"] == {"error": "HTTP 403"}
+	assert targets["shubhodeep1/digital_pa#13"] == {"error": "issue read returned a non-object"}
+	assert route.fetch_dispatch_targets([], gh_read=fake_read) == {} and len(calls) == 3
 
 
 def test_queue_binding_scan_factor_matches_the_documented_window():
@@ -1558,6 +1819,9 @@ def _binding_gh(tmp_path):
 	runs = tmp_path / "runs.json"
 	artifacts = tmp_path / "artifacts.json"
 	zip_file = tmp_path / "binding.zip"
+	# The live target issue the pickup re-checks at dispatch time (issue #6057).
+	target = tmp_path / "target.json"
+	target.write_text(json.dumps(_target()))
 	runs.write_text(json.dumps({"workflow_runs": [_producer_run()]}))
 	artifacts.write_text(json.dumps({"artifacts": [{"id": 501, "name": route.QUEUE_BINDING_ARTIFACT, "expired": False, "size_in_bytes": 400, "workflow_run": {"id": 1}}]}))
 	_write_stub(
@@ -1573,12 +1837,15 @@ case "$2" in
   *"/compare/"*"...refs/heads/main?per_page=1") echo ahead ;;
   *"/zip") cat "{zip_file}" ;;
   "repos/shubhodeep1/coding-workflows") echo main ;;
+  "repos/shubhodeep1/digital_pa/issues/"*)
+    [ -z "${{GH_STUB_FAIL_TARGET_READ:-}}" ] || {{ echo "HTTP 403" >&2; exit 1; }}
+    cat "{target}" ;;
   *) echo "HTTP 404" >&2; exit 1 ;;
 esac
 """,
 	)
 	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "PYTHONDONTWRITEBYTECODE": "1"}
-	return {"env": env, "log": log, "queue": queue, "zip": zip_file}
+	return {"env": env, "log": log, "queue": queue, "zip": zip_file, "target": target}
 
 
 def test_bound_items_are_pending_and_edited_items_are_refused():
