@@ -934,7 +934,8 @@ enforces, checking `<N>` against the `pr` of the evidence the fingerprint
 was computed from, so the intervention cap of one PR counts only its own
 grants),
 never skips or waives a security or validation pass, never merges, and
-sends a `PushNotification` only for `close`. A `budget` for
+sends a `PushNotification` only for `close` or when it ends blocked
+without a choice (an unreadable blocker thread or a ledger error). A `budget` for
 `fix-check-defective` is a fix round: a
 `claude/implement-plan-<slug>-conformance-fix-budget-<n>` PR for the
 findings the check left open, followed by a fix check of that PR. Human-only stops (Q8: ask-first operations, no

@@ -2452,8 +2452,10 @@ repo that receives this file via the `@stable` sync.
   question, a question with no option that satisfies §28.B, whether to run
   the chain at all) also stay with a human.
 - **Notifications.** A blocked stage sends no `PushNotification` for an
-  escalation stop. The judge sends exactly one, and only for `close`;
-  `budget` and `descope` are recorded but not pushed.
+  escalation stop. The judge sends exactly one for `close`, and exactly
+  one when it ends at `Status: BLOCKED` without a choice (it could not read
+  the blocker's thread, or the ledger refused), because no checker wait is
+  left to retry it; `budget` and `descope` are recorded but not pushed.
 
 ---
 

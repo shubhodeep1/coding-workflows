@@ -63,7 +63,7 @@ def test_judge_invariants(judge):
 	assert "Pick a choice `escalation_ledger.py allowed` did not return" in never
 	assert "Act on a human-only stop (Q8)" in never
 	assert "Start a session yourself" in never
-	assert "Send a `PushNotification` for `budget` or `descope`: only `close` notifies" in never
+	assert "Send a `PushNotification` for `budget` or `descope`: only `close` and an end at `Status: BLOCKED` without a choice (steps 1 and 3) notify the operator" in never
 
 
 def test_judge_menu_and_ledger_calls(judge):
@@ -83,7 +83,7 @@ def test_judge_menu_and_ledger_calls(judge):
 
 def test_judge_fingerprint_names_the_pr(judge):
 	assert "and `pr`, the number of the PR the stop is about" in judge
-	assert "always give `pr` for `intervention-cap` (the blocked PR) and `fix-check-defective` (the fix PR: the third conformance run's fix PR, also when the check that failed was on a `budget` round's fix PR" in judge
+	assert "always give `pr` for `intervention-cap` (the blocked PR) and `fix-check-defective` (the fix PR: the third conformance run's fix PR, also when the check that failed was on a `budget` round's fix PR or a `descope` round's revert PR, so the same findings stay the same failure)" in judge
 	assert "Two PRs that fail the same way are two failures." in judge
 	# `close` stays available, so the invariant is about `budget` and `descope` only.
 	assert "never pick `budget` or `descope` twice for the same failure (`close` stays available)" in judge
@@ -161,7 +161,29 @@ def test_judge_close_skips_finished_items_and_keeps_going(judge):
 def test_judge_stops_when_the_thread_cannot_be_read(judge):
 	step1 = judge[judge.index("1. **Read the evidence.**"):judge.index("2. **Compute the fingerprint.**")]
 	assert "If reading the blocker comment or the thread's comments fails, retry once; if it fails again, choose nothing" in step1
-	assert "leave `Status: BLOCKED` for a human, and end the turn" in step1
+	assert "leave `Status: BLOCKED` for a human, send **one** `PushNotification`" in step1
+	assert "and end the turn: no checker wait is left to retry it" in step1
+
+
+def test_judge_notifies_when_it_ends_blocked_without_a_choice(judge):
+	# The checker consumed the escalation wait to start the judge and step 0
+	# deleted the safety net, so an abort with no notification would stall the
+	# project silently. Both abort paths notify exactly once.
+	step1 = judge[judge.index("1. **Read the evidence.**"):judge.index("2. **Compute the fingerprint.**")]
+	assert "`<slug>: escalation judge blocked without a choice — <stop id>: blocker thread unreadable`" in step1
+	assert step1.count("`PushNotification`") == 1
+	step3 = judge[judge.index("3. **Get the allowed choices.**"):judge.index("4. **Choose**")]
+	assert "leave `Status: BLOCKED` for a human, send **one** `PushNotification` (`<slug>: escalation judge blocked without a choice — <stop id>: ledger error`), and end the turn" in step3
+	assert step3.count("`PushNotification`") == 1
+
+
+def test_judge_close_report_says_to_reopen_the_issue_first(judge):
+	# `/reclarify` on a closed issue is skipped (clarify.yml) and rejected
+	# (claude_issue_route.py `issue_closed`), so the recovery starts with a reopen.
+	close = judge[judge.index("**`close`** → close the project yourself"):judge.index("9. **Report**")]
+	assert "in issue mode, reopen the source issue first, and the PRs to resume, then post a trusted comment and `/reclarify` on it, because `/reclarify` skips a closed issue" in close
+	assert "the same failure keeps its used choices, so only a changed failure, with a new fingerprint, gets `budget` or `descope` again" in close
+	assert "a trusted comment and `/reclarify` start a new failure fingerprint" not in close
 
 
 def test_judge_label_removal_is_issue_mode_only(judge):
@@ -273,6 +295,26 @@ def test_fix_check_descope_checks_the_descope_pr(plan):
 	assert "and after a `descope` it is the descope PR" in step8
 
 
+def test_stage_adds_uncommitted_escalations_before_reading_the_ledger(plan):
+	# The judge never commits: with no PR in flight its ES-<n> entry travels
+	# only in the `— resume.` block. `grants` and `allowed` read only the log
+	# file, so the next stage must add those lines first or a granted round
+	# counts zero.
+	section = plan[plan.index("## Escalations"):plan.index("## Progress Log")]
+	assert "Before a capped stage takes its escalation stop, it adds its `— resume.` block's `Uncommitted escalations:` entries to its working log (below), writes the failure evidence" in section
+	rule = "A stage whose `— resume.` block carries `Uncommitted escalations:` adds each of those entries to its working copy of the log's `## Escalations` section with the Edit tool (skipping an `ES-<n>` the log already lists) before any `escalation_ledger.py grants` or `allowed` call, as judge step 1 does"
+	assert rule in section
+	assert "both read only the log file, so a `budget` or `descope` the judge recorded with no PR in flight would otherwise count as unused" in section
+	assert "The entries then ride that stage's next PR, or its own `Uncommitted escalations:` line when it opens none." in section
+	# The import comes before the ledger read it protects.
+	assert section.index("adds its `— resume.` block's `Uncommitted escalations:` entries") < section.index("escalation_ledger.py grants --log")
+
+
+def test_escalation_stop_notification_rule_matches_the_judge(plan):
+	section = plan[plan.index("## Escalations"):plan.index("## Progress Log")]
+	assert "Send no `PushNotification`: the judge notifies only when it closes the project or ends blocked without a choice (CLAUDE.md §28.G)." in section
+
+
 def test_every_cap_defers_to_the_escalations_counting_rule(plan):
 	# Each cap names the judge's granted rounds and links to the one place
 	# ("Escalations") that says they are counted per stop id.
@@ -354,7 +396,9 @@ def test_claude_md_section_28g():
 	assert "never merges past a failing required check" in section
 	assert "The operator approved these closes in advance (Q4: A)" in section
 	assert "**Human-only stops (Q8), never judged.**" in section
-	assert "The judge sends exactly one, and only for `close`" in section
+	assert "The judge sends exactly one for `close`, and exactly one when it ends at `Status: BLOCKED` without a choice" in section
+	assert "`budget` and `descope` are recorded but not pushed" in section
+	assert "The judge sends exactly one, and only for `close`" not in section
 	# §28.C points to §28.G without deleting the failure-escalation text.
 	c_section = claude.split("### C) Never auto-decided — still stop and ask", 1)[1].split("### D) Recording", 1)[0]
 	assert "the escalation judge answers them under the operator's standing decision (§28.G)" in c_section

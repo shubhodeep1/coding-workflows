@@ -8,9 +8,9 @@ Until now, each of these stops left the project at `Status: BLOCKED` until someo
 | Escalation stops handed to the judge | 10 (`intervention-cap`, `conformance-cap`, `fix-check-defective`, `security-run-failed`, `security-cap`, `security-followup-unmerged`, `validation-run-failed`, `validation-cap`, `validation-terminal`, `verify-activation-cap`) |
 | Time from stop to judge | one checker cycle, about 2 minutes |
 | Choices per failure fingerprint | each of `budget` and `descope` at most once; `close` always available; the fingerprint of `intervention-cap` and `fix-check-defective` includes the PR number, so each PR gets its own menu |
-| Notifications | one `PushNotification`, only for `close` |
+| Notifications | one `PushNotification` for `close`, and one when the judge ends blocked without a choice |
 
-What this means for operators: you are no longer asked to settle a failed security run, an exhausted validation loop, or a blocked PR past its cap. The judge never skips or waives a security or validation pass, never merges, and never merges past a failing required check. You hear from it only when it closes a project, and a trusted comment plus `/reclarify` reopens one. Ask-first operations (§22.B / §23.C / §24.D), a session without claude-code-remote tools, and a depth-limit refusal still stop for you.
+What this means for operators: you are no longer asked to settle a failed security run, an exhausted validation loop, or a blocked PR past its cap. The judge never skips or waives a security or validation pass, never merges, and never merges past a failing required check. You hear from it only when it closes a project or cannot decide. To reopen a closed issue-mode project, reopen the source issue (and the PRs to resume) first, then post a trusted comment and `/reclarify`: `/reclarify` skips a closed issue. Ask-first operations (§22.B / §23.C / §24.D), a session without claude-code-remote tools, and a depth-limit refusal still stop for you.
 
 ### For contributors
 
