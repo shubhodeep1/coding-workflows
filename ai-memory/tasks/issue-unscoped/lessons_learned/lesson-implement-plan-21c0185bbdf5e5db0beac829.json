@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T10:46:33Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A claude.ai session id has two forms, `session_<x>` and `cse_<x>` (a trigger's `persistent_session_id` can carry either); a script that joins sessions with triggers, or recognises its own session, must compare both in one form, as `scripts/claude_session_janitor.py` does.",
+  "phase": "implement_plan",
+  "pr_number": 6068,
+  "record_id": "lesson-implement-plan-21c0185bbdf5e5db0beac829",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}

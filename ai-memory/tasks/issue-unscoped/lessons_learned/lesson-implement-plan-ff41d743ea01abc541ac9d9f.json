@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T10:46:33Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "After a `[claude-twin-sync]` commit lands on a held PR, update the PR body's twin-first paragraph to say the sync landed: a body that still says the root copy waits for the sync leads reviewers to flag the sync commit itself as a twin-first violation.",
+  "phase": "implement_plan",
+  "pr_number": 6068,
+  "record_id": "lesson-implement-plan-ff41d743ea01abc541ac9d9f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:docs/implement-plan/issue-5660-resume-usage-limit-stops.md"
+  ]
+}
