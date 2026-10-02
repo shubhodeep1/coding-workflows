@@ -2417,15 +2417,18 @@ repo that receives this file via the `@stable` sync.
     not planned, with a report. The operator approved these closes in
     advance (Q4: A), so they are not a §23.C ask here. The judge never
     deletes a branch and never closes anything the chain did not open: it
-    closes a PR from the log only when its head is in this repository and
-    its head and base refs prove it is this project's (the final PR's head
+    closes a PR from the log only when its author is the account the chain
+    opens its PRs with (the `mcp__github__get_me` login), its head is in
+    this repository, and its head and base refs prove it is this project's
+    (the final PR's head
     is exactly `claude/implement-plan-<slug>` and it targets the default
     branch or the issue base; any other PR's head is exactly
     `claude/implement-plan-<slug>-<kind>` with a known branch kind, and it
     targets the project branch, or the default branch for an activation
     fix or a legacy-mode PR), so a
-    project whose slug starts with this one's is never matched, and it
-    lists any other PR in its report instead.
+    project whose slug starts with this one's is never matched, a PR
+    another account opened from a branch named like the chain's is never
+    closed, and it lists any other PR in its report instead.
 - **The fingerprint rule.** A failure is its stop id plus a fingerprint:
   the SHA-1 (first 12 hex characters) of the normalised failing check
   names, finding ids, follow-up issue numbers, validation class and

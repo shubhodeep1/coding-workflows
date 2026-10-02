@@ -205,15 +205,22 @@ def test_judge_close_checks_the_head_ref_before_closing(judge):
 	assert "`activation-fix-<k>` in project mode and, in legacy mode, one of the project-branch kinds or `activation-fix-<k>`" in close
 	assert "A plain prefix is not enough: another project's slug can start with this one's (`foo` and `foo-bar`)" in close
 	assert "any other PR can be opened against the project branch from a head named `claude/implement-plan-<slug>-<anything>`" in close
-	assert "A PR that fails this check is not closed: go on with the rest, and list its number, head ref, and base ref in the report so a human can decide." in close
+	assert "A PR that fails this check is not closed: go on with the rest, and list its number, author, head ref, and base ref in the report so a human can decide." in close
+	# Refs alone are not proof the chain opened a PR: anyone with push access
+	# can open one from a branch named like the chain's, so the author must be
+	# the account the chain opens its PRs with (review round 1 on e3c9cbf).
+	assert "Its author (`user.login`) must be the account this chain opens its PRs with: the login `mcp__github__get_me` returns, read once before the first close" in close
+	assert "If that read fails, close no PR and list them all in the report." in close
+	assert "a PR another account opened is listed, never closed, even when its refs fit" in close
+	assert close.index("Its author (`user.login`) must be") < close.index("Its head repository (`head.repo.full_name`) must be")
 	# The old prefix-only rule is gone.
 	assert "its head ref is exactly `claude/implement-plan-<slug>` or starts with `claude/implement-plan-<slug>-`, and its head repository" not in close
 	# The check reuses the state read, so it runs before any close call.
 	assert close.index("Read each one's state first") < close.index("Close a PR only when that same read shows it is this project's")
 	claude = _flat(CLAUDE_MD)
 	section = claude.split("### G) Escalation Judge", 1)[1].split("## FINAL REMINDER", 1)[0]
-	assert "it closes a PR from the log only when its head is in this repository and its head and base refs prove it is this project's" in section
-	assert "so a project whose slug starts with this one's is never matched, and it lists any other PR in its report instead" in section
+	assert "it closes a PR from the log only when its author is the account the chain opens its PRs with (the `mcp__github__get_me` login), its head is in this repository, and its head and base refs prove it is this project's" in section
+	assert "so a project whose slug starts with this one's is never matched, a PR another account opened from a branch named like the chain's is never closed, and it lists any other PR in its report instead" in section
 
 
 def test_judge_close_report_says_to_reopen_the_issue_first(judge):
