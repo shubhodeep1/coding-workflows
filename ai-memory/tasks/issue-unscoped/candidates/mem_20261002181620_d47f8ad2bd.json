@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: 962\u2013964 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `--no-<prefix>=<value>` matching uses `arg[3:]` rather than `name_part[3:]`, so the attached value prevents option-prefix matching and produces an inaccurate \u201cnot a git push option\u201d diagnostic.\n  WHY: The guard still blocks the push, but reports the wrong reason instead of identifying the negated option and its invalid value or ambiguity.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: lines 198 and 828-856 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash]\n  PROBLEM: `recurse-submodules` is treated as requiring a separate argument even though Git 2.43 treats its argument as optional, causing the guard to consume the remote name as the option value and potentially check the local branch instead of the pushed ref.\n  WHY: This can let a push to a merged PR branch bypass the merged-PR guard; the finding is rated BLOCKER for that bypass, while the related missing-argument rejection is rated MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Deliver the protected `.claude/hooks/pr_merge_status_guard.py` change through the `[claude-twin-sync]` commit; the plan specifies the canonical hook is updated via that sync.\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py`, `_push_refspec_targets`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_2]\n  EVIDENCE: The PR diff changes only `workflow-templates/.claude/hooks/pr_merge_status_guard.py`; the canonical hook still returns no target immediately on a delete option at lines 723\u2013724; `.claude/hooks/pr_merge_status_guard.py` is not in `pr_changed_files.txt` and has no diff hunk.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: 962-963 | severity=low | confidence=4\n  PROBLEM: The `--no-<prefix>=<value>` matching uses `arg[3:]` instead of `name_part[3:]`, so the attached value prevents option-prefix matching.\n  WHY: The push is still blocked, but operators see an inaccurate diagnostic instead of the more precise invalid-value message.\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: lines 198 and 828-856 | severity=critical | confidence=5\n  PROBLEM: `recurse-submodules` is declared as requiring a value, so the parser consumes the remote name as that value and may treat the pushed ref as the remote.\n  WHY: The guard can check the local branch rather than the target branch and silently allow a push to a merged PR branch.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: lines 198 and 829-832 | severity=high | confidence=5\n  PROBLEM: `recurse-submodules` is declared as requiring a value, so a valid `git push --recurse-submodules` command without an argument is rejected as unreadable.\n  WHY: Git accepts the option without an argument and defaults to checking submodules, but the guard blocks the command with exit code 2.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: lines 962-964 | severity=low | confidence=4\n  PROBLEM: The `--no-<prefix>=<value>` matching uses `arg[3:]` instead of `name_part[3:]`, so the attached value prevents option-prefix matching.\n  WHY: The command is still blocked, but the guard reports an inaccurate diagnostic instead of identifying the invalid value or ambiguity.\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: `_read_long_push_option`, lines 962\u2013964 | severity=low | confidence=4\n  PROBLEM: The `--no-<prefix>=<value>` path checks `arg[3:]` rather than `name_part[3:]`, so it reports the option as unrecognized instead of identifying the ambiguous prefix.\n  WHY: The guard still blocks the push, but gives the user an inaccurate reason for the rejection.\n- TASK_GAP\n  Requirement: Deliver the protected `.claude/hooks/pr_merge_status_guard.py` change through the `[claude-twin-sync]` commit; the plan specifies the canonical hook is updated via that sync.\n  Expected change site: `.claude/hooks/pr_merge_status_guard.py`, `_push_refspec_targets`\n  Evidence of absence: The PR diff changes only `workflow-templates/.claude/hooks/pr_merge_status_guard.py`. The canonical hook still returns no target immediately on a delete option at lines 723\u2013724, so `git push --delete --no-delete origin HEAD:claude/stale` still bypasses its merged-PR check. The progress log says the twin sync is pending, and the template-parity test remains failing until it lands.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: `_read_long_push_option`, around the `word_negates = True` branch where `arg[3:]` is used | severity=low | confidence=4\n  PROBLEM: The `--no-<prefix>=<value>` path uses `arg[3:]` instead of `name_part[3:]`, so the attached value prevents candidate lookup.\n  WHY: The push remains blocked, but the guard reports \u201cnot a `git push` option\u201d instead of the diagnostic for an ambiguous prefix.\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py: `_read_long_push_option`, the `no-` prefix matching branch (~line 960-963) | severity=low | confidence=4\n  PROBLEM: The `--no-<prefix>=<value>` path uses `arg[3:]` instead of `name_part[3:]`, so the attached value prevents candidate lookup.\n  WHY: The push is still blocked, but the diagnostic differs from Git's error for an invalid value on a recognized negated option.\n- TASK_GAP\n  Requirement: The plan and PR description state the canonical `.claude/hooks/pr_merge_status_guard.py` is updated via a `[claude-twin-sync]` commit after the twin lands.\n  Expected change site: `.claude/hooks/pr_merge_status_guard.py`, `_push_refspec_targets`.\n  Evidence of absence: The canonical `.claude/hooks/pr_merge_status_guard.py` is not in `pr_changed_files.txt` and has no diff hunk. The progress log explicitly records \"BLOCKED until the `[claude-twin-sync]` commit for the phase 1 PR lands\" and \"Hold claim and twin-sync blocker posted on #6088.\" This is the documented twin-first workflow per CLAUDE.md \u00a728.C (interim default until #4785), not an omission. The `test_template_copies_are_identical` failure is expected and recorded. The canonical hook remains vulnerable to the exploit until the twin sync lands, but this is the intended gated state \u2014 the PR is a draft and explicitly blocked.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6162ed18f65a0e8bddbe2eea5ae881951191cfe1a18e07be17095cc0091045e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6114,
+    "run_id": "37039886967",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37039886967",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002181620_d47f8ad2bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6114,
+    "run_id": "37039886967"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T18:16:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
