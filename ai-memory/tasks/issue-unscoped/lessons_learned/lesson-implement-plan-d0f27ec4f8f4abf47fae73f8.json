@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In Claude-fixer mode the push that makes the fifth consecutive `[claude-autofix]` commit is never reviewed: the next `review_autofix.yml` run skips the reviewers (`max_iterations_reached`) and labels the PR `ai:review-blocked`. Read the run summary before treating that block as unresolved findings; with none open, a `[claude-intervention]` commit resets the count.",
+  "phase": "implement_plan",
+  "pr_number": 5825,
+  "record_id": "lesson-implement-plan-d0f27ec4f8f4abf47fae73f8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5776-ignore-comment-url-issue-links",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

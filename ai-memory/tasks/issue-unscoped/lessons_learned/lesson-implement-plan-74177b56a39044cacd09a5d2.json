@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A rule that treats text ending in `/` before a path as an enclosing URL must exempt a lone `/` with no host or path segment before it: that is a root-relative path (`/owner/repo/issues/42`, `[t](/owner/repo/issues/42)`), which GitHub resolves on its own host. Test the root-relative shape whenever a URL-boundary rule changes.",
+  "phase": "implement_plan",
+  "pr_number": 5825,
+  "record_id": "lesson-implement-plan-74177b56a39044cacd09a5d2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5776-ignore-comment-url-issue-links",
+    "file:scripts/gh_helpers.sh"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A test module that CI runs as a script (`python3 tests/<module>.py`) calls its tests from a hand-written `__main__` list: every new `test_*` function must be added there too, or the CI step silently skips it while pytest still passes.",
+  "phase": "implement_plan",
+  "pr_number": 5825,
+  "record_id": "lesson-implement-plan-b64fc1c916dd46f3ad907a69",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5776-ignore-comment-url-issue-links",
+    "file:tests/test_issue_pr_status_comment_url_links.py",
+    "file:.github/workflows/ci.yml"
+  ]
+}

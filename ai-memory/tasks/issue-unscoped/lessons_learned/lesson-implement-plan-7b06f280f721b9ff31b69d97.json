@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Deciding where a URL ends with sed/grep splits keeps failing on new shapes (fragments after queries, parentheses, adjacent links, paths embedded in a query); scan the text once, take each URL whole the way GitHub renders it (to whitespace, `<`, `>`, or a Markdown destination's unmatched `)`), and judge the whole URL.",
+  "phase": "implement_plan",
+  "pr_number": 5825,
+  "record_id": "lesson-implement-plan-7b06f280f721b9ff31b69d97",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5776-ignore-comment-url-issue-links",
+    "file:scripts/gh_helpers.sh"
+  ]
+}

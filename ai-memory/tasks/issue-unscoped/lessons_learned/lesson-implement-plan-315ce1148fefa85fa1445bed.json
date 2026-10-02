@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When deciding whether a substring is \"inside another URL\", do not recognise only your own host: look at everything before it in the same whitespace-free run (after a Markdown `](`), and treat `://`, `?`, `#`, or a trailing `/` there as an enclosing URL. In a Markdown link destination, honour backslash escapes before counting parentheses.",
+  "phase": "implement_plan",
+  "pr_number": 5825,
+  "record_id": "lesson-implement-plan-315ce1148fefa85fa1445bed",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5776-ignore-comment-url-issue-links",
+    "file:scripts/gh_helpers.sh"
+  ]
+}

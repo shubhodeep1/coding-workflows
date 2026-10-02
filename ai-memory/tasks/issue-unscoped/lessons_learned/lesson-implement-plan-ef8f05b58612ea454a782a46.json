@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A pattern that recognises a host by its name (`github.com/`) must require a hostname boundary before it, or `evilgithub.com` and `gist.github.com` pass as the same host; a lookbehind such as `(?<![\\w.-])` does it, and Python's `re` applies lookbehind to the characters before a `pos` argument too.",
+  "phase": "implement_plan",
+  "pr_number": 5825,
+  "record_id": "lesson-implement-plan-ef8f05b58612ea454a782a46",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5776-ignore-comment-url-issue-links",
+    "file:scripts/gh_helpers.sh"
+  ]
+}

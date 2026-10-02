@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a changelog or plan cites how many places call a shell helper, count invocation lines only; `type <helper> >/dev/null` availability guards sit beside each call and are not call sites.",
+  "phase": "implement_plan",
+  "pr_number": 5825,
+  "record_id": "lesson-implement-plan-ca9ebbce97c6b5b75fdaafc1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5776-ignore-comment-url-issue-links",
+    "file:changelog.d/5776-ignore-comment-url-issue-links.md",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

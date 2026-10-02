@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:14:32Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A matcher that must reject URLs with a `#` fragment has to look past the path and query, not just the character after the id: GitHub notification links put `?notification_referrer_id=\u2026` before `#issuecomment-\u2026`. Match the whole URL tail, then drop matches that end in `#`, and read the id from its own position rather than the last number.",
+  "phase": "implement_plan",
+  "pr_number": 5825,
+  "record_id": "lesson-implement-plan-730cb53b89bb022b69b65ad3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5776-ignore-comment-url-issue-links",
+    "file:scripts/gh_helpers.sh"
+  ]
+}
