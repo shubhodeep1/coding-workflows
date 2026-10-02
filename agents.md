@@ -1273,7 +1273,9 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   coding-workflows workflow may name `CLAUDE_POOL_TOKEN`
   (`tests/test_claude_pool.py` enforces it).
 - **Selection.** One Haiku probe per account (`probe_model`, `Reply OK`, empty
-  directory, `--strict-mcp-config`); `probe-parse` reads the last
+  directory, `--strict-mcp-config`, only that account's token in the
+  environment, 60-second cap; no probe starts 6 minutes after the first, and
+  the rest record `probe_failed`); `probe-parse` reads the last
   `rate_limit_event` (`unifiedWindows.five_hour` / `seven_day` utilization
   0..1 and `resetsAt`). `choose` picks the lowest `max(five_hour, seven_day)`
   strictly below `gate_utilization`, ties alphabetical; an account with a
@@ -1294,9 +1296,14 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   `CLAUDE_FIXER_VERDICT_BOT_LOGIN` from the config; git identity
   `Claude <noreply@anthropic.com>`. The CLI runs under `timeout`
   (`timeout_minutes` per type, at most 350; the job limit adds 10, capped at
-  360). Exit 124/137 is a timeout. Before upload, `redact` replaces the token,
-  the raw token, `GH_PAT`, and the base64 `x-access-token:` form of each with
-  `***` in every output file.
+  360). Exit 124/137 is a timeout. Before upload, `redact`, run from a fresh
+  checkout of the select job's `pool_sha` (the worker can write `pool/`),
+  replaces the token, the raw token, `GH_PAT`, the base64 `x-access-token:`
+  form of each, and each one's base64 text at every byte offset (standard and
+  URL-safe) with `***` in every output file. It exits 1 when a file cannot be
+  read or written (`redact_failed`), and the transcript is uploaded only when
+  it succeeded. Bash is not denied on `.claude/**`; spike S13 saw a shell
+  redirect there denied, but other shell writes rely on the twin-first rule.
 - **Result (`claude-pool-result` artifact, `claude-pool-result.json`).** Keys:
   `queue_issue`, `attempt`, `item_type`, `account`, `outcome`
   (`success | auth_failed | usage_limit | all_gated | no_accounts | crashed |
@@ -1320,7 +1327,7 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   `x.y.z`), `handoff_author_login`, `verdict_bot_login` (GitHub logins or
   empty), `retire_pickup` (`false`).
 - Log prefix `CLAUDE_POOL` (`config`, `accounts`, `probe`, `choose`,
-  `prompt`, `work`, `smoke`, `redact`, `result`, `failed`, and the `*_failed`
+  `prompt`, `work`, `smoke`, `redact`, `probe_skipped`, `result`, `failed`, and the `*_failed`
   errors). Tests: `tests/test_claude_pool.py`, its own `ci.yml` step.
 
 ## Repo-specific batching helpers

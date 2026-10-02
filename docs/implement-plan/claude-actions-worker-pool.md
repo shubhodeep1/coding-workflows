@@ -4,17 +4,17 @@
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-claude-actions-worker-pool   Final PR: #6097 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/5
+- Stage: phase 1/5 — review round
 - Activation: not started
 - Waiting on: PR #6100
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net trig_011TjNGQevQtaMrp3G5f8GKd   hand-back trig_01MjziQQX88Drm9LvczHVcPd
+- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 1 stage (session_01BeTJV9bvuxq1nnSoRqqRAo), ids in its report
 - Last updated: 2026-10-02
-- Last note: phase 1 PR #6100 opened (session_01Gpi41BKskELLT7oHKT8xaN); runner-repo wrapper PR shubhodeep1/claude-workers#1 opened (merge = activation gate 2); live smoke run 37015227644 green
+- Last note: review round 1 on PR #6100 (session_01BeTJV9bvuxq1nnSoRqqRAo): 11 findings fixed (probe secret isolation, fresh redaction helper, upload gated on redaction, base64 redaction, probe time budget, inventory, docs), 3 rejected with reasons on the PR
 
 ## Phases
-1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 0; interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
-   - `scripts/claude_pool.py` [new]: `accounts`, `normalize`, `probe-parse`, `choose`, `prompt`, `classify`, `run-name`
+1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 1; interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
+   - `scripts/claude_pool.py` [new]: `accounts`, `normalize`, `probe-parse`, `choose`, `prompt`, `classify`, `run-name`; also `config` (the workflow reads the pool config through it) and `redact` (AD-4)
    - `.github/workflows/claude-pool-worker.yml` [new]: `workflow_call`, jobs `select` / `work` / `report`
    - `.github/ai/claude_pool.json` [new]: `dispatch_types: []` (pool off)
    - `shubhodeep1/claude-workers` `.github/workflows/claude-pool-worker.yml` [new]: wrapper PR with the `push`-to-`claude/**` smoke job
@@ -68,6 +68,8 @@
 - AD-9 [phase 1/5, 2026-10-02] Is an error result without a usage reading, or no result with a `rejected` reading, a usage limit? — Picked: A — `usage_limit` when the last `rate_limit_info` is `rejected` or at ≥ 1.0, or the result text names a usage limit, whether or not a result event exists. Alternatives: B — only `is_error` results, as the plan's interim rule words it. Why: excluding a rejected account on re-dispatch is the safer failover (Q7: no real rejection seen yet). Applied in: PR #6100. Status: pending review
 
 ## Lessons
+- [source:intervention] `ci.yml` does not run on PRs into a `claude/implement-plan-*` project branch, so a new workflow or script missing from `docs/INVENTORY.md` only fails at the final PR; run `tests/inventory_parity.py` locally before opening a phase PR that adds files. (files: docs/INVENTORY.md, tests/inventory_parity.py)
+- [source:intervention] A step that runs after an auto-mode Claude job must not execute code from a checkout that job could write; check the helper out again at a SHA recorded before the job ran, and gate any artifact upload on that step's success. (files: .github/workflows/claude-pool-worker.yml)
 - [source:plan-deviation] A new `.github/workflows/*.yml` file changes the auto-generated repo tree in agents.md; run `make generate` in the same PR, or the CI `make generate-check` drift step fails. (files: agents.md, tools/repo_tree/update_repo_tree.py)
 
 ## Notes

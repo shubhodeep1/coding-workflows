@@ -1541,16 +1541,20 @@ name; the dispatcher finds a queue item's runs by it):
    Each probe reports the account's 5-hour and 7-day utilization. The run
    uses the account with the lowest `max(5-hour, 7-day)` below
    `gate_utilization` (default 0.90); ties go to the alphabetically first
-   name. An account whose probe fails is skipped.
+   name. An account whose probe fails is skipped. Each probe gets only its
+   own token, is capped at 60 seconds, and no probe starts after 6 minutes.
 2. `work`: checks out the target repository with `GH_PAT`, trusts the
-   checkout so its allow list and hooks apply, denies every write to the
-   checkout's own `.claude/**` (`workflow-templates/.claude/**` stays
-   writable), and runs the item's slash command (`/implement-issue-claude`,
-   `/fix-claude-pr`, or `/implement-plan-claude … — resume.`) on
+   checkout so its allow list and hooks apply, denies the Edit, Write and
+   NotebookEdit tools on the checkout's own `.claude/**`
+   (`workflow-templates/.claude/**` stays writable; Bash is not denied, so
+   the commands' twin-first rule covers shell writes), and runs the item's
+   slash command (`/implement-issue-claude` or `/fix-claude-pr`) on
    `claude-opus-5-5` at `--effort high` in `auto` permission mode, with the
-   GitHub MCP server named `github`. The transcript, with every token value
-   replaced by `***`, is uploaded as the `claude-pool-transcript` artifact
-   (kept 14 days).
+   GitHub MCP server named `github`. Stage items
+   (`/implement-plan-claude … — resume.`) are refused until phase 3 of the
+   plan adds their payload parser. The transcript, with every token value
+   (plain and base64) replaced by `***` by a freshly checked-out helper, is
+   uploaded as the `claude-pool-transcript` artifact (kept 14 days).
 3. `report`: writes `claude-pool-result.json` (artifact `claude-pool-result`)
    with the outcome: `success`, `auth_failed`, `usage_limit`, `all_gated`,
    `no_accounts`, `crashed`, or `timeout`. The run fails for every outcome
@@ -1588,8 +1592,9 @@ gate ends the run as `all_gated` (with the earliest reset time in the
 result); no `CLAUDE_POOL_TOKEN_*` secret at all ends it as `no_accounts`. A
 worker job that runs out of time (`timeout_minutes`: 350 for issues and
 stages, 120 for PR fixes) ends as `timeout`; one that ends without a result
-ends as `crashed`. Work the job did not push is lost; the next attempt starts
-again from GitHub.
+ends as `crashed`. A transcript that could not be redacted is not uploaded,
+and the run ends as `crashed`. Work the job did not push is lost; the next
+attempt starts again from GitHub.
 
 Stable log prefix: `CLAUDE_POOL`.
 

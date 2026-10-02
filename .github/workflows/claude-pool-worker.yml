@@ -73,6 +73,7 @@ jobs:
       retention_days: ${{ steps.config.outputs.retention_days }}
       handoff_author_login: ${{ steps.config.outputs.handoff_author_login }}
       verdict_bot_login: ${{ steps.config.outputs.verdict_bot_login }}
+      pool_sha: ${{ steps.config.outputs.pool_sha }}
     steps:
       - name: Check out the pool scripts (coding-workflows)
         uses: actions/checkout@v5
@@ -109,6 +110,7 @@ jobs:
             echo "gate=$(jq -r .gate_utilization "$cfg")"
             echo "handoff_author_login=$(jq -r .handoff_author_login "$cfg")"
             echo "verdict_bot_login=$(jq -r .verdict_bot_login "$cfg")"
+            echo "pool_sha=$(git -C pool rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
           echo "CLAUDE_POOL config item_type=$ITEM_TYPE model=$run_model effort=$run_effort"
 
@@ -128,7 +130,7 @@ jobs:
         env:
           # Secret names and values for this step only. Only the names reach
           # claude_pool.py; each value is normalised, masked, and handed to
-          # one probe run.
+          # one probe run, which runs with ALL_SECRETS_JSON unset.
           ALL_SECRETS_JSON: ${{ toJSON(secrets) }}
           EXCLUDE_ACCOUNTS: ${{ inputs.exclude_accounts }}
           PROBE_MODEL: ${{ steps.config.outputs.probe_model }}
@@ -137,12 +139,22 @@ jobs:
           set -uo pipefail
           probes="$RUNNER_TEMP/pool-probes.jsonl"
           : > "$probes"
+          # A probe takes about a second (spike S8). Cap each at 60 s and stop
+          # starting probes after 6 minutes, so any number of accounts fits
+          # the job's 10-minute timeout; an unprobed account counts as failed.
+          probe_timeout=60
+          deadline=$((SECONDS + 360))
           if ! names=$(printf '%s' "$ALL_SECRETS_JSON" | jq -c 'keys' | python3 pool/scripts/claude_pool.py accounts --exclude "$EXCLUDE_ACCOUNTS" --lines); then
             echo "CLAUDE_POOL accounts_failed"
             exit 1
           fi
           echo "CLAUDE_POOL accounts names=$(tr '\n' ' ' <<< "$names") excluded=${EXCLUDE_ACCOUNTS:-none}"
           for name in $names; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "CLAUDE_POOL probe_skipped account=$name reason=select_deadline"
+              jq -cn --arg a "$name" '{account: $a, five_hour: null, seven_day: null, five_hour_resets_at: null, seven_day_resets_at: null, resets_at: null, status: null, error: "probe_failed"}' >> "$probes"
+              continue
+            fi
             token=$(printf '%s' "$ALL_SECRETS_JSON" | jq -r --arg k "CLAUDE_POOL_TOKEN_$name" '.[$k] // ""' | python3 pool/scripts/claude_pool.py normalize) || token=""
             if [ -z "$token" ]; then
               jq -cn --arg a "$name" '{account: $a, five_hour: null, seven_day: null, five_hour_resets_at: null, seven_day_resets_at: null, resets_at: null, status: null, error: "probe_failed"}' >> "$probes"
@@ -150,7 +162,7 @@ jobs:
             fi
             echo "::add-mask::$token"
             dir=$(mktemp -d)
-            (cd "$dir" && CLAUDE_CODE_OAUTH_TOKEN="$token" timeout 180 claude -p "Reply OK" --model "$PROBE_MODEL" \
+            (cd "$dir" && env -u ALL_SECRETS_JSON CLAUDE_CODE_OAUTH_TOKEN="$token" timeout "$probe_timeout" claude -p "Reply OK" --model "$PROBE_MODEL" \
               --strict-mcp-config --output-format stream-json --verbose > probe.jsonl 2> probe.err)
             code=$?
             token=""
@@ -240,9 +252,12 @@ jobs:
           f="$HOME/.claude.json"
           [ -f "$f" ] || echo '{}' > "$f"
           jq --arg p "$ws" '.projects[$p].hasTrustDialogAccepted = true' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-          # Twin-first (CLAUDE.md §28.C, plan Q11): deny every tool, shell
-          # redirects included, on the checkout's own .claude/**; anchored to
-          # the checkout root so workflow-templates/.claude/** stays writable (spike S13).
+          # Twin-first (CLAUDE.md §28.C, plan Q11): deny the Edit, Write and
+          # NotebookEdit tools on the checkout's own .claude/**, anchored to the
+          # checkout root so workflow-templates/.claude/** stays writable (spike
+          # S13, which also saw a shell redirect into .claude/ denied). Bash is
+          # not denied, so a program that writes files itself (cp, python) is
+          # not caught here; for those the commands' twin-first rule applies.
           jq -n --arg r "/$ws/.claude/**" \
             '{permissions: {deny: [("Edit(" + $r + ")"), ("Write(" + $r + ")"), ("NotebookEdit(" + $r + ")")]}}' \
             > "$RUNNER_TEMP/pool-deny.json"
@@ -328,20 +343,38 @@ jobs:
           fi
           exit "$fail"
 
+      # The auto-mode worker can write anywhere in the workspace, pool/
+      # included, so the redaction helper comes from a fresh checkout of the
+      # commit the select job read. A worker that uses the runner's sudo could
+      # still tamper with the VM itself; the transcript artifact stays private
+      # to the runner repo with short retention either way.
+      - name: Check out the redaction helper again
+        if: always()
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ needs.select.outputs.pool_sha }}
+          path: pool-redact
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Redact secrets from the transcript
+        id: redact
         if: always()
         env:
           CLAUDE_POOL_RAW_TOKEN: ${{ secrets[format('CLAUDE_POOL_TOKEN_{0}', needs.select.outputs.account)] }}
           CLAUDE_POOL_GH_PAT: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          set -uo pipefail
+          set -euo pipefail
           shopt -s nullglob
-          python3 pool/scripts/claude_pool.py redact --env-var CLAUDE_CODE_OAUTH_TOKEN --env-var CLAUDE_POOL_RAW_TOKEN \
+          python3 pool-redact/scripts/claude_pool.py redact --env-var CLAUDE_CODE_OAUTH_TOKEN --env-var CLAUDE_POOL_RAW_TOKEN \
             --env-var CLAUDE_POOL_GH_PAT "$RUNNER_TEMP"/pool-out/*
 
+      # Only a redacted transcript is uploaded; without it the report job
+      # classifies the run as crashed (no_transcript).
       - name: Upload the transcript
-        if: always()
+        if: always() && steps.redact.outcome == 'success'
         uses: actions/upload-artifact@v6
         with:
           name: claude-pool-transcript

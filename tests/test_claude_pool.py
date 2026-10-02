@@ -577,6 +577,32 @@ def test_redact_cli_rewrites_files_from_env(tmp_path, monkeypatch, capsys):
 	assert secret not in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("prefix", ["", "x", "xy", "Authorization: Bearer "])
+@pytest.mark.parametrize("encode", [base64.b64encode, base64.urlsafe_b64encode])
+def test_redact_catches_base64_at_every_offset(prefix, encode):
+	# A worker can print base64(secret), or base64 of a longer text holding it.
+	token = "sk-ant-oat01-" + "Ab0_-" * 19
+	encoded = encode(f"{prefix}{token} trailing".encode()).decode()
+	redacted, count = pool.redact_text(f"output: {encoded}\n", [token])
+	assert count >= 1
+	assert "***" in redacted
+	plain = encode(token.encode()).decode().rstrip("=")
+	assert plain[:-1] not in redacted
+
+
+def test_redact_base64_forms_leave_ordinary_text_alone():
+	text = "The run finished; see the log for details. " + base64.b64encode(b"unrelated payload").decode()
+	assert pool.redact_text(text, ["secret-value-1234567890"]) == (text, 0)
+
+
+def test_redact_cli_fails_closed_on_a_file_it_cannot_read(tmp_path, monkeypatch, capsys):
+	monkeypatch.setenv("POOL_TEST_SECRET", "secret-value-1234567890")
+	folder = tmp_path / "not-a-file"
+	folder.mkdir()
+	assert pool.main(["redact", "--env-var", "POOL_TEST_SECRET", str(folder)]) == 1
+	assert "redact_failed" in capsys.readouterr().err
+
+
 # --- workflow wiring -------------------------------------------------------
 
 
@@ -619,6 +645,41 @@ def test_worker_workflow_never_echoes_a_secret():
 	for name in ("CLAUDE_POOL_RAW_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ALL_SECRETS_JSON", "CLAUDE_POOL_GH_PAT", "GH_TOKEN"):
 		assert not re.search(rf"echo [^|\n]*\${name}\b", text.replace("::add-mask::$token", "")), name
 	assert text.count("::add-mask::$token") == 2
+
+
+def test_probes_get_only_their_own_token_and_fit_the_select_timeout():
+	data = _workflow()
+	select = data["jobs"]["select"]
+	probe = next(step for step in select["steps"] if step.get("name") == "Probe every pool account")
+	assert "env -u ALL_SECRETS_JSON CLAUDE_CODE_OAUTH_TOKEN=" in probe["run"]
+	assert 'timeout "$probe_timeout" claude' in probe["run"]
+	timeout = int(re.search(r"probe_timeout=(\d+)", probe["run"]).group(1))
+	budget = int(re.search(r"deadline=\$\(\(SECONDS \+ (\d+)\)\)", probe["run"]).group(1))
+	# The last probe starts before the deadline and ends within its cap, with
+	# room left for checkout, CLI install and choose.
+	assert budget + timeout <= (select["timeout-minutes"] - 2) * 60
+	assert "reason=select_deadline" in probe["run"]
+
+
+def test_redaction_runs_from_a_fresh_checkout_and_gates_the_upload():
+	data = _workflow()
+	steps = data["jobs"]["work"]["steps"]
+	names = [step.get("name") for step in steps]
+	run_claude = names.index("Run Claude")
+	fresh = names.index("Check out the redaction helper again")
+	redact = names.index("Redact secrets from the transcript")
+	upload = names.index("Upload the transcript")
+	assert run_claude < fresh < redact < upload
+	checkout = steps[fresh]
+	assert checkout["if"] == "always()"
+	assert checkout["with"]["ref"] == "${{ needs.select.outputs.pool_sha }}"
+	assert checkout["with"]["path"] == "pool-redact"
+	assert checkout["with"]["persist-credentials"] is False
+	assert steps[redact]["id"] == "redact"
+	assert "set -euo pipefail" in steps[redact]["run"]
+	assert "python3 pool-redact/scripts/claude_pool.py redact" in steps[redact]["run"]
+	assert steps[upload]["if"] == "always() && steps.redact.outcome == 'success'"
+	assert data["jobs"]["select"]["outputs"]["pool_sha"] == "${{ steps.config.outputs.pool_sha }}"
 
 
 def test_only_the_worker_workflow_names_pool_tokens():

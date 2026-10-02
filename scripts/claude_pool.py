@@ -686,12 +686,37 @@ REDACTION = "***"
 REDACT_MIN_LENGTH = 8
 
 
+def _base64_forms(value: str) -> set[str]:
+	"""The base64 text that encodes ``value`` wherever it sits in a stream.
+
+	Base64 encodes 3 bytes as 4 characters, so the same secret encodes
+	differently at each byte offset in a larger input. For each offset 0–2,
+	in the standard and URL-safe alphabets, this returns the characters that
+	depend on the secret's bytes alone; any encoding containing the secret
+	contains one of them. A plain ``base64(secret)`` is offset 0.
+	"""
+	raw = value.encode("utf-8")
+	forms: set[str] = set()
+	for offset in range(3):
+		data = b"\0" * offset + raw
+		first = math.ceil(offset * 8 / 6)
+		end = (len(data) * 8) // 6
+		for encode in (base64.b64encode, base64.urlsafe_b64encode):
+			encoded = encode(data).decode("ascii").rstrip("=")
+			form = encoded[first:end]
+			if len(form) >= REDACT_MIN_LENGTH:
+				forms.add(form)
+	return forms
+
+
 def redact_text(text: str, secrets: list[str]) -> tuple[str, int]:
 	"""Replace every occurrence of each secret; return the text and the count.
 
-	Each secret is also matched without whitespace, and in the base64
-	``x-access-token:<secret>`` form ``actions/checkout`` writes into the
-	checkout's ``.git/config`` (a worker could print that file).
+	Each secret is also matched without whitespace, in base64 at every byte
+	offset (standard and URL-safe alphabets, so ``base64(secret)`` printed by
+	a worker or embedded in a longer encoded string is caught), and in the
+	base64 ``x-access-token:<secret>`` form ``actions/checkout`` writes into
+	the checkout's ``.git/config`` (a worker could print that file).
 	"""
 	values: set[str] = set()
 	for secret in secrets:
@@ -701,6 +726,7 @@ def redact_text(text: str, secrets: list[str]) -> tuple[str, int]:
 			if len(value) >= REDACT_MIN_LENGTH:
 				values.add(value)
 				values.add(base64.b64encode(f"x-access-token:{value}".encode("utf-8")).decode("ascii"))
+				values.update(_base64_forms(value))
 	count = 0
 	# Longest first, so a secret that contains another is replaced whole.
 	for value in sorted(values, key=len, reverse=True):
@@ -863,18 +889,24 @@ def _cmd_run_name(args: argparse.Namespace) -> int:
 def _cmd_redact(args: argparse.Namespace) -> int:
 	secrets = [os.environ.get(name, "") for name in args.env_var]
 	total = 0
+	failed = 0
 	for path in args.file:
 		file_path = Path(path)
 		try:
 			text = file_path.read_text(encoding="utf-8", errors="replace")
-		except OSError:
+			redacted, count = redact_text(text, secrets)
+			if count:
+				file_path.write_text(redacted, encoding="utf-8")
+				total += count
+		except FileNotFoundError:
+			# Nothing to upload, so nothing to redact.
 			continue
-		redacted, count = redact_text(text, secrets)
-		if count:
-			file_path.write_text(redacted, encoding="utf-8")
-			total += count
-	log("redact", files=len(args.file), replaced=total)
-	return 0
+		except OSError as exc:
+			# Fail closed: a file that could not be redacted must not be uploaded.
+			failed += 1
+			log("redact_failed", file=file_path.name, error=type(exc).__name__)
+	log("redact", files=len(args.file), replaced=total, failed=failed)
+	return 1 if failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
