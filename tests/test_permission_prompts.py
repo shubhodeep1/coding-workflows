@@ -396,3 +396,295 @@ def test_ci_runs_the_helper_tests():
 	text = CI_WORKFLOW.read_text(encoding="utf-8")
 	for name in ("tests/test_permission_prompts.py", "tests/test_dispatch_workflow.py", "tests/test_edit_comment.py"):
 		assert name in text
+
+
+# ──────────────────────────────────────────────────────────────────
+# Allowlisted denials (issue #5899). These load the workflow-templates twin:
+# the `.claude/` copy reaches it only through the [claude-twin-sync] copy.
+# ──────────────────────────────────────────────────────────────────
+
+pp_twin = _load("permission_prompts_twin", TEMPLATE_SCRIPT_PATH)
+ISSUE_5899_COMMAND = "git merge --no-edit origin/claude/implement-plan-issue-4867-close-permission-prompt-duplicates"
+
+
+def _settings(tmp_path, allow):
+	path = tmp_path / "settings.json"
+	path.write_text(json.dumps({"permissions": {"allow": allow}}), encoding="utf-8")
+	return path
+
+
+@pytest.mark.parametrize(
+	"rule, command, matches",
+	[
+		("Bash(git merge *)", ISSUE_5899_COMMAND, True),
+		("Bash(git merge *)", "git merge", True),
+		("Bash(git merge *)", "git mergetool", False),
+		("Bash(git push origin claude/*)", "git push origin claude/x-1", True),
+		("Bash(git push origin claude/*)", "git push origin main", False),
+		("Bash(curl -q -sS -X PUT https://api.digitalocean.com/*)", "curl -q -sS -X PUT https://api.digitalocean.com/v2/apps", True),
+		("Bash(npm test)", "npm test", True),
+		("Bash(npm test)", "npm test --watch", False),
+		("Bash(git:*)", "git status", True),
+		("Bash(git:*)", "git", True),
+		("Bash(python3 [x].py *)", "python3 [x].py a", True),
+		("Bash(python3 [x].py *)", "python3 x.py a", False),
+		("Bash(* --help *)", "npm --help x", True),
+		("Bash(* --help *)", "npm --help", False),
+		("Bash(ls * *)", "ls *", False),
+		("Bash(git:* push)", "git:x push", True),
+		("Bash(git:* push)", "git status push", False),
+		("Bash(git push:*)", "git pushx", False),
+	],
+)
+def test_allow_rule_for_uses_the_documented_wildcards(tmp_path, rule, command, matches):
+	path = _settings(tmp_path, [rule])
+	assert pp_twin.allow_rule_for(command, path) == (rule if matches else None)
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git fetch origin x && git merge --no-edit origin/x",
+		"git merge --no-edit origin/x; git status",
+		"git merge --no-edit origin/x | tail -3",
+		"git merge --no-edit origin/x 2>&1",
+		"git merge --no-edit $(cat ref)",
+		"git merge --no-edit `cat ref`",
+		"git merge --no-edit origin/x\ngit status",
+		'git merge --no-edit "$(cat ref)"',
+		'git merge --no-edit "`cat ref`"',
+		"git merge -m 'a|b' origin/x | tail",
+		"git merge -m 'line one\nline two' origin/x",
+		"git merge -m 'unclosed origin/x",
+		'git merge -m "unclosed origin/x',
+		"git merge -m $'a|b' origin/x",
+		"",
+		"   ",
+	],
+)
+def test_allow_rule_for_never_matches_compound_commands(tmp_path, command):
+	assert pp_twin.allow_rule_for(command, _settings(tmp_path, ["Bash(git merge *)", "Bash(git *)"])) is None
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git merge -m 'a|b' origin/x",
+		'git merge -m "use && to chain; (or not)" origin/x',
+		"git merge -m 'it says $(x) and `y`' origin/x",
+		'git merge -m "say \\"a|b\\"" origin/x',
+		"git merge -m a\\|b origin/x",
+		'git merge -m "${x}>y" origin/x',
+	],
+)
+def test_allow_rule_for_ignores_quoted_and_escaped_operators(tmp_path, command):
+	assert pp_twin.allow_rule_for(command, _settings(tmp_path, ["Bash(git merge *)"])) == "Bash(git merge *)"
+
+
+def test_allow_rule_for_ignores_non_bash_rules_and_bad_settings(tmp_path):
+	assert pp_twin.allow_rule_for("git merge x", _settings(tmp_path, ["Edit", "mcp__github__issue_read", 7, "Bash(git merge *"])) is None
+	missing = tmp_path / "missing.json"
+	assert pp_twin.allow_rule_for("git merge x", missing) is None
+	broken = tmp_path / "broken.json"
+	broken.write_text("{not json", encoding="utf-8")
+	assert pp_twin.allow_rule_for("git merge x", broken) is None
+	for shape in ([], {"permissions": []}, {"permissions": {"allow": "Bash(git merge *)"}}):
+		odd = tmp_path / "odd.json"
+		odd.write_text(json.dumps(shape), encoding="utf-8")
+		assert pp_twin.allow_rule_for("git merge x", odd) is None
+
+
+def test_allow_rule_for_returns_the_first_matching_rule(tmp_path):
+	path = _settings(tmp_path, ["Bash(git fetch *)", "Bash(git merge --no-edit *)", "Bash(git merge *)"])
+	assert pp_twin.allow_rule_for(ISSUE_5899_COMMAND, path) == "Bash(git merge --no-edit *)"
+
+
+def test_real_settings_allowlist_the_issue_5899_command():
+	for path in SETTINGS_PATHS:
+		assert pp_twin.allow_rule_for(ISSUE_5899_COMMAND, path) == "Bash(git merge *)"
+	# The default resolves to the twin's own `.claude/settings.json`.
+	assert pp_twin.SETTINGS_PATH == TEMPLATE_SCRIPT_PATH.parent.parent / "settings.json"
+	assert pp_twin.allow_rule_for(ISSUE_5899_COMMAND) == "Bash(git merge *)"
+
+
+def test_patterns_and_report_carry_the_rule_and_modes(tmp_path):
+	settings = _settings(tmp_path, ["Bash(git merge *)"])
+	directory = _log(
+		tmp_path,
+		[
+			_payload(ISSUE_5899_COMMAND, event="PermissionDenied", reason="[Modify Shared Resources]"),
+			_payload("git merge --no-edit origin/other", event="PermissionDenied", permission_mode="default"),
+			_payload("ls -la | head"),
+			_payload(tool="Edit", tool_input={"file_path": "/home/user/coding-workflows/.claude/x.md"}),
+		],
+	)
+	patterns = pp_twin.group_patterns(pp_twin.load_records(directory), settings)
+	merge = next(p for p in patterns if p["shape"].startswith("git merge"))
+	assert merge["count"] == 2 and merge["allow_rule"] == "Bash(git merge *)"
+	assert merge["permission_modes"] == ["auto", "default"]
+	assert next(p for p in patterns if p["shape"].startswith("ls"))["allow_rule"] is None
+	assert next(p for p in patterns if p["tool_name"] == "Edit")["allow_rule"] is None
+	report = pp_twin.report(directory, settings)
+	assert {p["shape"]: p["allow_rule"] for p in report["patterns"]}[merge["shape"]] == "Bash(git merge *)"
+	assert all("allow_rule" in p for p in report["patterns"])
+
+
+def test_report_redacts_the_matched_rule(tmp_path):
+	"""PR #5918 review round 8: `report` and `file` print this JSON, so a credential in the matched rule is masked."""
+	rule = "Bash(curl -H 'Authorization: Bearer abcdefghijklmnop' *)"
+	directory = _log(tmp_path, [_payload("curl -H 'Authorization: Bearer abcdefghijklmnop' https://a.b", event="PermissionDenied")])
+	report = pp_twin.report(directory, _settings(tmp_path, [rule]))
+	assert [p["allow_rule"] for p in report["patterns"]] == ["Bash(curl -H 'Authorization: Bearer ***' *)"]
+	assert "abcdefghijklmnop" not in json.dumps(report["patterns"][0]["allow_rule"])
+
+
+def test_report_and_issue_redact_a_space_delimited_credential_option(tmp_path):
+	"""PR #5918 review round 9: `--password plainsecret` (no `=` or `:`) is masked in the matched rule, in the report
+	JSON, and in the issue text, while the rule's `*` wildcard stays. Since round 11 a dash-led next word is masked too
+	(`--password -hunter2` cannot be told from `--password -v`)."""
+	command = "curl --password plainsecret --api-key 'two words' https://a.b"
+	rule = "Bash(curl --password plainsecret *)"
+	directory = _log(tmp_path, [_payload(command, event="PermissionDenied")])
+	report = pp_twin.report(directory, _settings(tmp_path, [rule]))
+	assert [p["allow_rule"] for p in report["patterns"]] == ["Bash(curl --password *** *)"]
+	pattern = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, [rule]))[0]
+	for text in (json.dumps(report), pp_twin.issue_body(pattern, 1, "s1"), pp_twin.comment_body(pattern, 1, "s1")):
+		assert "plainsecret" not in text and "two words" not in text
+	assert pp_twin.redact("Bash(curl --password *)") == "Bash(curl --password *)"
+	assert pp_twin.redact("tool --password -v") == "tool --password ***"
+	assert pp_twin.redact("mysql --password -hunter2 db") == "mysql --password *** db"
+	assert pp_twin.redact("x --api-key=-abc y") == "x --api-key=*** y"
+
+@pytest.mark.parametrize(
+	("text", "masked"),
+	[
+		('x --password "abc\\"def ghi" y', "x --password *** y"),
+		('x --password abc"def ghi" y', "x --password *** y"),
+		("x --token 'unterminated rest", "x --token ***"),
+		("x --api-key a\\ b c", "x --api-key *** c"),
+		('x password="a b" y', "x password=*** y"),
+		("x secret:'p q' y", "x secret:*** y"),
+		# Bash ANSI-C quoting may hold an escaped apostrophe; a credential option after another keeps its own value
+		# (PR #5918 review round 12).
+		("x --password $'ab\\' cd' next", "x --password *** next"),
+		("x password=$'ab\\' cd' y", "x password=*** y"),
+		("tool --password --api-key secretvalue z", "tool --password --api-key *** z"),
+		("tool --password --api-key=secretvalue z", "tool --password --api-key=*** z"),
+	],
+)
+def test_redact_masks_the_whole_shell_word_of_a_credential_value(text, masked):
+	"""PR #5918 review round 10: an escaped quote, a concatenated quoted part, an escaped space, or an unterminated
+	quote no longer leaves the rest of the value visible, for the option form and the `key=value` form alike."""
+	assert pp_twin.redact(text) == masked
+
+def test_signature_and_title_do_not_depend_on_the_rule(tmp_path):
+	directory = _log(tmp_path, [_payload(ISSUE_5899_COMMAND, event="PermissionDenied")])
+	with_rule = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, ["Bash(git merge *)"]))[0]
+	without_rule = pp_twin.group_patterns(pp_twin.load_records(directory), tmp_path / "missing.json")[0]
+	assert with_rule["signature"] == without_rule["signature"] == "cc3a510041a7"
+	assert pp_twin.issue_title(with_rule) == pp_twin.issue_title(without_rule) == "[permission-prompt] Bash: git merge --no-edit *"
+
+
+def test_issue_and_comment_flag_an_allowlisted_denial(tmp_path):
+	directory = _log(tmp_path, [_payload(ISSUE_5899_COMMAND, event="PermissionDenied", reason="[Modify Shared Resources]")])
+	pattern = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, ["Bash(git merge *)"]))[0]
+	for text in (pp_twin.issue_body(pattern, 1, "s1"), pp_twin.comment_body(pattern, 1, "s1")):
+		assert "**Permission mode:** `auto`" in text
+		assert "**Already allowlisted:** `Bash(git merge *)` in `.claude/settings.json` matches this command" in text
+		assert "will not clear this pattern (issue #5899)" in text
+		assert text.index("**Occurrences:**") < text.index("**Already allowlisted:**") < text.index("**Reason Claude Code gave:**")
+
+
+def test_allow_rule_for_never_matches_a_command_the_logger_truncated(tmp_path):
+	"""PR #5918 review round 7: permission_prompt_logger.py cuts a value at MAX_VALUE_CHARS and appends a marker;
+	an operator after the cut was never logged, so a truncated command is never reported as allowlisted."""
+	path = _settings(tmp_path, ["Bash(git merge *)"])
+	assert pp_twin.allow_rule_for("git merge " + "x" * 50 + "… [truncated 12 chars]", path) is None
+	assert pp_twin.allow_rule_for("git merge " + "x" * 50, path) == "Bash(git merge *)"
+
+
+def test_allowlisted_rule_is_shown_as_a_safe_code_span(tmp_path):
+	"""PR #5918 review round 7: a backtick in the rule cannot end its code span, and a credential in it is masked."""
+	assert pp_twin._code_span("Bash(git merge *)") == "`Bash(git merge *)`"
+	assert pp_twin._code_span("Bash(echo `x`)") == "`` Bash(echo `x`) ``"
+	assert pp_twin._code_span("a``b") == "``` a``b ```"
+	directory = _log(tmp_path, [_payload(ISSUE_5899_COMMAND, event="PermissionDenied")])
+	pattern = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, ["Bash(git merge *)"]))[0]
+	pattern["allow_rule"] = "Bash(curl -H 'Authorization: Bearer abcdefghijklmnop' *)"
+	body = pp_twin.issue_body(pattern, 1, "s1")
+	assert "abcdefghijklmnop" not in body
+	assert "**Already allowlisted:** `Bash(curl -H 'Authorization: Bearer ***' *)`" in body
+
+
+def test_issue_without_a_matching_rule_is_unchanged_apart_from_the_mode(tmp_path):
+	directory = _log(tmp_path, [_payload("ls -la | head")])
+	pattern = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, ["Bash(git merge *)"]))[0]
+	body = pp_twin.issue_body(pattern, 1, "s1")
+	assert "Already allowlisted" not in body and "**Permission mode:** `auto`" in body
+	legacy = {"signature": "0" * 12, "event": "PermissionRequest", "tool_name": "Bash", "shape": "ls", "count": 1, "reasons": [], "first_ts": "t", "last_ts": "t", "example": "ls"}
+	for text in (pp_twin.issue_body(legacy, 1, "s1"), pp_twin.comment_body(legacy, 1, "s1")):
+		assert "**Occurrences:** 1 (t – t), session `s1`\n\n**Reason Claude Code gave:**" in text
+		assert "Permission mode" not in text and "Already allowlisted" not in text
+
+
+def test_file_dry_run_reports_the_allowlisted_rule(tmp_path, monkeypatch):
+	fake = FakeIssues()
+	monkeypatch.setattr(pp_twin.check_in_status, "gh_api_list", fake.gh_api_list)
+	monkeypatch.setattr(pp_twin, "_post", fake.post)
+	monkeypatch.setattr(pp_twin, "SETTINGS_PATH", _settings(tmp_path, ["Bash(git merge *)"]))
+	directory = _log(tmp_path, [_payload(ISSUE_5899_COMMAND, event="PermissionDenied")])
+	code, summary = pp_twin.file_patterns(directory, "s1", True, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and fake.posts == []
+	assert summary["patterns"][0]["allow_rule"] == "Bash(git merge *)"
+
+
+def test_claude_md_lists_the_sync_merge_as_a_routine_write():
+	text = CLAUDE_MD.read_text(encoding="utf-8")
+	section = text[text.index("### B) Routine Repository Writes") : text.index("### C) Destructive & Administrative Writes")]
+	assert "local `git merge` of `origin/<default>`" in section
+	assert "(issue #5899)" in section
+
+
+def _write_log(directory, name, records):
+	directory.mkdir(parents=True, exist_ok=True)
+	(directory / name).write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+
+def _record(command, ts, cwd="/home/user/coding-workflows"):
+	return {"ts": ts, "event": "PermissionDenied", "tool_name": "Bash", "tool_input": {"command": command}, "permission_mode": "auto", "cwd": cwd}
+
+
+def test_latest_occurrence_is_the_newest_record_across_session_files(tmp_path):
+	directory = tmp_path / "log"
+	# The file that sorts first by name holds the newer occurrence.
+	_write_log(directory, "a-session.jsonl", [_record("git merge --no-edit origin/newer", "2026-10-01T08:00:00Z")])
+	_write_log(directory, "b-session.jsonl", [_record("git merge --no-edit origin/older", "2026-09-30T08:00:00Z")])
+	records = pp_twin.load_records(directory)
+	assert [record["ts"] for record in records] == ["2026-09-30T08:00:00Z", "2026-10-01T08:00:00Z"]
+	pattern = pp_twin.group_patterns(records, _settings(tmp_path, ["Bash(git merge --no-edit origin/newer)"]))[0]
+	assert pattern["first_ts"] == "2026-09-30T08:00:00Z" and pattern["last_ts"] == "2026-10-01T08:00:00Z"
+	assert "origin/newer" in pattern["example"]
+	assert pattern["allow_rule"] == "Bash(git merge --no-edit origin/newer)"
+
+
+def test_records_from_another_checkout_are_not_checked(tmp_path):
+	settings_dir = tmp_path / "repo" / ".claude"
+	settings_dir.mkdir(parents=True)
+	settings = _settings(settings_dir, ["Bash(git merge *)"])
+	inside = str(tmp_path / "repo" / "sub")
+	cases = {str(tmp_path / "repo"): "Bash(git merge *)", inside: "Bash(git merge *)", "": "Bash(git merge *)", str(tmp_path / "repo-other"): None, str(tmp_path / "elsewhere"): None}
+	for cwd, expected in cases.items():
+		pattern = pp_twin.group_patterns([_record("git merge x", "2026-10-01T08:00:00Z", cwd=cwd)], settings)[0]
+		assert pattern["allow_rule"] == expected, cwd
+	# A settings file outside a `.claude/` directory names no checkout, so every record is checked.
+	assert pp_twin.group_patterns([_record("git merge x", "t", cwd="/elsewhere")], _settings(tmp_path, ["Bash(git merge *)"]))[0]["allow_rule"] == "Bash(git merge *)"
+
+
+def test_group_patterns_reads_the_settings_once(tmp_path, monkeypatch):
+	calls = []
+	real = pp_twin._bash_allow_rules
+	monkeypatch.setattr(pp_twin, "_bash_allow_rules", lambda path: calls.append(path) or real(path))
+	records = [_record(f"git merge --no-edit origin/x{n}", f"2026-10-01T08:0{n}:00Z") for n in range(5)]
+	pattern = pp_twin.group_patterns(records, _settings(tmp_path, ["Bash(git merge *)"]))[0]
+	assert pattern["count"] == 5 and pattern["allow_rule"] == "Bash(git merge *)"
+	assert len(calls) == 1

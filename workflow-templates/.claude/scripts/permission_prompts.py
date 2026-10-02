@@ -36,6 +36,25 @@ Issue text is untrusted data: the tool name, the prompt reason, and the
 command truncated to MAX_COMMAND_CHARS with heredoc bodies removed and
 token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
 
+Diagnostics (issue #5899): each pattern carries `permission_modes` (the
+modes its occurrences were logged under) and `allow_rule`, the first
+`Bash(...)` entry of the checkout's `.claude/settings.json`
+`permissions.allow` that matches the latest command as a whole (`*` matches
+any run of characters, and a trailing ` *` or `:*` also matches the bare
+command, when that is the rule's only wildcard), or None. Only a single
+command is checked: one with a newline, or with a shell operator, a backtick,
+or `$(` outside quotes and not escaped by a backslash, never matches (inside
+double quotes a backtick or `$(` still counts, since the shell runs it), and
+neither does one with an unclosed
+quote or ANSI-C `$'...'` quoting. A record whose `cwd` lies outside the checkout that holds the
+settings file is not checked either, since that checkout's rules did not
+apply to it. Records are ordered by their `ts`, so "latest" is the newest
+occurrence across session files. The issue body and
+the "Seen again" comment show the permission mode and, when a rule matches,
+say the call was decided despite the rule, so reshaping the command or adding
+another allow rule cannot clear it. `report` lists `allow_rule` per pattern.
+The settings file is read locally and never comes from the session log.
+
 API calls (CLAUDE.md §15), REST only, none when nothing is new: one read of
 the `ai:permission-prompt` issues per 100 issues, then one POST per pattern
 filed or commented.
@@ -51,6 +70,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -70,9 +90,18 @@ MARKER_TEMPLATE = "<!-- ai:permission-prompt:v1 sig={sig} -->"
 MARKER_RE = re.compile(r"<!-- ai:permission-prompt:v1 sig=([0-9a-f]{12}) -->")
 STATE_FILE = "filed-state.json"
 DEFAULT_LOG_DIR = Path.home() / ".claude" / "permission-prompts"
+# The checkout's settings, beside this script's own `.claude/` directory.
+SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings.json"
 MAX_COMMAND_CHARS = 2000
 MAX_SHAPE_CHARS = 200
 MAX_TITLE_SHAPE_CHARS = 90
+
+# One shell word as a credential value: ANSI-C quoted parts (`$'…'`, which may hold `\'`), quoted parts (a
+# double-quoted part may hold `\"`), escaped characters, and bare characters, concatenated; an unterminated quote
+# runs to the end, so the rest of a secret is never shown (PR #5918 review rounds 10 and 12).
+_REDACTION_SHELL_WORD = r"""(?:\$'(?:[^'\\]|\\.)*(?:'|$)|'[^']*(?:'|$)|"(?:[^"\\]|\\.)*(?:"|$)|\\.|[^\s'"\\])+"""
+# A credential option itself (`--api-key`): never taken as the value of the option before it, so it keeps its own.
+_REDACTION_CREDENTIAL_OPTION = r"--?[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key)[A-Za-z0-9_-]*"
 
 REDACTION_PATTERNS = (
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
@@ -81,7 +110,20 @@ REDACTION_PATTERNS = (
 	(re.compile(r"\bxox[abpr]-[A-Za-z0-9-]{10,}"), "xox*-***"),
 	(re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AKIA***"),
 	(re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer ***"),
-	(re.compile(r"(?i)\b(token|secret|password|passwd|api[_-]?key)(\s*[=:]\s*)[^\s'\"]+"), r"\1\2***"),
+	(re.compile(r"(?i)\b(token|secret|password|passwd|api[_-]?key)(\s*[=:]\s*)" + _REDACTION_SHELL_WORD), r"\1\2***"),
+	# The same keywords as a command-line option whose value follows a space
+	# (`--password plainsecret`, `--api-key 'a b'`); a lone `*` wildcard (an
+	# allow rule's) is not a value (PR #5918 review round 9). Both keyword
+	# patterns mask the whole shell word (round 10). A next word starting with
+	# `-` may be the value (`--password -hunter2`) or another option: it is
+	# masked either way, the safe side (round 11), unless it is a credential
+	# option itself (`--password --api-key secret`), which keeps its own value (round 12).
+	(
+		re.compile(
+			r"(?i)((?<![A-Za-z0-9_])" + _REDACTION_CREDENTIAL_OPTION + r")(\s+)(?!\*(?:[\s)]|$))(?!" + _REDACTION_CREDENTIAL_OPTION + r"(?:[\s=]|$))" + _REDACTION_SHELL_WORD
+		),
+		r"\1\2***",
+	),
 	# Long random-looking strings (hex keys, base64 secrets): 40+ letters,
 	# digits, `+`, `_`, `=` with both letters and digits. `/` and `-` are left
 	# out so API paths and branch names survive.
@@ -100,6 +142,9 @@ _SUBCOMMAND_TOOLS = frozenset(
 _SCRIPT_RE = re.compile(r"\.(py|sh|js|mjs|ts)$")
 _FILE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "MultiEdit"})
 _BULKY_INPUT_KEYS = frozenset({"content", "new_string", "old_string", "new_source", "edits"})
+# A command with any of these outside quotes (`_shell_visible_text`) is compound or substituted;
+# no prefix rule approves it as a whole.
+_COMPOUND_COMMAND_RE = re.compile(r"[;&|<>()`\n]|\$\(")
 
 
 def strip_heredocs(command: str, placeholder: str = "", keep_delimiter: bool = True) -> str:
@@ -233,6 +278,105 @@ def record_shape(record: dict) -> str:
 	return ""
 
 
+def _bash_allow_rules(settings_path: Path) -> list[str]:
+	"""The `Bash(...)` entries of `permissions.allow`, or [] when the file cannot be read."""
+	try:
+		settings = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return []
+	permissions = settings.get("permissions") if isinstance(settings, dict) else None
+	allow = permissions.get("allow") if isinstance(permissions, dict) else None
+	if not isinstance(allow, list):
+		return []
+	return [rule for rule in allow if isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")")]
+
+
+def _checkout_root(settings_path: Path) -> str | None:
+	"""The checkout that owns a `<root>/.claude/settings.json`, or None for a settings file elsewhere."""
+	path = Path(settings_path)
+	return os.path.realpath(path.parent.parent) if path.parent.name == ".claude" else None
+
+
+def _cwd_in_checkout(cwd: str, root: str | None) -> bool:
+	"""False only when the record's `cwd` is known and lies outside the checkout."""
+	if root is None or not cwd:
+		return True
+	cwd = os.path.realpath(cwd)
+	return cwd == root or cwd.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _allow_pattern_matches(pattern: str, command: str) -> bool:
+	if pattern.endswith(":*"):
+		# The legacy `:*` suffix is another spelling of a trailing ` *`.
+		pattern = pattern[: -len(":*")] + " *"
+	if pattern.endswith(" *") and pattern.count("*") == 1 and command == pattern[: -len(" *")]:
+		# A trailing ` *` that is the rule's only wildcard also matches the bare command.
+		return True
+	regex = ".*".join(re.escape(part) for part in pattern.split("*"))
+	return re.fullmatch(regex, command, re.DOTALL) is not None
+
+
+def allow_rule_for(command: str, settings_path: Path | None = None) -> str | None:
+	"""The first allow rule that matches this single command as a whole, or None (diagnostic only)."""
+	return _matching_allow_rule(command, _bash_allow_rules(SETTINGS_PATH if settings_path is None else settings_path))
+
+
+def _shell_visible_text(command: str) -> str | None:
+	"""The command without its quoted literal text, or None when a quote is left open.
+
+	Single-quoted text and backslash-escaped characters are dropped. Inside double
+	quotes only a backtick or `$(` is kept, because the shell still runs those.
+	ANSI-C `$'...'` quoting returns None rather than being parsed.
+	"""
+	visible: list[str] = []
+	quote = ""
+	index = 0
+	while index < len(command):
+		char = command[index]
+		following = command[index + 1] if index + 1 < len(command) else ""
+		if quote == "'":
+			if char == "'":
+				quote = ""
+		elif quote == '"':
+			if char == "\\":
+				index += 1
+			elif char == '"':
+				quote = ""
+			elif char == "`":
+				visible.append(char)
+			elif char == "$" and following == "(":
+				visible.append("$(")
+				index += 1
+		elif char == "\\":
+			index += 1
+		elif char == "$" and following == "'":
+			return None
+		elif char in "'\"":
+			quote = char
+		else:
+			visible.append(char)
+		index += 1
+	return None if quote else "".join(visible)
+
+
+# The marker permission_prompt_logger.py appends to a value it cut at MAX_VALUE_CHARS: the rest of the command,
+# shell operators included, was never logged, so such a command is never matched against an allow rule.
+_LOGGER_TRUNCATION_RE = re.compile(r"… \[truncated \d+ chars\]$")
+
+
+def _matching_allow_rule(command: str, rules: list[str]) -> str | None:
+	command = command.strip()
+	if not command or "\n" in command or _LOGGER_TRUNCATION_RE.search(command):
+		return None
+	visible = _shell_visible_text(command)
+	if visible is None or _COMPOUND_COMMAND_RE.search(visible):
+		return None
+	for rule in rules:
+		if _allow_pattern_matches(rule[len("Bash(") : -1], command):
+			return rule
+	return None
+
+
 def signature(event: str, tool: str, shape: str) -> str:
 	return hashlib.sha1(f"{event}\n{tool}\n{shape}".encode("utf-8")).hexdigest()[:12]
 
@@ -270,11 +414,17 @@ def load_records(log_dir: Path) -> list[dict]:
 				continue
 			if isinstance(record, dict) and record.get("event") in ("PermissionRequest", "PermissionDenied"):
 				records.append(record)
+	# Session files are named by session id, not by time. Order by timestamp so
+	# "first" and "latest" hold across files; the stable sort keeps file order on ties.
+	records.sort(key=lambda record: str(record.get("ts") or ""))
 	return records
 
 
-def group_patterns(records: list[dict]) -> list[dict]:
+def group_patterns(records: list[dict], settings_path: Path | None = None) -> list[dict]:
 	"""Group records into patterns, ordered by first occurrence."""
+	settings_file = SETTINGS_PATH if settings_path is None else settings_path
+	allow_rules = _bash_allow_rules(settings_file)
+	checkout_root = _checkout_root(settings_file)
 	patterns: dict[str, dict] = {}
 	for record in records:
 		event = str(record.get("event"))
@@ -293,21 +443,34 @@ def group_patterns(records: list[dict]) -> list[dict]:
 				"first_ts": record.get("ts"),
 				"last_ts": record.get("ts"),
 				"example": "",
+				"allow_rule": None,
+				"permission_modes": [],
 			}
 		pattern["count"] += 1
 		pattern["last_ts"] = record.get("ts")
 		pattern["example"] = record_example(record)
+		if tool == "Bash":
+			tool_input = record.get("tool_input") if isinstance(record.get("tool_input"), dict) else {}
+			in_checkout = _cwd_in_checkout(str(record.get("cwd") or ""), checkout_root)
+			pattern["allow_rule"] = _matching_allow_rule(str(tool_input.get("command") or ""), allow_rules) if in_checkout else None
+		mode = str(record.get("permission_mode") or "")
+		if mode and mode not in pattern["permission_modes"] and len(pattern["permission_modes"]) < 3:
+			pattern["permission_modes"].append(redact(mode)[:40])
 		reason = str(record.get("reason") or "")
 		if reason and reason not in pattern["reasons"] and len(pattern["reasons"]) < 3:
 			pattern["reasons"].append(redact(reason)[:300])
 	return list(patterns.values())
 
 
-def report(log_dir: Path) -> dict:
-	patterns = group_patterns(load_records(log_dir))
+def report(log_dir: Path, settings_path: Path | None = None) -> dict:
+	patterns = group_patterns(load_records(log_dir), settings_path)
 	return {
 		"total": sum(pattern["count"] for pattern in patterns),
-		"patterns": [{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons")} for pattern in patterns],
+		"patterns": [
+			# The matched rule is shown redacted here as in the issue text: `report` and `file` print this JSON.
+			{**{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons")}, "allow_rule": redact(pattern["allow_rule"]) if pattern["allow_rule"] else pattern["allow_rule"]}
+			for pattern in patterns
+		],
 	}
 
 
@@ -322,11 +485,29 @@ def issue_title(pattern: dict) -> str:
 	return f"[permission-prompt] {pattern['tool_name']}: {subject}"
 
 
+def _code_span(text: str) -> str:
+	"""`text` as a Markdown code span that a backtick inside it cannot end."""
+	longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+	fence = "`" * (longest + 1)
+	pad = " " if longest else ""
+	return f"{fence}{pad}{text}{pad}{fence}"
+
+
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
 	reasons = "\n".join(f"- {reason}" for reason in pattern["reasons"]) or "- (none given)"
+	modes = ", ".join(f"`{mode}`" for mode in pattern.get("permission_modes") or [])
+	allow_rule = pattern.get("allow_rule")
+	diagnostics = f"**Permission mode:** {modes}\n\n" if modes else ""
+	if allow_rule:
+		diagnostics += (
+			f"**Already allowlisted:** {_code_span(redact(allow_rule))} in `.claude/settings.json` matches this command, and it ran "
+			"as a single command, so Claude Code decided it despite the allow rule. Reshaping the command or adding "
+			"another allow rule will not clear this pattern (issue #5899).\n\n"
+		)
 	return (
 		f"**Occurrences:** {new_count} ({pattern['first_ts']} – {pattern['last_ts']}), session `{session_label}`\n\n"
-		f"**Reason Claude Code gave:**\n{reasons}\n\n"
+		+ diagnostics
+		+ f"**Reason Claude Code gave:**\n{reasons}\n\n"
 		"**Latest example** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
 		f"````text\n{pattern['example']}\n````\n"
 	)
