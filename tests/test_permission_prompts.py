@@ -792,3 +792,38 @@ def test_ci_runs_the_helper_tests():
 	text = CI_WORKFLOW.read_text(encoding="utf-8")
 	for name in ("tests/test_permission_prompts.py", "tests/test_dispatch_workflow.py", "tests/test_edit_comment.py"):
 		assert name in text
+
+
+def test_a_substitution_in_a_comment_is_not_a_construct():
+	"""PR #5697 review round 7: a `$(…)` in a `#` comment does not run, so it adds no `subst` to the family."""
+	assert pp.command_family("curl https://a.b # $(date)") == pp.command_family("curl https://a.b")
+	assert pp.command_family("curl https://a.b\n# $(date)\ngit status")[1] == ()
+	assert pp.command_family('echo "#$(date)"')[1] == ("subst",)
+	assert pp.command_family("echo a#$(date)")[1] == ("subst",)
+
+
+def test_an_unclosed_substitution_has_no_command_family():
+	"""PR #5697 review round 7: Bash rejects an unclosed `$(`, so the command falls back to its shape's family."""
+	assert pp.command_family("echo $(date") is None
+	assert pp.command_family('git log "$(date"') is None
+	family, label = pp.pattern_family("PermissionRequest", "Bash", "echo *", "echo $(date")
+	assert label == "echo *" and family == pp.pattern_family("PermissionRequest", "Bash", "echo *")[0]
+
+
+def test_timeout_end_of_options_before_the_duration_keeps_the_family():
+	"""PR #5697 review round 7: `timeout -- 5 git fetch` is the valid form (GNU timeout stops reading options at the
+	duration, so `timeout 5 -- git fetch` runs a command named `--`)."""
+	assert pp.command_family("timeout -- 5 git fetch") == pp.command_family("git fetch")
+
+
+def test_shape_and_family_label_cannot_break_their_code_spans():
+	"""PR #5697 review round 7: a backtick or a line break in a command-derived shape or family label stays inside its
+	code span in the issue body and in the family comment."""
+	pattern = _pattern("echo x")
+	pattern["shape"] = "./a`b.sh\n# planted heading"
+	pattern["family_label"] = "./a`b.sh\n**planted**"
+	for text in (pp.issue_body(pattern, 1, "s0"), pp.family_comment_body(pattern, 1, "s0")):
+		assert "``./a`b.sh # planted heading``" in text
+		assert "``./a`b.sh **planted**``" in text
+		assert "\n# planted heading" not in text and "\n**planted**" not in text
+	assert pp._family_code_span("`x") == "`` `x ``"

@@ -449,20 +449,30 @@ def _is_family_prefix(core: list[str], operator: str) -> bool:
 
 
 def _has_command_substitution(text: str) -> bool:
-	"""True when `$(` appears outside single quotes and is not arithmetic `$((`."""
+	"""True when `$(` appears outside single quotes and a `#` comment and is not arithmetic `$((`. A comment starts at
+	a `#` that begins a word outside quotes and runs to the end of its line (PR #5697 review round 7)."""
 	single_quoted = double_quoted = False
+	previous = "\n"
 	index = 0
 	while index < len(text):
 		char = text[index]
 		if char == "\\" and not single_quoted:
+			previous = "\\"
 			index += 2
 			continue
 		if char == "'" and not double_quoted:
 			single_quoted = not single_quoted
 		elif char == '"' and not single_quoted:
 			double_quoted = not double_quoted
+		elif char == "#" and not single_quoted and not double_quoted and previous in " \t\n;&|()":
+			line_end = text.find("\n", index)
+			if line_end == -1:
+				return False
+			index = line_end
+			continue
 		elif char == "$" and not single_quoted and text[index + 1 : index + 2] == "(" and text[index + 2 : index + 3] != "(":
 			return True
+		previous = char
 		index += 1
 	return False
 
@@ -498,8 +508,13 @@ def command_family(command: str) -> tuple[str, tuple[str, ...]] | None:
 	"""A Bash command's family key: (command word, constructs present), or None when it does not parse."""
 	stripped = strip_heredocs(command, keep_delimiter=False)
 	try:
-		segments = _family_segments(_shell_tokens(_collapse_substitutions(stripped)))
+		collapsed = _collapse_substitutions(stripped)
+		segments = _family_segments(_shell_tokens(collapsed))
 	except ValueError:
+		return None
+	if _has_command_substitution(collapsed):
+		# A `$(` left after collapsing is not closed: Bash rejects the command, so it has no command family and
+		# falls back to its shape (PR #5697 review round 7).
 		return None
 	constructs: set[str] = set()
 	word = ""
@@ -636,6 +651,16 @@ def report(log_dir: Path) -> dict:
 	}
 
 
+def _family_code_span(text: str) -> str:
+	"""Untrusted text (a command shape, a family label) as a one-line Markdown code span: line breaks become spaces, and
+	the fence is longer than any backtick run inside, so the text cannot end the span (PR #5697 review round 7)."""
+	text = " ".join(text.splitlines())
+	longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+	fence = "`" * (longest + 1)
+	pad = " " if text.startswith("`") or text.endswith("`") else ""
+	return f"{fence}{pad}{text}{pad}{fence}"
+
+
 def _event_label(event: str) -> str:
 	return "permission prompt" if event == "PermissionRequest" else "Auto-mode denial"
 
@@ -670,8 +695,8 @@ def issue_body(pattern: dict, new_count: int, session_label: str) -> str:
 		f"for `{pattern['tool_name']}`, so an unattended stage waited for a human "
 		"(or, for a denial, went on without the call). Filed by "
 		"`.claude/scripts/permission_prompts.py` (CLAUDE.md §23.I).\n\n"
-		f"**Pattern:** `{pattern['shape'] or pattern['tool_name']}`\n\n"
-		+ (f"**Family:** `{pattern['family_label']}` (later shapes of this family are added here as comments)\n\n" if pattern.get("family") else "")
+		f"**Pattern:** {_family_code_span(pattern['shape'] or pattern['tool_name'])}\n\n"
+		+ (f"**Family:** {_family_code_span(pattern['family_label'])} (later shapes of this family are added here as comments)\n\n" if pattern.get("family") else "")
 		+ _occurrence_block(pattern, new_count, session_label)
 		+ "\n**How to fix** (in this order, never widening a permission for a destructive or administrative action):\n"
 		"1. Change the command file that produced the call so it uses an allowlisted helper "
@@ -698,9 +723,9 @@ def comment_body(pattern: dict, new_count: int, session_label: str) -> str:
 
 def family_comment_body(pattern: dict, new_count: int, session_label: str) -> str:
 	return (
-		f"Seen again with a new command shape in this family (`{pattern['family_label']}`), "
+		f"Seen again with a new command shape in this family ({_family_code_span(pattern['family_label'])}), "
 		"so it is added here instead of as a new issue.\n\n"
-		f"**New pattern:** `{pattern['shape'] or pattern['tool_name']}` "
+		f"**New pattern:** {_family_code_span(pattern['shape'] or pattern['tool_name'])} "
 		f"({_event_label(pattern['event'])}, signature `{pattern['signature']}`)\n\n"
 		+ _occurrence_block(pattern, new_count, session_label)
 	)
