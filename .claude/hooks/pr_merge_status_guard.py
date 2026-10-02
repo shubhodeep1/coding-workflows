@@ -149,6 +149,18 @@ _COMPOUND_CLOSING_WORDS = frozenset({"fi", "done", "esac"})
 # `git push` options that consume the following word as their value.
 _PUSH_OPTS_WITH_VALUE = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
 _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
+# git also accepts any unambiguous prefix of a long option, so these shortest
+# prefixes (git 2.43: `--d`, `--p`, `--r`, `--re` and `--rec` are ambiguous)
+# and every longer one count as the option. `-o` is the only short option
+# that takes a value, so a short-option cluster ending in it (`-uo <value>`)
+# consumes the next word too (conformance audit of issue #5144).
+_PUSH_LONG_OPT_MIN_PREFIXES_WITH_VALUE = {
+	"--push-option": "--pu",
+	"--repo": "--rep",
+	"--receive-pack": "--rece",
+	"--exec": "--e",
+}
+_PUSH_DELETE_MIN_PREFIX = "--de"
 # `git push` options that write every local branch. git accepts any
 # unambiguous prefix of a long option (`--al`, `--mir`), so a word of four or
 # more characters that starts one of these counts as it.
@@ -708,9 +720,9 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 				options_done = True
 				index += 1
 				continue
-			if token in _PUSH_DELETE_FLAGS:
+			if _is_push_delete_option(token):
 				return []
-			if token in _PUSH_OPTS_WITH_VALUE:
+			if _push_option_takes_next_word(token):
 				index += 2
 				continue
 			if _is_push_bulk_flag(token):
@@ -783,6 +795,39 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 		tip = "HEAD" if source in ("HEAD", "@") else source
 		targets.append(GuardTarget("push", repo_dir, destination, tip, True))
 	return targets
+
+
+def _is_push_delete_option(token: str) -> bool:
+	"""Whether a `git push` word makes the push delete its refspecs: `-d`,
+	`--delete`, a prefix git expands to it (`--de`, `--del`), or a short-option
+	cluster with `d` before any `o` (`-fd`, `-df`; in `-od` the `d` is the
+	push option's value)."""
+	if token in _PUSH_DELETE_FLAGS:
+		return True
+	if token.startswith("--"):
+		return len(token) >= len(_PUSH_DELETE_MIN_PREFIX) and "--delete".startswith(token)
+	if token.startswith("-") and len(token) > 2:
+		return "d" in token[1:].split("o", 1)[0]
+	return False
+
+
+def _push_option_takes_next_word(token: str) -> bool:
+	"""Whether `git push` reads the word after this option as its value:
+	`-o`, `--push-option`, `--repo`, `--receive-pack`, `--exec`, a prefix git
+	expands to one of them (`--pu`, `--rep`, `--rece`, `--e`), or a
+	short-option cluster whose first `o` is its last letter (`-uo <value>`).
+	A `--opt=<value>` word or a cluster with the value attached (`-uoci.skip`)
+	carries its own value."""
+	if token in _PUSH_OPTS_WITH_VALUE:
+		return True
+	if token.startswith("--"):
+		return any(
+			len(token) >= len(min_prefix) and option.startswith(token)
+			for option, min_prefix in _PUSH_LONG_OPT_MIN_PREFIXES_WITH_VALUE.items()
+		)
+	if not token.startswith("-") or len(token) <= 2:
+		return False
+	return token.find("o", 1) == len(token) - 1
 
 
 def _is_push_bulk_flag(token: str) -> bool:
@@ -1496,7 +1541,8 @@ def blocking_pull_request(
 	"""Apply the three-condition detection rule; return the offending PR or None.
 
 	`tip` is the commit the pending write would stack on: HEAD for
-	`git commit`/`git push`, the fetched remote branch tip for an MCP push.
+	`git commit` and a `git push` without a refspec, the refspec's source for
+	a push that names one, the fetched remote branch tip for an MCP push.
 	`base` enables the merge-commit refinement in stacks_on_merged_history.
 	"""
 	merged = [pr for pr in pull_requests if pr.get("mergedAt")]
