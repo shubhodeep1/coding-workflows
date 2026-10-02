@@ -378,7 +378,6 @@ def _bash(command):
 		("echo \"$(sudo mysql -pS3cretPass)\"", "S3cretPass", "echo \"$(sudo mysql -p***)\""),
 		("tool -o\"$(mysql -pS3cretPass app)\"", "S3cretPass", "tool -o\"$(mysql -p*** app)\""),
 		("echo \"$(echo \"$(mysql -pS3cretPass)\")\"", "S3cretPass", "echo \"$(echo \"$(mysql -p***)\")\""),
-		("sh -c \"echo \\`mysql -pS3cretPass\\`\"", "S3cretPass", "sh -c \"echo \\`mysql -p***\\`\""),
 		# A shell's command line is the first word after its options, and a quoted one can start with `-`.
 		("bash -c -- 'mysql -pS3cretPass app'", "S3cretPass", "bash -c -- 'mysql -p*** app'"),
 		("bash -c -x 'mysql -pS3cretPass app'", "S3cretPass", "bash -c -x 'mysql -p*** app'"),
@@ -430,6 +429,8 @@ def _bash(command):
 		("MYSQL -pS3cretPass app", "S3cretPass", "MYSQL -p*** app"),
 		("env.exe -S 'mysql -pS3cretPass app'", "S3cretPass", "env.exe -S 'mysql -p*** app'"),
 		("ENV -S 'mysql -pS3cretPass app'", "S3cretPass", "ENV -S 'mysql -p*** app'"),
+		# `eval` runs its arguments as a command line (PR #5401 review round 13).
+		("eval 'mysql -pS3cretPass app'", "S3cretPass", "eval 'mysql -p*** app'"),
 		("sudo -u pg bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "sudo -u pg bash <<< 'mysql -p*** app'"),
 		("2>/dev/null bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "2>/dev/null bash <<< 'mysql -p*** app'"),
 		("false || sh -c 'mysql -pS3cretPass x'", "S3cretPass", "false || sh -c 'mysql -p*** x'"),
@@ -491,6 +492,16 @@ def test_example_masks_credentials(command, secret, expected):
 		# (PR #5401 review round 11).
 		("bash -c $'mysql -pS3cret\\x41ss app'", "S3cret", None),
 		("bash -c $'mysql -pS3cretPass app", "S3cretPass", None),
+		# A command substitution builds code a shell runs (`-c` line, here-string, `env -S`, `eval`), or is the command
+		# word itself; what it prints cannot be known from the words, so the command is withheld (PR #5401 review
+		# round 13; the backtick `-c` case was masked in place before).
+		("sh -c \"echo \\`mysql -pS3cretPass\\`\"", "S3cretPass", None),
+		("bash -c \"$(printf %s 'mysql -pS3cretPass app')\"", "S3cretPass", None),
+		("bash <<< \"$(printf %s 'mysql -pS3cretPass')\"", "S3cretPass", None),
+		("env -S \"$(printf %s 'mysql -pS3cretPass')\"", "S3cretPass", None),
+		("eval \"$(printf %s mysql\\\\ -pS3cretPass)\"", "S3cretPass", None),
+		("$(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
+		("\"$(printf %s 'mysql -pS3cretPass')\" app", "S3cretPass", "*"),
 		# Hex and octal escapes Bash decodes (`\x2d` and `\055` are `-`) are not reproduced, so the command is withheld
 		# (PR #5401 review round 12).
 		("bash -c $'mysql \\x2dpS3cretPass app'", "S3cretPass", "unparseable: bash"),

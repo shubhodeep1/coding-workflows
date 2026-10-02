@@ -608,6 +608,10 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 	if index >= len(tokens):
 		return shape
 	command = tokens[index].rsplit("/", 1)[-1] if not tokens[index].startswith(".") else tokens[index]
+	if "$(" in command or any(char.isspace() for char in command):
+		# A quoted command word holding a substitution or spaces (`"$(printf %s 'mysql -p…')"`) is arbitrary text, so
+		# it never reaches the shape (PR #5401 review round 13).
+		command = "*"
 	shape.append(command)
 	positionals = 0
 	subcommand = ""
@@ -775,6 +779,18 @@ def _word_credentials(word: str) -> set[str]:
 	return values
 
 
+def _shell_line_credentials(line: str, depth: int) -> set[str]:
+	"""Credential values in a command line a shell runs (`sh -c`, `env -S`, a here-string fed to a shell, `eval`).
+
+	Raises ValueError when the line holds a command substitution: whatever it prints becomes code the shell runs
+	(`bash -c "$(printf %s 'mysql -p…')"`), which no scan of the words can know, so the command is withheld (PR #5401
+	review round 13). This also withholds a harmless `bash -c 'echo $(date)'`, which is the safe side.
+	"""
+	if "$(" in line:
+		raise ValueError("command line built by a command substitution")
+	return _command_line_credentials(line, depth + 1)
+
+
 def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 	"""Credential values in one simple command: word credentials, credential long flags, the credential short flags of its credential commands, and the credentials of a shell's `-c` command line, an `env -S` command line, or a command substitution inside a quoted word.
 
@@ -782,6 +798,9 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 	"""
 	values: set[str] = set()
 	start = next((position for position, word in enumerate(words) if not _ASSIGNMENT_RE.match(word)), len(words))
+	if start + 1 < len(words) and _runner_basename(words[start]) == "eval":
+		# `eval` runs its arguments, joined by spaces, as a command line (PR #5401 review round 13).
+		values.update(_shell_line_credentials(" ".join(words[start + 1 :]), depth))
 	index = 0
 	while index < len(words):
 		word = words[index]
@@ -796,33 +815,33 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 		attached_command = _SHELL_COMMAND_CLUSTER_RE.match(word) if runner_before and not attached_flag else None
 		if attached_flag:
 			# `su --command='mysql -p…'`, `pwsh -Command:'mysql -p…'`: the attached text is a command line of its own.
-			values.update(_command_line_credentials(attached_flag.group(1), depth + 1))
+			values.update(_shell_line_credentials(attached_flag.group(1), depth))
 		elif runner_before and _SHELL_COMMAND_FLAG_RE.match(word):
 			# `su pg -c 'mysql -p…'`, `pwsh -C 'curl -u …'`: the next word is a command line of its own, or the
 			# first word after the shell's options (_shell_command_line_words). These words are still read as
 			# words of their own below, since a credential value can end in `c` (`sudo -u bash mysql
 			# -pSecretAbc`, user `bash`) and the next word is then not a command line.
 			for line in _shell_command_line_words(words, index):
-				values.update(_command_line_credentials(line, depth + 1))
+				values.update(_shell_line_credentials(line, depth))
 		elif attached_command:
 			# `su -c'mysql -p…'` carries the command line in the word; `bash -ce 'mysql -p…'` in the next
 			# word (or the first after the shell's options), which is still read as a word of its own below.
 			# The word itself is read as a flag too, since a user name such as `bash` before it (`sudo -u
 			# bash mysql -pScret…`) can match.
 			for line in _attached_command_lines(word):
-				values.update(_command_line_credentials(line, depth + 1))
+				values.update(_shell_line_credentials(line, depth))
 			if attached_command.group(2).isalpha():
 				for line in _shell_command_line_words(words, index):
-					values.update(_command_line_credentials(line, depth + 1))
+					values.update(_shell_line_credentials(line, depth))
 		if index - 1 > start and _split_string_runner_before(words, start, index - 1):
 			split_attached = _SPLIT_STRING_ATTACHED_RE.match(word)
 			if split_attached:
 				# `env -S'mysql -p…'`, `env --split-string='mysql -p…'`: the attached text is a command line of its own.
-				values.update(_command_line_credentials(_split_string_command_line(split_attached.group(2)), depth + 1))
+				values.update(_shell_line_credentials(_split_string_command_line(split_attached.group(2)), depth))
 			elif _SPLIT_STRING_FLAG_RE.match(word) and index < len(words):
 				# `env -S 'mysql -p…'`: the next word is a command line of its own, even when it starts with `-`; it is
 				# still read as a word of its own below.
-				values.update(_command_line_credentials(_split_string_command_line(words[index]), depth + 1))
+				values.update(_shell_line_credentials(_split_string_command_line(words[index]), depth))
 		if word.startswith("--"):
 			name, has_value, value = word.partition("=")
 			if _CREDENTIAL_LONG_FLAG_RE.match(name):
@@ -873,6 +892,7 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 	# True when the simple command being read gets the previous one's output on stdin: it follows a `|` or `|&`
 	# (also across a newline or a subshell's `(` right after it) or a `>(` process substitution.
 	piped_into = False
+	seen_segment = False
 	redirect = ""
 	for token in tokens + [";"]:
 		is_punctuation = bool(token) and set(token) <= set(_SHELL_PUNCTUATION_CHARS)
@@ -881,7 +901,7 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 			# (`bash <<< 'mysql -p…'`) is a command line of its own.
 			values.update(_segment_credentials([token], depth))
 			if redirect == "<<<" and (_segment_runs_a_shell(segment) or _segment_runs_a_shell(with_digits)):
-				values.update(_command_line_credentials(token, depth + 1))
+				values.update(_shell_line_credentials(token, depth))
 			redirect = ""
 			continue
 		redirect = ""
@@ -890,6 +910,16 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 				segment.pop()
 			redirect = token
 		elif is_punctuation:
+			command_word = next((word for word in segment if not _ASSIGNMENT_RE.match(word)), "")
+			# Unquoted, the lexer splits `$(` into `$` and `(`, so a bare `$` before `(` is a substitution too. In a
+			# nested parse of a substitution word (`$(mysql -p…)`), its own leading `$(` is not a command word.
+			bare_substitution = command_word == "$" and segment[-1] == "$" and token.startswith("(")
+			own_wrapper = bare_substitution and depth > 0 and not seen_segment
+			seen_segment = True
+			if ("$(" in command_word or bare_substitution) and not own_wrapper:
+				# A command substitution as the command word runs what it prints (`$(printf %s 'mysql -p…')`), which no
+				# scan of the words can know: withhold the command (PR #5401 review round 13).
+				raise ValueError("command word from a command substitution")
 			values.update(_segment_credentials(segment, depth))
 			if with_digits != segment:
 				values.update(_segment_credentials(with_digits, depth))

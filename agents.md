@@ -1154,7 +1154,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   URL userinfo, and credential query parameters become
   `***`. A command that cannot be parsed, that pipes text into a command
   with a shell among its words (`printf 'mysql -p…' | sh`, `… | docker run
-  -i img sh`, `… | ssh host sh`; `… | grep sh` too), or whose credential is
+  -i img sh`, `… | ssh host sh`; `… | grep sh` too), that runs code a
+  command substitution builds (`bash -c "$(…)"`, `eval "$(…)"`, a
+  substitution as the command word), or whose credential is
   shorter than 4 characters or does not occur verbatim, is withheld and
   only its shape is posted; the shape keeps no raw text
   (`unparseable: <command word>`, `-u*` for an attached value). Other
