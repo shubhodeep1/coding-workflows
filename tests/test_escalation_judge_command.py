@@ -104,7 +104,11 @@ def test_every_choice_reaches_the_report_step(judge):
 def test_judge_close_path(judge):
 	close = judge[judge.index("**`close`** → close the project yourself"):judge.index("9. **Report**")]
 	assert "`state_reason: not_planned`" in close
-	assert "Never delete a branch and never close anything the chain did not open." in close
+	# The source issue predates the chain, so the ownership rule must not read
+	# as forbidding its close (review round 1 on c5d9082).
+	assert "Never delete a branch and never close a PR the chain did not open." in close
+	assert "The source issue is the one thing you close that the chain did not open: in issue mode, close it as above (the issue the plan header's `Source issue:` line names, and no other issue)." in close
+	assert "never close anything the chain did not open" not in close
 	assert "Archive the project checker after the checker archive check" in close
 	assert "send **one** `PushNotification`" in close
 	assert "`Status: CLOSED (not planned, ES-<n>)`" in close
@@ -221,6 +225,8 @@ def test_judge_close_checks_the_head_ref_before_closing(judge):
 	section = claude.split("### G) Escalation Judge", 1)[1].split("## FINAL REMINDER", 1)[0]
 	assert "it closes a PR from the log only when its author is the account the chain opens its PRs with (the `mcp__github__get_me` login), its head is in this repository, and its head and base refs prove it is this project's" in section
 	assert "so a project whose slug starts with this one's is never matched, a PR another account opened from a branch named like the chain's is never closed, and it lists any other PR in its report instead" in section
+	assert "never closes a PR the chain did not open (the one thing it closes that the chain did not open is the source issue the plan header names, in issue mode)" in section
+	assert "never closes anything the chain did not open" not in section
 
 
 def test_judge_close_report_says_to_reopen_the_issue_first(judge):
@@ -310,13 +316,13 @@ def test_security_clean_pass_checks_earlier_followups(plan):
 	# while the finding is unfixed (review round 1 on 8950396).
 	step9 = plan[plan.index("9. **Security pass"):plan.index("10. **Runtime validation.**")]
 	clean = step9[step9.index("**Conclusion `success` and no follow-up issues opened"):step9.index("**Follow-up issues opened**")]
-	assert "the pass is clean, and you go to step 10, only when the run skipped as unchanged or audited and its run line reports `findings=0`" in clean
+	assert "the pass is clean, and you go to step 10, only when the run audited and its run line reports `findings=0`, or it skipped as unchanged and the log's `## Security pass` lists no follow-up issue from an earlier cycle" in clean
 	assert "`scripts/security_audit.sh` matches the `ai:security-finding` marker on every `ai:security` issue" in clean
 	assert "A follow-up issue the log's `## Security pass` lists that is still open and not blocked → arm the wait on the issue list again (next stage `security-pass <k+1>/5`)" in clean
 	assert "Otherwise (every listed follow-up is closed, with or without `ai:merged`, or one is blocked) → escalation stop `security-followup-unmerged`" in clean
 	assert "→ the pass is clean; go to step 10." not in clean
 	assert "a pass is clean only when it opened no follow-up and surfaced no finding: a finding it still reports is unfixed even when its earlier follow-up merged (step 9)" in plan
-	table_row = "| `security-followup-unmerged` | step 9 | a follow-up closed without a merged PR, or blocked, or a finding the audit still reports after its follow-up closed |"
+	table_row = "| `security-followup-unmerged` | step 9 | a follow-up closed without a merged PR, or blocked, or a finding the audit still reports after its follow-up closed, or a run skipped as unchanged after follow-ups were listed |"
 	assert table_row in plan
 
 
@@ -334,6 +340,21 @@ def test_security_finding_reported_after_its_followup_merged_is_not_clean(plan):
 	assert "either surfaced no finding or every earlier follow-up is closed with `ai:merged`" not in plan
 	# The repeat stop names the follow-ups that cover a finding the run still lists.
 	assert "whose evidence names the follow-up issues whose `ai:security-finding` marker matches a `Finding ID:` the run's tracker section still lists" in clean
+
+
+def test_security_skip_as_unchanged_after_followups_is_not_clean(plan):
+	# A legacy-mode audit skips when the default branch has no content change
+	# since its last audit, so after a blocked or unmerged follow-up (a `budget`
+	# re-dispatch on the same head) a skip audits nothing while the finding is
+	# unfixed (review round 2 on ad82b56).
+	step9 = plan[plan.index("9. **Security pass"):plan.index("10. **Runtime validation.**")]
+	clean = step9[step9.index("**Conclusion `success` and no follow-up issues opened"):step9.index("**Follow-up issues opened**")]
+	assert "the pass is clean, and you go to step 10, only when the run skipped as unchanged or audited" not in clean
+	assert "A skip audits nothing: it means the default branch has no content change since the commit the tracker last audited (legacy mode only; a branch audit never skips), so no follow-up fix has reached it since that audit." in clean
+	assert "A skip while the log lists follow-ups is therefore handled like a run that reports `findings` above 0, below." in clean
+	assert clean.index("A skip while the log lists follow-ups") < clean.index("A follow-up issue the log's `## Security pass` lists that is still open and not blocked")
+	assert "(for a skipped run, which writes no tracker section, every follow-up the log lists)" in clean
+	assert "and a skip as unchanged is clean only while the log lists no follow-up." in plan
 
 
 def test_judge_descope_applied_in_names_the_blocked_pr_for_intervention_cap(judge, plan):

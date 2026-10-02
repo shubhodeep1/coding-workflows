@@ -84,9 +84,10 @@ evidence, `record` evidence that does not give `--fingerprint`, not
 exactly one readable `--why` / `--why-file`, a reason holding `<!--` or
 `-->`, an `--evidence-file` or
 `--why-file` outside the session scratchpad, a used choice); 2 when the
-log cannot be read or an `## Escalations` line is malformed (a line that
-starts `- ` but does not match the format, a date that is not a real
-calendar date, or a repeated `ES-<n>` id). A log without an
+log cannot be read or an `## Escalations` line is malformed (any
+non-blank line that does not start with a space or a tab and does not
+match the format, with or without a leading `- `, a date that is not a
+real calendar date, or a repeated `ES-<n>` id). A log without an
 `## Escalations` section has no entries.
 
 No GitHub API calls and no network (CLAUDE.md §15): the script reads the

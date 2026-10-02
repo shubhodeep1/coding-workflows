@@ -897,7 +897,8 @@ entries become `confirmed` at LIVE. Failure escalations are not
 auto-decided: used-up caps, security or validation runs that did not
 succeed, terminal validation classes, security follow-ups closed unmerged
 or blocked (or closed while the audit still reports their finding: a
-security pass is clean only when its run reports `findings=0`), and a
+security pass is clean only when its run reports `findings=0`, or skips
+as unchanged before any follow-up was listed), and a
 defective fix check. They go to the escalation judge
 (below). §22.B / §23.C / §24.D operations still stop the chain at
 `BLOCKED` for a human. The AI orchestrator's own clarify auto-answer
