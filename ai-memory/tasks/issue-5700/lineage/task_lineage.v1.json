@@ -6,6 +6,11 @@
   "memory_record_ids": [],
   "prs": [
     {
+      "pr_number": 5713,
+      "state": "merged",
+      "url": "https://github.com/shubhodeep1/coding-workflows/pull/5713"
+    },
+    {
       "pr_number": 5923,
       "state": "merged",
       "url": "https://github.com/shubhodeep1/coding-workflows/pull/5923"
@@ -18,9 +23,16 @@
       "status": "merged",
       "timestamp": "2026-10-01T06:55:04Z",
       "workflow": "Internal: Issue-PR Status Sync"
+    },
+    {
+      "run_attempt": 1,
+      "run_id": "36949593948",
+      "status": "merged",
+      "timestamp": "2026-10-02T01:11:28Z",
+      "workflow": "Internal: Issue-PR Status Sync"
     }
   ],
   "schema_version": "task_lineage.v1",
   "state": "merged",
-  "updated_at": "2026-10-01T06:55:04Z"
+  "updated_at": "2026-10-02T01:11:28Z"
 }
