@@ -389,7 +389,7 @@ fi
     echo "Failing check runs on this head: \`${claude_fixer_failed_checks//,/\`, \`}\`."
   fi
   if [ "${claude_fixer_panel_floor_met}" = "false" ]; then
-    echo "Only ${REVIEWERS_SUCCESSFUL:-0} of ${claude_fixer_panel_active} reviewers returned a result, below the panel floor (half of the active panel), so this round is not clean even when the ledger has no finding. With no finding there is nothing for the GPT judge to rule on (a \`claude_fixer_judge_head\` dispatch decides nothing and labels the PR \`ai:review-blocked\`): push a new commit, or use the verdict-bot path below, so the reviewers run again."
+    echo "Only ${REVIEWERS_SUCCESSFUL:-0} of ${claude_fixer_panel_active} reviewers returned a result, below the panel floor (half of the active panel), so this round is not clean whatever the ledger says. When the ledger has no finding there is nothing for the GPT judge to rule on (a \`claude_fixer_judge_head\` dispatch decides nothing and labels the PR \`ai:review-blocked\`): push a new commit, or use the verdict-bot path below, so the reviewers run again."
   fi
   if [ -n "${claude_fixer_ledger_digest}" ]; then
     echo "Ledger SHA-256: \`${claude_fixer_ledger_digest}\`."

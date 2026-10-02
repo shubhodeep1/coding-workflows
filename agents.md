@@ -114,9 +114,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    (`judge_skip_reason=claude_fixer_fix_count_unreadable`), as does a
    failed decide helper (`claude_fixer_decide_failed`, apart from
    `claude_fixer_no_rulings`), and a hand-off ledger with no finding
-   (`claude_fixer_no_findings`: a round below the #5964 reviewer panel floor,
-   which the hand-off comment names; only a new review run can clear it, so
-   the judge never merges it as "nothing upheld"). One verdict
+   (`claude_fixer_no_findings`: usually a round below the #5964 reviewer
+   panel floor, which the hand-off comment names, or a clean ledger beside a
+   failing check; only a new review run or a fix can clear it, so the judge
+   never merges it as "nothing upheld"). One verdict
    comment ending `<!-- ai:claude-fixer-judge:v1 head=<sha> round=<r>
    run=<id> decision=<d> -->` is posted. The rulings ride in that run's
    evidence artifact (uploaded by "Upload Claude-fixer judge evidence"); the

@@ -7,8 +7,8 @@ sessions stuck on a permission prompt. Without the flag the script also
 applies the archive rules below to the automation sessions (issue
 implementation sessions, `/implement-plan-claude` stages and checkers,
 CLAUDE.md §26 checkers and `/fix-claude-pr` fixers) and prints the ids a
-caller would archive; since operator decision Q3: A nothing runs it that
-way. The script never archives anything itself.
+caller would archive; since operator decision Q3 (option A) nothing runs
+it that way. The script never archives anything itself.
 
 It also lists the sessions stuck on a permission prompt (D12), so the pickup
 can notify once per stall and file it as an `ai:permission-prompt` issue.

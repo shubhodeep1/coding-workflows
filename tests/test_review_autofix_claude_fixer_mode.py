@@ -573,7 +573,7 @@ def test_handoff_below_panel_floor_is_not_clean():
 		assert len(calls) == 1 and "kind=findings" in calls[0]["payload"]["body"]
 		body = calls[0]["payload"]["body"]
 		assert f"Only {successful} of {len(statuses)} reviewers returned a result, below the panel floor" in body
-		assert "there is nothing for the GPT judge to rule on" in body
+		assert "When the ledger has no finding there is nothing for the GPT judge to rule on" in body
 
 
 def test_handoff_above_panel_floor_has_no_floor_note():
