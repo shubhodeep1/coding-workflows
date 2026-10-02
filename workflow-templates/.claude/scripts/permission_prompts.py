@@ -416,6 +416,27 @@ def _split_string_runner_before(words: list[str], start: int, position: int) -> 
 	return any(earlier.rsplit("/", 1)[-1] in _SPLIT_STRING_RUNNERS for earlier in words[start:position])
 
 
+def _split_string_command_line(text: str) -> str:
+	"""An `env -S` argument as the shell lexer should read it: GNU env's `\\_` is a word break outside quotes and a space
+	inside double quotes, so it becomes a space everywhere except inside single quotes, where env keeps it literal."""
+	output: list[str] = []
+	single_quoted = double_quoted = False
+	index = 0
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and not single_quoted:
+			output.append(" " if text[index + 1 : index + 2] == "_" else text[index : index + 2])
+			index += 2
+			continue
+		if char == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif char == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		output.append(char)
+		index += 1
+	return "".join(output)
+
+
 def _shell_command_line_words(words: list[str], index: int) -> list[str]:
 	"""The words from `index` that may hold a shell's command line: each one up to and including the first that does not start with `-`.
 
@@ -546,11 +567,16 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 					elif shape[-1] != "*":
 						shape.append("*")
 				continue
-			if split_before and _SPLIT_STRING_FLAG_RE.match(token) and index < len(tokens) and not tokens[index].startswith("\x00"):
-				# `env -S 'mysql -p…'`: the next word is a command line, never part of the shape (not even as a script name).
-				index += 1
-				if shape[-1] != "*":
-					shape.append("*")
+			if split_before and _SPLIT_STRING_FLAG_RE.match(token):
+				# `env -S 'mysql -p…'`: the next word is a command line, never part of the shape (not even as a script
+				# name). A redirection before it (`env -S 2>/dev/null '…'`) keeps its operator and does not end the flag.
+				while index < len(tokens) and tokens[index].startswith("\x00"):
+					shape.append(tokens[index][1:])
+					index += 1
+				if index < len(tokens):
+					index += 1
+					if shape[-1] != "*":
+						shape.append("*")
 				continue
 			if index < len(tokens) and tokens[index].startswith("-") and _credential_flag_awaits_value(token, command, subcommand, _segment_flag_letters(tokens, command_position, index - 1)):
 				# A next word that starts with `-` may be this flag's value (`--password -s3cret`): it never reaches the shape.
@@ -690,11 +716,11 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 			split_attached = _SPLIT_STRING_ATTACHED_RE.match(word)
 			if split_attached:
 				# `env -S'mysql -p…'`, `env --split-string='mysql -p…'`: the attached text is a command line of its own.
-				values.update(_command_line_credentials(split_attached.group(2), depth + 1))
+				values.update(_command_line_credentials(_split_string_command_line(split_attached.group(2)), depth + 1))
 			elif _SPLIT_STRING_FLAG_RE.match(word) and index < len(words):
 				# `env -S 'mysql -p…'`: the next word is a command line of its own, even when it starts with `-`; it is
 				# still read as a word of its own below.
-				values.update(_command_line_credentials(words[index], depth + 1))
+				values.update(_command_line_credentials(_split_string_command_line(words[index]), depth + 1))
 		if word.startswith("--"):
 			name, has_value, value = word.partition("=")
 			if _CREDENTIAL_LONG_FLAG_RE.match(name):

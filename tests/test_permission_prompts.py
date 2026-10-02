@@ -401,6 +401,12 @@ def _bash(command):
 		("env --split-string='sshpass -p hunter22 ssh host'", "hunter22", "env --split-string='sshpass -p *** ssh host'"),
 		("env --split='mysql -pS3cretPass app'", "S3cretPass", "env --split='mysql -p*** app'"),
 		("sudo env -u HOME -S 'mysql -pS3cretPass ./run.sh'", "S3cretPass", "sudo env -u HOME -S 'mysql -p*** ./run.sh'"),
+		# A redirection between `-S` and its argument does not end the flag, and GNU env's `\_` is a word break
+		# outside quotes (PR #5401 review round 4).
+		("env -S 2>/dev/null 'mysql -pS3cretPass ./run.sh'", "S3cretPass", "env -S 2>/dev/null 'mysql -p*** ./run.sh'"),
+		("env -S 'mysql\\_-pS3cretPass app'", "S3cretPass", "env -S 'mysql\\_-p*** app'"),
+		("env -S \"mysql\\_-pS3cretPass app\"", "S3cretPass", "env -S \"mysql\\_-p*** app\""),
+		("env -iS'mysql\\_-pS3cretPass'", "S3cretPass", "env -iS'mysql\\_-p***'"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -560,6 +566,8 @@ def test_credential_free_commands_are_unchanged(command):
 		("env -iS'mysql -pS3cretPass app'", "env -iS*"),
 		("env --split-string='mysql -pS3cretPass app'", "env --split-string=*"),
 		("sudo env -S 'mysql -pS3cretPass ./run.sh'", "sudo * -S *"),
+		("env -S 2>/dev/null 'mysql -pS3cretPass ./run.sh'", "env -S 2> *"),
+		("env -S >out 'sshpass -p hunter22 ./x.sh'", "env -S > *"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):
@@ -1408,3 +1416,18 @@ def test_ci_runs_the_helper_tests():
 	text = CI_WORKFLOW.read_text(encoding="utf-8")
 	for name in ("tests/test_permission_prompts.py", "tests/test_dispatch_workflow.py", "tests/test_edit_comment.py"):
 		assert name in text
+
+
+@pytest.mark.parametrize(
+	("text", "expected"),
+	[
+		("mysql\\_-pX app", "mysql -pX app"),
+		('printf "a\\_b" c', 'printf "a b" c'),
+		("printf 'a\\_b' c", "printf 'a\\_b' c"),
+		("a\\\\_b", "a\\\\_b"),
+	],
+)
+def test_split_string_reads_gnu_env_word_breaks(text, expected):
+	"""GNU env -S (coreutils 9.4): `\\_` splits words outside quotes, is a space inside double quotes, and stays
+	literal inside single quotes; an escaped backslash before `_` is not a break (PR #5401 review round 4)."""
+	assert pp_mask_twin._split_string_command_line(text) == expected
