@@ -25,7 +25,7 @@ Turn #4525 around: if **Actions starts every working session**, no session ever 
 
 ### Spike evidence (tested before planning, 2026-10-02)
 
-All tests ran in `shubhodeep1/claude-workers`, branch `claude/eager-cori-7gq5zg`, workflow `.github/workflows/pool-spike.yml`, with two pool tokens `CLAUDE_POOL_TOKEN_TEST1` / `CLAUDE_POOL_TOKEN_TEST2` made with `claude setup-token`. Runs: 36956599290, 36956731182, 36957004234, 36957134545, 36961744547, 36964341979, 36964451668.
+All tests ran in `shubhodeep1/claude-workers`, branch `claude/eager-cori-7gq5zg`, workflow `.github/workflows/pool-spike.yml`, with two pool tokens `CLAUDE_POOL_TOKEN_TEST1` / `CLAUDE_POOL_TOKEN_TEST2` made with `claude setup-token`. Runs: 36956599290, 36956731182, 36957004234, 36957134545, 36961744547, 36964341979, 36964451668, and 37010604783 (branch `claude/pool-spike-r8`, S20–S21).
 
 | Ref | Function | Result |
 |---|---|---|
@@ -48,6 +48,8 @@ All tests ran in `shubhodeep1/claude-workers`, branch `claude/eager-cori-7gq5zg`
 | S17 | Reusable workflow with `secrets: inherit` | ✅ inside the called workflow S1, S2 and a Claude run all work |
 | S18 | Fixed start-up cost | a worker in a `coding-workflows` checkout writes ~58k tokens of cache before doing anything (~$0.21–0.24 at Sonnet list price), once per job |
 | S19 | Making a token without installing anything | `npx -y @anthropic-ai/claude-code setup-token` runs Claude Code from npm's cache; tested beside a custom `claude` on `PATH`, which stayed untouched |
+| S20 | A **fine-grained** token (all repos; actions, contents, issues, pull requests, workflows read/write; commit statuses read) on all 15 registered repos | Commit statuses, Actions runs and pull requests read everywhere. Check runs read on the public `coding-workflows` only; on all 14 private repos `GET …/commits/<ref>/check-runs` returns `Resource not accessible by personal access token` (fine-grained tokens have no Checks permission). `check_in_status.py` and `/fix-claude-pr` read check runs, so the workers' token must be a classic token with `repo` scope (Q32) |
+| S21 | Remote GitHub MCP (`https://api.githubcopilot.com/mcp/`) with that fine-grained token | ✅ `get_file_contents` read `README.md` from the private `claude-workers` |
 
 Platform facts from the docs (code.claude.com/docs/en/authentication): a `setup-token` token lasts one year, authenticates with the subscription, and **can only make model requests**: no claude.ai connectors, no Remote Control, no `create_session`.
 
@@ -77,15 +79,17 @@ Platform facts from the docs (code.claude.com/docs/en/authentication): a `setup-
 | Q20 | A | A `claude/*` PR fix is queued as soon as it is due, at the next sweep |
 | Q21 | A | A worker that fails (usage limit, crash, timeout) is re-queued on another account and restarts from GitHub state; unpushed work is lost |
 | Q22 | C | No per-account cap on concurrent jobs; only the 90% usage gate |
-| Q23 | A | A new fine-grained token for `shubhodeep1`: `GH_PAT` in `claude-workers`, `CLAUDE_POOL_DISPATCH_TOKEN` in `coding-workflows` |
+| Q23 | A | A new token for `shubhodeep1`: `GH_PAT` in `claude-workers`, `CLAUDE_POOL_DISPATCH_TOKEN` in `coding-workflows` (token types settled by Q32; the operator chose "all repositories" and no expiration for both on 2026-10-02) |
 | Q24 | A | Workers get no DigitalOcean or Cloudflare credentials (CLAUDE.md §22, §24.G unchanged) |
 | Q25 | A | Pool alerts go to Telegram from the `coding-workflows` dispatcher |
 | Q26 | A | Each worker's transcript is an Actions artifact in `claude-workers`, kept 14 days |
 | Q27 | A | Rollout one item type at a time; the pickup and checkers keep running until a type is switched; the last phase retires them |
 | Q28 | A | Five phases (below) |
-| Q29 | A | Four risks accepted as pending discovery (see Risks) |
+| Q29 | A | Four risks accepted as pending discovery (see Risks); the GitHub MCP one is now resolved by S21 |
 | Q30 | A | The per-type switch is a committed file, `.github/ai/claude_pool.json`, read by the dispatcher and the pickup (cloud sessions cannot read repo variables, §23.A) |
 | Q31 | A | Each worker run probes every pool account and picks the least-used one under 90% |
+| Q32 | A | After S20: workers use a **classic** token (`repo` and `workflow` scopes, no expiration) as `GH_PAT` in `claude-workers`; the fine-grained token stays as `CLAUDE_POOL_DISPATCH_TOKEN` in `coding-workflows` (the dispatcher never reads check runs). Supersedes the token type in Q23 |
+| Q33 | A | The plan records S20–S21 and the token change |
 
 ## Automation wiring (§18.E)
 
@@ -183,7 +187,7 @@ One committed file, read by the dispatcher, the sweep, the worker workflow (from
 The wrapper is a thin `workflow_dispatch` workflow whose inputs are `queue_issue`, `item_type`, `attempt`, `exclude_accounts` and `payload_b64` (the queue item's fire text, base64). `run-name: pool ${{ inputs.item_type }} q${{ inputs.queue_issue }} a${{ inputs.attempt }}` is the contract the dispatcher reads; no other state store exists. It calls the reusable workflow with `secrets: inherit` (S17). The reusable workflow:
 
 1. **select** (timeout 10 min): check out `coding-workflows@main` (public). Install the CLI (`cli_version`). Read account names from `toJSON(secrets)` keys matching `^CLAUDE_POOL_TOKEN_[A-Z0-9_]+$` (S1), minus `exclude_accounts`. For each: normalise the token (strip whitespace, add-mask; S3), run the Haiku probe (S8), record `utilization`, `resetsAt`, `status`, or the probe error. `scripts/claude_pool.py choose` picks the lowest `max(five_hour, seven_day)` below `gate_utilization`; ties go to the alphabetically first name. Outputs `account` or `outcome=all_gated` (with the earliest `resetsAt`) / `outcome=no_accounts`. Probe errors classify as `auth_failed` (S15 text) or `probe_failed`, and that account is skipped.
-2. **work** (needs select; timeout from `timeout_minutes`): check out the target repo with `secrets.GH_PAT` (full history), mark it trusted in `~/.claude.json` (S10), write the anchored deny settings for `<checkout>/.claude/**` (S13), write the MCP config naming the server `github` with `GH_PAT` (S11), set `CLAUDE_CODE_OAUTH_TOKEN` from the chosen secret (S2, S3), `GH_TOKEN` = `GH_PAT`, `CLAUDE_POOL_WORKER=1`, `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` / `CLAUDE_FIXER_VERDICT_BOT_LOGIN` from the config file, then run:
+2. **work** (needs select; timeout from `timeout_minutes`): check out the target repo with `secrets.GH_PAT` (a classic `repo` + `workflow` token, because fine-grained tokens cannot read check runs on private repos, S20; full history), mark it trusted in `~/.claude.json` (S10), write the anchored deny settings for `<checkout>/.claude/**` (S13), write the MCP config naming the server `github` with `GH_PAT` (S11), set `CLAUDE_CODE_OAUTH_TOKEN` from the chosen secret (S2, S3), `GH_TOKEN` = `GH_PAT`, `CLAUDE_POOL_WORKER=1`, `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` / `CLAUDE_FIXER_VERDICT_BOT_LOGIN` from the config file, then run:
    ```
    claude -p "<prompt built by claude_pool.py prompt>" --model <worker_model> --effort <worker_effort> \
      --permission-mode auto --settings <deny.json> --mcp-config <mcp.json> \
@@ -330,7 +334,7 @@ Phases 3 and 4 both add to `scripts/claude_pool_sweep.py` and `.github/workflows
 ## Tests
 
 - **Unit** (pytest, each new file in its own `ci.yml` step): token normalisation; account discovery from secret keys with excludes and invalid names; probe parsing from the spike transcripts; choose (lowest max utilization, the 0.90 gate, ties, all gated, unknown utilization, failed probes); prompts per type; classify (success, the S15 auth error, simulated usage-limit rejection, crash, missing result); dispatcher state machine per newest-run state, attempts, excludes, gate wait, Telegram dedupe, API-call counts; sweep marker trust, `seq` dedupe, routing, stage payload build/parse, terminal dedupe; `queue-pending` pool filter on/off/missing file.
-- **Integration (live, automated):** the runner-repo smoke job on every push to a `claude/**` branch of `claude-workers` (S1–S3, S8, S13 end to end); a dispatcher tick with the pool off; a sweep tick with no waits.
+- **Integration (live, automated):** the runner-repo smoke job on every push to a `claude/**` branch of `claude-workers` (S1–S3, S8, S13 end to end, plus a `GH_PAT` check-runs read on one private consumer repo and one GitHub MCP read, S20–S21); a dispatcher tick with the pool off; a sweep tick with no waits.
 - **End to end (activation):** after the gates below, one type at a time: switch `pr_fix`, confirm a real `claude/*` PR fix runs on the pool and the queue item closes with `Completed:`; then `issue`; then `stage` on a small project.
 - **Static:** `tests/test_workflow_file_size_limit.py` covers the new workflows; a test asserts no `coding-workflows` workflow references `CLAUDE_POOL_TOKEN`.
 
@@ -338,7 +342,8 @@ Phases 3 and 4 both add to `scripts/claude_pool_sweep.py` and `.github/workflows
 
 - **A real usage-limit rejection may look different from the simulation.** ACCEPTED — pending the first production occurrence (Q7, Q29). The classifier treats any `is_error` with `rate_limit_info.status: rejected` or utilization ≥ 1.0 as `usage_limit`, and an unrecognised failure still re-dispatches as `crashed`.
 - **GitHub-hosted jobs stop at 6 hours.** ACCEPTED — pending (Q29). `timeout_minutes` stays at 350; a stage that times out is re-dispatched (Q21) and resumes from the progress log.
-- **The GitHub MCP server with the new fine-grained token** was tested only with the runner's `GITHUB_TOKEN` (S11). ACCEPTED — pending the phase 1 smoke run with `GH_PAT`; the fallback is the Docker server.
+- **The GitHub MCP server with a personal token.** RESOLVED by S21 (remote server, fine-grained token, private repo read). The phase 1 smoke run repeats the check with the classic `GH_PAT`; the fallback is the Docker server.
+- **Broad, non-expiring tokens.** `GH_PAT` (classic, `repo` + `workflow`) and `CLAUDE_POOL_DISPATCH_TOKEN` (fine-grained, all repositories) never expire and reach every repository `shubhodeep1` owns. ACCEPTED — operator choice (Q32, 2026-10-02) so new consumer repos need no token change. Mitigation: each lives in one repo's Actions secrets only, is never echoed, and is revoked at github.com/settings/tokens or /settings/personal-access-tokens if it leaks.
 - **Terms of service for rotating personal accounts.** ACCEPTED — operator decision on 2026-09-30, reaffirmed in Q29.
 - **Unpushed work is lost when a worker fails** (Q21). Mitigation: the commands already push per step and per PR; re-dispatch restarts from GitHub.
 - **No per-account cap** (Q22): many parallel jobs can push one account past 90% within a single 5-hour window, since the gate is read only at job start. Mitigation: failover on `usage_limit`; operators can add accounts.
@@ -351,7 +356,9 @@ Phases 3 and 4 both add to `scripts/claude_pool_sweep.py` and `.github/workflows
 ## Rollout
 
 **Activation gates (human, once, none per account):**
-1. Create a fine-grained token for `shubhodeep1` with contents, pull requests, issues and workflows read/write, and actions read/write, on `coding-workflows`, the 13 consumer repos and `claude-workers`. Store it as `GH_PAT` in `claude-workers` and `CLAUDE_POOL_DISPATCH_TOKEN` in `coding-workflows` (Q23).
+1. GitHub tokens (Q23, Q32):
+   - `CLAUDE_POOL_DISPATCH_TOKEN` in `coding-workflows`: fine-grained token `claude-pool`, all repositories, no expiration, actions/contents/issues/pull requests/workflows read and write, commit statuses read. **Done 2026-10-02.**
+   - `GH_PAT` in `claude-workers`: a **classic** token `claude-pool-workers` with `repo` and `workflow` scopes and no expiration, replacing the fine-grained value stored there on 2026-10-02 (S20). The phase 1 smoke run confirms it reads check runs on a private consumer repo.
 2. Merge the phase 1 wrapper PR in `claude-workers` (a default-branch merge; §23.C).
 3. Add the production account secrets `CLAUDE_POOL_TOKEN_<NAME>` (made with `npx -y @anthropic-ai/claude-code setup-token`) and delete `CLAUDE_POOL_TOKEN_TEST1` / `TEST2` if those accounts are not pool members.
 
