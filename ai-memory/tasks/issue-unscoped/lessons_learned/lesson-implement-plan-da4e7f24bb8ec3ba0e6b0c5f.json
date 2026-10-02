@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T19:39:20Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A report that groups records from several session log files must order them by timestamp, because the files are named by session id; and a check against one checkout's settings must skip records whose `cwd` lies outside that checkout.",
+  "phase": "implement_plan",
+  "pr_number": 5918,
+  "record_id": "lesson-implement-plan-da4e7f24bb8ec3ba0e6b0c5f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5899-flag-allowlisted-classifier-denials",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}
