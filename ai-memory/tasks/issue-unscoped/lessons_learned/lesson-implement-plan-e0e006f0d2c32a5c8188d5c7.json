@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T05:42:30Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A parser that reads a git command's options must follow git's parse-options rules: a short-option cluster (`-fd` is `-f -d`, `-uo <v>` is `-u -o <v>`) and any unambiguous long-option prefix (`--del`, `--pu <v>`, `--rep <v>`) count as the option, or an option value shifts the positionals and the guard judges the wrong ref.",
+  "phase": "implement_plan",
+  "pr_number": 6070,
+  "record_id": "lesson-implement-plan-e0e006f0d2c32a5c8188d5c7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5144-merge-guard-effective-repo",
+    "file:.claude/hooks/pr_merge_status_guard.py"
+  ]
+}
