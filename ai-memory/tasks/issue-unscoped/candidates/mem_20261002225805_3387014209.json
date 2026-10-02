@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: After a usage-limit stop, the pickup should send each stopped session one Resume trigger on its first wake after the reset.\n  expected_change_site: .claude/commands/claude-issue-pickup.md step 1a; .claude/scripts/usage_limit_resumes.py; .claude/scripts/stale_routines.py; .claude/settings.json; tests/test_usage_limit_resumes.py\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Step 1a is present at .claude/commands/claude-issue-pickup.md:38-77; the selector is at .claude/scripts/usage_limit_resumes.py:128-643; the sweep name is at .claude/scripts/stale_routines.py:38-40 and 77; the allow rules are at .claude/settings.json:50-51; 999-line test file at tests/test_usage_limit_resumes.py covers every skip reason, the cap, the ordering, the hold-off, the trigger names, the prompts, and malformed input.\n- requirement: Resumes must be authorized by server-set session fields (source, origin, parent_session_id) so unrelated sessions are never resumed (#6101).\n  expected_change_site: .claude/scripts/usage_limit_resumes.py _unauthorized_reason, _skip_reason, load_allowed_repos, session_repos; tests/test_usage_limit_resumes.py\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: _unauthorized_reason at .claude/scripts/usage_limit_resumes.py:336-348; wired after the pickup check in _skip_reason at .claude/scripts/usage_limit_resumes.py:495-497; new skip reasons no_repo/foreign_repo/unknown_origin/no_lineage documented and tested (tests/test_usage_limit_resumes.py:757-826); the four new skip-reason tests at tests/test_usage_limit_resumes.py:756-825 cover both signals.\n- requirement: Stale Routine sweep must delete ended `Resume after usage limit (...)` triggers.\n  expected_change_site: .claude/scripts/stale_routines.py USAGE_LIMIT_RESUME_NAME_PATTERN; tests/test_stale_routines.py\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Pattern at .claude/scripts/stale_routines.py:77; is_ours updated at .claude/scripts/stale_routines.py:109-110; three ownership tests at tests/test_stale_routines.py:91-93 and three non-ownership tests at tests/test_stale_routines.py:121-123; parity test at tests/test_stale_routines.py:20-21.\n- requirement: Document the new env var CLAUDE_USAGE_LIMIT_RESUME_LIMIT, the step 1a report fields, and the security authorization.\n  expected_change_site: README.md, agents.md, CLAUDE.md \u00a726.G, docs/operations/master-session.md, changelog.d/5660-..., changelog.d/6101-...\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: README.md Required Variables row at line 2099; agents.md \"Usage-limit resumes\" block at lines 303-380; CLAUDE.md \u00a726.G at lines 2088-2090; master-session.md row at line 144 and replacement note at lines 231-234; two changelog fragments.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: After a usage-limit stop, the pickup should send each stopped session one Resume trigger on its first wake after the reset.\n  Expected change site: .claude/commands/claude-issue-pickup.md step 1a; .claude/scripts/usage_limit_resumes.py; .claude/scripts/stale_routines.py; .claude/settings.json; tests/test_usage_limit_resumes.py\n  Evidence of absence: Step 1a is present at .claude/commands/claude-issue-pickup.md:38-77; the selector is at .claude/scripts/usage_limit_resumes.py:128-643; the sweep name is at .claude/scripts/stale_routines.py:38-40 and 77; the allow rules are at .claude/settings.json:50-51; 999-line test file at tests/test_usage_limit_resumes.py covers every skip reason, the cap, the ordering, the hold-off, the trigger names, the prompts, and malformed input.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Resumes must be authorized by server-set session fields (source, origin, parent_session_id) so unrelated sessions are never resumed (#6101).\n  Expected change site: .claude/scripts/usage_limit_resumes.py _unauthorized_reason, _skip_reason, load_allowed_repos, session_repos; tests/test_usage_limit_resumes.py\n  Evidence of absence: _unauthorized_reason at .claude/scripts/usage_limit_resumes.py:336-348; wired after the pickup check in _skip_reason at .claude/scripts/usage_limit_resumes.py:495-497; new skip reasons no_repo/foreign_repo/unknown_origin/no_lineage documented and tested (tests/test_usage_limit_resumes.py:757-826); the four new skip-reason tests at tests/test_usage_limit_resumes.py:756-825 cover both signals.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Stale Routine sweep must delete ended `Resume after usage limit (...)` triggers.\n  Expected change site: .claude/scripts/stale_routines.py USAGE_LIMIT_RESUME_NAME_PATTERN; tests/test_stale_routines.py\n  Evidence of absence: Pattern at .claude/scripts/stale_routines.py:77; is_ours updated at .claude/scripts/stale_routines.py:109-110; three ownership tests at tests/test_stale_routines.py:91-93 and three non-ownership tests at tests/test_stale_routines.py:121-123; parity test at tests/test_stale_routines.py:20-21.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Document the new env var CLAUDE_USAGE_LIMIT_RESUME_LIMIT, the step 1a report fields, and the security authorization.\n  Expected change site: README.md, agents.md, CLAUDE.md \u00a726.G, docs/operations/master-session.md, changelog.d/5660-..., changelog.d/6101-...\n  Evidence of absence: README.md Required Variables row at line 2099; agents.md \"Usage-limit resumes\" block at lines 303-380; CLAUDE.md \u00a726.G at lines 2088-2090; master-session.md row at line 144 and replacement note at lines 231-234; two changelog fragments.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e58bf3e1fbd3d969e54df5191d3a47e3bdf600cd60cf9aa07d4c6ecbe99af254",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37073851899",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37073851899",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002225805_3387014209",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37073851899"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T22:58:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
