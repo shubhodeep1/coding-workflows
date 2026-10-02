@@ -442,7 +442,7 @@ elif any(a.endswith('/comments') for a in args) and 'GET' in args:
 """
 
 
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, fresh_failed: str = "", fresh_head: str = HEAD, extra_env: dict | None = None, evidence_helper: bool = True):
+def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, fresh_failed: str = "", fresh_head: str = HEAD, extra_env: dict | None = None, evidence_helper: bool = True, panel_statuses: list[str] | None = None, reviewers_successful: str = "2", active_models: int | None = None):
 	support = tmp / "support"
 	support.mkdir()
 	calls = tmp / "calls.jsonl"
@@ -475,8 +475,18 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 	checks_path.write_text(check_context, encoding="utf-8")
 	github_env = tmp / "github_env"
 	github_env.write_text("", encoding="utf-8")
+	panel_env: dict[str, str] = {}
+	if panel_statuses is not None:
+		reviews_dir = tmp / "previous_reviews"
+		reviews_dir.mkdir()
+		for index, status in enumerate(panel_statuses):
+			(reviews_dir / f"status_review_slot{index}.txt").write_text(status + "\n", encoding="utf-8")
+		panel_env["PREVIOUS_REVIEWS_DIR"] = str(reviews_dir)
+	if active_models is not None:
+		(tmp / "reviewer_active_models.txt").write_text("".join(f"vendor/model{index}\n" for index in range(active_models)), encoding="utf-8")
 	env = {
 		**os.environ,
+		**panel_env,
 		"PATH": os.pathsep.join((str(bin_dir), os.environ.get("PATH", ""))),
 		"PR_NUMBER": "42",
 		"GH_TOKEN": "t",
@@ -493,7 +503,7 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"RUNTIME_DIR": str(tmp),
 		"GITHUB_ENV": str(github_env),
 		"CLAUDE_FIXER_VERIFICATION": "true" if verification else "false",
-		"REVIEWERS_SUCCESSFUL": "2",
+		"REVIEWERS_SUCCESSFUL": reviewers_successful,
 		"MOCK_GH_CALLS": str(calls),
 		"MOCK_GH_LOGIN": "",
 	}
@@ -529,6 +539,88 @@ def test_handoff_zero_findings_exports_auto_merge_flag_without_comments():
 	assert proc.returncode == 0, proc.stderr
 	assert calls == [] and posts == ""
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
+
+
+PANEL_FLOOR_CASES = (
+	# (statuses, successful, expected floor_met)
+	(["success"] * 6, "6", "true"),
+	(["success"] * 5 + ["failed"], "5", "true"),
+	(["success"] * 3 + ["failed", "skipped_budget", "skipped_unmapped"], "3", "true"),
+	(["success"] * 2 + ["failed"] * 4, "2", "false"),
+	(["success"] * 3 + ["failed"] * 2, "3", "true"),
+	(["success"] * 2 + ["failed"] * 3, "2", "false"),
+)
+
+
+def test_handoff_panel_floor_clean_rounds_still_merge():
+	for statuses, successful, floor_met in PANEL_FLOOR_CASES[:3] + PANEL_FLOOR_CASES[4:5]:
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, panel_statuses=statuses, reviewers_successful=successful)
+		assert proc.returncode == 0, proc.stderr
+		assert f"CLAUDE_FIXER_PANEL_FLOOR pr=42 head={HEAD} round=2 successful={successful} active={len(statuses)} floor_met={floor_met}" in proc.stdout
+		assert calls == [] and posts == "", statuses
+		assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env, statuses
+		assert "action=auto_merge" in proc.stdout
+
+
+def test_handoff_below_panel_floor_is_not_clean():
+	for statuses, successful, floor_met in (PANEL_FLOOR_CASES[3], PANEL_FLOOR_CASES[5]):
+		with tempfile.TemporaryDirectory() as td:
+			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, panel_statuses=statuses, reviewers_successful=successful)
+		assert proc.returncode == 0, proc.stderr
+		assert f"successful={successful} active={len(statuses)} floor_met={floor_met}" in proc.stdout
+		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env, statuses
+		assert len(calls) == 1 and "kind=findings" in calls[0]["payload"]["body"]
+
+
+def test_handoff_real_finding_blocks_even_when_panel_floor_is_met():
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, posts, github_env = _run_handoff(
+			Path(td), ledger=LEDGER_WITH_FINDINGS, panel_statuses=["success"] * 5 + ["failed"], reviewers_successful="5"
+		)
+	assert proc.returncode == 0, proc.stderr
+	assert "floor_met=true" in proc.stdout
+	assert "post_review_comment" in posts
+	assert len(calls) == 1 and "kind=findings findings=2" in proc.stdout
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+
+
+def test_handoff_task_gap_blocks_even_when_panel_floor_is_met():
+	gap_ledger = LEDGER_EMPTY.replace(
+		"(No task gaps reported.)",
+		"- requirement: add the flag\n  expected_change_site: scripts/a.sh\n  confidence=[4]\n  flagged_by: [minimax]\n  EVIDENCE: missing",
+		1,
+	)
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(
+			Path(td), ledger=gap_ledger, panel_statuses=["success"] * 4 + ["failed"] * 2, reviewers_successful="4"
+		)
+	assert proc.returncode == 0, proc.stderr
+	assert "floor_met=true" in proc.stdout
+	assert len(calls) == 1
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+
+
+def test_handoff_panel_floor_unknown_keeps_todays_behaviour():
+	# No PREVIOUS_REVIEWS_DIR and no active-models file: the floor is not applied.
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, reviewers_successful="1")
+	assert proc.returncode == 0, proc.stderr
+	assert "active=0 floor_met=unknown" in proc.stdout
+	assert calls == []
+	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
+
+
+def test_handoff_panel_floor_uses_larger_active_models_count():
+	# A slot that never wrote a status file (silent drop) still counts as active.
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, _posts, github_env = _run_handoff(
+			Path(td), ledger=LEDGER_EMPTY, panel_statuses=["success"] * 2, reviewers_successful="2", active_models=6
+		)
+	assert proc.returncode == 0, proc.stderr
+	assert "successful=2 active=6 floor_met=false" in proc.stdout
+	assert len(calls) == 1
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 
 
 def test_handoff_does_not_merge_without_fresh_ready_checks():
@@ -1591,3 +1683,92 @@ def test_findings_handoff_offers_the_judge_dispatch():
 	assert f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=2 -->" in body
 	# The marker is only quoted inline; no line of the hand-off is a bare rejection marker.
 	assert f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=2 -->" not in body.splitlines()
+
+
+REVIEWERS_SCRIPT = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+
+
+def _reviewers_block(start_marker: str, end_marker: str) -> str:
+	text = REVIEWERS_SCRIPT.read_text(encoding="utf-8")
+	start = text.index(start_marker)
+	return text[start:text.index(end_marker, start)]
+
+
+def _run_reviewer_pass_with_statuses(td: Path, statuses: list[str]) -> tuple[subprocess.CompletedProcess, Path]:
+	"""Run the real `run_reviewer_pass` with each slot ending in the given status.
+
+	`run_reviewer` is stubbed to write the slot's status file and output, so
+	the pass's own tally and partial-finalize decision run unchanged.
+	"""
+	partial_block = _reviewers_block(
+		'REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"',
+		"resolve_ledger_substate_helper() {",
+	)
+	pass_block = _reviewers_block("run_reviewer_pass() {", "# Wrap a consolidated pass-1 ledger")
+	reviews = td / "reviews"
+	runtime = td / "runtime"
+	reviews.mkdir()
+	runtime.mkdir()
+	models = "".join(f"vendor/model{index}\\n" for index in range(len(statuses)))
+	status_cases = "".join(f'\t\tvendor/model{index}) echo "{status}" ;;\n' for index, status in enumerate(statuses))
+	script = (
+		"set -euo pipefail\n"
+		f"{partial_block}\n"
+		"emit_run_budget_gate_note() { :; }\n"
+		"codex_run_budget_phase_may_start() { return 0; }\n"
+		"reviewer_resume_should_reuse_success_slot() { return 1; }\n"
+		"reviewer_circuit_breaker_enabled() { return 1; }\n"
+		f"get_active_reviewer_models_text() {{ printf '{models}'; }}\n"
+		"slot_status_for() {\n"
+		'\tcase "$1" in\n'
+		f"{status_cases}"
+		"\tesac\n"
+		"}\n"
+		"run_reviewer() {\n"
+		'\tlocal model="$1" safe_name="$2" prefix="$3"\n'
+		'\tslot_status_for "${model}" > "${PREVIOUS_REVIEWS_DIR}/status_${prefix}_${safe_name}.txt"\n'
+		'\tprintf "(No findings reported.)\\n" > "${PREVIOUS_REVIEWS_DIR}/${prefix}_${safe_name}.txt"\n'
+		"}\n"
+		f"{pass_block}\n"
+		'run_reviewer_pass review "prompt" ""\n'
+	)
+	env = {
+		**os.environ,
+		"PREVIOUS_REVIEWS_DIR": str(reviews),
+		"RUNTIME_DIR": str(runtime),
+		"GITHUB_ENV": str(td / "github_env"),
+	}
+	proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	return proc, runtime / "reviewers_partial_finalize_request.txt"
+
+
+def test_budget_skip_only_pass_still_requests_partial_finalize(tmp_path):
+	"""Q47: A. A pass whose only non-success slot is `skipped_budget` still
+	requests a partial finalize before the summariser, so no ledger is written
+	and the panel floor does not apply to it (the hand-off fails closed). The
+	README, agents.md and the changelog say so.
+	"""
+	proc, request = _run_reviewer_pass_with_statuses(tmp_path, ["success"] * 3 + ["skipped_budget"])
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip().splitlines()[-1] == "3"
+	assert request.exists()
+	assert "AUTOFIX_PARTIAL_FINALIZE_REASON=soft_deadline" in request.read_text(encoding="utf-8")
+
+
+def test_budget_skip_beside_a_hard_failure_reaches_the_summariser(tmp_path):
+	proc, request = _run_reviewer_pass_with_statuses(tmp_path, ["success"] * 3 + ["failed", "skipped_budget", "skipped_unmapped"])
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip().splitlines()[-1] == "3"
+	assert not request.exists()
+
+
+def test_budget_skip_only_pass_without_ledger_hands_off_fail_closed():
+	"""Q47: A. The budget-only pass writes no ledger, so the hand-off step sees
+	ledger=missing and hands the round to Claude (kind=findings) even though
+	the panel floor is met. No auto-merge flag is exported.
+	"""
+	with tempfile.TemporaryDirectory() as td:
+		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=None, panel_statuses=["success"] * 3 + ["skipped_budget"], reviewers_successful="3")
+	assert proc.returncode == 0, proc.stderr
+	assert "kind=findings" in calls[0]["payload"]["body"]
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env

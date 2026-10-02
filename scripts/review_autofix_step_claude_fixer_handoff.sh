@@ -57,13 +57,28 @@
 # `ai:claude-fixer-verdict:v1` reply) to start the next stage session or to
 # hand the round back to the session that pushed the PR (--hand-back).
 #
+# Reviewer-slot infrastructure failures (failed, skipped_budget, skipped_unmapped,
+# skipped_open) do not block a clean round. The summariser drops every slot whose
+# status file is not `success`, and the round is clean when at least half of the
+# ACTIVE panel (rounded up) returned `success` and the ledger holds no finding
+# and no task gap. Below that floor the round is handed off as before. The
+# active panel size is the larger of the `status_review_*.txt` count in
+# PREVIOUS_REVIEWS_DIR and the line count of ${RUNTIME_DIR}/reviewer_active_models.txt;
+# when neither is available the floor is not applied (today's behaviour).
+# A pass whose only non-success slot is skipped_budget writes no ledger:
+# run_reviewer_pass requests a partial finalize before the summariser, so this
+# step sees ledger=missing and fails closed (kind=findings), as before. The
+# partial-finalize continuation does not run in Claude-fixer mode (operator
+# Q47: A keeps that path unchanged).
+#
 # Inputs (environment): PR_NUMBER, GH_TOKEN, GITHUB_REPOSITORY, HEAD_SHA,
 # HEAD_REF, CLAUDE_FIXER_ROUND_INDEX (consecutive [ai-autofix] /
 # [claude-autofix] commits on the head; round = index + 1),
 # AUTOFIX_PRE_REVIEW_RESOLVE,
 # AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED, REVIEWER_CONSENSUS_FILE,
 # PR_CHECK_RUNS_CONTEXT_FILE, SUPPORT_SCRIPTS_DIR, GITHUB_RUN_ID,
-# GITHUB_SERVER_URL, RUNTIME_DIR, CLAUDE_FIXER_CHECKS_PENDING_ENABLED
+# GITHUB_SERVER_URL, RUNTIME_DIR, REVIEWERS_SUCCESSFUL, and optionally
+# PREVIOUS_REVIEWS_DIR (panel floor), CLAUDE_FIXER_CHECKS_PENDING_ENABLED
 # (default true), CLAUDE_FIXER_EVIDENCE_DIR (optional),
 # CLAUDE_FIXER_JUDGE_ENABLED (default true), PR_ISSUE_COMMENTS_FILE (the
 # comments "Collect PR metadata" fetched), DEFAULT_BRANCH.
@@ -253,8 +268,36 @@ if [ -s "${PR_CHECK_RUNS_CONTEXT_FILE:-}" ]; then
   claude_fixer_failed_checks="$(sed -n 's/^failed\[[0-9]*\]\.name: //p' "${PR_CHECK_RUNS_CONTEXT_FILE}" | paste -sd, - || true)"
 fi
 
+# Panel floor: infrastructure failures of individual reviewer slots do not block
+# a clean round as long as at least half of the active panel (rounded up)
+# returned `success`. States: true / false, or unknown when the active panel
+# size cannot be determined (the floor is then not applied).
+claude_fixer_panel_active=0
+claude_fixer_panel_floor_met="unknown"
+if [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] && [ -d "${PREVIOUS_REVIEWS_DIR}" ]; then
+  # `|| true` keeps a failing find from aborting the step under pipefail; an
+  # unreadable directory then counts 0 and falls through to the models file.
+  claude_fixer_panel_active="$({ find "${PREVIOUS_REVIEWS_DIR}" -maxdepth 1 -type f -name 'status_review_*.txt' 2>/dev/null || true; } | wc -l | tr -d '[:space:]')"
+fi
+[[ "${claude_fixer_panel_active}" =~ ^[0-9]+$ ]] || claude_fixer_panel_active=0
+if [ -s "${RUNTIME_DIR:-/nonexistent}/reviewer_active_models.txt" ]; then
+  claude_fixer_panel_models_count="$(grep -c . "${RUNTIME_DIR}/reviewer_active_models.txt" 2>/dev/null || true)"
+  if [[ "${claude_fixer_panel_models_count}" =~ ^[0-9]+$ ]] && [ "${claude_fixer_panel_models_count}" -gt "${claude_fixer_panel_active}" ]; then
+    claude_fixer_panel_active="${claude_fixer_panel_models_count}"
+  fi
+fi
+if [ "${claude_fixer_panel_active}" -gt 0 ]; then
+  if [[ "${REVIEWERS_SUCCESSFUL:-}" =~ ^[0-9]+$ ]] && [ "$((REVIEWERS_SUCCESSFUL * 2))" -ge "${claude_fixer_panel_active}" ]; then
+    claude_fixer_panel_floor_met="true"
+  else
+    claude_fixer_panel_floor_met="false"
+  fi
+fi
+echo "CLAUDE_FIXER_PANEL_FLOOR pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} successful=${REVIEWERS_SUCCESSFUL:-unset} active=${claude_fixer_panel_active} floor_met=${claude_fixer_panel_floor_met}"
+
 claude_fixer_clean_ledger="false"
 if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}" -eq 0 ] \
+  && [ "${claude_fixer_panel_floor_met}" != "false" ] \
   && awk '
     /^=== CONSENSUS FINDINGS ===$/ { expected = "(No findings reported.)"; block = 1; entries = 0; next }
     /^=== CONSENSUS TASK GAPS ===$/ { expected = "(No task gaps reported.)"; block = 1; entries = 0; next }

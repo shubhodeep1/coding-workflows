@@ -11,17 +11,18 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  lint:
+  static-checks:
+    # The old single `lint` job ran every check in one runner and took
+    # 40-45 minutes, with a 60-minute stopgap budget (#4706). The checks are
+    # now split across parallel jobs (#4707), and the final `lint` job below
+    # aggregates them into one status.
+    #
+    # Static checks: shell-block guards, YAML lint, drift check, actionlint,
+    # Python syntax and ruff, schema/prompt checks, and ShellCheck. About
+    # 2 minutes measured (1.4-1.9 in #4707's CI runs); 15 leaves room for a
+    # cold runner.
     runs-on: ubuntu-latest
-    # 60 minutes, raised in two steps. 30 → 45: the orchestrate-poll module
-    # below is the critical path and its shards can be slower on a cold
-    # runner than on a warm one. At 30 every run — on main as well as on
-    # PRs — was cancelled mid-suite, so the repo had no completing full-test
-    # gate at all. 45 → 60 (2026-09-28): the suite grew to 40–45 minutes,
-    # and main's runs 36367681221 and 36368393442 were cancelled at 45 with
-    # every test still passing. This is a stopgap until the job is split
-    # into parallel jobs.
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -206,43 +207,10 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_shared_shell_block_guard.py
 
-      - name: Derive orchestrate poll test subsets
+      - name: CI job split contract tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-          import ast
-          from pathlib import Path
-
-          module = ast.parse(
-              Path("tests/test_orchestrate_poll_process.py").read_text(encoding="utf-8")
-          )
-          tests = [
-              node.name
-              for node in module.body
-              if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
-          ]
-          tests.sort()
-
-          fast_fail = [name for name in tests if name.startswith("test_implementation_failed_")]
-          if not fast_fail:
-              raise SystemExit("No implementation-failed orchestrate-poll regression tests found")
-
-          fast_fail_set = set(fast_fail)
-          remaining = [name for name in tests if name not in fast_fail_set]
-          if not remaining:
-              raise SystemExit(
-                  "Fast-fail selection unexpectedly captured the entire orchestrate-poll test module"
-              )
-
-          Path("/tmp/orchestrate_poll_fast_fail_tests.txt").write_text("\n".join(fast_fail) + "\n")
-          Path("/tmp/orchestrate_poll_remaining_tests.txt").write_text("\n".join(remaining) + "\n")
-          PY
-
-      - name: Orchestrate poll implementation-failed regression fast-fail
-        run: |
-          set -euo pipefail
-          mapfile -t selected_tests < /tmp/orchestrate_poll_fast_fail_tests.txt
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py "${selected_tests[@]}"
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_job_split_contract.py
 
       - name: YAML lint
         run: |
@@ -339,6 +307,98 @@ jobs:
           set -euo pipefail
           ruff check --select E,F --ignore E501 scripts/*.py
 
+      - name: JSON schema validation
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for f in schemas/*.json examples/*.json; do
+            python3 -c "import json; json.load(open('$f'))" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+          # Validate label contract
+          python3 scripts/ai_labels.py contract-validate --contract-file .github/ai/label_contract.v1.json
+
+      - name: Prompt files validation
+        run: |
+          set -euo pipefail
+          for f in prompts/*.txt; do
+            if [ ! -s "$f" ]; then
+              echo "FAIL: $f is empty"
+              exit 1
+            fi
+            echo "OK: $f ($(wc -c < "$f") bytes)"
+          done
+
+      - name: Prompt tier budget
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py
+
+      - name: Prompt forbidden-token soft lint
+        run: |
+          set -euo pipefail
+          # Per OpenAI prompt guide: "Don't use ALWAYS, NEVER, must, and
+          # only for judgment calls. Reserve them for true invariants."
+          # Soft lint — emits warnings, doesn't fail the build. Threshold
+          # of 8 hits per file gives operators visibility into prompts
+          # that are drifting back toward instruction-stack noise.
+          for f in prompts/*.txt; do
+            hits=$(grep -coE '\b(MANDATORY|FAILURE|NEVER|ALWAYS)\b' "${f}" || true)
+            if [ "${hits}" -gt 8 ]; then
+              echo "::warning file=${f}::High count of absolutist tokens (${hits}). Per OpenAI prompt guide, reserve MUST/NEVER/ALWAYS for true invariants."
+            fi
+          done
+
+      - name: Shell script syntax check
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
+            bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Validate memory_helpers.sh exports memory helpers
+        run: |
+          set -euo pipefail
+          bash -c 'source scripts/memory_helpers.sh && declare -F memory_ensure_branch >/dev/null && declare -F memory_bootstrap >/dev/null' \
+            && echo "OK: memory_ensure_branch and memory_bootstrap are defined after sourcing scripts/memory_helpers.sh" \
+            || { echo "FAIL: memory_ensure_branch and/or memory_bootstrap not defined after sourcing scripts/memory_helpers.sh"; exit 1; }
+
+      - name: ShellCheck static analysis
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
+            shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Script-workflow cross-reference
+        # Canonical check used by both CI and the inline post-resolver
+        # guard in review_autofix.yml.  Catches three reference patterns:
+        # explicit `scripts/<name>.<ext>`, `${SUPPORT_SCRIPTS_DIR}/<name>`,
+        # and bare names enumerated in bootstrap fetch loops.  See
+        # scripts/check_workflow_script_refs.py for details.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
+
+  tests-hooks-and-orchestrator:
+    # Unit and contract tests, a contiguous slice of the old `lint` job's
+    # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
+    # room for a cold runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
       - name: Event mirror shell tests
         run: |
           set -euo pipefail
@@ -403,12 +463,14 @@ jobs:
         # Drives scripts/review_merge_train.sh through a fake `gh` and pins
         # the per-run file-list cache (one GET /pulls/{n}/files per distinct
         # PR per release tick), plus _parse_reset_header's Retry-After
-        # precedence in scripts/gh_helpers.sh.
+        # precedence and gh_retry's per-attempt stdout buffering (#5495)
+        # in scripts/gh_helpers.sh.
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_review_merge_train.py \
-            tests/test_gh_helpers_parse_reset_header.py
+            tests/test_gh_helpers_parse_reset_header.py \
+            tests/test_gh_retry_stdout_isolation.py
 
       - name: PR-watch guard hook tests (CLAUDE.md §25)
         run: |
@@ -439,6 +501,10 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stale_sessions.py
+      - name: Stale session sweep tests (CLAUDE.md §26.I)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_session_janitor.py
 
       - name: Unattended helper and permission prompt report tests (CLAUDE.md §23.I)
         run: |
@@ -456,7 +522,7 @@ jobs:
       - name: /implement-plan-claude command contract tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py tests/test_session_titles.py
 
       - name: Claude issue implementer tests (routing, handoff, intake, §28 command contract)
         run: |
@@ -512,6 +578,26 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+
+  tests-heal-plan-and-validation:
+    # Unit and contract tests, a contiguous slice of the old `lint` job's
+    # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
+    # room for a cold runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
 
       - name: Workflow failure heal contract and driver tests
         run: |
@@ -630,6 +716,26 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
+  tests-promote-stall-and-review:
+    # Unit and contract tests, a contiguous slice of the old `lint` job's
+    # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
+    # room for a cold runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
       - name: Promote cycle and blocked-verdict unit tests
         run: |
           set -euo pipefail
@@ -656,6 +762,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_editor_watchdog_kill_contract.py
 
+      - name: Claude-branch push PR grace window unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_internal_review_push_pr_grace.py
+
       - name: Sub-issue closing-PR resolution unit tests
         run: |
           set -euo pipefail
@@ -665,6 +776,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_state_selfheal.py
+
       - name: Stall-loop and churn fixes unit tests
         run: |
           set -euo pipefail
@@ -845,6 +957,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_summarize_reviewer_consensus_sandbox_pin.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_summarize_reviewer_consensus_prompt.py
 
       - name: Clarify loop guard unit tests
         run: |
@@ -863,6 +976,26 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
+
+  tests-release-and-log-analysis:
+    # Unit and contract tests, a contiguous slice of the old `lint` job's
+    # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
+    # room for a cold runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
 
       - name: Update workflows guardrails contract test
         run: |
@@ -931,6 +1064,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
+
+      - name: Release smoke gate run-lookup regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_smoke_run_lookup.py
 
       - name: Alt-model cleanup PR-selector contract test
         run: |
@@ -1009,71 +1147,85 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
 
-      - name: JSON schema validation
+      - name: Semantic cache unit tests
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          for f in schemas/*.json examples/*.json; do
-            python3 -c "import json; json.load(open('$f'))" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
-          done
-          # Validate label contract
-          python3 scripts/ai_labels.py contract-validate --contract-file .github/ai/label_contract.v1.json
+          python3 -m coverage erase
+          python3 -m coverage run tests/test_semantic_cache.py
+          python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
 
-      - name: Prompt files validation
-        run: |
-          set -euo pipefail
-          for f in prompts/*.txt; do
-            if [ ! -s "$f" ]; then
-              echo "FAIL: $f is empty"
-              exit 1
-            fi
-            echo "OK: $f ($(wc -c < "$f") bytes)"
-          done
+  orchestrate-poll:
+    # tests/test_orchestrate_poll_process.py was the old job's critical path
+    # (about 20 minutes on 4 local shards). Each matrix group runs one
+    # quarter of it on CI_POLL_TEST_SHARDS local shards, about 5 minutes
+    # measured (#4707); 20 leaves room for a cold runner, whose shards can
+    # be slower than a warm one's.
+    runs-on: ubuntu-latest
+    strategy:
+      # Every group reports on its own; `lint` fails if any of them fails.
+      fail-fast: false
+      matrix:
+        poll-group: [0, 1, 2, 3]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
-      - name: Prompt tier budget
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
-      - name: Prompt forbidden-token soft lint
+      - name: Install Python CI dependencies
         run: |
           set -euo pipefail
-          # Per OpenAI prompt guide: "Don't use ALWAYS, NEVER, must, and
-          # only for judgment calls. Reserve them for true invariants."
-          # Soft lint — emits warnings, doesn't fail the build. Threshold
-          # of 8 hits per file gives operators visibility into prompts
-          # that are drifting back toward instruction-stack noise.
-          for f in prompts/*.txt; do
-            hits=$(grep -coE '\b(MANDATORY|FAILURE|NEVER|ALWAYS)\b' "${f}" || true)
-            if [ "${hits}" -gt 8 ]; then
-              echo "::warning file=${f}::High count of absolutist tokens (${hits}). Per OpenAI prompt guide, reserve MUST/NEVER/ALWAYS for true invariants."
-            fi
-          done
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
 
-      - name: Shell script syntax check
+      - name: Derive orchestrate poll test subsets
         run: |
           set -euo pipefail
-          for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
-            bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
-          done
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          import ast
+          from pathlib import Path
 
-      - name: Validate memory_helpers.sh exports memory helpers
-        run: |
-          set -euo pipefail
-          bash -c 'source scripts/memory_helpers.sh && declare -F memory_ensure_branch >/dev/null && declare -F memory_bootstrap >/dev/null' \
-            && echo "OK: memory_ensure_branch and memory_bootstrap are defined after sourcing scripts/memory_helpers.sh" \
-            || { echo "FAIL: memory_ensure_branch and/or memory_bootstrap not defined after sourcing scripts/memory_helpers.sh"; exit 1; }
+          module = ast.parse(
+              Path("tests/test_orchestrate_poll_process.py").read_text(encoding="utf-8")
+          )
+          tests = [
+              node.name
+              for node in module.body
+              if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+          ]
+          tests.sort()
 
-      - name: ShellCheck static analysis
+          fast_fail = [name for name in tests if name.startswith("test_implementation_failed_")]
+          if not fast_fail:
+              raise SystemExit("No implementation-failed orchestrate-poll regression tests found")
+
+          fast_fail_set = set(fast_fail)
+          remaining = [name for name in tests if name not in fast_fail_set]
+          if not remaining:
+              raise SystemExit(
+                  "Fast-fail selection unexpectedly captured the entire orchestrate-poll test module"
+              )
+
+          Path("/tmp/orchestrate_poll_fast_fail_tests.txt").write_text("\n".join(fast_fail) + "\n")
+          Path("/tmp/orchestrate_poll_remaining_tests.txt").write_text("\n".join(remaining) + "\n")
+          PY
+
+      - name: Orchestrate poll implementation-failed regression fast-fail
+        # The fast-fail subset is not part of the group split; run it once.
+        if: strategy.job-index == 0
         run: |
           set -euo pipefail
-          for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
-            shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
-          done
+          mapfile -t selected_tests < /tmp/orchestrate_poll_fast_fail_tests.txt
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py "${selected_tests[@]}"
 
       - name: Orchestrate poll process unit tests
         env:
           CI_POLL_TEST_SHARDS: ${{ vars.CI_POLL_TEST_SHARDS || '4' }}
+          CI_POLL_TEST_GROUP_INDEX: ${{ strategy.job-index }}
+          CI_POLL_TEST_GROUP_COUNT: ${{ strategy.job-total }}
         run: |
           set -euo pipefail
           # The fast-fail step already covers the implementation-failed hot path;
@@ -1091,19 +1243,39 @@ jobs:
           # so the module shards with no shared state; measured 3.6x on 4 cores
           # (62s -> 17s on a 16-test slice, all shards green). The runner already
           # takes test names as argv, so no harness change is needed.
+          #
+          # Two levels (#4707): the `orchestrate-poll` matrix first takes group
+          # CI_POLL_TEST_GROUP_INDEX of CI_POLL_TEST_GROUP_COUNT, then shards that
+          # group across CI_POLL_TEST_SHARDS local workers. Both splits are the
+          # same `NR % total == n` partition, so every test runs exactly once.
           shards="${CI_POLL_TEST_SHARDS:-4}"
           if ! [ "${shards}" -ge 1 ] 2>/dev/null; then
             echo "::warning::CI_POLL_TEST_SHARDS='${shards}' is not a positive integer; falling back to 1 (sequential)."
             shards=1
           fi
 
+          poll_group="${CI_POLL_TEST_GROUP_INDEX:-0}"
+          poll_groups="${CI_POLL_TEST_GROUP_COUNT:-1}"
+          # A bad group index would silently skip a slice of the module, so
+          # fail instead of falling back.
+          if ! [ "${poll_groups}" -ge 1 ] 2>/dev/null \
+            || ! [ "${poll_group}" -ge 0 ] 2>/dev/null \
+            || [ "${poll_group}" -ge "${poll_groups}" ]; then
+            echo "::error::Invalid orchestrate-poll group '${poll_group}' of '${poll_groups}'."
+            exit 1
+          fi
+
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_poll_test_sharding.py
+
+          awk -v n="${poll_group}" -v total="${poll_groups}" 'NR % total == n' \
+            /tmp/orchestrate_poll_remaining_tests.txt > /tmp/orchestrate_poll_group_tests.txt
+          echo "orchestrate-poll group ${poll_group} of ${poll_groups}: $(wc -l < /tmp/orchestrate_poll_group_tests.txt | tr -d '[:space:]') tests"
 
           rm -f /tmp/poll_shard_*.txt /tmp/poll_shard_*.log /tmp/poll_shard_*.rc
           shard_pids=()
           for shard in $(seq 0 "$((shards - 1))"); do
             awk -v n="${shard}" -v total="${shards}" 'NR % total == n' \
-              /tmp/orchestrate_poll_remaining_tests.txt > "/tmp/poll_shard_${shard}.txt"
+              /tmp/orchestrate_poll_group_tests.txt > "/tmp/poll_shard_${shard}.txt"
             [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
             (
               mapfile -t shard_tests < "/tmp/poll_shard_${shard}.txt"
@@ -1123,7 +1295,14 @@ jobs:
 
           shard_failures=0
           for shard in $(seq 0 "$((shards - 1))"); do
-            [ -f "/tmp/poll_shard_${shard}.log" ] || continue
+            [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
+            # A shard with tests but no log died before its runner started, so
+            # its tests never ran: count it as failed instead of skipping it.
+            if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
+              echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
+              shard_failures=$((shard_failures + 1))
+              continue
+            fi
             echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
             cat "/tmp/poll_shard_${shard}.log"
             echo "::endgroup::"
@@ -1143,23 +1322,44 @@ jobs:
             exit 1
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
+          # The single-file modules are not split; group 0 runs them once.
+          if [ "${poll_group}" -eq 0 ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
+            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
+            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
+          fi
 
-      - name: Semantic cache unit tests
+  lint:
+    # Aggregate status: the one check that says whether all of CI passed.
+    # The job id stays `lint` (docs and operators read `CI / lint`, §6).
+    # `always()` makes it run and fail when a needed job fails or is
+    # cancelled; without it the job would be skipped, and GitHub treats a
+    # skipped required check as passing.
+    needs:
+      - static-checks
+      - tests-hooks-and-orchestrator
+      - tests-heal-plan-and-validation
+      - tests-promote-stall-and-review
+      - tests-release-and-log-analysis
+      - orchestrate-poll
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI job to succeed
+        env:
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          python3 -m coverage erase
-          python3 -m coverage run tests/test_semantic_cache.py
-          python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
-
-      - name: Script-workflow cross-reference
-        # Canonical check used by both CI and the inline post-resolver
-        # guard in review_autofix.yml.  Catches three reference patterns:
-        # explicit `scripts/<name>.<ext>`, `${SUPPORT_SCRIPTS_DIR}/<name>`,
-        # and bare names enumerated in bootstrap fetch loops.  See
-        # scripts/check_workflow_script_refs.py for details.
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
+          ci_needs_count="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r 'length')"
+          if ! [ "${ci_needs_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::Could not read the needed jobs' results."
+            exit 1
+          fi
+          printf '%s' "${CI_NEEDS_JSON}" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          ci_unsuccessful_jobs="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(", ")')"
+          if [ -n "${ci_unsuccessful_jobs}" ]; then
+            echo "::error::CI jobs that did not succeed: ${ci_unsuccessful_jobs}"
+            exit 1
+          fi
+          echo "All ${ci_needs_count} CI jobs succeeded."
