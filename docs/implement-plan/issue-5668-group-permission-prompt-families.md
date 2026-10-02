@@ -10,11 +10,11 @@
 - Waiting on: PR #5697
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_0133V1fUz7ukod1UGEnYvTEY   safety net trig_01AJJgtdFW7jcN9GGgXXfypW   hand-back trig_01VZZSjFwM2fkidsfnb88DCN
-- Last updated: 2026-09-30
-- Last note: twin sync landed as `c6494fd` (hold lifted); project branch synced with `main`; wait armed on PR #5697 review
+- Last updated: 2026-10-02
+- Last note: review round 2 on PR #5697 head 76ec5c8 (owner's supervising session, 2026-10-02): a `$(…)` or `$((…))` in a leading assignment, `export`, or `cd` prefix was split into simple commands of its own, so `ROOT=$(pwd) && git status` got an empty family and `cd $(pwd) && git status` the `cd` family; substitutions now count as one word (AD-11). Live file and twin edited together, no twin sync pending. Earlier: review round 1 (8962a63) and its twin sync 76ec5c8; twin sync landed as `c6494fd` (hold lifted); project branch synced with `main`; wait armed on PR #5697 review
 
 ## Phases
-1. [ ] Phase 1 — family key and family-aware filing (twin script, tests, CLAUDE.md §23.I, agents.md, README.md, changelog)   — protected paths: `.claude/scripts/permission_prompts.py` — PR #5697 open (waiting on review; twin synced in `c6494fd`); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — family key and family-aware filing (twin script, tests, CLAUDE.md §23.I, agents.md, README.md, changelog)   — protected paths: `.claude/scripts/permission_prompts.py` — PR #5697 open (waiting on review; review round 1 twin-synced in `76ec5c8`, review round 2 edits live and twin together); review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -37,6 +37,7 @@
 - AD-8 [plan, 2026-09-30] Which script file do the tests load? — Picked: A — the `workflow-templates/.claude/` twin, with parity pinning the root copy. Alternatives: B — the root copy, with new tests red until the sync. Why: the twin-first rule of `/implement-plan-claude` step 4. Applied in: phase 1 PR. Status: pending review
 - AD-9 [plan, 2026-09-30] What counts as a substitution? — Picked: A — `$(` outside single quotes, excluding `$((`. Alternatives: B — also backticks. Why: #5668 names `$(…)`, and arithmetic is not command substitution. Applied in: phase 1 PR. Status: pending review
 - AD-10 [plan, 2026-09-30] For a heredoc behind another command, which command names the family? — Picked: A — the first command word, as #5668 says. Alternatives: B — the heredoc's receiving command. Why: B saves one family out of 22 and misplaces #5202. A is literal. Applied in: phase 1 PR. Status: pending review
+- AD-11 [phase 1 review round 2, 2026-10-02] How should a `$(…)` in a prefix segment be read for the family? — Picked: A — collapse every `$(…)` and `$((…))` outside single quotes (nested, with quoted parentheses) into one word before splitting into simple commands, leaving the text unchanged when one is not closed. Alternatives: B — teach `_is_family_prefix` to accept the `(`/`)` operators. Why: B would still treat the substitution's own commands as top-level segments (`X=$(cd a) && git status`); A keeps the `subst` construct (read from the original text) and matches the documented prefix rule (AD-7). Applied in: PR #5697. Status: pending review (owner standing instruction: recommended option)
 
 ## Lessons
 

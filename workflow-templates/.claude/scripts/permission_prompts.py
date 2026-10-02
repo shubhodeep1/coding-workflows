@@ -26,7 +26,9 @@ and the constructs present (`heredoc`, `loop` for `for`/`while`/`until`,
 `subst` for a `$(…)` outside single quotes). The command word is taken after
 skipping leading segments that are only variable assignments, `export` of
 variables, or `cd …` followed by `&&` or `;`, and after dropping leading
-`NAME=value` words and a `timeout [options] <duration>` prefix. It keeps the
+`NAME=value` words and a `timeout [options] <duration>` prefix; a `$(…)` or
+`$((…))` there counts as one word (`ROOT=$(pwd) && git status` is `git
+status`). It keeps the
 subcommand or script the shape keeps (`git fetch`, `gh api`, `python3 x.py`,
 script by basename). For other tools, and for a command that does not parse,
 the family is the event, the tool, and the shape (as wide as the signature).
@@ -301,6 +303,60 @@ def signature(event: str, tool: str, shape: str) -> str:
 	return hashlib.sha1(f"{event}\n{tool}\n{shape}".encode("utf-8")).hexdigest()[:12]
 
 
+def _collapse_substitutions(text: str) -> str:
+	"""`text` with every `$(…)` and `$((…))` outside single quotes replaced by the word `$_`, nested ones and quoted
+	parentheses inside included, so the lexer never splits a substitution into simple commands of its own
+	(`ROOT=$(pwd) && git status`, `cd $(pwd) && …`). Returns `text` unchanged when a substitution is not closed."""
+	output: list[str] = []
+	single_quoted = double_quoted = False
+	index = 0
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and not single_quoted:
+			output.append(text[index : index + 2])
+			index += 2
+			continue
+		if char == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif char == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		elif char == "$" and not single_quoted and text[index + 1 : index + 2] == "(":
+			end = _substitution_end(text, index + 1)
+			if end is None:
+				return text
+			output.append("$_")
+			index = end
+			continue
+		output.append(char)
+		index += 1
+	return "".join(output)
+
+
+def _substitution_end(text: str, open_index: int) -> int | None:
+	"""Index just past the `)` that closes the `(` at `open_index`, skipping quoted text and escapes; None when unclosed."""
+	depth = 0
+	single_quoted = double_quoted = False
+	index = open_index
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and not single_quoted:
+			index += 2
+			continue
+		if char == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif char == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		elif not single_quoted and not double_quoted:
+			if char == "(":
+				depth += 1
+			elif char == ")":
+				depth -= 1
+				if depth == 0:
+					return index + 1
+		index += 1
+	return None
+
+
 def _family_segments(tokens: list[str]) -> list[tuple[list[str], bool, str]]:
 	"""Split tokens into simple commands: (words, has a heredoc, the operator after it). Redirects and their targets are dropped."""
 	segments: list[tuple[list[str], bool, str]] = []
@@ -407,7 +463,7 @@ def command_family(command: str) -> tuple[str, tuple[str, ...]] | None:
 	"""A Bash command's family key: (command word, constructs present), or None when it does not parse."""
 	stripped = strip_heredocs(command, keep_delimiter=False)
 	try:
-		segments = _family_segments(_shell_tokens(stripped))
+		segments = _family_segments(_shell_tokens(_collapse_substitutions(stripped)))
 	except ValueError:
 		return None
 	constructs: set[str] = set()

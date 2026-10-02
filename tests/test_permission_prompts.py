@@ -439,6 +439,17 @@ def test_table_families_stay_apart():
 		("timeout -k 5 git fetch origin main", ("git fetch", ())),
 		("timeout $T git fetch origin main", ("git fetch", ())),
 		("timeout 1.5m git fetch origin main", ("git fetch", ())),
+		# A `$(…)` or `$((…))` in a prefix is one word, not simple commands of its own (PR #5697 review round 3).
+		("ROOT=$(pwd) && git status", ("git status", ("subst",))),
+		("ROOT=$(pwd)&&git status", ("git status", ("subst",))),
+		("cd $(pwd) && git status", ("git status", ("subst",))),
+		("export ROOT=$(pwd); git status", ("git status", ("subst",))),
+		("X=$((1 + 2)) && git status", ("git status", ())),
+		("X=$(echo \"a)b\" | tr a b) && git fetch", ("git fetch", ("subst",))),
+		("X=$(echo $(pwd)) && git fetch", ("git fetch", ("subst",))),
+		("git -C $(pwd) status", ("git status", ("subst",))),
+		("echo $(mysql -p x) && git fetch", ("echo", ("subst",))),
+		("(cd x && git status)", ("git status", ())),
 	],
 )
 def test_command_family(command, family):
