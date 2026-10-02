@@ -11,6 +11,7 @@ ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.ym
 ORCHESTRATE_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 ORCHESTRATE_POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 AGENTS_MD = REPO_ROOT / "agents.md"
+INTERNAL_POLL_WF = REPO_ROOT / ".github" / "workflows" / "internal-orchestrate-poll.yml"
 
 
 def _workflow(path: Path = ORCHESTRATE_POLL_WF) -> str:
@@ -169,6 +170,24 @@ def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> No
 	assert "run: bash scripts/worktree_gc.sh" in wf
 
 
+def test_poll_memory_checkout_reuse_is_private_authenticated_and_cleaned() -> None:
+	wf = _workflow()
+	internal = _workflow(INTERNAL_POLL_WF)
+	assert "*/5 * * * *" in internal
+	assert "orchestrate_poll.yml@main" in internal
+	assert 'mkdir -p -m 0700 "${RUNTIME_DIR}"' in wf
+	assert 'chmod 0700 "${RUNTIME_DIR}"' in wf
+	start = wf[wf.index("- name: Record poll run start"):wf.index("- name: Process each tracking issue")]
+	end = wf[wf.index("- name: Record poll run end"):wf.index("- name: Notify Telegram on job failure")]
+	assert start.count('--poll-checkout-dir "${RUNTIME_DIR}/poll-memory-checkout"') == 1
+	assert end.count('--poll-checkout-dir "${RUNTIME_DIR}/poll-memory-checkout"') == 1
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in start and "GH_TOKEN: ${{ secrets.GH_PAT }}" in end
+	assert "- name: Clean up poll memory checkout\n        if: always()" in end
+	assert 'rm -rf -- "${expected_dir}/poll-memory-checkout"' in end
+	assert 'path: ${{ env.RUNTIME_DIR }}/state-snapshot/state.json' in wf
+	assert 'path: ${{ env.RUNTIME_DIR }}\n' not in wf
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
@@ -180,6 +199,7 @@ def main() -> int:
 	test_security_pass_recovery_log_prefixes_are_registered()
 	test_staged_support_latch_sweep_runs_without_tracking_issues()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
+	test_poll_memory_checkout_reuse_is_private_authenticated_and_cleaned()
 	return 0
 
 

@@ -8,6 +8,7 @@ lineage handling, compaction, and branch-safe persistence for `ai-memory`.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import fcntl
 import hashlib
 import json
@@ -17,12 +18,14 @@ import os
 import random
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
 import urllib.error
+from urllib.parse import urlsplit, urlunsplit
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -3096,6 +3099,8 @@ _GIT_LOCATION_ENV_VARS = (
     "GIT_NAMESPACE",
 )
 
+_POLL_MEMORY_AUTH = contextvars.ContextVar("poll_memory_auth", default=False)
+
 # Keep telemetry numeric and bounded even across long retry bursts. A missing
 # stage means that stage was not attempted, not that it took zero milliseconds.
 _MEMORY_TIMING_MAX_MS = 86_400_000
@@ -3131,6 +3136,18 @@ def _git_subprocess_env() -> dict[str, str]:
     env = dict(os.environ)
     for name in _GIT_LOCATION_ENV_VARS:
         env.pop(name, None)
+    if _POLL_MEMORY_AUTH.get() and env.get("GH_TOKEN"):
+        # Git's transient config is inherited by subprocesses, never written
+        # to the retained clone's .git/config. The helper reads the token from
+        # its environment, not from a command argument or a diagnostic.
+        env.update({
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "credential.helper",
+            "GIT_CONFIG_VALUE_0": "",
+            "GIT_CONFIG_KEY_1": "credential.helper",
+            "GIT_CONFIG_VALUE_1": "!f() { printf 'username=x-access-token\\npassword=%s\\n' \"$GH_TOKEN\"; }; f",
+            "GIT_TERMINAL_PROMPT": "0",
+        })
     return env
 
 
@@ -3229,26 +3246,123 @@ def _resolve_origin_url(repo_root: Path) -> str:
 
 
 def _clone_for_memory_branch(
-    repo_root: Path, memory_branch: str, *, timings: dict[str, int] | None = None
+    repo_root: Path, memory_branch: str, *, timings: dict[str, int] | None = None,
+    poll_origin: str | None = None, poll_parent: Path | None = None,
 ) -> Path:
-    origin_url = _resolve_origin_url(repo_root)
-    temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
-    with _memory_stage_timer(timings, "clone_ms"):
-        _run_git(temp_dir.parent, ["clone", "--no-tags", "--quiet", origin_url, str(temp_dir)])
+    origin_url = poll_origin if poll_origin is not None else _resolve_origin_url(repo_root)
+    temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-", dir=poll_parent))
+    try:
+        with _memory_stage_timer(timings, "clone_ms"):
+            _run_git(temp_dir.parent, ["clone", "--no-tags", "--quiet", origin_url, str(temp_dir)])
 
-    branch_exists = (
-        _run_git(temp_dir, ["ls-remote", "--heads", "origin", memory_branch], check=False)
-        .stdout.strip()
-        != ""
-    )
-    if branch_exists:
-        with _memory_stage_timer(timings, "fetch_ms"):
-            _run_git(temp_dir, ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"])
-        _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
-    else:
-        _run_git(temp_dir, ["checkout", "-B", memory_branch])
+        branch_exists = (
+            _run_git(temp_dir, ["ls-remote", "--heads", "origin", memory_branch], check=False)
+            .stdout.strip()
+            != ""
+        )
+        if branch_exists:
+            with _memory_stage_timer(timings, "fetch_ms"):
+                _run_git(temp_dir, ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"])
+            _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
+        else:
+            _run_git(temp_dir, ["checkout", "-B", memory_branch])
 
-    return temp_dir
+        return temp_dir
+    except BaseException:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
+def _poll_memory_origin(repo_root: Path) -> str | None:
+    remote = _run_git(repo_root, ["remote", "get-url", "origin"], check=False, inherit_location_env=True)
+    if remote.returncode != 0:
+        return None
+    url = remote.stdout.strip()
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname + (f":{parts.port}" if parts.port else "") if parts.hostname else ""
+    except ValueError:
+        return None
+    if parts.scheme == "https" and host and not parts.query and not parts.fragment:
+        clean = urlunsplit(("https", host, parts.path, "", ""))
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            server = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+            repo = os.environ.get("GITHUB_REPOSITORY", "")
+            if not repo or clean.removesuffix(".git") != f"{server}/{repo}":
+                return None
+            if not os.environ.get("GH_TOKEN"):
+                return None
+        return clean
+    # Local Git remotes are useful for tests; an Actions checkout must use
+    # authenticated HTTPS, never an arbitrary file/ssh URL.
+    if os.environ.get("GITHUB_ACTIONS") != "true" and url.startswith("/") and "\n" not in url:
+        return url
+    return None
+
+
+def _poll_memory_location(path: Path) -> bool:
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    if not run_id.isascii() or not run_id.isdecimal() or not attempt.isascii() or not attempt.isdecimal():
+        return False
+    parent = Path(f"/tmp/codex-orchestrate-poll-{run_id}-{attempt}")
+    if path != parent / "poll-memory-checkout":
+        return False
+    try:
+        info = parent.lstat()
+        return stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700
+    except OSError:
+        return False
+
+
+def _poll_memory_checkout_valid(path: Path, branch: str, origin: str) -> bool:
+    try:
+        info = path.lstat()
+        git_info = (path / ".git").lstat()
+        config_info = (path / ".git" / "config").lstat()
+        marker_info = (path / ".git" / "poll-memory-start").lstat()
+        if not (stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and
+                stat.S_ISDIR(git_info.st_mode) and git_info.st_uid == os.getuid() and
+                stat.S_ISREG(config_info.st_mode) and config_info.st_uid == os.getuid() and
+                stat.S_ISREG(marker_info.st_mode) and marker_info.st_uid == os.getuid()):
+            return False
+        # Reject Git config that could redirect the fetch/push or run code
+        # while reading an otherwise clean checkout (url rewrites, includes,
+        # fsmonitor, hooksPath, credential helpers, etc.).
+        config_names = _run_git(path, ["config", "--local", "--name-only", "--list"], check=False)
+        if config_names.returncode:
+            return False
+        allowed_config = {"core.repositoryformatversion", "core.filemode", "core.bare",
+                          "core.logallrefupdates", "core.ignorecase", "core.symlinks",
+                          "core.precomposeunicode", "remote.origin.url", "remote.origin.fetch",
+                          "remote.origin.tagopt",
+                          "user.name", "user.email"}
+        if any(name not in allowed_config and not re.fullmatch(r"branch\.[^\n]+\.(remote|merge)", name)
+               for name in config_names.stdout.splitlines()):
+            return False
+        hooks = path / ".git" / "hooks"
+        if hooks.is_symlink() or any(not entry.name.endswith(".sample") for entry in hooks.iterdir()):
+            return False
+        marker = (path / ".git" / "poll-memory-start").read_text(encoding="ascii").strip()
+        if not re.fullmatch(r"[0-9a-f]{40,64}", marker):
+            return False
+        checks = (
+            (["rev-parse", "--show-toplevel"], str(path)),
+            (["symbolic-ref", "--quiet", "HEAD"], f"refs/heads/{branch}"),
+            (["rev-parse", "HEAD"], marker),
+            (["config", "--local", "--get-all", "remote.origin.url"], origin),
+            (["remote"], "origin"),
+        )
+        for args, expected in checks:
+            result = _run_git(path, args, check=False)
+            if result.returncode or result.stdout.strip() != expected:
+                return False
+        if _run_git(path, ["config", "--local", "--get-all", "remote.origin.pushurl"], check=False).returncode == 0:
+            return False
+        status = _run_git(path, ["status", "--porcelain", "--untracked-files=all"], check=False)
+        return status.returncode == 0 and not status.stdout.strip()
+    except (OSError, UnicodeError, ValueError):
+        return False
 
 
 # Memory-branch push retries all contend on the single shared `ai-memory`
@@ -3293,14 +3407,48 @@ def persist_memory_operation(
     commit_message: str,
     operation: Callable[[Path], dict[str, Any] | None],
     timings: dict[str, int] | None = None,
+    poll_checkout_dir: Path | None = None,
+    poll_checkout_mode: str | None = None,
 ) -> dict[str, Any]:
     if push_retries < 1:
         raise MemoryValidationError("push_retries must be >= 1")
+    if poll_checkout_mode not in (None, "start", "end") or (poll_checkout_dir is None) != (poll_checkout_mode is None):
+        raise MemoryValidationError("invalid poll checkout option")
 
     repo_root = repo_root.resolve()
     with _file_lock(f"ai-memory-{repo_root}-{memory_branch}"):
-        clone_dir = _clone_for_memory_branch(repo_root, memory_branch, timings=timings)
+        poll_eligible = poll_checkout_dir is not None and _poll_memory_location(poll_checkout_dir)
+        poll_origin = _poll_memory_origin(repo_root) if poll_eligible else None
+        poll_eligible = poll_eligible and poll_origin is not None
+        if poll_checkout_mode and not poll_eligible:
+            print("AI_MEMORY_POLL_CHECKOUT: fresh clone (unsafe location or origin)", file=sys.stderr)
+        auth_token = _POLL_MEMORY_AUTH.set(bool(poll_eligible))
+        clone_dir: Path | None = None
+        retain_clone = False
+        cache_start = False
         try:
+            if poll_checkout_mode == "end" and poll_eligible and poll_checkout_dir is not None:
+                if _poll_memory_checkout_valid(poll_checkout_dir, memory_branch, poll_origin):
+                    fetched = _run_git(
+                        poll_checkout_dir,
+                        ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"],
+                        check=False,
+                    )
+                    if fetched.returncode == 0 and _run_git(
+                        poll_checkout_dir, ["merge", "--ff-only", f"refs/remotes/origin/{memory_branch}"], check=False
+                    ).returncode == 0:
+                        clone_dir = poll_checkout_dir
+                        print("AI_MEMORY_POLL_CHECKOUT: reused after fast-forward", file=sys.stderr)
+                if clone_dir is None:
+                    print("AI_MEMORY_POLL_CHECKOUT: fresh clone (checkout unavailable or not fast-forwardable)", file=sys.stderr)
+            if clone_dir is None:
+                cache_start = poll_checkout_mode == "start" and poll_eligible and poll_checkout_dir is not None and not poll_checkout_dir.exists() and not poll_checkout_dir.is_symlink()
+                if poll_checkout_mode == "start" and poll_eligible and not cache_start:
+                    print("AI_MEMORY_POLL_CHECKOUT: fresh clone (checkout already exists)", file=sys.stderr)
+                clone_dir = _clone_for_memory_branch(
+                    repo_root, memory_branch, timings=timings,
+                    **({"poll_origin": poll_origin, "poll_parent": poll_checkout_dir.parent if cache_start else None} if poll_eligible else {}),
+                )
             memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
             ensure_memory_layout(memory_root)
 
@@ -3335,6 +3483,14 @@ def persist_memory_operation(
                     )
                 if push.returncode == 0:
                     pushed_commit_sha = _run_git(clone_dir, ["rev-parse", "HEAD"]).stdout.strip()
+                    if cache_start and poll_checkout_dir is not None and _poll_memory_location(poll_checkout_dir):
+                        try:
+                            (clone_dir / ".git" / "poll-memory-start").write_text(pushed_commit_sha + "\n", encoding="ascii")
+                            if not poll_checkout_dir.exists() and not poll_checkout_dir.is_symlink():
+                                clone_dir.rename(poll_checkout_dir)
+                                retain_clone = True
+                        except OSError:
+                            print("AI_MEMORY_POLL_CHECKOUT: could not retain checkout", file=sys.stderr)
                     return {
                         "did_commit": True,
                         "did_push": True,
@@ -3389,7 +3545,17 @@ def persist_memory_operation(
                             f"Memory branch rebase failed while retrying push: {rebase_detail}"
                         )
         finally:
-            shutil.rmtree(clone_dir, ignore_errors=True)
+            _POLL_MEMORY_AUTH.reset(auth_token)
+            if clone_dir is not None and not retain_clone:
+                # A failed/incomplete preparation never becomes a reusable
+                # checkout. On end, release a verified retained checkout even
+                # if the second write failed; the workflow also has an always()
+                # cleanup for cancellation between steps.
+                if clone_dir != poll_checkout_dir or (
+                    _poll_memory_location(clone_dir) and not clone_dir.is_symlink() and
+                    clone_dir.is_dir() and clone_dir.lstat().st_uid == os.getuid()
+                ):
+                    shutil.rmtree(clone_dir, ignore_errors=True)
 
 
 def read_memory_root_from_branch(
