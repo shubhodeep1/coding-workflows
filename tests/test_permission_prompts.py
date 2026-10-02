@@ -410,6 +410,8 @@ def _bash(command):
 		# A shell name passed to another command is not a shell reading the pipe or here-string (PR #5401 review round 6).
 		("curl -u deploy:mycustompwd https://a.b | grep sh", "mycustompwd", "curl -u *** https://a.b | grep sh"),
 		("sudo -u pg bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "sudo -u pg bash <<< 'mysql -p*** app'"),
+		("2>/dev/null bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "2>/dev/null bash <<< 'mysql -p*** app'"),
+		("false || sh -c 'mysql -pS3cretPass x'", "S3cretPass", "false || sh -c 'mysql -p*** x'"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -445,13 +447,23 @@ def test_example_masks_credentials(command, secret, expected):
 		("echo 'curl -u deploy:mycustompwd https://a.b' |& sh", "mycustompwd", "echo * |& sh"),
 		("printf 'mysql -pS3cretPass' | sed s/x/y/ | bash", "S3cretPass", "printf * | sed * | bash"),
 		("printf '%s %s' 'curl -u' 'deploy:mycustompwd' | sh", "mycustompwd", "printf * | sh"),
+		# The shell is still found behind a file-descriptor redirection, a newline or a subshell after the pipe, a
+		# brace group, or `xargs`, and a shell reading a process substitution is fed text too (PR #5401 review round 7).
+		("printf 'mysql -pS3cretPass' | 2>/dev/null sh", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' |\nsh", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' | ( sh )", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' | { sh; }", "S3cretPass", None),
+		("printf '%s\\n' 'mysql -pS3cretPass app' | xargs -I{} sh -c '{}'", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass' | tee >(sh)", "S3cretPass", None),
+		("bash <(printf 'mysql -pS3cretPass')", "S3cretPass", None),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
 	example = pp_mask_twin.record_example(_bash(command))
 	assert example.startswith("<command withheld:")
 	# The withheld text goes through redact() like any example, which may widen a `NAME=*` in the shape to `NAME=***`.
-	assert example.endswith(f"shape: {pp_mask_twin.redact(shape)}>")
+	if shape is not None:
+		assert example.endswith(f"shape: {pp_mask_twin.redact(shape)}>")
 	assert secret not in example
 
 
@@ -464,7 +476,9 @@ def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape
 		(["sudo", "-u", "pg", "bash", "-s"], True),
 		(["env", "-i", "sh"], True),
 		(["grep", "sh"], False),
-		(["xargs", "-n1", "echo", "bash"], False),
+		(["xargs", "-I{}", "sh", "-c", "{}"], True),
+		(["2", "sh"], True),
+		(["{", "sh"], True),
 		(["FOO=1"], False),
 		([], False),
 	],

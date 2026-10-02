@@ -413,14 +413,18 @@ def _shell_runner_before(words: list[str], start: int, position: int) -> bool:
 
 # Commands that run the command in their later words with the same stdin (`sudo -u pg bash`, `env -i sh`): behind
 # one of them, a shell still reads piped text or a here-string as its script.
-_SHELL_RUNNER_WRAPPERS = frozenset({"sudo", "doas", "env", "nice", "nohup", "command", "exec", "time", "timeout", "stdbuf", "ionice"})
+_SHELL_RUNNER_WRAPPERS = frozenset({"sudo", "doas", "env", "nice", "nohup", "command", "exec", "time", "timeout", "stdbuf", "ionice", "xargs"})
 
 
 def _segment_runs_a_shell(words: list[str]) -> bool:
 	"""True when the simple command `words` runs a _SHELL_COMMAND_RUNNERS shell: its command word is one, or it is a
 	_SHELL_RUNNER_WRAPPERS command with a shell among its later words. A shell name passed to another command as an
-	argument (`grep sh`) does not count."""
-	start = next((position for position, word in enumerate(words) if not _ASSIGNMENT_RE.match(word)), len(words))
+	argument (`grep sh`) does not count. Leading assignments, a group's `{`, `!`, and a redirection's file-descriptor
+	digit (`2>/dev/null sh`) come before the command word and are passed over."""
+	start = next(
+		(position for position, word in enumerate(words) if not (_ASSIGNMENT_RE.match(word) or word in ("{", "!") or word.isdigit())),
+		len(words),
+	)
 	if start >= len(words):
 		return False
 	command = words[start].rsplit("/", 1)[-1]
@@ -788,7 +792,8 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 	# lexer cannot tell apart, so the segment is read both without it (`segment`) and with it (`with_digits`).
 	segment: list[str] = []
 	with_digits: list[str] = []
-	# True when the simple command being read gets the previous one's output on stdin (it follows a `|` or `|&`).
+	# True when the simple command being read gets the previous one's output on stdin: it follows a `|` or `|&`
+	# (also across a newline or a subshell's `(` right after it) or a `>(` process substitution.
 	piped_into = False
 	redirect = ""
 	for token in tokens + [";"]:
@@ -797,7 +802,7 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 			# A target can run a command substitution (`> "$(mysql -p…)"`), and a here-string fed to a shell
 			# (`bash <<< 'mysql -p…'`) is a command line of its own.
 			values.update(_segment_credentials([token], depth))
-			if redirect == "<<<" and _segment_runs_a_shell(with_digits):
+			if redirect == "<<<" and (_segment_runs_a_shell(segment) or _segment_runs_a_shell(with_digits)):
 				values.update(_command_line_credentials(token, depth + 1))
 			redirect = ""
 			continue
@@ -810,12 +815,14 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 			values.update(_segment_credentials(segment, depth))
 			if with_digits != segment:
 				values.update(_segment_credentials(with_digits, depth))
-			if piped_into and _segment_runs_a_shell(with_digits):
+			runs_a_shell = _segment_runs_a_shell(segment) or _segment_runs_a_shell(with_digits)
+			if runs_a_shell and (piped_into or "<(" in token):
 				# A shell reading a pipe runs whatever the earlier stages print (`printf 'mysql -p…' | sh`, `cat f |
-				# sed … | bash`, arguments `printf` joins), which no scan of their words can know: withhold the
-				# command (PR #5401 review round 6).
+				# sed … | bash`, arguments `printf` joins), and one reading a `<(…)` runs what that command prints,
+				# which no scan of their words can know: withhold the command (PR #5401 review rounds 6 and 7).
 				raise ValueError("text piped into a shell")
-			piped_into = token in ("|", "|&")
+			pipe = ("|" in token and "||" not in token) or ">(" in token
+			piped_into = pipe or (piped_into and not with_digits)
 			segment = []
 			with_digits = []
 		else:
