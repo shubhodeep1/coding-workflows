@@ -3,6 +3,15 @@
 # Tags origin/stable as <version-tag> and moves the 'stable' and major-version
 # (e.g. v1) pointers to it, matching the release path in
 # .github/workflows/{mark-stable,test-and-mark-stable}.yml.
+# Like those workflows, it first runs the protected-path release check
+# (scripts/protected_path_authorization.py release, issue #4919), so it needs
+# `gh` authenticated for the repository and a full (not shallow) clone; exit 6
+# means the check refused or its checker could not run, exit 7 that
+# origin/stable moved between the check and the creation of a new version tag.
+# No tag moves in either case. A partial-publish recovery rerun releases the
+# commit its existing version tag names, so it never exits 7. Exit 8
+# means origin's `stable` or major-version tag changed after this run read it
+# (a concurrent release): the pointer push is refused instead of rolling it back.
 # Usage: ./scripts/mark-stable.sh v1.1.0
 set -euo pipefail
 
@@ -92,6 +101,77 @@ elif [ "${TAG_LSREMOTE_RC}" -ne 2 ]; then
 	exit "${TAG_LSREMOTE_RC}"
 fi
 
+# Issue #4919: the release check the workflows' `validate` job runs before the
+# `stable` tag moves. Every protected-equivalent change since the previous
+# `stable` tag (`.claude/**`, `workflow-templates/.claude/**`, the template
+# divergence pins, the gate itself) must come from a merged PR the repository
+# owner authorized at its merged head. It needs `gh` authenticated for the
+# repository and the full history, and it fails closed (exit 6). The
+# repository is GITHUB_REPOSITORY, else the last two parts of the origin URL.
+RELEASE_CHECK_SCRIPT="$(dirname -- "${BASH_SOURCE[0]}")/protected_path_authorization.py"
+RELEASE_CHECK_REPO="${GITHUB_REPOSITORY:-}"
+if [ -z "${RELEASE_CHECK_REPO}" ] && [[ "$(git remote get-url origin 2>/dev/null || true)" =~ ([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/?$ ]]; then
+	RELEASE_CHECK_REPO="${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}"
+fi
+if [ ! -f "${RELEASE_CHECK_SCRIPT}" ] || [ -z "${RELEASE_CHECK_REPO}" ]; then
+	echo "error: cannot run the protected-path release check (issue #4919): ${RELEASE_CHECK_SCRIPT} is missing or the repository is unknown (set GITHUB_REPOSITORY=<owner>/<repo>). Refusing to release." >&2
+	exit 6
+fi
+# The previous release is the check's base; a private ref keeps the local
+# `stable` tag untouched. No remote `stable` tag (a first release) checks the
+# whole history.
+RELEASE_CHECK_BASE_REF="refs/mark-stable/previous-stable"
+git update-ref -d "${RELEASE_CHECK_BASE_REF}" 2>/dev/null || true
+set +e
+PREVIOUS_STABLE_LSREMOTE_OUT="$(git ls-remote --exit-code --tags origin refs/tags/stable 2>&1)"
+PREVIOUS_STABLE_LSREMOTE_RC=$?
+set -e
+if [ "${PREVIOUS_STABLE_LSREMOTE_RC}" -eq 0 ]; then
+	git fetch --no-tags origin "+refs/tags/stable:${RELEASE_CHECK_BASE_REF}"
+elif [ "${PREVIOUS_STABLE_LSREMOTE_RC}" -ne 2 ]; then
+	echo "error: 'git ls-remote --tags origin refs/tags/stable' failed (rc=${PREVIOUS_STABLE_LSREMOTE_RC}): ${PREVIOUS_STABLE_LSREMOTE_OUT}" >&2
+	echo "       Refusing to release without the protected-path release check's base." >&2
+	exit "${PREVIOUS_STABLE_LSREMOTE_RC}"
+fi
+# The pointer pushes below lease on the values read here, so a release that
+# moved `stable` or ${MAJOR} meanwhile is never overwritten by this older one.
+# An empty lease means "the tag must still be absent".
+PREVIOUS_STABLE_LEASE=""
+if [ "${PREVIOUS_STABLE_LSREMOTE_RC}" -eq 0 ]; then
+	PREVIOUS_STABLE_LEASE="$(git rev-parse --verify "${RELEASE_CHECK_BASE_REF}")"
+fi
+set +e
+PREVIOUS_MAJOR_LSREMOTE_OUT="$(git ls-remote --exit-code --tags origin "refs/tags/${MAJOR}" 2>&1)"
+PREVIOUS_MAJOR_LSREMOTE_RC=$?
+set -e
+PREVIOUS_MAJOR_LEASE=""
+if [ "${PREVIOUS_MAJOR_LSREMOTE_RC}" -eq 0 ]; then
+	PREVIOUS_MAJOR_LEASE="$(printf '%s\n' "${PREVIOUS_MAJOR_LSREMOTE_OUT}" | awk -v ref="refs/tags/${MAJOR}" '$2 == ref { print $1; exit }')"
+	if [[ ! "${PREVIOUS_MAJOR_LEASE}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "error: could not read origin's refs/tags/${MAJOR}: ${PREVIOUS_MAJOR_LSREMOTE_OUT}" >&2
+		exit 1
+	fi
+elif [ "${PREVIOUS_MAJOR_LSREMOTE_RC}" -ne 2 ]; then
+	echo "error: 'git ls-remote --tags origin refs/tags/${MAJOR}' failed (rc=${PREVIOUS_MAJOR_LSREMOTE_RC}): ${PREVIOUS_MAJOR_LSREMOTE_OUT}" >&2
+	exit "${PREVIOUS_MAJOR_LSREMOTE_RC}"
+fi
+# The commit this release tags: the existing version tag on a recovery rerun,
+# otherwise the current origin/stable.
+if [ "${SKIP_VERSION_TAG_CREATE}" -eq 1 ]; then
+	RELEASE_CHECK_HEAD="${EXISTING_TAG_COMMIT}"
+else
+	git fetch --no-tags origin "+refs/heads/stable:refs/remotes/origin/stable"
+	RELEASE_CHECK_HEAD="$(git rev-parse --verify "refs/remotes/origin/stable^{commit}")"
+fi
+set +e
+PYTHONDONTWRITEBYTECODE=1 python3 "${RELEASE_CHECK_SCRIPT}" release --repo "${RELEASE_CHECK_REPO}" --base "${RELEASE_CHECK_BASE_REF}" --head "${RELEASE_CHECK_HEAD}"
+RELEASE_CHECK_RC=$?
+set -e
+if [ "${RELEASE_CHECK_RC}" -ne 0 ]; then
+	echo "error: protected-path authorization failed (exit ${RELEASE_CHECK_RC}, issue #4919). For each blocked PR above, the repository owner posts '/authorize-protected-paths <sha>' on it, with the SHA its blocked entry's reason names (the merged head, or the merge commit itself), then reruns this script. No tag was moved." >&2
+	exit 6
+fi
+
 if [ "${SKIP_VERSION_TAG_CREATE}" -eq 0 ]; then
 	git fetch origin stable
 	# Annotated tag (matches the workflow release path's `git tag -a "$VERSION" -m "Release $VERSION"`).
@@ -100,12 +180,33 @@ if [ "${SKIP_VERSION_TAG_CREATE}" -eq 0 ]; then
 	# fail loudly instead of silently retargeting the local immutable tag.
 	git tag -a "${VERSION_TAG}" -m "Release ${VERSION_TAG}" origin/stable
 fi
+# Release exactly the commit the protected-path check passed. On a new
+# release this catches origin/stable moving before `git tag -a` above. On a
+# partial-publish recovery the published version tag fixes the commit, and the
+# check ran on that commit, so the comparison holds by construction: the
+# stable branch advancing meanwhile does not change what this release is. The
+# pointers still only move forward, because the check blocks a head that does
+# not contain the previous stable tag and the pushes below lease on that tag.
+if [ "$(git rev-parse --verify "${VERSION_TAG}^{commit}")" != "${RELEASE_CHECK_HEAD}" ]; then
+	echo "error: ${VERSION_TAG} points at $(git rev-parse --verify "${VERSION_TAG}^{commit}"), not at ${RELEASE_CHECK_HEAD}, the commit the protected-path release check passed (origin/stable moved). No tag was pushed; rerun to check the new origin/stable." >&2
+	if [ "${SKIP_VERSION_TAG_CREATE}" -eq 0 ]; then
+		# This run created the local tag and never pushed it; drop it so the rerun can create it again.
+		git tag -d "${VERSION_TAG}" >/dev/null
+	fi
+	exit 7
+fi
 git tag -f stable "${VERSION_TAG}"
 git tag -f "${MAJOR}" "${VERSION_TAG}"
 # Use refs/tags/ explicitly to disambiguate from any same-named branch refs.
 if [ "${SKIP_VERSION_TAG_CREATE}" -eq 0 ]; then
 	git push origin "refs/tags/${VERSION_TAG}"
 fi
-git push -f origin refs/tags/stable
-git push -f origin "refs/tags/${MAJOR}"
+if ! git push --force-with-lease="refs/tags/stable:${PREVIOUS_STABLE_LEASE}" origin refs/tags/stable; then
+	echo "error: origin's refs/tags/stable is no longer ${PREVIOUS_STABLE_LEASE:-absent}, the value this run read before its release check (another release moved it, or the push failed). ${VERSION_TAG} may be published, but stable and ${MAJOR} were not moved. Check the other release before rerunning." >&2
+	exit 8
+fi
+if ! git push --force-with-lease="refs/tags/${MAJOR}:${PREVIOUS_MAJOR_LEASE}" origin "refs/tags/${MAJOR}"; then
+	echo "error: origin's refs/tags/${MAJOR} is no longer ${PREVIOUS_MAJOR_LEASE:-absent}, the value this run read before its release check (another release moved it, or the push failed). stable was moved to ${VERSION_TAG}; ${MAJOR} was not. Check the other release before rerunning." >&2
+	exit 8
+fi
 echo "Done. ${VERSION_TAG} is now the stable release (${MAJOR} pointer updated)."

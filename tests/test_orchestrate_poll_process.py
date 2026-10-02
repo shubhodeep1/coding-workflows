@@ -1892,7 +1892,7 @@ if args[0] == 'api':
 					'mergedAt': pr.get('merged_at', None),
 					'headRefName': pr.get('headRefName', ''),
 					'baseRefName': pr.get('baseRefName', ''),
-					'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
+					'headRefOid': pr.get('headRefOid', pr.get('headSha', f'{int(linked_pr_num):040x}')),
 								'mergeable': pr.get('mergeable', None),
 								'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
 								'mergeCommit': {
@@ -2281,7 +2281,7 @@ if args[0] == 'api':
 			else:
 				print('null')
 		elif jq == '.head.sha':
-			print(pr.get('headSha', f'mocksha{pr_num}'))
+			print(pr.get('headSha', f'{int(pr_num):040x}'))
 		elif jq == '.head.ref':
 			print(pr.get('headRefFromApi', pr.get('headRefName', '')))
 		else:
@@ -2301,7 +2301,7 @@ if args[0] == 'api':
 					'ref': pr.get('baseRefName', ''),
 				},
 				'head': {
-					'sha': pr.get('headSha', f'mocksha{pr_num}'),
+					'sha': pr.get('headSha', f'{int(pr_num):040x}'),
 					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
 				},
 			}))
@@ -11135,7 +11135,7 @@ def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "910" + "0" * 37,
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -11207,7 +11207,7 @@ def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle(
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "910" + "0" * 37,
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -11217,7 +11217,7 @@ def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle(
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-11",
 			"headRefFromApi": "ai/issue-11",
-			"headSha": "sha911",
+			"headSha": "911" + "0" * 37,
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -11268,7 +11268,7 @@ def test_integration_backpressure_size_aware_floor_does_not_self_deadlock_large_
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "910" + "0" * 37,
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -11323,7 +11323,7 @@ def test_integration_backpressure_uses_wave_issue_count_when_total_issues_missin
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "910" + "0" * 37,
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},
@@ -14011,7 +14011,7 @@ def _backpressure_3928_shape_prs() -> list[dict]:
 			"baseRefName": "orchestrator/project-192",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "sha910",
+			"headSha": "910" + "0" * 37,
 			"mergeable": True,
 			"mergeable_state": "clean",
 		},

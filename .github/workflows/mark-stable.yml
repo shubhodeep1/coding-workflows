@@ -529,6 +529,23 @@ jobs:
             echo "CI state: $STATE — OK"
           fi
 
+      # Issue #4919: see the matching step in test-and-mark-stable.yml.
+      # Every protected-equivalent change since the previous `stable` tag
+      # must come from a merged PR the repository owner authorized at its
+      # merged head; pre-gate history is grandfathered. Fails closed.
+      - name: "Verify protected-path changes are authorized (issue #4919)"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          rc=0
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/protected_path_authorization.py release \
+            --repo "${{ github.repository }}" --base refs/tags/stable --head HEAD || rc=$?
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::Protected-path authorization failed (exit ${rc}). For each blocked PR above, the repository owner posts '/authorize-protected-paths <sha>' on it, with the SHA its blocked entry's reason names (the merged head, or the merge commit itself), then re-runs this release."
+            exit 1
+          fi
+
   release:
     needs: [source, resolve-version, validate, validate-scripts]
     runs-on: ubuntu-latest

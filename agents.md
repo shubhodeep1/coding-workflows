@@ -1127,8 +1127,158 @@ reviews, comments, and conflicts stay a direct §12 request.
   CI when a template file has no root twin, differs from it, is a symlink,
   or is one of the five listed consumer-variant commands
   (`TEMPLATE_DIVERGENCE`) whose pinned SHA-256 no longer matches. Updating
-  that list is a protected-equivalent change too. Once an Edit or Write to
-  the root `.claude/**` is blocked or denied, the session never retries it
+  that list is a protected-equivalent change too.
+- **Protected-path merge and release gate (issue #4919).** The parity test
+  cannot see who changed a pin, so merging and releasing a
+  protected-equivalent change needs the repository owner's approval of the
+  exact head. The protected set is:
+  - `.claude/**` and `workflow-templates/.claude/**`;
+  - `tests/test_claude_template_parity.py`;
+  - `scripts/protected_path_authorization.py` and
+    `scripts/protected_path_gate.sh`.
+
+  Paths are compared case-insensitively. A rename source counts, and a
+  truncated file list counts as protected, as does one with an entry whose
+  paths cannot be read (not an object, no `filename` string, or a rename
+  without a `previous_filename` string).
+  - **The approval** is a PR comment whose whole body is
+    `/authorize-protected-paths <40-hex head sha>`. It counts only when all
+    of these hold:
+    - the author is a `User` with OWNER/MEMBER/COLLABORATOR association;
+    - `performed_via_github_app` is present and null (Claude sessions post
+      as the `claude` app; a payload without the field fails closed);
+    - it was never edited.
+  - **Merge.** Every `gh pr merge` in `scripts/*.sh` is prefixed with
+    `protected_path_guarded_merge`. That covers `review_enable_auto_merge.sh`,
+    the three `review_rb_judge.sh` merge paths (5 calls), and 15 calls at 9
+    `orchestrate_poll_process.sh` sites.
+    - It runs `protected_path_authorization.py pr`, which makes one PR read
+      and one files page per 100 files. Comments are read only for a
+      protected PR.
+    - A call without `--match-head-commit` gets the head the check read, for
+      unprotected and authorized PRs alike. A push between the check and the
+      merge then fails the merge instead of landing a protected path
+      unchecked. An unprotected call that already names a head runs
+      unchanged. A PR whose head is not a 40-hex SHA is refused, protected
+      or not, because its merge could not be bound to the checked head.
+    - Otherwise it returns 3 without merging. It posts one comment per head
+      (marker `<!-- ai:protected-path-authorization:v1 head=<sha> -->`) and
+      logs `PROTECTED_PATH_GATE pr=… decision=block … auto_merge=…`.
+    - A refused protected PR also has a pending auto-merge turned off (one
+      GraphQL `disablePullRequestAutoMerge` call, made only when the PR
+      read shows `auto_merge`). GitHub keeps auto-merge enabled across
+      pushes by anyone with write access. Without this, an auto-merge
+      enabled on an earlier, unprotected head would land the unauthorized
+      one. The call counts only when its response carries no GraphQL
+      `errors` and shows no auto-merge request left; otherwise it is
+      retried twice (2s, 4s), each retry after a PR read that ends the
+      loop if auto-merge is already off. `auto_merge=` in the log reads
+      `disabled`, `none pending`, or `disable failed: …`. A failure still
+      refuses the merge and adds a `::error::` annotation, because GitHub
+      can still land the pending auto-merge once checks pass.
+    - The gate writes these lines to stderr, so no guarded call may
+      discard stderr (`2>/dev/null`, `>/dev/null 2>&1`); capturing it into a
+      variable is fine. `tests/test_protected_path_authorization.py` checks
+      every call.
+    - The PR's current head decides the auto-merge. A call bound to an older
+      head (`--match-head-commit`) is refused for the move, and a pending
+      auto-merge is still turned off when the current head is protected and
+      not authorized, or its SHA cannot be read; an unprotected or authorized
+      current head keeps it. Only a call bound to the current head posts the
+      instruction comment.
+    - `review_enable_auto_merge.sh` then logs
+      `AUTOFIX_AUTO_MERGE_PROTECTED_PATH … action=refuse` (squash) or
+      `action=refuse_merge_commit` (forward-merge fallback PR) and withholds
+      `ai:ready-to-merge`.
+    - The instruction comment lists at most 20 paths, then `… and N more`.
+    - No label is added, so Claude checkers keep waiting instead of starting
+      a fixer.
+    - Read errors retry three times, then block for that attempt.
+    - The gate reads the PR number from the token right after `pr merge`
+      and refuses any other shape (`reason=unparseable_merge_call`).
+      `tests/test_protected_path_authorization.py` fails CI on a
+      `gh pr merge` call in `scripts/*.sh` that is unwrapped or puts a flag
+      before the PR number.
+    - Both files are in `REQUIRED_BOOTSTRAP_SCRIPTS`
+      (`scripts/stage_workflow_support.sh`) and in the orchestrator's
+      staging list (`orchestrate_poll.yml`).
+    - `review_autofix.yml`'s deterministic-skip merge is not wrapped: its
+      `PROTECTED_SKIP_SUPPRESSED` guard refuses the skip for `.claude/*`,
+      `workflow-templates/*`, `scripts/*`, and
+      `tests/test_claude_template_parity.py`.
+      `tests/test_protected_path_authorization.py` runs the real guard over
+      every path in the gate's protected set, so a path added to the gate
+      must be added to the guard too.
+  - **Release.** `test-and-mark-stable.yml` and `mark-stable.yml` run
+    "Verify protected-path changes are authorized (issue #4919)" in
+    `validate`, before `release` moves the `stable` tag.
+    - The step runs
+      `protected_path_authorization.py release --base refs/tags/stable --head HEAD`.
+    - Each non-merge commit in the range that touches the set passes when
+      one of its merged PRs (`commits/{sha}/pulls`) has the owner's comment
+      for that PR's merged `head.sha`.
+    - A merge commit that makes a protected change of its own is checked the
+      same way: a conflict resolution or a hand-edited merge, found with
+      `git log --remerge-diff` (git 2.36 or later), or an octopus merge with
+      a protected file that is not the version of the one parent that
+      changed it (or, when no parent changed it, of the merge base): a hand
+      edit, a new file, or a parent's change dropped. A protected file two
+      parents of an octopus changed is checked too (fail closed), since its
+      content merge cannot be verified. A clean merge only brings in
+      commits that are checked themselves, so it is not listed. Without
+      this, wrapping a protected edit in a merge commit (for example one
+      pushed straight to `main`) would hide it from the check. Such a merge
+      passes on a PR's merged-head comment only when that head contains the
+      merge (a conflict resolved on the PR's own branch). A merge made
+      outside the approved head, such as a local merge pushed straight to a
+      branch that GitHub still links to the PR it merged, needs the owner's
+      command naming the merge commit's own SHA on that PR.
+    - Commits reachable from the gate's arrival commit are grandfathered.
+      The arrival commit is the oldest first-parent commit that changed the
+      script.
+    - A shallow checkout fails the check: its boundary commit would stand in
+      for the arrival commit and be grandfathered.
+    - A release only moves forward. A head that does not contain the
+      previous `stable` tag (a rollback, or a history that diverged from
+      it) is blocked with no API read, because the range would hide the
+      protected changes it drops. Ship a rollback as a revert commit.
+    - A commit with no merged PR is blocked.
+    - To unblock a release, the owner posts the command with the SHA each
+      blocked entry's `reason` names (the merged head, or the merge commit
+      itself) on a listed PR and re-runs the release.
+    - `scripts/mark-stable.sh`, the manual release path, runs the same check
+      before any tag moves. Its base is the remote's `stable` tag, fetched
+      into `refs/mark-stable/previous-stable`. Its head is the commit the
+      version tag names. The repository is `GITHUB_REPOSITORY`, else the
+      last two parts of the origin URL. It needs `gh` authenticated and a
+      full clone. It exits 6 when the check refuses or cannot run, and 7
+      when `origin/stable` moved after the check. No tag moves in either
+      case. The `stable` and major-version pushes lease on the values the
+      script read before the check (`--force-with-lease`), so it exits 8
+      instead of rolling back a release that moved them meanwhile.
+  - **Residual risk (accepted).** A `GH_PAT` workflow comment also has no
+    app attribution. Only a comment whose entire body is the command counts,
+    and every workflow comment path wraps its text in headers or markers.
+    Local CLI sessions with a PAT post without app attribution. They are
+    human-watched, and CLAUDE.md §23.I forbids any Claude session from
+    posting the command.
+    - An auto-merge is turned off only when the gate runs on the new head.
+      Suppose a push adds a protected path to a PR whose earlier head
+      already had auto-merge enabled, and the review of the new head ends in
+      findings, so it never reaches `review_enable_auto_merge.sh`. The gate
+      then relies on GitHub honouring that auto-merge's `--match-head-commit`
+      binding.
+    - The gate's call sites, its wrap test
+      (`tests/test_protected_path_authorization.py`), `ci.yml`, and the
+      release steps are outside the protected set, so a PR could unwrap a
+      merge call. Such a PR touches `scripts/*` or `.github/*`, so it never
+      takes the deterministic skip and always gets the full reviewer panel.
+      The wrap test fails CI on an unwrapped call unless the same PR also
+      edits the test. Protecting these files would stop most orchestrator
+      PRs for owner approval (AD-14 of the #4919 project).
+  - Tests: `tests/test_protected_path_authorization.py` (own `ci.yml` step).
+- Once an Edit or Write to the root `.claude/**` is blocked or denied, the
+  session never retries it
   through Bash, `python3`, `sed`, `tee`, `cp`, a heredoc, or any other
   tool: it stops at `Status: BLOCKED` naming each file and its exact edit,
   and the operator's watched session applies it.
@@ -1733,6 +1883,8 @@ and shipped:
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `PROTECTED_PATH_GATE`
+- `AUTOFIX_AUTO_MERGE_PROTECTED_PATH`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1925,6 +2077,8 @@ LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=PROTECTED_PATH_GATE
+LOG_PREFIX.name=AUTOFIX_AUTO_MERGE_PROTECTED_PATH
 
 ---
 

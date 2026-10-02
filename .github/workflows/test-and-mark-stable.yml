@@ -5515,6 +5515,25 @@ jobs:
             echo "CI state: $STATE — OK"
           fi
 
+      # Issue #4919: consumers sync `.claude/` from the `stable` tag the
+      # release job moves. Every protected-equivalent change since the
+      # previous release (`.claude/**`, `workflow-templates/.claude/**`, the
+      # template-divergence pins, the gate itself) must come from a merged PR
+      # the repository owner authorized at its merged head; changes that
+      # landed before the gate did are grandfathered. Fails closed.
+      - name: "Verify protected-path changes are authorized (issue #4919)"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          rc=0
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/protected_path_authorization.py release \
+            --repo "${{ github.repository }}" --base refs/tags/stable --head HEAD || rc=$?
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::Protected-path authorization failed (exit ${rc}). For each blocked PR above, the repository owner posts '/authorize-protected-paths <sha>' on it, with the SHA its blocked entry's reason names (the merged head, or the merge commit itself), then re-runs this release."
+            exit 1
+          fi
+
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
       # Remove after root-cause is identified and a targeted fix lands.

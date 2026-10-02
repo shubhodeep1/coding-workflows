@@ -1205,8 +1205,10 @@ jobs:
                       agents.md|claude.md|unattended_system_instructions.md)
                         PROTECTED_SKIP_SUPPRESSED="true" ;;
                     esac
+                    # tests/test_claude_template_parity.py holds the template
+                    # divergence pins the protected-path gate protects (#4919).
                     case "${lc_fname}" in
-                      .github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*)
+                      .github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*|tests/test_claude_template_parity.py)
                         PROTECTED_SKIP_SUPPRESSED="true" ;;
                     esac
                     # Filenames are PR-controlled: executable build/test

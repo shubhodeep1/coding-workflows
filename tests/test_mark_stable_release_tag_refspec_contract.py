@@ -665,11 +665,17 @@ def test_script_pushes_all_three_tags_via_refs_tags() -> None:
 	assert 'git push origin "refs/tags/${VERSION_TAG}"' in text, (
 		"scripts/mark-stable.sh: VERSION_TAG push must use refs/tags/${VERSION_TAG}"
 	)
-	assert "git push -f origin refs/tags/stable" in text, (
-		"scripts/mark-stable.sh: stable tag push must use refs/tags/stable"
+	# The moving pointers are forced only under a lease on the value read
+	# before the release check (issue #4919), so a concurrent release is never
+	# rolled back; a bare `-f` would override the lease.
+	assert 'git push --force-with-lease="refs/tags/stable:${PREVIOUS_STABLE_LEASE}" origin refs/tags/stable' in text, (
+		"scripts/mark-stable.sh: stable tag push must use refs/tags/stable under a lease"
 	)
-	assert 'git push -f origin "refs/tags/${MAJOR}"' in text, (
-		"scripts/mark-stable.sh: major-version push must use refs/tags/${MAJOR}"
+	assert 'git push --force-with-lease="refs/tags/${MAJOR}:${PREVIOUS_MAJOR_LEASE}" origin "refs/tags/${MAJOR}"' in text, (
+		"scripts/mark-stable.sh: major-version push must use refs/tags/${MAJOR} under a lease"
+	)
+	assert not re.search(r"git push -f\b", text), (
+		"scripts/mark-stable.sh: an unleased 'git push -f' can roll back a concurrent release"
 	)
 	assert not re.search(r'^\s*git push origin "\$\{?VERSION_TAG\}?"\s*$', text, re.MULTILINE), (
 		"scripts/mark-stable.sh: bare 'git push origin \"${VERSION_TAG}\"' would re-introduce the regression"
