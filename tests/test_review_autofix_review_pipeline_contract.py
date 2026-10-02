@@ -375,6 +375,7 @@ def _run_collect_pr_check_runs_harness(
 	poll_interval_secs: str = "20",
 	log_tail_bytes: str = "0",
 	gh_retry_max_attempts: str = "1",
+	strict_merge_snapshot: str = "false",
 ) -> dict[str, object]:
 	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-") as td:
 		tmp = Path(td)
@@ -412,6 +413,7 @@ def _run_collect_pr_check_runs_harness(
 			"GH_RETRY_MAX_ATTEMPTS": gh_retry_max_attempts,
 			"SELF_RUN_ID": self_run_id,
 			"CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT": exclude_self_from_context,
+			"CHECK_RUNS_STRICT_MERGE_SNAPSHOT": strict_merge_snapshot,
 		})
 
 		result = subprocess.run(
@@ -3385,6 +3387,52 @@ def test_post_review_snapshot_ignores_only_its_own_incomplete_check() -> None:
 	assert "collection_status: ready\n" in result["context_text"]
 	assert "total_check_runs: 1\n" in result["context_text"]
 	assert "incomplete_count: 0\n" in result["context_text"]
+
+
+def test_strict_merge_snapshot_requires_complete_same_head_evidence() -> None:
+	sha = "a" * 40
+	self_url = "https://github.com/owner/repo/actions/runs/777/job/1"
+	green = {"id": 2, "head_sha": sha, "status": "completed", "conclusion": "success"}
+	self_pending = {"id": 1, "head_sha": sha, "status": "in_progress", "conclusion": None,
+		"app": {"slug": "github-actions"}, "details_url": self_url}
+	for runs, total, expected in [
+		([green, self_pending], 2, "ready"),
+		([green, {**self_pending, "details_url": "https://evil.example/actions/runs/777/job/1"}], 2, "not_ready"),
+		([green, {**self_pending, "app": {"slug": "other"}}], 2, "not_ready"),
+		([green, {**self_pending, "status": "completed", "conclusion": "failure"}], 2, "not_ready"),
+		([green, {**self_pending, "id": 3, "details_url": "https://github.com/owner/repo/actions/runs/888/job/3"}], 2, "not_ready"),
+		([green], 2, "invalid_snapshot"),
+		([{**green, "head_sha": "b" * 40}], 1, "invalid_snapshot"),
+		([{**green, "conclusion": "unknown"}], 1, "invalid_snapshot"),
+		([{**green, "status": "mystery"}], 1, "invalid_snapshot"),
+		([green, green], 2, "invalid_snapshot"),
+		([self_pending], 1, "invalid_snapshot"),
+	]:
+		result = _run_collect_pr_check_runs_harness(
+			pr_payload={"head": {"sha": sha}}, self_run_id="777", strict_merge_snapshot="true",
+			wait_timeout_secs="0", check_runs_responses=[{"json": [{"total_count": total, "check_runs": runs}]}],
+		)
+		assert result["returncode"] == 0, result
+		assert f"collection_status: {expected}\n" in result["context_text"], (expected, result)
+		assert result["mock_state"]["check_runs_index"] == 1, result
+	for response in (
+		{"json": []}, {"json": [{"total_count": 1, "check_runs": [green]}, "bad-page"]},
+		{"stdout": "garbage"}, {"json": [{"check_runs": [green]}]},
+		{"json": [{"total_count": 2, "check_runs": [green]},
+			{"total_count": 1, "check_runs": [{**green, "id": 3}]}]},
+		{"json": [{"total_count": 1000, "check_runs": [green]}]},
+	):
+		result = _run_collect_pr_check_runs_harness(
+			pr_payload={"head": {"sha": sha}}, strict_merge_snapshot="true",
+			check_runs_responses=[response],
+		)
+		assert "collection_status: invalid_snapshot\n" in result["context_text"], result
+
+	api_error = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": sha}}, strict_merge_snapshot="true",
+		check_runs_responses=[{"exit_code": 1}],
+	)
+	assert "collection_status: api_error\n" in api_error["context_text"], api_error
 
 
 def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
@@ -7459,6 +7507,10 @@ def _run_auto_merge_helper_with_fake_gh(
 	expected_head_sha: str,
 	head_ref: str = "ai/issue-42",
 	forward_merge_auto_setting: str = "true",
+	check_runs_response: dict[str, object] | None = None,
+	live_head_sha: str | None = None,
+	e2e_smoke: bool = False,
+	enable_auto_merge_setting: str = "true",
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
 	"""Run scripts/review_enable_auto_merge.sh with a fake ``gh`` on PATH.
 
@@ -7470,6 +7522,10 @@ def _run_auto_merge_helper_with_fake_gh(
 	bin_dir.mkdir(parents=True, exist_ok=True)
 	calls_path = tmp / "gh_calls.jsonl"
 	github_output_path = tmp / "github_output.txt"
+	if check_runs_response is None:
+		check_runs_response = {"json": [{"total_count": 1, "check_runs": [
+			{"id": 1, "head_sha": expected_head_sha, "status": "completed", "conclusion": "success"},
+		]}]}
 	fake_gh = bin_dir / "gh"
 	fake_gh.write_text(
 		textwrap.dedent(
@@ -7482,11 +7538,15 @@ def _run_auto_merge_helper_with_fake_gh(
 			if args[:1] == ["api"]:
 			    path = next(a for a in args[1:] if not a.startswith("-"))
 			    if "/labels" in path:
-			        sys.stdout.write("")
+			        sys.stdout.write("e2e-smoke-test\\n" if {e2e_smoke!r} else "")
 			        sys.exit(0)
 			    if path.endswith("/pulls/42"):
-			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "body": ""}}))
+			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {(live_head_sha if live_head_sha is not None else expected_head_sha)!r}}}, "body": ""}}))
 			        sys.exit(0)
+			    if "/check-runs" in path:
+			        response = {check_runs_response!r}
+			        sys.stdout.write(json.dumps(response.get("json", [])) if "json" in response else response.get("stdout", ""))
+			        sys.exit(response.get("exit_code", 0))
 			    sys.stderr.write("unhandled gh api path: %r\\n" % (path,))
 			    sys.exit(1)
 			if args[:2] == ["pr", "merge"]:
@@ -7504,13 +7564,15 @@ def _run_auto_merge_helper_with_fake_gh(
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			"GITHUB_REPOSITORY": "test-owner/test-repo",
 			"PR_NUMBER": "42",
-			"ENABLE_AUTO_MERGE": "true",
+			"ENABLE_AUTO_MERGE": enable_auto_merge_setting,
 			"FORWARD_MERGE_FALLBACK_AUTO_MERGE": forward_merge_auto_setting,
 			"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
 			"INITIAL_HEAD_SHA": expected_head_sha,
 			"GH_TOKEN": "fake-token",
 			"GITHUB_ENV": str(github_output_path),
 			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"GITHUB_RUN_ID": "777",
+			"RUNNER_TEMP": str(tmp),
 		}
 	)
 	proc = subprocess.run(
@@ -7541,6 +7603,7 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
 			"AUTO_MERGE_READY_LABELS_ALLOWED=true",
 		]
+		assert len([c for c in calls if any("/check-runs" in arg for arg in c)]) == 1, calls
 
 	# The explicit forward-merge opt-out is manual-merge mode, not a review refusal.
 	with tempfile.TemporaryDirectory() as tmp_str:
@@ -7556,6 +7619,7 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
 			"AUTO_MERGE_READY_LABELS_ALLOWED=true",
 		]
+		assert not [c for c in calls if any("/check-runs" in arg for arg in c)], calls
 
 	# Forward-merge fallback PRs keep the merge-commit path, now head-bound.
 	with tempfile.TemporaryDirectory() as tmp_str:
@@ -7571,6 +7635,7 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
 			"AUTO_MERGE_READY_LABELS_ALLOWED=true",
 		]
+		assert len([c for c in calls if any("/check-runs" in arg for arg in c)]) == 1, calls
 
 	# A moved-head rejection leaves the label permission false.
 	with tempfile.TemporaryDirectory() as tmp_str:
@@ -7594,6 +7659,68 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
 				"AUTO_MERGE_READY_LABELS_ALLOWED=false"
 			]
+
+
+def test_auto_merge_helper_gates_both_enrolments_on_fresh_checks() -> None:
+	sha = "5e5f148079b569f2fb248b4cb99eca23883ad452"
+	green = {"id": 4, "head_sha": sha, "status": "completed", "conclusion": "success"}
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(
+			Path(tmp_str), expected_head_sha=sha, check_runs_response={"json": [{"total_count": 2, "check_runs": [
+				green,
+				{"id": 5, "head_sha": sha, "status": "in_progress", "conclusion": None,
+					"app": {"slug": "github-actions"},
+					"details_url": "https://github.com/test-owner/test-repo/actions/runs/777/job/5"},
+			]}]},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert len([c for c in calls if c[:2] == ["pr", "merge"]]) == 1, calls
+		assert len([c for c in calls if any("/check-runs" in arg for arg in c)]) == 1, calls
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"AUTO_MERGE_READY_LABELS_ALLOWED=false", "AUTO_MERGE_READY_LABELS_ALLOWED=true",
+		]
+	responses = [
+		{"json": [{"total_count": 2, "check_runs": [green, {"id": 5, "head_sha": sha, "status": "queued"}]}]},
+		{"json": [{"total_count": 1, "check_runs": [{**green, "conclusion": "failure"}]}]},
+		{"exit_code": 1},
+		{"json": [{"total_count": 2, "check_runs": [green]}]},
+		{"json": [{"total_count": 1, "check_runs": [{**green, "head_sha": "f" * 40}]}]},
+		{"json": []},
+	]
+	for head_ref in ("ai/issue-42", "auto/forward-merge-stable-20260916"):
+		for response in responses:
+			with tempfile.TemporaryDirectory() as tmp_str:
+				tmp = Path(tmp_str)
+				proc, calls = _run_auto_merge_helper_with_fake_gh(
+					tmp, expected_head_sha=sha, head_ref=head_ref, check_runs_response=response,
+				)
+				assert proc.returncode == 0, proc.stderr
+				assert not [c for c in calls if c[:2] == ["pr", "merge"]], (head_ref, response, calls)
+				assert len([c for c in calls if any("/check-runs" in arg for arg in c)]) == 1, calls
+				assert (tmp / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+					"AUTO_MERGE_READY_LABELS_ALLOWED=false",
+				]
+				assert "fresh green check-run snapshot" in proc.stdout, proc.stdout
+
+	# The metadata read rejects a moved head before the collector is invoked.
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(
+			Path(tmp_str), expected_head_sha=sha, live_head_sha="f" * 40,
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert not [c for c in calls if c[:2] == ["pr", "merge"] or any("/check-runs" in arg for arg in c)]
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
+		]
+
+	for options in ({"e2e_smoke": True}, {"head_ref": "orchestrator/project-6031"},
+		{"head_ref": "auto/forward-merge-stable-20260916", "forward_merge_auto_setting": "false"},
+		{"enable_auto_merge_setting": "false"}):
+		with tempfile.TemporaryDirectory() as tmp_str:
+			proc, calls = _run_auto_merge_helper_with_fake_gh(Path(tmp_str), expected_head_sha=sha, **options)
+			assert proc.returncode == 0, proc.stderr
+			assert not [c for c in calls if any("/check-runs" in arg for arg in c)], (options, calls)
+			assert not [c for c in calls if c[:2] == ["pr", "merge"]], (options, calls)
 
 
 def test_identical_failure_fingerprint_cap_gate_wiring() -> None:

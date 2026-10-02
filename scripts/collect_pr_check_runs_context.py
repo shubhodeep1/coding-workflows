@@ -30,6 +30,69 @@ DEFAULT_LOG_TAIL_BYTES = 16384
 MAX_LOG_TAIL_BYTES = 131072
 LOG_TAIL_LINES = 200
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale", "startup_failure"}
+MERGE_PASS_CONCLUSIONS = {"success", "neutral", "skipped"}
+MERGE_INCOMPLETE_STATUSES = {"queued", "in_progress", "requested", "pending", "waiting"}
+
+
+def _merge_self_incomplete(run: dict[str, Any], repository: str, self_run_id: str) -> bool:
+	# Only a GitHub Actions check belonging to this exact run may be ignored.
+	if not self_run_id.isdigit() or run.get("status") == "completed":
+		return False
+	app = run.get("app")
+	if not isinstance(app, dict) or app.get("slug") != "github-actions":
+		return False
+	url = run.get("details_url")
+	return isinstance(url, str) and re.fullmatch(
+		rf"https://github\.com/{re.escape(repository)}/actions/runs/{re.escape(self_run_id)}/job/[0-9]+",
+		url,
+	) is not None
+
+
+def _strict_merge_runs(raw_text: str, head_sha: str, repository: str, self_run_id: str) -> list[dict[str, Any]] | None:
+	try:
+		pages = json.loads(raw_text)
+	except (TypeError, ValueError):
+		return None
+	if not isinstance(pages, list) or not pages or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+		return None
+	runs: list[dict[str, Any]] = []
+	total_count: int | None = None
+	seen_ids: set[int] = set()
+	for page in pages:
+		if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
+			return None
+		page_total = page.get("total_count")
+		if type(page_total) is not int or page_total < 0 or page_total >= 1000 or (total_count is not None and page_total != total_count):
+			return None
+		# An empty intermediary page or a page larger than the requested
+		# per_page=100 is not a complete paginated response.
+		if not page["check_runs"] or len(page["check_runs"]) > 100:
+			return None
+		total_count = page_total
+		for run in page["check_runs"]:
+			if not isinstance(run, dict) or run.get("head_sha") != head_sha:
+				return None
+			run_id = run.get("id")
+			if type(run_id) is not int or run_id <= 0 or run_id in seen_ids:
+				return None
+			seen_ids.add(run_id)
+			status = run.get("status")
+			conclusion = run.get("conclusion")
+			if not isinstance(status, str) or (conclusion is not None and not isinstance(conclusion, str)):
+				return None
+			if status == "completed":
+				if conclusion not in MERGE_PASS_CONCLUSIONS | FAILURE_CONCLUSIONS:
+					return None
+			elif status not in MERGE_INCOMPLETE_STATUSES or conclusion is not None:
+				return None
+			runs.append(run)
+	if total_count != len(runs) or total_count == 0:
+		return None
+	# An incomplete self check may be the only check, but that does not
+	# establish any independent evidence that the reviewed head is green.
+	if not any(not _merge_self_incomplete(run, repository, self_run_id) for run in runs):
+		return None
+	return runs
 
 
 def _required_env(name: str) -> str:
@@ -269,11 +332,23 @@ def _fetch_log_tail(*, details_url: str, log_tail_bytes: int, repository: str, t
 
 
 def _build_context_text(*, raw_text: str, head_sha: str, final_status: str) -> str:
-	runs = _extract_runs(raw_text)
+	strict_merge = os.environ.get("CHECK_RUNS_STRICT_MERGE_SNAPSHOT", "false") == "true"
+	if strict_merge:
+		validated_runs = _strict_merge_runs(
+			raw_text, head_sha, os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("SELF_RUN_ID", ""),
+		)
+		if validated_runs is None and final_status != "api_error":
+			final_status = "invalid_snapshot"
+		runs = [
+			run for run in (validated_runs or [])
+			if not _merge_self_incomplete(run, os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("SELF_RUN_ID", ""))
+		]
+	else:
+		runs = _extract_runs(raw_text)
 	# Only the post-review clean-result probe opts in: its own running job
 	# cannot complete before the probe, but every other incomplete check must
 	# still block auto-merge. Ordinary reviewer context keeps the self entry.
-	if os.environ.get("CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT", "false") == "true":
+	if not strict_merge and os.environ.get("CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT", "false") == "true":
 		self_run_id = os.environ.get("SELF_RUN_ID", "")
 		if self_run_id.isdigit():
 			runs = [run for run in runs if f"/actions/runs/{self_run_id}/job/" not in str(run.get("details_url") or "")]
@@ -378,7 +453,8 @@ def main() -> int:
 			return 0
 
 		head_sha = _load_head_sha(payload_path)
-		if not head_sha:
+		strict_merge = os.environ.get("CHECK_RUNS_STRICT_MERGE_SNAPSHOT", "false") == "true"
+		if not head_sha or (strict_merge and not re.fullmatch(r"[0-9a-f]{40}", head_sha)):
 			_write_text(
 				out_path,
 				_sentinel_text(
@@ -408,6 +484,17 @@ def main() -> int:
 				if proc.stderr:
 					sys.stderr.write(proc.stderr)
 				final_status = "api_error"
+				break
+			if strict_merge:
+				validated_runs = _strict_merge_runs(raw_text, head_sha, repository, self_run_id)
+				if validated_runs is None:
+					final_status = "invalid_snapshot"
+				else:
+					eligible_runs = [run for run in validated_runs if not _merge_self_incomplete(run, repository, self_run_id)]
+					final_status = "ready" if all(
+						run["status"] == "completed" and run["conclusion"] in MERGE_PASS_CONCLUSIONS
+						for run in eligible_runs
+					) else "not_ready"
 				break
 
 			wait_view = _build_wait_view(raw_text, self_run_id)
