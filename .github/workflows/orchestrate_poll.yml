@@ -589,12 +589,14 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: setup-uv
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        # Semble is now installed on first judge query in the poller. Keep
+        # these named steps for workflow compatibility, without eager work.
+        if: ${{ false }}
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: ${{ false }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -617,7 +619,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: ${{ false }}
         continue-on-error: true
         run: |
           set -euo pipefail

@@ -3404,6 +3404,7 @@ sys.exit(proc.returncode)
 		result["mock_operator_bypass_audit_append_calls"] = int(result.get("mock_operator_bypass_audit_append_calls", 0))
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
+		result["semble_setup_attempted"] = (runtime_dir / "poll_semble_setup_attempted").exists()
 		judge_prompt_path = runtime_dir / "judge_prompt.txt"
 		result["judge_prompt"] = judge_prompt_path.read_text(encoding="utf-8") if judge_prompt_path.exists() else ""
 		result["rb_judge_prompts"] = {
@@ -15232,7 +15233,7 @@ def test_implementation_failed_reissue_preserves_dependency_gates_and_pending_de
 
 
 def test_clean_wave_skip_advances_without_judge_call():
-	"""A clean wave with no pending definitions should advance without invoking judge."""
+	"""A clean wave advances without invoking a judge or installing Semble."""
 	state = {
 		"schema_version": "orchestrate_state.v1",
 		"project_title": "Test Project",
@@ -15269,12 +15270,14 @@ def test_clean_wave_skip_advances_without_judge_call():
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"]},
 		enable_clean_wave_judge_skip="true",
+		env_overrides={"SEMBLE_ENABLED": "true", "SEMBLE_PYTHON_BIN": "missing-semble-python"},
 	)
 	ls = result["latest_state"]
 	assert ls["current_wave"] == 2
 	assert ls["judge_cycle"] == 1
 	assert ls["judge_stall_cycles"] == 0
 	assert "Running judge evaluation" not in result["stdout"]
+	assert not result["semble_setup_attempted"]
 
 
 def test_clean_wave_skip_disabled_keeps_judge_invocation():
@@ -15315,6 +15318,7 @@ def test_clean_wave_skip_disabled_keeps_judge_invocation():
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"]},
 		enable_clean_wave_judge_skip="false",
+		env_overrides={"SEMBLE_ENABLED": "true", "SEMBLE_PYTHON_BIN": "missing-semble-python"},
 		codex_json={
 			"status": "in_progress",
 			"justification": "advance",
@@ -15324,6 +15328,8 @@ def test_clean_wave_skip_disabled_keeps_judge_invocation():
 		},
 	)
 	assert "Running judge evaluation" in result["stdout"]
+	assert result["semble_setup_attempted"]
+	assert result["judge_prompt"]
 	ls = result["latest_state"]
 	assert ls["judge_cycle"] == 1
 
@@ -21690,6 +21696,115 @@ def _extract_bash_function(script: str, signature: str) -> str:
 	start = script.index(signature)
 	end = script.index("\n}\n", start) + 3
 	return script[start:end]
+
+
+def _exercise_lazy_poll_semble(
+	queries: tuple[str, ...], *, enabled: str = "true", missing_helper: bool = False,
+	failure: str = "",
+) -> tuple[list[str], list[str], bool, str]:
+	"""Run the actual shared prefetch function against stubbed support in a sandbox."""
+	function = _extract_bash_function(
+		POLLER_SCRIPT.read_text(encoding="utf-8"),
+		"render_judge_semble_prefetch_from_query_file() {",
+	)
+	with tempfile.TemporaryDirectory(prefix="lazy-poll-semble-") as tmp:
+		root = Path(tmp)
+		(root / "scripts").mkdir()
+		runtime = root / "run"
+		runtime.mkdir()
+		call_log = root / "calls.txt"
+		github_env = root / "github_env.txt"
+		github_env.write_text("OUTER_ENV_UNCHANGED=true\n", encoding="utf-8")
+		(root / "scripts" / "install_semble.sh").write_text(
+			"#!/usr/bin/env bash\n"
+			'echo install >> "$CALL_LOG"\n'
+			'if [ "$MOCK_SEMBLE_FAILURE" = "install" ]; then exit 1; fi\n'
+			'if [ "$MOCK_SEMBLE_FAILURE" = "install-incomplete" ]; then exit 0; fi\n'
+			'echo SEMBLE_AVAILABLE=true >> "$GITHUB_ENV"\n',
+			encoding="utf-8",
+		)
+		if not missing_helper:
+			(root / "scripts" / "build_semble_wrapper.sh").write_text(
+				"#!/usr/bin/env bash\n"
+				'echo build >> "$CALL_LOG"\n'
+				'if [ "$MOCK_SEMBLE_FAILURE" = "build" ]; then\n'
+				'  echo SEMBLE_INDEX_AVAILABLE=false >> "$GITHUB_ENV"; exit 0\n'
+				'fi\n'
+				'if [ "$MOCK_SEMBLE_FAILURE" = "build-incomplete" ]; then exit 0; fi\n'
+				'mkdir -p "$SEMBLE_WRAPPER_DIR"\n'
+				'printf "index" > "$SEMBLE_INDEX_PATH"\n'
+				'printf "#!/bin/sh\\nexit 0\\n" > "$SEMBLE_WRAPPER_DIR/semble"\n'
+				'chmod +x "$SEMBLE_WRAPPER_DIR/semble"\n'
+				'printf "SEMBLE_AVAILABLE=true\\nSEMBLE_INDEX_AVAILABLE=true\\nSEMBLE_INDEX_PATH=%s\\nSEMBLE_BIN=%s\\n" '
+				'"$SEMBLE_INDEX_PATH" "$SEMBLE_WRAPPER_DIR/semble" >> "$GITHUB_ENV"\n',
+				encoding="utf-8",
+			)
+		query_paths = []
+		for index, query in enumerate(queries):
+			query_path = runtime / f"query_{index}.txt"
+			query_path.write_text(query, encoding="utf-8")
+			query_paths.append(str(query_path))
+		env = _git_test_env()
+		# The implement job injects a BASH_ENV workspace hook into child Bash
+		# processes; it must not redirect this isolated fixture's cwd/env files.
+		env.pop("BASH_ENV", None)
+		env.pop("ENV", None)
+		env.update({
+			"RUNTIME_DIR": str(runtime), "GITHUB_ENV": str(github_env),
+			"CALL_LOG": str(call_log), "SEMBLE_ENABLED": enabled,
+			"MOCK_SEMBLE_FAILURE": failure,
+		})
+		proc = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n"
+			 f'SEMBLE_HELPERS_AVAILABLE=true\nJUDGE_SEMBLE_MAX_CHUNKS=4\n'
+			 f'JUDGE_SEMBLE_QUERY_MAX_BYTES=12000\nJUDGE_SEMBLE_CONTEXT_MAX_BYTES=12000\n'
+			 f'{function}\n'
+			 'semble_query_block() {\n'
+			 '  [ "$SEMBLE_AVAILABLE" = true ] && [ "$SEMBLE_INDEX_AVAILABLE" = true ] || return 1\n'
+			 '  [ "$SEMBLE_BIN" = "$RUNTIME_DIR/semble/bin/semble" ] && [ -s "$SEMBLE_INDEX_PATH" ] || return 1\n'
+			 '  printf "=== SEMBLE: %s ===\\n%s\\n" "$3" "$1"\n'
+			 '}\n'
+			 'for query_file in "$@"; do\n'
+			 '  printf "RESULT:%s\\n" "$(render_judge_semble_prefetch_from_query_file "$query_file" "Judge Context")"\n'
+			 'done\n', "prefetch", *query_paths],
+			cwd=root, env=env, text=True, capture_output=True, timeout=30,
+		)
+		assert proc.returncode == 0, proc.stderr
+		return (
+			proc.stdout.split("RESULT:")[1:],
+			call_log.read_text(encoding="utf-8").splitlines() if call_log.exists() else [],
+			(runtime / "poll_semble_setup_attempted").exists(),
+			github_env.read_text(encoding="utf-8"),
+		)
+
+
+def test_lazy_poll_semble_skips_no_query_and_disabled_setup():
+	results, calls, attempted, _ = _exercise_lazy_poll_semble(("", "\n"))
+	assert results == ["\n", "\n"]
+	assert calls == [] and not attempted
+	results, calls, attempted, _ = _exercise_lazy_poll_semble(("Judge evidence",), enabled="false")
+	assert results == ["\n"]
+	assert calls == [] and not attempted
+
+
+def test_lazy_poll_semble_installs_once_and_reuses_context():
+	results, calls, attempted, outer_env = _exercise_lazy_poll_semble(("", "first", "second"))
+	assert results == ["\n", "=== SEMBLE: Judge Context ===\nfirst\n", "=== SEMBLE: Judge Context ===\nsecond\n"]
+	assert calls == ["install", "build"] and attempted
+	assert outer_env == "OUTER_ENV_UNCHANGED=true\n"
+
+
+def test_lazy_poll_semble_failure_and_missing_support_do_not_retry():
+	for failure, expected_calls in (
+		("install", ["install"]), ("install-incomplete", ["install"]),
+		("build", ["install", "build"]), ("build-incomplete", ["install", "build"]),
+	):
+		results, calls, attempted, _ = _exercise_lazy_poll_semble(("first", "second"), failure=failure)
+		assert results == ["\n", "\n"]
+		assert calls == expected_calls and attempted
+	results, calls, attempted, _ = _exercise_lazy_poll_semble(("first", "second"), missing_helper=True)
+	assert results == ["\n", "\n"]
+	assert calls == [] and attempted
 
 
 def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
