@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should be improved?\nChoices:\nA: A specific workflow or feature \u2014 name it and describe the problem. (RECOMMENDED)\nB: Documentation \u2014 name the page and what is unclear.\nC: Repository-wide quality \u2014 identify the priority, such as reliability, security, or performance.\nQ2: What result would count as success?\nChoices:\nA: Describe the expected behavior and, if possible, an example of the current failure. (RECOMMENDED)\nB: Specify a measurable target, such as runtime or failure rate.\nC: Specify the documentation outcome readers should achieve.",
+  "fingerprint": "6eb3243b25b265ffa4ce326e33d1bb09a32d96acce1499b30d8bcffa63cdf7ae",
+  "lineage": {
+    "issue_number": 6018,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36947919699",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36947919699",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261002005408_5ef1b37799",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6018,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36947919699"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6018 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-02T00:54:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
