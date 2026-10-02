@@ -213,6 +213,8 @@ _STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
 # scripts/promote_main_cycle.sh matches on). The id is unique per cycle, so it
 # must not reach the dedup fingerprint.
 _CYCLE_RUN_NAME_SUFFIX_RE = re.compile(r"\s*\[cycle:[0-9]+\]\s*$", re.IGNORECASE)
+# The review/autofix reporter's evidence header (strip_autofix_evidence_header).
+_AUTOFIX_EVIDENCE_HEADER_RE = re.compile(r"^(?:failure_reason=|finalize_reason=|consecutive_failed_runs=|flags: )")
 _SOFT_LOG_PATTERNS = re.compile(
 	r"::error::|::warning::|\bERROR\b|\bFAIL(?:ED|URE)?\b|\bfatal\b|\bTraceback\b|"
 	r"\b[A-Z][A-Z0-9_]*_(?:FAILED|SKIPPED|ESCALATE|BLOCKED)\b|\bexit code\b|\btimed?[ -]?out\b|\brate.?limit",
@@ -1035,6 +1037,24 @@ def error_signature(text: str) -> str:
 					break
 			return " | ".join(unique)[:SIGNATURE_CHAR_LIMIT]
 	return "no-error-lines"
+
+
+def strip_autofix_evidence_header(text: str) -> str:
+	"""Drop the fixed header lines the review/autofix reporter opens its evidence with.
+
+	``workflow_failure_heal_autofix_report.sh`` starts every evidence file with
+	``failure_reason=`` / ``finalize_reason=`` / ``consecutive_failed_runs=`` /
+	``flags: AUTOFIX_REVIEWERS_FAILED=...``. The ``flags:`` line matches the
+	``*_FAILED`` signature pattern whatever the flags hold, so it became the
+	signature of every report without an ``::error::`` line: unrelated failures
+	shared one fingerprint and one lineage, and PR #5892's first report
+	escalated at generation 4. Only the leading run of header lines is removed.
+	"""
+	lines = text.split("\n")
+	index = 0
+	while index < len(lines) and _AUTOFIX_EVIDENCE_HEADER_RE.match(lines[index]):
+		index += 1
+	return "\n".join(lines[index:])
 
 
 def fingerprint(workflow_name: str, failing_step: str, signature: str) -> str:
@@ -2141,6 +2161,8 @@ def _cmd_filter_log(args: argparse.Namespace) -> int:
 
 def _cmd_error_signature(args: argparse.Namespace) -> int:
 	chunks = [Path(path).read_text(encoding="utf-8", errors="replace") for path in args.log_file]
+	if args.strip_autofix_header:
+		chunks = [strip_autofix_evidence_header(chunk) for chunk in chunks]
 	sys.stdout.write(error_signature("\n".join(chunks)) + "\n")
 	return 0
 
@@ -2348,6 +2370,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser("error-signature", help="Derive the normalised error signature of one or more logs")
 	p.add_argument("--log-file", action="append", required=True)
+	p.add_argument("--strip-autofix-header", action="store_true", help="Ignore the review/autofix reporter's evidence header lines")
 	p.set_defaults(func=_cmd_error_signature)
 
 	p = sub.add_parser("fingerprint", help="Compute the dedup fingerprint")
