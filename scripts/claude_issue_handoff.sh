@@ -85,17 +85,21 @@ if ! gh_retry gh api -X POST "repos/${REPO}/issues/${ISSUE_NUMBER}/labels" -f 'l
 fi
 # Label removals go one REST call each so a label the repo never created
 # (404) cannot abort the others, which `gh issue edit --remove-label` would.
-STALE_LABELS=("ai:claude-handoff-failed")
-if [ "${TRIGGER}" = "reclarify" ]; then
-	STALE_LABELS+=("ai:clarification" "ai:planning" "ai:awaiting-approval" "ai:blocked")
-fi
-ISSUE_LABEL_NAMES="$(jq -r '[(.labels // [])[]? | (.name // .)] | .[]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
-for stale_label in "${STALE_LABELS[@]}"; do
-	if printf '%s\n' "${ISSUE_LABEL_NAMES}" | grep -qxF "${stale_label}"; then
-		gh api -X DELETE "repos/${REPO}/issues/${ISSUE_NUMBER}/labels/$(jq -rn --arg l "${stale_label}" '$l|@uri')" >/dev/null 2>&1 || true
+# Only a claimed issue is cleaned up: a failed claim is not dispatched, so
+# its phase labels (`ai:blocked` included) stay as they were.
+if [ "${CLAIM_OK}" = "true" ]; then
+	STALE_LABELS=("ai:claude-handoff-failed")
+	if [ "${TRIGGER}" = "reclarify" ]; then
+		STALE_LABELS+=("ai:clarification" "ai:planning" "ai:awaiting-approval" "ai:blocked")
 	fi
-done
-log "claimed issue=${ISSUE_NUMBER} trigger=${TRIGGER} reason=${ROUTE_REASON}"
+	ISSUE_LABEL_NAMES="$(jq -r '[(.labels // [])[]? | (.name // .)] | .[]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+	for stale_label in "${STALE_LABELS[@]}"; do
+		if printf '%s\n' "${ISSUE_LABEL_NAMES}" | grep -qxF "${stale_label}"; then
+			gh api -X DELETE "repos/${REPO}/issues/${ISSUE_NUMBER}/labels/$(jq -rn --arg l "${stale_label}" '$l|@uri')" >/dev/null 2>&1 || true
+		fi
+	done
+	log "claimed issue=${ISSUE_NUMBER} trigger=${TRIGGER} reason=${ROUTE_REASON}"
+fi
 
 # --- 2. Dispatch to coding-workflows ------------------------------------------
 

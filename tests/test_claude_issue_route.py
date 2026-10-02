@@ -364,12 +364,15 @@ def test_handoff_does_not_dispatch_an_issue_it_could_not_claim(stubs):
 	# Issue #6057: ai:claude is the live claim the intake and the pickup
 	# re-check, so an unclaimed issue is never dispatched.
 	issue_file = stubs["tmp"] / "issue.json"
-	issue_file.write_text(json.dumps(_issue(number=43)))
+	# A /reclarify with stale phase labels: a failed claim must not strip
+	# them, since nothing is dispatched (review round 1 on PR #6081).
+	issue_file.write_text(json.dumps(_issue(["ai:blocked", "ai:planning", "ai:claude-handoff-failed"], number=43)))
 	env = {
 		**stubs["env"],
 		"GITHUB_REPOSITORY": "o/r",
 		"ISSUE_NUMBER": "43",
 		"ISSUE_META_FILE": str(issue_file),
+		"CLAUDE_ISSUE_TRIGGER": "reclarify",
 		"GH_TOKEN": "x",
 		"GH_STUB_FAIL_CLAIM": "1",
 	}
@@ -383,6 +386,9 @@ def test_handoff_does_not_dispatch_an_issue_it_could_not_claim(stubs):
 	assert "CLAUDE_ISSUE_HANDOFF error claim_label_failed issue=43" in result.stdout
 	assert "CLAUDE_ISSUE_HANDOFF error dispatch_failed issue=43" in result.stdout
 	assert "ai:claude-issue-routed:v1" not in calls
+	# No success-shaped telemetry and no label removals on a failed claim.
+	assert "CLAUDE_ISSUE_HANDOFF claimed" not in result.stdout
+	assert "-X DELETE" not in calls
 
 
 
