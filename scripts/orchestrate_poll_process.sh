@@ -15760,9 +15760,11 @@ _check_open_pr_conflict_guard() {
 #     `MERGED_STATE_HEALED`, add a healing note, and send a Telegram WARNING.
 # Otherwise (closed issue, healing disabled, already healed once, or no
 # wave entry) nothing changes: it logs `MERGED_STATE_STALE … action=alert`
-# every cycle and alerts once, recorded as `.merged_state_heal.alerted`
-# before the alert is sent (a failed write sends nothing:
-# `why=alert_marker_write_failed`, retried next cycle).
+# every cycle and, when the issue has a wave entry, alerts once, recorded as
+# `.merged_state_heal.alerted` before the alert is sent (a failed write
+# sends nothing: `why=alert_marker_write_failed`, retried next cycle). With
+# no wave entry (`why=no_state_entry`) there is nowhere to record the
+# marker, so it only logs.
 # A failed state write changes nothing. A failed label edit keeps the
 # stored status at `in_progress` (with `.merged_state_heal_pending`, written
 # together with it, so the next cycle retries even when `ai:merged` was
@@ -20255,21 +20257,23 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         RECONCILE_LABELS_CHANGED=true
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${MERGED_HEAL_LABELS_JSON}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
       fi
-    elif [ "${PR_MERGED}" != "true" ] && [ -n "${_rcl_rejected_merged_pr}" ]; then
-      # A read failed this cycle (the issue's state, or another linked PR),
-      # so the heal cannot run. If the issue still counts as merged (the
-      # `ai:merged` label or a stored `merged` status), check-wave-status
-      # would count that rejected merge and could advance the wave, after
-      # which the current-wave heal never sees the issue again. Hold the
-      # wave this cycle instead (PR #5633 review round 9); the next cycle
-      # with good reads heals it.
+    elif [ "${PR_MERGED}" != "true" ] \
+      && { [ -n "${_rcl_rejected_merged_pr}" ] || [ "${_rcl_candidate_fetch_failed}" = "true" ]; }; then
+      # A read failed this cycle (the issue's state, or a linked PR), so the
+      # heal cannot run, or no merge could be verified at all. If the issue
+      # still counts as merged (the `ai:merged` label or a stored `merged`
+      # status), check-wave-status would count that unverified merge and
+      # could advance the wave, after which the current-wave heal never sees
+      # the issue again. Hold the wave this cycle instead (PR #5633 review
+      # rounds 9 and 10, the latter for a fetch failure with no rejected link
+      # known); the next cycle with good reads heals or confirms it.
       _rcl_hold_why="pr_fetch_failed"
       [ "${_rcl_issue_state_confirmed}" = "true" ] || _rcl_hold_why="issue_state_unread"
       _rcl_hold_label="$(echo "${LABELS_JSON}" | jq -r --arg key "${inum}" '(.[$key] // []) | if type == "array" then (index("ai:merged") != null) else false end' 2>/dev/null || echo "false")"
       _rcl_hold_stored="$(jq -r --argjson wi "${WAVE_IDX}" --arg n "${inum}" '[.waves[$wi].issues[]? | select((.github_issue | tostring) == $n)][0].status // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
       if [ "${_rcl_hold_label}" = "true" ] || [ "${_rcl_hold_stored}" = "merged" ]; then
         MERGED_HEAL_WAVE_HOLD="true"
-        echo "MERGED_STATE_STALE issue=${inum} pr=${_rcl_rejected_merged_pr} reason=${_rcl_rejected_merged_reason} label_merged=${_rcl_hold_label} stored_status=${_rcl_hold_stored:-none} action=retry why=${_rcl_hold_why} wave_hold=true" >&2
+        echo "MERGED_STATE_STALE issue=${inum} pr=${_rcl_rejected_merged_pr:-none} reason=${_rcl_rejected_merged_reason:-unverified} label_merged=${_rcl_hold_label} stored_status=${_rcl_hold_stored:-none} action=retry why=${_rcl_hold_why} wave_hold=true" >&2
       fi
     fi
 

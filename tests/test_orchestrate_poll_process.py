@@ -15469,6 +15469,23 @@ def test_reconcile_holds_the_wave_when_a_failed_read_skips_the_heal():
 	assert "Wave 1 not yet complete." in combined, combined[-4000:]
 
 
+def test_reconcile_holds_the_wave_when_no_merge_can_be_verified():
+	"""PR #5633 review round 10: the only linked PR cannot be fetched, so no merge is verified and no rejected link is
+	known; an issue that still counts as merged holds the wave this cycle instead of advancing it."""
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [954]},
+		prs=[],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "LINKED_PR_CROSS_REF_REJECTED issue=10 pr=954 reason=pr_fetch_failed" in combined
+	assert "MERGED_STATE_STALE issue=10 pr=none reason=unverified label_merged=true stored_status=merged action=retry why=pr_fetch_failed wave_hold=true" in combined, combined[-4000:]
+	assert "MERGED_STATE_WAVE_HOLD" in combined
+	assert "Wave 1 not yet complete." in combined
+
 def test_reconcile_wave_hold_needs_a_stale_merged_signal():
 	"""PR #5633 review round 9 control: an issue that does not count as merged is not a reason to hold the wave."""
 	result = _run_poller(

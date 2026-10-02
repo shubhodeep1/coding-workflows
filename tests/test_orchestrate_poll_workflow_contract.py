@@ -137,6 +137,10 @@ def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 		"STAGED_SUPPORT_LATCH_SKIP",
 		"STAGED_SUPPORT_LATCH_RELEASE_SKIPPED",
 		"ORCHESTRATOR_ENGINE_SHA",
+		"MERGED_STATE_HEALED",
+		"MERGED_STATE_STALE",
+		"MERGED_STATE_WAVE_HOLD",
+		"STALL_MERGED_LABEL_REJECTED",
 	):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
