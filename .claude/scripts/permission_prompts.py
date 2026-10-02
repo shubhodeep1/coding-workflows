@@ -110,11 +110,13 @@ REDACTION_PATTERNS = (
 	(re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer ***"),
 	(re.compile(r"(?i)\b(token|secret|password|passwd|api[_-]?key)(\s*[=:]\s*)" + _REDACTION_SHELL_WORD), r"\1\2***"),
 	# The same keywords as a command-line option whose value follows a space
-	# (`--password plainsecret`, `--api-key 'a b'`); a following option or a
-	# lone `*` wildcard (an allow rule's) is not a value (PR #5918 review round 9).
-	# Both keyword patterns mask the whole shell word (round 10).
+	# (`--password plainsecret`, `--api-key 'a b'`); a lone `*` wildcard (an
+	# allow rule's) is not a value (PR #5918 review round 9). Both keyword
+	# patterns mask the whole shell word (round 10). A next word starting with
+	# `-` may be the value (`--password -hunter2`) or another option: it is
+	# masked either way, the safe side (round 11).
 	(
-		re.compile(r"(?i)((?<![A-Za-z0-9_])--?[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key)[A-Za-z0-9_-]*)(\s+)(?!-)(?!\*(?:[\s)]|$))" + _REDACTION_SHELL_WORD),
+		re.compile(r"(?i)((?<![A-Za-z0-9_])--?[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key)[A-Za-z0-9_-]*)(\s+)(?!\*(?:[\s)]|$))" + _REDACTION_SHELL_WORD),
 		r"\1\2***",
 	),
 	# Long random-looking strings (hex keys, base64 secrets): 40+ letters,

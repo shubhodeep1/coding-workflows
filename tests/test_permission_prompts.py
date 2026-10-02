@@ -540,7 +540,8 @@ def test_report_redacts_the_matched_rule(tmp_path):
 
 def test_report_and_issue_redact_a_space_delimited_credential_option(tmp_path):
 	"""PR #5918 review round 9: `--password plainsecret` (no `=` or `:`) is masked in the matched rule, in the report
-	JSON, and in the issue text, while a following option and the rule's `*` wildcard stay."""
+	JSON, and in the issue text, while the rule's `*` wildcard stays. Since round 11 a dash-led next word is masked too
+	(`--password -hunter2` cannot be told from `--password -v`)."""
 	command = "curl --password plainsecret --api-key 'two words' https://a.b"
 	rule = "Bash(curl --password plainsecret *)"
 	directory = _log(tmp_path, [_payload(command, event="PermissionDenied")])
@@ -550,7 +551,9 @@ def test_report_and_issue_redact_a_space_delimited_credential_option(tmp_path):
 	for text in (json.dumps(report), pp_twin.issue_body(pattern, 1, "s1"), pp_twin.comment_body(pattern, 1, "s1")):
 		assert "plainsecret" not in text and "two words" not in text
 	assert pp_twin.redact("Bash(curl --password *)") == "Bash(curl --password *)"
-	assert pp_twin.redact("tool --password -v") == "tool --password -v"
+	assert pp_twin.redact("tool --password -v") == "tool --password ***"
+	assert pp_twin.redact("mysql --password -hunter2 db") == "mysql --password *** db"
+	assert pp_twin.redact("x --api-key=-abc y") == "x --api-key=*** y"
 
 @pytest.mark.parametrize(
 	("text", "masked"),
