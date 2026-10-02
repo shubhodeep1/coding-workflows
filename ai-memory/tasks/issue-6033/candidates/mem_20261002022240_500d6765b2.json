@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-6031` at `6ef54647e9467c3a38ee63762421e5fa4a416aea`; it matches the issue\u2019s integration branch. No clarification questions were required; the `/answer` comment was auto-posted by the orchestrator.\n\nScope-mode: Hold Scope\nReuse-audit: extends `ai_memory.py` telemetry and `ai_memory_lib.py` memory-branch helpers\nScope-mode justification: Instrument the existing operations without changing checkout lifecycle or retry policy. A checkout-reuse shortcut appears in the source analysis, but is outside this issue\u2019s explicit instrumentation scope. Under \u00a76 Core Priorities, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed; measuring all requested stages is preferable to a smaller but misleading total-only timer.\n\n## Automation and wiring\n- Extend existing scripts; introduce no new script, scheduled operation, supervisor, database gate, or removal-registry entry.\n- Existing `clarify.yml` and `plan.yml` calls through `memory_helpers.sh` exercise the change. Existing `.github/workflows/ci.yml` PR/push checks already run the relevant memory tests; no workflow edit is planned.\n\n## Files likely to change\n- `scripts/ai_memory.py` \u2014 add bounded timing fields to the existing `record-run-event` and `retrieve` telemetry.\n- `scripts/ai_memory_lib.py` \u2014 time the existing git-stage calls and retry sleep without adding git commands or changing results.\n- `tests/test_ai_memory_processed_command_entry.py` \u2014 assert CLI telemetry, unchanged stdout, unavailable-branch behavior, and absence of sensitive values.\n- `tests/test_ai_memory_push_retry_backoff.py` \u2014 assert stage accumulation across retries and unchanged retry/failure behavior.\n\n## Functions or modules to implement\nUse a call-local timing accumulator around `cmd_record_run_event` and `cmd_retrieve`. Time the existing clone calls, persistence commit and push calls, initial and retry fetches, rebases, and actual retry sleeps at their current call sites. Accumulate repeated stages and record attempted stages even when they fail. Use a monotonic clock, non-negative integer milliseconds, and a fixed upper bound; omit stages that did not run. Keep timing collection out of `_run_git`\u2019s environment-selection logic.\n\n## Data structures affected\nOnly additive numeric fields on the two operations\u2019 `AI_MEMORY_TELEMETRY` entries: `elapsed_ms`, `clone_ms`, `commit_ms`, `fetch_ms`, `rebase_ms`, `push_ms`, and `retry_sleep_ms` where applicable. Preserve every existing telemetry key and the CLI\u2019s JSON return shape.\n\n## API/interface changes\nNo new CLI flags, environment variables, endpoints, or GitHub API calls. No change to `persist_memory_operation`\u2019s return values, git-environment isolation, retry counts, backoff calculation, or shell-wrapper fail-open result.\n\n## Decisions\n### D1 \u2014 Keep measurements call-local\n- **Chosen:** Collect timings only while the two targeted CLI operations run, then add numeric fields to their existing telemetry.\n- **Alternatives considered:** Globally time every memory operation or add timing fields to persistence return dictionaries.\n- **Why:** Call-local collection avoids unrelated telemetry and preserves existing return contracts.\n\n### D2 \u2014 Measure work performed, not planned delays\n- **Chosen:** Measure elapsed retry sleep and each executed git stage, accumulating across attempts.\n- **Alternatives considered:** Report the sampled backoff value or infer stage time from total duration.\n- **Why:** Actual elapsed time remains useful when operations fail or a retry is interrupted.\n\n## Security considerations\nThe CLI reads repository state, a potentially credential-bearing origin URL, git errors, and memory content. Timing telemetry must contain only fixed-name, bounded numeric fields\u2014never command arguments, remote URLs, exception text, record text, or credentials. No new authorization surface is introduced. Preserve the existing stripped git-location environment for mutating subprocesses. Test an origin/error containing a credential-like sentinel and confirm it does not enter timing telemetry.\n\n## Risks and edge cases\n- A fresh branch may have no fetch or rebase; a no-change write may have no push. Do not report an unexecuted stage as measured.\n- A rejected push may lead to several sleeps, fetches, rebases, and pushes; totals must include each attempt without changing their order.\n- Retrieval\u2019s unavailable-branch path remains fail-open and retains its existing fields. Instrumentation must not turn timing or cleanup failures into a new failure mode.\n- **Missing context:** The supplied issue text says to stay within `files_touched` but does not include the allowlist. Confirm these four paths are permitted before implementation; do not widen the edit if they are not.\n\n## Testing considerations\nExtend the existing CLI and retry tests for successful writes, no-change writes, retrieval success and unavailable branch, retry success and exhaustion, and failed fetch/rebase. Assert numeric bounds, stage presence or absence, unchanged stdout and return values, retry call order, and no sensitive telemetry fields. Run the focused tests and existing git-environment-isolation test using the repository\u2019s configured Python tooling.\n\n## Pre-execution self-check\nThe plan covers the requested stages, failure paths, compatibility constraints, and existing automation. No code was changed and no validator was run during planning.\n\nPLAN_SELF_CHECK: WARNING: The issue\u2019s `files_touched` allowlist was not supplied; implementation must verify it before editing.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1a428255fd74f3abca9e9889883de6ce6f11d1a031c466481d2e28398e39b77d",
+  "lineage": {
+    "issue_number": 6033,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36954811766",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36954811766",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6033"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261002022240_500d6765b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6033,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36954811766"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6033",
+  "timestamps": {
+    "created_at": "2026-10-02T02:22:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
