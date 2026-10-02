@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/escalation_ledger.py and workflow-templates/.claude/scripts/escalation_ledger.py: lines ~318-330, 325-347, 327-328, 342-350, 350-358, 406 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The allowlisted ledger helper accepts unrestricted --evidence-file and --why-file paths and returns their contents in output, allowing sensitive file contents to enter committed logs or public GitHub comments.\n  WHY: Prompt-injected or model-supplied paths can expose readable files through the judge\u2019s output and subsequent writes; severity was rated MAJOR by minimax_minimax-m3 and openai_gpt-6-luna, but NIT by qwen_qwen3_7-plus.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/escalation_ledger.py (and workflow-templates/.claude/scripts/escalation_ledger.py) | severity=MAJOR | confidence=4\n  PROBLEM: Both `--evidence-file` and `--why-file` read any path the running session can access, and the allowlisted `record` subcommand returns file contents in stdout JSON.\n  WHY: A prompt-injection comment can cause sensitive file contents to be read and returned to the judge, then exposed through a public GitHub write.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/escalation_ledger.py: _load_why() lines 350-358; record_line() lines 327-328; .claude/commands/escalation-judge.md lines 41-45; .claude/settings.json lines 54-55 | severity=MAJOR | confidence=4\n  PROBLEM: The allowlisted helper reads any file supplied to --why-file and returns its contents in command output, without restricting the path to the expected scratchpad file.\n  WHY: A prompt-injected path such as /proc/self/environ can expose session environment contents in a subsequent escalation comment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/escalation_ledger.py (and .claude/scripts/escalation_ledger.py) | severity=NIT | confidence=3\n  PROBLEM: The allowlisted command accepts an unrestricted --why-file path, reads it, and returns its contents in JSON output.\n  WHY: A prompt injection can cause sensitive file contents to be written into the progress log and committed because the allow rule does not constrain the path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f24516c05ac64f1e480639fc9b0f13d443c1352ea2c584f6b6f7f9eb6b6d5da6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36956726588",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36956726588",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002025619_483b83746b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36956726588"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T02:56:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
