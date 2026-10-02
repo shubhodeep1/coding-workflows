@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:23:56Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`author_association` in `OWNER`/`MEMBER`/`COLLABORATOR` is a trust policy, not proof of write access (a member or collaborator can hold read or triage rights only); describe it that way in comments and docs.",
+  "phase": "implement_plan",
+  "pr_number": 5862,
+  "record_id": "lesson-implement-plan-c5a2529ed36600920e556378",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5809-duplicate-check-trusted-target-fix",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py"
+  ]
+}

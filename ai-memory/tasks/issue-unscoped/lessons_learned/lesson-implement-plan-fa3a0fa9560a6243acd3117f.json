@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:23:56Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A pure decision function that uses an optionally loaded module must guard the missing module itself and fail closed; a guard only in its CLI wrapper leaves direct callers with an `AttributeError`.",
+  "phase": "implement_plan",
+  "pr_number": 5862,
+  "record_id": "lesson-implement-plan-fa3a0fa9560a6243acd3117f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5809-duplicate-check-trusted-target-fix",
+    "file:workflow-templates/.claude/scripts/permission_prompts.py",
+    "file:tests/test_permission_prompt_duplicates.py"
+  ]
+}

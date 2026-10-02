@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:23:56Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A review-round push that carries the progress log must update every round-dependent line (`Stage:`, `Waiting on:`, the phase line, `Check-in:`) to the round the push starts, and arm the hand-back and safety net before committing so their ids are in the log; reviewers flag any line left at the old round.",
+  "phase": "implement_plan",
+  "pr_number": 5862,
+  "record_id": "lesson-implement-plan-943a9396bc23000987cd7b28",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5809-duplicate-check-trusted-target-fix",
+    "file:docs/implement-plan/issue-5809-duplicate-check-trusted-target-fix.md"
+  ]
+}
