@@ -66,7 +66,8 @@ by `||`, `&` or `|`, a path that does not exist yet), or a refspec cannot be
 turned into one branch (a variable, a glob, a `heads/` shorthand, a source
 starting with `-`), that call is judged on the session checkout as before
 and a warning names the reason. The exception is a `cd` or `pushd` that
-`CDPATH` may redirect (an operand not starting with `/`, `.` or `..` while
+`CDPATH` may redirect (an operand other than `/…`, `.`, `..`, `./…` or
+`../…`, so `.git` counts, while
 `CDPATH` is inherited, set earlier in the command, or given as a non-empty
 prefix): Bash may enter a directory in another repository altogether, so
 judging the session checkout could judge the wrong one, and every later call
@@ -686,8 +687,8 @@ def _cd_destination(
 def _cdpath_directory_command(words: list[str]) -> tuple[str, list[str]]:
 	"""(`cd` or `pushd`, its arguments) when `words` run that builtin, else ("", []).
 
-	Besides a bare `cd` / `pushd`, `builtin cd …` and `command [-p] [--] cd …`
-	run the builtin too, and search `CDPATH` the same way (issue #6090).
+	Besides a bare `cd` / `pushd`, `builtin [--] cd …` and
+	`command [-p] [--] cd …` run the builtin too, and search `CDPATH` the same way (issue #6090).
 	`command -v` / `-V` only describe the word, so they change nothing.
 	"""
 	if not words:
@@ -704,7 +705,11 @@ def _cdpath_directory_command(words: list[str]) -> tuple[str, list[str]]:
 			if any(flag in "vV" for flag in rest[position][1:]):
 				return "", []
 			position += 1
-	elif head != "builtin":
+	elif head == "builtin":
+		# `builtin -- cd …` runs the builtin too (review round 1 of #6113).
+		if rest[:1] == ["--"]:
+			position = 1
+	else:
 		return "", []
 	if position < len(rest) and rest[position] in _CDPATH_DIRECTORY_COMMANDS:
 		return rest[position], rest[position + 1 :]

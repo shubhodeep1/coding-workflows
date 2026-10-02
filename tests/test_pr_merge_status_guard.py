@@ -2473,6 +2473,7 @@ def _cdpath_targets(command: str, cwd: Path) -> list[tuple]:
 		("CDPATH=.. cd \"$DIR\" && git commit -m x", "inline `CDPATH=`"),
 		("CDPATH=.. cd '~/sub' && git commit -m x", "inline `CDPATH=`"),
 		("CDPATH=.. builtin cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
+		("CDPATH=.. builtin -- cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
 		("CDPATH=.. command -p -- cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
 		("export CDPATH=..; command cd sub && git commit -m x", "set or used earlier"),
 	],
@@ -2599,7 +2600,7 @@ def test_e2e_cdpath_really_redirects_the_cd(worktree_repo) -> None:
 	assert proc.stdout.strip() == str(worktree.resolve())
 
 
-@pytest.mark.parametrize("form", ["inline", "bare", "export"])
+@pytest.mark.parametrize("form", ["inline", "bare", "export", "builtin"])
 def test_e2e_cdpath_redirected_push_of_merged_history_is_blocked(worktree_repo, form: str) -> None:
 	"""The exploit of #6090: the old guard judged `$PWD/wt` (the rebuilt repo)
 	and allowed the push that Bash runs from the stranded worktree."""
@@ -2609,6 +2610,7 @@ def test_e2e_cdpath_redirected_push_of_merged_history_is_blocked(worktree_repo, 
 		"inline": f"CDPATH={worktree.parent} cd wt",
 		"bare": f"CDPATH={worktree.parent}; cd wt",
 		"export": f"export CDPATH={worktree.parent}; cd wt",
+		"builtin": f"CDPATH={worktree.parent} builtin -- cd wt",
 	}[form]
 	proc = _run_twin_hook(repo, stub_bin, f"{prefix} && git push origin HEAD:feature/x")
 	assert proc.returncode == 2, proc.stdout + proc.stderr

@@ -941,9 +941,10 @@ turned into one branch (a variable, a glob or brace pattern, a `heads/` /
 judged on the session checkout as before and the guard emits a warning naming
 the reason; it never fails open silently.
 The one exception is a `cd` or `pushd` (also run as `builtin cd` or
-`command cd`) that **`CDPATH`** may redirect (issue #6090). Bash looks an operand that does not start with `/`, `.` or `..` up in
-`CDPATH` before the current directory, so `CDPATH=.. cd .git` enters the
-parent repository's `.git`. The guard treats `CDPATH` as possibly set when the
+`command cd`) that **`CDPATH`** may redirect (issue #6090). Bash looks every
+operand up in `CDPATH` before the current directory except one that starts
+with `/` or is `.`, `..`, `./…` or `../…`. `.git` is therefore searched:
+`CDPATH=.. cd .git` enters the parent repository's `.git`. The guard treats `CDPATH` as possibly set when the
 hook's environment holds a non-empty one, when any word of an earlier segment
 contains `CDPATH` (an assignment, `export`, even `unset`: nothing clears it,
 since an earlier command may not have run), and, for that `cd` alone, when it

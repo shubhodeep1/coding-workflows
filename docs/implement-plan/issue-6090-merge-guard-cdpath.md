@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#6090
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5144-merge-guard-effective-repo
 - Project branch: claude/implement-plan-issue-6090-merge-guard-cdpath   Final PR: #6109 draft
-- Status: IN_PROGRESS
+- Status: BLOCKED until the `[claude-twin-sync]` copy for PR #6113 lands; IN_PROGRESS from that commit on
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #6113: twin sync (queued with the supervising session), then review round 2
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-02
-- Last note: phase 1 implemented twin-first (44f0e50): 396 guard tests pass against the twin except `test_template_copies_are_identical` (red until the `[claude-twin-sync]` copy); 478 related tests pass. Phase PR opening; twin-sync blocker follows.
+- Last note: phase PR #6113 opened; review round 1 (run 37037524141) fixed in one `[claude-autofix]` commit: `builtin -- cd` now counts, and the docstring, CLAUDE.md §21.B and changelog wording on exempt operands matches the code; the single-quoted `'~/sub'` finding was rejected (Bash leaves that `~` literal and searches CDPATH). Guard tests: 398 pass, only `test_template_copies_are_identical` fails until the twin sync.
 
 ## Phases
-1. [ ] Phase 1 — block guarded git calls after a CDPATH-redirectable `cd` / `pushd` — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [ ] Phase 1 — block guarded git calls after a CDPATH-redirectable `cd` / `pushd` — PR #6113 open (twin sync pending); review rounds: 1; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Twin hook: `GuardTarget.unjudgeable_reason`, CDPATH state in `guard_targets`, block in `_evaluate_bash`
    - Tests in `tests/test_pr_merge_status_guard.py` (unit + e2e on `worktree_repo`) reading the twin
    - CLAUDE.md §21.B paragraph; `changelog.d/6090-merge-guard-cdpath.md`
@@ -39,8 +39,10 @@
 - AD-5 [plan, 2026-10-02] Does the block apply to `git commit` as well as `git push`? — Picked: A — both. Alternatives: B — push only. Why: the issue says deny the write; both are §21-guarded writes. Applied in: phase 1 PR. Status: pending review
 - AD-6 [plan, 2026-10-02] Fix the `CDPATH` row now although #6038 lists it and is deferred until #5163 merges? — Picked: A — yes, only the `CDPATH` row, on the issue's project branch. Alternatives: B — leave it to #6038 and close this as a duplicate. Why: #6090 is the #5144 project's own security follow-up, which its security pass needs fixed on the project branch. Applied in: phase 1 PR. Status: pending review
 - AD-7 [phase 1, 2026-10-02] Should a `cd` / `pushd` run through `builtin` or `command` count for the CDPATH rule, although wrapper prefixes in general are #6038's scope? — Picked: A — yes, for the CDPATH rule only. Alternatives: B — no, leave every wrapper to #6038. Why: `CDPATH=.. builtin cd .git` is a direct bypass of this fix; the walker still does not follow those wrappers' directory changes otherwise (#6038). Applied in: phase 1 PR. Status: pending review
+- AD-8 [phase 1, 2026-10-02] Q1 of the twin-sync blocker on #6090: how should the `.claude/` copy for #6113 land? — Picked: A — a supervising session makes the `[claude-twin-sync]` copy and comments `/reclarify`. Alternatives: B — de-scope to the twin only; C — close #6113 and leave the gap to #6038. Why: answered A by the hourly driver session under the operator's mandate to take RECOMMENDED options; the hook copy needs the operator's Auto-off window. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:intervention] When a guard recognises a builtin behind a wrapper (`builtin`, `command`), let each wrapper consume its own `--` end-of-options marker, or the wrapped command slips past. (files: workflow-templates/.claude/hooks/pr_merge_status_guard.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)
