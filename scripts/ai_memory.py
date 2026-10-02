@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from ai_memory_lib import (
     MEMORY_RECORD_SCHEMA_VERSION,
     MemoryGitError,
     MemoryValidationError,
+    _bounded_memory_elapsed_ms,
     append_operator_bypass_audit_entry,
     append_revalidate_event,
     append_validation_discovery_entry,
@@ -65,6 +67,10 @@ def _emit_telemetry(op: str, **fields: Any) -> None:
     entry: dict[str, Any] = {"op": op}
     entry.update(fields)
     print(f"AI_MEMORY_TELEMETRY: {json.dumps(entry, ensure_ascii=True, sort_keys=True)}", file=sys.stderr)
+
+
+def _memory_timing_fields(timings: dict[str, int], started_at: float) -> dict[str, int]:
+    return {"elapsed_ms": _bounded_memory_elapsed_ms(started_at), **timings}
 
 
 def _sanitize_git_error(text: str) -> str:
@@ -201,6 +207,8 @@ def _split_csv(value: str | None) -> list[str]:
 
 
 def cmd_retrieve(args: argparse.Namespace) -> int:
+    started_at = time.monotonic()
+    timings: dict[str, int] = {}
     args = _read_env_defaults(args)
     if not args.enabled:
         context = "AI MEMORY CONTEXT\nstatus: disabled\n"
@@ -225,6 +233,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             records_selected=0,
             token_budget=None,
             miss_reason="disabled",
+            **_memory_timing_fields(timings, started_at),
         )
         return 0
 
@@ -236,6 +245,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                 repo_root,
                 memory_branch=args.memory_branch,
                 memory_root_relative=args.memory_root,
+                timings=timings,
             )
         except MemoryGitError as exc:
             error_text = _sanitize_git_error(str(exc))
@@ -272,6 +282,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                 token_budget=None,
                 miss_reason="branch_unavailable" if is_missing_branch else "git_error",
                 warning="branch_unavailable" if is_missing_branch else "git_error",
+                **_memory_timing_fields(timings, started_at),
             )
             return 0
         memory_root = _resolve_memory_root(branch_dir, args.memory_root)
@@ -339,14 +350,20 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             token_budget=result.token_budget,
             keyword_method=result.keyword_method,
             miss_reason=result.miss_reason,
+            **_memory_timing_fields(timings, started_at),
         )
         return 0
+    except Exception:
+        _emit_telemetry("retrieve", ok=False, **_memory_timing_fields(timings, started_at))
+        raise
     finally:
         if branch_dir:
             shutil.rmtree(branch_dir, ignore_errors=True)
 
 
 def cmd_record_run_event(args: argparse.Namespace) -> int:
+    started_at = time.monotonic()
+    timings: dict[str, int] = {}
     args = _read_env_defaults(args)
     if not args.enabled:
         _print_json({"ok": True, "enabled": False, "event": None})
@@ -370,14 +387,21 @@ def cmd_record_run_event(args: argparse.Namespace) -> int:
         )
         return {"event": entry}
 
-    result = persist_memory_operation(
-        repo_root,
-        memory_branch=args.memory_branch,
-        memory_root_relative=args.memory_root,
-        push_retries=int(args.push_retries),
-        commit_message=f"ai-memory: record run event [{args.workflow}]",
-        operation=_op,
-    )
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: record run event [{args.workflow}]",
+            operation=_op,
+            timings=timings,
+        )
+    except Exception:
+        # The existing error handler still owns the failure; telemetry must
+        # never include the exception, git arguments, URL or event content.
+        _emit_telemetry("record-run-event", ok=False, **_memory_timing_fields(timings, started_at))
+        raise
     _print_json({"ok": True, **result})
     _emit_telemetry(
         "record-run-event",
@@ -386,6 +410,7 @@ def cmd_record_run_event(args: argparse.Namespace) -> int:
         event_type=args.event_type,
         did_push=result.get("did_push", False),
         push_attempts=result.get("push_attempts", 0),
+        **_memory_timing_fields(timings, started_at),
     )
     return 0
 
