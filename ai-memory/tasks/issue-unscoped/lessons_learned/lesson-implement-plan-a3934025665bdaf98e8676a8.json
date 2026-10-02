@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:19:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A rule meant to cover every review workflow must not reuse a list built for another purpose: `check_in_status.FIXER_WORKFLOW_PATHS` lacks the judge wrapper `review_rb_judge_dispatch.yml`, so a guard over review dispatches checks it together with `UNBOUND_DISPATCH_REVIEW_WORKFLOWS`.",
+  "phase": "implement_plan",
+  "pr_number": 5929,
+  "record_id": "lesson-implement-plan-a3934025665bdaf98e8676a8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5906-bind-unbound-review-dispatches",
+    "file:scripts/claude_fixer_pending_checks.py",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}

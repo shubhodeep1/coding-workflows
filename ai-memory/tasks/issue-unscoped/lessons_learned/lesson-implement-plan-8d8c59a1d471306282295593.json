@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:19:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A trust rule must name what it trusts, never list what it distrusts: `check_review_runs()` excluded `workflow_dispatch` from the head-branch bound reviews, so `push` runs (internal-review.yml's no-PR route, which concludes `success` once a PR exists) and fork runs under the same branch name still counted; on a head branch only a same-repository `pull_request` run is a review of the PR.",
+  "phase": "implement_plan",
+  "pr_number": 5929,
+  "record_id": "lesson-implement-plan-8d8c59a1d471306282295593",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5906-bind-unbound-review-dispatches",
+    "file:scripts/claude_fixer_pending_checks.py",
+    "file:.github/workflows/internal-review.yml"
+  ]
+}

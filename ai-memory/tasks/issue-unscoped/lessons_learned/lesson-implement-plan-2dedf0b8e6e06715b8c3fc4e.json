@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:19:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a trust rule (here: only a default-branch run's name is trusted) has to hold across several listings, decide trust once per run in one classifier that every listing feeds, and never read the untrusted field at all; patching each listing's condition separately let four review rounds each find one more combination that still read it.",
+  "phase": "implement_plan",
+  "pr_number": 5929,
+  "record_id": "lesson-implement-plan-2dedf0b8e6e06715b8c3fc4e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5906-bind-unbound-review-dispatches",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}

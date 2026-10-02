@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:19:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A workflow run's `display_title` (its `run-name`) is only trustworthy on a run from the default branch: a `workflow_dispatch` on any other ref runs that ref's workflow file, so any PR binding read from a title must also check `head_branch` against the default branch.",
+  "phase": "implement_plan",
+  "pr_number": 5929,
+  "record_id": "lesson-implement-plan-6e4cbc5379de88319888001f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5906-bind-unbound-review-dispatches",
+    "file:scripts/claude_fixer_pending_checks.py",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}

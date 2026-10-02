@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:19:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A workflow run's `pull_requests` lists every open PR whose head matches the run (`push` runs included), not the PR that triggered it, so it binds a run to a PR only when it lists that PR alone; when one head branch can have PRs into several bases, \"contains this PR\" still lets a sibling PR's run through.",
+  "phase": "implement_plan",
+  "pr_number": 5929,
+  "record_id": "lesson-implement-plan-949e9ce8d25ac409cfb5fb0b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5906-bind-unbound-review-dispatches",
+    "file:scripts/claude_fixer_pending_checks.py"
+  ]
+}
