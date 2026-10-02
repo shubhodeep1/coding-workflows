@@ -15430,6 +15430,44 @@ def test_reconcile_does_not_heal_on_a_rejection_without_base_ref():
 	assert "MERGED_STATE_STALE" not in combined
 
 
+def test_reconcile_does_not_heal_when_issue_state_is_unreadable():
+	"""PR #5633 round 3: when neither the batch nor the REST read returns the
+	issue's open/closed state, the heal never treats it as open."""
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="error",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+		fail_issue_get_for=[10],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert "MERGED_STATE_HEALED" not in combined
+
+
+def test_reconcile_heal_label_edit_failure_stays_retryable():
+	"""PR #5633 round 3: the label edit failing leaves the label, writes no
+	once-only marker, and logs a retry, so the next cycle heals."""
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+		fail_issue_edit_for=[10],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert "MERGED_STATE_STALE issue=10 pr=953 reason=non_target_base" in combined, combined
+	assert "action=retry why=label_edit_failed" in combined, combined
+	assert "MERGED_STATE_HEALED" not in combined
+	assert "merged_state_heal" not in result["latest_state"]["waves"][0]["issues"][0], result["latest_state"]["waves"][0]["issues"][0]
+
+
 def test_reconcile_leaves_merged_label_without_rejected_merge_alone():
 	"""An ai:merged label with no merged linked PR at all (a person, the close
 	sweep) is not this rule's business and stays."""

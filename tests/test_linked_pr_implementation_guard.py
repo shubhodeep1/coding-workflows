@@ -528,9 +528,9 @@ def test_target_unknowns_fail_closed():
 	assert _target_rc("5618", on_project) == (1, "non_target_base")
 	assert _target_rc("5618", on_project, "") == (1, "non_target_base")
 	no_base = _target_pr(5618, base="", head="ai/issue-5618")
-	assert _target_rc("5618", no_base, "")[0] == 1
-	assert _target_rc("5618", "{}", _PROJECT_BRANCH)[0] == 1
-	assert _target_rc("not-a-number", on_project, _PROJECT_BRANCH)[0] == 1
+	assert _target_rc("5618", no_base, "") == (1, "missing_base")
+	assert _target_rc("5618", "{}", _PROJECT_BRANCH) == (1, "invalid_input")
+	assert _target_rc("not-a-number", on_project, _PROJECT_BRANCH) == (1, "invalid_input")
 
 
 def test_target_foreign_base_repository_is_rejected():
@@ -710,6 +710,18 @@ def test_reconcile_fetch_failures_fail_closed():
 	calls, err, _, rc = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), None)
 	assert not _labelled(calls), calls
 	assert "reason=issue_fetch_failed stall_action=skip" in err
+	assert rc == 0
+
+
+def test_reconcile_unjudgeable_payload_skips_instead_of_running_recovery():
+	"""PR #5633 round 3: a merged PR payload without a base ref is rejected as
+	`missing_base`, which proves nothing, so the stall action is skipped this
+	cycle (return 0) rather than run."""
+	no_base = _merged_payload("main", "ai/issue-5618")
+	no_base["base"] = {"repo": no_base["base"]["repo"]}
+	calls, err, _, rc = _reconcile_run(no_base, _issue_payload(""))
+	assert not _labelled(calls), calls
+	assert "reason=missing_base stall_action=skip" in err
 	assert rc == 0
 
 

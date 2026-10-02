@@ -15280,7 +15280,9 @@ _pr_json_is_issue_implementation_pr() {
 #     (pr_head_ref_is_issue_automation_branch in scripts/gh_helpers.sh).
 # Anything else returns 1 with ISSUE_TARGET_MERGE_REJECT_REASON set to
 # `unverified_identity` (the base was a target branch) or `non_target_base`.
-# A missing helper, head repository, base repository, or base fails closed.
+# A missing helper, head repository, base repository, or base fails closed;
+# an invalid issue number or empty JSON sets `invalid_input` and an empty
+# base ref `missing_base`, so logs name the real cause.
 #
 # Input: the REST `pulls/<n>` shape (.base.ref, .base.repo.full_name,
 # .base.repo.default_branch, .head.ref, .head.repo.full_name). Issues no
@@ -15290,7 +15292,9 @@ _pr_json_merged_into_issue_target() {
   local issue_num="$1"
   local pr_json="$2"
   shift 2 || true
-  ISSUE_TARGET_MERGE_REJECT_REASON="non_target_base"
+  # Malformed input gets its own reason (PR #5633 review round 3), so a log
+  # never blames the target branch for a payload that could not be judged.
+  ISSUE_TARGET_MERGE_REJECT_REASON="invalid_input"
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
     return 1
@@ -15299,7 +15303,11 @@ _pr_json_merged_into_issue_target() {
   _itm_base="$(printf '%s' "${pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
   _itm_base_repo="$(printf '%s' "${pr_json}" | jq -r '.base.repo.full_name // ""' 2>/dev/null || echo "")"
   _itm_default="$(printf '%s' "${pr_json}" | jq -r '.base.repo.default_branch // ""' 2>/dev/null || echo "")"
-  [ -n "${_itm_base}" ] || return 1
+  if [ -z "${_itm_base}" ]; then
+    ISSUE_TARGET_MERGE_REJECT_REASON="missing_base"
+    return 1
+  fi
+  ISSUE_TARGET_MERGE_REJECT_REASON="non_target_base"
   if [ -z "${_itm_base_repo}" ] || [ "${_itm_base_repo}" != "${GITHUB_REPOSITORY:-}" ]; then
     ISSUE_TARGET_MERGE_REJECT_REASON="foreign_base_repo"
     return 1
@@ -15815,6 +15823,22 @@ _heal_rejected_merged_state() {
   if declare -F ensure_label_exists >/dev/null 2>&1; then
     ensure_label_exists "${_mhs_target_label}" >/dev/null 2>&1 || true
   fi
+  # Order matters (PR #5633 review round 3): the stored status changes first,
+  # so a failed state write leaves everything as it was; the label edit
+  # second, so a failed edit leaves the label (and check-wave-status then
+  # restores `merged` from it) for the next cycle to retry; the once-only
+  # marker last, so a failed edit never blocks that retry.
+  if [ "${_mhs_stored}" = "merged" ]; then
+    if jq --argjson wi "${WAVE_IDX}" --arg lid "${_mhs_lid}" \
+      '(.waves[$wi].issues[] | select(.id == $lid)) |= (if .status == "merged" then .status = "in_progress" else . end)' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      MERGED_HEAL_STATE_CHANGED="true"
+    else
+      rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=retry why=state_write_failed" >&2
+      return 0
+    fi
+  fi
   local _mhs_edit_args=(--add-label "${_mhs_target_label}")
   [ "${_mhs_has_label}" = "true" ] && _mhs_edit_args+=(--remove-label "ai:merged")
   if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${_mhs_edit_args[@]}" >/dev/null 2>&1; then
@@ -15824,14 +15848,12 @@ _heal_rejected_merged_state() {
   MERGED_HEAL_LABELS_JSON="$(printf '%s' "${labels_json}" | jq -c --arg add "${_mhs_target_label}" '(if type == "array" then . else [] end) | map(select(. != "ai:merged")) + [$add] | unique' 2>/dev/null || echo "${labels_json}")"
 
   if jq --argjson wi "${WAVE_IDX}" --arg lid "${_mhs_lid}" --arg pr "${rejected_pr}" --arg reason "${reason}" --arg label "${_mhs_target_label}" --argjson now "$(date +%s)" '
-    (.waves[$wi].issues[] | select(.id == $lid)) |= (
-      (if .status == "merged" then .status = "in_progress" else . end)
-      | .merged_state_heal = {pr: ($pr | tonumber? // $pr), reason: $reason, label: $label, at: $now}
-    )' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    (.waves[$wi].issues[] | select(.id == $lid)) |= (.merged_state_heal = {pr: ($pr | tonumber? // $pr), reason: $reason, label: $label, at: $now})' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     MERGED_HEAL_STATE_CHANGED="true"
   else
     rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-    echo "::warning::MERGED_STATE_HEALED issue=${issue_num}: labels healed but the state file update failed; the stored status is re-checked next cycle." >&2
+    echo "::warning::MERGED_STATE_HEALED issue=${issue_num}: healed, but recording the once-only marker failed; the issue no longer reads as merged, so it is not healed again." >&2
   fi
 
   local _mhs_next="its plan is re-approved by the poller's auto-approve step and implementation runs again"
@@ -15872,7 +15894,8 @@ _heal_rejected_merged_state() {
 #   0 — the caller skips the stall action: the merge was verified and
 #       ai:merged was added, or a fetch failed (pr_fetch_failed,
 #       issue_fetch_failed), so nothing could be verified this cycle and
-#       the next cycle retries (fail closed, stall_action=skip).
+#       the next cycle retries (fail closed, stall_action=skip); so does a
+#       PR payload the rule cannot judge (invalid_input, missing_base).
 #   1 — the link is definitively not this issue's merge into its target
 #       branch (not_merged, not_implementation_pr, foreign_base_repo,
 #       non_target_base, unverified_identity): the caller runs the stall
@@ -15925,6 +15948,10 @@ _reconcile_merged_pr_issue() {
       fi
       if ! _pr_json_merged_into_issue_target "${issue_num}" "${_rmpi_pr_json}" "${_rmpi_issue_base}" "${_rmpi_project_branch}"; then
         _rmpi_reason="${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}"
+        # A payload the rule could not judge proves nothing either way.
+        case "${_rmpi_reason}" in
+          invalid_input|missing_base) _rmpi_stall_action="skip" ;;
+        esac
       fi
     fi
   fi
@@ -20081,8 +20108,13 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       ISSUE_STATE="$(printf '%s' "${_current_wave_details_json}" | jq -r --arg key "${inum}" '.[$key].state // empty' 2>/dev/null | grep -xE 'open|closed' || true)"
     fi
     if [ -z "${ISSUE_STATE}" ]; then
-      ISSUE_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}" --jq '.state' | grep -xE 'open|closed' || echo "open")"
+      ISSUE_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}" --jq '.state' | grep -xE 'open|closed' || true)"
     fi
+    # The heal below acts only on a state actually read this cycle; the
+    # "open" default for an unreadable state keeps the legacy behaviour of
+    # every other consumer (PR #5633 review round 3).
+    _rcl_issue_state_confirmed="false"
+    [ -n "${ISSUE_STATE}" ] && _rcl_issue_state_confirmed="true"
     [ -n "${ISSUE_STATE}" ] || ISSUE_STATE="open"
     ISSUE_STATES_JSON="$(echo "${ISSUE_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${ISSUE_STATE}" '. + {($key): $state}' 2>/dev/null || echo "${ISSUE_STATES_JSON}")"
 
@@ -20157,9 +20189,12 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # Merged state written before the #5618 rule could rest on a merge the
     # rule now rejects; heal it (or alert) before labels are reconciled and
     # check-wave-status reads them. Only when a merged link was rejected for
-    # a branch or identity reason, none passed, and every read succeeded.
+    # a branch or identity reason, none passed, every read succeeded, and the
+    # issue's open/closed state was read this cycle (an unreadable state
+    # never counts as open for a heal).
     if [ "${PR_MERGED}" != "true" ] && [ -n "${_rcl_rejected_merged_pr}" ] \
-      && [ "${_rcl_candidate_fetch_failed}" != "true" ]; then
+      && [ "${_rcl_candidate_fetch_failed}" != "true" ] \
+      && [ "${_rcl_issue_state_confirmed}" = "true" ]; then
       _heal_rejected_merged_state "${inum}" "${ISSUE_STATE}" \
         "$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')" \
         "${_rcl_rejected_merged_pr}" "${_rcl_rejected_merged_reason}" "${_rcl_own_open_pr}"
