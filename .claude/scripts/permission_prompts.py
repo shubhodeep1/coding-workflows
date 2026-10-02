@@ -339,9 +339,14 @@ def _shell_visible_text(command: str) -> str | None:
 	return None if quote else "".join(visible)
 
 
+# The marker permission_prompt_logger.py appends to a value it cut at MAX_VALUE_CHARS: the rest of the command,
+# shell operators included, was never logged, so such a command is never matched against an allow rule.
+_LOGGER_TRUNCATION_RE = re.compile(r"… \[truncated \d+ chars\]$")
+
+
 def _matching_allow_rule(command: str, rules: list[str]) -> str | None:
 	command = command.strip()
-	if not command or "\n" in command:
+	if not command or "\n" in command or _LOGGER_TRUNCATION_RE.search(command):
 		return None
 	visible = _shell_visible_text(command)
 	if visible is None or _COMPOUND_COMMAND_RE.search(visible):
@@ -456,6 +461,14 @@ def issue_title(pattern: dict) -> str:
 	return f"[permission-prompt] {pattern['tool_name']}: {subject}"
 
 
+def _code_span(text: str) -> str:
+	"""`text` as a Markdown code span that a backtick inside it cannot end."""
+	longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+	fence = "`" * (longest + 1)
+	pad = " " if longest else ""
+	return f"{fence}{pad}{text}{pad}{fence}"
+
+
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
 	reasons = "\n".join(f"- {reason}" for reason in pattern["reasons"]) or "- (none given)"
 	modes = ", ".join(f"`{mode}`" for mode in pattern.get("permission_modes") or [])
@@ -463,7 +476,7 @@ def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
 	diagnostics = f"**Permission mode:** {modes}\n\n" if modes else ""
 	if allow_rule:
 		diagnostics += (
-			f"**Already allowlisted:** `{allow_rule}` in `.claude/settings.json` matches this command, and it ran "
+			f"**Already allowlisted:** {_code_span(redact(allow_rule))} in `.claude/settings.json` matches this command, and it ran "
 			"as a single command, so Claude Code decided it despite the allow rule. Reshaping the command or adding "
 			"another allow rule will not clear this pattern (issue #5899).\n\n"
 		)

@@ -547,6 +547,27 @@ def test_issue_and_comment_flag_an_allowlisted_denial(tmp_path):
 		assert text.index("**Occurrences:**") < text.index("**Already allowlisted:**") < text.index("**Reason Claude Code gave:**")
 
 
+def test_allow_rule_for_never_matches_a_command_the_logger_truncated(tmp_path):
+	"""PR #5918 review round 7: permission_prompt_logger.py cuts a value at MAX_VALUE_CHARS and appends a marker;
+	an operator after the cut was never logged, so a truncated command is never reported as allowlisted."""
+	path = _settings(tmp_path, ["Bash(git merge *)"])
+	assert pp_twin.allow_rule_for("git merge " + "x" * 50 + "… [truncated 12 chars]", path) is None
+	assert pp_twin.allow_rule_for("git merge " + "x" * 50, path) == "Bash(git merge *)"
+
+
+def test_allowlisted_rule_is_shown_as_a_safe_code_span(tmp_path):
+	"""PR #5918 review round 7: a backtick in the rule cannot end its code span, and a credential in it is masked."""
+	assert pp_twin._code_span("Bash(git merge *)") == "`Bash(git merge *)`"
+	assert pp_twin._code_span("Bash(echo `x`)") == "`` Bash(echo `x`) ``"
+	assert pp_twin._code_span("a``b") == "``` a``b ```"
+	directory = _log(tmp_path, [_payload(ISSUE_5899_COMMAND, event="PermissionDenied")])
+	pattern = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, ["Bash(git merge *)"]))[0]
+	pattern["allow_rule"] = "Bash(curl -H 'Authorization: Bearer abcdefghijklmnop' *)"
+	body = pp_twin.issue_body(pattern, 1, "s1")
+	assert "abcdefghijklmnop" not in body
+	assert "**Already allowlisted:** `Bash(curl -H 'Authorization: Bearer ***' *)`" in body
+
+
 def test_issue_without_a_matching_rule_is_unchanged_apart_from_the_mode(tmp_path):
 	directory = _log(tmp_path, [_payload("ls -la | head")])
 	pattern = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, ["Bash(git merge *)"]))[0]

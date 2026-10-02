@@ -1184,7 +1184,10 @@ reviews, comments, and conflicts stay a direct §12 request.
   as `allow_rule` (or `null`) per pattern. The check reads only the local
   settings file and issues no API calls. A call logged from a directory
   outside that checkout is not checked, and "latest" is the newest
-  occurrence by timestamp across all session logs.
+  occurrence by timestamp across all session logs (same-second ties in
+  session-file name order). A command the logger truncated is never
+  matched, and the rule is shown masked in a code span a backtick cannot
+  end.
 - `/implement-plan-claude` step 0 now refuses to run outside Auto mode
   (except issue mode, which records the mode), and a phase touching
   `.claude/**` stops at `Status: BLOCKED` before it starts (CLAUDE.md
