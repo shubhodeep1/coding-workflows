@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/usage_limit_resumes.py:lines 72-82, 136-144, 252-263, 326-335, 345-351, 382-388, 422-436 | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The PR includes root-copy changes that violate the stated twin-first sequence, updating `.claude/scripts/usage_limit_resumes.py` before the PR is reviewed and the separate twin sync occurs.\n  WHY: The root-copy hunks make `test_template_parity` pass before the documented sync and defeat the held PR's twin-only review gate.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:select() at lines 422-436; _skip_reason() at lines 382-388 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `session_key(pickup_session)` is recomputed during each iteration of the `select` loop and inside each `_skip_reason` call, although `pickup_session` does not change.\n  WHY: The repeated regex work is unnecessary; the source notes that the cost is negligible and not a runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description \"Twin-first (Q40): only `workflow-templates/.claude/scripts/usage_limit_resumes.py` changes. `.claude/scripts/usage_limit_resumes.py` waits for the twin sync, so `test_template_parity` is red until then.\" Plan AD-11: \"Edit the `workflow-templates/.claude/**` twins ... and put the `claude-issue-pickup.md` diff and sha256 in the sync blocker. After the phase PR opens, post a `hold` claim and stop `BLOCKED`.\" Progress log: \"twin sync (seventh; hold claim on the pushed head)\".\n  expected_change_site: `.claude/scripts/usage_limit_resumes.py` should not appear in the PR diff; it should be updated by a separate `[claude-twin-sync]` operation after approval.\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR DIFF includes `.claude/scripts/usage_limit_resumes.py` with 30 added and 7 deleted lines, mirroring the twin's seven hunks; the last_commit_stat records commit b91a9ec as `[claude-twin-sync] Sync #5660 conformance fix 1 twins into .claude/`. The test_template_parity signal should still be red until the follow-on sync.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/usage_limit_resumes.py:lines 72-82, 136-144, 252-263, 326-335, 345-351, 382-388, 422-436 | severity=critical | confidence=5\n  PROBLEM: The PR diff includes root-copy hunks that violate the stated twin-first sequence.\n  WHY: The root-copy changes make `test_template_parity` pass before the documented post-review twin sync and defeat the held PR's twin-only review gate.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:select() at lines 422-436; _skip_reason() at lines 382-388 | severity=low | confidence=3\n  PROBLEM: `session_key(pickup_session)` is recomputed for every iteration of the `select` loop and inside each `_skip_reason` call, although `pickup_session` does not change.\n  WHY: The repeated regex work is unnecessary; the source notes that the cost is negligible and not a runtime failure.\n- .claude/scripts/usage_limit_resumes.py:lines 72-82, 136-144, 252-263, 326-335, 345-351, 382-388, 422-436 | severity=critical | confidence=5\n  PROBLEM: The root-copy update is an implicit-execution / declared-vs-effective gap: the PR declares twin-first intent but delivers a full root-copy edit in the same branch.\n  WHY: The protected-path trust boundary is broken, the parity test loses its red-until-sync signal, and the held PR can no longer be reviewed as twin-only.\n- TASK_GAP\n  Requirement: PR description \"Twin-first (Q40): only `workflow-templates/.claude/scripts/usage_limit_resumes.py` changes. `.claude/scripts/usage_limit_resumes.py` waits for the twin sync, so `test_template_parity` is red until then.\" Plan AD-11: \"Edit the `workflow-templates/.claude/**` twins ... and put the `claude-issue-pickup.md` diff and sha256 in the sync blocker. After the phase PR opens, post a `hold` claim and stop `BLOCKED`.\" Progress log: \"twin sync (seventh; hold claim on the pushed head)\".\n  Expected change site: `.claude/scripts/usage_limit_resumes.py` should not appear in the PR diff at all \u2014 it is supposed to be updated by a separate `[claude-twin-sync]` operation after the PR is approved. `tests/test_template_parity` is supposed to be red on the PR head until that sync lands.\n  Evidence of absence: The PR DIFF includes `.claude/scripts/usage_limit_resumes.py` with 30 added and 7 deleted lines (mirror of the twin's 7 hunks at lines 72-82, 136-144, 252-263, 326-335, 345-351, 382-388, 422-436), and the last_commit_stat records commit b91a9ec as `[claude-twin-sync] Sync #5660 conformance fix 1 twins into .claude/`. Per the PR description, those hunks should be absent; the test_template_parity signal should still be red, and the sync should be a follow-on operation, not a PR commit.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "57fb0f3a6d90decd7aaff435fef0043703740646cc98c8873848216106132807",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6068,
+    "run_id": "36971866886",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36971866886",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002062510_c14c2147d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6068,
+    "run_id": "36971866886"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T06:25:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
