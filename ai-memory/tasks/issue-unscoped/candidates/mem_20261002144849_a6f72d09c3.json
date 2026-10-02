@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:111 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The space-delimited credential-option regex does not handle escaped quotes in double-quoted values, so it can mask only the prefix and leave the rest of a secret visible.\n  WHY: `redact()` can publish the unmasked suffix in issue bodies, comments, report JSON, or workflow logs; reviewers disagreed on severity, with deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, and openai_gpt-6-luna rating it MAJOR, and qwen_qwen3_7-plus and z-ai_glm-5_2 rating it NIT.\n- workflow-templates/.claude/scripts/permission_prompts.py:111 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The space-delimited credential-option regex does not handle escaped quotes in double-quoted values, so it can mask only the prefix and leave the rest of a secret visible.\n  WHY: `redact()` can publish the unmasked suffix in issue bodies, comments, report JSON, or workflow logs; reviewers disagreed on severity, with deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, and openai_gpt-6-luna rating it MAJOR, and qwen_qwen3_7-plus and z-ai_glm-5_2 rating it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py and workflow-templates/.claude/scripts/permission_prompts.py: Line 111 | severity=MAJOR | confidence=4\n  PROBLEM: The double-quoted value group `\\\"[^\\\"]*\\\"` does not account for escaped double quotes, so a credential value such as `--password \"prefix\\\"secret-suffix\"` is only partially masked.\n  WHY: The unmasked suffix can appear in published GitHub issue bodies, comments, and report output.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/scripts/permission_prompts.py: line 111 | severity=MAJOR | confidence=5\n  PROBLEM: The double-quoted value alternative in the space-delimited credential-option regex does not account for escaped double quotes inside double-quoted strings.\n  WHY: The remaining portion of the secret can appear in issue bodies, comments, and report JSON.\n- workflow-templates/.claude/scripts/permission_prompts.py: line 111 | severity=MAJOR | confidence=5\n  PROBLEM: The double-quoted value alternative in the space-delimited credential-option regex does not account for escaped double quotes inside double-quoted strings.\n  WHY: The remaining portion of the secret can appear in issue bodies, comments, and report JSON.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/permission_prompts.py and workflow-templates/.claude/scripts/permission_prompts.py: REDACTION_PATTERNS entry at line 111 | severity=MAJOR | confidence=5\n  PROBLEM: The double-quoted-value alternative does not account for backslash-escaped quotes, so a credential value such as `--password \"prefix\\\"secret-suffix\"` is only partially masked.\n  WHY: The unmasked suffix can be published in issue comments and report JSON, and the test does not cover double-quoted values with escaped quotes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/permission_prompts.py and .claude/scripts/permission_prompts.py: 111 | severity=MAJOR | confidence=5\n  PROBLEM: The space-delimited credential-option regex does not handle escaped quotes inside quoted values, so it can leave `secret-suffix\"` visible.\n  WHY: Permission reports can publish the remaining credential text in an issue or \u201cSeen again\u201d comment; a matching allow rule can also expose it in report JSON.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- `.claude/scripts/permission_prompts.py` and `workflow-templates/.claude/scripts/permission_prompts.py`: the new `re.compile` entry in `REDACTION_PATTERNS` (the space-delimited credential-option pattern added in review round 9, around line 108) | severity=NIT | confidence=4\n  PROBLEM: The double-quoted alternative `\\\"[^\\\"]*\\\"` does not account for escaped quotes, so a double-quoted credential value can be only partially masked.\n  WHY: The remainder can be published in the issue body, comment text, or report JSON; the existing test does not cover double-quoted values with escaped quotes.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py (and .claude/scripts/permission_prompts.py): REDACTION_PATTERNS, the new space-delimited credential-option regex (round 9 addition, around line 111) | severity=NIT | confidence=3\n  PROBLEM: The double-quoted value alternative `\"[^\"]*\"` does not handle escaped quotes, so it can leave `secret-suffix\"` visible after redaction.\n  WHY: Part of the credential can be published in a GitHub issue or workflow log.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d87947f95a13eae5dd10fdbbddf68d81a456608f960b5fff6736d69d0ecd85d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5918,
+    "run_id": "37017971651",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37017971651",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002144849_a6f72d09c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5918,
+    "run_id": "37017971651"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T14:48:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
