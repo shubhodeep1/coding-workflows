@@ -181,6 +181,8 @@ def _issue_example_match(body: str) -> re.Match[str] | None:
 	Reading no example then means no family: the report files by signature, as for any issue without a family,
 	and never under a planted command's family (PR #5697 review rounds 5 and 6). Bodies written since then put each
 	reason on one line and fence the example longer than any backtick run in it."""
+	# An issue body edited in the web UI can carry CRLF line ends (PR #5697 review round 9).
+	body = body.replace("\r\n", "\n")
 	starts = [match.start() for match in _ISSUE_EXAMPLE_START_RE.finditer(body)]
 	return _ISSUE_EXAMPLE_RE.match(body, starts[0]) if len(starts) == 1 else None
 
@@ -507,9 +509,42 @@ def _family_word(core: list[str]) -> str:
 	return shape[0]
 
 
+def _strip_shell_comments(text: str) -> str:
+	"""`text` without its `#` comments: a `#` that starts a word outside quotes, up to the end of its line, as Bash reads
+	it (a backslash-newline is removed first, so it does not start a word). Used for the family only; the shape keeps
+	its own tokens (PR #5697 review round 9)."""
+	output: list[str] = []
+	single_quoted = double_quoted = False
+	previous = "\n"
+	index = 0
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and not single_quoted:
+			output.append(text[index : index + 2])
+			if text[index + 1 : index + 2] != "\n":
+				previous = "\\"
+			index += 2
+			continue
+		if char == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif char == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		elif char == "#" and not single_quoted and not double_quoted and previous in " \t\n;&|()":
+			line_end = text.find("\n", index)
+			if line_end == -1:
+				break
+			index = line_end
+			continue
+		output.append(char)
+		previous = char
+		index += 1
+	return "".join(output)
+
+
 def command_family(command: str) -> tuple[str, tuple[str, ...]] | None:
-	"""A Bash command's family key: (command word, constructs present), or None when it does not parse."""
-	stripped = strip_heredocs(command, keep_delimiter=False)
+	"""A Bash command's family key: (command word, constructs present), or None when it does not parse. `#` comments
+	are dropped first, so a leading comment line is never the command word (PR #5697 review round 9)."""
+	stripped = _strip_shell_comments(strip_heredocs(command, keep_delimiter=False))
 	try:
 		collapsed = _collapse_substitutions(stripped)
 		segments = _family_segments(_shell_tokens(collapsed))
@@ -568,6 +603,7 @@ def issue_family_marker(body: str) -> str | None:
 
 def legacy_issue_family(body: str) -> str | None:
 	"""The family of an issue filed before family markers, from its recorded tool, event, and example (Bash only)."""
+	body = body.replace("\r\n", "\n")
 	event_match = _ISSUE_EVENT_RE.search(body)
 	example_match = _issue_example_match(body)
 	if not event_match or not example_match or event_match.group(2) != "Bash":

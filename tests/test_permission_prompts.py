@@ -831,3 +831,19 @@ def test_shape_and_family_label_cannot_break_their_code_spans():
 		assert "``./a`b.sh **planted**``" in text
 		assert "\n# planted heading" not in text and "\n**planted**" not in text
 	assert pp._family_code_span("`x") == "`` `x ``"
+
+
+def test_comments_never_become_the_family():
+	"""PR #5697 review round 9: a leading comment line is not the command word, and an unclosed `$(` in a comment does
+	not stop the real substitutions from being collapsed."""
+	assert pp.command_family("# note\ngit status") == pp.command_family("git status")
+	assert pp.command_family("# x $(\ngit status") == pp.command_family("git status")
+	assert pp.command_family("x=$(pwd) && git status # $(") == pp.command_family("x=$(pwd) && git status")
+	assert pp.command_family('echo "#x" $#') == pp.command_family("echo x")
+
+
+def test_a_legacy_body_with_crlf_line_ends_keeps_its_family():
+	"""PR #5697 review round 9: an issue body edited in the web UI can carry CRLF line ends."""
+	legacy = _legacy_body("git fetch origin main")
+	assert pp.legacy_issue_family(legacy.replace("\n", "\r\n")) == pp.legacy_issue_family(legacy) == _bash_family("git fetch origin main")
+
