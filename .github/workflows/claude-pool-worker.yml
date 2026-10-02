@@ -1,0 +1,428 @@
+# Claude worker pool: one headless Claude Code job on the least-used pool
+# account (docs/plans/claude-actions-worker-pool-plan.md).
+#
+# Called only by the runner repo's thin wrapper,
+# shubhodeep1/claude-workers/.github/workflows/claude-pool-worker.yml, with
+# `secrets: inherit`. The pool tokens (CLAUDE_POOL_TOKEN_<NAME>) and the
+# workers' GH_PAT exist only in that repo's secrets; no workflow of
+# coding-workflows reads them (plan G8).
+#
+# Jobs:
+#   select  probe every pool account with a one-word Haiku run and pick the
+#           least-used one under gate_utilization (scripts/claude_pool.py)
+#   work    check out the target repo with GH_PAT and run the item's slash
+#           command on the worker model; transcript uploaded as an artifact
+#   report  classify the run into claude-pool-result.json (the dispatcher's
+#           only input besides the run name) and fail unless it succeeded
+#
+# Every decision is made by scripts/claude_pool.py; every input and secret
+# reaches a `run:` body through `env:` only, and no step prints a token.
+name: Claude Pool Worker
+
+on:
+  workflow_call:
+    inputs:
+      queue_issue:
+        description: The ai:claude-issue-queue issue this run works on (0 for smoke)
+        type: number
+        required: true
+      item_type:
+        description: issue | pr_fix | stage | smoke
+        type: string
+        required: true
+      attempt:
+        description: Attempt number, starting at 1
+        type: number
+        required: false
+        default: 1
+      exclude_accounts:
+        description: Comma-separated pool account names to skip (failover)
+        type: string
+        required: false
+        default: ''
+      payload_b64:
+        description: The queue item's fire text, base64 (empty for smoke)
+        type: string
+        required: false
+        default: ''
+      pool_ref:
+        description: coding-workflows ref the pool scripts are read from
+        type: string
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    name: Select a pool account
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      outcome: ${{ steps.choose.outputs.outcome }}
+      account: ${{ steps.choose.outputs.account }}
+      selection: ${{ steps.choose.outputs.selection }}
+      item_timeout_minutes: ${{ steps.config.outputs.item_timeout_minutes }}
+      job_timeout_minutes: ${{ steps.config.outputs.job_timeout_minutes }}
+      run_model: ${{ steps.config.outputs.run_model }}
+      run_effort: ${{ steps.config.outputs.run_effort }}
+      worker_model: ${{ steps.config.outputs.worker_model }}
+      probe_model: ${{ steps.config.outputs.probe_model }}
+      cli_version: ${{ steps.config.outputs.cli_version }}
+      retention_days: ${{ steps.config.outputs.retention_days }}
+      handoff_author_login: ${{ steps.config.outputs.handoff_author_login }}
+      verdict_bot_login: ${{ steps.config.outputs.verdict_bot_login }}
+    steps:
+      - name: Check out the pool scripts (coding-workflows)
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ inputs.pool_ref }}
+          path: pool
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Read the pool config
+        id: config
+        env:
+          ITEM_TYPE: ${{ inputs.item_type }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          python3 pool/scripts/claude_pool.py config --config pool/.github/ai/claude_pool.json --item-type "$ITEM_TYPE" > "$RUNNER_TEMP/pool-config.json"
+          cfg="$RUNNER_TEMP/pool-config.json"
+          if [ "$ITEM_TYPE" = "smoke" ]; then
+            run_model=$(jq -r .probe_model "$cfg"); run_effort=low
+          else
+            run_model=$(jq -r .worker_model "$cfg"); run_effort=$(jq -r .worker_effort "$cfg")
+          fi
+          {
+            echo "item_timeout_minutes=$(jq -r .item_timeout_minutes "$cfg")"
+            echo "job_timeout_minutes=$(jq -r .job_timeout_minutes "$cfg")"
+            echo "run_model=$run_model"
+            echo "run_effort=$run_effort"
+            echo "worker_model=$(jq -r .worker_model "$cfg")"
+            echo "probe_model=$(jq -r .probe_model "$cfg")"
+            echo "cli_version=$(jq -r .cli_version "$cfg")"
+            echo "retention_days=$(jq -r .transcript_retention_days "$cfg")"
+            echo "gate=$(jq -r .gate_utilization "$cfg")"
+            echo "handoff_author_login=$(jq -r .handoff_author_login "$cfg")"
+            echo "verdict_bot_login=$(jq -r .verdict_bot_login "$cfg")"
+          } >> "$GITHUB_OUTPUT"
+          echo "CLAUDE_POOL config item_type=$ITEM_TYPE model=$run_model effort=$run_effort"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code
+        env:
+          CLI_VERSION: ${{ steps.config.outputs.cli_version }}
+        run: |
+          set -euo pipefail
+          npm install -g "@anthropic-ai/claude-code@$CLI_VERSION"
+          claude --version
+
+      - name: Probe every pool account
+        env:
+          # Secret names and values for this step only. Only the names reach
+          # claude_pool.py; each value is normalised, masked, and handed to
+          # one probe run.
+          ALL_SECRETS_JSON: ${{ toJSON(secrets) }}
+          EXCLUDE_ACCOUNTS: ${{ inputs.exclude_accounts }}
+          PROBE_MODEL: ${{ steps.config.outputs.probe_model }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -uo pipefail
+          probes="$RUNNER_TEMP/pool-probes.jsonl"
+          : > "$probes"
+          if ! names=$(printf '%s' "$ALL_SECRETS_JSON" | jq -c 'keys' | python3 pool/scripts/claude_pool.py accounts --exclude "$EXCLUDE_ACCOUNTS" --lines); then
+            echo "CLAUDE_POOL accounts_failed"
+            exit 1
+          fi
+          echo "CLAUDE_POOL accounts names=$(tr '\n' ' ' <<< "$names") excluded=${EXCLUDE_ACCOUNTS:-none}"
+          for name in $names; do
+            token=$(printf '%s' "$ALL_SECRETS_JSON" | jq -r --arg k "CLAUDE_POOL_TOKEN_$name" '.[$k] // ""' | python3 pool/scripts/claude_pool.py normalize) || token=""
+            if [ -z "$token" ]; then
+              jq -cn --arg a "$name" '{account: $a, five_hour: null, seven_day: null, five_hour_resets_at: null, seven_day_resets_at: null, resets_at: null, status: null, error: "probe_failed"}' >> "$probes"
+              continue
+            fi
+            echo "::add-mask::$token"
+            dir=$(mktemp -d)
+            (cd "$dir" && CLAUDE_CODE_OAUTH_TOKEN="$token" timeout 180 claude -p "Reply OK" --model "$PROBE_MODEL" \
+              --strict-mcp-config --output-format stream-json --verbose > probe.jsonl 2> probe.err)
+            code=$?
+            token=""
+            python3 pool/scripts/claude_pool.py probe-parse --account "$name" --transcript "$dir/probe.jsonl" --exit-code "$code" >> "$probes"
+            rm -rf "$dir"
+          done
+          jq -c '{account, five_hour, seven_day, status, error}' "$probes" | sed 's/^/CLAUDE_POOL probe /'
+
+      - name: Choose the least-used account
+        id: choose
+        env:
+          GATE: ${{ steps.config.outputs.gate }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          sel="$RUNNER_TEMP/pool-selection.json"
+          python3 pool/scripts/claude_pool.py choose --probes "$RUNNER_TEMP/pool-probes.jsonl" --gate "$GATE" > "$sel"
+          {
+            echo "outcome=$(jq -r .outcome "$sel")"
+            echo "account=$(jq -r .account "$sel")"
+            echo "selection=$(jq -c . "$sel")"
+          } >> "$GITHUB_OUTPUT"
+
+  work:
+    name: Run the worker
+    needs: select
+    if: needs.select.outputs.outcome == 'selected'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.select.outputs.job_timeout_minutes) }}
+    steps:
+      - name: Check out the pool scripts (coding-workflows)
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ inputs.pool_ref }}
+          path: pool
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build the prompt
+        id: prompt
+        env:
+          ITEM_TYPE: ${{ inputs.item_type }}
+          PAYLOAD_B64: ${{ inputs.payload_b64 }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          python3 pool/scripts/claude_pool.py prompt --item-type "$ITEM_TYPE" --payload-b64 "$PAYLOAD_B64" \
+            --registry pool/.github/ai/consumer_repos.json > "$RUNNER_TEMP/pool-prompt.json"
+          jq -r .prompt "$RUNNER_TEMP/pool-prompt.json" > "$RUNNER_TEMP/pool-prompt.txt"
+          repo=$(jq -r .repo "$RUNNER_TEMP/pool-prompt.json")
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "CLAUDE_POOL prompt item_type=$ITEM_TYPE repo=$repo"
+
+      - name: Check out the target repository
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ steps.prompt.outputs.repo }}
+          token: ${{ secrets.GH_PAT }}
+          path: target
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code
+        env:
+          CLI_VERSION: ${{ needs.select.outputs.cli_version }}
+        run: |
+          set -euo pipefail
+          npm install -g "@anthropic-ai/claude-code@$CLI_VERSION"
+          claude --version
+
+      - name: Prepare the worker
+        env:
+          CLAUDE_POOL_RAW_TOKEN: ${{ secrets[format('CLAUDE_POOL_TOKEN_{0}', needs.select.outputs.account)] }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          token=$(printf '%s' "$CLAUDE_POOL_RAW_TOKEN" | python3 pool/scripts/claude_pool.py normalize)
+          echo "::add-mask::$token"
+          echo "CLAUDE_CODE_OAUTH_TOKEN=$token" >> "$GITHUB_ENV"
+          token=""
+          ws="$GITHUB_WORKSPACE/target"
+          # Trust the checkout, so the repo's allow list and hooks apply (spike S10).
+          f="$HOME/.claude.json"
+          [ -f "$f" ] || echo '{}' > "$f"
+          jq --arg p "$ws" '.projects[$p].hasTrustDialogAccepted = true' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          # Twin-first (CLAUDE.md §28.C, plan Q11): deny every tool, shell
+          # redirects included, on the checkout's own .claude/**; anchored to
+          # the checkout root so workflow-templates/.claude/** stays writable (spike S13).
+          jq -n --arg r "/$ws/.claude/**" \
+            '{permissions: {deny: [("Edit(" + $r + ")"), ("Write(" + $r + ")"), ("NotebookEdit(" + $r + ")")]}}' \
+            > "$RUNNER_TEMP/pool-deny.json"
+          # GitHub MCP named `github`, so the commands' mcp__github__* tool names hold (spike S11, S21).
+          jq -n '{mcpServers: {github: {type: "http", url: "https://api.githubcopilot.com/mcp/", headers: {Authorization: "Bearer ${CLAUDE_POOL_MCP_TOKEN}"}}}}' \
+            > "$RUNNER_TEMP/pool-mcp.json"
+          git -C "$ws" config user.name "Claude"
+          git -C "$ws" config user.email "noreply@anthropic.com"
+          mkdir -p "$RUNNER_TEMP/pool-out"
+
+      - name: Run Claude
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          CLAUDE_POOL_MCP_TOKEN: ${{ secrets.GH_PAT }}
+          CLAUDE_POOL_WORKER: '1'
+          CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN: ${{ needs.select.outputs.handoff_author_login }}
+          CLAUDE_FIXER_VERDICT_BOT_LOGIN: ${{ needs.select.outputs.verdict_bot_login }}
+          RUN_MODEL: ${{ needs.select.outputs.run_model }}
+          RUN_EFFORT: ${{ needs.select.outputs.run_effort }}
+          ITEM_TIMEOUT_MINUTES: ${{ needs.select.outputs.item_timeout_minutes }}
+        run: |
+          set +e
+          out="$RUNNER_TEMP/pool-out"
+          timeout --signal=TERM --kill-after=60 "${ITEM_TIMEOUT_MINUTES}m" \
+            claude -p "$(cat "$RUNNER_TEMP/pool-prompt.txt")" --model "$RUN_MODEL" --effort "$RUN_EFFORT" \
+            --permission-mode auto --settings "$RUNNER_TEMP/pool-deny.json" --mcp-config "$RUNNER_TEMP/pool-mcp.json" \
+            --output-format stream-json --verbose > "$out/transcript.jsonl" 2> "$out/stderr.txt"
+          code=$?
+          timed_out=false
+          if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then timed_out=true; fi
+          jq -n --argjson c "$code" --argjson t "$timed_out" '{exit_code: $c, timed_out: $t}' > "$out/exit.json"
+          echo "CLAUDE_POOL work exit_code=$code timed_out=$timed_out"
+          jq -c 'select(.type == "result") | {subtype, is_error, num_turns, duration_ms, total_cost_usd}' "$out/transcript.jsonl" 2>/dev/null | tail -1
+
+      - name: Smoke checks (deny rule, GH_PAT check runs, GitHub MCP)
+        if: inputs.item_type == 'smoke'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          CLAUDE_POOL_MCP_TOKEN: ${{ secrets.GH_PAT }}
+          WORKER_MODEL: ${{ needs.select.outputs.worker_model }}
+          PROBE_MODEL: ${{ needs.select.outputs.probe_model }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/pool-out"
+          ws="$GITHUB_WORKSPACE/target"
+          fail=0
+          # 1. The anchored deny rule blocks .claude/** and leaves the twins writable.
+          (cd "$ws" && timeout 600 claude -p "This is a permissions test; do each step with exactly one tool call, in order, and do not retry or work around a denial. 1) Use the Write tool to create .claude/pool-smoke-probe.md containing probe. 2) Use the Write tool to create workflow-templates/.claude/pool-smoke-probe.md containing probe. Then report, for each step, succeeded or denied." \
+            --model "$WORKER_MODEL" --effort low --permission-mode auto --settings "$RUNNER_TEMP/pool-deny.json" \
+            --output-format stream-json --verbose > "$out/smoke-deny.jsonl" 2>> "$out/stderr.txt")
+          if [ -e "$ws/.claude/pool-smoke-probe.md" ]; then
+            echo "CLAUDE_POOL smoke check=deny_rule result=failed"; fail=1
+          else
+            echo "CLAUDE_POOL smoke check=deny_rule result=ok"
+          fi
+          if [ -e "$ws/workflow-templates/.claude/pool-smoke-probe.md" ]; then
+            echo "CLAUDE_POOL smoke check=twin_write result=ok"
+          else
+            echo "CLAUDE_POOL smoke check=twin_write result=failed"; fail=1
+          fi
+          # 2. GH_PAT reads check runs on a private consumer repo (classic token, spike S20).
+          consumer=$(jq -r '.[0] // empty' pool/.github/ai/consumer_repos.json)
+          branch=$(gh api "repos/$consumer" --jq .default_branch 2>/dev/null)
+          total=$(gh api "repos/$consumer/commits/$branch/check-runs?per_page=1" --jq .total_count 2>/dev/null)
+          if printf '%s' "$total" | grep -Eq '^[0-9]+$'; then
+            echo "CLAUDE_POOL smoke check=check_runs repo=$consumer result=ok"
+          else
+            echo "CLAUDE_POOL smoke check=check_runs repo=$consumer result=failed"; fail=1
+          fi
+          # 3. The GitHub MCP server reads a private file with GH_PAT (spike S21).
+          expected=$(gh api "repos/$GITHUB_REPOSITORY/readme" --jq .content 2>/dev/null | base64 -d 2>/dev/null | head -n 1)
+          owner="${GITHUB_REPOSITORY%%/*}"; repo="${GITHUB_REPOSITORY#*/}"
+          dir=$(mktemp -d)
+          (cd "$dir" && timeout 300 claude -p "Use the GitHub MCP tool get_file_contents to read README.md from owner $owner, repo $repo, then reply with its first line only. If no GitHub MCP tool is available or the call fails, reply with the exact error." \
+            --model "$PROBE_MODEL" --mcp-config "$RUNNER_TEMP/pool-mcp.json" --strict-mcp-config --allowedTools "mcp__github__*" \
+            --output-format stream-json --verbose > "$out/smoke-mcp.jsonl" 2>> "$out/stderr.txt")
+          got=$(jq -r 'select(.type == "result") | .result' "$out/smoke-mcp.jsonl" 2>/dev/null)
+          if [ -n "$expected" ] && printf '%s' "$got" | grep -qF -- "$expected"; then
+            echo "CLAUDE_POOL smoke check=github_mcp result=ok"
+          else
+            echo "CLAUDE_POOL smoke check=github_mcp result=failed"; fail=1
+          fi
+          exit "$fail"
+
+      - name: Redact secrets from the transcript
+        if: always()
+        env:
+          CLAUDE_POOL_RAW_TOKEN: ${{ secrets[format('CLAUDE_POOL_TOKEN_{0}', needs.select.outputs.account)] }}
+          CLAUDE_POOL_GH_PAT: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          python3 pool/scripts/claude_pool.py redact --env-var CLAUDE_CODE_OAUTH_TOKEN --env-var CLAUDE_POOL_RAW_TOKEN \
+            --env-var CLAUDE_POOL_GH_PAT "$RUNNER_TEMP"/pool-out/*
+
+      - name: Upload the transcript
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: claude-pool-transcript
+          path: ${{ runner.temp }}/pool-out/
+          retention-days: ${{ fromJSON(needs.select.outputs.retention_days) }}
+          if-no-files-found: ignore
+
+  report:
+    name: Report the result
+    needs: [select, work]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the pool scripts (coding-workflows)
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ inputs.pool_ref }}
+          path: pool
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download the transcript
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: claude-pool-transcript
+          path: ${{ runner.temp }}/pool-out
+
+      - name: Classify the run
+        id: classify
+        env:
+          SELECTION: ${{ needs.select.outputs.selection }}
+          WORK_RESULT: ${{ needs.work.result }}
+          QUEUE_ISSUE: ${{ inputs.queue_issue }}
+          ATTEMPT: ${{ inputs.attempt }}
+          ITEM_TYPE: ${{ inputs.item_type }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pool-out"
+          mkdir -p "$out" "$RUNNER_TEMP/pool-result"
+          printf '%s' "$SELECTION" > "$RUNNER_TEMP/pool-selection.json"
+          result="$RUNNER_TEMP/pool-result/claude-pool-result.json"
+          python3 pool/scripts/claude_pool.py classify --transcript "$out/transcript.jsonl" --exit-info "$out/exit.json" \
+            --selection "$RUNNER_TEMP/pool-selection.json" --work-result "$WORK_RESULT" \
+            --queue-issue "$QUEUE_ISSUE" --attempt "$ATTEMPT" --item-type "$ITEM_TYPE" > "$result"
+          outcome=$(jq -r .outcome "$result")
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Claude pool worker"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            jq -r '"| Item | \(.item_type) q\(.queue_issue) a\(.attempt) |",
+              "| Outcome | \(.outcome) \(if .reason != "" then "(" + .reason + ")" else "" end) |",
+              "| Account | \(if .account != "" then .account else "none" end) |",
+              "| Cost (USD, list price) | \(.total_cost_usd // "n/a") |",
+              "| Duration (ms) | \(.duration_ms // "n/a") |",
+              "| Earliest reset (all gated) | \(.resets_at // "n/a") |"' "$result"
+            echo
+            echo "| Account | 5-hour | 7-day | Status | Error |"
+            echo "| --- | --- | --- | --- | --- |"
+            jq -r '.probes[] | "| \(.account) | \(.five_hour // "?") | \(.seven_day // "?") | \(.status // "?") | \(.error // "") |"' "$result"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: claude-pool-result
+          path: ${{ runner.temp }}/pool-result/claude-pool-result.json
+          # Fixed: the select job (and its config output) may not have run.
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Fail unless the run succeeded
+        if: steps.classify.outputs.outcome != 'success'
+        env:
+          OUTCOME: ${{ steps.classify.outputs.outcome }}
+        run: |
+          echo "CLAUDE_POOL failed outcome=${OUTCOME:-unknown}"
+          exit 1
