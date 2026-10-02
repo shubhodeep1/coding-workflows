@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:102 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: `_REDACTION_SHELL_WORD` can treat an escaped apostrophe inside Bash ANSI-C quoting as the end of a credential value, leaving its tail visible after redaction.\n  WHY: `record_example()` applies `redact()` before building issue text, so a denied command with this form can expose part of a credential in an issue or \u201cSeen again\u201d comment.\n- workflow-templates/.claude/scripts/permission_prompts.py:102 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash]\n  PROBLEM: `_REDACTION_SHELL_WORD` can treat an escaped apostrophe inside Bash ANSI-C quoting as the end of a credential value, leaving its tail visible after redaction.\n  WHY: `record_example` passes commands through `redact()` before embedding them in issue bodies and \u201cSeen again\u201d comments, which can expose the remainder of a secret.\n- .claude/scripts/permission_prompts.py:119 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The space-delimited credential-option pattern can consume a following dash-led option as the previous credential's value, leaving that option's credential value unredacted.\n  WHY: A denied command such as `tool --password --api-key secretvalue` can leave `secretvalue` in the issue example because the generic long-random-string rule does not mask it.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/scripts/permission_prompts.py:102 (and workflow-templates/.claude/scripts/permission_prompts.py line 102) | severity=high | confidence=5\n  PROBLEM: _REDACTION_SHELL_WORD treats an escaped apostrophe inside Bash ANSI-C quoting ($'...') as closing a single-quoted segment because it uses '[^']*(?:'|$). If an ANSI-C quoted credential value contains an escaped apostrophe followed by whitespace (for example, --password $'prefix\\' secret-tail'), matching terminates at the whitespace boundary rather than continuing to the true end of the shell word.\n  WHY: record_example passes commands through redact() before embedding them in issue bodies and \"Seen again\" comments. When a command uses ANSI-C quoting with an escaped apostrophe and spaces in the credential value, only the prefix up to the escaped quote is replaced with ***, leaking the remainder of the secret in plain text into the issue description or comment.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py:102 | severity=high | confidence=5\n  PROBLEM: The shell-word pattern treats an escaped apostrophe inside Bash ANSI-C quoting as the end of an ordinary single-quoted value. For `--password $'prefix\\'secret-tail'`, it masks only through the escaped apostrophe and leaves `secret-tail'` visible.\n  WHY: A logged denied command with that form of password is included in the issue example after redaction, exposing part of the credential in the filed issue or \u201cSeen again\u201d comment.\n- .claude/scripts/permission_prompts.py:119 | severity=high | confidence=4\n  PROBLEM: Allowing a dash-led word as a credential value lets the first sensitive option consume the next option name. For example, `tool --password --api-key secretvalue` matches `--api-key` as the password value, so the substitution skips over that option and leaves `secretvalue` unredacted.\n  WHY: A denied command recorded in the session log can put the remaining credential value into the issue example. The generic long-random-string rule does not mask a short value such as `secretvalue`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2fb07dfb4ddcf0e17ed718e2594127c9c2799ed9981b4c2aaadfade618663075",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5918,
+    "run_id": "37031729601",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37031729601",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002165926_7f2f5af601",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5918,
+    "run_id": "37031729601"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T16:59:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
