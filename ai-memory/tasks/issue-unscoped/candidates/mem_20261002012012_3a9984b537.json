@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Merged changes repeatedly touched renderer code, workflow templates, and validation tests together. When changing behavior used by generated or distributed workflows, inspect the rendering and staging paths and verify the resulting template contract, not just the repository's direct workflow.",
+  "fingerprint": "8663c492d231ec84273bf42f67cebc0419990fb72a0dac860a2500967d8709bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36949796597",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36949796597",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4563",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4564",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4566",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4577",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4595",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4569",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4570",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4574",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4578",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4600"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261002012012_3a9984b537",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Changes to workflow support often require keeping repository scripts and generated or packaged workflow templates aligned.",
+  "timestamps": {
+    "created_at": "2026-10-02T01:20:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
