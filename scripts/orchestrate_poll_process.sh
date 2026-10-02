@@ -16552,7 +16552,12 @@ PY
     # Fresh-push guard complements issue_has_active_workflow above; see
     # _check_fresh_push_guard for rationale. Consumes linked_pr already
     # populated in _candidate_details_json (0 additional API calls).
-    if _check_fresh_push_guard_with_fallback "${issue_num}" "${_std_linked_json}" "${phase}"; then
+    # A rejected merged link is not this issue's PR, so its push time must
+    # not suppress the terminal rung: pass no entry and let the guard
+    # re-resolve the issue's own automation branch (PR #5633 review round 5).
+    local _std_fresh_push_json="${_std_linked_json}"
+    [ -n "${_std_merged_rejected_pr}" ] && _std_fresh_push_json="null"
+    if _check_fresh_push_guard_with_fallback "${issue_num}" "${_std_fresh_push_json}" "${phase}"; then
       local _fp_src_suffix=""
       [ "${FRESH_PUSH_SOURCE:-cross_ref}" = "branch_fallback" ] && _fp_src_suffix=" source=branch_fallback"
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${FRESH_PUSH_PR_NUM} was pushed ${FRESH_PUSH_AGE_SECS}s ago — skipping recovery (fresh push)."
@@ -17587,7 +17592,12 @@ recover_stalled_issue() {
       return 0  # Signal: attempt counted (caller increments the counter)
     fi
   fi
-  if _check_fresh_push_guard_with_fallback "${issue_num}" "${_fresh_lpr_entry}" "${phase}"; then
+  # A rejected merged link is not this issue's PR, so its push time must not
+  # suppress the terminal rung: pass no entry and let the guard re-resolve
+  # the issue's own automation branch (PR #5633 review round 5).
+  local _mgd_fresh_push_json="${_fresh_lpr_entry}"
+  [ -n "${_mgd_merged_rejected_pr}" ] && _mgd_fresh_push_json="null"
+  if _check_fresh_push_guard_with_fallback "${issue_num}" "${_mgd_fresh_push_json}" "${phase}"; then
     local _fp_src_suffix=""
     [ "${FRESH_PUSH_SOURCE:-cross_ref}" = "branch_fallback" ] && _fp_src_suffix=" source=branch_fallback"
     echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}${_fp_src_suffix}"

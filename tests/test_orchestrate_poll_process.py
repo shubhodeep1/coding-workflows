@@ -17284,6 +17284,68 @@ def test_managed_stall_recovery_runs_early_phase_action_for_rejected_merge():
 	assert result["latest_state"]["waves"][0]["issues"][0].get("stall_recovery_count") == 1, result["latest_state"]["waves"][0]["issues"][0]
 
 
+def test_managed_stall_fresh_push_guard_ignores_rejected_merged_link():
+	"""PR #5633 review round 5: at the terminal `skip` rung the rejected
+	merged link falls through to normal recovery, and a recent push on that
+	rejected PR must not suppress the rung as a fresh push."""
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:ready-to-merge"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	fresh_pr = _wrong_base_merged_pr(91, 10)
+	fresh_pr["headPushedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 91},
+		prs=[fresh_pr],
+		env_overrides={"MAX_STALL_RECOVERIES_PER_ISSUE": "1"},
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "STALL_MERGED_LABEL_REJECTED issue=10 pr=91" in combined, combined
+	assert "reason=merged_link_rejected" not in combined, combined
+	assert "reason=fresh_push pr=91" not in combined, combined
+	assert "STALL_FRESH_PUSH_FALLBACK issue=10 phase=ai:ready-to-merge source=branch_name" in combined, combined
+
+
+def test_standalone_stall_fresh_push_guard_ignores_rejected_merged_link():
+	"""PR #5633 review round 5: the standalone path likewise ignores a
+	rejected merged link's push time at the terminal `skip` rung."""
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 1,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	fresh_pr = _wrong_base_merged_pr(421, 503)
+	fresh_pr["headPushedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 503: ["ai:done"]},
+		issue_comments={503: [standalone_state_comment]},
+		issue_linked_prs={503: 421},
+		mock_gh_issue_list_label_filter=True,
+		prs=[fresh_pr],
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "STALL_MERGED_LABEL_REJECTED issue=503 pr=421" in combined, combined
+	assert "reason=merged_link_rejected" not in combined, combined
+	assert "reason=fresh_push pr=421" not in combined, combined
+	assert "merged but not into the issue's target branch — continuing with 'skip'" in combined, combined
+
+
 def test_linked_pr_graphql_queries_request_full_label_page():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	candidate_helper = script.split("_fetch_candidate_issue_details_graphql()", 1)[1].split("_fetch_linked_pr_status_graphql()", 1)[0]
