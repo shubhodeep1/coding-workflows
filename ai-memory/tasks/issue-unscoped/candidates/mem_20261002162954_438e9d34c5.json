@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:459-462 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_has_command_substitution` mishandles backslash-newline continuations, so it may fail to recognize a following `#` comment and treat `$()` inside the comment as an active substitution.\n  WHY: Bash removes backslash-newline, so a `$()` in the resulting comment should not add a spurious `subst` construct or assign the command to a different family.\n- workflow-templates/.claude/scripts/permission_prompts.py:459-462 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_has_command_substitution` mishandles backslash-newline continuations, so it may fail to recognize a following `#` comment and treat `$()` inside the comment as an active substitution.\n  WHY: Bash removes backslash-newline, so a `$()` in the resulting comment should not add a spurious `subst` construct or assign the command to a different family.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/scripts/permission_prompts.py:459-462 in _has_command_substitution (and workflow-templates/.claude/scripts/permission_prompts.py lines 459-462) | severity=NIT | confidence=4\n  PROBLEM: `_has_command_substitution` unconditionally sets `previous = \"\\\\\"` on backslash-newline, so a following comment containing `$()` is not recognized as a comment.\n  WHY: Bash strips backslash-newline, but the scanner may detect `$()` in the comment as an active command substitution, assigning the command to a different family.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/permission_prompts.py: `_has_command_substitution` (added in this round, ~lines 459-474; `previous = \"\\\\\"` assignment at the backslash branch) | severity=NIT | confidence=4\n  PROBLEM: `_has_command_substitution` sets `previous = \"\\\\\"` even when a backslash is followed by a newline, so a following comment containing `$()` is not recognized as a comment.\n  WHY: Bash removes backslash-newline, but the scanner may detect `$()` in the comment as an active substitution, causing the command family to differ.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py; workflow-templates/.claude/scripts/permission_prompts.py: _has_command_substitution, backslash handling | severity=NIT | confidence=4\n  PROBLEM: The scanner treats backslash-newline as an escaped character and sets `previous` to `\\`, so a following comment containing `$()` is not recognized as a comment.\n  WHY: Bash removes backslash-newline, but the scanner adds a `subst` construct and assigns the prompt to a different family than the equivalent command without the comment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/permission_prompts.py (and twin workflow-templates/.claude/scripts/permission_prompts.py): _has_command_substitution, lines 459-462 vs _substitution_end, lines 367-372 | severity=NIT | confidence=4\n  PROBLEM: `_has_command_substitution` sets `previous = \"\\\\\"` unconditionally on backslash-newline, unlike `_substitution_end`, so a following comment containing `$()` is not recognized as a comment.\n  WHY: Bash removes backslash-newline, but the scanner detects `$()` in the comment as an active substitution and adds a spurious `subst` construct.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py (and .claude/scripts/permission_prompts.py, byte-identical twin): _has_command_substitution, lines 459-462 \u2014 the backslash branch | severity=NIT | confidence=4\n  PROBLEM: `_has_command_substitution` always sets `previous = \"\\\\\"` for backslash-newline, so a following comment containing `$()` is not recognized as a comment.\n  WHY: Bash removes backslash-newline, but the scanner detects `$()` in the comment as an active substitution, adding a spurious `subst` construct and creating a duplicate family issue.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8d0debb8e1e79be8a4132ee3f3ba0e62fc2b72a9436476ec48c53c88e2ab8204",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5697,
+    "run_id": "37031959195",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37031959195",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002162954_438e9d34c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5697,
+    "run_id": "37031959195"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T16:29:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
