@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15831-15846, 20198-20250; scripts/orchestrate_lib.py:2293-2304 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: If editing the GitHub label fails during rejected-merge healing, the stale `ai:merged` label can make `check-wave-status` treat the issue as merged, despite its stored status having been changed to `in_progress`.\n  WHY: The reconciled status can be persisted as `merged` and the wave can advance before the heal retries; severity differed, with four reviewers rating it MAJOR and one rating it BLOCKER, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:15831-15846, 20198-20207, 20239 | severity=high | confidence=5\n  PROBLEM: If the GitHub label edit fails during healing, the stored status changes to `in_progress` but `MERGED_HEAL_LABELS_JSON` and the caller's `LABELS_JSON` retain `ai:merged`, allowing `check-wave-status` to return `merged` in the same poll cycle.\n  WHY: The stored-terminal guard does not fire for `in_progress`, so the wave can complete and advance based on the stale label; the test does not assert that the wave status is `not merged`.\n- (No task gaps reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/orchestrate_poll_process.sh:15831-15846, 20198-20250 | severity=critical | confidence=5\n  PROBLEM: If the GitHub label edit fails during healing, the stored status becomes `in_progress` but the caller retains `ai:merged`, allowing `check-wave-status` to mark the issue as merged.\n  WHY: The wave can advance on the rejected merge, and subsequent poll cycles may not revisit the issue to retry the label edit.\n- scripts/orchestrate_poll_process.sh:15311, 15329\n  PROBLEM: Repository slug comparisons in `_pr_json_merged_into_issue_target` are case-sensitive, although GitHub owner and repository identifiers are case-insensitive.\n  WHY: A PR with differently cased repository slugs may be rejected as `foreign_base_repo`.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:15831-15846, 20201-20214; scripts/orchestrate_lib.py:2301-2304 | severity=high | confidence=5\n  PROBLEM: If label editing fails during healing, the healer changes the stored status to `in_progress` but leaves `ai:merged` in the labels, which the caller preserves.\n  WHY: `check-wave-status` can then read the stale label and report the rejected PR as merged before the heal retries.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:15831-15846, 20199-20210, 4263-4276; scripts/orchestrate_lib.py:2301-2304 | severity=high | confidence=4\n  PROBLEM: If label editing fails during healing, the stored status changes to `in_progress` but the original `ai:merged` label remains in `LABELS_JSON` and is preserved by label reconciliation.\n  WHY: `reconcile_wave_issue_status` can therefore report the rejected PR as merged in the same poll, allowing the wave to advance before a later retry.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh:15831-15846, 20409-20414, 4270-4276; scripts/orchestrate_lib.py:2293-2304 | severity=high | confidence=5\n  PROBLEM: If label editing fails during healing, the stored status changes to `in_progress` but the stale `ai:merged` label remains and is accepted by `reconcile_wave_issue_status`.\n  WHY: The reconciled status can be persisted as `merged`, advancing the wave and preventing the current-wave healer from retrying.\n- scripts/orchestrate_poll_process.sh:15311, 15329\n  PROBLEM: Repository slug comparisons in `_pr_json_merged_into_issue_target` are case-sensitive, although GitHub owner and repository identifiers are case-insensitive.\n  WHY: A PR with differently cased repository slugs may be rejected as `foreign_base_repo`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d6b88cad85611459ffbbba58ffd28f7c34ed3b9969e75b72d9a577e7a3323f7a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "36973372112",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36973372112",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002065508_166183c216",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "36973372112"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T06:55:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
