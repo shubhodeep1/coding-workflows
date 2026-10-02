@@ -323,7 +323,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     intake of an unlabelled issue is refused `claude_label_removed`; add
     `ai:claude` first. The pickup
     starts one Opus session per target issue via `claude-issue-dispatch.md`
-    step 2 (start prompt `/implement-issue-claude <url> — dispatched`; with
+    step 2 (the start prompt first reads the issue's labels and stops as
+    `issue parked` without `ai:claude`, whatever command version the target
+    repo has installed, then runs `/implement-issue-claude <url> — dispatched`; with
     that marker `/implement-issue-claude` step 2 stops as `issue parked`
     when `ai:claude` is gone instead of re-adding it, which covers a label
     removed after the pickup's read; a hand run still claims the issue), and closes the queue issues with a `Dispatched:` line (no

@@ -177,6 +177,10 @@ def test_dispatched_session_stops_when_the_claim_was_removed():
 	dispatch = _flat(TEMPLATE_COMMANDS / "claude-issue-dispatch.md")
 	issue = _flat(TEMPLATE_COMMANDS / "implement-issue-claude.md")
 	assert "/implement-issue-claude <url> — dispatched If .claude/commands/implement-issue-claude.md is missing" in dispatch
+	# Review round 3: the launch prompt checks the label itself, so a target repo still
+	# on an older installed /implement-issue-claude cannot re-add a removed claim.
+	precheck = dispatch.index("First read the issue's labels (mcp__github__issue_read with method get_labels). If ai:claude is not among them, reply `issue parked (ai:claude removed) — nothing to do` and end the turn without changing any label")
+	assert precheck < dispatch.index("/implement-issue-claude <url> — dispatched")
 	assert "follow it with <url> — dispatched as $ARGUMENTS." in dispatch
 	assert "A trailing `— dispatched` marks a session the Claude issue pickup started" in issue
 	parked = issue.index("**Parked** — `$ARGUMENTS` carries `— dispatched` and the issue no longer carries `ai:claude`")

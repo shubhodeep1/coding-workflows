@@ -1279,9 +1279,11 @@ mode).
    with a `Refused: <reason>` line in its body. If that read fails (a
    consumer repository the pickup session cannot reach), the item is started
    as before; the intake already checked the claim when it queued it. The
-   session reads the issue once more when it starts: a session the pickup
-   started (`— dispatched`) stops with `issue parked` when `ai:claude` is
-   gone, instead of adding the label back, so a label removed after the
+   session reads the issue once more when it starts: the pickup's start
+   prompt checks the labels first, and `/implement-issue-claude` with the
+   `— dispatched` marker checks again; either stops with `issue parked` when
+   `ai:claude` is gone, instead of adding the label back (the prompt check
+   also covers a consumer repo whose installed command is older), so a label removed after the
    pickup's read still parks the issue; a hand run still claims it. That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
    as `/implement-plan-claude` in issue mode. The project is built on the
    branch the issue names in an `Integration branch:` / `Target branch:` line:
