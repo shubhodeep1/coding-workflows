@@ -58,7 +58,9 @@ A candidate is skipped (listed under `skipped`) when it is the pickup
 (`pickup`), archived (`archived`), created more than 72 hours ago
 (`too_old`: the pickup lists 3 days of sessions, but the last page it reads
 can reach further back, and those older sessions stay with the manual
-fallback; an unreadable `created_at` is not skipped), not IDLE (`not_idle:<status>`), waiting
+fallback; an unreadable `created_at` is not skipped; an old session waiting
+on a human answer is listed as `needs_input` instead, so the manual fallback
+never resumes it past the question), not IDLE (`not_idle:<status>`), waiting
 on a permission prompt (`permission_prompt`), waiting on a human answer
 (`needs_input`, below), still limited by its own
 `rate_limit_info` (`not_reset`), or bound to an enabled trigger that will
@@ -75,11 +77,14 @@ on a rate limit again, the next wake picks the session again.
 `needs_input` (issue #6102) holds on both signals when the summary still
 records a request to a human: a non-empty `needs_action`, in
 `post_turn_summary` or `external_metadata.post_turn_summary`, that is not
-only a wait for the usage limit. A limit wait carries the usage-limit error
-text, or starts with the wait or the limit and names a limit together with
-reset, wait, retry, resume, resend, or try again; a `needs_action` with a
-Q-ID (`Q1`), a question mark, or the words reply, answer, decide, confirm,
-choose, or approve is never one. Unknown
+only a wait for the usage limit. A limit wait is made only of limit-wait
+words (`LIMIT_WAIT_VOCABULARY`: the usage-limit error wording, wait words,
+times, and connectives; any other word, such as merge or push, makes it a
+request), and it carries the usage-limit error text or starts with the wait
+or the limit and names a limit together with reset, wait, retry, resume,
+resend, or try again; a `needs_action` with a Q-ID (`Q1`), a question mark,
+or the words reply, answer, decide, confirm, choose, or approve is never
+one. Unknown
 wording is a request, so the session stays stopped and is listed. On the
 rate_limit_info signal a `need_input` category holds too. On the text
 signal a `need_input` category with an empty `needs_action` does not: a
@@ -162,6 +167,34 @@ LIMIT_WAIT_START_PATTERN = re.compile(
 HUMAN_REQUEST_PATTERN = re.compile(
 	r"\bQ\d+\b|\?|\b(?:repl\w*|answer\w*|decid\w*|decision\w*|confirm\w*|choos\w*|choice\w*|approv\w*)\b",
 	re.IGNORECASE,
+)
+# PR #6112 review round 1: a limit wait is made only of these words, so a request
+# riding on the error text ("Usage limit reached — merge PR #N") fails closed.
+# Words are runs of letters (any script, apostrophes kept) and runs of digits;
+# digits always pass (times, dates, error codes), symbols are not words.
+LIMIT_WAIT_TOKEN_PATTERN = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)*|\d+")
+LIMIT_WAIT_VOCABULARY = frozenset(
+	(
+		# the usage-limit and rate-limit error wording (LIMIT_TEXT_PATTERNS and the summaries it matches)
+		"you", "you've", "hit", "your", "claude", "ai", "api", "error", "type", "message", "number", "of",
+		"request", "requests", "tokens", "has", "exceeded", "server", "is", "temporarily", "limiting", "not",
+		"limited", "reached", "usage", "limit", "limits", "limit's", "rate", "session", "account", "weekly",
+		"daily", "hourly", "monthly", "hour", "hours", "opus", "sonnet", "model",
+		# waiting for it
+		"wait", "waiting", "retry", "retrying", "resume", "resuming", "resumes", "resend", "try", "again",
+		"reset", "resets", "resetting", "please", "later", "now", "soon", "automatically", "last",
+		# connectives
+		"the", "a", "an", "to", "for", "until", "till", "after", "once", "then", "when", "it", "its", "it's",
+		"are", "have", "been", "be", "will", "should", "at", "on", "in", "by", "and", "next", "about",
+		"around", "approximately",
+		# times and dates
+		"am", "pm", "utc", "gmt", "z", "t", "h", "m", "min", "mins", "minute", "minutes", "sec", "secs",
+		"second", "seconds", "time", "local", "window", "today", "tomorrow", "tonight", "noon", "midnight",
+		"january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+		"november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct",
+		"nov", "dec", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon",
+		"tue", "tues", "wed", "thu", "thurs", "fri", "sat", "sun",
+	)
 )
 # One session has two id forms: `session_<x>` (list_sessions, get_session) and
 # `cse_<x>` (seen as a trigger's `persistent_session_id`, 2026-10-02).
@@ -349,6 +382,9 @@ def is_limit_wait(needs_action: str) -> bool:
 	"""True when a `needs_action` only waits for the usage limit and asks a human for nothing (issue #6102)."""
 	if HUMAN_REQUEST_PATTERN.search(needs_action):
 		return False
+	words = LIMIT_WAIT_TOKEN_PATTERN.findall(needs_action.lower().replace("’", "'"))
+	if any(not word.isdigit() and word not in LIMIT_WAIT_VOCABULARY for word in words):
+		return False
 	if has_limit_text(needs_action):
 		return True
 	return bool(
@@ -465,9 +501,13 @@ def _skip_reason(
 		return "pickup"
 	if status == ARCHIVED_STATUS:
 		return "archived"
+	needs_input = has_unanswered_request(session) or (
+		signal == "rate_limit_info" and _text(summary.get("status_category")) == "need_input"
+	)
 	created_at = _parse_time(session.get("created_at"))
 	if created_at is not None and created_at < now - dt.timedelta(hours=SESSION_WINDOW_HOURS):
-		return "too_old"
+		# PR #6112 review round 1: the manual fallback resumes too_old sessions, so an old one waiting on a human says so.
+		return "needs_input" if needs_input else "too_old"
 	if status != IDLE_STATUS:
 		short = status[len(SESSION_STATUS_PREFIX):] if status.startswith(SESSION_STATUS_PREFIX) else status
 		return f"not_idle:{short.lower() or 'unknown'}"
@@ -475,9 +515,7 @@ def _skip_reason(
 		_text(summary.get("status_detail"))
 	):
 		return "permission_prompt"
-	if has_unanswered_request(session) or (
-		signal == "rate_limit_info" and _text(summary.get("status_category")) == "need_input"
-	):
+	if needs_input:
 		return "needs_input"
 	if limit_holds(_rate_limit_info(session), now):
 		return "not_reset"
