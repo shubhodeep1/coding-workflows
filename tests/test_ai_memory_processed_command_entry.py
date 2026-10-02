@@ -185,6 +185,12 @@ def _extract_ai_memory_telemetry(stderr: str) -> list[dict]:
 	return entries
 
 
+def _assert_memory_timings(telemetry: dict, expected_stages: set[str]) -> None:
+	timing_keys = {key for key in telemetry if key.endswith("_ms")}
+	assert timing_keys == expected_stages | {"elapsed_ms"}
+	assert all(isinstance(telemetry[key], int) and 0 <= telemetry[key] <= ai_memory_lib._MEMORY_TIMING_MAX_MS for key in timing_keys)
+
+
 def _isolated_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 	env = dict(os.environ)
 	# GitHub Actions workspaces can export repo-specific git routing vars; drop
@@ -330,14 +336,14 @@ def _stub_ai_memory_cli_branch():
 	ai_memory_lib.ensure_memory_layout(memory_root)
 	ai_memory_lib._sync_memory_reference_files(REPO_ROOT / "ai-memory", memory_root)
 
-	def _fake_read_memory_root_from_branch(_repo_root, *, memory_branch, memory_root_relative):
+	def _fake_read_memory_root_from_branch(_repo_root, *, memory_branch, memory_root_relative, timings=None):
 		assert memory_branch == "ai-memory"
 		snapshot_root = Path(tempfile.mkdtemp(prefix="ai-memory-cli-read-"))
 		test_cleanup_paths.append(snapshot_root)
 		shutil.copytree(store_root / memory_root_relative, snapshot_root / memory_root_relative, dirs_exist_ok=True)
 		return snapshot_root
 
-	def _fake_persist_memory_operation(_repo_root, *, memory_branch, memory_root_relative, push_retries, commit_message, operation):
+	def _fake_persist_memory_operation(_repo_root, *, memory_branch, memory_root_relative, push_retries, commit_message, operation, timings=None):
 		assert memory_branch == "ai-memory"
 		assert memory_root_relative == "ai-memory"
 		assert push_retries >= 1
@@ -1134,6 +1140,74 @@ def test_memory_record_run_event_wrapper_keeps_json_stdout_and_telemetry_stderr(
 	assert event["event_type"] == "candidate_written"
 	assert "AI_MEMORY_TELEMETRY" not in result.stdout
 	assert '"op": "record-run-event"' in result.stderr
+	telemetry = _extract_ai_memory_telemetry(result.stderr)
+	assert len(telemetry) == 1
+	assert telemetry[0]["did_push"] is True
+	_assert_memory_timings(telemetry[0], {"clone_ms", "commit_ms", "push_ms"})
+	assert not any(key.endswith("_ms") for key in payload)
+
+	# The branch exists after the write; reading it is one shallow clone, with
+	# the legacy JSON result still on stdout and context text on the output file.
+	output_file = _make_temp_output_file(prefix="ai-memory-timed-retrieve-")
+	exit_code, stdout, stderr = _run_ai_memory_cli([
+		"retrieve", "--repo-root", str(repo_root), "--role", "implementation",
+		"--output-file", str(output_file),
+	])
+	assert exit_code == 0
+	assert json.loads(stdout)["ok"] is True
+	assert "AI_MEMORY_TELEMETRY" not in stdout
+	assert output_file.read_text(encoding="utf-8").startswith("AI MEMORY CONTEXT\n")
+	read_telemetry = _extract_ai_memory_telemetry(stderr)
+	assert len(read_telemetry) == 1
+	_assert_memory_timings(read_telemetry[0], {"clone_ms"})
+	second_code, second_stdout, second_stderr = _run_ai_memory_cli([
+		"record-run-event", "--repo-root", str(repo_root), "--run-id", "4202",
+		"--workflow", "clarify", "--event-type", "candidate_written",
+		"--status", "ok", "--message", "Stored another event", "--actor", "octocat",
+	])
+	assert second_code == 0 and json.loads(second_stdout)["push_attempts"] == 1
+	second_telemetry = _extract_ai_memory_telemetry(second_stderr)
+	assert len(second_telemetry) == 1
+	_assert_memory_timings(second_telemetry[0], {"clone_ms", "fetch_ms", "commit_ms", "push_ms"})
+
+
+def test_failed_memory_clone_reports_only_numeric_timing_fields() -> None:
+	secret = "credential-like-sentinel-xyz"
+	def _failed_clone(*_args, **_kwargs):
+		raise ai_memory_lib.MemoryGitError(f"clone rejected {secret}")
+	with _patched_module_attrs(
+		ai_memory_lib, _run_git=_failed_clone, _resolve_origin_url=lambda _repo: "https://example.invalid/repo"
+	):
+		code, stdout, stderr = _run_ai_memory_cli([
+			"record-run-event", "--run-id", "1", "--workflow", "clarify",
+			"--event-type", "created", "--status", "ok", "--message", "private text",
+			"--actor", "octocat",
+		])
+	assert code == 2 and stdout == ""
+	telemetry = _extract_ai_memory_telemetry(stderr)
+	assert len(telemetry) == 1
+	assert telemetry[0]["ok"] is False
+	_assert_memory_timings(telemetry[0], {"clone_ms"})
+	assert secret not in json.dumps(telemetry)
+	assert "private text" not in json.dumps(telemetry)
+
+	# The read's missing-branch path is still fail-open even when git's error
+	# contains sensitive text: neither the URL nor the error enters telemetry.
+	output_file = _make_temp_output_file(prefix="ai-memory-timed-failed-read-")
+	with _patched_module_attrs(
+		ai_memory_lib,
+		_run_git=lambda *_args, **_kwargs: subprocess.CompletedProcess([], 128, "", f"remote {secret}"),
+		_resolve_origin_url=lambda _repo: "https://example.invalid/repo",
+	):
+		code, stdout, stderr = _run_ai_memory_cli([
+			"retrieve", "--role", "implementation", "--output-file", str(output_file),
+		])
+	assert code == 0 and json.loads(stdout)["miss_reason"] == "git_error"
+	assert output_file.read_text(encoding="utf-8") == "AI MEMORY CONTEXT\nstatus: unavailable\n"
+	telemetry = _extract_ai_memory_telemetry(stderr)
+	assert len(telemetry) == 1
+	_assert_memory_timings(telemetry[0], {"clone_ms"})
+	assert secret not in json.dumps(telemetry)
 
 
 def test_stage_workflow_support_bootstraps_memory_injection_patterns() -> None:
@@ -1506,6 +1580,7 @@ def test_retrieve_cli_success_emits_additive_budget_and_miss_fields() -> None:
 	assert telemetry["token_budget"] == 1600
 	assert telemetry["keyword_method"] == "none"
 	assert telemetry["miss_reason"] is None
+	_assert_memory_timings(telemetry, set())
 
 
 def test_retrieve_cli_zero_hit_reports_no_eligible_records() -> None:
@@ -1639,6 +1714,7 @@ def test_retrieve_cli_branch_unavailable_keeps_json_stdout_and_context_file() ->
 	assert telemetry["token_budget"] is None
 	assert telemetry["miss_reason"] == "branch_unavailable"
 	assert telemetry["warning"] == "branch_unavailable"
+	_assert_memory_timings(telemetry, set())
 
 
 def test_retrieve_cli_invalid_max_reports_flag_specific_error() -> None:

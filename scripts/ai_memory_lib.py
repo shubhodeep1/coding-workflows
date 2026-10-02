@@ -3096,6 +3096,29 @@ _GIT_LOCATION_ENV_VARS = (
     "GIT_NAMESPACE",
 )
 
+# Keep telemetry numeric and bounded even across long retry bursts. A missing
+# stage means that stage was not attempted, not that it took zero milliseconds.
+_MEMORY_TIMING_MAX_MS = 86_400_000
+
+
+def _bounded_memory_elapsed_ms(started_at: float) -> int:
+    return min(_MEMORY_TIMING_MAX_MS, max(0, int((time.monotonic() - started_at) * 1000)))
+
+
+@contextlib.contextmanager
+def _memory_stage_timer(timings: dict[str, int] | None, stage: str) -> Any:
+    if timings is None:
+        yield
+        return
+    started_at = time.monotonic()
+    try:
+        yield
+    finally:
+        timings[stage] = min(
+            _MEMORY_TIMING_MAX_MS,
+            timings.get(stage, 0) + _bounded_memory_elapsed_ms(started_at),
+        )
+
 
 def _git_subprocess_env() -> dict[str, str]:
     """Return a copy of the environment with repo-pinning git vars removed.
@@ -3205,10 +3228,13 @@ def _resolve_origin_url(repo_root: Path) -> str:
     return url
 
 
-def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
+def _clone_for_memory_branch(
+    repo_root: Path, memory_branch: str, *, timings: dict[str, int] | None = None
+) -> Path:
     origin_url = _resolve_origin_url(repo_root)
     temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
-    _run_git(temp_dir.parent, ["clone", "--no-tags", "--quiet", origin_url, str(temp_dir)])
+    with _memory_stage_timer(timings, "clone_ms"):
+        _run_git(temp_dir.parent, ["clone", "--no-tags", "--quiet", origin_url, str(temp_dir)])
 
     branch_exists = (
         _run_git(temp_dir, ["ls-remote", "--heads", "origin", memory_branch], check=False)
@@ -3216,7 +3242,8 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
         != ""
     )
     if branch_exists:
-        _run_git(temp_dir, ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"])
+        with _memory_stage_timer(timings, "fetch_ms"):
+            _run_git(temp_dir, ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"])
         _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
     else:
         _run_git(temp_dir, ["checkout", "-B", memory_branch])
@@ -3265,13 +3292,14 @@ def persist_memory_operation(
     push_retries: int,
     commit_message: str,
     operation: Callable[[Path], dict[str, Any] | None],
+    timings: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     if push_retries < 1:
         raise MemoryValidationError("push_retries must be >= 1")
 
     repo_root = repo_root.resolve()
     with _file_lock(f"ai-memory-{repo_root}-{memory_branch}"):
-        clone_dir = _clone_for_memory_branch(repo_root, memory_branch)
+        clone_dir = _clone_for_memory_branch(repo_root, memory_branch, timings=timings)
         try:
             memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
             ensure_memory_layout(memory_root)
@@ -3294,15 +3322,17 @@ def persist_memory_operation(
                     "operation_result": op_result,
                 }
 
-            _run_git(clone_dir, ["commit", "-m", commit_message])
+            with _memory_stage_timer(timings, "commit_ms"):
+                _run_git(clone_dir, ["commit", "-m", commit_message])
             _run_git(clone_dir, ["rev-parse", "HEAD"])
 
             for attempt in range(1, push_retries + 1):
-                push = _run_git(
-                    clone_dir,
-                    ["push", "origin", f"HEAD:refs/heads/{memory_branch}"],
-                    check=False,
-                )
+                with _memory_stage_timer(timings, "push_ms"):
+                    push = _run_git(
+                        clone_dir,
+                        ["push", "origin", f"HEAD:refs/heads/{memory_branch}"],
+                        check=False,
+                    )
                 if push.returncode == 0:
                     pushed_commit_sha = _run_git(clone_dir, ["rev-parse", "HEAD"]).stdout.strip()
                     return {
@@ -3321,17 +3351,21 @@ def persist_memory_operation(
                 # Wait a jittered, exponentially growing interval before
                 # re-syncing and retrying so concurrent runs stop losing the
                 # ref-lock race against the shared memory branch in lockstep.
-                time.sleep(_push_retry_backoff_seconds(attempt))
+                retry_delay = _push_retry_backoff_seconds(attempt)
+                with _memory_stage_timer(timings, "retry_sleep_ms"):
+                    time.sleep(retry_delay)
 
-                fetch = _run_git(
-                    clone_dir,
-                    ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"],
-                    check=False,
-                )
+                with _memory_stage_timer(timings, "fetch_ms"):
+                    fetch = _run_git(
+                        clone_dir,
+                        ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"],
+                        check=False,
+                    )
                 if fetch.returncode != 0:
                     raise MemoryGitError(f"Memory branch fetch failed while retrying push: {fetch.stderr.strip()}")
                 if _run_git(clone_dir, ["show-ref", "--verify", f"refs/remotes/origin/{memory_branch}"], check=False).returncode == 0:
-                    rebase = _run_git(clone_dir, ["rebase", f"refs/remotes/origin/{memory_branch}"], check=False)
+                    with _memory_stage_timer(timings, "rebase_ms"):
+                        rebase = _run_git(clone_dir, ["rebase", f"refs/remotes/origin/{memory_branch}"], check=False)
                     if rebase.returncode != 0:
                         # git writes the conflicting paths ("CONFLICT (add/add):
                         # Merge conflict in <path>") to stdout, while stderr only
@@ -3344,7 +3378,8 @@ def persist_memory_operation(
                             if rebase_detail:
                                 rebase_detail = f"{rebase_detail} | "
                             rebase_detail += f"rebase stdout: {rebase_stdout}"
-                        rebase_abort = _run_git(clone_dir, ["rebase", "--abort"], check=False)
+                        with _memory_stage_timer(timings, "rebase_ms"):
+                            rebase_abort = _run_git(clone_dir, ["rebase", "--abort"], check=False)
                         if rebase_abort.returncode != 0:
                             raise MemoryGitError(
                                 "Memory branch rebase failed while retrying push: "
@@ -3362,6 +3397,7 @@ def read_memory_root_from_branch(
     *,
     memory_branch: str,
     memory_root_relative: str,
+    timings: dict[str, int] | None = None,
 ) -> Path:
     """Return a temporary directory path containing memory data from the branch.
 
@@ -3372,20 +3408,21 @@ def read_memory_root_from_branch(
     origin_url = _resolve_origin_url(repo_root)
     temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-read-"))
 
-    clone = _run_git(
-        temp_dir.parent,
-        [
-            "clone",
-            "--no-tags",
-            "--depth",
-            "1",
-            "--branch",
-            memory_branch,
-            origin_url,
-            str(temp_dir),
-        ],
-        check=False,
-    )
+    with _memory_stage_timer(timings, "clone_ms"):
+        clone = _run_git(
+            temp_dir.parent,
+            [
+                "clone",
+                "--no-tags",
+                "--depth",
+                "1",
+                "--branch",
+                memory_branch,
+                origin_url,
+                str(temp_dir),
+            ],
+            check=False,
+        )
     if clone.returncode != 0:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise MemoryGitError(
