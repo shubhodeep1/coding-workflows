@@ -407,6 +407,11 @@ def _bash(command):
 		("env -S 'mysql\\_-pS3cretPass app'", "S3cretPass", "env -S 'mysql\\_-p*** app'"),
 		("env -S \"mysql\\_-pS3cretPass app\"", "S3cretPass", "env -S \"mysql\\_-p*** app\""),
 		("env -iS'mysql\\_-pS3cretPass'", "S3cretPass", "env -iS'mysql\\_-p***'"),
+		# A word piped into a shell that reads its script from stdin is a command line of its own (PR #5401 review round 5).
+		("printf '%s\\n' 'mysql -pS3cretPass app' | sh", "S3cretPass", "printf '%s\\n' 'mysql -p*** app' | sh"),
+		("echo 'mysql -pS3cretPass ./run.sh' | bash", "S3cretPass", "echo 'mysql -p*** ./run.sh' | bash"),
+		("echo 'mysql -pS3cretPass app' | sudo bash -s", "S3cretPass", "echo 'mysql -p*** app' | sudo bash -s"),
+		("echo 'curl -u deploy:mycustompwd https://a.b' |& sh", "mycustompwd", "echo 'curl -u *** https://a.b' |& sh"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -568,6 +573,9 @@ def test_credential_free_commands_are_unchanged(command):
 		("sudo env -S 'mysql -pS3cretPass ./run.sh'", "sudo * -S *"),
 		("env -S 2>/dev/null 'mysql -pS3cretPass ./run.sh'", "env -S 2> *"),
 		("env -S >out 'sshpass -p hunter22 ./x.sh'", "env -S > *"),
+		# A word with whitespace is a value even when it ends like a script name (PR #5401 review round 5).
+		("echo 'mysql -pS3cretPass ./run.sh' | bash", "echo * | bash"),
+		("bash ./deploy.sh", "bash ./deploy.sh"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):

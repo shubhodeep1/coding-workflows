@@ -587,7 +587,9 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 		positionals += 1
 		if command == "gh" and positionals == 2 and len(shape) >= 2 and shape[1] == "api":
 			shape.append(_normalize_endpoint(token))
-		elif positionals == 1 and ((command in _SUBCOMMAND_TOOLS and _SUBCOMMAND_RE.match(token)) or _SCRIPT_RE.search(token)):
+		elif positionals == 1 and ((command in _SUBCOMMAND_TOOLS and _SUBCOMMAND_RE.match(token)) or (_SCRIPT_RE.search(token) and not any(char.isspace() for char in token))):
+			# A word with whitespace is a value, never a script name, even when it ends like one
+			# (`echo 'mysql -p… ./run.sh' | bash`).
 			if command in _SUBCOMMAND_TOOLS and _SUBCOMMAND_RE.match(token):
 				subcommand = token
 			shape.append(_strip_url_userinfo(token))
@@ -768,6 +770,9 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 	# lexer cannot tell apart, so the segment is read both without it (`segment`) and with it (`with_digits`).
 	segment: list[str] = []
 	with_digits: list[str] = []
+	# The words of the simple command before a `|`: when the command after it runs a shell that reads its script
+	# from stdin (`printf 'mysql -p…' | sh`), each of them may be that script and is parsed as a command line.
+	piped_words: list[str] = []
 	redirect = ""
 	for token in tokens + [";"]:
 		is_punctuation = bool(token) and set(token) <= set(_SHELL_PUNCTUATION_CHARS)
@@ -788,6 +793,10 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 			values.update(_segment_credentials(segment, depth))
 			if with_digits != segment:
 				values.update(_segment_credentials(with_digits, depth))
+			if piped_words and _shell_runner_before(segment, 0, len(segment)):
+				for piped_word in piped_words:
+					values.update(_command_line_credentials(piped_word, depth + 1))
+			piped_words = list(with_digits) if token in ("|", "|&") else []
 			segment = []
 			with_digits = []
 		else:
@@ -805,8 +814,9 @@ def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
 	assignments, credential header fields, credential long flags, and the
 	`_CREDENTIAL_SHORT_FLAGS` of every credential command in a segment,
 	including those inside a shell's `-c` command line, an `env -S` /
-	`--split-string` command line, a here-string fed to a shell, and a `$(…)`
-	or backtick command substitution; a redirection between
+	`--split-string` command line, a here-string fed to a shell, a word piped
+	into a shell (`printf 'mysql -p…' | sh`), and a `$(…)` or backtick command
+	substitution; a redirection between
 	a flag and its value or command line does not separate them. Returns None
 	when the text (or such a command line) cannot be tokenized, or when a
 	value is shorter than MIN_MASKED_VALUE_CHARS or does not occur verbatim in
