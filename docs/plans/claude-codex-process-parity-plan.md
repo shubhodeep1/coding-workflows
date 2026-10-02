@@ -72,6 +72,36 @@ Facts found while planning that bind the design:
 - **`move-checking-roles-to-claude-plan.md`** also extends the intake
   (`claude-check` items). Both plans touch `scripts/claude_issue_route.py` and
   `scripts/claude_issue_intake.sh`; see Risks.
+- **This plan builds on the Claude worker pool.**
+  `docs/plans/claude-actions-worker-pool-plan.md` (#6060, #6096; project
+  `claude/implement-plan-claude-actions-worker-pool`, final PR #6097) moves
+  the hourly pickup, the §26 checkers, and the `/implement-plan-claude`
+  project checker into GitHub Actions. Once it is in place:
+  - a queue item is started by `claude-pool-dispatch.yml`
+    (`scripts/claude_pool_dispatch.py`) as a headless worker run in
+    `shubhodeep1/claude-workers`, whose prompt comes from
+    `scripts/claude_pool.py prompt` (`build_prompt`: `issue` →
+    `/implement-issue-claude <url>`, `pr_fix` → `/fix-claude-pr …`, `stage` →
+    `/implement-plan-claude <plan> — resume.` plus the marker's resume block);
+  - a stage running as a worker (`CLAUDE_POOL_WORKER=1`, "pool mode") arms no
+    checker, hand-back Routine, or stage session. It ends by posting one
+    `<!-- ai:claude-pool-wait:v1 slug=… seq=… wait=<pr:N | run:ID |
+    issues:a,b> state=waiting -->` comment, with a next stage per outcome and
+    the `— resume.` block, on the project's final PR, and labelling that PR
+    `ai:claude-pool-waiting`;
+  - `claude-pool-sweep.yml` (`scripts/claude_pool_sweep.py`, every 15
+    minutes) evaluates each marker with `check_in_status.py` and opens a bound
+    `claude_stage.v1` queue item (queue type `stage`) for the due stage; its
+    terminal pass (pool phase 4) finds `claude/*` PRs that merged or closed,
+    for a one-time Telegram notice;
+  - pool phase 5 removes the session-checker text from the commands (pool mode
+    is the only mode left), and the pickup stops once `retire_pickup: true`
+    is set in `.github/ai/claude_pool.json`. Until then the pickup still
+    starts the queue items whose type is not in `dispatch_types`.
+
+  This plan's original text (Q17, Q19, §18.E) assumed the relays the pool
+  retires. The worker-pool amendment below (Q32–Q38, D9–D13) moves it onto
+  the pool.
 
 ### Decisions (clarification round, 2026-10-02)
 
@@ -122,10 +152,37 @@ Facts found while planning that bind the design:
 | D7 | The final-merge stage closes the tracking issue (`completed`, `ai:merged`) and ticks its checklist once the final PR merged | Q26 needs the ticks; the orchestrator leaves its tracking issue open, but a stale open Claude tracking issue would be swept by nothing |
 | D8 | `/implement-issue-claude` refuses an issue labelled `ai:claude-tracking` (`tracking issue — owned by project <slug>`) | Q23 belt and braces; a `/reclarify` or a future blocked-issue `requeue` could still queue one |
 
+### Decisions (worker-pool amendment, 2026-10-02)
+
+Owner decision before this round: the parity project runs **after** the
+worker pool and depends on pool mode; it does not wait for the pool's relay
+retirement to go live. The Q17 and Q19 rows above keep their text (§6); Q35
+and Q38 say how each maps onto the pool.
+
+| Q | Decision |
+|---|---|
+| Q32: A | The parity project starts once the worker pool's final PR #6097 has merged into main. That is the earliest point pool phase 3 (pool-mode waits) can be on main, because `/implement-plan-claude` lands nothing on the default branch before every stage passed. It does not wait for `retire_pickup: true` or for every type to be in `dispatch_types` |
+| Q33: A | `flow` keeps Q14's route (intake → payload `flow:` → queue item). This plan extends `scripts/claude_pool.py` `build_prompt` so an `issue` item's prompt is `/implement-issue-claude <url> — flow <flow>` (no ` — flow` suffix for a payload without the key) |
+| Q34: A | The pickup and dispatch command edits are dropped (`claude-issue-pickup.md` step 3, `claude-issue-dispatch.md` step 2 stay unchanged). `/implement-issue-claude` with no `— flow` argument runs today's chain (`project`), which replaces the "absent → `pr`" default of Approach shared step 4. Pool-dispatched issues always carry `flow`, so the single-PR flow is live for an issue exactly when the pool starts it, and `CLAUDE_ISSUE_FLOW=project` can never be lost on the way |
+| Q35: A | Every new stage of this plan (the issue PR stages of Part 1 and decompose, tracking issue, wave, and wave judge of Part 2) is written for pool mode only: it ends with a pool wait marker and runs as a `stage` queue item; no checker, hand-back, or stage session |
+| Q36: A | The single-PR flow keeps its wait marker on its own `claude/issue-<N>` PR, which carries `ai:claude-pool-waiting` while a wait is open |
+| Q37: A | The post-merge close stage is queued by the pool sweep's terminal pass: for a merged or closed PR labelled `ai:claude-pool-waiting`, it evaluates the open wait marker, queues that outcome's stage as a normal `stage` item, and removes the label. No extra read (one label DELETE per PR, plus the usual queue write); a no-op where pool phase 3 already does this for closed PRs |
+| Q38: A | Q19 stands: wave sub-issues start through clarify → router → intake → queue, and the pool dispatcher (or the pickup, for an unpooled `issue` type) starts them. The wave waits with `wait=issues:a,b` on the project's final PR |
+
+### Derived decisions (worker-pool amendment)
+
+| ID | Decision | Follows from |
+|---|---|---|
+| D9 | `claude_stage.v1` gets no `flow` key: every stage reads `Flow:` from the plan header and the progress log on its branch (`claude/issue-<N>` for flow `pr`, the project branch for waves) | Q33, Q35 |
+| D10 | The schedulers are the pool's: `claude-issue-intake.yml` (unchanged trigger) produces `issue` items, `claude-pool-dispatch.yml` starts every worker, `claude-pool-sweep.yml` evaluates every wait. This plan extends `scripts/claude_pool.py` (Q33) and `scripts/claude_pool_sweep.py` (Q37); a revert keeps the route parser's acceptance of `flow`, which `build_prompt` inherits | Q32, Q35 |
+| D11 | The "Pickup latency" risk becomes dispatcher latency (the dispatcher runs on `workflow_run` of the intake, with a 15-minute backstop) plus one 15-minute sweep tick per wait | Q38 |
+| D12 | The Q20 risk (no sub-issue cap) is relieved by the pool's least-used-account choice, its 90% usage gate, and failover to another account, not by the superseded `claude-multi-account-pool-plan.md` | Q32 |
+| D13 | A `claude/issue-<N>` PR is deduplicated against the pool's 15-minute catch-all (`claude_pr_sweep.py --min-age-hours 0`) the same way the pool deduplicates a phase PR that has an open wait marker (if the pool has no such rule, phase 1 adds it to `claude_pool_sweep.py`: the catch-all skips a PR whose newest trusted marker is `waiting` or `queued`, since the marker's `review` / `block` stages already cover it); a draft PR is already skipped by the catch-all | Q36 |
+
 ## Goals
 
 - **G1:** With `CLAUDE_ISSUE_FLOW` unset or `pr`, a Claude-routed standalone
-  issue produces exactly one PR, head `claude/issue-<N>`, base the issue base,
+  issue started by the pool dispatcher (Q34) produces exactly one PR, head `claude/issue-<N>`, base the issue base,
   plus one comment starting `Implementation plan` and the progress comment.
   No `claude/implement-plan-issue-<N>-*` branch is created. Verified by
   command-text tests and one real issue after rollout.
@@ -207,24 +264,33 @@ Facts found while planning that bind the design:
   handoff add no calls (labels are already in the issue JSON). The wave flow
   creates issues with MCP writes and waits with the existing
   `check_in_status.py --issues` loop (one GET per sub-issue per hourly
-  check-in). `security_pass_skip.py` keeps its three-GET budget.
+  check-in). `security_pass_skip.py` keeps its three-GET budget. Under the
+  pool (D10) a wait costs what the pool sweep already spends per marker; the
+  close-stage trigger (Q37) reuses the terminal pass's reads, and
+  `build_prompt` (Q33) makes no API call.
 - **§18:** no standalone script. `claude_project_waves.py` is a helper the
-  `/implement-plan-claude` stage sessions call; the existing intake workflow,
-  hourly pickup, and project checker are the schedulers.
+  `/implement-plan-claude` stage workers call; the intake workflow, the pool
+  dispatcher, and the pool sweep are the schedulers (D10).
 - **§19:** the tracking issue is referenced only with `Refs #T`; the rule and
   its lint extend to `ai:claude-tracking`.
 - **§20:** each phase adds one `changelog.d/` fragment.
-- **§21, §25, §26:** unchanged; the single-PR flow's checker is the
-  `/implement-plan-claude` project checker, which is the §26 check-in for its
-  PRs.
+- **§21, §25, §26:** unchanged by this plan. §26 as rewritten by the pool's
+  phase 4 applies: no checker session is armed; the single-PR flow's waits
+  are pool wait markers on its own PR (Q36), and the pool sweep covers fixes
+  and terminal notices.
 - **§27:** no workflow file grows by more than a few lines.
 - **§28:** the single-PR flow and the wave flow are both in §28.A scope (issue
   mode and `/implement-plan-claude`); §28.A/§28.C text is updated for the new
   stops and modes.
 - **Protected paths (§28.C):** both phases edit `.claude/**`. In
   coding-workflows they follow the interim twin-first rule (edit
-  `workflow-templates/.claude/**` twins; `.claude/commands/claude-issue-pickup.md`
-  has no twin, so its diff goes in the twin-sync blocker).
+  `workflow-templates/.claude/**` twins). Neither phase edits
+  `.claude/commands/claude-issue-pickup.md` any more (Q34), so no twin-sync
+  blocker diff is needed for a file without a twin.
+- **Start gate (Q32):** the project starts only after the worker pool's final
+  PR #6097 has merged into main. Every pool file this plan extends
+  (`scripts/claude_pool.py`, `scripts/claude_pool_sweep.py`, the pool-mode
+  sections of the command twins) exists only from then on.
 
 ## Approach
 
@@ -241,20 +307,36 @@ Facts found while planning that bind the design:
    the queue binding (issue #4621), so the pickup sees it as a parsed field.
    A payload without `flow` (an item queued before this change) parses as
    `pr`.
-3. `claude-issue-dispatch.md` step 2 and `claude-issue-pickup.md` step 3 put
-   it in the start prompt: `/implement-issue-claude <url> — flow <flow>`.
+3. `scripts/claude_pool.py` `build_prompt` puts it in the worker's start
+   prompt: `/implement-issue-claude <url> — flow <flow>` (Q33). A payload
+   without the key gets no suffix. `claude-issue-dispatch.md` and
+   `claude-issue-pickup.md` are not changed (Q34): an item the pickup still
+   starts (its type not yet in `dispatch_types`) runs today's chain.
 4. `/implement-issue-claude` picks the flow: an existing
    `claude/implement-plan-issue-<N>-*` project → today's chain (G3); an issue
    with `ai:claude-subissue` → `pr` (Q21); otherwise the `— flow` argument,
-   defaulting to `pr` when absent (a hand-run or an old queue item).
+   and **today's chain (`project`) when it is absent** (Q34: a pickup start, a
+   hand run, or an old queue item).
 
 ### Part 1: the single-PR flow (phase 1)
 
 `/implement-issue-claude` with flow `pr` writes the plan, then follows
 `/implement-plan-claude` in a new **issue PR sub-mode**. The plan header
 gains `Flow: pr` (today's chain writes `Flow: project`; a plan without the
-line is today's chain). Stages, all using the existing checker, stage
-sessions, claims, hand-back, and progress log:
+line is today's chain). Every stage runs in pool mode (Q35): the first is the
+`issue` worker the dispatcher starts, each later one a `stage` worker the
+pool sweep queues, and each ends by posting the next pool wait marker on the
+`claude/issue-<N>` PR and labelling it `ai:claude-pool-waiting` (Q36).
+Claims (`--by pool-run-<GITHUB_RUN_ID>`) and the progress log work as in the
+pool's pool mode. Stages and their waits:
+
+| Stage | Worker | Ends with wait | Outcomes → next stage |
+|---|---|---|---|
+| 1–2 plan, post, implement, open draft PR, dispatch audit | `issue` | `run:<audit run>` (or `pr:<N>` after a verified skip, once marked ready) | run done → `security-pass <c>/5` |
+| 3 security pass | `stage` | follow-ups: `issues:a,b`; clean: marks ready, then `pr:<N>` | follow-ups merged → `security-pass <c+1>/5`; cap → stop `issue-security-cap` |
+| 4 ready and review | `stage` | `pr:<N>` | `review` → `review round`; `block` / `hand_back` → `blocked PR`; merged or closed → stage 5 |
+| 5 close | `stage` (queued by the terminal pass, Q37) | none | ends the flow |
+
 
 1. **Plan and post** (start session). Write the plan as today, but at
    `docs/completed/issue-<N>-<topic>-plan.md` (Q16), and post its full text
@@ -268,9 +350,11 @@ sessions, claims, hand-back, and progress log:
    (`Fixes #<N>` when the base is the default branch, `Refs #<N>` otherwise;
    §19), and add `ai:claude-pr-open` to the issue (D1).
 3. **Security pass** (Q15). `Security pass: skip` (verified per Q24 or the
-   existing #4623 labels) goes straight to stage 4. Otherwise dispatch the
-   audit with `ref=claude/issue-<N>` through the dispatch helper, wait on the
-   run, read it as step 9 does today, and wait on any follow-ups (they route
+   existing #4623 labels) goes straight to stage 4. Otherwise the `issue`
+   worker dispatches the audit with `ref=claude/issue-<N>` through the
+   dispatch helper and ends on a `wait=run:<id>` marker; the
+   `security-pass` stage reads the run as step 9 does today and waits on any
+   follow-ups with `wait=issues:<list>` (they route
    to Claude with `Integration branch: claude/issue-<N>`, each a single-PR
    flow into that branch with its own pass skipped). Cap 5 cycles; on
    exhaustion stop `issue-security-cap` (Q30).
@@ -281,9 +365,12 @@ sessions, claims, hand-back, and progress log:
 5. **Close.** On merge: when the base is not the default branch, close the
    issue (`completed`) and add `ai:merged`, as the final-merge stage does
    today; remove `ai:claude-pr-open`; finish the progress comment with the
-   auto-decision list (§28.E); archive the checker. When the PR is closed
-   unmerged, remove `ai:claude-pr-open` and stop with the existing
-   closed-PR hand-back.
+   auto-decision list (§28.E). There is no checker to archive. When the PR is
+   closed unmerged, remove `ai:claude-pr-open` and report the closed PR on the
+   issue (the pool has no hand-back, pool Q6). The pool sweep's terminal pass
+   queues this stage from the PR's last wait marker and removes
+   `ai:claude-pool-waiting` (Q37); the PR's own Telegram terminal notice is
+   the pool's, unchanged.
 
 Dropped for this flow (Q4 C): project branch, final PR, conformance,
 validation, completion PR, verify-activation, deploy-activate.
@@ -293,6 +380,10 @@ validation, completion PR, verify-activation, deploy-activate.
 `/implement-plan-claude <plan>` without `— legacy`, on a project with no log
 yet, writes `Flow: waves` in the log; a log without that line runs the
 sequential chain (G6). Stages:
+
+All stages run in pool mode (Q35); decompose and the tracking issue run in
+the same worker, and every wait is a pool wait marker on the project's final
+PR.
 
 1. **Project branch and draft final PR** as step 3a today.
 2. **Decompose** (`decompose 1/1`). The stage reads the plan and writes a DAG
@@ -316,12 +407,16 @@ sequential chain (G6). Stages:
    claude/implement-plan-<slug>`, `files_touched`, `Refs #T`, and
    `<!-- ai:claude-subissue:v1 tracking=<T> id=<local id> -->`. The existing
    route starts each one (Q19): clarify → router (`claude_subissue`) →
-   handoff → intake → pickup → `/implement-issue-claude <url> — flow pr`.
+   handoff → intake → queue → pool dispatcher → `/implement-issue-claude
+   <url> — flow pr`.
+   The route ends at the pool dispatcher, which starts each as an `issue`
+   worker (or at the pickup while `issue` is not in `dispatch_types`; Q38).
    All nodes of a wave start together (Q20 C). Each ships one
    `claude/issue-<N>` PR into the project branch and closes itself with
-   `ai:merged` after the merge (Part 1 stage 5). The project checker waits
-   with `check_in_status.py --issues <list>` (next stage
-   `wave <w>/<W> — judge`).
+   `ai:merged` after the merge (Part 1 stage 5). The wave stage then posts a
+   pool wait marker `wait=issues:<list>` on the project's final PR (next
+   stage `wave <w>/<W> — judge`), which the pool sweep evaluates with
+   `check_in_status.py --issues`.
 5. **Wave judge** (`wave <w>/<W> — judge`, Opus, high). Sync the project
    branch; any sub-issue closed without `ai:merged` → stop
    `subissue-unmerged`. Otherwise compare the merged code with each node's
@@ -329,7 +424,8 @@ sequential chain (G6). Stages:
    - `complete` → tick the nodes on the tracking issue, then the next wave
      (stage 4), or stage 6 after the last wave;
    - `in_progress` → open fix-up sub-issues (same labels and markers, local
-     id `<id>-fix-<k>`), wait on them, re-judge; at most 3 rounds per wave,
+     id `<id>-fix-<k>`), wait on them (`wait=issues:<list>` on the final
+     PR), re-judge; at most 3 rounds per wave,
      then stop `wave-judge-failed` (D6);
    - `failed` → stop `wave-judge-failed`.
 6. **Conformance, security, validation, completion, final merge,
@@ -365,20 +461,36 @@ default branch they stop at `BLOCKED` as today.
   puts Claude logic in Codex workflows).
 - The project checker starting sub-issue sessions directly (rejected, Q19:
   needs a duplicate-start guard against the intake route and deepens the
-  session chain).
+  session chain). Under the pool, the wave stage opening `issue` queue items
+  itself (rejected, Q38: skips clarify and intake and needs its own
+  duplicate-start guard).
+- Writing every new stage for both pool mode and the session checker
+  (rejected, Q35: pool phase 5 removes the checker mode before this plan
+  starts).
+- Carrying `flow` as an issue label instead of the payload (rejected, Q33).
+- Keeping the pickup and dispatch command edits for the coexistence window
+  (rejected, Q34: dead once the pickup retires, and it needs a twin-sync hold
+  for the pickup, which has no twin).
 - Auditing after merge (rejected, Q15 B: code ships unaudited).
 
 ## Automation & Wiring (§18.E)
 
 | Item | This plan |
 |---|---|
-| New or extended scripts | New helper `.claude/scripts/claude_project_waves.py` (phase 2), called only by `/implement-plan-claude` stage sessions. Extended: `scripts/claude_issue_intake.sh`, `scripts/claude_issue_route.py`, `.claude/scripts/check_in_status.py` (phase 1); `scripts/claude_issue_handoff.sh`, `.claude/scripts/security_pass_skip.py`, `scripts/lint_pr_body_auto_close.py`, `scripts/lint_plan_archival_completeness.py` (phase 2). Nothing needs a manual run (§18.A). |
-| Scheduler / entry points | `claude-issue-intake.yml` (`repository_dispatch` `claude-issue`, `workflow_dispatch`) reads the variable; the hourly Claude issue pickup (`claude-issue-pickup.md`, Routine `Claude issue pickup: hourly`) starts sessions; the `/implement-plan-claude` project checker (hourly `send_later`) runs every wait; `clarify.yml` (unchanged) routes sub-issues; `lint-pr-body-auto-close.yml` and `lint-plan-archival.yml` (unchanged triggers) run the extended lints. |
-| Long-running supervisor (§18.C) | None new. The pickup and the project checker are the existing supervisors. |
+| New or extended scripts | New helper `.claude/scripts/claude_project_waves.py` (phase 2), called only by `/implement-plan-claude` stage workers. Extended: `scripts/claude_issue_intake.sh`, `scripts/claude_issue_route.py`, `.claude/scripts/check_in_status.py`, `scripts/claude_pool.py` (`build_prompt`, Q33), `scripts/claude_pool_sweep.py` (terminal-pass close stage, Q37) (phase 1); `scripts/claude_issue_handoff.sh`, `.claude/scripts/security_pass_skip.py`, `scripts/lint_pr_body_auto_close.py`, `scripts/lint_plan_archival_completeness.py` (phase 2). Nothing needs a manual run (§18.A). |
+| Scheduler / entry points | `claude-issue-intake.yml` (`repository_dispatch` `claude-issue`, `workflow_dispatch`) reads the variable and opens `issue` queue items; `.github/workflows/claude-pool-dispatch.yml` (`workflow_run` of the intake and the sweeps, `*/15` schedule) starts every worker in `shubhodeep1/claude-workers`; `.github/workflows/claude-pool-sweep.yml` (`*/15` schedule) evaluates every wait marker, queues `stage` items, and (Q37) the close stage from its terminal pass; `clarify.yml` (unchanged) routes sub-issues; `lint-pr-body-auto-close.yml` and `lint-plan-archival.yml` (unchanged triggers) run the extended lints. All triggers are the pool's; this plan adds none (D10). |
+| Long-running supervisor (§18.C) | None. The pool's Actions schedules replace the session supervisors; nothing runs between ticks. |
 | DB gate (§18.D) | Not applicable: no database operation. |
 | §18.F registry | No entry: `claude_project_waves.py` is a helper, not a single-use or long-running script or supervisor. |
 
 ## Phases & Merge Strategy
+
+**Start gate (Q32):** phase 1 starts only after the worker pool's final PR
+#6097 has merged into main (pool phases 1–5, conformance, security,
+validation). It does not wait for `retire_pickup: true` or for every type to
+be in `dispatch_types`; until `issue` is pooled, the pickup starts issues on
+today's chain (Q34). Who starts a `stage` item before `stage` is pooled is
+the pool's coexistence rule, unchanged by this plan.
 
 Two phases, one PR each (Q28). They have no merge-order dependency:
 
@@ -390,38 +502,48 @@ Two phases, one PR each (Q28). They have no merge-order dependency:
   absent no issue carries that label, so the rule is inert.
 
 1. **Single-issue flow and the flow switch** (Part 1).
-   - **Scope:** the `CLAUDE_ISSUE_FLOW` read and payload field; the dispatch
-     and pickup prompt; the issue PR sub-mode of `/implement-plan-claude`;
+   - **Scope:** the `CLAUDE_ISSUE_FLOW` read and payload field; the pool
+     worker prompt (`claude_pool.py build_prompt`, Q33); the pool sweep's
+     close-stage trigger (Q37); the issue PR sub-mode of
+     `/implement-plan-claude` in pool mode (Q35, Q36);
      `/implement-issue-claude` flow selection, plan comment, and plan path;
      the `ai:claude-pr-open` lock (label contract, router rule, add/remove in
      both the new flow and today's issue-mode chain when its final PR opens
      and merges or closes); `check_in_status.py` prefix (D3); the
      `issue_pr_status.yml` lessons condition (D4); docs and fragment.
-   - **Done:** with the variable unset, a test issue in coding-workflows ships
-     as one `claude/issue-<N>` PR (draft → security → ready → merged) and
-     closes; with `project` set on a consumer, a test issue runs today's
-     chain; every listed test passes; template parity passes after the twin
+   - **Done:** with `issue` and `stage` in `dispatch_types` and the variable
+     unset, a test issue in coding-workflows ships as one `claude/issue-<N>`
+     PR (draft → security → ready → merged), each stage a pool worker started
+     from a wait marker on that PR, and closes; with `project` set on a
+     consumer, a pool-started test issue runs today's chain; every listed test passes; template parity passes after the twin
      sync.
    - **Rollback:** revert the PR **except** the parser's acceptance of the
      optional `flow` key in `scripts/claude_issue_route.py`
-     (`parse_fire_text` rejects any unknown line, so a full revert would make
-     the pickup reject every queue item opened before the revert). Any
-     in-flight `claude/issue-<N>` PR finishes through the §26 check-in and
-     `/fix-claude-pr`, which handle every `claude/*` head. Set
+     (`parse_fire_text` rejects any unknown line, and both the pickup and
+     `claude_pool.py build_prompt` parse with it, so a full revert would make
+     them reject every queue item opened before the revert; D10). Any
+     in-flight `claude/issue-<N>` PR finishes through the pool's catch-all
+     and `/fix-claude-pr`, which handle every `claude/*` head. The reverted
+     command has no issue PR stages, so the revert PR's description lists the
+     `claude/issue-<N>` PRs with an open wait marker, and the revert removes
+     their `ai:claude-pool-waiting` label so the sweep queues no stage the
+     command cannot run. Set
      `CLAUDE_ISSUE_FLOW=project` on a repo for a per-repo rollback without a
-     revert.
+     revert: it reaches every pool-started issue through the payload (Q33).
 
 2. **Wave flow** (Part 2).
    - **Scope:** `Flow: waves` and `— legacy` in `/implement-plan-claude`;
-     decompose, tracking issue, wave, and wave-judge stages; the new stop ids
+     decompose, tracking issue, wave, and wave-judge stages, in pool mode
+     (Q35, Q38); the new stop ids
      and tracking-issue blocker location; `claude_project_waves.py`; labels
      `ai:claude-tracking` / `ai:claude-subissue`; router rules for both;
      handoff skip; `/implement-issue-claude` tracking refusal;
      `security_pass_skip.py` rule; both lints; CLAUDE.md §19 / §28 and
      `unattended_system_instructions.md` §21 text; docs and fragment.
    - **Done:** a two-wave test plan in coding-workflows decomposes, opens a
-     tracking issue and sub-issues, runs a wave judge per wave, and reaches
-     the final merge; `— legacy` on another test plan runs the sequential
+     tracking issue and sub-issues (started by the pool dispatcher), runs a
+     wave judge per wave from `issues:` wait markers on the final PR, and
+     reaches the final merge; `— legacy` on another test plan runs the sequential
      chain; every listed test passes; template parity passes after the twin
      sync.
    - **Rollback:** revert the PR. A project started in wave mode keeps its
@@ -453,19 +575,30 @@ Two phases, one PR each (Q28). They have no merge-order dependency:
    `CLAUDE_ISSUE_FLOW` (Approach, shared step 1) and pass `--flow` to
    `validate-payload` / `queue-issue`. Add the variable name to the
    `claude-issue-intake.yml` step `env` only if the script needs it there.
-4. `.claude/commands/claude-issue-dispatch.md` (twin first) step 1 accepts
-   the optional `flow:` line; step 2's issue prompt becomes
-   `/implement-issue-claude <url> — flow <flow>`.
-   `.claude/commands/claude-issue-pickup.md` (no twin; diff in the sync
-   blocker) step 3: the entry's `flow` fills `<flow>`.
+4. `scripts/claude_pool.py` `build_prompt` (Q33): for an `issue` item whose
+   parsed payload has `flow`, the first prompt line becomes
+   `/implement-issue-claude <url> — flow <flow>` (the fallback line keeps
+   `the same $ARGUMENTS`); no suffix without the key. `claude_pool_sweep.py`
+   terminal pass (Q37): for a merged or closed PR labelled
+   `ai:claude-pool-waiting`, evaluate its newest trusted wait marker (same
+   author and `seq` rules as the wait pass), queue the matching outcome's
+   stage as a `claude_stage.v1` item, mark the marker `state=queued`, and
+   remove the label; no extra API call beyond the reads the terminal pass
+   already makes, plus the existing queue POST and one label DELETE per PR
+   (docstring per §15). `claude-issue-dispatch.md` and
+   `claude-issue-pickup.md` are not edited (Q34).
 5. `.claude/commands/implement-issue-claude.md` (twin first):
-   - parse `— flow pr|project`; selection rules (Approach, shared step 4);
+   - parse `— flow pr|project`; selection rules (Approach, shared step 4;
+     absent → `project`, Q34);
    - flow `pr`: plan path `docs/completed/…`, `Flow: pr` header line, post
      the `Implementation plan` comment (marker `<!-- ai:claude-plan:v1 -->`,
      one comment, edited in place on a `/reclarify` re-plan);
    - Rules section: drop "one project branch" wording for flow `pr`.
 6. `.claude/commands/implement-plan-claude.md` (twin first): new
-   "Issue PR mode" subsection under Issue Mode with stages 2–5 of Part 1;
+   "Issue PR mode" subsection under Issue Mode with stages 2–5 of Part 1,
+   written inside the command's pool mode (Q35): each stage ends by posting
+   the next `ai:claude-pool-wait:v1` marker on the `claude/issue-<N>` PR and
+   labelling it (Q36), per the stage table in Part 1;
    step 3a, 6, 9, 11, 11a, 12 each say what the mode skips; session titles
    (`… — security-pass 1/5`, `… — review round`); new stop id
    `issue-security-cap` with `kind=escalation`; `ai:claude-pr-open` add and
@@ -502,7 +635,8 @@ Two phases, one PR each (Q28). They have no merge-order dependency:
    --merged <ids>` (next nodes). No API calls; docstring per §15.
 6. `.claude/commands/implement-plan-claude.md` (twin first): `Flow: waves`
    and `— legacy`; stages decompose, tracking issue, wave, wave judge (Part
-   2); tracking-issue blocker location; stop ids `decompose-failed`,
+   2), in pool mode, each wave and fix-up round ending on a
+   `wait=issues:<list>` marker on the final PR (Q35, Q38); tracking-issue blocker location; stop ids `decompose-failed`,
    `wave-judge-failed`, `subissue-unmerged` with `kind=escalation`; final
    merge ticks and closes the tracking issue (D7); progress-log template
    gains `Flow:`, `Tracking issue:`, and `## Waves`; the wave judge also
@@ -529,8 +663,8 @@ Phase 1:
 - `scripts/claude_issue_intake.sh`
 - `.github/workflows/claude-issue-intake.yml` (only if step 3 needs an env line)
 - `scripts/claude_issue_handoff.sh`
-- `.claude/commands/claude-issue-dispatch.md` + `workflow-templates/.claude/commands/claude-issue-dispatch.md`
-- `.claude/commands/claude-issue-pickup.md` (no twin)
+- `scripts/claude_pool.py` (`build_prompt`, Q33)
+- `scripts/claude_pool_sweep.py` (terminal-pass close stage, Q37)
 - `.claude/commands/implement-issue-claude.md` + twin
 - `.claude/commands/implement-plan-claude.md` + twin
 - `.claude/scripts/check_in_status.py` + twin
@@ -564,6 +698,15 @@ None. No MongoDB collection, index, or contract is touched (§10).
 Unit (each runs in its existing `ci.yml` step, or a new step for the new
 test file):
 
+- `tests/test_claude_pool.py`: an `issue` payload with `flow: pr` / `flow:
+  project` yields `— flow <flow>` on the prompt line; a payload without the
+  key yields today's prompt (Q33).
+- `tests/test_claude_pool_sweep.py`: the terminal pass queues the close stage
+  once for a merged PR with an open trusted marker, marks it `queued`,
+  removes the label, and ignores an untrusted marker, a marker already
+  `queued` for that `seq`, and a PR without the label (Q37); a
+  `claude/issue-<N>` PR with an open marker is not also queued by the
+  catch-all (D13).
 - `tests/test_claude_issue_route.py`: route order (D2) for `ai:claude-pr-open`,
   `ai:claude-tracking`, `ai:claude-subissue` with and without `ai:codex` and
   `AI_ISSUE_IMPLEMENTER=codex`; `flow` round-trips through dispatch, fire
@@ -592,25 +735,29 @@ test file):
 Command-text tests:
 
 - `tests/test_implement_issue_claude_command.py`: flow parsing and selection
-  rules, plan path, `Implementation plan` comment, tracking refusal,
+  rules (absent `— flow` → today's chain, Q34), plan path, `Implementation plan` comment, tracking refusal,
   sub-issue forcing `pr`.
-- `tests/test_implement_plan_claude_command.py`: issue PR mode stages, draft →
-  ready order, `issue-security-cap`, lock label add/remove; `Flow: waves`,
+- `tests/test_implement_plan_claude_command.py`: issue PR mode stages in pool
+  mode with their wait markers on the issue PR (Q35, Q36), draft → ready
+  order, `issue-security-cap`, lock label add/remove; `Flow: waves`,
   `— legacy`, decompose / wave / judge stages, stop ids, tracking-issue
-  blocker location, tracking close at final merge; the legacy chain text is
-  still present.
+  blocker location, tracking close at final merge, `issues:` wait markers on
+  the final PR; no new stage text arms a checker or a stage session; the
+  legacy chain text is still present.
 - `tests/test_claude_md_section_numbers.py`: section numbers unchanged.
 - Template parity tests: twins match after the `[claude-twin-sync]` copy.
 
 End to end (after each phase merges, in coding-workflows):
 
-- Phase 1: open a small test issue; expect one draft `claude/issue-<N>` PR,
+- Phase 1 (with `issue` and `stage` in `dispatch_types`): open a small test
+  issue; expect a pool `issue` worker, then one draft `claude/issue-<N>` PR,
   the plan comment, a security run with `ref=claude/issue-<N>`, the PR marked
-  ready, a review round, auto-merge, and the issue closed. Then set
-  `CLAUDE_ISSUE_FLOW=project` on one consumer and confirm a test issue there
-  runs today's chain.
+  ready, a review round, auto-merge, the close stage queued by the sweep's
+  terminal pass, and the issue closed. Then set `CLAUDE_ISSUE_FLOW=project`
+  on one consumer and confirm a pool-started test issue there runs today's
+  chain.
 - Phase 2: run `/implement-plan-claude` on a two-wave test plan; expect the
-  tracking issue, wave-1 sub-issues started by the pickup, a wave judge,
+  tracking issue, wave-1 sub-issues started by the pool dispatcher, a wave judge,
   wave-2 sub-issues, then the existing project stages. Run `— legacy` on a
   second test plan.
 
@@ -624,11 +771,27 @@ End to end (after each phase merges, in coding-workflows):
   make it visible; a classic PAT with `repo` scope or a fine-grained PAT with
   "Variables: read" covers it. ACCEPTED — pending the first rollout check on a
   consumer with the variable set.
-- **No cap on parallel sub-issues (Q20 C)** can exhaust the account's usage
-  window on a wide wave. ACCEPTED (Q20 C); `claude-multi-account-pool-plan.md`
-  is the planned relief.
-- **Pickup latency.** Each wave waits up to about one pickup interval (hourly,
-  catch-up 30 min) before its sessions start. ACCEPTED (Q19 A).
+- **No cap on parallel sub-issues (Q20 C)** can push the pool's accounts
+  toward their usage windows on a wide wave. ACCEPTED (Q20 C). Mitigation
+  (D12): the worker pool picks the least-used account, skips any account at
+  ≥ 90% of a window, and re-dispatches a usage-limit failure on another
+  account (`docs/plans/claude-actions-worker-pool-plan.md`, Q4, Q21, Q22);
+  more accounts are one secret each.
+- **Dispatch and wait latency.** A sub-issue starts after the intake and the
+  pool dispatcher (on `workflow_run` of the intake, 15-minute backstop), and
+  each wait resolves on the next 15-minute pool sweep tick. ACCEPTED (Q19 A,
+  Q38; D11).
+- **The pool is not live for a type.** Until `issue` is in
+  `dispatch_types`, the pickup starts issues on today's chain (Q34), so
+  phase 1 has no effect there; `stage` items follow the pool's own
+  coexistence rule until `stage` is pooled. ACCEPTED: the pool's rollout switches the types
+  one at a time; the phase 1 end-to-end check runs only once both are
+  pooled.
+- **The pool's sweep or prompt changes before this plan runs.** This plan
+  extends `claude_pool.py` and `claude_pool_sweep.py` as written in the pool
+  plan. Mitigation: the start gate (Q32) puts both on main first, and phase 1
+  re-reads them and adapts the extension (Q37 is a no-op if the sweep
+  already handles closed PRs).
 - **The escalation judge is not on the default branch yet.** Until
   `retire-master-session-plan.md` phase 1 merges, the new stops behave like
   today's: `BLOCKED` with a comment and a notification. Mitigation: the stop
@@ -668,9 +831,13 @@ End to end (after each phase merges, in coding-workflows):
 - Default on: with `CLAUDE_ISSUE_FLOW` unset, new Claude issues use the
   single-PR flow as soon as phase 1 is live in a repo; new
   `/implement-plan-claude` projects use waves as soon as phase 2 is live.
+- Start only after the worker pool's final PR #6097 merged (Q32). Phase 1
+  takes effect for a repo's issues once `issue` is in `dispatch_types`;
+  issues the pickup still starts run today's chain (Q34).
 - Per-repo switch back: `gh variable set CLAUDE_ISSUE_FLOW --body project -R
-  <repo>` (an operator action, §23.C ask-first for Claude). Per project:
-  `— legacy`.
+  <repo>` (an operator action, §23.C ask-first for Claude). It reaches every
+  pool-started issue through the payload and `build_prompt` (Q33). Per
+  project: `— legacy`.
 - In-flight work is never migrated: issue-mode projects on
   `claude/implement-plan-issue-<N>-*` and sequential projects without
   `Flow: waves` finish as they started.
@@ -685,4 +852,5 @@ End to end (after each phase merges, in coding-workflows):
 - `.github/workflows/implement.yml:1862-1888`, `.github/workflows/review_autofix.yml:553-555`, `:773`, `.github/workflows/security-audit.yml`, `.github/workflows/issue_pr_status.yml:543`
 - `scripts/lint_pr_body_auto_close.py`, `scripts/lint_plan_archival_completeness.py`, CLAUDE.md §19
 - `docs/plans/retire-master-session-plan.md` (escalation judge; PR #5164, final PR #5132)
-- `docs/plans/move-checking-roles-to-claude-plan.md`, `docs/completed/claude-multi-account-pool-plan.md` (superseded by `docs/plans/claude-actions-worker-pool-plan.md`)
+- `docs/plans/move-checking-roles-to-claude-plan.md`
+- `docs/plans/claude-actions-worker-pool-plan.md` (the base this plan builds on; supersedes `claude-multi-account-pool-plan.md`), `scripts/claude_pool.py`, `scripts/claude_pool_dispatch.py`, `scripts/claude_pool_sweep.py`, `.github/ai/claude_pool.json`

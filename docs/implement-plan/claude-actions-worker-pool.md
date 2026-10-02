@@ -8,12 +8,12 @@
 - Activation: not started
 - Waiting on: PR #6100
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 3 stage (session_01Ayv4nfo5aPfb8xV99FmVR6), ids in its report
+- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 4 (conflict) stage (session_01QFtuh6z4joi6M5R2GLZNu1), ids in its report
 - Last updated: 2026-10-02
-- Last note: review round 3 on PR #6100 (session_01Ayv4nfo5aPfb8xV99FmVR6): 3 findings fixed (work/report jobs check out the select job's `pool_sha`, `all_gated` falls back to the top-level `resetsAt`, smoke job limit covers the smoke checks), 0 rejected
+- Last note: review round 4 on PR #6100 (session_01QFtuh6z4joi6M5R2GLZNu1): conflict hand-off — merged the project branch (main's #6098 parity-plan rewrite) into the phase branch; the one conflicting line in `docs/plans/claude-codex-process-parity-plan.md` keeps the base side, which already drops the stale `docs/plans/claude-multi-account-pool-plan.md` path phase 1 had repointed
 
 ## Phases
-1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 3; interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
+1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 4 (round 4: conflict); interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
    - `scripts/claude_pool.py` [new]: `accounts`, `normalize`, `probe-parse`, `choose`, `prompt`, `classify`, `run-name`; also `config` (the workflow reads the pool config through it) and `redact` (AD-4)
    - `.github/workflows/claude-pool-worker.yml` [new]: `workflow_call`, jobs `select` / `work` / `report`
    - `.github/ai/claude_pool.json` [new]: `dispatch_types: []` (pool off)
