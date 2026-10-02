@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:21:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In Claude-fixer mode the review run on the head carrying the `MAX_AUTOFIX_ITERATIONS`-th consecutive `[claude-autofix]` commit skips the reviewer panel and labels the PR `ai:review-blocked`, so that round's fix is never reviewed; a `[claude-intervention]` commit (with the log update) ends the run and gets it reviewed.",
+  "phase": "implement_plan",
+  "pr_number": 5816,
+  "record_id": "lesson-implement-plan-24f9add2b4b4df4857c19de7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5785-security-audit-codex-stderr-tail",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

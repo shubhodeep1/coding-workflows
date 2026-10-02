@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:21:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When an exact-line filter (`grep -vxF -f <patterns>`) compares a normalised stream against a pattern file, normalise the pattern file the same way (`-f <(tr -d '\\000\\r' < file)`): stripping CR from only one side lets every line of a CRLF input escape the match.",
+  "phase": "implement_plan",
+  "pr_number": 5816,
+  "record_id": "lesson-implement-plan-bc8316637387e05057797746",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5785-security-audit-codex-stderr-tail",
+    "file:scripts/security_audit.sh"
+  ]
+}

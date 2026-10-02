@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:21:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a change adds a stronger mask for one log source, apply it to every line printed from that source, including older diagnostics that run first (`captured_path_error=`): the first unmasked print leaks the secret no matter what the later output masks.",
+  "phase": "implement_plan",
+  "pr_number": 5816,
+  "record_id": "lesson-implement-plan-5a9ed3db3c0623c2766e6013",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5785-security-audit-codex-stderr-tail",
+    "file:scripts/security_audit.sh"
+  ]
+}

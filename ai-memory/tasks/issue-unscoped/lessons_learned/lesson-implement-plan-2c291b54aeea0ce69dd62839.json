@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:21:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a log tail is bounded by bytes, drop the cut first line instead of rewriting it: any rewrite (such as a `[cut]` marker) makes the fragment fail later exact-match filters like a prompt-echo `grep -vxF`, so filtered text leaks. Read one extra byte so a boundary that falls at a line start costs no complete line.",
+  "phase": "implement_plan",
+  "pr_number": 5816,
+  "record_id": "lesson-implement-plan-2c291b54aeea0ce69dd62839",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5785-security-audit-codex-stderr-tail",
+    "file:scripts/security_audit.sh"
+  ]
+}

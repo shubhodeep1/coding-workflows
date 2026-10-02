@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:21:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A separator class between a context word and the value it qualifies must be `{1,n}`, not `{0,n}`: a zero-width separator lets the value glue onto the word (`error402`, `Error500Handler`), so an identifier reads as a status code.",
+  "phase": "implement_plan",
+  "pr_number": 5816,
+  "record_id": "lesson-implement-plan-3ef74ff080b1e55fc125c20e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5785-security-audit-codex-stderr-tail",
+    "file:scripts/security_audit.sh"
+  ]
+}
