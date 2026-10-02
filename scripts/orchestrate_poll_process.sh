@@ -15760,7 +15760,9 @@ _check_open_pr_conflict_guard() {
 #     `MERGED_STATE_HEALED`, add a healing note, and send a Telegram WARNING.
 # Otherwise (closed issue, healing disabled, already healed once, or no
 # wave entry) nothing changes: it logs `MERGED_STATE_STALE … action=alert`
-# every cycle and alerts once, recorded as `.merged_state_heal.alerted`.
+# every cycle and alerts once, recorded as `.merged_state_heal.alerted`
+# before the alert is sent (a failed write sends nothing:
+# `why=alert_marker_write_failed`, retried next cycle).
 # A failed state write changes nothing. A failed label edit keeps the
 # stored status at `in_progress` (with `.merged_state_heal_pending`, written
 # together with it, so the next cycle retries even when `ai:merged` was
@@ -15815,18 +15817,23 @@ _heal_rejected_merged_state() {
   if [ -n "${_mhs_why}" ]; then
     echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=alert why=${_mhs_why}" >&2
     if [ -n "${_mhs_lid}" ] && [ "${_mhs_marker_alerted}" != "true" ]; then
-      if declare -F tg_notify >/dev/null 2>&1; then
-        tg_notify "Orchestrator: issue #${issue_num} still counts as merged, but its only merged linked PR #${rejected_pr} is not its merge into the target branch (${reason}). Not healed (${_mhs_why}); check it by hand."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${rejected_pr}")" "WARNING" || true
-      fi
-      if declare -F add_healing_note >/dev/null 2>&1; then
-        add_healing_note "Issue #${issue_num}: still counts as merged on rejected PR #${rejected_pr} (${reason}); not healed (${_mhs_why})"
-      fi
+      # Record `.merged_state_heal.alerted` first and alert only once it is
+      # stored (PR #5633 review round 8): a failed write sends nothing and
+      # the next cycle tries again, so the alert and healing note go out
+      # once instead of every cycle until the write succeeds.
       if jq --argjson wi "${WAVE_IDX}" --arg lid "${_mhs_lid}" \
         '(.waves[$wi].issues[] | select(.id == $lid)) |= (.merged_state_heal = ((.merged_state_heal // {}) + {alerted: true}))' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
         MERGED_HEAL_STATE_CHANGED="true"
+        if declare -F tg_notify >/dev/null 2>&1; then
+          tg_notify "Orchestrator: issue #${issue_num} still counts as merged, but its only merged linked PR #${rejected_pr} is not its merge into the target branch (${reason}). Not healed (${_mhs_why}); check it by hand."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${rejected_pr}")" "WARNING" || true
+        fi
+        if declare -F add_healing_note >/dev/null 2>&1; then
+          add_healing_note "Issue #${issue_num}: still counts as merged on rejected PR #${rejected_pr} (${reason}); not healed (${_mhs_why})"
+        fi
       else
         rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+        echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=retry why=alert_marker_write_failed" >&2
       fi
     fi
     return 0

@@ -15565,6 +15565,18 @@ def test_heal_defers_its_comment_and_alerts_when_the_marker_write_fails_with_a_p
 	assert retry < body.index("add_healing_note", retry) and retry < body.index("tg_notify", retry)
 
 
+def test_alert_only_branch_records_its_marker_before_alerting():
+	"""PR #5633 review round 8: the alert-only branch stores `.merged_state_heal.alerted` first and sends the
+	Telegram alert and healing note only after that write succeeded, so a failed write never repeats them."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = script.split("_heal_rejected_merged_state() {", 1)[1].split("\n}\n", 1)[0]
+	branch = body[body.index('if [ -n "${_mhs_why}" ]; then'):body.index('local _mhs_target_label=')]
+	marker = branch.index("{alerted: true}")
+	failed = branch.index("why=alert_marker_write_failed")
+	assert marker < branch.index("tg_notify") < failed
+	assert marker < branch.index("add_healing_note") < failed
+	assert branch.index("else", branch.index("add_healing_note")) < failed
+
 def test_reconcile_leaves_merged_label_without_rejected_merge_alone():
 	"""An ai:merged label with no merged linked PR at all (a person, the close
 	sweep) is not this rule's business and stays."""

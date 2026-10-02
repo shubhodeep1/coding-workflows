@@ -8,7 +8,7 @@
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
-- Waiting on: final-merge review of PR #5633 (review rounds 3–5 fixed; intervention 1 after the workflow's `ai:review-blocked` at `MAX_AUTOFIX_ITERATIONS`)
+- Waiting on: final-merge review of PR #5633 (review rounds 3–8 fixed; intervention 1 after the workflow's `ai:review-blocked` at `MAX_AUTOFIX_ITERATIONS`)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_016KrwLrGKBe3mJCxcGowd7W   safety net and hand-back: see the completion stage report
 - Last updated: 2026-10-02
@@ -54,6 +54,7 @@
 ## Notes
 - Final-merge review round 2 on PR #5633 (2026-10-02, owner's supervising session): merged state an earlier poll wrote on a merge the #5618 rule now rejects is healed by `_heal_rejected_merged_state` in the current-wave reconcile loop (Q9 B, Q11 A: open current-wave children only, closed issues alerted; Q12 A: re-enter at `ai:done` with the issue's own open automation PR, else `ai:awaiting-approval`; Q13 A: once per issue). `ENABLE_MERGED_STATE_HEAL` (default `true`) turns it into alerts only.
 - Final-merge review rounds 3–5 on PR #5633 (2026-10-02, owner's supervising session): round 3 (cfe0070) heals only on an issue state read this cycle, writes the stored status before the labels, and names malformed-input rejections (`invalid_input`, `missing_base`); round 4 (c9bc233) holds the wave when the heal's label edit fails (`wave_hold=true`) and compares repository slugs case-insensitively; round 5 (98c6cf7) passes the fresh-push guard no entry after a rejected merged link, so the issue's own branch decides. Intervention 1 (2026-10-02): `ai:review-blocked` at `MAX_AUTOFIX_ITERATIONS` with every round-5 finding already fixed; this log commit is the `[claude-intervention]` that restarts the count. Interventions on PR #5633: 1 of 3.
+- Final-merge review rounds 6–8 on PR #5633 (2026-10-02, owner's supervising session, after intervention 1): round 6 (e250c4f) records `.merged_state_heal_pending` with the stored-status rewrite so a failed label edit is retried even without `ai:merged`; round 7 (5b4c650) defers the heal's comment and alerts to the retry when the once-only marker write fails (`why=marker_write_failed`); round 8 records `.merged_state_heal.alerted` before the alert-only branch sends its Telegram alert and healing note, so a failed write sends nothing (`why=alert_marker_write_failed`) instead of repeating them each cycle.
 - Security pass: skip (`security_pass_skip.py`: ai:security, created and labelled by the issue automation).
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5618#issuecomment-5909984944
 - Plan widened during planning (AD-1): the finding names the reconcile loop, but the #4813 project checker's context recorded that conformance run 1 had flagged `_reconcile_merged_pr_issue` too; tracing every `ai:merged` writer found four paths.
