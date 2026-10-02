@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:246-248 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, qwen_qwen3_7-plus]\n  PROBLEM: The retry grammar treats any time after \u201cretry\u201d as a limit-reset condition, so \u201cUsage limit reached. Please retry after 5pm.\u201d can be classified as a limit-only wait.\n  WHY: The selector may schedule a short-offset resume before the stated time; both reviewers rated this MAJOR.\n- .claude/scripts/usage_limit_resumes.py:246-249 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: The retry grammar treats any time after \u201cretry\u201d as a limit-reset condition, so \u201cUsage limit reached. Please retry after 5pm.\u201d can be classified as a limit-only wait.\n  WHY: The selector may schedule a short-offset resume before the stated time; google_gemini-3_8-flash rated this MAJOR, while openai_gpt-6-luna rated it BLOCKER.\n- docs/implement-plan/issue-6102-skip-unanswered-question-resumes.md:7-10, 14, 17 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The progress log still records the project as blocked and waiting for a twin sync that reviewers report has already completed.\n  WHY: A resumed implementation stage may read the stale blocker as outstanding and halt instead of advancing; all three reviewers rated this MAJOR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py (and .claude/scripts/usage_limit_resumes.py): lines 246-249 and lines 447-470 | severity=high | confidence=5\n  PROBLEM: In _limit_wait_forms(), retry_forms allows bare times without tying them to a reset event, so \u201cUsage limit reached. Please retry after 5pm.\u201d or \u201cUsage limit reached. Retry on Monday.\u201d matches the retry pattern.\n  WHY: has_unanswered_request() treats needs_action containing an undeferred retry-at-time instruction as a limit-only wait, so _skip_reason() does not return needs_input and the pickup selector queues an automated resume trigger scheduled for now + 2 minutes.\n- docs/implement-plan/issue-6102-skip-unanswered-question-resumes.md: lines 7-10, 14 | severity=high | confidence=4\n  PROBLEM: The progress log metadata still lists Status: BLOCKED and Waiting on: PR #6112: twin sync (review round 3 fixes), even though the fourth twin-sync commit (7eb6f72) has landed on the branch and made .claude/scripts/usage_limit_resumes.py byte-identical to workflow-templates/.claude/scripts/usage_limit_resumes.py.\n  WHY: When PR #6112 merges or the implementation stage resumes, /implement-plan-claude reads the progress log, detects Status: BLOCKED for an already-completed sync, and halts for manual intervention instead of progressing to the next stage.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py: _limit_wait_forms(), line 247; resume selection, lines 676-684 | severity=critical | confidence=5\n  PROBLEM: The retry form accepts `after` followed by any time, without requiring that time to be the limit reset; thus \u201cUsage limit reached. Please retry after 5pm.\u201d is accepted as a limit wait.\n  WHY: `is_limit_wait()` returns true, so the selector does not classify this `needs_action` as `needs_input` and can schedule a resume trigger at the ordinary short fire offset instead of waiting until 5pm.\n- docs/implement-plan/issue-6102-skip-unanswered-question-resumes.md: lines 7-10, 14, and 17 | severity=high | confidence=5\n  PROBLEM: The progress log still marks the project `BLOCKED` and says it is waiting for the fourth twin sync, but the current PR head is itself a `[claude-twin-sync]` commit and the root and template copies contain the synced classifier.\n  WHY: `/implement-plan-claude` reads the progress log as its source of truth; a resumed stage sees `Status: BLOCKED` and the already-completed twin sync as outstanding, so it can stop and report the stale blocker instead of advancing.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py: `_limit_wait_forms()` at lines 246-248, the `retry_forms` tuple | severity=high | confidence=5\n  PROBLEM: The retry grammar accepts `retry after <time>` where `<time>` is any time pattern, without requiring that time to be the limit reset; for example, \u201cUsage limit reached. Please retry after 5pm.\u201d passes.\n  WHY: `has_unanswered_request()` treats this `needs_action` as a limit-only wait, so the text-signal selector schedules a resume trigger instead of returning `needs_input`; the trigger fires shortly after creation, not at 5pm, and can resume the session before the requested time.\n- docs/implement-plan/issue-6102-skip-unanswered-question-resumes.md: lines 7-10 (Status, Stage, Waiting on fields) | severity=high | confidence=4\n  PROBLEM: The progress log still says `Status: BLOCKED` and `Waiting on: PR #6112: twin sync (review round 3 fixes)`, but the current head (commit 7eb6f72) is a `[claude-twin-sync]` commit that copied the twin to `.claude/scripts/usage_limit_resumes.py`; the root and template copies are now byte-identical.\n  WHY: A resumed implementation stage reads this persisted log and sees the already-completed twin sync as outstanding, leaving the project blocked instead of advancing to its next stage.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2f0544bfd14fdccfaa8324d3ec0c8fa101046d760f7c4e941c8f26219df0b0ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6112,
+    "run_id": "37075707562",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37075707562",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002232118_6e0ec0a307",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6112,
+    "run_id": "37075707562"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T23:21:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
