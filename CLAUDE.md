@@ -2416,7 +2416,11 @@ repo that receives this file via the `@stable` sync.
   - `close`: the chain's own open PRs and the source issue are closed as
     not planned, with a report. The operator approved these closes in
     advance (Q4: A), so they are not a §23.C ask here. The judge never
-    deletes a branch and never closes anything the chain did not open.
+    deletes a branch and never closes anything the chain did not open: it
+    closes a PR from the log only when its head ref is
+    `claude/implement-plan-<slug>` or starts with
+    `claude/implement-plan-<slug>-` and its head is in this repository,
+    and lists any other PR in its report instead.
 - **The fingerprint rule.** A failure is its stop id plus a fingerprint:
   the SHA-1 (first 12 hex characters) of the normalised failing check
   names, finding ids, follow-up issue numbers, validation class and
