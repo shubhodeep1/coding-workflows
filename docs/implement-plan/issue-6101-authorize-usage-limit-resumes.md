@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#6101 (progress comment 5956414439)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5660-resume-usage-limit-stops
 - Project branch: claude/implement-plan-issue-6101-authorize-usage-limit-resumes   Final PR: #6106 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #6108: twin sync
+- Waiting on: PR #6108 (review)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-02
-- Last note: phase 1 PR #6108 opened twin-first (workflow-templates/.claude/ twin only); hold claim posted; twin-sync blocker posted on #6101; the stage `/reclarify` resumes arms the wait on #6108 and never re-implements the phase
+- Last note: twin sync landed as 00ae9ca ([claude-twin-sync] issue-6101 phase 1, by the operator's #5660 driver session; both sha256 values verified; 342 tests passed on the synced head); ai:claude-blocked removed; review wait armed on PR #6108
 
 ## Phases
-1. [ ] Phase 1 — authorize usage-limit resumes by session source, origin, and lineage   — protected paths: .claude/scripts/usage_limit_resumes.py (via workflow-templates/.claude/** twin); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #6108 open (blocked on the twin sync); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — authorize usage-limit resumes by session source, origin, and lineage   — protected paths: .claude/scripts/usage_limit_resumes.py (via workflow-templates/.claude/** twin); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #6108 open (twin sync 00ae9ca, 2026-10-02; waiting on review); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -39,3 +39,4 @@
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)
+- Twin sync: 00ae9ca on the phase branch (2026-10-02 17:09Z), relayed by trigger trig_011fh92GLpoQjSZwejg3jbwf because the Claude issue pickup is stopped, so no `/reclarify` was posted
