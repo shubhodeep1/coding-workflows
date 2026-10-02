@@ -1257,7 +1257,7 @@ mode).
    Auto-mode session woken hourly by a trigger bound to itself, reads the queue
    (`claude_issue_route.py queue-pending`) and, following
    `.claude/commands/claude-issue-dispatch.md` step 2, starts an Opus session
-   in the target repo running `/implement-issue-claude <url>` for each item,
+   in the target repo running `/implement-issue-claude <url> — dispatched` for each item,
    then closes the queue issue. It starts at most 20 items per wake
    (`QUEUE_PICKUP_LIMIT`; set `CLAUDE_ISSUE_PICKUP_LIMIT` in the pickup
    session's environment to change it, clamped to 1..30), and `/reclarify`
@@ -1278,7 +1278,11 @@ mode).
    pickup starts nothing for it and closes the queue item as not planned,
    with a `Refused: <reason>` line in its body. If that read fails (a
    consumer repository the pickup session cannot reach), the item is started
-   as before; the intake already checked the claim when it queued it. That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
+   as before; the intake already checked the claim when it queued it. The
+   session reads the issue once more when it starts: a session the pickup
+   started (`— dispatched`) stops with `issue parked` when `ai:claude` is
+   gone, instead of adding the label back, so a label removed after the
+   pickup's read still parks the issue; a hand run still claims it. That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
    as `/implement-plan-claude` in issue mode. The project is built on the
    branch the issue names in an `Integration branch:` / `Target branch:` line:
    a security follow-up on its project's branch, a heal issue on `stable` or

@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#6057
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-6057-recheck-claude-label-at-dispatch   Final PR: #6067 draft
-- Status: IN_PROGRESS
+- Status: BLOCKED
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #6081
+- Waiting on: PR #6081: twin sync (review round 2)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: armed after the review round 1 push (ids in the stage report)
+- Check-in: checker session_01USBFJWeRKFYoN4f41wAyq5 (kept; no wait handed to it while the PR is held)   safety net none   hand-back none
 - Last updated: 2026-10-02
-- Last note: twin sync landed (`9d6cbf9`, sha256 matches); `/reclarify` posted 10:30Z; review round 1 fixed (handoff failure path, its test, this log)
+- Last note: review round 2 (head `2ce9fd2`): the one consensus finding (a label removed between the pickup's read and the session start is re-added by `/implement-issue-claude`) is valid; fixed twin-first (AD-10). PR held for the twin sync of `implement-issue-claude.md` and `claude-issue-dispatch.md`
 
 ## Phases
-1. [ ] Phase 1 — re-check the `ai:claude` claim at dispatch time   — protected paths: .claude/commands/claude-issue-pickup.md (no twin; synced in `9d6cbf9`); PR #6081 open; review rounds: 1; interventions: 0
+1. [ ] Phase 1 — re-check the `ai:claude` claim at dispatch time   — protected paths: .claude/commands/claude-issue-pickup.md (no twin; synced in `9d6cbf9`); PR #6081 open; review rounds: 2; interventions: 0
 
 ## Conformance
 
@@ -36,10 +36,12 @@
 - AD-7 [plan, 2026-10-02] Re-queue after a park (the issue cites an "existing labeled trigger", which does not exist). — Picked: A — document "add `ai:claude` back, then comment `/reclarify`". Alternatives: B — add an `issues: labeled` trigger to `ai-clarify.yml` for every consumer. Why: §5; `/reclarify` already routes a labelled issue to Claude (rule 5). Applied in: phase 1 PR. Status: pending review
 - AD-8 [plan, 2026-10-02] Manual intake (`workflow_dispatch`, trigger `manual`) of an issue without `ai:claude`. — Picked: A — refuse it like any other unclaimed issue and document "add `ai:claude` first". Alternatives: B — exempt the `manual` trigger. Why: one rule for the claim; an exemption would bring the bug back for hand re-fires. Applied in: phase 1 PR. Status: pending review
 - AD-9 [plan, 2026-10-02] `/claude-issue-dispatch` (named by the issue as a call site). — Picked: A — leave it unchanged. Alternatives: B — make it read the issue. Why: it never reads the issue by design, and the pickup now checks before following its step 2. Applied in: no code change. Status: pending review
+- AD-10 [phase 1/1 — review round 2, 2026-10-02] The reviewer panel (5 of 6, consensus) found that a label removed after the pickup's batch read but before a session starts is not honoured, because `/implement-issue-claude` step 2 adds `ai:claude` back. How to close it? — Picked: A — the dispatch start prompt carries a `— dispatched` marker, and with it `/implement-issue-claude` step 2 stops as `issue parked` when `ai:claude` is gone; a hand run (no marker) still claims the issue (twin-first edit of `claude-issue-dispatch.md` and `implement-issue-claude.md`). Alternatives: B — the pickup re-reads each target right before its `create_session` (no-twin pickup file; narrows the gap to seconds, but the session still re-adds the label); C — reject the finding (needs the dedicated verdict bot, which this web session cannot post as, so the PR would block). Why: the session's own read is the last moment that matters, it also covers the `claim_check_failed` consumer targets, and it keeps the plan's non-goal for hand runs and resumed projects. Applied in: PR #6081 (review round 2 commit). Status: pending review
 
 ## Lessons
 - [source:intervention] When a step becomes a gate (the handoff's claim), every side effect after it must be gated too, not only the final action: a failed claim must also skip the cleanup and the success log, and the test must assert their absence. (files: scripts/claude_issue_handoff.sh, tests/test_claude_issue_route.py)
 - [source:plan-deviation] A gate that must hold "at dispatch time" needs a read at the moment of dispatch: checking only where the payload is first validated (the intake) leaves every later state change of the target invisible to the session starter. (files: scripts/claude_issue_route.py, .claude/commands/claude-issue-pickup.md)
+- [source:intervention] A claim check done by a batch starter is check-then-act: the session it starts must re-check the claim and refuse when it is gone, not restore it, or any change in the gap is undone. Mark dispatched starts so the session can tell them from hand runs. (files: .claude/commands/claude-issue-dispatch.md, .claude/commands/implement-issue-claude.md)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)
@@ -49,3 +51,4 @@
 - Pickup file after the sync: sha256 `e35c2ed22ca18988dc5276378faa1717262154f33dbe087177a552c92c7095d1` (the diff is in the twin-sync blocker comment on #6057).
 - Verified 2026-10-02 in the phase session: `tests/test_claude_issue_route.py` 261 passed; the six suites that read the pickup file passed against a copy with the synced file (one copy-only failure: the `workflow-templates/CLAUDE.md` symlink is not preserved by the copy; the test passes in the checkout); ruff and `shellcheck --severity=error` clean.
 - Plan deviation: `_dispatch_refusal` also refuses `target_repo_mismatch` (a transferred issue), the same family as AD-4's `target_not_issue`; it matches the intake's `authorize_target()` check.
+- Review round 2 (head `2ce9fd2`, ledger `06db8da1…`, run 37010796674): one consensus finding plus the matching task gap from 5 of 6 reviewers, valid, fixed in one `[claude-autofix]` commit (AD-10). Twin-first: only `workflow-templates/.claude/commands/{implement-issue-claude,claude-issue-dispatch}.md` changed; `test_template_parity` for both stays red until the `[claude-twin-sync]` copy. Verified against a scratch copy with the twins copied into `.claude/`: the janitor, implement-issue, session-title, and route suites (429 passed) and the other 15 twin-reading suites (695 passed, 1 skipped).

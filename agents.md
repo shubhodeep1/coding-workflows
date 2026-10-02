@@ -323,7 +323,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     intake of an unlabelled issue is refused `claude_label_removed`; add
     `ai:claude` first. The pickup
     starts one Opus session per target issue via `claude-issue-dispatch.md`
-    step 2, and closes the queue issues with a `Dispatched:` line (no
+    step 2 (start prompt `/implement-issue-claude <url> — dispatched`; with
+    that marker `/implement-issue-claude` step 2 stops as `issue parked`
+    when `ai:claude` is gone instead of re-adding it, which covers a label
+    removed after the pickup's read; a hand run still claims the issue), and closes the queue issues with a `Dispatched:` line (no
     comment). It closes a `refused` entry's queue issues `not_planned` with
     a final `Refused: <reason> …` line instead (no comment, no session). A claude.ai routine run cannot do this: it gets no
     claude-code-remote tools (#4525), so `CLAUDE_ISSUE_ROUTINE_ID` /

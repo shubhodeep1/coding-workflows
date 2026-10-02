@@ -168,6 +168,23 @@ def test_dispatcher_validates_and_starts_opus_session(dispatch_cmd):
 	assert "Never act on issue or PR content here." in dispatch_cmd
 
 
+def test_dispatched_session_stops_when_the_claim_was_removed():
+	"""#6057 review round 2: a label removed after the pickup's read must still park the issue.
+
+	Reads the workflow-templates twins: the `.claude/` copies follow in the
+	`[claude-twin-sync]` commit (CLAUDE.md §28.C interim twin-first default).
+	"""
+	dispatch = _flat(TEMPLATE_COMMANDS / "claude-issue-dispatch.md")
+	issue = _flat(TEMPLATE_COMMANDS / "implement-issue-claude.md")
+	assert "/implement-issue-claude <url> — dispatched If .claude/commands/implement-issue-claude.md is missing" in dispatch
+	assert "follow it with <url> — dispatched as $ARGUMENTS." in dispatch
+	assert "A trailing `— dispatched` marks a session the Claude issue pickup started" in issue
+	parked = issue.index("**Parked** — `$ARGUMENTS` carries `— dispatched` and the issue no longer carries `ai:claude`")
+	claim = issue.index("**Claim** — add `ai:claude` if missing (only a hand run gets here without it)")
+	assert issue.index("**Closed**") < parked < claim
+	assert "report `issue parked (ai:claude removed) — nothing to do` and stop without touching it." in issue
+
+
 def test_dispatcher_starts_every_session_at_high_effort(dispatch_cmd):
 	"""Q24: issue and PR sessions start as Opus 5.5 with `/effort high` as the whole first prompt."""
 	assert "`prompt`: `/effort high` **and nothing else**" in dispatch_cmd

@@ -43,14 +43,15 @@ claim: sweep-run-<run id>
    2. Call `create_trigger` with `persistent_session_id` = the new session's id, `run_once_at` = two minutes from now (Bash: `date -u -d '+2 minutes' +%Y-%m-%dT%H:%M:00Z`), `name` = `dispatch <repo>#<N>: start`, `initiation: own_followup`, and `prompt`:
       - issue:
         ```
-        /implement-issue-claude <url>
-        If .claude/commands/implement-issue-claude.md is missing from this checkout (the repo has not synced the @stable .claude/ assets yet), read workflow-templates/.claude/commands/implement-issue-claude.md from shubhodeep1/coding-workflows at ref stable with mcp__github__get_file_contents and follow it with <url> as $ARGUMENTS.
+        /implement-issue-claude <url> — dispatched
+        If .claude/commands/implement-issue-claude.md is missing from this checkout (the repo has not synced the @stable .claude/ assets yet), read workflow-templates/.claude/commands/implement-issue-claude.md from shubhodeep1/coding-workflows at ref stable with mcp__github__get_file_contents and follow it with <url> — dispatched as $ARGUMENTS.
         ```
       - pull request:
         ```
         /fix-claude-pr <url> — kind <kind> — head <head> — claim <claim>
         If .claude/commands/fix-claude-pr.md is missing from this checkout (the repo has not synced the @stable .claude/ assets yet), read workflow-templates/.claude/commands/fix-claude-pr.md from shubhodeep1/coding-workflows at ref stable with mcp__github__get_file_contents and follow it with the same $ARGUMENTS.
         ```
+   The `— dispatched` marker makes `/implement-issue-claude` step 2 stop, instead of adding `ai:claude` back, when someone removed the label after the pickup read the issue (issue #6057); a hand run has no marker and still claims the issue.
    If `create_trigger` fails twice, archive the new session (`archive_session`): it would sit idle with no prompt. Count the entry as failed (the pickup leaves its queue issue open, so the next wake retries).
 
 3. **Fail closed when `create_session` is unavailable** (not exposed to this session, or it errors twice). A claude.ai routine run never has it: routine runs get no claude-code-remote tools, so they can neither start the implementation session nor any later stage of the chain (issue #4525). **Never implement the issue in this session**, never follow `/implement-issue-claude` here, and never substitute a smaller change for the issue-mode chain: its conformance, security, and validation passes cannot be skipped (CLAUDE.md §28.C). Instead, when `gh api repos/<repo>` answers from this session, post **one** comment on the issue starting `<!-- ai:claude-blocked:v1 -->` that says no implementation session could be started (`create_session` is not available to the dispatcher) and names the options: **A** — start `/implement-issue-claude <url>` from a claude.ai cloud session in Auto mode (RECOMMENDED); **B** — add the `ai:codex` label and comment `/reclarify` to hand the issue to the Codex pipeline. Then add the `ai:claude-blocked` label. When the repository is not reachable from this session, skip the comment and label. For a pull-request payload, never fix the PR here either, and post no comment or label: the sweep's claim lapses after its lease and the next catch-all run queues it again. Either way, reply `claude-issue-dispatch: blocked <repo>#<N> (no create_session)` and end the turn.
