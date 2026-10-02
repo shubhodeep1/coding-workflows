@@ -199,3 +199,43 @@ Estimates are prospective and overlap; no files were changed during this audit.
 | Code modularization | 6 workflows and 2 scripts, plus tests | Large |
 | Expression size reduction | 1 workflow and at least 1 support script, plus tests | Medium |
 | Medium/Low fixes | 5 scripts and 2 workflow gates, plus tests | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-02)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for implementation without further review. `NEEDS_VERIFICATION` requires the stated checks first. `RISKY_SKIP` must not be auto-implemented because a specified safety trigger applies.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — RISKY_SKIP** · `.github/workflows/clarify.yml:586-587` and `.github/workflows/clarify.yml:589-606` (`Fetch issue comments` step). **Current call count:** 2 logical reads when semantic caching is enabled; **proposed:** 1 on successful full-history retrieval, with a separate fallback read on failure. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`, first with `sort=created&direction=asc&per_page=50`, then with the same filters, `per_page=100` and `--paginate --slurp`. **Evidence:** The first response supplies bounded prompt context; the second fetches those comments again as part of full thread history. **Proposed fix:** In `Fetch issue comments`, derive the first 50 comments for `ISSUE_COMMENTS_FILE` from a successful full-history response, while retaining the bounded read when caching is disabled or full-history retrieval fails. **Safety rationale:** The second call implements pagination, and the current bounded read is mandatory while the full-history read fails open; changing their order or failure behavior needs manual review. **Downstream signal:** Do not auto-implement. Manually test 0, 50, 51, and more than 100 comments, including later-page failure and comments arriving between reads; preserve prompt bounds and the existing cache-bypass behavior.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — The calls are in `orchestrate_poll_process.sh`, which explicitly defends against upstream races; preserve snapshot-first and unknown-value behavior.
+- API-002: RISKY_SKIP — A poll-cycle cache in `orchestrate_poll_process.sh` needs manual validation of cache misses and changed default-branch state.
+- BATCH-001: RISKY_SKIP — The existing PR-files calls are paginated; GraphQL batching needs file-page parity and fallback review.
+- API-003: RISKY_SKIP — The marker lookup is paginated; retaining its body must preserve page selection and lookup-failure behavior.
+- API-004: RISKY_SKIP — This changes retry-loop behavior, including rate-limit handling, and is not an authorized automatic consolidation.
+
+### Summary Counts
+
+Counts cover net-new findings; Deep Audit cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
