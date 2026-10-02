@@ -685,4 +685,4 @@ End to end (after each phase merges, in coding-workflows):
 - `.github/workflows/implement.yml:1862-1888`, `.github/workflows/review_autofix.yml:553-555`, `:773`, `.github/workflows/security-audit.yml`, `.github/workflows/issue_pr_status.yml:543`
 - `scripts/lint_pr_body_auto_close.py`, `scripts/lint_plan_archival_completeness.py`, CLAUDE.md §19
 - `docs/plans/retire-master-session-plan.md` (escalation judge; PR #5164, final PR #5132)
-- `docs/plans/move-checking-roles-to-claude-plan.md`, `docs/plans/claude-multi-account-pool-plan.md`
+- `docs/plans/move-checking-roles-to-claude-plan.md`, `docs/completed/claude-multi-account-pool-plan.md` (superseded by `docs/plans/claude-actions-worker-pool-plan.md`)

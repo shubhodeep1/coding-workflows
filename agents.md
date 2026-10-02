@@ -1248,6 +1248,81 @@ reviews, comments, and conflicts stay a direct §12 request.
 
 ---
 
+## Claude worker pool contract
+
+The worker half of `docs/plans/claude-actions-worker-pool-plan.md` (phase 1).
+Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
+`dispatch_types: []`.
+
+- **Workflows.** `.github/workflows/claude-pool-worker.yml` is
+  `workflow_call` only, so it never runs in coding-workflows itself. Its only
+  caller is `shubhodeep1/claude-workers/.github/workflows/claude-pool-worker.yml`
+  (`workflow_dispatch` inputs `queue_issue`, `item_type`
+  (`issue | pr_fix | stage | smoke`), `attempt`, `exclude_accounts`,
+  `payload_b64`; `push` to `claude/**` runs the `smoke` job), which calls it at
+  `@main` with `secrets: inherit`. The reusable workflow's `pool_ref` input
+  (default `main`) picks the coding-workflows ref its scripts are read from.
+- **Run name (contract).** `pool <item_type> q<queue issue> a<attempt>`
+  (`claude_pool.py run-name`, regex `^pool (issue|pr_fix|stage|smoke)
+  q([0-9]{1,10}) a([0-9]{1,3})$`). The dispatcher keys a queue item's runs on
+  it and keeps no other state.
+- **Accounts.** One secret per account, `CLAUDE_POOL_TOKEN_<NAME>`
+  (`^CLAUDE_POOL_TOKEN_[A-Z0-9_]+$`), found from `toJSON(secrets)` keys in the
+  select job's probe step only; only the names reach `claude_pool.py`. Tokens
+  are whitespace-stripped (`normalize`) and masked before use. No other
+  coding-workflows workflow may name `CLAUDE_POOL_TOKEN`
+  (`tests/test_claude_pool.py` enforces it).
+- **Selection.** One Haiku probe per account (`probe_model`, `Reply OK`, empty
+  directory, `--strict-mcp-config`); `probe-parse` reads the last
+  `rate_limit_event` (`unifiedWindows.five_hour` / `seven_day` utilization
+  0..1 and `resetsAt`). `choose` picks the lowest `max(five_hour, seven_day)`
+  strictly below `gate_utilization`, ties alphabetical; an account with a
+  successful probe but no reading is used only when no reading is under the
+  gate; `status: rejected` or a reading at/over the gate is gated; a probe
+  error (`auth_failed`, `probe_failed`) skips the account. Verdicts with no
+  account: `no_accounts`, `all_gated` (`resets_at` = earliest time a gated
+  account is usable), `auth_failed`, `crashed`.
+- **Work job.** Target repo from the payload (`prompt`, which parses
+  `claude_issue.v1` / `claude_pr_fix.v1` with the pickup's strict rules and
+  requires the repo in `.github/ai/consumer_repos.json` or coding-workflows;
+  `stage` needs `claude_issue_route.parse_stage_text`, phase 3, and is refused
+  without it). Checkout with `GH_PAT` (classic; `repo` + `workflow`), full
+  history; `~/.claude.json` trusts it; `--settings` denies
+  `Edit|Write|NotebookEdit(//<checkout>/.claude/**)`; `--mcp-config` names the
+  remote GitHub MCP server `github` with `GH_PAT`; env `CLAUDE_POOL_WORKER=1`,
+  `GH_TOKEN`, `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` /
+  `CLAUDE_FIXER_VERDICT_BOT_LOGIN` from the config; git identity
+  `Claude <noreply@anthropic.com>`. The CLI runs under `timeout`
+  (`timeout_minutes` per type, at most 350; the job limit adds 10, capped at
+  360). Exit 124/137 is a timeout. Before upload, `redact` replaces the token,
+  the raw token, `GH_PAT`, and the base64 `x-access-token:` form of each with
+  `***` in every output file.
+- **Result (`claude-pool-result` artifact, `claude-pool-result.json`).** Keys:
+  `queue_issue`, `attempt`, `item_type`, `account`, `outcome`
+  (`success | auth_failed | usage_limit | all_gated | no_accounts | crashed |
+  timeout`), `reason`, `rate_limit_info` (the last one seen), `total_cost_usd`,
+  `duration_ms`, `resets_at`, `probes`. `usage_limit` is an error result (or
+  no result) whose last `rate_limit_info.status` is `rejected`, whose
+  utilization is ≥ 1.0, or whose text names a usage limit (no real rejection
+  observed yet, plan Q7). A clean result with a failed work job (a smoke check)
+  is `crashed`. The run fails for every outcome but `success`. Transcript
+  artifact `claude-pool-transcript` (`transcript.jsonl`, `exit.json`,
+  `stderr.txt`, smoke transcripts) is kept `transcript_retention_days`.
+- **Config keys** (`.github/ai/claude_pool.json`, `claude_pool.py config`;
+  an invalid value falls back to its default and logs `CLAUDE_POOL
+  config_invalid key=<key>`; a missing or unreadable file is all defaults):
+  `dispatch_types` (subset of `issue`, `pr_fix`, `stage`; empty = pool off),
+  `runner_repo`, `worker_workflow`, `gate_utilization` (0 < g ≤ 1, default
+  0.9), `max_attempts` (1–10, 3), `timeout_minutes` (`issue` 350, `stage` 350,
+  `pr_fix` 120; 1–350), `transcript_retention_days` (1–90, 14),
+  `worker_model` (`claude-opus-5-5`), `worker_effort` (`high`),
+  `probe_model` (`claude-haiku-4-5-20251001`), `cli_version` (`latest` or
+  `x.y.z`), `handoff_author_login`, `verdict_bot_login` (GitHub logins or
+  empty), `retire_pickup` (`false`).
+- Log prefix `CLAUDE_POOL` (`config`, `accounts`, `probe`, `choose`,
+  `prompt`, `work`, `smoke`, `redact`, `result`, `failed`, and the `*_failed`
+  errors). Tests: `tests/test_claude_pool.py`, its own `ci.yml` step.
+
 ## Repo-specific batching helpers
 
 The following helpers are the canonical batched GraphQL paths for the
@@ -1864,6 +1939,7 @@ and shipped:
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `CLAUDE_FIXER_PANEL_FLOOR`
 - `SECURITY_AUDIT_TARGET`
+- `CLAUDE_POOL`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -2058,6 +2134,7 @@ LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=CLAUDE_FIXER_PANEL_FLOOR
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=CLAUDE_POOL
 
 ---
 
@@ -2303,6 +2380,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/clarify.yml
 .github/workflows/claude-issue-intake.yml
 .github/workflows/claude-issue-queue-watchdog.yml
+.github/workflows/claude-pool-worker.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml

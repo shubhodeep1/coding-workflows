@@ -1,3 +1,5 @@
+Status: superseded by docs/plans/claude-actions-worker-pool-plan.md (2026-10-02)
+
 # Multi-account work pool for the Claude automation
 
 ## Summary
