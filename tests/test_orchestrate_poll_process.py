@@ -15495,6 +15495,64 @@ def test_reconcile_heal_retry_cycle_finishes_after_label_edit_failure():
 	assert issue["merged_state_heal"]["pr"] == 953, issue
 
 
+def test_reconcile_heal_failed_edit_on_stored_status_only_keeps_a_pending_marker():
+	"""PR #5633 review round 6: when the stale merge is only the stored `merged`
+	status (no `ai:merged` label) and the label edit fails, the status rewrite
+	carries `.merged_state_heal_pending`, so the retry signal survives."""
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+		fail_issue_edit_for=[10],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "MERGED_STATE_STALE issue=10 pr=953 reason=non_target_base label_merged=false stored_status=merged action=retry why=label_edit_failed" in combined, combined
+	assert "MERGED_STATE_HEALED" not in combined
+	issue = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue["status"] != "merged", issue
+	assert issue.get("merged_state_heal_pending", {}).get("pr") == 953, issue
+	assert "merged_state_heal" not in issue, issue
+
+
+def test_reconcile_heal_retries_from_the_pending_marker():
+	"""PR #5633 review round 6: the next cycle, with no `ai:merged` label and
+	stored `in_progress`, heals from `.merged_state_heal_pending` and clears it."""
+	state = _stale_merged_state(stored_status="in_progress")
+	state["waves"][0]["issues"][0]["merged_state_heal_pending"] = {"pr": 953, "reason": "non_target_base", "at": 1}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "MERGED_STATE_HEALED issue=10 pr=953 reason=non_target_base label=ai:awaiting-approval stored_status=in_progress" in combined, combined
+	assert "ai:awaiting-approval" in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	issue = result["latest_state"]["waves"][0]["issues"][0]
+	assert "merged_state_heal_pending" not in issue, issue
+	assert issue["merged_state_heal"]["pr"] == 953, issue
+
+
+def test_reconcile_heal_without_any_stale_signal_does_nothing():
+	"""No label, stored `in_progress`, and no pending marker: nothing to heal."""
+	result = _run_poller(
+		state=_stale_merged_state(stored_status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "MERGED_STATE_HEALED" not in combined
+	assert "MERGED_STATE_STALE" not in combined
+
+
 def test_reconcile_leaves_merged_label_without_rejected_merge_alone():
 	"""An ai:merged label with no merged linked PR at all (a person, the close
 	sweep) is not this rule's business and stays."""

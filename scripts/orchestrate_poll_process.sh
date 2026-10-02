@@ -15761,7 +15761,10 @@ _check_open_pr_conflict_guard() {
 # Otherwise (closed issue, healing disabled, already healed once, or no
 # wave entry) nothing changes: it logs `MERGED_STATE_STALE … action=alert`
 # every cycle and alerts once, recorded as `.merged_state_heal.alerted`.
-# A failed label edit changes nothing, so the next cycle retries.
+# A failed state write changes nothing. A failed label edit keeps the
+# stored status at `in_progress` (with `.merged_state_heal_pending`, written
+# together with it, so the next cycle retries even when `ai:merged` was
+# never on the issue) and holds the wave this cycle (`wave_hold=true`).
 #
 # Sets MERGED_HEAL_LABELS_JSON (the issue's labels after the call) and
 # MERGED_HEAL_STATE_CHANGED (true when the state file changed). API calls:
@@ -15785,7 +15788,12 @@ _heal_rejected_merged_state() {
   [ -n "${_mhs_entry}" ] || _mhs_entry='{}'
   _mhs_lid="$(printf '%s' "${_mhs_entry}" | jq -r '.id // ""' 2>/dev/null || echo "")"
   _mhs_stored="$(printf '%s' "${_mhs_entry}" | jq -r '.status // ""' 2>/dev/null || echo "")"
-  if [ "${_mhs_has_label}" != "true" ] && [ "${_mhs_stored}" != "merged" ]; then
+  # A heal whose label edit failed after the stored status was rewritten
+  # leaves this marker, the only signal left when `ai:merged` was never on
+  # the issue (PR #5633 review round 6).
+  local _mhs_pending
+  _mhs_pending="$(printf '%s' "${_mhs_entry}" | jq -r 'if (.merged_state_heal_pending | type) == "object" then "true" else "false" end' 2>/dev/null || echo "false")"
+  if [ "${_mhs_has_label}" != "true" ] && [ "${_mhs_stored}" != "merged" ] && [ "${_mhs_pending}" != "true" ]; then
     return 0
   fi
   _mhs_marker_pr="$(printf '%s' "${_mhs_entry}" | jq -r '.merged_state_heal.pr // "" | tostring' 2>/dev/null || echo "")"
@@ -15826,14 +15834,15 @@ _heal_rejected_merged_state() {
   if declare -F ensure_label_exists >/dev/null 2>&1; then
     ensure_label_exists "${_mhs_target_label}" >/dev/null 2>&1 || true
   fi
-  # Order matters (PR #5633 review round 3): the stored status changes first,
-  # so a failed state write leaves everything as it was; the label edit
-  # second, so a failed edit leaves the label (and check-wave-status then
-  # restores `merged` from it) for the next cycle to retry; the once-only
-  # marker last, so a failed edit never blocks that retry.
+  # Order matters (PR #5633 review rounds 3, 4 and 6): the stored status
+  # changes first, together with the pending marker, so a failed state write
+  # leaves everything as it was; the label edit second, so a failed edit
+  # holds the wave this cycle (below) and the pending marker brings the next
+  # cycle back here; the once-only marker last, written together with
+  # clearing the pending marker, so a failed edit never blocks that retry.
   if [ "${_mhs_stored}" = "merged" ]; then
-    if jq --argjson wi "${WAVE_IDX}" --arg lid "${_mhs_lid}" \
-      '(.waves[$wi].issues[] | select(.id == $lid)) |= (if .status == "merged" then .status = "in_progress" else . end)' \
+    if jq --argjson wi "${WAVE_IDX}" --arg lid "${_mhs_lid}" --arg pr "${rejected_pr}" --arg reason "${reason}" --argjson now "$(date +%s)" \
+      '(.waves[$wi].issues[] | select(.id == $lid)) |= (if .status == "merged" then .status = "in_progress" | .merged_state_heal_pending = {pr: ($pr | tonumber? // $pr), reason: $reason, at: $now} else . end)' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
       MERGED_HEAL_STATE_CHANGED="true"
     else
@@ -15849,19 +15858,20 @@ _heal_rejected_merged_state() {
     # Hold the wave this cycle (PR #5633 review round 4): the stored status
     # is already in_progress, so drop `ai:merged` from the labels this cycle
     # evaluates (GitHub keeps it until the retry) and check-wave-status
-    # cannot read the issue as merged while the heal is pending.
+    # cannot read the issue as merged while the heal is pending. The next
+    # cycle retries from the label or from `.merged_state_heal_pending`.
     MERGED_HEAL_LABELS_JSON="$(printf '%s' "${labels_json}" | jq -c '(if type == "array" then . else [] end) | map(select(. != "ai:merged"))' 2>/dev/null || echo "${labels_json}")"
     return 0
   fi
   MERGED_HEAL_LABELS_JSON="$(printf '%s' "${labels_json}" | jq -c --arg add "${_mhs_target_label}" '(if type == "array" then . else [] end) | map(select(. != "ai:merged")) + [$add] | unique' 2>/dev/null || echo "${labels_json}")"
 
   if jq --argjson wi "${WAVE_IDX}" --arg lid "${_mhs_lid}" --arg pr "${rejected_pr}" --arg reason "${reason}" --arg label "${_mhs_target_label}" --argjson now "$(date +%s)" '
-    (.waves[$wi].issues[] | select(.id == $lid)) |= (.merged_state_heal = {pr: ($pr | tonumber? // $pr), reason: $reason, label: $label, at: $now})' \
+    (.waves[$wi].issues[] | select(.id == $lid)) |= (.merged_state_heal = {pr: ($pr | tonumber? // $pr), reason: $reason, label: $label, at: $now} | del(.merged_state_heal_pending))' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     MERGED_HEAL_STATE_CHANGED="true"
   else
     rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-    echo "::warning::MERGED_STATE_HEALED issue=${issue_num}: healed, but recording the once-only marker failed; the issue no longer reads as merged, so it is not healed again." >&2
+    echo "::warning::MERGED_STATE_HEALED issue=${issue_num}: healed, but recording the once-only marker failed; unless .merged_state_heal_pending is set, the issue no longer reads as merged and is not healed again." >&2
   fi
 
   local _mhs_next="its plan is re-approved by the poller's auto-approve step and implementation runs again"
