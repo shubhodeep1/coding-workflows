@@ -412,6 +412,10 @@ def _bash(command):
 		("docker run -i alpine sh <<< 'mysql -pS3cretPass app'", "S3cretPass", "docker run -i alpine sh <<< 'mysql -p*** app'"),
 		("pwsh -Command'mysql -pS3cretPass app'", "S3cretPass", "pwsh -Command'mysql -p*** app'"),
 		("pwsh -comm'mysql -pS3cretPass app'", "S3cretPass", "pwsh -comm'mysql -p*** app'"),
+		# A short-flag cluster holding `c` joined to its quoted command line (`-cemysql -p…` after the shell joins
+		# them) is read past at every cluster length (PR #5401 review round 9).
+		("bash -ce'mysql -pS3cretPass app'", "S3cretPass", "bash -ce'mysql -p*** app'"),
+		("sudo bash -xce'mysql -pS3cretPass app'", "S3cretPass", "sudo bash -xce'mysql -p*** app'"),
 		("sudo -u pg bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "sudo -u pg bash <<< 'mysql -p*** app'"),
 		("2>/dev/null bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "2>/dev/null bash <<< 'mysql -p*** app'"),
 		("false || sh -c 'mysql -pS3cretPass x'", "S3cretPass", "false || sh -c 'mysql -p*** x'"),
@@ -466,6 +470,9 @@ def test_example_masks_credentials(command, secret, expected):
 		("printf 'mysql -pS3cretPass app' | ssh host sh", "S3cretPass", None),
 		("printf 'mysql -pS3cretPass app' | kubectl exec -i pod -- sh", "S3cretPass", None),
 		("curl -u deploy:mycustompwd https://a.b | grep sh", "mycustompwd", None),
+		# Text piped into a shell is withheld even when it holds no credential, since what the shell runs is unknown
+		# (PR #5401 review round 9: this case had sat in the credential-free list, whose test compared the twin to itself).
+		("curl -sS https://example.com/install.sh | sh", "S3cretPass", "curl -sS https://example.com/install.sh | sh"),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
@@ -515,7 +522,6 @@ def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
 		"git commit -m 'hello world'",
 		"PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py --repo o/r --pr 5",
 		"python3 - <<'EOF'\nprint(1)\nEOF\necho done",
-		"curl -sS https://example.com/install.sh | sh",
 		# `X` takes a value, so the `U` in `PUT` is not curl's `-U`; `Accept` is not a credential header.
 		"curl -XPUT -H 'Accept: application/json' https://a.b",
 		# `--author` is not `--auth`.
@@ -548,9 +554,13 @@ def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
 	],
 )
 def test_credential_free_commands_are_unchanged(command):
+	"""Masking leaves a command with no credential as it was. `pp` and `pp_mask_twin` load the same twin, so the example
+	is compared with the command itself (PR #5401 review round 9) and the shape must be a parsed one."""
 	record = _bash(command)
-	assert pp_mask_twin.record_example(record) == pp.record_example(record)
-	assert pp_mask_twin.record_shape(record) == pp.record_shape(record)
+	# Heredoc bodies are always left out of the example, credentials or not.
+	assert pp_mask_twin.record_example(record) == pp_mask_twin.strip_heredocs(command, placeholder="<heredoc body omitted>")
+	shape = pp_mask_twin.record_shape(record)
+	assert shape and not shape.startswith("unparseable") and "withheld" not in shape
 
 
 @pytest.mark.parametrize(
@@ -1491,3 +1501,14 @@ def test_split_string_reads_gnu_env_word_breaks(text, expected):
 	"""GNU env -S (coreutils 9.4): `\\_` splits words outside quotes, is a space inside double quotes, and stays
 	literal inside single quotes; an escaped backslash before `_` is not a break (PR #5401 review round 4)."""
 	assert pp_mask_twin._split_string_command_line(text) == expected
+
+
+def test_powershell_parameters_are_not_read_as_a_command_cluster():
+	"""PR #5401 review round 9: PowerShell has no short-flag clusters, so `-NonInteractive` (which holds a `c`) does not
+	make the next words a command line; `-File` and the options after it stay in the shape."""
+	assert pp_mask_twin.command_shape("pwsh -NonInteractive -File ./deploy.ps1 -Env prod") == "pwsh -NonInteractive -File * -Env *"
+	assert pp_mask_twin.command_shape("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./x.ps1") == (
+		"powershell -NoProfile -NonInteractive -ExecutionPolicy * -File *"
+	)
+	# A POSIX shell's cluster still takes the next word as its command line.
+	assert pp_mask_twin.command_shape("bash -ce ./x.sh") == "bash -ce *"

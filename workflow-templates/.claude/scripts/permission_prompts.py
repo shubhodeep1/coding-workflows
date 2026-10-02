@@ -261,6 +261,10 @@ _SHELL_COMMAND_ATTACHED_RE = re.compile(rf"^(?:{_SHELL_COMMAND_FLAG_NAMES})[=:](
 # A short-flag cluster with `c` (any case) before its end: `su -c'mysql -p…'` (the rest is the attached command
 # line) or `bash -ce 'mysql -p…'` (the next word is it). Both are parsed when a runner precedes it.
 _SHELL_COMMAND_CLUSTER_RE = re.compile(r"^(-[A-Za-z]*?c)(.+)$", re.IGNORECASE | re.DOTALL)
+# A whole short-flag cluster holding `c` anywhere (`-ce`, `-xce`): a prefix _attached_command_lines reads past.
+_SHELL_COMMAND_CLUSTER_PREFIX_RE = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$", re.IGNORECASE)
+# PowerShell has no short-flag clusters: `-NonInteractive` is one parameter, not `-…c` followed by a command line.
+_POWERSHELL_RUNNERS = frozenset({"pwsh", "powershell", "pwsh.exe", "powershell.exe"})
 # GNU `env -S STRING` / `--split-string=STRING` (any unambiguous prefix, `--s` on) splits STRING into a command
 # line of its own (`env -S 'mysql -p…'`, also as a script's `#!/usr/bin/env -S` line). In a short-flag cluster the
 # argument starts after the `S` when only `env`'s boolean flags (`-i`, `-v`, `-0`) come before it (`env -iS'…'`),
@@ -432,11 +436,16 @@ def _segment_runs_a_shell(words: list[str]) -> bool:
 
 
 def _attached_command_lines(word: str) -> list[str]:
-	"""The text after every prefix of `word` that is itself a shell command flag (_SHELL_COMMAND_FLAG_RE), shortest
-	prefix first. The shell joins a flag and its quoted command line into one word (`pwsh -Command'mysql -p…'`
-	becomes `-Commandmysql -p…`), and the word does not say where the flag ends (`-C`, `-Co`, … `-Command`), so each
-	reading is parsed and their credentials are all masked (PR #5401 review round 8)."""
-	return [word[length:] for length in range(2, len(word)) if _SHELL_COMMAND_FLAG_RE.match(word[:length])]
+	"""The text after every prefix of `word` that is a shell command flag (_SHELL_COMMAND_FLAG_RE) or a short-flag
+	cluster holding `c` (`-ce`, `-xce`), shortest prefix first. The shell joins a flag and its quoted command line into
+	one word (`pwsh -Command'mysql -p…'` becomes `-Commandmysql -p…`, `bash -ce'mysql -p…'` becomes `-cemysql -p…`),
+	and the word does not say where the flag ends, so each reading is parsed and their credentials are all masked
+	(PR #5401 review rounds 8 and 9)."""
+	return [
+		word[length:]
+		for length in range(2, len(word))
+		if _SHELL_COMMAND_FLAG_RE.match(word[:length]) or _SHELL_COMMAND_CLUSTER_PREFIX_RE.match(word[:length])
+	]
 
 
 def _split_string_runner_before(words: list[str], start: int, position: int) -> bool:
@@ -583,7 +592,12 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			if flag not in seen_flags:
 				seen_flags.add(flag)
 				shape.append(flag)
-			if runner_before and (_SHELL_COMMAND_FLAG_RE.match(token) or (attached_command and attached_command.group(2).isalpha())):
+			# A cluster such as `-ce` makes the next word the command line, but PowerShell has no clusters: its
+			# `-NonInteractive` is a parameter of its own and the words after it stay in the shape (PR #5401 review round 9).
+			cluster_flag = bool(attached_command and attached_command.group(2).isalpha()) and not any(
+				earlier.rsplit("/", 1)[-1].lower() in _POWERSHELL_RUNNERS for earlier in tokens[command_position : index - 1]
+			)
+			if runner_before and (_SHELL_COMMAND_FLAG_RE.match(token) or cluster_flag):
 				# A shell's command line is one value: the first word after its options (`bash -c -- '…'`), which can
 				# start with `-` (`sh -c '-x; mysql -p…'`) or end like a script name (`sh -c '… ./run.sh'`). Neither
 				# it nor those options reach the shape; a redirection among them keeps its operator (`sh -c 2> *`).
