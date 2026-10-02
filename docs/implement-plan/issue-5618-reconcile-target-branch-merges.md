@@ -8,7 +8,7 @@
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
-- Waiting on: final-merge review of PR #5633 (review rounds 3–11 fixed; interventions 1 and 2 after the workflow's `ai:review-blocked` at `MAX_AUTOFIX_ITERATIONS`)
+- Waiting on: final-merge review of PR #5633 (review rounds 3–12 fixed; interventions 1 and 2 after the workflow's `ai:review-blocked` at `MAX_AUTOFIX_ITERATIONS`)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_016KrwLrGKBe3mJCxcGowd7W   safety net and hand-back: see the completion stage report
 - Last updated: 2026-10-02
@@ -59,6 +59,7 @@
 - Final-merge review round 10 on PR #5633 (2026-10-02, owner's supervising session): the wave hold also fires when a linked-PR fetch failed and no merge was verified, even with no rejected link known (`pr=none reason=unverified`); `MERGED_STATE_WAVE_HOLD` and `STALL_MERGED_LABEL_REJECTED` join the agents.md stable log-prefix lists (pinned by the workflow contract test) and the changelog row; the heal header says the `no_state_entry` path only logs. Rejected with evidence: holding the validation-dispatch gate on a rejected newest link (it sees only the newest closing-keyword link, so an older correct merge would be stalled for good, and the heal never runs while validating; labels deciding there is the documented design). Owner standing instruction: recommended option.
 - Intervention 2 on PR #5633 (2026-10-02, owner's supervising session): the review workflow reached `MAX_AUTOFIX_ITERATIONS` (5) after round 10 and labelled the PR `ai:review-blocked` before reviewing 77b826a, so no finding is open; this `[claude-intervention]` commit restarts the iteration count and the label is removed after the push.
 - Final-merge review round 11 on PR #5633 (2026-10-02, owner's supervising session, after intervention 2): a failed stored-status rewrite in the heal now also holds the wave (`MERGED_HEAL_WAVE_HOLD`, `why=state_write_failed wave_hold=true`), since the stored `merged` is still there. Rejected with evidence: the README compact-table gap (the `ENABLE_MERGED_STATE_HEAL` row is already the last row, line 2031, of the one Required Variables table under its anchor).
+- Final-merge review round 12 on PR #5633 (2026-10-02, owner's supervising session): a merged link the rule cannot judge (`missing_base`, `invalid_input`, or a branch rejection without a base ref) sets `_rcl_merge_unverified`: it never heals (it could be the real merge, so it also blocks a heal from another rejected link) but holds the wave (`why=merge_unverified wave_hold=true`).
 - Security pass: skip (`security_pass_skip.py`: ai:security, created and labelled by the issue automation).
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5618#issuecomment-5909984944
 - Plan widened during planning (AD-1): the finding names the reconcile loop, but the #4813 project checker's context recorded that conformance run 1 had flagged `_reconcile_merged_pr_issue` too; tracing every `ai:merged` writer found four paths.

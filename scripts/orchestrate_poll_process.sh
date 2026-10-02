@@ -20186,6 +20186,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _rcl_rejected_merged_pr=""
     _rcl_rejected_merged_reason=""
     _rcl_candidate_fetch_failed="false"
+    # A merged candidate the rule could not judge (no base ref, malformed
+    # payload): not evidence for a heal, but no verified merge either.
+    _rcl_merge_unverified="false"
     _rcl_own_open_pr=""
     # Inspect every cross-reference so a later mention-only PR cannot mask an
     # earlier implementation PR. Prefer merged evidence, while retaining the
@@ -20219,11 +20222,20 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         # un-merges an issue (fail closed).
         case "${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}" in
           non_target_base|unverified_identity|foreign_base_repo)
-            if [ -z "${_rcl_rejected_merged_pr}" ] \
-              && [ -n "$(_jq_field "${_linked_pr_candidate_json}" '.base.ref')" ]; then
-              _rcl_rejected_merged_pr="${_linked_pr_candidate}"
-              _rcl_rejected_merged_reason="${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}"
+            if [ -n "$(_jq_field "${_linked_pr_candidate_json}" '.base.ref')" ]; then
+              if [ -z "${_rcl_rejected_merged_pr}" ]; then
+                _rcl_rejected_merged_pr="${_linked_pr_candidate}"
+                _rcl_rejected_merged_reason="${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}"
+              fi
+            else
+              _rcl_merge_unverified="true"
             fi
+            ;;
+          *)
+            # missing_base, invalid_input: the merge cannot be judged, so it
+            # never heals, but it still holds the wave below (PR #5633 review
+            # round 12).
+            _rcl_merge_unverified="true"
             ;;
         esac
         continue
@@ -20246,11 +20258,13 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # Merged state written before the #5618 rule could rest on a merge the
     # rule now rejects; heal it (or alert) before labels are reconciled and
     # check-wave-status reads them. Only when a merged link was rejected for
-    # a branch or identity reason, none passed, every read succeeded, and the
+    # a branch or identity reason, none passed, none was unjudgeable (a merged
+    # payload without a base ref could be the real merge), every read succeeded, and the
     # issue's open/closed state was read this cycle (an unreadable state
     # never counts as open for a heal).
     if [ "${PR_MERGED}" != "true" ] && [ -n "${_rcl_rejected_merged_pr}" ] \
       && [ "${_rcl_candidate_fetch_failed}" != "true" ] \
+      && [ "${_rcl_merge_unverified}" != "true" ] \
       && [ "${_rcl_issue_state_confirmed}" = "true" ]; then
       _heal_rejected_merged_state "${inum}" "${ISSUE_STATE}" \
         "$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')" \
@@ -20263,7 +20277,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${MERGED_HEAL_LABELS_JSON}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
       fi
     elif [ "${PR_MERGED}" != "true" ] \
-      && { [ -n "${_rcl_rejected_merged_pr}" ] || [ "${_rcl_candidate_fetch_failed}" = "true" ]; }; then
+      && { [ -n "${_rcl_rejected_merged_pr}" ] || [ "${_rcl_candidate_fetch_failed}" = "true" ] || [ "${_rcl_merge_unverified}" = "true" ]; }; then
       # A read failed this cycle (the issue's state, or a linked PR), so the
       # heal cannot run, or no merge could be verified at all. If the issue
       # still counts as merged (the `ai:merged` label or a stored `merged`
@@ -20273,6 +20287,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       # rounds 9 and 10, the latter for a fetch failure with no rejected link
       # known); the next cycle with good reads heals or confirms it.
       _rcl_hold_why="pr_fetch_failed"
+      [ "${_rcl_candidate_fetch_failed}" = "true" ] || _rcl_hold_why="merge_unverified"
       [ "${_rcl_issue_state_confirmed}" = "true" ] || _rcl_hold_why="issue_state_unread"
       _rcl_hold_label="$(echo "${LABELS_JSON}" | jq -r --arg key "${inum}" '(.[$key] // []) | if type == "array" then (index("ai:merged") != null) else false end' 2>/dev/null || echo "false")"
       _rcl_hold_stored="$(jq -r --argjson wi "${WAVE_IDX}" --arg n "${inum}" '[.waves[$wi].issues[]? | select((.github_issue | tostring) == $n)][0].status // ""' "${STATE_FILE}" 2>/dev/null || echo "")"

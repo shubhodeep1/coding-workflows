@@ -14240,9 +14240,9 @@ def test_judge_prompt_caps_embedded_pr_diffs_by_bytes():
 		issue_labels={10: ["ai:merged"], 11: ["ai:merged"], 12: ["ai:merged"]},
 		issue_linked_prs={10: 77, 11: 78, 12: 79},
 		prs=[
-			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "diff": huge_line},
-			{"number": 78, "state": "closed", "merged": True, "headRefName": "ai/issue-11", "diff": huge_line},
-			{"number": 79, "state": "closed", "merged": True, "headRefName": "ai/issue-12", "diff": huge_line},
+			{"number": 77, "state": "closed", "merged": True, "baseRefName": "main", "headRefName": "ai/issue-10", "diff": huge_line},
+			{"number": 78, "state": "closed", "merged": True, "baseRefName": "main", "headRefName": "ai/issue-11", "diff": huge_line},
+			{"number": 79, "state": "closed", "merged": True, "baseRefName": "main", "headRefName": "ai/issue-12", "diff": huge_line},
 		],
 		codex_json={
 			"status": "in_progress",
@@ -14348,7 +14348,7 @@ def test_judge_prompt_keeps_small_pr_diffs_intact_under_default_byte_caps():
 		issue_labels={10: ["ai:merged"]},
 		issue_linked_prs={10: 77},
 		prs=[
-			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "diff": "ordinary small diff"},
+			{"number": 77, "state": "closed", "merged": True, "baseRefName": "main", "headRefName": "ai/issue-10", "diff": "ordinary small diff"},
 		],
 		codex_json={
 			"status": "in_progress",
@@ -15413,7 +15413,8 @@ def test_reconcile_stale_merged_state_heal_can_be_disabled():
 
 def test_reconcile_does_not_heal_on_a_rejection_without_base_ref():
 	"""A merged PR payload without a base ref proves nothing about where it
-	merged, so it never un-merges an issue (fail closed)."""
+	merged, so it never un-merges an issue (fail closed); since PR #5633
+	review round 12 it holds the wave instead of letting the label decide."""
 	no_base_pr = dict(_STALE_WRONG_BASE_PR)
 	del no_base_pr["baseRefName"]
 	result = _run_poller(
@@ -15427,7 +15428,7 @@ def test_reconcile_does_not_heal_on_a_rejection_without_base_ref():
 	combined = result["stdout"] + result["stderr"]
 	assert "ai:merged" in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
 	assert "MERGED_STATE_HEALED" not in combined
-	assert "MERGED_STATE_STALE" not in combined
+	assert "why=merge_unverified wave_hold=true" in combined
 
 
 def test_reconcile_does_not_heal_when_issue_state_is_unreadable():
@@ -15484,6 +15485,25 @@ def test_reconcile_holds_the_wave_when_no_merge_can_be_verified():
 	assert "LINKED_PR_CROSS_REF_REJECTED issue=10 pr=954 reason=pr_fetch_failed" in combined
 	assert "MERGED_STATE_STALE issue=10 pr=none reason=unverified label_merged=true stored_status=merged action=retry why=pr_fetch_failed wave_hold=true" in combined, combined[-4000:]
 	assert "MERGED_STATE_WAVE_HOLD" in combined
+	assert "Wave 1 not yet complete." in combined
+
+def test_reconcile_holds_the_wave_when_a_merged_link_cannot_be_judged():
+	"""PR #5633 review round 12: a merged PR payload without a base ref (`missing_base`) proves nothing, so it never
+	heals, but it is not a verified merge either: an issue that still counts as merged holds the wave this cycle."""
+	pr = dict(_STALE_WRONG_BASE_PR)
+	pr["baseRefName"] = ""
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953]},
+		prs=[pr],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "reason=missing_base" in combined
+	assert "MERGED_STATE_HEALED" not in combined
+	assert "MERGED_STATE_STALE issue=10 pr=none reason=unverified label_merged=true stored_status=merged action=retry why=merge_unverified wave_hold=true" in combined, combined[-4000:]
 	assert "Wave 1 not yet complete." in combined
 
 def test_reconcile_wave_hold_needs_a_stale_merged_signal():
