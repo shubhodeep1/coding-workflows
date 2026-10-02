@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:24:02Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A reviewer-ledger check scoped to one path (failed slots) leaves the sibling path trusting model output; when a check reconciles a model-written ledger with runner files, apply the cheap coverage and status parts to every ledger and scope only the checks with measured false positives.",
+  "phase": "implement_plan",
+  "pr_number": 5606,
+  "record_id": "lesson-implement-plan-7602ecf0aca1eb61e0c36d2f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5579-reconcile-every-ledger-with-runner",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
