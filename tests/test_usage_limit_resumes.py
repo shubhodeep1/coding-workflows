@@ -805,6 +805,41 @@ def test_sessions_outside_the_registered_workflows_are_never_resumed(tmp_path, c
 	assert _skips(result) == {"session_a": reason}
 
 
+@pytest.mark.parametrize(
+	"url",
+	["https://github.com/", "https://github.com", "https://github.com/.git", "https://github.com/owner", "https://github.com//repo", "https://github.com/a/b/c"],
+)
+def test_github_urls_without_an_owner_and_repo_fail_closed(tmp_path, capsys, url):
+	"""PR #6108 review: a bare-hostname URL never matches SOURCE_URL_PATTERN, so it is skipped, not a crash."""
+	code, result = _run(tmp_path, capsys, [_pickup(), _session("session_a", sources=(url,))])
+	assert code == 0 and result["resume"] == []
+	assert _skips(result) == {"session_a": "foreign_repo"}
+
+
+@pytest.mark.parametrize(
+	"bad_source",
+	["not an object", None, ["list"], {"git_repository": None}, {"git_repository": "https://github.com/shubhodeep1/coding-workflows"}, {"git_repository": {}}],
+)
+def test_an_unreadable_source_beside_an_allowed_one_fails_closed(tmp_path, capsys, bad_source):
+	"""PR #6108 review: an allowed repository does not authorize a session whose other sources cannot be read."""
+	session = _session("session_a")
+	session["session_context"]["sources"].append(bad_source)
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert result["resume"] == []
+	assert _skips(result) == {"session_a": "foreign_repo"}
+
+
+def test_a_source_of_another_kind_is_not_a_repository(tmp_path, capsys):
+	session = _session("session_a")
+	session["session_context"]["sources"].append({"file_mount": {"path": "/mnt/data"}})
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _ids(result["resume"]) == ["session_a"]
+	only_other = _session("session_b", sources=())
+	only_other["session_context"]["sources"].append({"file_mount": {"path": "/mnt/data"}})
+	_, result = _run(tmp_path, capsys, [_pickup(), only_other])
+	assert _skips(result) == {"session_b": "no_repo"}
+
+
 def test_unauthorized_checkers_are_skipped_on_the_rate_limit_info_signal(tmp_path, capsys):
 	checker = _checker("session_c", detail="awaiting next cycle trigger", category="review_ready", rate_status="rejected", origin="desktop_app")
 	_, result = _run(tmp_path, capsys, [_pickup(), checker])

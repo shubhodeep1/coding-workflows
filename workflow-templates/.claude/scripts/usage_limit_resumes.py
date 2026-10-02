@@ -316,16 +316,19 @@ def load_allowed_repos(registry_path: str, self_repo: str, errors: list) -> froz
 def session_repos(session: dict) -> list[str] | None:
 	"""Lowercased `<owner>/<repo>` of each GitHub source in `session_context.sources`.
 
-	None when a `git_repository` source has a URL that is not a GitHub repository URL, so an unreadable
-	source fails closed instead of being ignored.
+	None when a source is not an object, or a `git_repository` source is null or has a URL that is not a
+	GitHub repository URL, so an unreadable source fails closed instead of being ignored. A source of
+	another kind (an object with no `git_repository` key) is not a repository and is skipped.
 	"""
 	context = session.get("session_context")
 	sources = context.get("sources") if isinstance(context, dict) else None
 	repos: list[str] = []
 	for source in sources if isinstance(sources, list) else []:
-		repository = source.get("git_repository") if isinstance(source, dict) else None
-		if repository is None:
+		if not isinstance(source, dict):
+			return None
+		if "git_repository" not in source:
 			continue
+		repository = source["git_repository"]
 		url = repository.get("url") if isinstance(repository, dict) else None
 		match = SOURCE_URL_PATTERN.match(url.strip()) if isinstance(url, str) else None
 		if not match:

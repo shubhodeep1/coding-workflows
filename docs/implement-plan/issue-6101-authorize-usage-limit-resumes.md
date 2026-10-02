@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#6101 (progress comment 5956414439)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5660-resume-usage-limit-stops
 - Project branch: claude/implement-plan-issue-6101-authorize-usage-limit-resumes   Final PR: #6106 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1
+- Status: BLOCKED
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #6108 (review)
+- Waiting on: PR #6108: twin sync (review round 1 fix)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01DV4YiX8EogPZxbF41aN7P7 (idle until the twin sync is copied; the resumed stage hands it the next wait)
 - Last updated: 2026-10-02
-- Last note: twin sync landed as 00ae9ca ([claude-twin-sync] issue-6101 phase 1, by the operator's #5660 driver session; both sha256 values verified; 342 tests passed on the synced head); ai:claude-blocked removed; review wait armed on PR #6108
+- Last note: review round 1 on e38f334: 1 valid finding fixed in the twin (unreadable `session_context.sources` entries now fail closed), 8 rejected; blocked on the twin sync of `workflow-templates/.claude/scripts/usage_limit_resumes.py`
 
 ## Phases
-1. [ ] Phase 1 — authorize usage-limit resumes by session source, origin, and lineage   — protected paths: .claude/scripts/usage_limit_resumes.py (via workflow-templates/.claude/** twin); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #6108 open (twin sync 00ae9ca, 2026-10-02; waiting on review); review rounds: 0; interventions: 0
+1. [ ] Phase 1 — authorize usage-limit resumes by session source, origin, and lineage   — protected paths: .claude/scripts/usage_limit_resumes.py (via workflow-templates/.claude/** twin); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #6108 open (twin sync 00ae9ca, 2026-10-02; review round 1 fix in the twin, waiting on its twin sync); review rounds: 1; interventions: 0
 
 ## Conformance
 
@@ -36,7 +36,10 @@
 - AD-6 [phase 1/1, 2026-10-02] A session a person opened in the app (`origin` `desktop_app`, no parent) sometimes runs a workflow itself, such as the invoking session of a manual `/implement-plan-claude` (2 of 47 such sessions on the live 100-session listing). Is it resumed? — Picked: A — no; it is skipped as `unknown_origin` and resumed by hand. Alternatives: B — resume it when its title matches a workflow title pattern. Why: §1; titles are written by sessions and cannot authorize anything, and the person who opened the session can resume it. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A parser behind a fail-closed authorization check must treat every entry it cannot read (a non-object, or a present but null field) as unreadable and refuse, not skip it; skipping lets one readable entry authorize the whole record. (files: workflow-templates/.claude/scripts/usage_limit_resumes.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)
 - Twin sync: 00ae9ca on the phase branch (2026-10-02 17:09Z), relayed by trigger trig_011fh92GLpoQjSZwejg3jbwf because the Claude issue pickup is stopped, so no `/reclarify` was posted
+- Review round 1 (2026-10-02, head e38f334, ledger fa993529…): fixed — `session_repos` returned the readable repositories and skipped a non-object source or a `git_repository: null` entry, so one allowed source authorized a session whose other sources could not be read, contrary to the documented "anything the script cannot read fails closed"; both now return None (`foreign_repo`, as the existing `not a url` case does), an object with no `git_repository` key is still another source kind and skipped. Rejected — the `SOURCE_URL_PATTERN` crash (the `?` makes the last `+` lazy, the group is not optional: `https://github.com/`, `https://github.com/.git`, and `https://github.com/owner` never match, so they fail closed as `foreign_repo`; tests now pin it), the `main` catch-all (premised on that crash), a distinct `unreadable_source` reason (the plan documents four reasons and `foreign_repo` for an unreadable URL), and binding the parent chain to the pickup (AD-1 B, a recorded non-goal)
+- Real-data evidence (review round 1 task gap): this account's live 100-session listing (2026-10-02 18:20Z) carries 108 sources, all `git_repository` objects with an `https://github.com/<owner>/<repo>` URL: no bare-hostname URL, no `git_repository: null`, no non-object entry, and no other source kind, so the round-1 tightening changes no live session's verdict
