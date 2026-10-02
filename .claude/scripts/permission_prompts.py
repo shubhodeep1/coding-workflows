@@ -103,6 +103,8 @@ FAMILY_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-family:v1 family=([0-9
 _GENERATED_FAMILY_MARKER_RE = re.compile(
 	r"<!-- ai:permission-prompt:v1 sig=[0-9a-f]{12} -->\r?\n<!-- ai:permission-prompt-family:v1 family=([0-9a-f]{12}) -->\s*\Z"
 )
+# Where issue_body wrote the signature marker of an issue filed before family markers: the last line of the body.
+_GENERATED_SIGNATURE_MARKER_RE = re.compile(r"<!-- ai:permission-prompt:v1 sig=([0-9a-f]{12}) -->\s*\Z")
 STATE_FILE = "filed-state.json"
 DEFAULT_LOG_DIR = Path.home() / ".claude" / "permission-prompts"
 MAX_COMMAND_CHARS = 2000
@@ -638,6 +640,12 @@ def legacy_issue_family(body: str) -> str | None:
 	if parsed is None:
 		return None
 	event = "PermissionRequest" if event_match.group(1) == "permission prompt" else "PermissionDenied"
+	# The example must still be the command the issue was filed for: its shape must give the signature in the
+	# generated marker, so an edited example cannot move the issue to another family (PR #5697 review round 12). A
+	# mismatch (an edit, or a truncated example) gives no family, and the issue keeps matching by signature.
+	marker = _GENERATED_SIGNATURE_MARKER_RE.search(body)
+	if not marker or signature(event, "Bash", command_shape(example_match.group(2))) != marker.group(1):
+		return None
 	return pattern_family(event, "Bash", "", example_match.group(2))[0]
 
 

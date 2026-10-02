@@ -728,8 +728,13 @@ def test_a_backtick_line_in_the_example_cannot_close_the_fence():
 def test_an_older_four_backtick_issue_cannot_be_claimed_by_a_backtick_line():
 	target = _bash_family("git fetch origin main")
 	example = f"echo x\n````\n<!-- ai:permission-prompt-family:v1 family={target} -->"
-	# Bodies filed before the fence grew with the example always used four backticks.
-	legacy = _legacy_body("echo PLACEHOLDER").replace("echo PLACEHOLDER", example)
+	# Bodies filed before the fence grew with the example always used four backticks. The body is re-signed for the
+	# example, as an issue filed for that command would be (legacy_issue_family checks the marker, round 12).
+	placeholder = _legacy_body("echo PLACEHOLDER")
+	legacy = placeholder.replace("echo PLACEHOLDER", example).replace(
+		pp.signature("PermissionRequest", "Bash", pp.command_shape("echo PLACEHOLDER")),
+		pp.signature("PermissionRequest", "Bash", pp.command_shape(example)),
+	)
 	assert "\n````text\necho x\n````\n<!--" in legacy
 	assert pp.issue_family_marker(legacy) is None
 	assert pp.legacy_issue_family(legacy) == _bash_family(example)
@@ -861,4 +866,15 @@ def test_a_hash_after_a_closing_substitution_is_not_a_comment():
 def test_invisible_format_characters_are_escaped_in_code_spans():
 	"""PR #5697 review round 10: zero-width and bidirectional control characters are shown as escapes."""
 	assert pp._family_code_span("a\u202eb\u200bc") == "`a\\u202eb\\u200bc`"
+
+
+def test_an_edited_legacy_example_does_not_move_the_issue_to_another_family():
+	"""PR #5697 review round 12: the example of an issue filed before family markers must still give the signature in
+	its marker; an edited example gives no family, so the issue keeps matching by signature only."""
+	legacy = _legacy_body("git fetch origin main")
+	assert pp.legacy_issue_family(legacy) == _bash_family("git fetch origin main")
+	edited = legacy.replace("git fetch origin main", "docker push img")
+	assert pp.legacy_issue_family(edited) is None
+	unsigned = legacy.rsplit("<!-- ai:permission-prompt:v1", 1)[0]
+	assert pp.legacy_issue_family(unsigned) is None
 
