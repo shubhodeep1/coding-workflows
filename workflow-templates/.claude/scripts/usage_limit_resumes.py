@@ -72,6 +72,11 @@ is never resumed twice for the same stop. A trigger's time is its
 disabled and no longer counts: when the resumed turn fails on the limit or
 on a rate limit again, the next wake picks the session again.
 
+Session ids are compared in one form: `cse_<x>` and `session_<x>` name the
+same session (a trigger's `persistent_session_id` can carry either), so a
+trigger bound by either form counts as that session's wake, and the pickup is
+recognised by either form.
+
 Selected sessions are ordered checkers first (title contains `— checker` or
 `status check-in`), then oldest `updated_at`. The first `limit` go to
 `resume`; the rest go to `pending` for the next wake.
@@ -131,6 +136,9 @@ LIMIT_TEXT_PATTERNS = (
 	re.compile(r"\bAPI Error\b[^\n]{0,80}?\brate[ _-]?limit", re.IGNORECASE),
 )
 PERMISSION_PROMPT_PATTERN = re.compile(r"^\s*approve or deny\b|\bwaiting on permission\b", re.IGNORECASE)
+# One session has two id forms: `session_<x>` (list_sessions, get_session) and
+# `cse_<x>` (seen as a trigger's `persistent_session_id`, 2026-10-02).
+RESUME_SESSION_ID_PATTERN = re.compile(r"^(?:session|cse)_(?P<suffix>[A-Za-z0-9]+)$")
 ISSUE_TITLE_PATTERN = re.compile(r"^#(\d+) · ")
 PR_TITLE_PATTERN = re.compile(r"\bPR #(\d+)\b")
 LOGIN_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$")
@@ -244,6 +252,12 @@ def _parse_time(value: object) -> dt.datetime | None:
 	return None
 
 
+def session_key(session_id: str) -> str:
+	"""Compare form of a session id: `cse_<x>` and `session_<x>` both become `session_<x>`; other ids stay as given."""
+	match = RESUME_SESSION_ID_PATTERN.match(session_id.strip())
+	return f"session_{match.group('suffix')}" if match else session_id.strip()
+
+
 def _rate_limit_info(session: dict) -> dict:
 	metadata = session.get("external_metadata")
 	info = metadata.get("rate_limit_info") if isinstance(metadata, dict) else None
@@ -312,9 +326,10 @@ def fire_offset_minutes(position: int) -> int:
 
 
 def _bound_wakes(triggers: list, errors: list) -> dict:
-	"""Map session id → `(wake time, is a resume trigger)` for every enabled trigger bound to it.
+	"""Map session key → `(wake time, is a resume trigger)` for every enabled trigger bound to it.
 
 	The wake time is `next_run_at` when readable, else `run_once_at`, and None when neither is readable.
+	The key is `session_key(persistent_session_id)`, so a trigger bound by the `cse_` form still counts.
 	"""
 	wakes: dict = {}
 	for position, trigger in enumerate(triggers):
@@ -330,7 +345,7 @@ def _bound_wakes(triggers: list, errors: list) -> dict:
 		wake_time = _parse_time(trigger.get("next_run_at"))
 		if wake_time is None:
 			wake_time = _parse_time(trigger.get("run_once_at"))
-		wakes.setdefault(session_id, []).append((wake_time, is_resume))
+		wakes.setdefault(session_key(session_id), []).append((wake_time, is_resume))
 	return wakes
 
 
@@ -367,7 +382,7 @@ def _signal(session: dict, kind: str, next_runs: list, now: dt.datetime) -> str 
 def _skip_reason(session: dict, kind: str, signal: str, pickup_session: str, next_runs: list, now: dt.datetime) -> str | None:
 	summary = _summary(session)
 	status = _text(session.get("session_status"))
-	if session.get("id") == pickup_session:
+	if session_key(_text(session.get("id"))) == session_key(pickup_session):
 		return "pickup"
 	if status == ARCHIVED_STATUS:
 		return "archived"
@@ -407,14 +422,15 @@ def select(sessions: list, triggers: list, pickup_session: str, login: str, limi
 		if not isinstance(session_id, str) or not session_id:
 			errors.append(f"session entry {position}: missing id")
 			continue
-		if session_id in seen:
+		key = session_key(session_id)
+		if key in seen:
 			continue
-		seen.add(session_id)
-		if session_id == pickup_session:
+		seen.add(key)
+		if key == session_key(pickup_session):
 			account_holds = limit_holds(_rate_limit_info(session), now)
 		title = _text(session.get("title"))
 		kind = session_kind(title)
-		next_runs = wakes.get(session_id, [])
+		next_runs = wakes.get(key, [])
 		signal = _signal(session, kind, next_runs, now)
 		if signal is None:
 			continue

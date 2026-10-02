@@ -344,6 +344,47 @@ def test_a_pending_resume_trigger_blocks_whatever_its_time(tmp_path, capsys):
 	assert result["resume"] == [] and _skips(result) == {"session_a": "wake_pending"}
 
 
+def test_a_trigger_bound_by_the_cse_id_form_counts_as_the_wake(tmp_path, capsys):
+	"""Conformance run 1 (2026-10-02): a live trigger carried `persistent_session_id` `cse_<x>` for session `session_<x>`."""
+	resume_trigger = _trigger("cse_a", "2026-09-30T12:45:00Z", name="Resume after usage limit (#5607)")
+	check_in = _trigger("cse_c", "2026-09-30T12:55:00Z")
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a"), _checker("session_c")], [resume_trigger, check_in])
+	assert result["resume"] == []
+	assert _skips(result) == {"session_a": "wake_pending", "session_c": "wake_pending"}
+
+
+def test_the_pickup_is_recognised_in_either_id_form(tmp_path, capsys):
+	"""A listing that names the pickup `cse_<x>` neither resumes it nor drops its account-wide hold-off."""
+	pickup = _pickup(rate_status="rejected", resets_at=FUTURE_RESET)
+	pickup["id"] = "cse_pickup"
+	pickup["session_status"] = "SESSION_STATUS_IDLE"
+	pickup["post_turn_summary"]["status_detail"] = LIMIT_TEXT
+	_, result = _run(tmp_path, capsys, [pickup, _session("session_a")])
+	assert result["not_reset"] is True
+	assert _skips(result) == {"cse_pickup": "pickup"}
+	assert result["resume"] == [] and _ids(result["pending"]) == ["session_a"]
+
+
+def test_both_id_forms_of_one_session_are_considered_once(tmp_path, capsys):
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a"), _session("cse_a")])
+	assert result["considered"] == 2
+	assert _ids(result["resume"]) == ["session_a"]
+
+
+@pytest.mark.parametrize(
+	("session_id", "key"),
+	[
+		("cse_01AbC", "session_01AbC"),
+		("session_01AbC", "session_01AbC"),
+		(" cse_01AbC ", "session_01AbC"),
+		("other-id", "other-id"),
+		("cse_", "cse_"),
+	],
+)
+def test_session_key(session_id, key):
+	assert resumes.session_key(session_id) == key
+
+
 @pytest.mark.parametrize("name", ["Resume after usage limit", "Resume after usage limits (#5607)"])
 def test_a_hand_named_resume_lookalike_is_an_ordinary_trigger(tmp_path, capsys, name):
 	"""PR #5718 review round 1 (head 49c078d): only names the stale sweep deletes count as resume triggers."""
