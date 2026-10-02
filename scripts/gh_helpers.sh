@@ -432,6 +432,19 @@ _gh_ratelimit_tg_alert()
 # Rate-limit errors  → wait until X-RateLimit-Reset, retry (up to max_attempts).
 # Other failures     → exponential backoff 1 s, 2 s, 4 s, …
 #
+# Stdout contract: each attempt's stdout is buffered in a temp file
+# and only the attempt that succeeds is copied to the caller's stdout.
+# `gh api` prints the error response body to stdout when a call fails,
+# so without the buffer a retry that succeeded after a rate limit
+# handed the caller the error bodies followed by the real response
+# (issue #5495: clarify.yml's `gh_retry gh api … > file` then read
+# `null`, `null`, `5016`). A failed attempt's stdout is dropped; one
+# warning line reports its size, never its content, because callers
+# grep gh_retry's stderr to pick a branch. A failure that never
+# succeeds writes nothing to stdout and returns 1. If the successful
+# attempt's output cannot be delivered (the reader closed the pipe),
+# the copy's non-zero status is returned and the command is not re-run.
+#
 # Usage:
 #   gh_retry gh api repos/owner/repo/issues
 #   gh_retry gh issue edit 42 --add-label bug
@@ -440,16 +453,29 @@ gh_retry()
 {
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	local attempt=1
-	local stderr_file
+	local stderr_file stdout_file
 	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX" 2>/dev/null); then
 		echo "::error::gh_retry: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
 		return 1
 	fi
+	if ! stdout_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null); then
+		echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+		rm -f "${stderr_file}"
+		return 1
+	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
-		if "$@" 2>"${stderr_file}"; then
-			rm -f "${stderr_file}"
-			return 0
+		if "$@" >"${stdout_file}" 2>"${stderr_file}"; then
+			local _gh_retry_replay_rc=0
+			cat "${stdout_file}" || _gh_retry_replay_rc=$?
+			rm -f "${stderr_file}" "${stdout_file}"
+			return "${_gh_retry_replay_rc}"
+		fi
+
+		if [ -s "${stdout_file}" ]; then
+			local _gh_retry_stdout_bytes
+			_gh_retry_stdout_bytes=$(wc -c < "${stdout_file}" 2>/dev/null | tr -d '[:space:]' || true)
+			echo "::warning::  gh_retry: dropped ${_gh_retry_stdout_bytes:-?} bytes of stdout from failed attempt ${attempt}/${max_attempts}" >&2
 		fi
 
 		local stderr_content
@@ -460,7 +486,7 @@ gh_retry()
 			if [ -n "${stderr_content}" ]; then
 				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 			fi
-			rm -f "${stderr_file}"
+			rm -f "${stderr_file}" "${stdout_file}"
 			return 1
 		fi
 
@@ -489,7 +515,7 @@ gh_retry()
 	if [ -s "${stderr_file}" ]; then
 		cat "${stderr_file}" >&2
 	fi
-	rm -f "${stderr_file}"
+	rm -f "${stderr_file}" "${stdout_file}"
 	return 1
 }
 

@@ -1281,6 +1281,19 @@ mode).
    carries `Fixes #N`; into any other branch, the final-merge stage closes the
    issue and labels it `ai:merged`. Verify-activation and `/deploy-activate`
    run only for projects based on the default branch.
+5. **Finished sessions are archived** (CLAUDE.md §26.I, issue #4887).
+   - A `/fix-claude-pr` fixer session archives itself when its PR merges or
+     closes.
+   - On every wake the pickup reads one `list_sessions` page and runs
+     `scripts/claude_session_janitor.py`. Across wakes it walks older pages
+     with a cursor, back 30 days. It archives:
+     - fixer and hold sessions whose PR merged or closed 2 hours ago or more;
+     - issue-start sessions whose issue is closed. A later stage session
+       does not count, because it may be one whose start failed (#5664);
+     - §26.D report sessions idle for 7 days.
+   - Sessions that are running, waiting on a permission prompt, or holding
+     an unanswered report question are left alone. So are checkers, stage
+     sessions, and operator sessions.
 
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without
@@ -1417,6 +1430,24 @@ Every PR-backed `claude/*` head runs in **Claude-fixer mode**
 `CLAUDE_FIXER_ENABLED=false`): the reviewer panel still reviews, but the
 GPT editor, conflict resolver, and review-blocked judge never run on it. A
 Claude session fixes it instead (CLAUDE.md §26 and §26.H).
+
+A review round is **clean** (auto-merge once the same-head check-run snapshot
+is fresh and ready) when the successful reviewers reported no finding and no
+task gap and at least half of the active reviewer panel, rounded up, returned
+`success` (6 active reviewers need 3, 5 need 3). A slot that only failed for
+infrastructure reasons (non-retryable error, output-token cap, empty output,
+retryable-failure limit, unmapped model) is dropped from the consensus ledger
+and does not block. A slot skipped for budget is not covered when it is the
+pass's only non-success slot: the pass then requests a partial finalize, no
+consensus ledger is written, and in Claude-fixer mode the hand-off step fails
+closed and hands the round to the Claude session (the partial-finalize
+continuation does not run for `claude/*` heads), as before. Beside a hard
+failure it is dropped like the others. A real finding or task gap
+from any successful reviewer still hands the round to Claude, and so does a
+round below the 50% floor. The hand-off step logs
+`CLAUDE_FIXER_PANEL_FLOOR successful=<n> active=<m> floor_met=<true|false|unknown>`;
+`unknown` (no status files and no active-models list) leaves today's rule in
+place.
 
 The deterministic pre-review skip (`AUTOFIX_SKIP_DOC_ONLY`,
 `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS`) applies to
@@ -1762,7 +1793,11 @@ through `clarify → plan → implement → review`.
   Test & Mark Stable Release run name, so every cycle shares one fingerprint),
   the failing step, and a normalised error signature built from the step's
   `##[error]` / `::error::` output (numbers, SHAs, URLs, and temp paths
-  stripped) — the same bug in ten consumers is one
+  stripped); a review/autofix report's signature comes from its evidence
+  without the reporter's own `failure_reason=` / `finalize_reason=` /
+  `consecutive_failed_runs=` / `flags:` header lines, led by the run's first
+  error (`AUTOFIX_FAILURE_FIRST_ERROR`), and an `identical_failure_cap` report's
+  from its validated `failure_fingerprint` — the same bug in ten consumers is one
   issue with an occurrence comment per report (`<!-- workflow-failure-heal:fp=… -->`).
   A recurrence after the previous heal issue closed increments the generation
   (`<!-- workflow-failure-heal:gen=N -->`, `root=…`); an escalation on a heal
@@ -1951,11 +1986,11 @@ through `clarify → plan → implement → review`.
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Mark a PR review thread resolved once the editor's validated `PR comment audit:` section gives its comment a disposition. `applied` waits for a productive commit and the editor safety checks; for `ignored` the editor's reason is posted as a thread reply first, so a reviewer can reopen. Resolution is keyed on the audited comment id, never on a path/line pair. Set `false` to keep threads untouched. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Cap on review threads resolved in a single autofix run. Threads above the cap are named in a `::warning::` and left open for the next iteration rather than dropped silently. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | How long a `queued` review run keeps suppressing a duplicate dispatch from `review_autofix_sweep.yml`. Past this age the run is treated as wedged, logged as `AUTOFIX_SWEEP_STALE_QUEUED`, and no longer blocks the sweep. `in_progress` runs are never discounted. Set `0` to restore the previous no-cutoff behaviour. |
-| `REVIEW_TIER_RESOLVER_ENABLED` | `false` | Enable the additive Phase I `lite \| standard \| full` review-tier resolver. While `false`, existing reviewer routing is unchanged. `AUTOFIX_SKIP_*` fast paths remain authoritative, and `[force-review]` / `force-review` still force `full`. |
-| `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the `lite` review tier. `lite` also requires the existing doc-only path set (`*.md`, `*.txt`, `*.rst`, `LICENSE*`, `CHANGELOG*`, `docs/**`) and reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator. |
-| `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.7-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to the full live reviewer roster. |
-| `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the `standard` review tier. `standard` also requires all changes to stay within one allowed top-level directory: `scripts/`, `prompts/`, `.github/workflows/`, or `tests/`. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to the full live reviewer roster. |
+| `REVIEW_TIER_RESOLVER_ENABLED` | `true` | Size-based `lite \| standard \| full` review tiers: `lite` runs 1 reviewer, `standard` 4, `full` the whole `REVIEWER_MODELS` panel. Set to `false` to turn the size tiers off: the full panel then runs unless `REVIEWER_RISK_TIER_ENABLED` is also on, in which case that resolver's selection (which can be smaller) stands. `AUTOFIX_SKIP_*` fast paths remain authoritative, `[force-review]` / `force-review` still force `full`, and so does a full panel the `REVIEWER_RISK_TIER_*` resolver already forced. The `REVIEW_TIER: tier=… reason=… models_source=… protected=…` log line records each decision. |
+| `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the `lite` (one-reviewer) tier. Any file type qualifies, but a diff touching a protected path (the same list as the deterministic skip gate: `agents.md` / `CLAUDE.md` / `unattended_system_instructions.md`, `.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`, and build, dependency, config and script files; both sides of a rename count) goes to `standard` instead. `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator. |
+| `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Reviewer slug for the `lite` tier. Empty (the default) draws one reviewer from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list (from `REVIEWER_MODELS` when that list is empty or names a slug not on the panel, with a warning for the latter), seeded by the PR number: the lowest `sha256("<PR number>:<model>")` wins, so a PR keeps the same reviewer on every round and rerun and PRs spread evenly across the pool (`models_source=random_lite`). A set value pins that reviewer (`models_source=configured_lite`); unknown or unavailable slugs fail open to the full live reviewer roster. |
+| `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the `standard` (four-reviewer) tier, in any folder. Larger diffs run the full panel. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | Comma-separated reviewer subset for the `standard` tier, and the pool an unpinned `lite` tier draws from. The default is the four cheapest panel models by list price; `google/gemini-3.8-flash` and `z-ai/glm-5.2`, the two most expensive, run only on the `full` panel. A set value pins those reviewers (`models_source=configured_standard`). If the value reaches the script empty (an empty repo variable falls back to this default instead), four reviewers are drawn from `REVIEWER_MODELS` the same way as `REVIEW_TIER_LITE_REVIEWER_SLUG` (`models_source=random_standard`); unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEWER_MAX_STEPS` | `120` | Hard turn cap per review-panel reviewer attempt. The reviewer watchdog kills an attempt that starts more OpenCode turns, and the slot fails without a retry or failback. Real reviewer passes peaked at 101 turns. |
 | `REVIEWER_TOOL_REPEAT_LIMIT` | `10` | Consecutive identical tool calls (same tool and same input) that end a review-panel reviewer attempt as a retryable `tool_repeat` failure (cheaper reasoning, then the reviewer's failback model). Minimum `2`. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
@@ -2608,6 +2643,8 @@ Any workflow or script that routes GitHub API calls through `scripts/gh_helpers.
 ```
 
 **Wait computation (`curl_gh_api`):** the retry wait is derived from the 403/429 response headers. A numeric `Retry-After` (what GitHub sends on secondary rate limits) takes precedence and the helper sleeps that many seconds; otherwise it sleeps until `X-RateLimit-Reset` (the primary window). Both paths keep the 600 s cap, 1 s floor, and 30 s fallback of `_sleep_until_reset`. Before this ordering a secondary-limit 403 was timed against the primary reset, which can be up to an hour out, so the helper slept the full 600 s cap where GitHub had asked for a few seconds. The `gh_retry` family still reads the reset from `GET /rate_limit`.
+
+**Output of a retried call (`gh_retry`):** `gh api` prints the error response body to stdout when a call fails, so `gh_retry` buffers each attempt's stdout in a temp file and prints only the buffer of the attempt that succeeds. A caller's `> file` or `$(…)` capture therefore holds only the successful response, even after rate-limited attempts (issue #5495: clarify run 36670937896 read `null`, `null`, `5016` from a file that held two rate-limit bodies before the issue). A failed attempt's output is dropped, and one stderr line reports its size (`::warning::  gh_retry: dropped <N> bytes of stdout from failed attempt <a>/<m>`), never its content. A call that never succeeds prints nothing to stdout and returns 1. If the successful output cannot be delivered because the reader closed the pipe, `gh_retry` returns non-zero without running the command again. `gh_retry_to_file` and `gh_api_json_to_file` already truncate their output file on every attempt; on final failure, `gh_retry_to_file` leaves the last error body in the file for the caller to log. The two inline `gh_retry()` retry loops in `.github/workflows/review_autofix.yml` (the standalone-validate dispatch fallback and the deterministic-skip-merge step) follow the same stdout contract and print the same dropped-bytes warning.
 
 **Throttling:** alerts are globally throttled to at most one per `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600` s = 1 h) across **all** workflow runs. The cooldown state is kept in a Telegram **pinned message** in the admin chat via an embedded marker `<!-- gh_rl_ts:EPOCH -->`, read with `getChat`. This deliberately avoids any GitHub API call for dedup state so the throttle still works while the GitHub API itself is the resource being limited. Previous pinned alerts are unpinned best-effort after a new alert is pinned.
 

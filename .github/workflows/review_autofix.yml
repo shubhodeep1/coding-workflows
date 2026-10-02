@@ -152,11 +152,18 @@ env:
   REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
   REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'high' }}
   REVIEWER_PASS2_REASONING_LARGE: ${{ vars.REVIEWER_PASS2_REASONING_LARGE || 'xhigh' }}
-  REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}
+  # Review tiers (scripts/review_run_reviewers.sh classify_review_tier): a diff
+  # of <= REVIEW_TIER_LITE_MAX_LOC lines touching no protected path gets one
+  # reviewer, any diff of <= REVIEW_TIER_STANDARD_MAX_LOC lines gets four, the
+  # rest the full panel. The standard tier defaults to the four cheapest panel
+  # models (google/gemini-3.8-flash and z-ai/glm-5.2, the two most expensive,
+  # run only on the full panel). An empty lite slug draws one reviewer from the
+  # standard list, seeded by the PR number; set either variable to pin reviewers.
+  REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}
   REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
-  REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}
+  REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}
   REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna' }}
+  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}
   REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
   REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
   REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -1609,12 +1616,29 @@ jobs:
             source ".codex-workflow-src/scripts/gh_helpers.sh" 2>/dev/null || true
           fi
           if ! type gh_retry >/dev/null 2>&1; then
+            # Buffers each attempt's stdout and prints only the successful
+            # attempt's, like scripts/gh_helpers.sh: gh api prints a failed
+            # response body to stdout, which would otherwise land in front
+            # of the real response in a $(gh_retry ...) capture (#5495).
             gh_retry() {
               local n=0 max=4 delay=2
+              local _gh_retry_inline_out _gh_retry_inline_bytes _gh_retry_inline_rc=0
+              if ! _gh_retry_inline_out="$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null)"; then
+                echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+                return 1
+              fi
               while :; do
-                if "$@"; then return 0; fi
+                if "$@" >"${_gh_retry_inline_out}"; then
+                  cat "${_gh_retry_inline_out}" || _gh_retry_inline_rc=$?
+                  rm -f "${_gh_retry_inline_out}"
+                  return "${_gh_retry_inline_rc}"
+                fi
                 n=$((n+1))
-                if [ "${n}" -ge "${max}" ]; then return 1; fi
+                if [ -s "${_gh_retry_inline_out}" ]; then
+                  _gh_retry_inline_bytes="$(wc -c <"${_gh_retry_inline_out}" 2>/dev/null | tr -d '[:space:]' || true)"
+                  echo "::warning::  gh_retry: dropped ${_gh_retry_inline_bytes:-?} bytes of stdout from failed attempt ${n}/${max}" >&2
+                fi
+                if [ "${n}" -ge "${max}" ]; then rm -f "${_gh_retry_inline_out}"; return 1; fi
                 sleep "${delay}"
                 delay=$((delay*2))
               done
@@ -1824,13 +1848,30 @@ jobs:
 
           # Inline retry wrapper (mirrors gh_retry pattern from
           # SUPPORT_SCRIPTS_DIR/gh_helpers.sh; we avoid loading the full
-          # support source here to keep this job lightweight).
+          # support source here to keep this job lightweight). Each attempt's
+          # stdout is buffered and only the successful attempt's is printed:
+          # gh api prints a failed response body to stdout, which would
+          # otherwise land in front of the real response in a
+          # $(gh_retry ...) capture (#5495).
           gh_retry() {
             local n=0 max=4 delay=2
+            local _gh_retry_inline_out _gh_retry_inline_bytes _gh_retry_inline_rc=0
+            if ! _gh_retry_inline_out="$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null)"; then
+              echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+              return 1
+            fi
             while :; do
-              if "$@"; then return 0; fi
+              if "$@" >"${_gh_retry_inline_out}"; then
+                cat "${_gh_retry_inline_out}" || _gh_retry_inline_rc=$?
+                rm -f "${_gh_retry_inline_out}"
+                return "${_gh_retry_inline_rc}"
+              fi
               n=$((n+1))
-              if [ "${n}" -ge "${max}" ]; then return 1; fi
+              if [ -s "${_gh_retry_inline_out}" ]; then
+                _gh_retry_inline_bytes="$(wc -c <"${_gh_retry_inline_out}" 2>/dev/null | tr -d '[:space:]' || true)"
+                echo "::warning::  gh_retry: dropped ${_gh_retry_inline_bytes:-?} bytes of stdout from failed attempt ${n}/${max}" >&2
+              fi
+              if [ "${n}" -ge "${max}" ]; then rm -f "${_gh_retry_inline_out}"; return 1; fi
               sleep "${delay}"
               delay=$((delay*2))
             done
@@ -2337,11 +2378,11 @@ jobs:
       REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}
       REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}
       FORCE_FULL_REVIEW_TIER: ${{ needs.gate.outputs.force_full_review_tier || 'false' }}
-      REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}
+      REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}
       REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
-      REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}
+      REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}
       REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,openai/gpt-6-luna' }}
+      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}
       REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
       REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
       REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
