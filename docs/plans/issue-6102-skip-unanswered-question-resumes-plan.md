@@ -45,7 +45,7 @@ The usage-limit selector (`.claude/scripts/usage_limit_resumes.py`, issue #5660)
 
 - §1: security first. Unknown `needs_action` wording fails closed (skipped, listed under `skipped`, where the handbook's manual fallback covers it).
 - §5: the smallest change that closes the finding. One helper and its tests, plus the docs that describe the skip reasons.
-- §6: no identifier is renamed or removed. The reason stays `needs_input`, and the JSON output shape is unchanged. New module-level names (`LIMIT_WORD_PATTERN`, `LIMIT_WAIT_WORD_PATTERN`, `HUMAN_REQUEST_PATTERN`, `_needs_action_texts`, `is_limit_wait`, `has_unanswered_request`, `NOT_AN_ANSWER_TEXT`) are checked against the module first.
+- §6: no identifier is renamed or removed. The reason stays `needs_input`, and the JSON output shape is unchanged. New module-level names (`LIMIT_WORD_PATTERN`, `LIMIT_WAIT_WORD_PATTERN`, `LIMIT_WAIT_START_PATTERN`, `HUMAN_REQUEST_PATTERN`, `_needs_action_texts`, `is_limit_wait`, `has_unanswered_request`, `NOT_AN_ANSWER_TEXT`) are checked against the module first.
 - §9: tabs in Python.
 - §20: a `changelog.d/` fragment (security fix).
 - §28.C and the interim twin-first default: `.claude/**` is edited only through `workflow-templates/.claude/scripts/usage_limit_resumes.py`. The root copy is synced by the operator from the twin-sync blocker.
@@ -53,7 +53,7 @@ The usage-limit selector (`.claude/scripts/usage_limit_resumes.py`, issue #5660)
 ## Approach
 
 1. Read `needs_action` from both summary copies (`post_turn_summary` and `external_metadata.post_turn_summary`), stripped.
-2. A `needs_action` is a **limit wait** when it carries no human-request marker (`Q<n>`, `?`, or the words reply, answer, decide, confirm, choose, approve) and either matches the usage-limit error text (`has_limit_text`) or names a limit (`limit`) together with a wait word (reset, wait, retry, resume, resend, try again).
+2. A `needs_action` is a **limit wait** when it carries no human-request marker (`Q<n>`, `?`, or the words reply, answer, decide, confirm, choose, approve) and either matches the usage-limit error text (`has_limit_text`) or starts with the wait or the limit and names a limit (`limit`) together with a wait word (reset, wait, retry, resume, resend, try again), so `merge PR #N once the limit resets` stays a request.
 3. A session **has an unanswered request** when any copy is non-empty and is not a limit wait.
 4. `_skip_reason` returns `needs_input` (after the existing `permission_prompt` check) when the session has an unanswered request, on either signal, or when the signal is `rate_limit_info` and `status_category` is `need_input`.
 5. Both prompts gain one fixed sentence: this message is not an answer to any question or approval request of yours; if one is still unanswered, keep waiting for the human's answer and end the turn without acting on it.
@@ -73,7 +73,7 @@ Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: the issue fixes th
 ## Implementation Steps
 
 Phase 1:
-1. `workflow-templates/.claude/scripts/usage_limit_resumes.py`: add the three patterns, `_needs_action_texts`, `is_limit_wait`, and `has_unanswered_request`; change the `needs_input` rule in `_skip_reason`; add `NOT_AN_ANSWER_TEXT` to both prompts; update the module docstring (signals and skip reasons).
+1. `workflow-templates/.claude/scripts/usage_limit_resumes.py`: add the four patterns, `_needs_action_texts`, `is_limit_wait`, and `has_unanswered_request`; change the `needs_input` rule in `_skip_reason`; add `NOT_AN_ANSWER_TEXT` to both prompts; update the module docstring (signals and skip reasons).
 2. `tests/test_usage_limit_resumes.py`: add tests for each goal; keep `test_text_signal_still_resumes_a_need_input_summary` and `test_rejected_snapshot_waiting_on_a_human_is_skipped`.
 3. `README.md` (pickup step 1a summary) and `agents.md` (selector skip reasons): describe the `needs_input` rule on both signals.
 4. `changelog.d/6102-skip-unanswered-question-resumes.md` (`security`).
@@ -112,7 +112,7 @@ Ships with the #5660 project (final PR #5678 into `main`) after the twin sync. N
 
 ## Auto-decisions
 
-- AD-1 [plan, 2026-10-02] How does the selector recognise an unanswered request on the `text` signal? — Picked: A — a non-empty `needs_action` in either summary copy that is not only a limit wait (no Q-ID, `?`, or reply/answer/decide/confirm/choose/approve; the limit error text or a limit plus a wait word), on both signals; a `need_input` summary with an empty `needs_action` still resumes. Alternatives: B — skip every `need_input` category on both signals; C — skip only a `needs_action` matching a list of question phrasings. Why: B would likely stop every limit-stopped session (the #5660 contract says a failed turn can still show `need_input`), and C fails open on wording it does not know. Applied in: phase 1 PR. Status: pending review
+- AD-1 [plan, 2026-10-02] How does the selector recognise an unanswered request on the `text` signal? — Picked: A — a non-empty `needs_action` in either summary copy that is not only a limit wait (no Q-ID, `?`, or reply/answer/decide/confirm/choose/approve; the limit error text, or text that starts with the wait or the limit and names a limit plus a wait word), on both signals; a `need_input` summary with an empty `needs_action` still resumes. Alternatives: B — skip every `need_input` category on both signals; C — skip only a `needs_action` matching a list of question phrasings. Why: B would likely stop every limit-stopped session (the #5660 contract says a failed turn can still show `need_input`), and C fails open on wording it does not know. Applied in: phase 1 PR. Status: pending review
 - AD-2 [plan, 2026-10-02] Should the resume prompts also say they are not an answer? — Picked: A — yes, one fixed sentence in both prompts. Alternatives: B — selector change only. Why: it covers the case the snapshot cannot see (an empty `needs_action` after a question) at the cost of one sentence. Applied in: phase 1 PR. Status: pending review
 - AD-3 [plan, 2026-10-02] Which skip reason does the new rule report? — Picked: A — the existing `needs_input`. Alternatives: B — a new `unanswered_request` reason. Why: same meaning, no new identifier (§6), and the docs already name it. Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-10-02] Update `.claude/commands/claude-issue-pickup.md`'s list of skip reasons? — Picked: A — no. Alternatives: B — add `needs_input` to it through the twin-sync blocker. Why: the file has no twin, its list already omits `needs_input` and is a summary (the script decides), and B adds a protected-path diff for wording only (§5). Applied in: no code change. Status: pending review
