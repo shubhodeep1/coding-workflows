@@ -419,7 +419,14 @@ def _events(actor=LOGIN, at=CREATED, label="ai:permission-prompt"):
 
 
 def _target(**overrides):
-	target = {"number": 4678, "state": "open", "state_reason": None, "user": {"login": LOGIN}, "body": "**Occurrences:** 1 (2026-09-27T23:49:14Z – 2026-09-27T23:49:14Z), session `session_01N`"}
+	target = {
+		"number": 4678,
+		"state": "open",
+		"state_reason": None,
+		"user": {"login": LOGIN},
+		"author_association": "OWNER",
+		"body": "**Occurrences:** 1 (2026-09-27T23:49:14Z – 2026-09-27T23:49:14Z), session `session_01N`",
+	}
 	target.update(overrides)
 	return target
 
@@ -431,8 +438,10 @@ def _fix(**overrides):
 		"merged_at": None,
 		"title": "Never edit files with an inline interpreter — project integration",
 		"body": "Fixes #4678",
-		"head": {"ref": "claude/implement-plan-issue-4678-inline-interpreter-rule"},
-		"base": {"ref": "main", "repo": {"default_branch": "main"}},
+		"user": {"login": LOGIN},
+		"author_association": "OWNER",
+		"head": {"ref": "claude/implement-plan-issue-4678-inline-interpreter-rule", "repo": {"full_name": SLUG}},
+		"base": {"ref": "main", "repo": {"full_name": SLUG, "default_branch": "main"}},
 	}
 	fix.update(overrides)
 	return fix
@@ -534,6 +543,73 @@ def test_fix_pr_linked_by_branch_name_only_is_accepted():
 	assert verdict["eligible"] is True
 
 
+# Issue #5809: in a public repository anyone can open a target issue and a fork
+# PR that names it. The target and the fix must come from trusted accounts, and
+# the fix must be a same-repository PR.
+FORK = "attacker/coding-workflows"
+
+
+@pytest.mark.parametrize("association", ["MEMBER", "COLLABORATOR"])
+def test_member_and_collaborator_targets_and_fixes_are_trusted(association):
+	verdict = _decide(target=_target(author_association=association), fix=_fix(author_association=association))
+	assert verdict["eligible"] is True and verdict["reasons"] == []
+
+
+@pytest.mark.parametrize(
+	"kwargs, reason",
+	[
+		# The target: an outsider's issue, with or without forged markers.
+		({"target": _target(author_association="NONE", user={"login": "attacker"}, body=FILED_BODY)}, "#4678 author attacker (NONE) is not an owner, member, or collaborator"),
+		({"target": _target(author_association="CONTRIBUTOR")}, "is not an owner, member, or collaborator"),
+		({"target": _target(author_association="FIRST_TIME_CONTRIBUTOR")}, "is not an owner, member, or collaborator"),
+		({"target": _target(author_association=None)}, "(no association) is not an owner, member, or collaborator"),
+		({"target": {key: value for key, value in _target().items() if key != "author_association"}}, "#4678 author"),
+		# The fix PR: a fork, a deleted fork, or an outsider's PR.
+		({"fix": _fix(head={"ref": "claude/implement-plan-issue-4678-x", "repo": {"full_name": FORK}})}, f"PR #4684 is not a same-repository PR (head {FORK})"),
+		({"fix": _fix(head={"ref": "claude/implement-plan-issue-4678-x", "repo": None})}, "PR #4684 is not a same-repository PR (head unknown)"),
+		({"fix": _fix(head={"ref": "claude/implement-plan-issue-4678-x"})}, "is not a same-repository PR"),
+		({"fix": _fix(base={"ref": "main", "repo": {"default_branch": "main"}})}, "is not a same-repository PR"),
+		({"fix": _fix(author_association="NONE", user={"login": "attacker"})}, "PR #4684 author attacker (NONE) is not an owner, member, or collaborator"),
+		({"fix": _fix(author_association="CONTRIBUTOR")}, "PR #4684 author"),
+		({"fix": {key: value for key, value in _fix().items() if key != "author_association"}}, "PR #4684 author"),
+	],
+)
+def test_untrusted_target_or_fix_blocks_the_close(kwargs, reason):
+	verdict = _decide(**kwargs)
+	assert verdict["eligible"] is False
+	assert any(reason in item for item in verdict["reasons"]), verdict["reasons"]
+
+
+def test_the_finding_scenario_is_not_eligible():
+	# An outsider's target with a forged class marker, and a fork PR whose title names it.
+	verdict = _decide(
+		target=_target(author_association="NONE", user={"login": "attacker"}, body=FILED_BODY),
+		fix=_fix(
+			title="Fix #4678",
+			body="",
+			user={"login": "attacker"},
+			author_association="NONE",
+			head={"ref": "patch-1", "repo": {"full_name": FORK}},
+		),
+	)
+	assert verdict["eligible"] is False
+	assert len([item for item in verdict["reasons"] if "#4678 author" in item or "PR #4684" in item]) == 3
+
+
+def test_same_repository_check_ignores_case():
+	verdict = _decide(fix=_fix(head={"ref": "claude/implement-plan-issue-4678-x", "repo": {"full_name": SLUG.upper()}}))
+	assert verdict["eligible"] is True
+
+
+def test_an_untrusted_target_gives_no_evidence():
+	verdict = _decide(target=_target(author_association="NONE", body=FILED_BODY))
+	assert verdict["eligible"] is False
+	assert verdict["target_class"] is None and verdict["target_occurrences"] is None
+	# The trusted target's own evidence is still read.
+	trusted = _decide(target=_target(body=FILED_BODY))
+	assert trusted["target_class"] == "inline-interpreter-write" and "session_01B" in trusted["target_occurrences"]
+
+
 def test_duplicate_check_reads_at_most_five_times(monkeypatch):
 	calls: list[str] = []
 	responses = {
@@ -609,6 +685,22 @@ def test_missing_security_pass_skip_only_disables_duplicate_check(tmp_path, monk
 	assert verdict["eligible"] is False and "security_pass_skip.py" in verdict["reasons"][0]
 
 
+def test_decide_without_security_pass_skip_fails_closed(tmp_path):
+	# PR #5862 review round 2: a direct caller of the pure decision must get a
+	# refusal, not an AttributeError, when security_pass_skip.py did not load.
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "permission_prompts.py").write_bytes(TEMPLATE_SCRIPT_PATH.read_bytes())
+	(scripts / "check_in_status.py").write_bytes((TEMPLATE_SCRIPT_PATH.parent / "check_in_status.py").read_bytes())
+	module = _load("permission_prompts_decide_without_skip_check", scripts / "permission_prompts.py")
+	assert module.security_pass_skip is None
+	untrusted_target = _target(author_association="NONE")
+	verdict = module.decide_duplicate_close(_issue(), _events(), untrusted_target, _fix(), LOGIN, 4843, 4678)
+	assert verdict["eligible"] is False
+	assert verdict["reasons"] == [module._SKIP_CHECK_ERROR] and "security_pass_skip.py" in verdict["reasons"][0]
+	assert (verdict["issue"], verdict["target"], verdict["fix_pr"]) == (4843, 4678, 4684)
+
+
 # ──────────────────────────────────────────────────────────────────
 # Instruction text: the carve-out and its limits
 # ──────────────────────────────────────────────────────────────────
@@ -639,6 +731,7 @@ def test_section_23i_states_the_four_conditions(claude_md):
 	assert "its author is the workflow/session account, the author applied the label at creation" in section
 	assert "2. **An open or merged fix exists.**" in section
 	assert "a closed-as-completed issue whose fix is on the default branch" in section
+	assert "The target's author is an owner, member, or collaborator, and the fix is a same-repository pull request (not a fork) by an owner, member, or collaborator" in section
 	assert "3. **Matching evidence.**" in section
 	assert "the same denial reason (for example `Classifier unavailable`) or the same command class" in section
 	assert "the session ids and timestamps involved" in section

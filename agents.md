@@ -1189,9 +1189,16 @@ reviews, comments, and conflicts stay a direct §12 request.
     (the `security_pass_skip.py` 120 s rule), and carries the signature
     marker and the "Filed by" line;
   - N's author is the authenticated account;
-  - M is another issue, open or closed as completed;
+  - M is another issue, open or closed as completed, by an owner, member,
+    or collaborator (`author_association`);
+  - P is a same-repository PR (head repository = base repository, so no
+    fork) by an owner, member, or collaborator;
   - P references M (branch `issue-<M>-` or `#<M>`), and is open or merged;
     for a closed M, P merged into the default branch.
+
+  An untrusted M also leaves the `target_class` and `target_occurrences`
+  evidence `null` (issue #5809). The trust fields come from the issue and PR
+  reads already made, so the budget stays at five GETs.
 
   `/implement-issue-claude` step 5a runs it before any plan exists. On
   `"eligible": true` the session posts one evidence comment

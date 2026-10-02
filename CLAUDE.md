@@ -1426,7 +1426,11 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
      asks.
   2. **An open or merged fix exists.** The duplicate target is an open
      issue with a fix in flight or merged, or a closed-as-completed issue
-     whose fix is on the default branch.
+     whose fix is on the default branch. The target's author is an owner,
+     member, or collaborator, and the fix is a same-repository pull request
+     (not a fork) by an owner, member, or collaborator: anyone can open an
+     issue or a fork PR in a public repository, so neither proves a fix
+     (issue #5809).
   3. **Matching evidence.** The session first posts one comment naming the
      target and the fix PR and giving concrete evidence that the cause is
      the same: the same denial reason (for example `Classifier

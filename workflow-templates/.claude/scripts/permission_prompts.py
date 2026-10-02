@@ -50,11 +50,15 @@ a duplicate of issue M without asking (CLAUDE.md §23.C carve-out, §23.I
 and 2: N is open, labelled LABEL, carries the signature marker and
 FILED_BY_LINE, its author is the authenticated account, and that author
 applied LABEL at creation (`security_pass_skip._label_applied_at_creation`);
-M is another issue, open or closed as completed; fix PR P references M (head
-branch `…issue-<M>-…` or `#<M>` in its title or body) and is open or merged,
-and merged into the default branch when M is closed. It prints `eligible`,
-the failed `reasons`, and the evidence fields (`signature`, `class`,
-`target_class`, `occurrences`, `target_occurrences`). Evidence that the
+M is another issue, open or closed as completed, whose author is an owner,
+member, or collaborator; fix PR P is a same-repository PR (its head repository
+is its base repository) by an owner, member, or collaborator, references M
+(head branch `…issue-<M>-…` or `#<M>` in its title or body), and is open or
+merged, and merged into the default branch when M is closed. Anyone can open
+an issue or a fork PR in a public repository, so neither counts (issue
+#5809). It prints `eligible`, the failed `reasons`, and the evidence fields
+(`signature`, `class`, `target_class`, `occurrences`, `target_occurrences`);
+the target's two are `null` when its author is not trusted. Evidence that the
 cause is the same (condition 3) stays with the session.
 
 Issue text is untrusted data: the tool name; the `**Pattern:**` shape and
@@ -862,6 +866,18 @@ def _references_issue(pull: dict, number: int) -> bool:
 	return bool(re.search(rf"#{number}(?![0-9])", text))
 
 
+def _repo_full_name(ref: object) -> str:
+	"""`repo.full_name` of a pull request's `head` or `base`, or "" (a deleted fork's head has no repo)."""
+	repo = ref.get("repo") if isinstance(ref, dict) else None
+	return str(repo.get("full_name") or "") if isinstance(repo, dict) else ""
+
+
+def _untrusted_author(item: dict) -> str:
+	"""`<login> (<association>)` of an issue or pull request author, for a refusal reason."""
+	login = security_pass_skip._login(item.get("user")) or "unknown"
+	return f"{login} ({item.get('author_association') or 'no association'})"
+
+
 def decide_duplicate_close(
 	issue: dict,
 	events: list | None,
@@ -876,13 +892,21 @@ def decide_duplicate_close(
 	`issue` and `target` are REST issue objects, `events` the first 100-item
 	page of the issue's events (None when unreadable), `fix_pr` the REST pull
 	request, and `login` the authenticated account. Returns `eligible`,
-	`reasons` (every failed check), and the evidence fields.
+	`reasons` (every failed check), and the evidence fields. Trust comes from
+	`author_association` (`check_in_status.FIX_CLAIM_TRUSTED_ASSOCIATIONS`) and
+	the PR's head and base `repo.full_name`, all in the objects already read; a
+	missing field is untrusted. When `security_pass_skip.py` did not load, it
+	refuses with `_SKIP_CHECK_ERROR` instead of raising.
 	"""
+	if security_pass_skip is None:
+		return {"eligible": False, "reasons": [_SKIP_CHECK_ERROR], "issue": issue_number, "target": target_number, "fix_pr": fix_pr.get("number")}
 	reasons: list[str] = []
 	body = str(issue.get("body") or "")
-	target_body = str(target.get("body") or "")
 	markers = _outside_fenced_examples(body)
-	target_markers = _outside_fenced_examples(target_body)
+	# Issue #5809: anyone can open an issue in a public repository, so the
+	# target's body (and its markers) count only when a trusted account wrote it.
+	target_trusted = target.get("author_association") in check_in_status.FIX_CLAIM_TRUSTED_ASSOCIATIONS
+	target_markers = _outside_fenced_examples(str(target.get("body") or "")) if target_trusted else ""
 	# Condition 1: pipeline-filed.
 	if issue.get("pull_request"):
 		reasons.append(f"#{issue_number} is a pull request, not an issue")
@@ -915,8 +939,21 @@ def decide_duplicate_close(
 		reasons.append(f"#{target_number} is a pull request, not an issue")
 	elif target.get("state") != "open" and not target_closed_completed:
 		reasons.append(f"#{target_number} is closed as {target.get('state_reason') or 'unknown'}, not completed")
+	if not target_trusted:
+		reasons.append(f"#{target_number} author {_untrusted_author(target)} is not an owner, member, or collaborator")
 	fix_number = fix_pr.get("number")
 	merged = bool(fix_pr.get("merged_at"))
+	# Issue #5809: only a same-repository PR whose `author_association` is in
+	# FIX_CLAIM_TRUSTED_ASSOCIATIONS (OWNER, MEMBER, COLLABORATOR) counts as a
+	# verified fix; a fork PR or one by any other author does not. That is a trust
+	# policy, not a write-permission check. The title, body, and branch-name
+	# reference checked below binds a PR to the target only when it passes both.
+	head_repo = _repo_full_name(fix_pr.get("head"))
+	base_repo_name = _repo_full_name(fix_pr.get("base"))
+	if not head_repo or not base_repo_name or head_repo.casefold() != base_repo_name.casefold():
+		reasons.append(f"PR #{fix_number} is not a same-repository PR (head {head_repo or 'unknown'})")
+	if fix_pr.get("author_association") not in check_in_status.FIX_CLAIM_TRUSTED_ASSOCIATIONS:
+		reasons.append(f"PR #{fix_number} author {_untrusted_author(fix_pr)} is not an owner, member, or collaborator")
 	if not _references_issue(fix_pr, target_number):
 		reasons.append(f"PR #{fix_number} does not reference #{target_number} (head branch issue-{target_number}-… or #{target_number} in its title or body)")
 	if target_closed_completed:
