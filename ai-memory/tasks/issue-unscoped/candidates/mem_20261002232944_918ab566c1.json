@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:486-499 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_segment_runs_a_shell()` does not recognize `source` or `.` when invoked through Bash\u2019s `command` or `builtin` wrapper, allowing credentials in piped input to be posted unmasked.\n  WHY: The pipeline is not withheld, and credential-like text inside the producer\u2019s quoted argument is not extracted; severity disagreement: deepseek_deepseek-v4-pro and qwen_qwen3_7-plus rated this MAJOR, while google_gemini-3_8-flash, openai_gpt-6-luna, and z-ai_glm-5_2 rated it BLOCKER.\n- .claude/scripts/permission_prompts.py:811 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash]\n  PROBLEM: `_segment_credentials()` misses `eval` when invoked through the `builtin` or `command` wrapper, so credentials inside the evaluated command string are not collected.\n  WHY: `_shell_line_credentials()` is not called on the argument string, leaving the secret unmasked in the posted command.\n- .claude/scripts/permission_prompts.py:937 and 942 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `<(` and `>(` checks in `_command_line_credentials()` are unreachable because the lexer splits those forms into separate tokens.\n  WHY: `bash <(printf 'mysql -pS3cretPass')` is not withheld, and the credential is not extracted before the command is posted.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py | severity=MAJOR | confidence=4\n  Line or code reference: 937 and 942\n  PROBLEM: The `<(` and `>(` checks in `_command_line_credentials()` are dead code because the lexer splits these forms into separate tokens.\n  WHY: `bash <(printf 'mysql -pS3cretPass')` is not withheld, and the credential is not extracted before the command is posted.\n- .claude/scripts/permission_prompts.py | severity=MAJOR | confidence=4\n  Line or code reference: 486-499\n  PROBLEM: `_segment_runs_a_shell()` misses `source` and `.` when invoked through `command` or `builtin`.\n  WHY: Piped credential text is not withheld and is posted unmasked.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/scripts/permission_prompts.py | severity=BLOCKER | confidence=5\n  Line or code reference: lines 486-499 (_segment_runs_a_shell)\n  PROBLEM: `_segment_runs_a_shell()` misses `source` and `.` when invoked through `command` or `builtin`.\n  WHY: Sensitive input piped to these shell readers is not withheld, and the secret password is posted unmasked.\n- .claude/scripts/permission_prompts.py | severity=MAJOR | confidence=4\n  Line or code reference: line 811 (_segment_credentials)\n  PROBLEM: `_segment_credentials` misses `eval` when invoked through `builtin` or `command`.\n  WHY: Credential flags inside the evaluated command string are not collected, so the command is posted with the secret unmasked.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py | severity=BLOCKER | confidence=5\n  Line or code reference: _segment_runs_a_shell(), lines 497-499; pipeline handling, lines 936-941\n  PROBLEM: Piped commands invoking the `source` builtin through Bash\u2019s `command` or `builtin` wrapper are not recognized as shell readers.\n  WHY: The pipeline is not withheld, and the producer\u2019s quoted argument containing a credential remains unmasked in the posted example.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/permission_prompts.py (and twin workflow-templates/.claude/scripts/permission_prompts.py) | severity=MAJOR | confidence=5\n  Line or code reference: `_segment_runs_a_shell()` (lines ~493-499), specifically the `start` computation that skips only assignments, `{`, `!`, and digit words before checking `words[start] in _SOURCE_COMMANDS`\n  PROBLEM: `_segment_runs_a_shell()` does not recognize `source` or `.` when invoked through Bash\u2019s `command` or `builtin` wrapper.\n  WHY: The shell-reading command is not recognized, so piped credential text remains in the posted command example.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/permission_prompts.py | severity=BLOCKER | confidence=5\n  Line or code reference: _segment_runs_a_shell, lines 493-499 (and the twin at workflow-templates/.claude/scripts/permission_prompts.py)\n  PROBLEM: `_segment_runs_a_shell` recognizes `_SOURCE_COMMANDS` only at the command word position and misses `source` or `.` behind `command` or `builtin`.\n  WHY: The pipeline is not withheld, `_segment_credentials` does not collect the password from the producer\u2019s quoted argument, and the password is posted verbatim.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b8339ad4e8ce3dedf647ace51311c594200513658ff4d105a3c0ccd155e585b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "37076069852",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37076069852",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002232944_918ab566c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "37076069852"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T23:29:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
