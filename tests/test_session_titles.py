@@ -85,7 +85,7 @@ def test_rename_rule_never_stacks_prefixes():
 
 
 def test_checker_copies_one_of_three_filled_titles(plan_cmd):
-	assert "Its title comes from the same field: `success` → \"<title on success>\"; `review` → \"<title on review round>\"; `block` → \"<title on block>\"." in plan_cmd
+	assert "Its title comes from the same field: `success` → \"<title on success>\"; `review` → \"<title on review round>\"; `block` → \"<title on block>\"; `rebuild` → \"<title on block>\" with its last ` — ` part replaced by ` — base rebuild`." in plan_cmd
 	assert "Use that title exactly as written here; never build one yourself." in plan_cmd
 	assert "title = the title you picked above, and the prompt `/effort high` and nothing else" in plan_cmd
 	# The arming stage fills them.
@@ -178,7 +178,7 @@ def test_fixer_takes_the_issue_from_the_head_ref_only():
 def test_claude_md_keeps_the_check_in_title_exact_and_prefixes_fixer_and_report(claude_md):
 	assert "`title` = `PR #<n> status check-in`" in claude_md
 	assert "select a session titled exactly `PR #<n> status check-in`" in claude_md
-	assert "this title never takes the `#<issue> · ` prefix other sessions carry, so the exact match holds" in claude_md
+	assert "this title never takes the `#<issue> · ` prefix other sessions carry, so the match holds" in claude_md
 	assert "the PR's source issue number when it has one (it goes first in a fresh fixer's title, §26.C step 5)" in claude_md
 	assert "`title` = `PR #<n> — fix <kind>` (with `#<issue> · ` in front when the instructions name a source issue)" in claude_md
 	# Both §26.D report titles (merged and closed) take the issue prefix.

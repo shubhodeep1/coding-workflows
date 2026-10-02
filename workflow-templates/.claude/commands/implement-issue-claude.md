@@ -44,7 +44,7 @@ $ARGUMENTS
    - The issue is an **`ai:security` follow-up** → keep the named base: the audited code lives on the project branch it names.
    - Otherwise, for every file the plan **changes** (not one it creates), run `git cat-file -e origin/<default>:<path>`. **All present** → use the default branch as `<issue base>` and record `AD-<n>` `Base: <default> instead of <named> (D13)`. **Any missing** → keep the named base and record `AD-<n>` `Base: <named> instead of <default> (D13): <missing paths> missing on <default>`.
 
-   Write the chosen branch into the plan header's `Base branch:` line. The auto-decision goes under the plan's `## Auto-decisions` like every other planning decision. A project that still runs on a non-default base is checked for a dead base at every stage and check-in, and rebuilt on the default branch when that base's pull request closes without merging (`/implement-plan-claude` [Issue Mode](.claude/commands/implement-plan-claude.md#issue-mode)).
+   Write the chosen branch into the plan header's `Base branch:` line. The auto-decision goes under the plan's `## Auto-decisions` like every other planning decision. A project that still runs on a non-default base is checked for a dead base at every stage and check-in, and rebuilt on the default branch when that base's pull request closes without merging (`/implement-plan-claude` [Issue Mode](implement-plan-claude.md#issue-mode)).
 
 7. **Post the progress comment.** Create the issue's single progress comment (`mcp__github__add_issue_comment`) starting `<!-- ai:claude-issue-progress:v1 -->`. It carries:
    - the plan title and path;

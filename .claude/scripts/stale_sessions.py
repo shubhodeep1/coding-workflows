@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Deterministic session janitor for the Claude issue pickup (plan D7, D12).
+"""Prompt-stall report (plan D12) and session archive rules (plan D7) for the Claude issue pickup.
 
-Every automation flow in this repository starts claude.ai sessions: issue
+The hourly Claude issue pickup (`.claude/commands/claude-issue-pickup.md`,
+`— wake.`, step 3b) runs this script with `--stalls-only` to list the
+sessions stuck on a permission prompt. Without the flag the script also
+applies the archive rules below to the automation sessions (issue
 implementation sessions, `/implement-plan-claude` stages and checkers,
-CLAUDE.md §26 checkers and `/fix-claude-pr` fixers. Nothing archives most of
-them once their pull request or issue is finished, so the session list only
-grows. The hourly Claude issue pickup (`.claude/commands/claude-issue-pickup.md`,
-`— wake.`) lists the sessions, runs this script, and calls `archive_session`
-on each id it prints. The script never archives anything itself.
+CLAUDE.md §26 checkers and `/fix-claude-pr` fixers) and prints the ids a
+caller would archive; since operator decision Q3: A nothing runs it that
+way. The script never archives anything itself.
 
 It also lists the sessions stuck on a permission prompt (D12), so the pickup
 can notify once per stall and file it as an `ai:permission-prompt` issue.

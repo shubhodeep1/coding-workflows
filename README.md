@@ -1279,9 +1279,14 @@ mode).
    later stage (issue #4525). The pickup starts only items whose binding
    checks out (below). That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
    as `/implement-plan-claude` in issue mode. The project is built on the
-   branch the issue names in an `Integration branch:` / `Target branch:` line:
-   a security follow-up on its project's branch, a heal issue on `stable` or
-   a pull request's branch. Otherwise it is built on the default branch.
+   default branch unless the issue names another branch in an
+   `Integration branch:` / `Target branch:` line and the code it fixes is
+   missing on the default branch (plan D13): a security follow-up always
+   stays on its project's branch, and any other named base (a heal issue on
+   `stable`, a pull request's branch) is kept only when a file the plan
+   changes does not exist on the default branch. A project still on a
+   non-default base is rebuilt on the default branch when that base's pull
+   request closes without merging.
    Every PR uses `Refs #N` except the final PR. Into the default branch it
    carries `Fixes #N`; into any other branch, the final-merge stage closes the
    issue and labels it `ai:merged`. Verify-activation and `/deploy-activate`
