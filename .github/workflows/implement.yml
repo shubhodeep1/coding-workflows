@@ -620,7 +620,6 @@ jobs:
         id: baseline_refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ISSUE_BODY: ${{ github.event.issue.body || '' }}
           ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
         run: |
@@ -633,14 +632,7 @@ jobs:
           from pathlib import Path
 
           output_path = Path(os.environ["GITHUB_OUTPUT"])
-          issue_body = os.environ.get("ISSUE_BODY", "")
-          issue_body_file = Path(os.environ.get("ISSUE_BODY_FILE", ""))
-          if issue_body_file.is_file():
-              try:
-                  issue_body = issue_body_file.read_text(encoding="utf-8")
-              except (OSError, UnicodeDecodeError):
-                  print("::notice::Baseline override ignored: ISSUE_BODY_FILE could not be read; falling back to event body.")
-          issue_body = issue_body.replace("\r\n", "\n")
+          issue_body_file = os.environ.get("ISSUE_BODY_FILE", "")
           issue_author_association = os.environ.get("ISSUE_AUTHOR_ASSOCIATION", "").strip().upper()
           feature_enabled = os.environ.get("REISSUE_PRESERVE_BASELINE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
           repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -667,6 +659,15 @@ jobs:
           if issue_author_association not in trusted_issue_associations:
               notice("Baseline override ignored: issue author association is not trusted for review-blocked baseline reuse.")
               emit(status="issue-author-untrusted")
+              raise SystemExit(0)
+
+          try:
+              if not issue_body_file:
+                  raise OSError("ISSUE_BODY_FILE is unset")
+              issue_body = Path(issue_body_file).read_text(encoding="utf-8").replace("\r\n", "\n")
+          except (OSError, UnicodeDecodeError):
+              notice("Baseline override ignored: ISSUE_BODY_FILE unavailable; using resolved checkout ref.")
+              emit(status="metadata-missing")
               raise SystemExit(0)
 
           # The machine-generated footer is the last block the review-blocked
@@ -1432,14 +1433,14 @@ jobs:
           set -euo pipefail
           workspace_shell_env="${RUNTIME_DIR}/workspace-shell.env"
           cat > "${workspace_shell_env}" <<'EOF'
+          export GIT_DIR="${GITHUB_WORKSPACE}/.git"
+          export GIT_WORK_TREE="${WORKSPACE_PATH}"
           if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then
             cd "${WORKSPACE_PATH}"
           fi
           EOF
           {
             echo "BASH_ENV=${workspace_shell_env}"
-            echo "GIT_DIR=${GITHUB_WORKSPACE}/.git"
-            echo "GIT_WORK_TREE=${WORKSPACE_PATH}"
           } >> "$GITHUB_ENV"
 
       - name: Run workspace after_create hook
@@ -5646,3 +5647,10 @@ jobs:
              [[ "${CODEX_FAILURE_LOG_DIR}" =~ ^${RUNNER_TEMP:-/tmp}/codex-implement-failure-logs$ ]]; then
             rm -rf "${CODEX_FAILURE_LOG_DIR}"
           fi
+
+      # Runner environment-file updates reach checkout's JavaScript post-actions;
+      # unsetting BASH_ENV in this shell would not change later processes.
+      - name: Clear workspace shell context for post-actions
+        if: always()
+        run: |
+          echo "BASH_ENV=" >> "$GITHUB_ENV"
