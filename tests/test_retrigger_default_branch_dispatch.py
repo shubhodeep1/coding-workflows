@@ -322,6 +322,12 @@ gh() {
 	[ "${1:-}" = "api" ] || return 1
 	printf '%s\n' "$*" >> "${GH_CALLS}"
 	case " $* " in
+		*" repos/owner/repo --jq .default_branch "*)
+			# The REST fallback of _autofix_pr_named_review_default_branch
+			# (issue #5838); gh applies --jq itself, so print the bare value.
+			[ -n "${REST_DEFAULT_BRANCH:-}" ] || return 1
+			printf '%s\n' "${REST_DEFAULT_BRANCH}"
+			;;
 		*" event=workflow_dispatch "*)
 			[ "${PR_NAMED_FAIL:-0}" = "1" ] && return 1
 			cat "${PR_NAMED_FIXTURE}"
@@ -331,13 +337,27 @@ gh() {
 	esac
 }
 
+eval "$(extract_fn _autofix_pr_named_review_default_branch)"
 eval "$(extract_fn _autofix_pr_named_review_runs)"
 eval "$(extract_fn __FN__)"
 __FN__ "$@"
 """
 
+DEFAULT_BRANCH = "main"
+# The event payload GitHub writes for the run (issue #5838): the helper reads
+# the default branch from it when it names this repository.
+EVENT_PAYLOAD = {"repository": {"full_name": "owner/repo", "default_branch": DEFAULT_BRANCH}}
 
-def _run_probe(fn: str, branch_runs: list[dict], pr_named_runs: list[dict], *args: str, pr_named_fail: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
+
+def _run_probe(
+	fn: str,
+	branch_runs: list[dict],
+	pr_named_runs: list[dict],
+	*args: str,
+	pr_named_fail: bool = False,
+	event_payload: object = EVENT_PAYLOAD,
+	rest_default_branch: str = "",
+) -> tuple[subprocess.CompletedProcess, list[str]]:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		branch_fixture = tmp_path / "branch.json"
@@ -347,6 +367,7 @@ def _run_probe(fn: str, branch_runs: list[dict], pr_named_runs: list[dict], *arg
 		calls = tmp_path / "calls.txt"
 		calls.write_text("", encoding="utf-8")
 		env = dict(os.environ)
+		env.pop("GITHUB_EVENT_PATH", None)
 		env.update(
 			{
 				"GITHUB_REPOSITORY": "owner/repo",
@@ -354,14 +375,19 @@ def _run_probe(fn: str, branch_runs: list[dict], pr_named_runs: list[dict], *arg
 				"PR_NAMED_FIXTURE": str(pr_named_fixture),
 				"GH_CALLS": str(calls),
 				"PR_NAMED_FAIL": "1" if pr_named_fail else "0",
+				"REST_DEFAULT_BRANCH": rest_default_branch,
 			}
 		)
+		if event_payload is not None:
+			event_file = tmp_path / "event.json"
+			event_file.write_text(event_payload if isinstance(event_payload, str) else json.dumps(event_payload), encoding="utf-8")
+			env["GITHUB_EVENT_PATH"] = str(event_file)
 		script = _PROBE_RUNNER.replace("__HELPERS__", str(GH_HELPERS)).replace("__FN__", fn)
 		proc = subprocess.run(["bash", "-c", script, "bash", *args], capture_output=True, text=True, env=env)
 		return proc, [line for line in calls.read_text(encoding="utf-8").splitlines() if line]
 
 
-def _pr_named(run_id: int, status: str, conclusion: str | None, created_epoch: int, *, pr: str = PR, wrapper: str = "internal-review.yml") -> dict:
+def _pr_named(run_id: int, status: str, conclusion: str | None, created_epoch: int, *, pr: str = PR, wrapper: str = "internal-review.yml", head_branch: str | None = DEFAULT_BRANCH) -> dict:
 	title = f"Internal: AI Review & Autofix [pr:{pr}]" if wrapper == "internal-review.yml" else f"AI Review [pr:{pr}]"
 	return {
 		"id": run_id,
@@ -371,6 +397,7 @@ def _pr_named(run_id: int, status: str, conclusion: str | None, created_epoch: i
 		"created_at": _iso(created_epoch),
 		"path": f".github/workflows/{wrapper}",
 		"display_title": title,
+		"head_branch": head_branch,
 		"head_sha": "d" * 40,
 	}
 
@@ -630,6 +657,7 @@ def _unnamed_dispatch(run_id: int, status: str, conclusion: str | None, created_
 		"created_at": _iso(created_epoch),
 		"path": ".github/workflows/ai-review.yml",
 		"display_title": "AI Review",
+		"head_branch": DEFAULT_BRANCH,
 		"head_sha": "d" * 40,
 	}
 
@@ -715,3 +743,247 @@ def test_budget_unnamed_check_skips_pull_request_runs() -> None:
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 	assert "reason=unnamed_dispatch_run" not in proc.stderr
 	assert "event=pull_request" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# Provenance of PR-named runs (issue #5838)
+# ---------------------------------------------------------------------------
+# A run's name comes from the workflow file at the dispatched ref, so a branch
+# writer can dispatch a wrapper copy titled for another PR. A PR-named run
+# counts only when it was dispatched on the default branch, from the wrapper
+# that sets that name.
+
+DEFAULT_BRANCH_READ = "repos/owner/repo --jq .default_branch"
+
+
+def _listing_calls(calls: list[str]) -> list[str]:
+	return [call for call in calls if "event=workflow_dispatch" in call]
+
+
+def test_peer_check_ignores_pr_named_runs_dispatched_on_another_branch() -> None:
+	missing_branch = _pr_named(123, "in_progress", None, PUSH_EPOCH)
+	del missing_branch["head_branch"]
+	proc, calls = _run_probe(
+		PEER,
+		[],
+		[
+			_pr_named(120, "in_progress", None, PUSH_EPOCH, head_branch="attacker/forged-review"),
+			_pr_named(121, "queued", None, PUSH_EPOCH, head_branch=BRANCH),
+			_pr_named(122, "queued", None, PUSH_EPOCH, head_branch=None),
+			_pr_named(124, "queued", None, PUSH_EPOCH, head_branch=""),
+			missing_branch,
+		],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+	)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert "peer_count=0 peer_run=- peer_path=-" in proc.stdout
+	assert len(_listing_calls(calls)) == 1, calls
+
+
+def test_peer_check_requires_the_exact_wrapper_for_each_name() -> None:
+	swapped_internal = _pr_named(130, "in_progress", None, PUSH_EPOCH)
+	swapped_internal["path"] = ".github/workflows/ai-review.yml"
+	swapped_consumer = _pr_named(131, "in_progress", None, PUSH_EPOCH, wrapper="ai-review.yml")
+	swapped_consumer["path"] = ".github/workflows/internal-review.yml"
+	yaml_suffix = _pr_named(132, "in_progress", None, PUSH_EPOCH)
+	yaml_suffix["path"] = ".github/workflows/internal-review.yaml"
+	prefixed = _pr_named(133, "in_progress", None, PUSH_EPOCH)
+	prefixed["path"] = "attacker/.github/workflows/internal-review.yml"
+	nested = _pr_named(134, "in_progress", None, PUSH_EPOCH, wrapper="ai-review.yml")
+	nested["path"] = ".github/workflows/sub/ai-review.yml"
+	pull_request_event = _pr_named(135, "in_progress", None, PUSH_EPOCH)
+	pull_request_event["event"] = "pull_request"
+	proc, _ = _run_probe(
+		PEER,
+		[],
+		[swapped_internal, swapped_consumer, yaml_suffix, prefixed, nested, pull_request_event],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+	)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert "peer_count=0" in proc.stdout
+
+
+def test_peer_check_still_counts_a_default_branch_run_beside_forged_ones() -> None:
+	proc, _ = _run_probe(
+		PEER,
+		[],
+		[
+			_pr_named(140, "in_progress", None, PUSH_EPOCH, head_branch="attacker/forged-review"),
+			_pr_named(141, "queued", None, PUSH_EPOCH, wrapper="ai-review.yml"),
+		],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+	)
+	assert proc.returncode == 0, (proc.stdout, proc.stderr)
+	assert "peer_count=1 peer_run=141 peer_path=.github/workflows/ai-review.yml" in proc.stdout
+
+
+def test_budget_ignores_a_forged_pr_named_retry_from_another_branch() -> None:
+	# The exploit: a completed run titled for this PR, dispatched on another
+	# branch after the push, must not consume the editor-changes-lost retry.
+	proc, calls = _run_probe(
+		BUDGET,
+		[_branch_run(300, HEAD, "completed", "cancelled", PUSH_EPOCH)],
+		[_pr_named(350, "completed", "success", PUSH_EPOCH + 600, head_branch="attacker/forged-review")],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		HEAD,
+		str(PUSH_EPOCH - 60),
+	)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert "prior_completed=0 pr_named_completed=0" in proc.stdout
+	assert len(calls) == 2, calls
+
+
+def test_budget_treats_a_current_run_from_another_branch_as_unnamed() -> None:
+	# A dispatch run of another branch is never PR-named, so its own retry
+	# could not count it: it consumes the budget (fail closed).
+	proc, _ = _run_probe(
+		BUDGET,
+		[_branch_run(300, HEAD, "completed", "cancelled", PUSH_EPOCH)],
+		[_pr_named(int(CURRENT_RUN), "in_progress", None, PUSH_EPOCH + 600, head_branch="feature/x")],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		HEAD,
+		str(PUSH_EPOCH - 60),
+		"workflow_dispatch",
+	)
+	assert proc.returncode == 0, (proc.stdout, proc.stderr)
+	assert "reason=unnamed_dispatch_run" in proc.stderr
+
+
+def test_unresolved_default_branch_fails_the_peer_check_open_without_a_listing_call() -> None:
+	proc, calls = _run_probe(
+		PEER,
+		[],
+		[_pr_named(111, "in_progress", None, PUSH_EPOCH)],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		event_payload=None,
+	)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert (
+		f"AUTOFIX_PR_NAMED_REVIEW_PROVENANCE pr={PR} repo=owner/repo outcome=default_branch_unresolved pr_named_matching=disabled"
+		in proc.stderr
+	)
+	assert "reason=pr_named_api_error" in proc.stderr
+	assert "peer_count=0" in proc.stdout
+	assert _listing_calls(calls) == [], calls
+	assert sum(DEFAULT_BRANCH_READ in call for call in calls) == 1, calls
+
+
+def test_unresolved_default_branch_fails_the_budget_closed_without_a_listing_call() -> None:
+	proc, calls = _run_probe(
+		BUDGET,
+		[_branch_run(300, HEAD, "completed", "cancelled", PUSH_EPOCH)],
+		[],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		HEAD,
+		str(PUSH_EPOCH - 60),
+		event_payload=None,
+	)
+	assert proc.returncode == 0, (proc.stdout, proc.stderr)
+	assert "outcome=default_branch_unresolved" in proc.stderr
+	assert "reason=pr_named_api_error" in proc.stderr
+	assert "AUTOFIX_CHANGES_LOST_BUDGET " not in proc.stdout
+	assert _listing_calls(calls) == [], calls
+
+
+def test_event_payload_answers_without_a_rest_read() -> None:
+	for payload in (
+		EVENT_PAYLOAD,
+		{"repository": {"full_name": "Owner/Repo", "default_branch": DEFAULT_BRANCH}},
+	):
+		proc, calls = _run_probe(PEER, [], [_pr_named(111, "in_progress", None, PUSH_EPOCH)], PR, BRANCH, CURRENT_RUN, event_payload=payload)
+		assert proc.returncode == 0, (payload, proc.stdout, proc.stderr)
+		assert not [call for call in calls if DEFAULT_BRANCH_READ in call], (payload, calls)
+
+
+def test_default_branch_falls_back_to_one_rest_read() -> None:
+	for payload in (
+		None,
+		{"repository": {"full_name": "attacker/fork", "default_branch": "attacker/forged-review"}},
+		{"repository": {"full_name": "owner/repo"}},
+		{"repository": {"full_name": "owner/repo", "default_branch": 7}},
+		{"repository": {"full_name": "owner/repo", "default_branch": "has space"}},
+		{"repository": "owner/repo"},
+		["not", "an", "object"],
+		"{not json",
+	):
+		proc, calls = _run_probe(
+			PEER,
+			[],
+			[_pr_named(111, "in_progress", None, PUSH_EPOCH)],
+			PR,
+			BRANCH,
+			CURRENT_RUN,
+			event_payload=payload,
+			rest_default_branch=DEFAULT_BRANCH,
+		)
+		assert proc.returncode == 0, (payload, proc.stdout, proc.stderr)
+		assert "peer_run=111" in proc.stdout, (payload, proc.stdout)
+		assert sum(DEFAULT_BRANCH_READ in call for call in calls) == 1, (payload, calls)
+		assert "-X GET" in next(call for call in calls if DEFAULT_BRANCH_READ in call)
+
+
+def test_another_repositorys_payload_never_vouches_for_a_run() -> None:
+	# The payload names another repository and its branch; the REST read is
+	# the source, so a run on the payload's branch is not counted.
+	proc, _ = _run_probe(
+		PEER,
+		[],
+		[_pr_named(111, "in_progress", None, PUSH_EPOCH, head_branch="attacker/forged-review")],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		event_payload={"repository": {"full_name": "attacker/fork", "default_branch": "attacker/forged-review"}},
+		rest_default_branch=DEFAULT_BRANCH,
+	)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert "peer_count=0" in proc.stdout
+
+
+def test_a_rest_answer_that_is_not_a_branch_name_is_unresolved() -> None:
+	proc, calls = _run_probe(
+		PEER,
+		[],
+		[_pr_named(111, "in_progress", None, PUSH_EPOCH)],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		event_payload=None,
+		rest_default_branch='{"message": "Not Found"}',
+	)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert "outcome=default_branch_unresolved" in proc.stderr
+	assert _listing_calls(calls) == [], calls
+
+
+def test_the_resolved_default_branch_is_the_one_compared() -> None:
+	# A repository whose default branch is not "main": a run on "main" is
+	# another branch there, and only a run on the default branch counts.
+	payload = {"repository": {"full_name": "owner/repo", "default_branch": "trunk"}}
+	proc, _ = _run_probe(PEER, [], [_pr_named(111, "in_progress", None, PUSH_EPOCH)], PR, BRANCH, CURRENT_RUN, event_payload=payload)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+	assert "peer_count=0" in proc.stdout
+	proc, _ = _run_probe(
+		PEER,
+		[],
+		[_pr_named(111, "in_progress", None, PUSH_EPOCH, head_branch="trunk")],
+		PR,
+		BRANCH,
+		CURRENT_RUN,
+		event_payload=payload,
+	)
+	assert proc.returncode == 0, (proc.stdout, proc.stderr)
+	assert "peer_run=111" in proc.stdout
