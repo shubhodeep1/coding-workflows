@@ -907,7 +907,9 @@ already decides for them.
 each guarded git call runs in, not the session's own checkout (issue #5144).
 The guard replays the command line: the hook's working directory, moved by
 every earlier `cd <path>` in the same command, then by `git -C <path>`, then
-by a `GIT_DIR=<path>` prefix or `--git-dir` option. Paths resolve the way
+by a `GIT_DIR=<path>` prefix or `--git-dir` option. An append prefix
+(`NAME+=value`) is read as an assignment like `NAME=value`, so `X+=1 git push`
+is guarded; a `GIT_DIR+=` prefix leaves the directory unknown. Paths resolve the way
 the shell and git resolve them: `cd` lexically unless `-P` is in force,
 `git -C` and the git directory physically (symlinks followed before `..`),
 and a `~` that is quoted or escaped (`"~"`, `'~'`, `\~`, or one inside

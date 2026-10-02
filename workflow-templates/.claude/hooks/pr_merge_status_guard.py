@@ -144,6 +144,10 @@ _UNMODELLED_DIRECTORY_COMMANDS = frozenset({"pushd", "popd"})
 # starts with `/` or is `.`, `..`, `./…` or `../…`.
 _CDPATH_DIRECTORY_COMMANDS = frozenset({"cd", "pushd"})
 _CDPATH_VARIABLE = "CDPATH"
+# A Bash assignment word: `NAME=value` or the append form `NAME+=value`,
+# which Bash accepts as a command prefix and as a bare assignment too
+# (review round 2 of #6113: `X+=1 git push` hid the push from the guard).
+_ASSIGNMENT_PREFIX_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\+?)=")
 # Shell keywords that can prefix a directory change inside the same segment
 # (`if cd x; then …`), which the walker cannot place in the command's flow.
 _DIRECTORY_KEYWORD_PREFIXES = frozenset({"if", "then", "else", "elif", "do", "while", "until", "!", "time"})
@@ -468,7 +472,7 @@ def git_subcommands(command: str) -> set[str]:
 		index = 0
 		while index < len(tokens) and tokens[index] in _COMMAND_RESERVED_WORD_PREFIXES:
 			index += 1
-		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+		while index < len(tokens) and _ASSIGNMENT_PREFIX_RE.match(tokens[index]):
 			index += 1
 		if index >= len(tokens):
 			continue
@@ -562,7 +566,7 @@ def _tilde_word_flags(command: str) -> list[tuple[str, bool]]:
 			return
 		text = "".join(character for character, _quoted in word)
 		positions = [0]
-		assignment = re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", text)
+		assignment = _ASSIGNMENT_PREFIX_RE.match(text)
 		if assignment and not any(quoted for _character, quoted in word[: assignment.end()]):
 			positions.append(assignment.end())
 		word_flags.append((text, any(tilde_is_literal(position) for position in positions)))
@@ -1171,10 +1175,15 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 		leading_reserved_words = tokens[:index]
 		compound_depth += sum(1 for word in leading_reserved_words if word in _COMPOUND_OPENING_WORDS)
 		assignments: dict[str, str] = {}
+		# Names assigned with `+=`: their value appends to one the guard
+		# cannot see, so it is not the whole value.
+		appended_assignment_names: set[str] = set()
 		assignment_start = index
-		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
-			name, value = tokens[index].split("=", 1)
-			assignments[name] = value
+		while index < len(tokens) and (assignment_match := _ASSIGNMENT_PREFIX_RE.match(tokens[index])):
+			name = assignment_match.group(1)
+			assignments[name] = tokens[index][assignment_match.end() :]
+			if assignment_match.group(2):
+				appended_assignment_names.add(name)
 			index += 1
 		# The `CDPATH` this segment's `cd` / `pushd` would search: its own
 		# prefix decides for it alone (both are regular builtins, so the
@@ -1183,16 +1192,18 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 		cdpath_command, cdpath_command_args = _cdpath_directory_command(tokens[index:])
 		own_cdpath_prefix = bool(cdpath_command)
 		if own_cdpath_prefix and _CDPATH_VARIABLE in assignments:
-			segment_cdpath_source = (
-				"an inline `CDPATH=` assignment" if assignments[_CDPATH_VARIABLE] else ""
-			)
+			if assignments[_CDPATH_VARIABLE]:
+				segment_cdpath_source = "an inline `CDPATH=` assignment"
+			elif _CDPATH_VARIABLE not in appended_assignment_names:
+				segment_cdpath_source = ""
+			# An empty `CDPATH+=` appends nothing and keeps what was set.
 		if not cdpath_source and any(
 			_CDPATH_VARIABLE in word
 			for position, word in enumerate(tokens)
 			if not (
 				own_cdpath_prefix
 				and assignment_start <= position < index
-				and word.startswith(f"{_CDPATH_VARIABLE}=")
+				and word.startswith((f"{_CDPATH_VARIABLE}=", f"{_CDPATH_VARIABLE}+="))
 			)
 		):
 			cdpath_source = "`CDPATH` set or used earlier in the command"
@@ -1238,7 +1249,7 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 				# several times, so the directory after it is unknown.
 				directory, unresolved = None, "a `cd` inside an `if`, loop or `case` body"
 				continue
-			elif executable == "export" and any(arg.split("=", 1)[0] == "GIT_DIR" for arg in args):
+			elif executable == "export" and any(arg.split("=", 1)[0].rstrip("+") == "GIT_DIR" for arg in args):
 				directory, unresolved = None, "`export GIT_DIR`"
 			elif executable == "cd" and not (
 				_is_sequential_separator(separator_before) and _is_sequential_separator(separator_after)
@@ -1267,6 +1278,9 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 		if executable != "git" and not executable.endswith("/git"):
 			continue
 		git_directory, git_unresolved = directory, unresolved
+		if git_directory is not None and "GIT_DIR" in appended_assignment_names:
+			# `GIT_DIR+=x` appends to a value the guard cannot see.
+			git_directory, git_unresolved = None, "a `GIT_DIR+=` assignment"
 		if git_directory is not None and tilde_quoting_reason:
 			# Only this call: its own `-C` / `GIT_DIR` / `--git-dir` word may
 			# be the ambiguous one; later commands keep the directory.

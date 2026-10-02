@@ -7,14 +7,14 @@
 - Status: BLOCKED until the `[claude-twin-sync]` copy for PR #6113 lands; IN_PROGRESS from that commit on
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #6113: twin sync (queued with the supervising session), then review round 2
+- Waiting on: PR #6113: twin sync (queued with the supervising session), then review round 3
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-02
-- Last note: phase PR #6113 opened; review round 1 (run 37037524141) fixed in one `[claude-autofix]` commit: `builtin -- cd` now counts, and the docstring, CLAUDE.md §21.B and changelog wording on exempt operands matches the code; the single-quoted `'~/sub'` finding was rejected (Bash leaves that `~` literal and searches CDPATH). Guard tests: 398 pass, only `test_template_copies_are_identical` fails until the twin sync.
+- Last note: review round 2 (run 37045792546) fixed in one `[claude-autofix]` commit: every assignment-prefix matcher in the hook (`git_subcommands`, the tilde-word scan, `guard_targets`, `export GIT_DIR`) now accepts Bash `NAME+=value`, so `X+=1 git push` is guarded and `CDPATH+=… cd` counts; an empty `CDPATH+=` keeps an inherited CDPATH, and `GIT_DIR+=` leaves the directory unknown. Guard tests: 408 pass, only `test_template_copies_are_identical` fails until the twin sync.
 
 ## Phases
-1. [ ] Phase 1 — block guarded git calls after a CDPATH-redirectable `cd` / `pushd` — PR #6113 open (twin sync pending); review rounds: 1; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [ ] Phase 1 — block guarded git calls after a CDPATH-redirectable `cd` / `pushd` — PR #6113 open (twin sync pending); review rounds: 2; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Twin hook: `GuardTarget.unjudgeable_reason`, CDPATH state in `guard_targets`, block in `_evaluate_bash`
    - Tests in `tests/test_pr_merge_status_guard.py` (unit + e2e on `worktree_repo`) reading the twin
    - CLAUDE.md §21.B paragraph; `changelog.d/6090-merge-guard-cdpath.md`
@@ -43,6 +43,7 @@
 
 ## Lessons
 - [source:intervention] When a guard recognises a builtin behind a wrapper (`builtin`, `command`), let each wrapper consume its own `--` end-of-options marker, or the wrapped command slips past. (files: workflow-templates/.claude/hooks/pr_merge_status_guard.py)
+- [source:intervention] A shell command walker must read Bash assignment words as `NAME=` and `NAME+=` everywhere it skips prefixes, or `X+=1 git push` hides the command; keep one shared assignment regex. (files: workflow-templates/.claude/hooks/pr_merge_status_guard.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)

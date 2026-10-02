@@ -8,6 +8,7 @@ Bash looks a `cd` operand up in `CDPATH` before the current directory unless it 
 | `CDPATH` sources counted | non-empty `CDPATH` in the hook's environment; any word containing `CDPATH` in an earlier segment; a non-empty `CDPATH=` prefix on the `cd` itself (that `cd` only) |
 | Turns it off | an empty `CDPATH=` prefix on that `cd` |
 | Not affected | operands `/…`, `.`, `..`, `./…`, `../…`; unquoted `~` / `~/…`; `cd` with no operand; `cd -`; deletion and tag-only pushes |
+| Append prefixes | `NAME+=value` is read as an assignment: `X+=1 git push …` is guarded, `CDPATH+=… cd x` counts as a `CDPATH` source, and an empty `CDPATH+=` keeps an inherited one |
 | GitHub API calls for a blocked call | 0 |
 
 What this means for operators and supervising sessions: in a shell where `CDPATH` is set, write `cd ./<dir>` (or an absolute path) before a `git commit` / `git push`. Without `CDPATH`, nothing changes.
