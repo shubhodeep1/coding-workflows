@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py: `_shell_visible_text` (the `quote == '\"'` branch, around lines 338-348 of the new file) | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The double-quote parser treats every backslash as escaping the next character, so an escaped `\"` can incorrectly close the quoted string and corrupt the visible command text.\n  WHY: A valid quoted command can then be misclassified as compound, causing `allow_rule_for` to return `None`.\n- workflow-templates/.claude/scripts/permission_prompts.py: issue_body() lines 335-358, _occurrence_block() lines 314-332 / _occurrence_block() (lines 485-513) | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When a pattern is already allowlisted, the diagnostic says adding another permission rule will not help, but the generic remediation still recommends adding an exact `permissions.allow` rule.\n  WHY: The issue gives operators contradictory guidance, potentially wasting effort and leaving the denial unresolved; one reviewer noted the prominent diagnostic mitigates the confusion.\n- workflow-templates/.claude/scripts/permission_prompts.py: `_REDACTION_CREDENTIAL_OPTION` regex | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The credential-option regex matches credential keywords anywhere in an option name, including non-credential options such as `--tokenize` and `--passwordless`.\n  WHY: The option-with-space redactor can mask a non-secret value and make the command in the issue body harder to act on.\n- workflow-templates/.claude/scripts/permission_prompts.py: `_LOGGER_TRUNCATION_RE` and the truncation check in `_matching_allow_rule` | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The truncation-marker regex may fail to recognize a marker if the logged command ends with trailing whitespace.\n  WHY: The reviewer notes the logger currently appends the marker without trailing whitespace, so this is not a runtime defect today.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/permission_prompts.py | confidence=3\n  PROBLEM: `_shell_visible_text` treats every backslash inside double quotes as escaping the next character, so an escaped `\"` can close the quote incorrectly and cause valid command text after it to be misparsed.\n  WHY: A quoted command with `&&` outside its quotes can appear compound and make `allow_rule_for` return `None`. Line or code reference: `_shell_visible_text` (the `quote == '\"'` branch, around lines 338-348 of the new file)\n- workflow-templates/.claude/scripts/permission_prompts.py | confidence=4\n  PROBLEM: The \u201cAlready allowlisted\u201d diagnostic says another allow rule will not help, while `issue_body`'s generic remediation still recommends adding an exact `permissions.allow` rule.\n  WHY: Operators may edit settings unnecessarily instead of addressing the classifier-side cause. Line or code reference: `issue_body` (lines 335-358 of the pre-PR file, the `**How to fix**` block)\n- workflow-templates/.claude/scripts/permission_prompts.py | confidence=3\n  PROBLEM: `_REDACTION_CREDENTIAL_OPTION` matches credential keywords anywhere in an option name, overmatching options such as `--notpassword`, `--tokenize`, `--passwordless`, and `--tokens`.\n  WHY: The redactor may mask a non-secret argument value and make the command harder to act on. Line or code reference: `_REDACTION_CREDENTIAL_OPTION` regex (r\"--?[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key)[A-Za-z0-9_-]*\")\n- workflow-templates/.claude/scripts/permission_prompts.py | confidence=2\n  PROBLEM: `_LOGGER_TRUNCATION_RE` may miss the truncation marker if the logged command has trailing whitespace.\n  WHY: The reviewer says the logger currently appends the marker without trailing whitespace, so this is only a defensive concern, not a runtime defect today. Line or code reference: `_LOGGER_TRUNCATION_RE` and the truncation check in `_matching_allow_rule`\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/permission_prompts.py and .claude/scripts/permission_prompts.py | severity=NIT | confidence=5\n  PROBLEM: For an allowlisted denial, the \u201cAlready allowlisted\u201d message says adding another rule will not help, but remediation item 3 still recommends adding an exact `permissions.allow` rule.\n  WHY: The conflicting guidance directs operators to change settings even when the report says that change will not resolve the denial. Line or code reference: `_occurrence_block()` adds the \u201cAlready allowlisted\u201d message; `issue_body()` remediation item 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/permission_prompts.py | severity=NIT | confidence=5\n  PROBLEM: When a pattern is already allowlisted, `_occurrence_block()` says adding another allow rule will not clear it, but `issue_body()` still recommends adding an exact `permissions.allow` rule.\n  WHY: Operators receive contradictory guidance that can waste effort and leave denials unresolved. Line or code reference: `_occurrence_block()` (lines 485-513) and `issue_body()` (existing code, not in diff)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py | severity=NIT | confidence=5\n  PROBLEM: When a pattern has an `allow_rule` match, the \u201cAlready allowlisted\u201d paragraph says another permission rule will not help, but the generic \u201cHow to fix\u201d section still recommends adding an exact permission rule.\n  WHY: The contradictory instructions can lead to a futile settings change and leave the denial unresolved; the reviewer noted the diagnostic appears first and mitigates confusion. Line or code reference: issue_body() lines 335-358, _occurrence_block() lines 314-332\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "04369d260ae86011f384ac6e0a6b6422c69f3651fe02d644a4d5e7c3f20b5ac2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5918,
+    "run_id": "37044623863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37044623863",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002184258_c2e6ce4769",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5918,
+    "run_id": "37044623863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T18:42:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
