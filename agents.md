@@ -1279,8 +1279,9 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   `rate_limit_event` (`unifiedWindows.five_hour` / `seven_day` utilization
   0..1 and `resetsAt`). `choose` picks the lowest `max(five_hour, seven_day)`
   strictly below `gate_utilization`, ties alphabetical; an account with a
-  successful probe but no reading is used only when no reading is under the
-  gate; `status: rejected` or a reading at/over the gate is gated; a probe
+  successful probe but no reading, or only one window under the gate, is used
+  only when no full reading is under the gate; `status: rejected` or any one
+  window at/over the gate (even with the other missing) is gated; a probe
   error (`auth_failed`, `probe_failed`) skips the account. Verdicts with no
   account: `no_accounts`, `all_gated` (`resets_at` = earliest time a gated
   account is usable), `auth_failed`, `crashed`.
@@ -1299,7 +1300,8 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   360). Exit 124/137 is a timeout. Before upload, `redact`, run from a fresh
   checkout of the select job's `pool_sha` (the worker can write `pool/`),
   replaces the token, the raw token, `GH_PAT`, the base64 `x-access-token:`
-  form of each, and each one's base64 text at every byte offset (standard and
+  form of each, each one's complete standalone base64 encoding (padded and
+  unpadded), and each one's base64 text at every byte offset (standard and
   URL-safe) with `***` in every output file. It exits 1 when a file cannot be
   read or written (`redact_failed`), and the transcript is uploaded only when
   it succeeded. Bash is not denied on `.claude/**`; spike S13 saw a shell

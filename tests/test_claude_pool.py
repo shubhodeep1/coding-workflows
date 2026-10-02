@@ -280,6 +280,22 @@ def test_choose_uses_unknown_utilization_only_as_a_last_resort():
 	assert verdict["utilization"] is None
 
 
+def test_choose_gates_one_window_over_the_gate_when_the_other_is_missing():
+	# Review round 2: a known over-gate window must not fall back to "unknown".
+	five_only = _probe("A", 0.95, None, five_reset=300)
+	seven_only = _probe("B", None, 0.91, seven_reset=600)
+	verdict = pool.choose_account([five_only, seven_only], 0.9)
+	assert verdict["outcome"] == "all_gated"
+	assert verdict["gated"] == ["A", "B"]
+	assert verdict["resets_at"] == 300
+	# A partial reading under the gate is still only a last resort.
+	partial = _probe("C", 0.2, None)
+	assert pool.choose_account([partial, _probe("D", 0.5, 0.5)], 0.9)["account"] == "D"
+	verdict = pool.choose_account([five_only, partial], 0.9)
+	assert verdict["account"] == "C"
+	assert verdict["utilization"] is None
+
+
 def test_choose_verdicts_when_nothing_is_usable():
 	assert pool.choose_account([], 0.9)["outcome"] == "no_accounts"
 	auth = [_probe("A", None, None, error="auth_failed")]
@@ -588,6 +604,19 @@ def test_redact_catches_base64_at_every_offset(prefix, encode):
 	assert "***" in redacted
 	plain = encode(token.encode()).decode().rstrip("=")
 	assert plain[:-1] not in redacted
+
+
+@pytest.mark.parametrize("length", [24, 25, 26])
+@pytest.mark.parametrize("encode", [base64.b64encode, base64.urlsafe_b64encode])
+def test_redact_removes_every_character_of_a_standalone_base64_secret(length, encode):
+	# Review round 2: for byte lengths not divisible by 3 the last character
+	# of base64(secret) also carries secret bits and must not survive.
+	token = ("sk-ant-oat01-" + "Ab0_-" * 10)[:length]
+	encoded = encode(token.encode()).decode()
+	for printed in (encoded, encoded.rstrip("=")):
+		redacted, count = pool.redact_text(f"output: {printed} done\n", [token])
+		assert count == 1
+		assert redacted == "output: *** done\n"
 
 
 def test_redact_base64_forms_leave_ordinary_text_alone():

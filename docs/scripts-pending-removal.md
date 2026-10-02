@@ -235,3 +235,15 @@ Copy this block when adding a new entry:
   - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=all&per_page=1"` shows no queue item created after the removal of the queue path.
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_claude_issue_route.py` returns exit code 0 after the watchdog tests are removed with it.
 - **Owner:** @shubhodeep1
+
+### `scripts/claude_pool.py` + `.github/workflows/claude-pool-worker.yml` (Claude worker pool)
+
+- **Introduced in:** #6100 (2026-10-02)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. The worker runs every Claude session the pool dispatches (`docs/plans/claude-actions-worker-pool-plan.md`); removing it without a replacement stops all pool work once any `dispatch_types` entry in `.github/ai/claude_pool.json` is set.
+- **Removal preflight checks:**
+  - `jq -c .dispatch_types .github/ai/claude_pool.json` returns `[]` (the pool is off, so nothing is dispatched to the worker).
+  - `rg -n 'claude-pool-worker\.yml|claude_pool\.py' .github/workflows scripts workflow-templates --glob '!scripts/claude_pool.py' --glob '!.github/workflows/claude-pool-worker.yml'` returns no matches.
+  - `gh api repos/shubhodeep1/claude-workers/contents/.github/workflows/claude-pool-worker.yml` returns 404 (the runner repo's wrapper, which calls this reusable workflow, is gone).
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_claude_pool.py` is removed with the script rather than left asserting it.
+- **Owner:** @shubhodeep1

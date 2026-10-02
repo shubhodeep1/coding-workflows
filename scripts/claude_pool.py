@@ -411,6 +411,12 @@ def _max_utilization(probe: dict[str, Any]) -> float | None:
 	return max(values)
 
 
+def _known_peak(probe: dict[str, Any]) -> float | None:
+	"""The highest window reading the probe did report, or ``None`` when it reported none."""
+	values = [value for value in (probe.get("five_hour"), probe.get("seven_day")) if value is not None]
+	return max(values) if values else None
+
+
 def _usable_at(probe: dict[str, Any], gate: float) -> int | None:
 	"""When a gated account drops back under the gate: the latest reset of the windows holding it."""
 	resets: list[int] = []
@@ -429,11 +435,13 @@ def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 
 	Rank: the lowest ``max(five_hour, seven_day)`` strictly below ``gate``,
 	ties to the alphabetically first name. An account whose probe succeeded but
-	reported no utilization is used only when no account has a known reading
-	under the gate. A probe error skips the account. Verdicts when nothing is
-	usable: ``no_accounts`` (no probes), ``all_gated`` (at least one account at
-	or over the gate or rejected; ``resets_at`` is the earliest time one of them
-	is usable again), ``auth_failed`` (only token failures), ``crashed``
+	reported no utilization, or only one window under the gate, is used only
+	when no account has a full reading under the gate; one window at or over
+	the gate gates the account even when the other is missing. A probe error
+	skips the account. Verdicts when nothing is usable: ``no_accounts`` (no
+	probes), ``all_gated`` (at least one account at or over the gate or
+	rejected; ``resets_at`` is the earliest time one of them is usable again),
+	``auth_failed`` (only token failures), ``crashed``
 	(only other probe failures).
 	"""
 	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
@@ -452,7 +460,10 @@ def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 			failed.append(name)
 			continue
 		peak = _max_utilization(probe)
-		if probe.get("status") == "rejected" or (peak is not None and peak >= gate):
+		known = _known_peak(probe)
+		# One window at or over the gate gates the account even when the
+		# other window is missing: the known reading already rules it out.
+		if probe.get("status") == "rejected" or (known is not None and known >= gate):
 			gated.append(probe)
 		elif peak is None:
 			unknown.append(name)
@@ -693,10 +704,16 @@ def _base64_forms(value: str) -> set[str]:
 	differently at each byte offset in a larger input. For each offset 0–2,
 	in the standard and URL-safe alphabets, this returns the characters that
 	depend on the secret's bytes alone; any encoding containing the secret
-	contains one of them. A plain ``base64(secret)`` is offset 0.
+	contains one of them. A plain ``base64(secret)`` is offset 0; its final
+	character also depends on the padding bits, so the complete standalone
+	encoding (with and without ``=`` padding) is returned too, and replacing
+	it first leaves no trailing character of the secret behind.
 	"""
 	raw = value.encode("utf-8")
 	forms: set[str] = set()
+	for encode in (base64.b64encode, base64.urlsafe_b64encode):
+		standalone = encode(raw).decode("ascii")
+		forms.update({standalone, standalone.rstrip("=")})
 	for offset in range(3):
 		data = b"\0" * offset + raw
 		first = math.ceil(offset * 8 / 6)

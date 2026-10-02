@@ -8,12 +8,12 @@
 - Activation: not started
 - Waiting on: PR #6100
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 1 stage (session_01BeTJV9bvuxq1nnSoRqqRAo), ids in its report
+- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 2 stage (session_01LhNKV59QBGPCoQXBkDQrDH), ids in its report
 - Last updated: 2026-10-02
-- Last note: review round 1 on PR #6100 (session_01BeTJV9bvuxq1nnSoRqqRAo): 11 findings fixed (probe secret isolation, fresh redaction helper, upload gated on redaction, base64 redaction, probe time budget, inventory, docs), 3 rejected with reasons on the PR
+- Last note: review round 2 on PR #6100 (session_01LhNKV59QBGPCoQXBkDQrDH): 3 findings fixed (full standalone base64 redaction, one over-gate window gates the account, `docs/scripts-pending-removal.md` entry per AD-10), 0 rejected
 
 ## Phases
-1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 1; interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
+1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 2; interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
    - `scripts/claude_pool.py` [new]: `accounts`, `normalize`, `probe-parse`, `choose`, `prompt`, `classify`, `run-name`; also `config` (the workflow reads the pool config through it) and `redact` (AD-4)
    - `.github/workflows/claude-pool-worker.yml` [new]: `workflow_call`, jobs `select` / `work` / `report`
    - `.github/ai/claude_pool.json` [new]: `dispatch_types: []` (pool off)
@@ -66,11 +66,13 @@
 - AD-7 [phase 1/5, 2026-10-02] How is a worker timeout told apart from a crash? — Picked: A — the CLI runs under `timeout <timeout_minutes>m` inside the job (exit 124/137 → `timeout`), the job limit is that plus 10 minutes capped at 360, and a cancelled work job is also `timeout`. Alternatives: B — job-level `timeout-minutes` only. Why: the job is then still alive to upload the transcript and exit info. Applied in: PR #6100. Status: pending review
 - AD-8 [phase 1/5, 2026-10-02] Which git identity do workers commit with? — Picked: A — `Claude <noreply@anthropic.com>`, the identity claude.ai cloud sessions use today. Alternatives: B — `github-actions[bot]`. Why: workers replace those sessions; the bot identity would misattribute commits pushed with `GH_PAT`. Applied in: PR #6100. Status: pending review
 - AD-9 [phase 1/5, 2026-10-02] Is an error result without a usage reading, or no result with a `rejected` reading, a usage limit? — Picked: A — `usage_limit` when the last `rate_limit_info` is `rejected` or at ≥ 1.0, or the result text names a usage limit, whether or not a result event exists. Alternatives: B — only `is_error` results, as the plan's interim rule words it. Why: excluding a rejected account on re-dispatch is the safer failover (Q7: no real rejection seen yet). Applied in: PR #6100. Status: pending review
+- AD-10 [phase 1/5 — review round 2, 2026-10-02] The plan says the new pool scripts get no `docs/scripts-pending-removal.md` entry because they are permanent, but CLAUDE.md §18.F requires an entry with `permanent — review annually` when no sunset applies; the reviewer panel flagged the gap. Add one? — Picked: A — add one entry for `scripts/claude_pool.py` + `.github/workflows/claude-pool-worker.yml` (permanent — review annually), and later phases add entries for the scripts and workflows they introduce. Alternatives: B — reject the finding and follow the plan. Why: §18.F is a hard rule over the plan's wording, and the registry already lists permanent workflow helpers the same way. Applied in: PR #6100. Status: pending review
 
 ## Lessons
 - [source:intervention] `ci.yml` does not run on PRs into a `claude/implement-plan-*` project branch, so a new workflow or script missing from `docs/INVENTORY.md` only fails at the final PR; run `tests/inventory_parity.py` locally before opening a phase PR that adds files. (files: docs/INVENTORY.md, tests/inventory_parity.py)
 - [source:intervention] A step that runs after an auto-mode Claude job must not execute code from a checkout that job could write; check the helper out again at a SHA recorded before the job ran, and gate any artifact upload on that step's success. (files: .github/workflows/claude-pool-worker.yml)
 - [source:plan-deviation] A new `.github/workflows/*.yml` file changes the auto-generated repo tree in agents.md; run `make generate` in the same PR, or the CI `make generate-check` drift step fails. (files: agents.md, tools/repo_tree/update_repo_tree.py)
+- [source:plan-deviation] CLAUDE.md §18.F wants a `docs/scripts-pending-removal.md` entry even for permanent scripts and workflows (`Removal trigger: permanent — review annually`); a plan line saying "no new entry; the scripts are permanent" does not exempt them. (files: docs/scripts-pending-removal.md)
 
 ## Notes
 - 2026-10-02: the operator's runner repo now holds pool secrets `CLAUDE_POOL_TOKEN_FUNTOKEN1` and `_FUNTOKEN2` (TEST1/TEST2 gone), and `GH_PAT` there is already the classic token: spike round 9 (run 37012676689) and the phase 1 smoke run read check runs on private consumers. Activation gate 1 looks done; the activation stage re-checks it.
