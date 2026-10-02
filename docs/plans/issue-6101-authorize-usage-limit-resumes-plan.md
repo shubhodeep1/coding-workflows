@@ -48,7 +48,7 @@ The usage-limit resume selector (`.claude/scripts/usage_limit_resumes.py`, issue
 
 - §1: security first; the check fails closed.
 - §5: minimal change, confined to the selector, its tests, and docs.
-- §6: no existing identifier, output key, or skip reason is renamed; four skip reasons and two optional arguments are added. New names checked for clashes in the module (`AUTHORIZED_ORIGINS`, `DEFAULT_SELF_REPO`, `DEFAULT_REGISTRY_PATH`, `SOURCE_URL_PATTERN`, `load_allowed_repos`, `session_repos`, `_unauthorized_reason`).
+- §6: no existing identifier, output key, or skip reason is renamed; four skip reasons and two optional arguments are added. New names checked for clashes in the module (`AUTHORIZED_ORIGINS`, `DEFAULT_SELF_REPO`, `DEFAULT_REGISTRY_PATH`, `_REPO_SLUG`, `SOURCE_URL_PATTERN`, `REPO_SLUG_PATTERN`, `load_allowed_repos`, `session_repos`, `_unauthorized_reason`, and the `--self-repo` / `--registry` arguments).
 - §15: no API call is added; the selector stays offline.
 - §20: a `changelog.d/` fragment (security).
 - §28.C protected paths: the selector lives under `.claude/scripts/`. Twin-first: edit `workflow-templates/.claude/scripts/usage_limit_resumes.py` only; `.claude/commands/claude-issue-pickup.md` has no twin, so its one-line doc change goes into the twin-sync blocker as a diff.
@@ -101,6 +101,7 @@ Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: one issue, one pha
 ## Risks
 
 - A legitimate session with a missing `origin` or `parent_session_id` is no longer resumed. It stays with the manual fallback the pickup already documents for older sessions; the skip reason names why.
+- A session a person opened in the app is no longer resumed even when it runs a workflow command itself (AD-6). It stays with the manual fallback; the skip reason is `unknown_origin`.
 - A consumer added to the registry after the pickup's checkout was refreshed is unknown until the pickup's next `git fetch` (step 0 refreshes the checkout every wake).
 - Merge overlap with #6102 in the same function; resolved on whichever merges second.
 
@@ -115,6 +116,7 @@ Ships with the parent project #5660 (base branch `claude/implement-plan-issue-56
 - AD-3 [plan, 2026-10-02] Must the session's `environment_id` match the pickup's? — Picked: A — no. Alternatives: B — yes. Why: §5; repository, origin, and lineage close the finding, and a chain started from another environment is a registered workflow too. Applied in: no code change. Status: pending review
 - AD-4 [plan, 2026-10-02] Does `.claude/commands/claude-issue-pickup.md` change? — Picked: A — one doc line in step 1a.2 (`skipped` lists the new reasons), as a diff in the twin-sync blocker. Alternatives: B — leave it. Why: §7 keeps the operator text accurate; behaviour needs no command change. Applied in: twin-sync blocker. Status: pending review
 - AD-5 [plan, 2026-10-02] What does `select` do when called without the allowed set? — Picked: A — `None` authorizes nothing (fail closed). Alternatives: B — self repo only; C — no check. Why: a caller that forgets the argument must not widen access. Applied in: phase 1 PR. Status: pending review
+- AD-6 [phase 1/1, 2026-10-02] A session a person opened in the app (`origin` `desktop_app`, no parent) sometimes runs a workflow itself, such as the invoking session of a manual `/implement-plan-claude` (2 of 47 such sessions on the live 100-session listing). Is it resumed? — Picked: A — no; it is skipped as `unknown_origin` and resumed by hand. Alternatives: B — resume it when its title matches a workflow title pattern. Why: §1; titles are written by sessions and cannot authorize anything, and the person who opened the session can resume it. Applied in: phase 1 PR. Status: pending review
 
 ## Notes
 

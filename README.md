@@ -1299,6 +1299,7 @@ mode).
    - It lists sessions (3 days back) and enabled triggers, and runs `.claude/scripts/usage_limit_resumes.py` with its own `get_session` result first (the pickup runs for weeks, so its own entry is rarely on that listing, and the account-wide hold-off reads it).
    - The script selects `IDLE` sessions whose last summary carries the usage-limit error, plus checkers whose `rate_limit_info` shows a `rejected` limit that has since reset and that have no trigger at all.
    - It skips a session that is:
+     - outside the pickup's workflows (#6101): it must work in coding-workflows or a `.github/ai/consumer_repos.json` repository (its `session_context.sources`), have been started by another session (`origin` `claude_code_mcp_seed`), and name its `parent_session_id`. A session a person opened in the app is never resumed, and anything unreadable is skipped (`no_repo`, `foreign_repo`, `unknown_origin`, `no_lineage`);
      - archived, running, or on a permission prompt;
      - the pickup itself;
      - created more than 72 hours ago (the last page listed can reach further back; those stay with the manual fallback);
