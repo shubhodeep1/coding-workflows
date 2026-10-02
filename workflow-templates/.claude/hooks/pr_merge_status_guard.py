@@ -656,6 +656,23 @@ def _cd_destination(
 	)
 
 
+def _cd_redefinition_reason(executable: str, args: list[str]) -> str:
+	"""Why a segment redefines `cd`, or "" when it does not.
+
+	`cd() { …; }`, `cd () …`, `function cd { …; }` and `alias cd=…` make a
+	later `cd` run the redefinition instead of the builtin, so the directory
+	after it is unknown (PR #5173 operator review). A quoted operand that
+	starts with `(` (`cd "(dir)"`) also matches; it only costs a fallback.
+	"""
+	if executable.startswith("cd(") or (executable == "cd" and args and args[0].startswith("(")):
+		return "a redefinition of `cd` as a function"
+	if executable == "function" and args and (args[0] == "cd" or args[0].startswith("cd(")):
+		return "a redefinition of `cd` as a function"
+	if executable == "alias" and any(arg.startswith("cd=") for arg in args):
+		return "a redefinition of `cd` as an alias"
+	return ""
+
+
 def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> list[GuardTarget]:
 	"""Targets for `git push <args>` run in `repo_dir`.
 
@@ -924,7 +941,8 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 	So does a `cd` after `&&` behind a command that may fail, once its `&&`
 	chain ends (`a && cd x; git push`, `a && cd x && b || git push`), a
 	`cd` inside a list sent to the background with `&`, and a `cd` inside an
-	`if`, loop or `case` body (`if a; then b; cd x; fi`).
+	`if`, loop or `case` body (`if a; then b; cd x; fi`), and a segment that
+	redefines `cd` as a function or alias (`cd() { :; }`, `alias cd=true`).
 	The same segments count as git calls as in `git_subcommands`, so nothing
 	it ignores is judged here; reserved words ahead of `git` (`then git push`)
 	are skipped as there. Whether a `~` is literal is read per word, so a
@@ -1009,8 +1027,11 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 		if executable in _COMPOUND_OPENING_WORDS:
 			# `for …`, `case …`, `select …`: not a command, but a body follows.
 			compound_depth += 1
+		cd_redefinition = _cd_redefinition_reason(executable, args)
 		if directory is not None:
-			if executable.startswith(("(", "{")):
+			if cd_redefinition:
+				directory, unresolved = None, cd_redefinition
+			elif executable.startswith(("(", "{")):
 				directory, unresolved = None, "a subshell or command group"
 			elif (leading_reserved_words or executable in _COMPOUND_OPENING_WORDS) and any(
 				word == "cd" or word in _UNMODELLED_DIRECTORY_COMMANDS for word in [executable, *args]

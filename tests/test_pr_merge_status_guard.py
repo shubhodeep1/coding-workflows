@@ -2311,3 +2311,68 @@ def test_git_dir_option_with_equals_keeps_its_tilde_literal_as_bash_does(tmp_pat
 		check=True,
 	)
 	assert proc.stdout == "--git-dir=~/wt"
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"cd() { :; }; cd wt && git push origin HEAD:x",
+		"cd () { :; }; cd wt && git push origin HEAD:x",
+		"cd(){ :;}; cd wt && git push origin HEAD:x",
+		"function cd { :; }; cd wt && git push origin HEAD:x",
+		"function cd() { :; }; cd wt && git push origin HEAD:x",
+		"shopt -s expand_aliases\nalias cd=true\ncd wt && git push origin HEAD:x",
+		"alias ll='ls -l' cd='true'; cd wt && git commit -m x",
+		"cd() { :; }; git -C wt push origin HEAD:x",
+	],
+)
+def test_a_redefined_cd_makes_the_directory_unknown(tmp_path: Path, command: str) -> None:
+	"""PR #5173 operator review: after `cd() { …; }`, `function cd …` or
+	`alias cd=…`, a later `cd` runs the redefinition, not the builtin, so the
+	git calls after it fall back to the session checkout with a warning."""
+	(tmp_path / "wt").mkdir()
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert targets, command
+	for target in targets:
+		assert (target.cwd, target.branch, target.tip) == (str(tmp_path), "", "HEAD"), command
+		assert "redefinition of `cd`" in target.fallback_reason, command
+
+
+def test_calls_before_a_cd_redefinition_keep_their_directory(tmp_path: Path) -> None:
+	(tmp_path / "wt").mkdir()
+	targets = twin_guard.guard_targets("cd wt && git commit -m x; cd() { :; }; git push origin HEAD:y", str(tmp_path))
+	assert [(t.subcommand, t.cwd, t.branch, bool(t.fallback_reason)) for t in targets] == [
+		("commit", str(tmp_path / "wt"), "", False),
+		("push", str(tmp_path), "", True),
+	]
+
+
+def test_other_aliases_and_functions_leave_cd_alone(tmp_path: Path) -> None:
+	(tmp_path / "wt").mkdir()
+	for command in (
+		"alias ll='ls -l'; cd wt && git commit -m x",
+		"cdx() { :; }; cd wt && git commit -m x",
+		"function cdx { :; }; cd wt && git commit -m x",
+		"echo 'cd() { :; }'; cd wt && git commit -m x",
+	):
+		assert _targets(command, tmp_path) == [("commit", str(tmp_path / "wt"), "", "HEAD", False, False)], command
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"cd() {{ :; }}; cd {worktree} && git push origin HEAD:feature/x",
+		"function cd {{ :; }}; cd {worktree} && git push origin HEAD:feature/x",
+		"shopt -s expand_aliases\nalias cd=true\ncd {worktree} && git push origin HEAD:feature/x",
+	],
+)
+def test_e2e_a_redefined_cd_blocks_on_a_stranded_checkout(worktree_repo, command: str) -> None:
+	"""The regression from the PR #5173 operator review: with `cd` shadowed,
+	Bash runs the push in the stranded session checkout, not the worktree. The
+	old hook blocked these; the guard now falls back and blocks again."""
+	repo, worktree, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, command.format(worktree=worktree))
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+	assert "merged-PR guard: could not resolve" in proc.stderr
+	assert "redefinition of `cd`" in proc.stderr

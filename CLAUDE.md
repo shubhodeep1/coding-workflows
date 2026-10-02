@@ -933,7 +933,8 @@ listed; the ask issues no API call and applies on the default branch too. When t
 substitution, a subshell, `pushd`/`popd`, a `cd` joined by `||`, `&` or `|`,
 a `cd` after `&&` behind a command that may fail once its `&&` chain ends
 (`a && cd x; git push`), a `cd` inside a list sent to the background with `&`,
-a `cd` inside an `if`, loop or `case` body, the same `~` path quoted and
+a `cd` inside an `if`, loop or `case` body, a `cd` redefined earlier in the
+command as a function or alias (`cd() { :; }`, `alias cd=true`), the same `~` path quoted and
 unquoted in one git call, `export GIT_DIR`, a path that does not exist yet or cannot be entered), or a refspec cannot be
 turned into one branch (a variable, a glob or brace pattern, a `heads/` /
 `tags/` / `remotes/` shorthand, a word starting with `-`), that call is
