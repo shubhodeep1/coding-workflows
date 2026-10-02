@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The progress log's internal evidence must be consistent \u2014 every description of the same conformance checks run must report the same test-suite count.\n  expected_change_site: docs/implement-plan/issue-5660-resume-usage-limit-stops.md, line 96, the review-round note for session_01Mw5LSRJggfnyzsG39K8pkd\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: Line 21 (the conformance Run 2 summary) reads \"Checks: 597 passed, 1 skipped across the eight affected suites\" while line 96 reads \"Checks: 597 passed, 1 skipped across seven affected suites.\" The PR description (entry 1 in the PR comment context, the Claude-fixer verdict) lists eight test modules: test_usage_limit_resumes.py, test_stale_routines.py, test_implement_issue_claude_command.py, test_session_titles.py, test_claude_issue_route.py, test_claude_session_janitor.py, test_implement_plan_claude_command.py, and test_workflow_file_size_limit.py. The correct count is eight, matching line 21.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nRequirement: The progress log's internal evidence must be consistent \u2014 every description of the same conformance checks run must report the same test-suite count.\nExpected change site: docs/implement-plan/issue-5660-resume-usage-limit-stops.md, line 96, the review-round note for session_01Mw5LSRJggfnyzsG39K8pkd\nEvidence of absence: Line 21 (the conformance Run 2 summary) reads \"Checks: 597 passed, 1 skipped across the eight affected suites\" while line 96 reads \"Checks: 597 passed, 1 skipped across seven affected suites.\" The PR description (entry 1 in the PR comment context, the Claude-fixer verdict) lists eight test modules: test_usage_limit_resumes.py, test_stale_routines.py, test_implement_issue_claude_command.py, test_session_titles.py, test_claude_issue_route.py, test_claude_session_janitor.py, test_implement_plan_claude_command.py, and test_workflow_file_size_limit.py. The correct count is eight, matching line 21.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===",
+  "fingerprint": "cf618750e885e0709b0b35475a6004762130a3cf8f8599480ef99e96277ed8c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6085,
+    "run_id": "37009460466",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37009460466",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002130306_91eb7e0f2e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6085,
+    "run_id": "37009460466"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T13:03:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
