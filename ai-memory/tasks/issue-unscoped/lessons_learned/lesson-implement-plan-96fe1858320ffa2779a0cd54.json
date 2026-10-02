@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:21:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A guard that needs quoting facts about shell words must keep them per occurrence, lined up with the tokenizer's words, not in a set keyed by word text: the same text can be quoted in one place and bare in another. Check the alignment and fall back when it fails.",
+  "phase": "implement_plan",
+  "pr_number": 5173,
+  "record_id": "lesson-implement-plan-96fe1858320ffa2779a0cd54",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5144-merge-guard-effective-repo",
+    "file:.claude/hooks/pr_merge_status_guard.py"
+  ]
+}

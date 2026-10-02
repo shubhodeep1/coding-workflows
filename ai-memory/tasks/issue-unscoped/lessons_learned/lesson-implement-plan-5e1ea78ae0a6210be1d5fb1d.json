@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:21:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a guard starts judging a user-supplied ref instead of local state, treat every shell word it reads (variables, globs, shorthands git expands, `-`-prefixed values) as unresolvable unless it is a plain literal, and fall back to the old check with a warning.",
+  "phase": "implement_plan",
+  "pr_number": 5173,
+  "record_id": "lesson-implement-plan-5e1ea78ae0a6210be1d5fb1d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5144-merge-guard-effective-repo",
+    "file:.claude/hooks/pr_merge_status_guard.py"
+  ]
+}

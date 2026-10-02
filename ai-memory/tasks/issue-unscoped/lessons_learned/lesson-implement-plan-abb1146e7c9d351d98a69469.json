@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:21:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In a shell `&&` chain, a `cd` behind a command that may fail is skipped with that command, and whatever follows `;`, a newline or `||` then runs in the original directory; a `cd` inside a list sent to the background with `&` never reaches the commands after it. A command walker must drop the tracked directory at those points.",
+  "phase": "implement_plan",
+  "pr_number": 5173,
+  "record_id": "lesson-implement-plan-abb1146e7c9d351d98a69469",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5144-merge-guard-effective-repo",
+    "file:.claude/hooks/pr_merge_status_guard.py"
+  ]
+}

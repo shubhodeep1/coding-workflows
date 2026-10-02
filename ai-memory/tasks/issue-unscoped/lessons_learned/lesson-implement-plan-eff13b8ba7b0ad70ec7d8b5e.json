@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:21:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A guard that predicts where a later command runs must treat a `cd` target it cannot enter (no search permission) like a missing one: the `cd` fails and the next command runs in the old directory.",
+  "phase": "implement_plan",
+  "pr_number": 5173,
+  "record_id": "lesson-implement-plan-eff13b8ba7b0ad70ec7d8b5e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5144-merge-guard-effective-repo",
+    "file:.claude/hooks/pr_merge_status_guard.py"
+  ]
+}

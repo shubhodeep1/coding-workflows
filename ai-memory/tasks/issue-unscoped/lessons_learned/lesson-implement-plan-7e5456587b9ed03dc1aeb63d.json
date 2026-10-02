@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:21:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A guard that tokenizes a shell command with `shlex` loses quoting, so it must re-derive the quote state for words where it matters: Bash leaves a quoted or escaped `~` (`\"~\"`, `'~'`, `\\~`, `~\"/x\"`) and one after `--opt=` literal, and only expands it at a word start or after an assignment's first `=`.",
+  "phase": "implement_plan",
+  "pr_number": 5173,
+  "record_id": "lesson-implement-plan-7e5456587b9ed03dc1aeb63d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5144-merge-guard-effective-repo",
+    "file:.claude/hooks/pr_merge_status_guard.py"
+  ]
+}

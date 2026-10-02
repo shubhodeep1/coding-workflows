@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:21:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`git push --tags <remote>` with no refspec pushes only tags, while `--all`, `--branches`, `--mirror` (and any unambiguous prefix git accepts, such as `--al`) and the `:` refspec write many branches; a guard that judges one branch per push must not map either to the checked-out branch alone.",
+  "phase": "implement_plan",
+  "pr_number": 5173,
+  "record_id": "lesson-implement-plan-b30aa023b7c9cf3a3e6970f0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5144-merge-guard-effective-repo",
+    "file:.claude/hooks/pr_merge_status_guard.py"
+  ]
+}

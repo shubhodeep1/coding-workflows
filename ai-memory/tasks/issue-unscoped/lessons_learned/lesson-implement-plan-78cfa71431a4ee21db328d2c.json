@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:21:21Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Resolve a path the way the program that uses it does: `cd` is lexical unless `-P`, but `git -C`, `GIT_DIR` and `--git-dir` go through `chdir`, which follows symlinks before `..`; and a builtin's options end at its first operand (`cd x -P` is a second operand, so the `cd` fails).",
+  "phase": "implement_plan",
+  "pr_number": 5173,
+  "record_id": "lesson-implement-plan-78cfa71431a4ee21db328d2c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5144-merge-guard-effective-repo",
+    "file:.claude/hooks/pr_merge_status_guard.py"
+  ]
+}
