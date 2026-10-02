@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:52:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In a poll loop that waits on two reads, let the success exit check that the guard read in the same iteration actually answered; a guard read that was rate-limited at a deadline must not let the other read end the loop.",
+  "phase": "implement_plan",
+  "pr_number": 5874,
+  "record_id": "lesson-implement-plan-661a7eca4279551cdd57adc1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5858-phase4b-rate-limit-aware-pr-state",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

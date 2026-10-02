@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:52:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a sleep is capped at a deadline, read the clock after every blocking call that comes before the sleep (an API request, a subprocess), not before it; otherwise the call's latency is added past the deadline.",
+  "phase": "implement_plan",
+  "pr_number": 5874,
+  "record_id": "lesson-implement-plan-76bb892b56e94d854f0a87c9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5858-phase4b-rate-limit-aware-pr-state",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

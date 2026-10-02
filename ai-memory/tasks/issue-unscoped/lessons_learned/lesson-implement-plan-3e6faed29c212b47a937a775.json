@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:52:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a helper starts returning a distinct exit code for a failure class, audit every caller in the same loop, not only the one the incident hit: a caller that keeps treating the new code as a generic failure silently skips the new handling.",
+  "phase": "implement_plan",
+  "pr_number": 5874,
+  "record_id": "lesson-implement-plan-3e6faed29c212b47a937a775",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5858-phase4b-rate-limit-aware-pr-state",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

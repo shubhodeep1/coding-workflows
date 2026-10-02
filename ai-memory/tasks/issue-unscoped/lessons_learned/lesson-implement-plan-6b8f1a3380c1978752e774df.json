@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:52:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A long wait inside a poll loop makes every guard checked before it stale: after the wait, go back to the loop top so the guards run again before any later read can end the loop, and clear a carried-over \"read owed\" flag before the wait so a zero wait cannot keep the loop alive.",
+  "phase": "implement_plan",
+  "pr_number": 5874,
+  "record_id": "lesson-implement-plan-6b8f1a3380c1978752e774df",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5858-phase4b-rate-limit-aware-pr-state",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}

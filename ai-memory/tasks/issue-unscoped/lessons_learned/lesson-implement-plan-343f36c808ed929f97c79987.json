@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:52:50Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A guard that must confirm a state should test for the confirming value (`!= \"open\"`), not exclude the known-bad values one at a time: every new failure value (`rate_limited`, `unknown`) otherwise slips through until a reviewer finds it.",
+  "phase": "implement_plan",
+  "pr_number": 5874,
+  "record_id": "lesson-implement-plan-343f36c808ed929f97c79987",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5858-phase4b-rate-limit-aware-pr-state",
+    "file:.github/workflows/test-and-mark-stable.yml"
+  ]
+}
