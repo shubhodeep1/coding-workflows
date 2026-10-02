@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md; .claude/scripts/stale_routines.py: CLAUDE.md \u00a726.G, lines 2097\u20132102; \u00a726.I, lines 2212\u20132215; stale_routines.py, lines 160\u2013163 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Later stale-Routine sweeps exclude IDs whose deletion was denied, but do not exclude IDs whose deletion failed for another reason.\n  WHY: If a `delete_trigger` call fails without being classified as a denial and the ended Routine remains in the trigger list, a later sweep may retry deletion; deepseek_deepseek-v4-pro and qwen_qwen3_7-plus dispute this, reading \u00a726.I as applying only to denials.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CLAUDE.md; .claude/scripts/stale_routines.py | severity=low | confidence=4\n  PROBLEM: Later stale-Routine sweeps exclude IDs whose deletion was denied, but do not exclude IDs whose deletion failed for another reason.\n  WHY: If a `delete_trigger` call fails without being classified as a denial and the ended Routine remains in the trigger list, a later sweep classifies it for deletion again because `classify` adds every ended Routine to `to_delete`. This retries a cleanup call despite \u00a726.I saying other failures are not retried. CLAUDE.md \u00a726.G, lines 2097\u20132102; \u00a726.I, lines 2212\u20132215; stale_routines.py, lines 160\u2013163.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "2d115d2ead75f809f80466b617069f2d53e4dc13ca5626e3f4c6dfd0c05fb949",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5856,
+    "run_id": "36957085059",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36957085059",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002031429_93a3f78f4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5856,
+    "run_id": "36957085059"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T03:14:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
