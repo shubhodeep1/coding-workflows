@@ -15553,6 +15553,18 @@ def test_reconcile_heal_without_any_stale_signal_does_nothing():
 	assert "MERGED_STATE_STALE" not in combined
 
 
+def test_heal_defers_its_comment_and_alerts_when_the_marker_write_fails_with_a_pending_retry():
+	"""PR #5633 review round 7: a failed once-only marker write while the pending marker is set returns before the
+	explanatory comment, healing note, and Telegram alert, so the retry that records the marker sends them once."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = script.split("_heal_rejected_merged_state() {", 1)[1].split("\n}\n", 1)[0]
+	retry = body.index("why=marker_write_failed")
+	assert body.rindex("del(.merged_state_heal_pending)", 0, retry) < body.rindex('if [ "${_mhs_pending}" = "true" ] || [ "${_mhs_stored}" = "merged" ]; then', 0, retry)
+	assert body.index("return 0", retry) < body.index("issues/${issue_num}/comments")
+	assert retry < body.index("MERGED_STATE_HEALED issue=${issue_num} pr=")
+	assert retry < body.index("add_healing_note", retry) and retry < body.index("tg_notify", retry)
+
+
 def test_reconcile_leaves_merged_label_without_rejected_merge_alone():
 	"""An ai:merged label with no merged linked PR at all (a person, the close
 	sweep) is not this rule's business and stays."""

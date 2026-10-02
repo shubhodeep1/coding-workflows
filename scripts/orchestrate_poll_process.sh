@@ -15765,6 +15765,9 @@ _check_open_pr_conflict_guard() {
 # stored status at `in_progress` (with `.merged_state_heal_pending`, written
 # together with it, so the next cycle retries even when `ai:merged` was
 # never on the issue) and holds the wave this cycle (`wave_hold=true`).
+# A failed once-only marker write while `.merged_state_heal_pending` is set
+# defers the comment and alerts to the retry (`why=marker_write_failed`),
+# so they are sent once.
 #
 # Sets MERGED_HEAL_LABELS_JSON (the issue's labels after the call) and
 # MERGED_HEAL_STATE_CHANGED (true when the state file changed). API calls:
@@ -15871,7 +15874,15 @@ _heal_rejected_merged_state() {
     MERGED_HEAL_STATE_CHANGED="true"
   else
     rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-    echo "::warning::MERGED_STATE_HEALED issue=${issue_num}: healed, but recording the once-only marker failed; unless .merged_state_heal_pending is set, the issue no longer reads as merged and is not healed again." >&2
+    if [ "${_mhs_pending}" = "true" ] || [ "${_mhs_stored}" = "merged" ]; then
+      # `.merged_state_heal_pending` is still set, so the next cycle heals
+      # again (the label edit is idempotent). The comment and alerts wait for
+      # the cycle that records the marker, so they are sent once (PR #5633
+      # review round 7).
+      echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=retry why=marker_write_failed" >&2
+      return 0
+    fi
+    echo "::warning::MERGED_STATE_HEALED issue=${issue_num}: healed, but recording the once-only marker failed; the issue no longer reads as merged, so it is not healed again." >&2
   fi
 
   local _mhs_next="its plan is re-approved by the poller's auto-approve step and implementation runs again"
