@@ -552,6 +552,22 @@ def test_report_and_issue_redact_a_space_delimited_credential_option(tmp_path):
 	assert pp_twin.redact("Bash(curl --password *)") == "Bash(curl --password *)"
 	assert pp_twin.redact("tool --password -v") == "tool --password -v"
 
+@pytest.mark.parametrize(
+	("text", "masked"),
+	[
+		('x --password "abc\\"def ghi" y', "x --password *** y"),
+		('x --password abc"def ghi" y', "x --password *** y"),
+		("x --token 'unterminated rest", "x --token ***"),
+		("x --api-key a\\ b c", "x --api-key *** c"),
+		('x password="a b" y', "x password=*** y"),
+		("x secret:'p q' y", "x secret:*** y"),
+	],
+)
+def test_redact_masks_the_whole_shell_word_of_a_credential_value(text, masked):
+	"""PR #5918 review round 10: an escaped quote, a concatenated quoted part, an escaped space, or an unterminated
+	quote no longer leaves the rest of the value visible, for the option form and the `key=value` form alike."""
+	assert pp_twin.redact(text) == masked
+
 def test_signature_and_title_do_not_depend_on_the_rule(tmp_path):
 	directory = _log(tmp_path, [_payload(ISSUE_5899_COMMAND, event="PermissionDenied")])
 	with_rule = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, ["Bash(git merge *)"]))[0]
