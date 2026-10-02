@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T10:31:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a rule names the call sites it covers, list every site in each flow that runs the same calls, including the per-stage ones (a context-step delete, a rename on opening a PR), and test that each named site still exists in the command.",
+  "phase": "implement_plan",
+  "pr_number": 5856,
+  "record_id": "lesson-implement-plan-7cd72e4c4e74d4b0a0565716",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:CLAUDE.md",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}

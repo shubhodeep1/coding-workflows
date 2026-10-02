@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T10:31:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A skip-on-denial note on one call must also gate every later call in the same step that issues the same kind of call (a sweep that deletes), and the test must assert the gate itself, not only the note.",
+  "phase": "implement_plan",
+  "pr_number": 5856,
+  "record_id": "lesson-implement-plan-564c7274c82de40c2f922025",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md",
+    "file:tests/test_implement_plan_claude_command.py"
+  ]
+}

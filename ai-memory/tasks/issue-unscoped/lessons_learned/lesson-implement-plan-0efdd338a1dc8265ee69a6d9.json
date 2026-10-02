@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T10:31:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a definition gains an exception (a sweep that must leave out ids denied earlier), grep every sentence elsewhere that promises the old behaviour (\"a later sweep removes what it would have\") and restate it, and say the exception at each site that runs the definition.",
+  "phase": "implement_plan",
+  "pr_number": 5856,
+  "record_id": "lesson-implement-plan-0efdd338a1dc8265ee69a6d9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md",
+    "file:CLAUDE.md"
+  ]
+}

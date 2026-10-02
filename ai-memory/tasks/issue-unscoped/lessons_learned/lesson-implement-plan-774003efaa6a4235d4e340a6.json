@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T10:31:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A skip-on-denial rule must also cover a later, generic cleanup pass that would pick the same object (a sweep selecting ended Routines by name): define the exclusion in that pass's own procedure, so every flow that runs it skips what was denied earlier.",
+  "phase": "implement_plan",
+  "pr_number": 5856,
+  "record_id": "lesson-implement-plan-774003efaa6a4235d4e340a6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:CLAUDE.md",
+    "file:.claude/scripts/stale_routines.py"
+  ]
+}

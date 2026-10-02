@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T10:31:36Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A fix that widens a rule's list of call sites must update every copy of that list a session reads at run time (the command's Rules bullet as well as CLAUDE.md), or reviewers flag the narrower copy as the defect left unfixed.",
+  "phase": "implement_plan",
+  "pr_number": 5856,
+  "record_id": "lesson-implement-plan-322422673414a5cd4c9b68f5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5068-skip-denied-cleanup-calls",
+    "file:CLAUDE.md",
+    "file:workflow-templates/.claude/commands/implement-plan-claude.md"
+  ]
+}
