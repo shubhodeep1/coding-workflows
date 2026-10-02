@@ -1548,10 +1548,19 @@ def _run_prepare(tmp: Path, *, verdict: dict, comments: list[dict], ledger: str 
 	(support / "review_claude_fixer_judge.py").write_text(JUDGE_HELPER.read_text(encoding="utf-8"), encoding="utf-8")
 	comments_file = tmp / "comments.json"
 	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	payload_file = tmp / "pr_payload.json"
+	payload_file.write_text(json.dumps({"user": {"login": "PR-Author"}}), encoding="utf-8")
+	# `gh api user` answers with the workflow account; every other call fails.
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text('#!/usr/bin/env bash\nif [ "$1 $2" = "api user" ]; then echo workflow-bot; exit 0; fi\nexit 1\n', encoding="utf-8")
+	(bin_dir / "gh").chmod(0o755)
 	github_env = tmp / "github_env"
 	github_env.write_text("", encoding="utf-8")
 	env = {
 		**os.environ,
+		"PATH": os.pathsep.join((str(bin_dir), os.environ.get("PATH", ""))),
+		"PR_PAYLOAD_FILE": str(payload_file),
 		"PR_NUMBER": "42",
 		"GITHUB_REPOSITORY": "o/r",
 		"HEAD_SHA": HEAD,
@@ -1574,8 +1583,8 @@ def _run_prepare(tmp: Path, *, verdict: dict, comments: list[dict], ledger: str 
 	return proc, github_env.read_text(), verify_args, inputs
 
 
-def _rejection(body: str, association: str = "OWNER", comment_id: int = 5) -> dict:
-	return {"id": comment_id, "author_association": association, "user": {"login": "x"}, "body": body}
+def _rejection(body: str, association: str = "OWNER", comment_id: int = 5, login: str = "pr-author") -> dict:
+	return {"id": comment_id, "author_association": association, "user": {"login": login}, "body": body}
 
 
 def test_prepare_step_collects_verified_inputs():
@@ -1628,11 +1637,26 @@ def test_prepare_step_fails_closed_on_unverified_evidence_or_bad_inputs():
 		assert proc.returncode == 0 and "CLAUDE_FIXER_JUDGE_SKIP_REASON=invalid_inputs" in github_env.read_text()
 
 
+def test_prepare_accepts_the_workflow_accounts_rejection():
+	marker = f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=1 -->"
+	with tempfile.TemporaryDirectory() as td:
+		proc, github_env, _args, inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=[_rejection(f"sweep fixer\n{marker}", login="Workflow-Bot")])
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_JUDGE_READY=true" in github_env
+		assert (inputs / "rejection.txt").read_text().startswith("sweep fixer")
+
+
 def test_prepare_refuses_a_dispatch_without_the_fixers_rejection():
 	"""Security follow-up #6061: a dispatch alone never authorizes the judge; without a
 	collaborator's rejection comment for this head and round it decides nothing."""
 	marker = f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=1 -->"
-	for comments in ([], [_rejection(f"forged\n{marker}", association="NONE")], [_rejection(f"other round\n<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=2 -->")]):
+	for comments in (
+		[],
+		[_rejection(f"forged\n{marker}", association="NONE")],
+		[_rejection(f"other round\n<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=2 -->")],
+		# PR #6069 review: a collaborator who is neither the PR author nor the workflow account.
+		[_rejection(f"another collaborator\n{marker}", association="COLLABORATOR", login="someone-else")],
+	):
 		with tempfile.TemporaryDirectory() as td:
 			proc, github_env, _args, _inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=comments)
 		assert proc.returncode == 0, proc.stderr
@@ -1655,7 +1679,7 @@ if __name__ == "__main__":
 """
 
 
-def _sticky_repo(tmp: Path, *, change_after: bool = False) -> tuple[str, str]:
+def _sticky_repo(tmp: Path, *, change_after: bool = False, change_path: str = "scripts/a.sh") -> tuple[str, str]:
 	"""A git checkout holding scripts/a.sh; returns (path, the ruled head)."""
 	repo = tmp / "checkout"
 	(repo / "scripts").mkdir(parents=True)
@@ -1666,13 +1690,15 @@ def _sticky_repo(tmp: Path, *, change_after: bool = False) -> tuple[str, str]:
 	subprocess.run([*git, "commit", "-qm", "ruled"], check=True)
 	ruled = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
 	if change_after:
-		(repo / "scripts" / "a.sh").write_text("eval $x\n", encoding="utf-8")
-		subprocess.run([*git, "commit", "-qam", "changed"], check=True)
+		(repo / change_path).parent.mkdir(parents=True, exist_ok=True)
+		(repo / change_path).write_text("eval $x\n", encoding="utf-8")
+		subprocess.run([*git, "add", "-A"], check=True)
+		subprocess.run([*git, "commit", "-qm", "changed"], check=True)
 	return str(repo), ruled
 
 
-def _run_handoff_with_rulings(tmp: Path, rulings: list[dict], *, enabled: str = "true", change_after: bool = False):
-	cwd, ruled_head = _sticky_repo(tmp, change_after=change_after)
+def _run_handoff_with_rulings(tmp: Path, rulings: list[dict], *, enabled: str = "true", change_after: bool = False, change_path: str = "scripts/a.sh"):
+	cwd, ruled_head = _sticky_repo(tmp, change_after=change_after, change_path=change_path)
 	comments = tmp / "pr_comments.json"
 	comments.write_text(json.dumps([{"id": 3, "author_association": "OWNER", "body": f"<!-- ai:claude-fixer-judge:v1 head={ruled_head} round=1 run=900 decision=merge -->"}]), encoding="utf-8")
 	extra = {
@@ -1711,12 +1737,14 @@ def test_handoff_demotes_findings_the_judge_ruled_invalid():
 
 def test_handoff_keeps_findings_when_the_file_changed_since_the_ruled_head():
 	"""Security follow-up #6062: an invalid ruling only demotes while the code it judged is unchanged."""
-	with tempfile.TemporaryDirectory() as td:
-		proc, _calls, _posts, github_env = _run_handoff_with_rulings(
-			Path(td), [{"file": "scripts/a.sh", "line": 12, "ruling": "invalid", "claim": "unquoted expansion"}], change_after=True
-		)
-	assert proc.returncode == 0, proc.stderr
-	assert "sticky_demoted" not in proc.stdout
+	# PR #6069 review: a change in another file (a caller) counts too.
+	for change_path in ("scripts/a.sh", "scripts/caller.sh"):
+		with tempfile.TemporaryDirectory() as td:
+			proc, _calls, _posts, github_env = _run_handoff_with_rulings(
+				Path(td), [{"file": "scripts/a.sh", "line": 12, "ruling": "invalid", "claim": "unquoted expansion"}], change_after=True, change_path=change_path
+			)
+		assert proc.returncode == 0, proc.stderr
+		assert "sticky_demoted" not in proc.stdout, change_path
 	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
 	assert "kind=findings findings=2" in proc.stdout
 

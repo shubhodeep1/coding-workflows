@@ -253,11 +253,12 @@ def test_sticky_newest_matching_ruling_decides_and_code_must_be_unchanged():
 	assert moved == 0 and seen and seen[0] == ("scripts/a.sh", "a" * 40)
 
 
-def test_git_file_unchanged_fails_closed():
-	assert judge.git_file_unchanged("scripts/a.sh", None) is False
-	assert judge.git_file_unchanged("scripts/a.sh", "not-a-sha") is False
-	assert judge.git_file_unchanged("scripts/a.sh", "d" * 40) is False  # unknown commit
-	assert judge.git_file_unchanged("", "d" * 40) is False
+def test_git_tree_unchanged_fails_closed():
+	assert judge.git_tree_unchanged("scripts/a.sh", None) is False
+	assert judge.git_tree_unchanged("scripts/a.sh", "not-a-sha") is False
+	assert judge.git_tree_unchanged("scripts/a.sh", "d" * 40) is False  # unknown commit
+	assert judge.git_tree_unchanged("", "d" * 40) is False
+	assert judge.git_tree_unchanged("a\x00b", "d" * 40) is False  # NUL byte never raises
 
 
 def test_rb_judge_claude_mode_fix_obeys_workflow_edit_policy_and_write_guard():

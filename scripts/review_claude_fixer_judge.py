@@ -40,11 +40,11 @@ everything that decides what happens to the PR lives here so it can be tested:
 	with only such findings is clean. Prints the number moved. Rulings are
 	read newest first (the order ``prior-rulings`` writes) and the newest
 	matching ruling decides, so a later ``upheld`` ruling keeps the finding
-	blocking. An ``invalid`` ruling only demotes when the file is unchanged
-	between the head it was made on (the ruling's ``head``) and ``HEAD``
-	(``git diff --quiet <head> HEAD -- <file>``); a ruling without a head, a
-	changed file, or a failed git call keeps the finding blocking (security
-	follow-up #6062).
+	blocking. An ``invalid`` ruling only demotes when nothing changed between
+	the head it was made on (the ruling's ``head``) and ``HEAD``
+	(``git diff --quiet <head> HEAD``, the whole change set); a ruling without
+	a head, any change, or a failed git call keeps the finding blocking
+	(security follow-up #6062).
 
 ``prior-rulings --comments FILE --repo R --pr N [--default-branch B] [--max 3] --out FILE``
 	Reads ``<!-- ai:claude-fixer-judge:v1 head=<sha> round=<r> run=<id> ... -->``
@@ -268,18 +268,23 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 	return result
 
 
-def git_file_unchanged(file_name: str, head: Any) -> bool:
-	"""True only when `git diff --quiet <head> HEAD -- <file>` succeeds; any doubt is False."""
+def git_tree_unchanged(file_name: str, head: Any) -> bool:
+	"""True only when `git diff --quiet <head> HEAD` succeeds (nothing changed since the ruled head).
+
+	The whole change set counts, not just the cited file: a change in a caller or a shared module
+	can make a finding the judge ruled invalid valid again (PR #6069 review). Any doubt is False.
+	`file_name` is accepted for the sticky callback signature and must be non-empty.
+	"""
 	if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head) or not file_name:
 		return False
 	try:
 		completed = subprocess.run(
-			["git", "diff", "--quiet", head, "HEAD", "--", file_name],
+			["git", "diff", "--quiet", head, "HEAD"],
 			capture_output=True,
 			timeout=60,
 			check=False,
 		)
-	except (OSError, subprocess.SubprocessError):
+	except (OSError, ValueError, subprocess.SubprocessError):
 		return False
 	return completed.returncode == 0
 
@@ -289,7 +294,7 @@ def sticky(ledger_text: str, rulings: list[dict[str, Any]], file_unchanged: Any 
 
 	`rulings` are newest first; the newest ruling that matches a finding (same file, start line
 	within STICKY_LINE_WINDOW, same claim) decides. `file_unchanged(file, head)` binds an invalid
-	ruling to unchanged code; the CLI always passes git_file_unchanged (#6062).
+	ruling to unchanged code; the CLI always passes git_tree_unchanged (#6062).
 	"""
 	candidates = []
 	for ruling in rulings:
@@ -460,7 +465,7 @@ def _cmd_sticky(args: argparse.Namespace) -> int:
 	loaded = _load_json(args.rulings)
 	rulings = loaded.get("rulings") if isinstance(loaded, dict) else loaded
 	ledger = Path(args.ledger)
-	text, moved = sticky(ledger.read_text(encoding="utf-8"), rulings if isinstance(rulings, list) else [], file_unchanged=git_file_unchanged)
+	text, moved = sticky(ledger.read_text(encoding="utf-8"), rulings if isinstance(rulings, list) else [], file_unchanged=git_tree_unchanged)
 	if moved:
 		ledger.write_text(text, encoding="utf-8")
 	print(moved)

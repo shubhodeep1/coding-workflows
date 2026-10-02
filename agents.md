@@ -115,8 +115,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    (`judge_skip_reason=claude_fixer_fix_count_unreadable`), as does a
    failed decide helper (`claude_fixer_decide_failed`, apart from
    `claude_fixer_no_rulings`), a missing rejection
-   (`claude_fixer_rejection_missing`: no collaborator's rejection comment for
-   that head and round, so a bare dispatch never runs the judge, #6061), and
+   (`claude_fixer_rejection_missing`: no rejection comment for that head and
+   round from a collaborator posting as the PR author or the workflow's
+   GH_PAT account, so a bare dispatch never runs the judge, #6061), and
    a hand-off ledger with no finding
    (`claude_fixer_no_findings`: usually a round below the #5964 reviewer
    panel floor, which the hand-off comment names, or a clean ledger beside a
@@ -132,8 +133,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    name (OWNER, MEMBER, or COLLABORATOR), verifies each, and moves findings
    within 3 lines of an `invalid` ruling in the same file that make the same
    claim (case- and whitespace-insensitive; security follow-up #6051), when
-   the file is unchanged since the head that ruling judged and no newer
-   matching ruling upheld it (#6062), into a
+   nothing changed since the head that ruling judged (the whole change set,
+   not just the cited file) and no newer matching ruling upheld it (#6062),
+   into a
    `=== NON-BLOCKING FINDINGS ===` block (sticky rulings, log
    `CLAUDE_FIXER_JUDGE … action=sticky_demoted`). A judge that decides
    nothing leaves `judge_handled=false`, so the PR is labelled

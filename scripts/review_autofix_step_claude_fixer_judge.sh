@@ -24,7 +24,8 @@
 #   * findings.json — the ledger's findings numbered F1..Fn
 #     (scripts/review_claude_fixer_judge.py findings);
 #   * rejection.txt — the newest rejection comment for this head and round by
-#     an OWNER / MEMBER / COLLABORATOR, passed to the model as untrusted
+#     an OWNER / MEMBER / COLLABORATOR posting as the PR author or this
+#     workflow's GH_PAT account, passed to the model as untrusted
 #     argument only. Without one the inputs are not ready (reason
 #     rejection_missing, security follow-up #6061): a dispatch alone never
 #     authorizes the judge;
@@ -104,19 +105,32 @@ if [ ! -s "${claude_fixer_judge_comments}" ]; then
   claude_fixer_judge_comments="${claude_fixer_judge_dir}/no_comments.json"
   printf '[]\n' > "${claude_fixer_judge_comments}"
 fi
-# $marker is a jq variable, not a shell expansion.
+# The rejection must come from the fixer's identity, not just any collaborator (PR #6069
+# review): the PR author (the session that pushed it) or this workflow's own GH_PAT account
+# (the catch-all fixer), the same identities CLAUDE.md §26.H trusts for claims. An unreadable
+# identity is left out, so the filter fails closed.
+claude_fixer_judge_allowed_logins="$(
+  {
+    jq -r '.user.login // empty' "${PR_PAYLOAD_FILE:-/nonexistent}" 2>/dev/null || true
+    gh api user --jq '.login // empty' 2>/dev/null || true
+  } | sed '/^$/d' | tr '[:upper:]' '[:lower:]' | jq -R . | jq -sc .
+)"
+[ -n "${claude_fixer_judge_allowed_logins}" ] || claude_fixer_judge_allowed_logins='[]'
+# $marker and $allowed are jq variables, not shell expansions.
 # shellcheck disable=SC2016
-jq -r --arg marker "<!-- ai:claude-fixer-rejection:v1 head=${HEAD_SHA} round=${claude_fixer_judge_round} -->" '
+jq -r --arg marker "<!-- ai:claude-fixer-rejection:v1 head=${HEAD_SHA} round=${claude_fixer_judge_round} -->" --argjson allowed "${claude_fixer_judge_allowed_logins}" '
     [.[]? | select(type == "object" and ((.id // null) | type) == "number"
       and ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+      and (((.user.login // "") | ascii_downcase) as $login | $login != "" and ($allowed | index($login)) != null)
       and ((.body // "") | split("\n") | map(gsub("\r$"; "")) | index($marker) != null))]
     | max_by(.id) // empty | .body[0:30000]
   ' "${claude_fixer_judge_comments}" > "${claude_fixer_judge_dir}/rejection.txt" 2>/dev/null || : > "${claude_fixer_judge_dir}/rejection.txt"
 claude_fixer_judge_rejection="found"
 if [ ! -s "${claude_fixer_judge_dir}/rejection.txt" ]; then
   # Security follow-up #6061: a dispatch alone never authorizes the judge. Without the fixer's
-  # rejection comment for this head and round (OWNER / MEMBER / COLLABORATOR), nothing was
-  # rejected, so the judge decides nothing and the PR is labelled ai:review-blocked.
+  # rejection comment for this head and round (OWNER / MEMBER / COLLABORATOR, posted as the PR
+  # author or this workflow's account), nothing was rejected, so the judge decides nothing and
+  # the PR is labelled ai:review-blocked.
   claude_fixer_judge_not_ready "rejection_missing"
 fi
 
