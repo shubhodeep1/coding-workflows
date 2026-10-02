@@ -119,6 +119,20 @@ for f in "${input_files[@]}"; do
 	if grep -q '^.*failed after retries' "${f}" 2>/dev/null; then
 		continue
 	fi
+	# Drop slots whose reviewer did not finish with `success` (failed,
+	# skipped_budget, skipped_unmapped, skipped_open, pr_closed, ...): the
+	# per-slot output is then an infrastructure failure notice, not a review,
+	# and must not reach the ledger as a finding. review_run_reviewers.sh writes
+	# status_<prefix>_<safe_model>.txt next to <prefix>_<safe_model>.txt. An
+	# input with no status file (older layout) is kept, as before.
+	summariser_status_file="${PREVIOUS_REVIEWS_DIR}/status_$(basename "${f}")"
+	if [ -f "${summariser_status_file}" ]; then
+		summariser_status_value="$(tr -d '[:space:]' < "${summariser_status_file}" 2>/dev/null || true)"
+		if [ "${summariser_status_value}" != "success" ]; then
+			echo "summariser (${PREFIX}): skipping $(basename "${f}") — reviewer status is '${summariser_status_value:-<empty>}', not 'success'." >&2
+			continue
+		fi
+	fi
 	if [ ! -s "${f}" ]; then
 		continue
 	fi

@@ -296,7 +296,8 @@ def test_pickup_reports_queue_age_limit_and_resume_order(pickup_cmd):
 	assert "`QUEUE_PICKUP_LIMIT` (20), or the session's `CLAUDE_ISSUE_PICKUP_LIMIT` clamped to 1..30" in pickup_cmd
 	assert "at most 10 are started per wake" not in pickup_cmd
 	assert "first 3 × `limit` targets (60 at the default)" in pickup_cmd
-	assert "failed <f>; oldest_waiting=<oldest_waiting_minutes, or none>; catch_up=<scheduled | pending | none | failed>; limit_resumed=<n>; limit_pending=<n, or unknown>`" in pickup_cmd
+	# Issue #5660 adds step 1a's `limit_*` fields after catch_up, and issue #4887 the step 3a sweep's `archived <a> (next …)` part after them.
+	assert "failed <f>; oldest_waiting=<oldest_waiting_minutes, or none>; catch_up=<scheduled | pending | none | failed>; limit_resumed=<n>; limit_pending=<n, or unknown>; archived <a> (next <next_after_id or null>)`" in pickup_cmd
 
 
 def test_pickup_resumes_sessions_stopped_by_the_usage_limit(pickup_cmd):

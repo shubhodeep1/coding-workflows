@@ -180,6 +180,7 @@ SOURCE_GEN="$(_pf '.source_gen // ""')"
 SOURCE_ROOT="$(_pf '.source_root // ""')"
 FAILURE_REASON="$(_pf '.failure_reason // ""')"
 FAILURE_STREAK="$(_pf '.failure_streak // ""')"
+PAYLOAD_FAILURE_FINGERPRINT="$(_pf '.failure_fingerprint // ""')"
 FAILURE_EVIDENCE_FILE="${RUNTIME_DIR}/failure_evidence.txt"
 _pf '.failure_evidence // ""' > "${FAILURE_EVIDENCE_FILE}"
 PAYLOAD_BASE_BRANCH="$(_pf '.base_branch // ""')"
@@ -283,8 +284,17 @@ if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	# evidence identify the failure; the job logs still go to the model below.
 	[ -n "${PAYLOAD_WORKFLOW_NAME}" ] && FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
 	FIRST_FAILING_STEP="autofix:${FAILURE_REASON:-unknown}"
-	if [ -s "${FAILURE_EVIDENCE_FILE}" ]; then
-		SIGNATURE="$(python3 "${HEAL_PY}" error-signature --log-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || echo "no-error-lines")"
+	# The reporter's own header lines are not evidence: its `flags:` line
+	# matched the signature patterns on every report, so unrelated failures
+	# shared one fingerprint and lineage (PR #5892 escalated at generation 4).
+	# An identical_failure_cap report's evidence is the gate's marker data,
+	# which matches no signature pattern, so every cap report would share
+	# `no-error-lines`; its validated failure_fingerprint (the repeated
+	# failure's review-side fp) names the failure instead.
+	if [ "${FAILURE_REASON}" = "identical_failure_cap" ] && [[ "${PAYLOAD_FAILURE_FINGERPRINT}" =~ ^[0-9a-f]{64}$ ]]; then
+		SIGNATURE="autofix-fp:${PAYLOAD_FAILURE_FINGERPRINT}"
+	elif [ -s "${FAILURE_EVIDENCE_FILE}" ]; then
+		SIGNATURE="$(python3 "${HEAL_PY}" error-signature --strip-autofix-header --log-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || echo "no-error-lines")"
 	else
 		SIGNATURE="autofix:${FAILURE_REASON:-unknown}"
 	fi

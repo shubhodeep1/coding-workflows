@@ -88,7 +88,24 @@ Phases of the unattended pipeline (each is a separate workflow file under
    The bot's comment keeps `<!-- ai:claude-fixer-verdict:v1 head=<sha> -->`
    alongside the v2 digest marker; the session dispatches
    `claude_fixer_converged_head=<sha>` for verification. Zero ledger entries
-   with a clean check snapshot auto-merge in the run; at the cap the PR itself
+   with a clean check snapshot auto-merge in the run. A reviewer slot that
+   merely failed for infrastructure reasons (non-retryable error, token cap,
+   empty output, retryable-failure limit, `skipped_unmapped` / `skipped_open`)
+   does not block. A `skipped_budget` slot is covered only beside a hard
+   failure: when it is a pass's only non-success slot, `run_reviewer_pass`
+   still requests a partial finalize (reason `soft_deadline`) before the
+   summariser runs, so no ledger is written and the Claude-fixer hand-off
+   fails closed (`ledger=missing`, `kind=findings`): the round goes to the
+   Claude session as before, since the partial-finalize continuation is off
+   in Claude-fixer mode. This PR leaves that path unchanged (operator Q47: A). `summarize_reviewer_consensus.sh` drops
+   every input whose `status_<prefix>_<slot>.txt` is not `success` (an input
+   with no status file is kept), and the hand-off step requires
+   `REVIEWERS_SUCCESSFUL * 2 >= active` (active = the larger of the
+   `status_review_*.txt` count and the `reviewer_active_models.txt` line
+   count; unknown = floor not applied) before it calls a round clean, logging
+   `CLAUDE_FIXER_PANEL_FLOOR successful=<n> active=<m> floor_met=<true|false|unknown>`.
+   A finding or task gap from any successful reviewer still blocks, and below
+   the floor the round is handed off. At the cap the PR itself
    is labelled `ai:review-blocked`; dispatch
    re-runs on a head that already has a hand-off are skipped
    (`claude_fixer_awaiting_session`). Doc-only and small-diff `claude/*`
@@ -168,7 +185,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     heal issues of the same fingerprint / lineage. It de-dupes by fingerprint
     (label `ai:workflow-heal`; the promote cycle's `[cycle:<id>]` run-name
     suffix is ignored, and the error signature comes from the steps'
-    `##[error]` output, not the echoed step script), de-dupes an
+    `##[error]` output, not the echoed step script; for an `autofix_failure`
+    report it comes from the evidence minus the reporter's header lines,
+    `error-signature --strip-autofix-header`, led by the
+    `AUTOFIX_FAILURE_FIRST_ERROR` line the reporter adds; an
+    `identical_failure_cap` report uses its payload `failure_fingerprint`), de-dupes an
     `autofix_failure` report also by its pull request's `source=` marker (that
     PR's closed heal issues, and the heal issue its `ai/issue-<N>` head branch
     fixes, continue the lineage), caps the lineage at
@@ -936,7 +957,10 @@ tools (`send_later`, `create_session`, `archive_session`, the trigger tools)
 prompt on every call whatever the allowlist says, and Haiku 4.5 cannot run
 in Auto mode, which is why the checker is Sonnet. Progress between
 stages is persisted in `docs/implement-plan/<slug>.md`
-(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions: the project checker
+(`docs/implement-plan/README.md`) and in each stage's `— resume.` prompt. Only the chain archives its own sessions (one exception: the
+Claude issue pickup's session sweep, CLAUDE.md §26.I, archives an idle
+issue-start session once its issue is closed, never because a later stage
+session exists (#5664); it never touches a checker or a stage session): the project checker
 holds the project's only pending check-in, so archiving it by hand stalls the
 project until the 24h safety net fires. To nudge a stalled project, start the
 next stage session by hand with a `— resume.` block; to stop one, delete its
@@ -1147,6 +1171,39 @@ reviews, comments, and conflicts stay a direct §12 request.
   so it cannot run from Actions. A byte-identical copy lives under
   `workflow-templates/.claude/scripts/`; `tests/test_stale_routines.py` has
   its own `ci.yml` step.
+- Stale session sweep (CLAUDE.md §26.I, #4887): `scripts/claude_session_janitor.py`
+  (coding-workflows only, no template copy) reads one saved `list_sessions`
+  page and prints the sessions the Claude issue pickup archives on its
+  hourly `— wake.` (step 3a). The pickup calls `get_session`, then
+  `archive_session` only if the session is still `SESSION_STATUS_IDLE` under
+  the same title.
+  - Eligible titles, with or without the #4886 prefix: fixer / hold
+    (`PR [<repo>]#<n> — fix|fixed|on hold…`, `PR#<n> · fix-claude-pr`),
+    issue-start (`Issue #<n> — implement`, `issue <repo>#<n> — implement`,
+    `implement-issue-claude — #<n>`, `#<n> · implement-issue-claude`, later
+    `#<n> · PR #<pr> — implement-issue-claude`), and
+    report (`PR #<n> merged|closed — …needed`). The two `·` forms are what
+    the pickup has been seen to name its sessions; their number comes from
+    the prefix and the repository from the session's source.
+  - Rules:
+    - a fixer is archived 2 h after its PR merged or closed
+      (`--fixer-grace-hours`); normally it archived itself on the terminal
+      hand-back (`fix-claude-pr.md` step 2);
+    - an issue-start session is archived once its issue is closed. A later
+      `implement-plan issue-<n>-… — <stage>` session does not count (#5664):
+      the checker archives a stage whose start failed, and archiving the
+      issue-start session would disable its safety net;
+    - a report is archived after 7 idle days by `updated_at`
+      (`--report-days`), unless it is `need_input`.
+  - Never archived: `RUNNING`, `REQUIRES_ACTION`, `…_WORKING`, the pickup
+    (`--self`), and every other title.
+  - Budget: one REST read per distinct PR or issue, and a failed read keeps
+    the session.
+  - `next_after_id` is the next page's `after_id`, or null at the last page
+    or the 30-day horizon (`--horizon-days`), so one page per wake still
+    reaches week-old sessions.
+  - Exit 2 on unreadable input.
+  - `tests/test_claude_session_janitor.py` has its own `ci.yml` step.
 - Permissions: `.claude/settings.json` `permissions.allow` pre-approves the
   tools the check-in and `/implement-plan-claude` call (file edits,
   `claude/*` pushes, `gh` REST and run reads, the security-audit / validate
@@ -1868,6 +1925,7 @@ and shipped:
 - `CLAUDE_FIXER_HANDOFF`
 - `CLAUDE_FIXER_REVIEW_BLOCKED`
 - `CLAUDE_FIXER_AUTO_MERGE`
+- `CLAUDE_FIXER_PANEL_FLOOR`
 - `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -2061,6 +2119,7 @@ LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
 LOG_PREFIX.name=CLAUDE_FIXER_HANDOFF
 LOG_PREFIX.name=CLAUDE_FIXER_REVIEW_BLOCKED
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
+LOG_PREFIX.name=CLAUDE_FIXER_PANEL_FLOOR
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---
@@ -2277,6 +2336,7 @@ depend on it.
 
 **GitHub API rate-limits**
 - Shared GitHub quota handling is reset-aware: use the repo helpers' `gh_retry` backoff behavior instead of ad-hoc retry loops. Pointer: `scripts/gh_helpers.sh`.
+- A retry wrapper must buffer each attempt's stdout and emit only the successful attempt's: `gh api` prints failed responses to stdout, so an unbuffered retry prepends error bodies to the real output (#5495). `gh_retry` does this; an inline `"$@"` retry loop does not. Pointers: `scripts/gh_helpers.sh`, `tests/test_gh_retry_stdout_isolation.py`.
 - Rate-limit alerting is deduplicated by pin/cooldown state, and repeated issue/PR lookups should flow through the poller's batched GraphQL helpers. Pointers: `scripts/gh_helpers.sh`, `scripts/orchestrate_poll_process.sh`.
 
 **Memory subsystem**
