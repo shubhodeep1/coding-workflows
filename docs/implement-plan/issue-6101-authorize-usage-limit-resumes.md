@@ -1,31 +1,36 @@
 # Implement-Plan Log — Usage-limit resumes: only resume sessions the pickup's workflows started
 
-- Plan: docs/plans/issue-6101-authorize-usage-limit-resumes-plan.md
+- Plan: docs/completed/issue-6101-authorize-usage-limit-resumes-plan.md (moved from docs/plans/ in the completion PR)
 - Source issue: shubhodeep1/coding-workflows#6101 (progress comment 5956414439)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5660-resume-usage-limit-stops
 - Project branch: claude/implement-plan-issue-6101-authorize-usage-limit-resumes   Final PR: #6106 draft
-- Status: IN_PROGRESS
-- Stage: phase 1/1 — review round 3
-- Activation: not started
-- Waiting on: PR #6108 (review)
+- Status: COMPLETE
+- Stage: final-merge
+- Activation: pending verify-activation
+- Waiting on: completion PR (this PR)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01DV4YiX8EogPZxbF41aN7P7 (reused); safety net and hand-back ids in the review-round-2 stage report
+- Check-in: checker session_01DV4YiX8EogPZxbF41aN7P7 (reused); safety net and hand-back ids in the validation 1/3 — read result stage report
 - Last updated: 2026-10-02
-- Last note: review round 2 on 92714eb handed off with 2 ledger entries that are both reviewer "Review summary" lines reporting no defects; nothing to fix, no verdict bot, so this log commit is the next head (AD-8)
+- Last note: validation cycle 1 (run 37067368025, project head d932a9c) passed 10/10; completion PR moves the plan to docs/completed/; next stage final-merge 1/1 marks final PR #6106 ready (session_01S7TqLGpAf3y1KBEUwm73uZ)
 
 ## Phases
-1. [ ] Phase 1 — authorize usage-limit resumes by session source, origin, and lineage   — protected paths: .claude/scripts/usage_limit_resumes.py (via workflow-templates/.claude/** twin); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #6108 open (twin sync 00ae9ca; round-1 fix e66e22c, twin sync 92714eb; round 2 on 92714eb: 0 defects, closed by this log commit; waiting on review round 3); review rounds: 2; interventions: 0
+1. [x] Phase 1 — authorize usage-limit resumes by session source, origin, and lineage   — protected paths: .claude/scripts/usage_limit_resumes.py (via workflow-templates/.claude/** twin); .claude/commands/claude-issue-pickup.md (no twin — diff in the sync blocker)   — PR #6108 merged 2026-10-02T20:44:07Z (merge d932a9c; twin sync 00ae9ca; round-1 fix e66e22c, twin sync 92714eb; round 2 on 92714eb: 0 defects); review rounds: 2; interventions: 0
 
 ## Conformance
+- Run 1 — 2026-10-02: CONFORMANT — no fixes (pre-validation; security skipped). Implemented COMPLETE, Correctness PASS: every Goal maps to code (workflow-templates/.claude/scripts/usage_limit_resumes.py:158-163 constants, :296 load_allowed_repos, :316 session_repos, :340 _unauthorized_reason, :499 wired after `pickup`, :612-613 flags with defaults, :636 main builds the set); twin and .claude copy byte-identical; tests/test_usage_limit_resumes.py 162 passed, janitor/stale-routines/implement-issue/changelog suites 214 passed, implement-plan/session-titles 59 passed (1 skipped), ruff clean; real-data run on the live 100-session listing: all 66 claude_code_mcp_seed sessions authorized, 32 desktop_app unknown_origin, 2 desktop_app foreign_repo. Non-finding: an unreadable or non-GitHub git_repository URL is labelled foreign_repo, not no_repo (the plan's two descriptions overlap; the module docstring defines it, review round 1 chose it; the session is skipped either way)
 
 ## Security pass
 - Skipped (ai:security: automation-produced issue; `security_pass_skip.py` verified it)
 
 ## Validation
+- Cycle 1 — run 37067368025 2026-10-02 (target_ref: claude/implement-plan-issue-6101-authorize-usage-limit-resumes, authorized head d932a9c): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 274s); no fix issues
 
 ## Completion
+- Completion PR (claude/implement-plan-issue-6101-authorize-usage-limit-resumes-complete) open 2026-10-02 — doc moved to docs/completed/issue-6101-authorize-usage-limit-resumes-plan.md
+- Final PR #6106 draft — marked ready at final-merge 1/1 (base claude/implement-plan-issue-5660-resume-usage-limit-stops)
 
 ## Activation
+- Expected: n/a (base claude/implement-plan-issue-5660-resume-usage-limit-stops) — the change goes live with the #5660 project's final PR #5678; recorded at final-merge, which closes #6101 with `ai:merged`
 
 ## Auto-decisions
 - AD-1 [plan, 2026-10-02] How are resumes authorized? — Picked: A — every GitHub source in coding-workflows or the consumer registry, `origin` = `claude_code_mcp_seed`, and a `parent_session_id`; fail closed. Alternatives: B — also require the parent chain to reach the pickup session; C — repository check only. Why: server-set fields, no API call; B would stop resuming chains rooted at an operator session or a previous pickup and ancestors older than the 72-hour listing; C still resumes a person's own Auto-mode session in the same repository. Applied in: phase 1 PR. Status: pending review
@@ -48,4 +53,5 @@
 - Real-data evidence (review round 1 task gap): this account's live 100-session listing (2026-10-02 18:20Z) carries 108 sources, all `git_repository` objects with an `https://github.com/<owner>/<repo>` URL: no bare-hostname URL, no `git_repository: null`, no non-object entry, and no other source kind, so the round-1 tightening changes no live session's verdict
 - Twin sync round 1: 92714eb ([claude-twin-sync] issue-6101 review round 1, by the operator's driver session_01Db6EvqsPiaDHDTp8fUMeV8, answer A to blocker comment 5958673498, relayed by trigger trig_01SDBMPUgrkzHGDcfK3Y6ay5 at 2026-10-02 19:07Z) copies the twin to .claude/scripts/usage_limit_resumes.py; sha256 36de9839…520d0fb verified for both copies; 355 passed across the selector, implement-issue, stale-routine, and janitor suites on 92714eb; ai:claude-blocked removed from #6101 at 19:08Z
 - Review round 2 (2026-10-02, head 92714eb, workflow round 1, run 37051666777, ledger 466adb43…): 6 of 6 reviewers succeeded; consensus findings and task gaps empty; the 2 ledger entries are minimax-m3's and glm-5.2's "Review summary" bullets, both stating no defects; no failed check. Nothing fixed or rejected; closed by this log commit (AD-8)
+- Validation 1/3 — read result (2026-10-02, session_01S7TqLGpAf3y1KBEUwm73uZ): run 37067368025 conclusion success, `validation_status.json` status=pass raw_status=pass on authorized head d932a9c; no validation-fix PR, so no post-validation conformance re-run; issue base claude/implement-plan-issue-5660-resume-usage-limit-stops has not merged (no closed PR with that head); project branch already up to date with it
 - Operator note: never archive session_01Db6EvqsPiaDHDTp8fUMeV8 (it holds the operator's hourly driver Routine for the #5660 project) and never delete that Routine
