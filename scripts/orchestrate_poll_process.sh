@@ -15308,7 +15308,10 @@ _pr_json_merged_into_issue_target() {
     return 1
   fi
   ISSUE_TARGET_MERGE_REJECT_REASON="non_target_base"
-  if [ -z "${_itm_base_repo}" ] || [ "${_itm_base_repo}" != "${GITHUB_REPOSITORY:-}" ]; then
+  # Repository slugs compare case-insensitively, as GitHub resolves them.
+  local _itm_repo_lc="${GITHUB_REPOSITORY:-}"
+  _itm_repo_lc="${_itm_repo_lc,,}"
+  if [ -z "${_itm_base_repo}" ] || [ "${_itm_base_repo,,}" != "${_itm_repo_lc}" ]; then
     ISSUE_TARGET_MERGE_REJECT_REASON="foreign_base_repo"
     return 1
   fi
@@ -15326,7 +15329,7 @@ _pr_json_merged_into_issue_target() {
   ISSUE_TARGET_MERGE_REJECT_REASON="unverified_identity"
   _itm_head="$(printf '%s' "${pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
   _itm_head_repo="$(printf '%s' "${pr_json}" | jq -r '.head.repo.full_name // ""' 2>/dev/null || echo "")"
-  if [ -n "${_itm_head_repo}" ] && [ "${_itm_head_repo}" = "${GITHUB_REPOSITORY:-}" ] \
+  if [ -n "${_itm_head_repo}" ] && [ "${_itm_head_repo,,}" = "${_itm_repo_lc}" ] \
     && type pr_head_ref_is_issue_automation_branch >/dev/null 2>&1 \
     && pr_head_ref_is_issue_automation_branch "${issue_num}" "${_itm_head}"; then
     ISSUE_TARGET_MERGE_REJECT_REASON=""
@@ -15842,7 +15845,12 @@ _heal_rejected_merged_state() {
   local _mhs_edit_args=(--add-label "${_mhs_target_label}")
   [ "${_mhs_has_label}" = "true" ] && _mhs_edit_args+=(--remove-label "ai:merged")
   if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${_mhs_edit_args[@]}" >/dev/null 2>&1; then
-    echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=retry why=label_edit_failed" >&2
+    echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=retry why=label_edit_failed wave_hold=true" >&2
+    # Hold the wave this cycle (PR #5633 review round 4): the stored status
+    # is already in_progress, so drop `ai:merged` from the labels this cycle
+    # evaluates (GitHub keeps it until the retry) and check-wave-status
+    # cannot read the issue as merged while the heal is pending.
+    MERGED_HEAL_LABELS_JSON="$(printf '%s' "${labels_json}" | jq -c '(if type == "array" then . else [] end) | map(select(. != "ai:merged"))' 2>/dev/null || echo "${labels_json}")"
     return 0
   fi
   MERGED_HEAL_LABELS_JSON="$(printf '%s' "${labels_json}" | jq -c --arg add "${_mhs_target_label}" '(if type == "array" then . else [] end) | map(select(. != "ai:merged")) + [$add] | unique' 2>/dev/null || echo "${labels_json}")"
@@ -20172,7 +20180,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         continue
       fi
       if [ "${_linked_pr_candidate_state}" = "open" ] && [ -z "${_rcl_own_open_pr}" ] \
-        && [ "$(_jq_field "${_linked_pr_candidate_json}" '.head.repo.full_name')" = "${GITHUB_REPOSITORY}" ] \
+        && [ "$(_jq_field "${_linked_pr_candidate_json}" '.head.repo.full_name' | tr '[:upper:]' '[:lower:]')" = "${GITHUB_REPOSITORY,,}" ] \
         && type pr_head_ref_is_issue_automation_branch >/dev/null 2>&1 \
         && pr_head_ref_is_issue_automation_branch "${inum}" "$(_jq_field "${_linked_pr_candidate_json}" '.head.ref')"; then
         _rcl_own_open_pr="${_linked_pr_candidate}"

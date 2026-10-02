@@ -15466,6 +15466,33 @@ def test_reconcile_heal_label_edit_failure_stays_retryable():
 	assert "action=retry why=label_edit_failed" in combined, combined
 	assert "MERGED_STATE_HEALED" not in combined
 	assert "merged_state_heal" not in result["latest_state"]["waves"][0]["issues"][0], result["latest_state"]["waves"][0]["issues"][0]
+	# PR #5633 round 4: the label GitHub still carries must not let this
+	# cycle's wave check read the issue as merged and close the wave.
+	assert "wave_hold=true" in combined, combined
+	assert result["latest_state"]["waves"][0]["issues"][0]["status"] != "merged", result["latest_state"]["waves"][0]["issues"][0]
+	assert result["latest_state"]["status"] == "in_progress", result["latest_state"]["status"]
+
+
+def test_reconcile_heal_retry_cycle_finishes_after_label_edit_failure():
+	"""PR #5633 round 4: the cycle after a failed label edit starts from a
+	stored `in_progress` with `ai:merged` still on the issue, and the heal
+	runs again and finishes."""
+	result = _run_poller(
+		state=_stale_merged_state(stored_status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+	)
+	combined = result["stdout"] + result["stderr"]
+	labels = result["issues"]["10"]["labels"]
+	assert "ai:merged" not in labels, labels
+	assert "ai:awaiting-approval" in labels, labels
+	assert "MERGED_STATE_HEALED issue=10 pr=953 reason=non_target_base label=ai:awaiting-approval stored_status=in_progress" in combined, combined
+	issue = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue["status"] == "in_progress", issue
+	assert issue["merged_state_heal"]["pr"] == 953, issue
 
 
 def test_reconcile_leaves_merged_label_without_rejected_merge_alone():

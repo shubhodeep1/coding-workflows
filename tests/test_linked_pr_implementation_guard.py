@@ -543,6 +543,21 @@ def test_target_foreign_base_repository_is_rejected():
 	assert _target_rc("5618", no_base_repo, _PROJECT_BRANCH) == (1, "foreign_base_repo")
 
 
+def test_target_repository_slugs_compare_case_insensitively():
+	"""GitHub resolves repository slugs case-insensitively, so a different
+	casing of the same repository is not foreign (PR #5633 review round 4);
+	another repository is still rejected in any casing."""
+	upper = _TEST_REPO.upper()
+	on_project = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618", base_repo=upper, head_repo=upper)
+	assert _target_rc("5618", on_project, _PROJECT_BRANCH) == (0, "")
+	on_default = _target_pr(5618, base="main", head="claude/any-branch", base_repo=upper)
+	assert _target_rc("5618", on_default, _PROJECT_BRANCH) == (0, "")
+	foreign = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618", base_repo="ATTACKER/OTHER-REPO")
+	assert _target_rc("5618", foreign, _PROJECT_BRANCH) == (1, "foreign_base_repo")
+	fork_head = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618", head_repo="Attacker/Coding-Workflows")
+	assert _target_rc("5618", fork_head, _PROJECT_BRANCH) == (1, "unverified_identity")
+
+
 def test_target_missing_identity_helper_fails_closed():
 	pr = _target_pr(5618, base=_PROJECT_BRANCH, head="ai/issue-5618")
 	assert _target_rc("5618", pr, _PROJECT_BRANCH, with_identity_helper=False) == (1, "unverified_identity")
