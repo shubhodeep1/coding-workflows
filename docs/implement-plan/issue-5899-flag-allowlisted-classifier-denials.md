@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5899
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5899-flag-allowlisted-classifier-denials   Final PR: #5913 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: PR #5918: twin sync (review round 2)
+- Waiting on: PR #5918 review on the synced head `f0393e2`
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01CoJMFhaTmz26Vbz9TbiV3b   safety net none   hand-back none (held for the twin sync; the stage after /reclarify arms the wait)
-- Last updated: 2026-10-01
-- Last note: review round 2 on PR #5918 (workflow round 1 on head aef35b2): quoted or escaped operators no longer block the allow-rule match (AD-4), legacy-pattern test asserts the rendered text, this log updated; hold claim and third twin-sync blocker on #5899 — awaiting [claude-twin-sync] copy and /reclarify
+- Last updated: 2026-10-02
+- Last note: review round 3 on PR #5918 (workflow round 1 on the synced head f0393e2): agents.md describes the quote-aware allow-rule check; log refreshed after the round-2 twin sync. Earlier: review round 2 on PR #5918 (workflow round 1 on head aef35b2): quoted or escaped operators no longer block the allow-rule match (AD-4), legacy-pattern test asserts the rendered text, this log updated; hold claim and third twin-sync blocker on #5899 — awaiting [claude-twin-sync] copy and /reclarify
 
 ## Phases
-1. [ ] Phase 1 — report allowlisted denials and document the sync merge — PR #5918 open (round-2 twin sync pending); review rounds: 2; interventions: 0 — protected paths: .claude/scripts/permission_prompts.py
+1. [ ] Phase 1 — report allowlisted denials and document the sync merge — PR #5918 open (round-2 twin sync done; review round 3 on the synced head); review rounds: 3; interventions: 0 — protected paths: .claude/scripts/permission_prompts.py
    - [x] twin `workflow-templates/.claude/scripts/permission_prompts.py`: `allow_rule_for`, `allow_rule` / `permission_modes` on patterns, report key, occurrence-block lines (first twin sha256 f1a4aabbeb0c202ebcb3b335800bfaedbc6af818e6039000cbfdc93342b9ec01, synced in b8fea25)
    - [x] `tests/test_permission_prompts.py`: matcher, grouping, body/comment, real-settings tests against the twin (78 passed at phase PR; 87 passed after review round 1, `test_template_parity` red until the round-1 twin sync)
    - [x] `CLAUDE.md` §23.B routine sync-merge bullet
@@ -24,7 +24,8 @@
    - [x] review round 1 (2026-10-01): records ordered by `ts`, cross-checkout `cwd` not checked, settings read once per run, `:*` and only-wildcard bare-command rule in the matcher; 3 new tests
    - [x] `[claude-twin-sync]` copy of the round-1 twin into `.claude/scripts/permission_prompts.py` (aef35b2, pushed by the supervising session 2026-10-01; twin sha256 c9d10651b4b9eeef07e313b9490d5980a7b4b2f2d30ae18ed208dd5549aca0ae)
    - [x] review round 2 (2026-10-01, workflow round 1 on aef35b2): the single-command check ignores operators inside quotes or escaped by a backslash, still rejects a backtick or `$(` inside double quotes, a newline, an unclosed quote, and `$'...'` (AD-4); the legacy-pattern test asserts the rendered text instead of comparing the two copies; 13 new test cases (103 passed, `test_template_parity` red until the round-2 twin sync)
-   - [ ] `[claude-twin-sync]` copy of the round-2 twin into `.claude/scripts/permission_prompts.py` (supervising session; twin sha256 da9092663e0a84b657acd9a848091657adf53cf35095cdd155b79edadee042b7)
+   - [x] `[claude-twin-sync]` copy of the round-2 twin into `.claude/scripts/permission_prompts.py` (f0393e2, pushed by the owner's supervising session 2026-10-02; twin sha256 da9092663e0a84b657acd9a848091657adf53cf35095cdd155b79edadee042b7; 137 tests passed incl. template parity)
+   - [x] review round 3 (2026-10-02, workflow round 1 on f0393e2): `agents.md` "Already allowlisted" bullet states the quote-aware single-command rule; this log refreshed
    - Done: new tests pass on the twin; after twin sync the full permission-prompt suite and section-number test pass
 
 ## Conformance
