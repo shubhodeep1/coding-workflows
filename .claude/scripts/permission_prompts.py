@@ -96,10 +96,12 @@ MAX_COMMAND_CHARS = 2000
 MAX_SHAPE_CHARS = 200
 MAX_TITLE_SHAPE_CHARS = 90
 
-# One shell word as a credential value: quoted parts (a double-quoted part may hold `\"`), escaped characters, and
-# bare characters, concatenated; an unterminated quote runs to the end, so the rest of a secret is never shown
-# (PR #5918 review round 10).
-_REDACTION_SHELL_WORD = r"""(?:'[^']*(?:'|$)|"(?:[^"\\]|\\.)*(?:"|$)|\\.|[^\s'"\\])+"""
+# One shell word as a credential value: ANSI-C quoted parts (`$'…'`, which may hold `\'`), quoted parts (a
+# double-quoted part may hold `\"`), escaped characters, and bare characters, concatenated; an unterminated quote
+# runs to the end, so the rest of a secret is never shown (PR #5918 review rounds 10 and 12).
+_REDACTION_SHELL_WORD = r"""(?:\$'(?:[^'\\]|\\.)*(?:'|$)|'[^']*(?:'|$)|"(?:[^"\\]|\\.)*(?:"|$)|\\.|[^\s'"\\])+"""
+# A credential option itself (`--api-key`): never taken as the value of the option before it, so it keeps its own.
+_REDACTION_CREDENTIAL_OPTION = r"--?[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key)[A-Za-z0-9_-]*"
 
 REDACTION_PATTERNS = (
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
@@ -114,9 +116,12 @@ REDACTION_PATTERNS = (
 	# allow rule's) is not a value (PR #5918 review round 9). Both keyword
 	# patterns mask the whole shell word (round 10). A next word starting with
 	# `-` may be the value (`--password -hunter2`) or another option: it is
-	# masked either way, the safe side (round 11).
+	# masked either way, the safe side (round 11), unless it is a credential
+	# option itself (`--password --api-key secret`), which keeps its own value (round 12).
 	(
-		re.compile(r"(?i)((?<![A-Za-z0-9_])--?[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key)[A-Za-z0-9_-]*)(\s+)(?!\*(?:[\s)]|$))" + _REDACTION_SHELL_WORD),
+		re.compile(
+			r"(?i)((?<![A-Za-z0-9_])" + _REDACTION_CREDENTIAL_OPTION + r")(\s+)(?!\*(?:[\s)]|$))(?!" + _REDACTION_CREDENTIAL_OPTION + r"(?:[\s=]|$))" + _REDACTION_SHELL_WORD
+		),
 		r"\1\2***",
 	),
 	# Long random-looking strings (hex keys, base64 secrets): 40+ letters,

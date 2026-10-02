@@ -564,6 +564,12 @@ def test_report_and_issue_redact_a_space_delimited_credential_option(tmp_path):
 		("x --api-key a\\ b c", "x --api-key *** c"),
 		('x password="a b" y', "x password=*** y"),
 		("x secret:'p q' y", "x secret:*** y"),
+		# Bash ANSI-C quoting may hold an escaped apostrophe; a credential option after another keeps its own value
+		# (PR #5918 review round 12).
+		("x --password $'ab\\' cd' next", "x --password *** next"),
+		("x password=$'ab\\' cd' y", "x password=*** y"),
+		("tool --password --api-key secretvalue z", "tool --password --api-key *** z"),
+		("tool --password --api-key=secretvalue z", "tool --password --api-key=*** z"),
 	],
 )
 def test_redact_masks_the_whole_shell_word_of_a_credential_value(text, masked):
