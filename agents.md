@@ -324,10 +324,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
         `need_input`, and with no enabled trigger at all.
     - **Skip reasons:** `pickup`, `archived`, `too_old` (`created_at` more
       than 72 hours ago; the last page listed can reach further back, and an
-      unreadable `created_at` is not skipped), `not_idle:<status>`,
+      unreadable `created_at` is not skipped; an old session waiting on a
+      human answer is listed as `needs_input` instead), `not_idle:<status>`,
       `permission_prompt`, `needs_input` (on both signals, #6102: a
       non-empty `needs_action` in either summary copy that is not only a
-      wait for the limit; a Q-ID, `?`, or reply / answer / decide / confirm
+      wait for the limit; a limit wait is made only of limit-wait words
+      (`LIMIT_WAIT_VOCABULARY`), so any other word such as merge or push
+      makes it a request; a Q-ID, `?`, or reply / answer / decide / confirm
       / choose / approve is never a limit wait; on the `rate_limit_info`
       signal a `need_input` category too), `not_reset` (its own limit still
       in the future), `wake_pending` (a pending `Resume after usage limit`

@@ -273,6 +273,12 @@ def test_text_signal_with_only_a_limit_wait_still_resumes(tmp_path, capsys, need
 		"You've hit your session limit · resets 11am (UTC); then approve the merge",
 		"merge PR #4376 once the usage limit resets",
 		"copy 2 files to .claude/commands/ after the limit resets, then push",
+		# PR #6112 review round 1: the error text or a wait prefix with a request whose verb is not a marker
+		"Usage limit reached — merge PR #4376 now",
+		"You've hit your session limit · resets 11am (UTC). Then run the suites and push",
+		"API Error: 429 rate_limit_error; delete the stale branch after the reset",
+		"Wait for the usage limit to reset, then merge PR #4376",
+		"retry once the rate limit resets and drop #4374",
 	],
 )
 def test_a_limit_wait_that_also_asks_a_human_is_skipped(tmp_path, capsys, needs_action):
@@ -317,10 +323,55 @@ def test_permission_prompt_still_wins_over_needs_input(tmp_path, capsys):
 		("limit resets soon?", False),
 		("choose A or B after the limit resets", False),
 		("", False),
+		# PR #6112 review round 1: only limit-wait words, so a request riding on the error text fails closed
+		("Usage limit reached — merge PR #4376 now", False),
+		("API Error: 429. Then push the branch", False),
+		("You've hit your session limit · resets 11am (UTC). Run the suites", False),
+		("wait for the limit to reset, then merge", False),
+		("wait for the limit to reset, then fusionner la PR", False),
+		("Usage limit reached. Wait until it resets at 11:00 UTC on Oct 3, then resume", True),
+		("You’ve hit your weekly limit — resets Monday 9am", True),
 	],
 )
 def test_is_limit_wait(text, expected):
 	assert resumes.is_limit_wait(text) is expected
+
+
+@pytest.mark.parametrize(
+	"text",
+	[
+		LIMIT_TEXT,
+		"You've hit your weekly limit",
+		"You’ve hit your session limit · resets 11am (UTC)",
+		"Claude usage limit reached. Your limit will reset at 11am.",
+		'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your rate limit"}}',
+		"API Error: account rate-limit exceeded",
+		"API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+	],
+)
+def test_every_usage_limit_error_text_is_a_limit_wait(text):
+	"""A limit-stopped summary can copy its error into `needs_action`; the vocabulary must cover each one."""
+	assert resumes.is_limit_wait(text) is True
+
+
+@pytest.mark.parametrize(
+	"session",
+	[
+		_session("session_a", created_at="2026-09-27T11:59:00Z", needs_action="Reply `Q1: A` or `Q1: B`"),
+		_session("session_a", created_at="2026-09-27T11:59:00Z", needs_action="Usage limit reached — merge PR #4376 now"),
+		_checker(
+			"session_a",
+			created_at="2026-09-27T11:59:00Z",
+			detail="awaiting next cycle trigger",
+			category="need_input",
+			rate_status="rejected",
+		),
+	],
+)
+def test_an_old_session_waiting_on_a_human_is_needs_input_not_too_old(tmp_path, capsys, session):
+	"""PR #6112 review round 1: the manual fallback resumes too_old sessions, so an unanswered request must show."""
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert result["resume"] == [] and _skips(result) == {"session_a": "needs_input"}
 
 
 def test_has_unanswered_request_reads_both_copies():

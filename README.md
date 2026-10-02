@@ -1300,7 +1300,7 @@ mode).
    - The script selects `IDLE` sessions whose last summary carries the usage-limit error, plus checkers whose `rate_limit_info` shows a `rejected` limit that has since reset and that have no trigger at all.
    - It skips a session that is:
      - archived, running, or on a permission prompt;
-     - waiting on a human answer: its summary's `needs_action` asks for something other than waiting for the limit to reset (#6102);
+     - waiting on a human answer: its summary's `needs_action` asks for something other than waiting for the limit to reset, or uses any word outside the limit-wait vocabulary (#6102). An old session in this state is listed as `needs_input`, not `too_old`;
      - the pickup itself;
      - created more than 72 hours ago (the last page listed can reach further back; those stay with the manual fallback);
      - still limited;
