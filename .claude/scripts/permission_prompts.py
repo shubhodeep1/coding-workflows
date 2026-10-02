@@ -333,7 +333,8 @@ def _collapse_substitutions(text: str) -> str:
 
 
 def _substitution_end(text: str, open_index: int) -> int | None:
-	"""Index just past the `)` that closes the `(` at `open_index`, skipping quoted text and escapes; None when unclosed."""
+	"""Index just past the `)` that closes the `(` at `open_index`, skipping quoted text, escapes, and a `#` comment
+	that starts a word (to the end of its line, as Bash does inside `$(…)`); None when unclosed."""
 	depth = 0
 	single_quoted = double_quoted = False
 	index = open_index
@@ -347,6 +348,12 @@ def _substitution_end(text: str, open_index: int) -> int | None:
 		elif char == '"' and not single_quoted:
 			double_quoted = not double_quoted
 		elif not single_quoted and not double_quoted:
+			if char == "#" and text[index - 1] in " \t\n;&|()":
+				line_end = text.find("\n", index)
+				if line_end == -1:
+					return None
+				index = line_end
+				continue
 			if char == "(":
 				depth += 1
 			elif char == ")":

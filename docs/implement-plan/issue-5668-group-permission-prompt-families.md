@@ -11,10 +11,10 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_0133V1fUz7ukod1UGEnYvTEY   safety net trig_01AJJgtdFW7jcN9GGgXXfypW   hand-back trig_01VZZSjFwM2fkidsfnb88DCN
 - Last updated: 2026-10-02
-- Last note: review round 2 on PR #5697 head 76ec5c8 (owner's supervising session, 2026-10-02): a `$(…)` or `$((…))` in a leading assignment, `export`, or `cd` prefix was split into simple commands of its own, so `ROOT=$(pwd) && git status` got an empty family and `cd $(pwd) && git status` the `cd` family; substitutions now count as one word (AD-11). Live file and twin edited together, no twin sync pending. Earlier: review round 1 (8962a63) and its twin sync 76ec5c8; twin sync landed as `c6494fd` (hold lifted); project branch synced with `main`; wait armed on PR #5697 review
+- Last note: review round 3 on PR #5697 head f454e88 (owner's supervising session, 2026-10-02): `_substitution_end` treated a `)` inside a `#` comment within `$(…)` as the close, so the family parser picked the wrong command; a `#` that starts a word now skips to the end of its line, as in Bash. Live file and twin edited together. Earlier: review round 2 on PR #5697 head 76ec5c8 (owner's supervising session, 2026-10-02): a `$(…)` or `$((…))` in a leading assignment, `export`, or `cd` prefix was split into simple commands of its own, so `ROOT=$(pwd) && git status` got an empty family and `cd $(pwd) && git status` the `cd` family; substitutions now count as one word (AD-11). Live file and twin edited together, no twin sync pending. Earlier: review round 1 (8962a63) and its twin sync 76ec5c8; twin sync landed as `c6494fd` (hold lifted); project branch synced with `main`; wait armed on PR #5697 review
 
 ## Phases
-1. [ ] Phase 1 — family key and family-aware filing (twin script, tests, CLAUDE.md §23.I, agents.md, README.md, changelog)   — protected paths: `.claude/scripts/permission_prompts.py` — PR #5697 open (waiting on review; review round 1 twin-synced in `76ec5c8`, review round 2 edits live and twin together); review rounds: 2; interventions: 0
+1. [ ] Phase 1 — family key and family-aware filing (twin script, tests, CLAUDE.md §23.I, agents.md, README.md, changelog)   — protected paths: `.claude/scripts/permission_prompts.py` — PR #5697 open (waiting on review; review round 1 twin-synced in `76ec5c8`, review rounds 2–3 edit live and twin together); review rounds: 3; interventions: 0
 
 ## Conformance
 

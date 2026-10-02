@@ -450,6 +450,13 @@ def test_table_families_stay_apart():
 		("git -C $(pwd) status", ("git status", ("subst",))),
 		("echo $(mysql -p x) && git fetch", ("echo", ("subst",))),
 		("(cd x && git status)", ("git status", ())),
+		# A `#` comment that starts a word inside `$(…)` runs to the end of its line, as in Bash; a `#` inside a
+		# word, `$#`, or a quoted `#)` is not one (PR #5697 review round 3).
+		("X=$(printf a # note :)\n) && git status", ("git status", ("subst",))),
+		("X=$(#c)\necho a) && git fetch", ("git fetch", ("subst",))),
+		("X=$(echo a#b) && git status", ("git status", ("subst",))),
+		("X=$(echo $#) && git fetch", ("git fetch", ("subst",))),
+		("X=$(echo \"#)\" ) && git fetch", ("git fetch", ("subst",))),
 	],
 )
 def test_command_family(command, family):
