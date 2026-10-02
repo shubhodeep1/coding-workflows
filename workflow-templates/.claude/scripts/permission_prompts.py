@@ -47,9 +47,10 @@ nothing. For each pattern with occurrences not filed yet:
     the lowest-numbered open one, else the lowest-numbered closed as
     `completed` or `not_planned` (or with no reason; not reopened). An issue
     closed as `duplicate` is never a family's issue. An issue's family is its
-    last `<!-- ai:permission-prompt-family:v1 family=<id> -->` marker outside
-    the example block; a legacy issue without one gets it from its recorded
-    tool, event, and example command (Bash only);
+    `<!-- ai:permission-prompt-family:v1 family=<id> -->` marker on the line
+    after the signature marker at the end of the body (a marker anywhere else
+    is untrusted text and ignored); a legacy issue without one gets it from
+    its recorded tool, event, and example command (Bash only);
   - otherwise → one new issue labelled `ai:permission-prompt` and `ai:claude`,
     so clarify routes it to the Claude issue implementer. It carries the
     signature marker, unchanged, and the family marker on its own line. Later
@@ -96,6 +97,11 @@ MARKER_RE = re.compile(r"<!-- ai:permission-prompt:v1 sig=([0-9a-f]{12}) -->")
 # The family id rides on its own line so the v1 signature marker stays byte-identical for every reader (issue #5668).
 FAMILY_MARKER_TEMPLATE = "<!-- ai:permission-prompt-family:v1 family={family} -->"
 FAMILY_MARKER_RE = re.compile(r"<!-- ai:permission-prompt-family:v1 family=([0-9a-f]{12}) -->")
+# Where issue_body writes the family marker: on the line after the signature marker, at the end of the body.
+# Only a marker there counts; one anywhere else (the untrusted reason or example text) is ignored.
+_GENERATED_FAMILY_MARKER_RE = re.compile(
+	r"<!-- ai:permission-prompt:v1 sig=[0-9a-f]{12} -->\r?\n<!-- ai:permission-prompt-family:v1 family=([0-9a-f]{12}) -->\s*\Z"
+)
 STATE_FILE = "filed-state.json"
 DEFAULT_LOG_DIR = Path.home() / ".claude" / "permission-prompts"
 MAX_COMMAND_CHARS = 2000
@@ -337,10 +343,15 @@ def _substitution_end(text: str, open_index: int) -> int | None:
 	that starts a word (to the end of its line, as Bash does inside `$(…)`); None when unclosed."""
 	depth = 0
 	single_quoted = double_quoted = False
+	# The character before this one as Bash reads it: a backslash-newline is removed, so it does not count.
+	previous = "("
 	index = open_index
 	while index < len(text):
 		char = text[index]
 		if char == "\\" and not single_quoted:
+			if text[index + 1 : index + 2] != "\n":
+				# An escaped character continues the word (`a\ #b`), so it is never a separator.
+				previous = "\\"
 			index += 2
 			continue
 		if char == "'" and not double_quoted:
@@ -348,7 +359,7 @@ def _substitution_end(text: str, open_index: int) -> int | None:
 		elif char == '"' and not single_quoted:
 			double_quoted = not double_quoted
 		elif not single_quoted and not double_quoted:
-			if char == "#" and text[index - 1] in " \t\n;&|()":
+			if char == "#" and previous in " \t\n;&|()":
 				line_end = text.find("\n", index)
 				if line_end == -1:
 					return None
@@ -360,6 +371,7 @@ def _substitution_end(text: str, open_index: int) -> int | None:
 				depth -= 1
 				if depth == 0:
 					return index + 1
+		previous = char
 		index += 1
 	return None
 
@@ -512,11 +524,12 @@ def record_family(record: dict) -> tuple[str, str]:
 
 
 def issue_family_marker(body: str) -> str | None:
-	"""The issue's family marker: the last one outside its recorded example (the generated marker follows it)."""
-	example_match = _ISSUE_EXAMPLE_RE.search(body)
-	outside = body[: example_match.start(2)] + body[example_match.end(2) :] if example_match else body
-	markers = FAMILY_MARKER_RE.findall(outside)
-	return markers[-1] if markers else None
+	"""The issue's family marker: the generated one, on the line after the signature marker at the end of the body.
+
+	A marker anywhere else is untrusted text (the reason Claude Code gave, the
+	recorded example) and is ignored (PR #5697 review round 4)."""
+	match = _GENERATED_FAMILY_MARKER_RE.search(body)
+	return match.group(1) if match else None
 
 
 def legacy_issue_family(body: str) -> str | None:

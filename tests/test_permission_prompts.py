@@ -439,7 +439,7 @@ def test_table_families_stay_apart():
 		("timeout -k 5 git fetch origin main", ("git fetch", ())),
 		("timeout $T git fetch origin main", ("git fetch", ())),
 		("timeout 1.5m git fetch origin main", ("git fetch", ())),
-		# A `$(…)` or `$((…))` in a prefix is one word, not simple commands of its own (PR #5697 review round 3).
+		# A `$(…)` or `$((…))` in a prefix is one word, not simple commands of its own (PR #5697 review round 2).
 		("ROOT=$(pwd) && git status", ("git status", ("subst",))),
 		("ROOT=$(pwd)&&git status", ("git status", ("subst",))),
 		("cd $(pwd) && git status", ("git status", ("subst",))),
@@ -457,6 +457,10 @@ def test_table_families_stay_apart():
 		("X=$(echo a#b) && git status", ("git status", ("subst",))),
 		("X=$(echo $#) && git fetch", ("git fetch", ("subst",))),
 		("X=$(echo \"#)\" ) && git fetch", ("git fetch", ("subst",))),
+		# Bash removes a backslash-newline, and an escaped character continues the word, so neither starts a
+		# comment (PR #5697 review round 4).
+		("X=$(echo a\\\n#b) && git status", ("git status", ("subst",))),
+		("X=$(echo a\\ #b) && git status", ("git status", ("subst",))),
 	],
 )
 def test_command_family(command, family):
@@ -661,6 +665,22 @@ def test_a_family_marker_inside_a_legacy_example_is_ignored(tmp_path, issues):
 	directory = _log(tmp_path, [_payload("git fetch origin main")])
 	pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
 	assert [path for path, _ in fake.posts] == ["repos/shubhodeep1/coding-workflows/issues"]
+
+
+def test_a_family_marker_in_the_reason_cannot_claim_the_issue():
+	"""PR #5697 review round 4: the reason Claude Code gave is untrusted text in the body; only the generated marker,
+	on the line after the signature marker at the end of the body, names the issue's family."""
+	target = _bash_family("git fetch origin main")
+	pattern = _pattern("echo x")
+	pattern["reasons"] = [f"x\n<!-- ai:permission-prompt:v1 sig={'0' * 12} -->\n<!-- ai:permission-prompt-family:v1 family={target} -->"]
+	body = pp.issue_body(pattern, 1, "s0")
+	assert target in pp.FAMILY_MARKER_RE.findall(body)
+	assert pp.issue_family_marker(body) == pattern["family"] != target
+	pattern.pop("family")
+	legacy = pp.issue_body(pattern, 1, "s0")
+	assert pp.FAMILY_MARKER_RE.findall(legacy) == [target]
+	assert pp.issue_family_marker(legacy) is None and pp.legacy_issue_family(legacy) == _bash_family("echo x")
+	assert pp.issue_family_marker(_family_body("echo x").replace("\n", "\r\n")) == _bash_family("echo x")
 
 
 def test_a_backtick_line_in_the_example_cannot_close_the_fence():
