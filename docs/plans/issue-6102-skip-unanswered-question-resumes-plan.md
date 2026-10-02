@@ -43,9 +43,9 @@ The usage-limit selector (`.claude/scripts/usage_limit_resumes.py`, issue #5660)
 
 ## Constraints
 
-- §1: security first. Unknown `needs_action` wording fails closed (skipped, listed under `skipped`, where the handbook's manual fallback covers it).
+- §1: security first. Unknown `needs_action` wording fails closed (skipped and listed under `skipped` as `needs_input`; the handbook says never to resume such a session by hand, but to answer it in that session, which resumes it).
 - §5: the smallest change that closes the finding. One helper and its tests, plus the docs that describe the skip reasons.
-- §6: no identifier is renamed or removed. The reason stays `needs_input`, and the JSON output shape is unchanged. New module-level names (`LIMIT_WORD_PATTERN`, `LIMIT_WAIT_WORD_PATTERN`, `LIMIT_WAIT_START_PATTERN`, `HUMAN_REQUEST_PATTERN`, `_needs_action_texts`, `is_limit_wait`, `has_unanswered_request`, `NOT_AN_ANSWER_TEXT`) are checked against the module first.
+- §6: no identifier is renamed or removed. The reason stays `needs_input`, and the JSON output shape is unchanged. New module-level names (`LIMIT_WORD_PATTERN`, `LIMIT_WAIT_WORD_PATTERN`, `LIMIT_WAIT_START_PATTERN`, `HUMAN_REQUEST_PATTERN`, `LIMIT_WAIT_TOKEN_PATTERN`, `LIMIT_WAIT_VOCABULARY`, `LIMIT_RETRY_WORD_PATTERN`, `LIMIT_DEFERRAL_PATTERN`, `_needs_action_texts`, `is_limit_wait`, `has_unanswered_request`, `NOT_AN_ANSWER_TEXT`) are checked against the module first.
 - §9: tabs in Python.
 - §20: a `changelog.d/` fragment (security fix).
 - §28.C and the interim twin-first default: `.claude/**` is edited only through `workflow-templates/.claude/scripts/usage_limit_resumes.py`. The root copy is synced by the operator from the twin-sync blocker.
@@ -53,7 +53,7 @@ The usage-limit selector (`.claude/scripts/usage_limit_resumes.py`, issue #5660)
 ## Approach
 
 1. Read `needs_action` from both summary copies (`post_turn_summary` and `external_metadata.post_turn_summary`), stripped.
-2. A `needs_action` is a **limit wait** when it carries no human-request marker (`Q<n>`, `?`, or the words reply, answer, decide, confirm, choose, approve) and either matches the usage-limit error text (`has_limit_text`) or starts with the wait or the limit and names a limit (`limit`) together with a wait word (reset, wait, retry, resume, resend, try again), so `merge PR #N once the limit resets` stays a request.
+2. A `needs_action` is a **limit wait** when all of these hold: it carries no human-request marker (`Q<n>`, `?`, or the words reply, answer, decide, confirm, choose, approve); every word in it (`LIMIT_WAIT_TOKEN_PATTERN`: runs of letters, apostrophes kept, and runs of digits) is a digit run or a limit-wait word (`LIMIT_WAIT_VOCABULARY`: the usage-limit error wording, wait words, times, and connectives, not "now"), so any other word, such as merge or push, makes it a request (AD-6); a retry, resend, resume, or try is deferred to the reset by a wait word, until, till, later, or the limit resets (`LIMIT_RETRY_WORD_PATTERN`, `LIMIT_DEFERRAL_PATTERN`), so `Usage limit reached. Please retry the request` stays a request (AD-7); and it either matches the usage-limit error text (`has_limit_text`) or starts with the wait or the limit and names a limit (`limit`) together with a wait word (reset, wait, retry, resume, resend, try again), so `merge PR #N once the limit resets` stays a request.
 3. A session **has an unanswered request** when any copy is non-empty and is not a limit wait.
 4. `_skip_reason` returns `needs_input` (after the existing `permission_prompt` check) when the session has an unanswered request, on either signal, or when the signal is `rate_limit_info` and `status_category` is `need_input`.
 5. Both prompts gain one fixed sentence: this message is not an answer to any question or approval request of yours; if one is still unanswered, keep waiting for the human's answer and end the turn without acting on it.
@@ -102,7 +102,7 @@ Phase 1:
 
 ## Risks & Mitigations
 
-- A limit-stopped session whose `needs_action` uses wording the limit-wait rule does not know is skipped and stays stopped. ACCEPTED — security first (§1); it is listed under `skipped` as `needs_input`, and the handbook's manual fallback covers it.
+- A limit-stopped session whose `needs_action` uses wording the limit-wait rule does not know is skipped and stays stopped. ACCEPTED — security first (§1); it is listed under `skipped` as `needs_input`, and the handbook tells the operator to answer it in that session (which resumes it), never to resume it by hand.
 - A `need_input` summary with an empty `needs_action` from a turn that had asked a question is still resumed. Mitigation: the prompt's not-an-answer sentence keeps the session waiting.
 - #6101 edits the same file on the same base branch. Mitigation: whichever lands second merges the base and resolves the conflict in its own project.
 

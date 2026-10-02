@@ -279,6 +279,10 @@ def test_text_signal_with_only_a_limit_wait_still_resumes(tmp_path, capsys, need
 		"API Error: 429 rate_limit_error; delete the stale branch after the reset",
 		"Wait for the usage limit to reset, then merge PR #4376",
 		"retry once the rate limit resets and drop #4374",
+		# PR #6112 review round 2: only limit-wait words, but a retry now or a retry not deferred to the reset
+		"Usage limit reached. Please retry the request now.",
+		"Wait for the limit. Please retry now.",
+		"Usage limit reached. Please retry the request.",
 	],
 )
 def test_a_limit_wait_that_also_asks_a_human_is_skipped(tmp_path, capsys, needs_action):
@@ -331,6 +335,20 @@ def test_permission_prompt_still_wins_over_needs_input(tmp_path, capsys):
 		("wait for the limit to reset, then fusionner la PR", False),
 		("Usage limit reached. Wait until it resets at 11:00 UTC on Oct 3, then resume", True),
 		("You’ve hit your weekly limit — resets Monday 9am", True),
+		# PR #6112 review round 2: vocabulary-only instructions to act now, or to retry without waiting
+		("Usage limit reached. Please retry the request now.", False),
+		("Wait for the limit. Please retry now.", False),
+		("Wait for the limit to reset. Please retry now.", False),
+		("Usage limit reached. Please retry the request.", False),
+		("API Error: 429. Retry the request", False),
+		("Usage limit reached. Please resend the request.", False),
+		("Usage limit reached. Please resume the session.", False),
+		("Usage limit reached. Please try the request again.", False),
+		("Session limit reached. Retry once.", False),
+		("Usage limit reached. Retry the request, not waiting for the reset.", False),
+		("Usage limit reached. Retry the request after it resets.", True),
+		("Wait for the limit. Then retry the request.", True),
+		("Usage limit reached. Please try again later.", True),
 	],
 )
 def test_is_limit_wait(text, expected):
