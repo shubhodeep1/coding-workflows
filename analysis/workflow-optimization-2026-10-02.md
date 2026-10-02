@@ -122,3 +122,80 @@ The observable pain point is recovery attribution: the poller counted PR **#5360
 | **Other MCP servers observed** | **None** | — | — | — |
 
 **Collection gaps:** no population-wide GH API endpoint/attempt counters, job queue distribution, judge-cycle or merged-PR counts, or outcomes linked from conflict dispatch to resolution. Add those fields to the existing collector and structured job summaries before assigning population-wide savings or stall rates.
+
+## Deep Audit — Workflows & Scripts (2026-10-02)
+
+### Section 1: Bug & Correctness Sweep
+
+The local sweep covered 52 `.github/workflows/*.yml` files and 160 top-level `scripts/*.sh` and `scripts/*.py` files. YAML parsing, Python AST parsing, and `bash -n` found no syntax failures. The findings below concern behavior, not syntax.
+
+- **SEC-001** — **High** · `security` · `.github/workflows/workflow-log-analysis.yml:1162-1169`; also `.github/workflows/mark-stable.yml:44-52` and `.github/workflows/test-and-mark-stable.yml:163-181`. **Description:** These `run:` blocks insert `github.ref_name` directly into shell source before assigning or validating it. Inference: a dispatchable ref containing shell syntax could execute that syntax before the ref check; the report-push workflow also checks out with a credentialed token. Whether repository ref and dispatch permissions permit an exploitable name needs confirmation. **[NEEDS VERIFICATION]** **Recommended fix:** Pass the ref through step `env:` and read `$GITHUB_REF_NAME` or the env-bound value in Bash, as the later deep-audit sync step does at `.github/workflows/workflow-log-analysis.yml:1459-1469`. Keep the `stable` checks.
+
+- **BUG-001** — **Medium** · `bug` · `scripts/claude_issue_queue_watchdog.sh:60-74`. **Description:** The hourly watchdog makes one non-paginated `issues?labels=ai:claude-issue-queue&state=open&per_page=100` read, then treats that response as the full queue. If more than 100 matching issues are open, items beyond the first page are never assessed for staleness. The parser only examines issues it receives (`scripts/claude_issue_route.py:1010-1036`). **Recommended fix:** Fetch all pages with `gh_retry gh api --paginate --slurp`, flatten and validate the arrays before `queue-stale`, and log the page and issue counts.
+
+- **SEC-002** — **Medium** · `security` · `scripts/gh_helpers.sh:648-659`. **Description:** When a successful API command returns invalid JSON, `gh_api_json_to_file` prints the first 50 lines of its *raw* response to the Actions log. Its callers include issue and PR reads (`scripts/workflow_failure_heal_report.sh:109-116`; `scripts/check_failure_triage.sh:149-154`). Inference: a malformed or partial response could expose private response content in logs. **[NEEDS VERIFICATION]** **Recommended fix:** Log endpoint class, byte count and a digest or sanitized error class—not response content—and test the malformed-response path with sensitive fixture text.
+
+- **BUG-002** — **Low** · `bug` · `scripts/review_merge_train.sh:275-291`. **Description:** `_mt_upsert_comment` ends both its PATCH and POST branches with `|| true`; it therefore reports success even when the comment write failed. The release caller’s warning-on-error path at lines 484-486 cannot observe that failure. **Recommended fix:** Return the write’s real status; let callers retain their existing fail-open handling and emit the warning.
+
+The existing report already covers the poller’s draft-PR prefilter and the observed conflict-dispatch/skip outcome. They are not repeated as new findings. The current tree also sets `AUTOFIX_REVIEWERS_FAILED` before its summary step (`.github/workflows/review_autofix.yml:5066-5084`; `scripts/review_autofix_step_iteration_summary.sh:709-718`), so the report’s historical clean-summary incident is not asserted as an unchanged code defect.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are **logical calls on the stated path**; pagination and retries can increase physical requests. Candidates with state or pagination trade-offs require parity tests before replacement.
+
+- **API-001** — **Medium** · `api-redundancy` · `scripts/orchestrate_poll_process.sh:10432-10444`. **Description:** When `final_pr_json_snapshot` is not for the recorded final PR, the same `pulls/${final_pr}` endpoint is fetched separately for `.state` and `.merged_at != null`: **2 reads → 1**. **Recommended fix:** Fetch one PR object and derive both fields locally, retaining the existing snapshot-first branch and unknown-value behavior. This extends the file’s existing snapshot reuse pattern.
+
+- **API-002** — **Medium** · `api-redundancy` · `scripts/orchestrate_poll_process.sh:17704-17723,18212-18218,23219-23227`. **Description:** The tracking-issue loop resets `DEFAULT_BRANCH_TRACKING` and can fetch repository `.default_branch` for each eligible issue; the standalone conflict sweep fetches that same repository field again. Current count is **at least one per eligible tracking issue plus one sweep read** when those paths execute; a successful poll-cycle cache would make it **1 shared read**. **Recommended fix:** Cache a confirmed default branch once per poll process, distinguish an API failure from a confirmed value, and retain the legacy read on a cache miss. Follow the cycle-local cache contract used by `_candidate_details_json` and `STALL_MANAGED_LINKED_PR_CACHE`.
+
+- **BATCH-001** — **Medium** · `api-batching` · `scripts/review_merge_train.sh:119-140,199-233,429-457`. **Description:** The merge-train gate/release loop obtains files through one paginated REST `pulls/{n}/files` read per distinct examined PR. The gate can examine up to `MT_MAX_OLDER_PRS` older PRs, default 20; the release loop reuses its per-process PR-file cache. For **F distinct PRs**, the first-page path is **F logical reads → approximately `ceil(F/25)` aliased GraphQL reads**. Extra file pages would still need pagination. **Recommended fix:** Add a batch prefetch using the aliased-query pattern of `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh:14686-14790`; preserve `_mt_pr_files_into` as the per-PR fallback for missing results, GraphQL failure, or additional pages. **[NEEDS VERIFICATION]** for GraphQL file-page parity with the current REST output.
+
+- **API-003** — **Low** · `api-redundancy` · `scripts/review_merge_train.sh:257-291,480-486`. **Description:** An `_mt_upsert_comment` call without an already-known ID lists comments to find the marker and then fetches the matched comment again for its body: **2 reads → 1** for an existing marker. **Recommended fix:** Have the marker-list lookup retain both ID and body and pass them to the upsert; retain the single-comment fallback when only an ID is supplied. This extends the existing marker-list call, not the poller’s issue-detail batch.
+
+- **API-004** — **Medium** · `api-redundancy` · `scripts/gh_helpers.sh:636-684,704-748`. **Description:** `gh_api_json_to_file` retries command failures without consulting `_is_gh_permanent_failure`; `curl_gh_api` likewise backs off on non-rate-limit HTTP failures. With the default maximum, a deterministic 404 or 422 can cost **5 attempts → 1** in either wrapper; the JSON helper also sleeps after its final failed attempt. **Recommended fix:** Reuse the permanent-failure classification already applied by `gh_retry` and `gh_retry_to_file` (`scripts/gh_helpers.sh:91-94,452-515,531-576`), while retaining retries for invalid successful JSON and transient or rate-limit failures. Test permanent and transient statuses separately.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001** — **Medium** · `duplication` · `.github/workflows/clarify.yml:218-255`, `.github/workflows/plan.yml:281-318`, `.github/workflows/orchestrate.yml:358-395`, `.github/workflows/orchestrate_clarify_respond.yml:281-318`; related staging in `.github/workflows/validate.yml:360-388`. **Description:** These workflows repeat the trusted support-checkout, per-file fallback, required-file validation and installation loop, with phase-specific asset lists. **Recommended fix:** Extend `scripts/stage_workflow_support.sh` with a phase-scoped entry point such as `stage_phase_support <phase> <verified-support-ref> <destination>`. Fetch and verify that helper from the immutable support checkout *before* invoking it; keep each phase’s required/optional asset contract and the existing review-specific staging behavior. Update the listed callers and their contract tests.
+
+- **DUP-002** — **Low** · `duplication` · `.github/workflows/review_autofix.yml:1618-1643,1848-1877`. **Description:** Two jobs carry near-identical inline `gh_retry` implementations, including temporary stdout buffering, although `scripts/gh_helpers.sh:452-515` owns the full helper. **Recommended fix:** Load the helper from the verified support checkout in both early jobs and call its existing `gh_retry <command> [args...]` interface. Preserve their pre-bootstrap behavior when verified support is unavailable; test that neither path executes a PR-head helper.
+
+No pair of complete workflows was established to be more than 70% identical; similar internal wrappers have distinct event and job contracts.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+The YAML-node sweep measured **779 `run:` blocks**, of which **225** contain `${{ }}`. The counts below are static rendered-script-size proxies: runtime substitutions can change them. Individual `${{ }}` expressions were also measured separately; the largest source expression was **185 characters**. Five `run:` bodies over 18,000 characters contained **no** `${{ }}` and were excluded as requested.
+
+- **EXPR-001** — **Medium** · `expression-limit` · `.github/workflows/implement.yml:986-1343`. **Description:** “Stage workflow support files” is **16,985 characters** of YAML-decoded `run:` source with **3** interpolations: approximately **4,015 characters** of static-body headroom to the requested 21,000-character assessment threshold. Its largest individual interpolation is **59 characters**; the body measurement does **not** establish that an individual GitHub expression is near rejection. **Recommended fix:** Move the staging body into a verified external script under `scripts/`, pass expression values through step `env:`, and register the script in the phase’s support staging and contract tests. Do not source it from the PR worktree.
+
+No other interpolated body reached 15,000 characters; the largest measured `if:` was **859 characters** (`.github/workflows/internal-clarify.yml:15-17`). No workflow reached the requested **800 KB** file-size flag. A separate, stricter repository contract matters here: `agents.md:620-645` and `tests/test_workflow_file_size_limit.py:1-45` document a measured **512,000-byte** execution limit and a **480,000-byte** CI guard. `.github/workflows/review_autofix.yml` is **458,436 bytes**, leaving **21,564 bytes** to that guard.
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEAD-001** — **Low** · `dead-code` · `scripts/review_issue_ledger.sh:866-917`. **Description:** `CURRENT_FLOOR` is declared and populated, but the repository-script search found no read of that array. ShellCheck also reports it as apparently unused. **Recommended fix:** Remove the declaration and assignment if no sourced caller consumes them; pin unchanged ledger output in a test before removal. **[NEEDS VERIFICATION]** for external sourcing.
+
+- **DEBT-001** — **Low** · `tech-debt` · `.github/workflows/ci.yml:259-277,365-369`; mirrored release check at `.github/workflows/test-and-mark-stable.yml:4225-4229`. **Description:** CI disables actionlint’s inline-shell ShellCheck integration and checks script files only at `--severity=error`. The full warning-level script sweep reported warnings, including SC2034 in `scripts/review_issue_ledger.sh:866-917` and SC2043 in `scripts/stage_workflow_support.sh:138,198`; neither warning-level script regressions nor inline-block warnings fail these gates. Some warnings are intentional or analyzer artifacts and should not be promoted indiscriminately. **Recommended fix:** Add a changed-lines warning report with a reviewed baseline, then resolve or explicitly justify warnings by code; keep the current error-level release gate during rollout.
+
+No `TODO`, `FIXME`, or `HACK` marker was found in the scoped workflow and script files. The shellcheck sweep did **not** establish an actionable unquoted-variable defect in the sampled call paths.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | SEC-001 |
+| Medium | 8 | BUG-001, SEC-002, API-001, API-002, API-004, BATCH-001, DUP-001, EXPR-001 |
+| Low | 5 | BUG-002, API-003, DUP-002, DEAD-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+Estimates are prospective and overlap; no files were changed during this audit.
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 3 workflows, plus tests | Medium |
+| API call optimization | 3 scripts, plus tests | Large |
+| Code modularization | 6 workflows and 2 scripts, plus tests | Large |
+| Expression size reduction | 1 workflow and at least 1 support script, plus tests | Medium |
+| Medium/Low fixes | 5 scripts and 2 workflow gates, plus tests | Medium |
