@@ -192,6 +192,9 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 	model_action = _one_line(model.get("action")).lower()
 	raw_rulings = model.get("rulings") if isinstance(model.get("rulings"), list) else []
 	by_id: dict[str, dict[str, Any]] = {}
+	# Findings any upheld ruling left without a valid category, duplicates included, so the
+	# order of duplicate rulings never decides whether the cap holds (#6050).
+	uncategorized_upheld: set[str] = set()
 	for entry in raw_rulings:
 		if not isinstance(entry, dict):
 			continue
@@ -199,6 +202,8 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 		ruling = str(entry.get("ruling") or "").strip().lower()
 		if not finding_id or ruling not in RULINGS:
 			continue
+		if ruling == "upheld" and str(entry.get("category") or "").strip().lower() not in CATEGORIES:
+			uncategorized_upheld.add(finding_id)
 		# A repeated ruling never clears a finding or skips the hold gate:
 		# the most cautious one for the finding is kept.
 		if finding_id not in by_id or _ruling_caution(entry) > _ruling_caution(by_id[finding_id]):
@@ -208,11 +213,11 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 	for finding in findings:
 		entry = by_id.get(finding["id"])
 		category = str((entry or {}).get("category") or "").strip().lower()
+		if entry is None or (finding["id"] in uncategorized_upheld and category not in HOLD_CATEGORIES):
+			# An unruled finding, or one upheld without a valid category, could be a security finding
+			# the model left out; it is never merged at the cap (#6050).
+			unclassified.append(finding["id"])
 		if category not in CATEGORIES:
-			# An unruled finding, or one ruled without a valid category, could be a security finding
-			# the model left out; it is shown as `other` but never merged at the cap (#6050).
-			if entry is None or str(entry.get("ruling") or "").strip().lower() == "upheld":
-				unclassified.append(finding["id"])
 			category = "other"
 		rulings.append({
 			"finding": finding["id"],

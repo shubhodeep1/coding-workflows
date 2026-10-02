@@ -120,6 +120,12 @@ def test_cap_reached_with_an_unruled_or_uncategorized_upheld_finding_holds():
 	# An invalid ruling without a category is not upheld, so the cap still merges with a follow-up.
 	result = judge.decide(_model("fix", {"F1": ("upheld", "correctness"), "F2": ("upheld", "other"), "F3": ("invalid", "")}), _findings(), 2, 2)
 	assert result["decision"] == "merge_with_followup"
+	# A duplicate upheld ruling without a category holds whichever order the duplicates come in.
+	for order in ((("upheld", "correctness"), ("upheld", "")), (("upheld", ""), ("upheld", "correctness"))):
+		model = {"action": "fix", "rulings": [{"finding": "F1", "ruling": r, "category": c, "reason": "x"} for r, c in order]
+			+ [{"finding": "F2", "ruling": "upheld", "category": "other", "reason": "x"}, {"finding": "F3", "ruling": "invalid", "category": "other", "reason": "x"}]}
+		result = judge.decide(model, _findings(), 2, 2)
+		assert result["decision"] == "hold" and result["reason"] == "upheld_unruled_or_uncategorized_at_cap", order
 	# Below the cap the omitted finding is fixed as before.
 	assert judge.decide(_model("fix", {"F1": ("upheld", "correctness")}), _findings(), 0, 2)["decision"] == "fix"
 
