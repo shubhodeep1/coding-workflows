@@ -379,10 +379,21 @@ def _signal(session: dict, kind: str, next_runs: list, now: dt.datetime) -> str 
 	return None
 
 
-def _skip_reason(session: dict, kind: str, signal: str, pickup_session: str, next_runs: list, now: dt.datetime) -> str | None:
+def _skip_reason(
+	session: dict,
+	kind: str,
+	signal: str,
+	pickup_session: str,
+	next_runs: list,
+	now: dt.datetime,
+	*,
+	pickup_key: str | None = None,
+) -> str | None:
+	"""Why a signalled session is not resumed, or None. `select` passes `pickup_key` (the pickup's `session_key`, computed once per run)."""
 	summary = _summary(session)
 	status = _text(session.get("session_status"))
-	if session_key(_text(session.get("id"))) == session_key(pickup_session):
+	own_key = pickup_key if pickup_key is not None else session_key(pickup_session)
+	if session_key(_text(session.get("id"))) == own_key:
 		return "pickup"
 	if status == ARCHIVED_STATUS:
 		return "archived"
@@ -414,6 +425,7 @@ def select(sessions: list, triggers: list, pickup_session: str, login: str, limi
 	skipped: list[dict] = []
 	account_holds = False
 	far_future = dt.datetime.max.replace(tzinfo=dt.timezone.utc)
+	pickup_key = session_key(pickup_session)
 	for position, session in enumerate(sessions):
 		if not isinstance(session, dict):
 			errors.append(f"session entry {position}: not an object")
@@ -426,7 +438,7 @@ def select(sessions: list, triggers: list, pickup_session: str, login: str, limi
 		if key in seen:
 			continue
 		seen.add(key)
-		if key == session_key(pickup_session):
+		if key == pickup_key:
 			account_holds = limit_holds(_rate_limit_info(session), now)
 		title = _text(session.get("title"))
 		kind = session_kind(title)
@@ -434,7 +446,7 @@ def select(sessions: list, triggers: list, pickup_session: str, login: str, limi
 		signal = _signal(session, kind, next_runs, now)
 		if signal is None:
 			continue
-		reason = _skip_reason(session, kind, signal, pickup_session, next_runs, now)
+		reason = _skip_reason(session, kind, signal, pickup_session, next_runs, now, pickup_key=pickup_key)
 		if reason:
 			skipped.append({"session_id": session_id, "signal": signal, "reason": reason})
 			continue

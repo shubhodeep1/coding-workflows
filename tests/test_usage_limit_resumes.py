@@ -365,6 +365,23 @@ def test_the_pickup_is_recognised_in_either_id_form(tmp_path, capsys):
 	assert result["resume"] == [] and _ids(result["pending"]) == ["session_a"]
 
 
+def test_select_keys_the_pickup_id_once_per_run(monkeypatch):
+	"""PR #6068 review round 1 (head b91a9ec): the pickup's key is computed once, not per listed session."""
+	pickup_calls = []
+	real_session_key = resumes.session_key
+
+	def counting_session_key(session_id):
+		if session_id == "cse_pickup":
+			pickup_calls.append(session_id)
+		return real_session_key(session_id)
+
+	monkeypatch.setattr(resumes, "session_key", counting_session_key)
+	sessions = [_session("session_a"), _session("session_b"), _checker("session_c"), _pickup()]
+	result = resumes.select(sessions, [], "cse_pickup", LOGIN, 20, NOW)
+	assert _ids(result["resume"]) == ["session_c", "session_a", "session_b"]
+	assert pickup_calls == ["cse_pickup"]
+
+
 def test_both_id_forms_of_one_session_are_considered_once(tmp_path, capsys):
 	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a"), _session("cse_a")])
 	assert result["considered"] == 2
