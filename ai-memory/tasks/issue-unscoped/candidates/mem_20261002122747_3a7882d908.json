@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/escalation-judge.md:46 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The descope auto-decision instruction says `Applied in: the revert PR` for every descope, but `intervention-cap` applies the change as a commit on the blocked PR's branch and opens no revert PR.\n  WHY: For `intervention-cap`, the progress log points to a nonexistent PR instead of the PR that received the descope commit, making the decision unauditable.\n- workflow-templates/.claude/commands/escalation-judge.md:46 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The descope auto-decision instruction says `Applied in: the revert PR` for every descope, but `intervention-cap` applies the change as a commit on the blocked PR's branch and opens no revert PR.\n  WHY: The log points to a nonexistent PR rather than the PR that received the descope commit; severity was MAJOR in minimax_minimax-m3 and NIT in qwen_qwen3_7-plus and z-ai_glm-5_2, so the highest severity is used.\n- .claude/scripts/escalation_ledger.py:243 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The PR-scoped evidence check uses the raw `stop` parameter rather than the validated `payload[\"stop\"]` returned by `_check_stop`.\n  WHY: It has no current runtime impact because `_check_stop` only validates today, but a future normalization could make the scope check diverge from the payload.\n- .claude/commands/escalation-judge.md:54-55 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The close branch describes branch-kind matching rules in prose without a formal matching algorithm or tests for the optional collision suffix and kind mappings.\n  WHY: A judge could misidentify a branch kind and refuse to close a chain-owned PR or close an unrelated one, although the author and base-ref checks reduce the risk.\n- workflow-templates/.claude/commands/implement-plan-claude.md:74; scripts/security_audit.sh:1693-1700 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A successful audit can be treated as clean when earlier follow-up issues are closed and labelled `ai:merged`, even if the current audit still reports findings already listed on those issues.\n  WHY: The audit script skips creating a new follow-up for a finding ID already present on an `ai:security` issue regardless of its state, allowing the project to proceed with an unresolved finding.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/escalation-judge.md:46 | severity=low | confidence=5\n  PROBLEM: The descope auto-decision recording step unconditionally says `Applied in: the revert PR`, although `intervention-cap` applies the descope as a commit on the blocked PR's branch.\n  WHY: For `intervention-cap`, the progress log points to a nonexistent revert PR instead of the blocked PR that received the commit.\n- .claude/scripts/escalation_ledger.py:243 | severity=low | confidence=2\n  PROBLEM: The PR-scoped evidence check uses the raw `stop` parameter rather than the validated `payload[\"stop\"]` returned by `_check_stop`.\n  WHY: It has no current runtime impact because `_check_stop` only validates today, but a future normalization could make the check diverge from the payload.\n- .claude/commands/escalation-judge.md:54-55 | severity=low | confidence=3\n  PROBLEM: The close branch describes branch-kind matching rules in prose without a formal matching algorithm or tests for the optional collision suffix and kind mappings.\n  WHY: A judge could misidentify a branch kind and refuse to close a chain-owned PR or close an unrelated one, although the author and base-ref checks reduce the risk.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/escalation-judge.md: step 5 (line 46) | severity=high | confidence=5\n  PROBLEM: The descope auto-decision instruction says `Applied in: the revert PR` for every descope, but `intervention-cap` applies the change as a commit on the blocked PR's branch and opens no revert PR.\n  WHY: The progress log points to a nonexistent PR rather than the PR that received the descope commit.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/commands/implement-plan-claude.md: 74; interaction with scripts/security_audit.sh:1693-1700 | severity=high | confidence=5\n  PROBLEM: A successful audit can be treated as clean when earlier follow-up issues are closed and labelled `ai:merged`, even if the current audit still reports findings already listed on those issues.\n  WHY: The audit script skips creating a new follow-up for a finding ID already present on an `ai:security` issue regardless of its state, allowing the project to proceed with an unresolved finding.\n- .claude/commands/escalation-judge.md: 46; the intervention-cap descope procedure in workflow-templates/.claude/commands/implement-plan-claude.md:333 | severity=low | confidence=5\n  PROBLEM: The descope auto-decision instruction says `Applied in: the revert PR` for every descope, but `intervention-cap` applies the change as a commit on the blocked PR's branch and opens no revert PR.\n  WHY: The progress log points to a nonexistent PR instead of the PR that received the descope commit.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/escalation-judge.md: Step 5 \"Record\" | severity=low | confidence=5\n  PROBLEM: The descope auto-decision instruction says `Applied in: the revert PR` for every descope, but `intervention-cap` applies the change as a commit on the blocked PR's branch and opens no revert PR.\n  WHY: The progress log points to a nonexistent PR instead of the PR that received the descope commit.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/escalation-judge.md: line 46, step 5 \"Record\" | severity=low | confidence=5\n  PROBLEM: The descope auto-decision instruction says `Applied in: the revert PR` for every descope, but `intervention-cap` applies the change as a commit on the blocked PR's branch and opens no revert PR.\n  WHY: The progress log points to a nonexistent PR instead of the PR that received the descope commit.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bc7542da459ac382e0643aa4954db200dd92f14941fe51199abac85449d96598",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "37004863443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37004863443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002122747_3a7882d908",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "37004863443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T12:27:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
