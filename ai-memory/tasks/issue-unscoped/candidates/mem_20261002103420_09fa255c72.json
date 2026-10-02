@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:689-723, 772-795 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Credential detection does not inspect shell source passed through a pipe, so a password in a string piped to `sh` can remain visible in the permission-prompt report.\n  WHY: For `printf '%s\\n' 'mysql -pS3cretPass app' | sh`, neither segment contributes `S3cretPass` to the credential set, and `_sanitize_bash_command()` returns the original display text.\n- tests/test_permission_prompts.py:409 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The test case `(\"env -iS'mysql\\\\_-pS3cretPass'\", \"S3cretPass\", \"env -iS'mysql\\\\_-p***'\")` is reported to leave `S3cretPass` unmasked and fail in CI.\n  WHY: Qwen states that `_split_string_command_line()` keeps `\\_` literal inside single quotes, leaving a token without a `-p` flag; other reviewers dispute this diagnosis.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/permission_prompts.py: _command_line_credentials() lines 772-795 and _segment_credentials() lines 689-723 | severity=critical | confidence=5\n  PROBLEM: Credential detection does not inspect shell source passed through a pipe. For `printf '%s\\n' 'mysql -pS3cretPass app' | sh`, the producer's string is treated as an ordinary argument and the `sh` segment has no command string to parse.\n  WHY: The command runs `mysql -pS3cretPass`, but neither segment contributes `S3cretPass` to the credential set. `_sanitize_bash_command()` therefore returns the original display text, exposing the password in the permission-prompt report.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_permission_prompts.py: line 409, test case `(\"env -iS'mysql\\\\_-pS3cretPass'\", \"S3cretPass\", \"env -iS'mysql\\\\_-p***'\")` | severity=critical | confidence=5\n  PROBLEM: The test expects the credential `S3cretPass` to be masked, but `_split_string_command_line()` correctly keeps `\\_` literal inside single quotes, leaving a token with no `-p` flag.\n  WHY: The returned command still contains `S3cretPass` unchanged, so the test assertion `assert secret not in example` fails because the credential is not masked.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "62e818f51d170b8499117dfbfbb35eea8041802f6e88bddbb8d1a00468d5bb3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "36994040846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36994040846",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002103420_09fa255c72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "36994040846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T10:34:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
