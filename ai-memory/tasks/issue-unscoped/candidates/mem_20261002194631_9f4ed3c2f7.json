@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:20214-20229, 20252-20282 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: A merged PR rejected as `missing_base` is not recorded as a rejected merge, so neither stale merged-state healing nor the wave hold runs and a stale `ai:merged` label or stored `merged` status can let the wave advance.\n  WHY: The highest severity is used: DeepSeek rated this NIT and Minimax, OpenAI, and GLM rated it MAJOR; DeepSeek considered the path practically unreachable, while Qwen considered the fail-closed behavior correct.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: Lines 20214-20229 (reconcile loop target-branch rejection case statement) and lines 20252-20282 (heal and wave-hold gates) | severity=NIT | confidence=3\n  PROBLEM: A `missing_base` rejection is not recorded, so neither the stale-state healing gate nor the wave-hold gate runs.\n  WHY: The GitHub REST API normally returns `base.ref`; DeepSeek described this as practically unreachable and a latent concern, not a practical runtime defect.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: reconcile loop rejection recording (case statement around lines 20197\u201320220 inside the `_pr_json_merged_into_issue_target` rejection branch); wave hold condition around lines 20265\u201320280 (`elif [ \"${PR_MERGED}\" != \"true\" ] && { [ -n \"${_rcl_rejected_merged_pr}\" ] || [ \"${_rcl_candidate_fetch_failed}\" = \"true\" ]; }`); heal trigger immediately above (`if [ \"${PR_MERGED}\" != \"true\" ] && [ -n \"${_rcl_rejected_merged_pr}\" ] && [ \"${_rcl_candidate_fetch_failed}\" != \"true\" ] && [ \"${_rcl_issue_state_confirmed}\" = \"true\" ]`) | severity=MAJOR | confidence=4\n  PROBLEM: `missing_base` and `invalid_input` rejections do not set `_rcl_rejected_merged_pr`, so stale merged state can bypass both healing and the wave hold.\n  WHY: The wave can complete on an unverified merge; the cited existing test does not assert that the wave is held.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh; scripts/orchestrate_lib.py | severity=MAJOR | confidence=5\n  PROBLEM: When a merged PR payload has no base ref, the reconcile loop does not record it as a rejected merge, so neither stale-state healing nor the wave hold runs.\n  WHY: `reconcile_wave_issue_status` can still count a pre-existing stored `status: merged` or `ai:merged` label as merged, allowing the wave to advance despite the payload failing the target-branch check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh: 20214-20229 (reconcile loop `case` statement) and 20265-20282 (heal/wave-hold branches) | severity=MAJOR | confidence=3\n  PROBLEM: A merged candidate with a missing base ref is rejected but not recorded, so neither healing nor the wave hold runs and the wave can advance using stale merged state.\n  WHY: The existing test does not assert that the wave was held or did not complete.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c55ae1d9bcd4d8ad46d48d4b9a92ce1cf7b8e6b3927ea4eff1b8b7106a293e4b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "37053524410",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37053524410",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002194631_9f4ed3c2f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "37053524410"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T19:46:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
