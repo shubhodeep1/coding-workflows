@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:362; .claude/scripts/permission_prompts.py:360\u2013362 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: Excluding `)` from `_COMMENT_WORD_STARTS` means a `#` immediately after a closing subshell group is not stripped as a comment, so `$(...)` inside the comment is detected as an active command substitution and changes the command family.\n  WHY: This misclassifies commands such as `(cd /tmp)# $(date)` into a separate `subst` family; all reviewers rate the edge case NIT, with no severity disagreement.\n- workflow-templates/.claude/scripts/permission_prompts.py: `file_patterns`, lines 912\u2013942 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Family lookup and issue creation are not coordinated across invocations.\n  WHY: Concurrent sessions with different command shapes in the same new family can each create an issue after reading an index with no issue for that family.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/permission_prompts.py:362 (`_COMMENT_WORD_STARTS = \" \\t\\n;&|(\"`) | severity=low | confidence=3\n  PROBLEM: Removing `)` correctly handles `X=$(pwd)#suffix`, but also means a `#` after a closing subshell group is not recognized as a comment start.\n  WHY: For `(echo x) # $(date)`, `_strip_shell_comments` retains the commented substitution and `_has_command_substitution` can classify it as active, routing the report to a different family.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/permission_prompts.py: 362 (`_COMMENT_WORD_STARTS = \" \\t\\n;&|(\"`); 518-547 (`_has_command_substitution`); 553-576 (`_strip_shell_comments`) | severity=low | confidence=3\n  PROBLEM: Removing `)` to handle `X=$(pwd)#suffix` prevents the comment stripper from recognizing a `#` immediately after a closing `)` of a subshell or command grouping.\n  WHY: `(cd x && git status)#$(date)` retains the comment and detects `$(date)`, adding `subst` to the family; the whitespace variant `(cd x && git status) # $(date)` does not. The reviewer describes this as a known tradeoff and notes that the inverse case is not tested.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py and workflow-templates/.claude/scripts/permission_prompts.py; `_COMMENT_WORD_STARTS` at lines 360\u2013362; `_strip_shell_comments` at lines 518\u2013547; `_has_command_substitution` at lines 459\u2013488 | severity=low | confidence=4\n  PROBLEM: The comment scanners exclude `)` as a character that can start a comment.\n  WHY: After a shell group closes, an adjacent `#` starts a comment. In `echo ok; (true)# $(date)`, the scanners retain and detect `$(date)`, adding the `subst` family construct.\n- workflow-templates/.claude/scripts/permission_prompts.py; `file_patterns`, lines 912\u2013942 | severity=low | confidence=4\n  PROBLEM: Family lookup and issue creation are not coordinated across invocations.\n  WHY: Concurrent stage sessions with different command shapes in the same new family can both read an index with no issue for that family, then each POST a new issue. The in-memory registration only coordinates patterns within one invocation.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py; `_COMMENT_WORD_STARTS = \" \\t\\n;&|(\"` (line ~362), used by `_has_command_substitution` (~518) and `_strip_shell_comments` (~553) | severity=low | confidence=3\n  PROBLEM: Removing `)` to fix `X=$(pwd)#suffix` also means a `#` immediately after a closing subshell is not recognized as a comment.\n  WHY: In `(cd /tmp)# $(date)`, the comment is retained and `$(date)` adds `subst` to the family, filing the prompt under a different family issue than `(cd /tmp)`.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "14c978cc711e58a8fec6497bf7d3268f8a41f76d83a738fbc5a5f6f5aaaa8ddf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5697,
+    "run_id": "37052060952",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37052060952",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002192914_d70b4dd264",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5697,
+    "run_id": "37052060952"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T19:29:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
