@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:117; workflow-templates/.claude/scripts/permission_prompts.py:117 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The `(?!-)` lookahead in the space-delimited credential option redaction pattern leaves hyphen-prefixed values such as `-hunter2` unmasked.\n  WHY: `redact()` can pass the credential through into a filed GitHub issue or report JSON, exposing it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py (and workflow-templates/.claude/scripts/permission_prompts.py):117 | severity=high | confidence=5\n  PROBLEM: The option-value redaction pattern uses a (?!-) lookahead that rejects any credential value starting with a hyphen, leaving short hyphen-prefixed values unmasked.\n  WHY: A denied command such as tool --password -hunter2 can expose the credential in a public GitHub issue because the long-random-string fallback does not catch it.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/permission_prompts.py: lines 116-119 (the option redaction pattern) and the shell-word pattern at line 95 | severity=high | confidence=5\n  PROBLEM: The option redaction regex's `(?!-)` lookahead suppresses masking for hyphen-prefixed credential values such as `-hunter2`.\n  WHY: The unredacted value can appear in a filed issue and `report` JSON because the long-random-string fallback does not catch it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py and workflow-templates/.claude/scripts/permission_prompts.py\nLine or code reference: 117; `record_example()` at lines 377-389; `_occurrence_block()` at lines 504-505. Regression assertion: `tests/test_permission_prompts.py:553`. | severity=high | confidence=5\n  PROBLEM: The option-value redaction pattern rejects password values beginning with `-` because of `(?!-)`.\n  WHY: A command such as `tool --password -hunter2` passes through `redact()` unchanged for that value, exposing the password in a filed issue or \u201cSeen again\u201d comment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py\nLine or code reference: line 117, the option-value redaction pattern `(?!-)` lookahead; also .claude/scripts/permission_prompts.py line 117 (byte-identical twin) | severity=high | confidence=4\n  PROBLEM: The `(?!-)` negative lookahead causes any credential value beginning with `-` to skip redaction entirely.\n  WHY: `record_example()` passes the raw command through `redact()`, and the result can be posted in a public GitHub issue.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1b9b5e416096f07e410dddfbdf8c4e9da177dc9011ede7f989ade787a2a431c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5918,
+    "run_id": "37024718566",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37024718566",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002154722_c32aa62d20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5918,
+    "run_id": "37024718566"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T15:47:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
