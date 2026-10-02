@@ -2094,6 +2094,15 @@ sweep runs in the sessions that create them, never in Actions:
   Routines to delete. Later pages are left for later sweeps. These deletes
   are cleanup calls (§26.I): after the first denial, skip the rest of the
   list and record `cleanup skipped: delete_trigger denied (<reason>)`.
+  The one exception to "the script decides": leave out every id whose
+  `delete_trigger` was already denied earlier in this session (for
+  example a `/implement-plan-claude` step 2 delete of a stale Routine, or
+  the §26.D delete of the fired hand-back), because deleting it again
+  would retry a denied cleanup call; record it as `cleanup skipped:
+  <trigger id> denied earlier`. Leave out, the same way, every id whose
+  `delete_trigger` failed earlier in this session for any reason other
+  than not found, because §26.I does not retry a failed cleanup call
+  either; record it as `cleanup skipped: <trigger id> failed earlier`.
 - **What it deletes**: only Routines these flows create, matched by name
   (`PR #<n> status check-in…`, `PR #<n> hand-back`,
   `implement-plan <slug>: …`, and the start trigger of a session the
@@ -2188,16 +2197,19 @@ Workloads]`. It was retrying the resume-hygiene `delete_trigger` on
 
 - **Cleanup calls** are `delete_trigger`, `archive_session`, and
   `set_session_title` in the §26 flows (§26.C step 5, §26.D, the §26.G
-  sweep), in `/implement-plan-claude` (resume hygiene, the zombie-checker
-  cleanup, the re-arm cleanup, a failed two-step start, the hand-back, the
-  end-of-project archives, and its checker prompt), in `/fix-claude-pr`,
+  sweep), in `/implement-plan-claude` (resume hygiene, the step 2 delete
+  of stale Routines from the previous design, the zombie-checker cleanup,
+  the re-arm cleanup, a failed two-step start, the rename when a stage
+  opens a PR, the hand-back, the end-of-project archives, and its checker
+  prompt), in `/fix-claude-pr`,
   and in `/claude-issue-pickup`. They are housekeeping: every leftover is
   also handled elsewhere. An archived session's triggers auto-disable
   (`auto_disabled_session_gone`), the stale Routine sweep (§26.G) deletes
   ended ones, and a reused checker ignores stale waits.
 - **Never retry a cleanup call.** When one is denied (by the Auto-mode
   classifier, a permission rule, or a hook), do not repeat it or reach
-  the same result with another call. Skip the remaining cleanup calls of
+  the same result with another call, in that step or a later one (a
+  later §26.G sweep leaves its id out). Skip the remaining cleanup calls of
   that step. Record `cleanup skipped: <tool> denied (<reason>)` in the
   stage report, and in the progress log where the flow keeps one. Then
   continue with the stage's real work. A not-found result means the

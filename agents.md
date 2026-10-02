@@ -1086,17 +1086,22 @@ reviews, comments, and conflicts stay a direct §12 request.
   its own `ci.yml` step.
 - Denied cleanup calls (CLAUDE.md §26.I, issue #5068): `delete_trigger`,
   `archive_session`, and `set_session_title` in the §26 flows,
-  `/implement-plan-claude` (resume hygiene, zombie-checker cleanup, re-arm
-  cleanup, hand-back, end-of-project archives, checker prompt),
+  `/implement-plan-claude` (resume hygiene, step 2 stale-Routine delete,
+  zombie-checker cleanup, re-arm cleanup, a failed two-step start,
+  rename on opening a PR, hand-back, end-of-project archives, checker
+  prompt),
   `/fix-claude-pr`, and `/claude-issue-pickup` are housekeeping. A denied
-  one is never retried: the step's remaining cleanup is skipped,
-  `cleanup skipped: <tool> denied (<reason>)` goes into the report (and
+  one is never retried, in that step or a later one (a later stale Routine
+  sweep leaves the denied trigger id out): the step's remaining cleanup is
+  skipped, `cleanup skipped: <tool> denied (<reason>)` goes into the report (and
   the progress log's `Last note`), and the stage continues. Without this,
   the third consecutive classifier refusal turns into a human prompt that
   nobody answers. Before deleting a trigger named by id, the flow reads it
   with `get_trigger` and deletes only its own (`implement-plan <slug>: …`
   or `PR #<n> …`, bound to a session of that project or PR). Not found
-  counts as done. Only starting a stage, checker, or fixer, and arming a
+  counts as done. Any other failure is not retried either (`cleanup
+  skipped: <tool> failed (<error>)`), and a later sweep leaves that
+  trigger id out too. Only starting a stage, checker, or fixer, and arming a
   wait, may be retried, at most once. Leftovers are caught by
   `auto_disabled_session_gone`, the stale Routine sweep, and the checker's
   stale-wait check. Tests: `tests/test_implement_plan_claude_command.py`,

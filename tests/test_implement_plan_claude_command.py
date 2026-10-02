@@ -357,6 +357,87 @@ def test_claude_md_26_flows_point_to_26i():
 	assert "These deletes are cleanup calls (§26.I): after the first denial, skip the rest of the list" in sweep
 
 
+def test_claude_md_26i_covers_the_per_stage_delete_and_rename(twin_text):
+	# Conformance run 1 for #5068: step 2 deletes stale Routines and every stage
+	# that opens a PR renames itself, so both run on every stage and must be
+	# named as cleanup calls too.
+	section = _section(_flat(CLAUDE_MD), "### I) Denied cleanup calls are skipped, never retried", "## §27.")
+	assert "the step 2 delete of stale Routines from the previous design" in section
+	assert "the rename when a stage opens a PR" in section
+	assert "delete stale `implement-plan <slug>` Routines from the previous design" in twin_text
+	assert "**Rename when you open a PR.**" in twin_text
+
+
+def test_command_rules_cover_the_per_stage_delete_and_rename(twin_text):
+	# PR #5856 review round 1: sessions read the command, so its Rules bullet and
+	# both call sites must name these cleanup calls as §26.I does, not CLAUDE.md alone.
+	rules = twin_text[twin_text.index("## Rules"):]
+	bullet = rules[rules.index("**A denied cleanup call is skipped, never retried**"):]
+	bullet = bullet[:bullet.index(" - **")]
+	assert "the step 2 delete of stale Routines from the previous design" in bullet
+	assert "the rename when a stage opens a PR" in bullet
+	assert "a failed two-step start" in bullet
+	assert "the checker prompt are housekeeping" in bullet
+	assert "so two check-ins never race (these deletes are cleanup calls, CLAUDE.md §26.I: after a denied one, delete no more and record `cleanup skipped`)" in twin_text
+	assert "The rename is a cleanup call (CLAUDE.md §26.I): a denied one is never retried." in twin_text
+
+
+def test_step_2_sweep_is_skipped_after_a_denied_delete(twin_text):
+	# PR #5856 review round 1 (head 4854299): the §26.G sweep's deletes are cleanup
+	# calls of the same step, so a denied step 2 delete must skip the sweep too.
+	context = _section(twin_text, "- **Context.** Then always read", "3. **Build the phase checklist.**")
+	gate = "then run the stale Routine sweep (CLAUDE.md §26.G) only when none of those deletes was denied"
+	assert gate in context
+	assert "then run the stale Routine sweep (CLAUDE.md §26.G)." not in context
+	# PR #5856 review round 2 (head d133928): the later sweep must leave the denied id
+	# out, never "remove what it would have", and the sweep site itself must say so.
+	assert "removes what it would have" not in twin_text
+	assert "so a denial skips the sweep too, and a later sweep (Arming the wait, step 0) removes the rest but leaves out every id whose delete was denied (CLAUDE.md §26.G: a denied delete is never retried)." in context
+	arming = _section(twin_text, "0. **Sweep, then the hand-back Routine.**", "1. **Find or create the project checker.**")
+	assert "Run the stale Routine sweep (CLAUDE.md §26.G), leaving out every trigger id whose `delete_trigger` was denied earlier in this session" in arming
+	assert "`cleanup skipped: <trigger id> denied earlier`" in arming
+	assert "every trigger id whose `delete_trigger` failed earlier in this session for any reason other than not found" in arming
+	assert "`cleanup skipped: <trigger id> failed earlier`" in arming
+
+
+def test_later_sweep_leaves_out_a_trigger_denied_earlier():
+	# PR #5856 review round on head be4b64d: an ended Routine whose step 2 delete was
+	# denied matches the sweep's `implement-plan <slug>: ` rule, so the Arming-the-wait
+	# sweep (and the §26.D sweep after the fired hand-back's delete) must not retry it.
+	claude_md = _flat(CLAUDE_MD)
+	sweep = _section(claude_md, "### G) Stale Routine sweep", "### H) Claude-fixer mode")
+	assert "leave out every id whose `delete_trigger` was already denied earlier in this session" in sweep
+	assert "a `/implement-plan-claude` step 2 delete of a stale Routine" in sweep
+	assert "the §26.D delete of the fired hand-back" in sweep
+	assert "`cleanup skipped: <trigger id> denied earlier`" in sweep
+	assert "every id whose `delete_trigger` failed earlier in this session for any reason other than not found" in sweep
+	assert "`cleanup skipped: <trigger id> failed earlier`" in sweep
+	section = _section(claude_md, "### I) Denied cleanup calls are skipped, never retried", "## §27.")
+	assert "in that step or a later one (a later §26.G sweep leaves its id out)" in section
+	agents = _flat(AGENTS_MD)
+	assert "in that step or a later one (a later stale Routine sweep leaves the denied trigger id out)" in agents
+
+
+def test_agents_md_lists_every_26i_implement_plan_cleanup_site():
+	# PR #5856 review round 1: agents.md mirrors the §26.I list for /implement-plan-claude.
+	agents = _flat(AGENTS_MD)
+	bullet = agents[agents.index("- Denied cleanup calls (CLAUDE.md §26.I, issue #5068)"):]
+	start = bullet.index("`/implement-plan-claude` (")
+	sites = bullet[start:bullet.index(")", start)]
+	for site in (
+		"resume hygiene",
+		"step 2 stale-Routine delete",
+		"zombie-checker cleanup",
+		"re-arm cleanup",
+		"a failed two-step start",
+		"rename on opening a PR",
+		"hand-back",
+		"end-of-project archives",
+		"checker prompt",
+	):
+		assert site in sites, site
+
+
 def test_resume_hygiene_skips_a_denied_cleanup_call(twin_text):
 	hygiene = _section(twin_text, "**Resume hygiene**", "**No claude-code-remote tools**")
 	assert "each only after `get_trigger` shows it is this project's own" in hygiene
