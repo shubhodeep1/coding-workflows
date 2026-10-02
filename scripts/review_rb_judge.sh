@@ -2386,6 +2386,30 @@ __EDIT_DISCIPLINE__
           echo "Error: workflow runtime/helper artifacts are staged in consumer repo"
           exit 1
         fi
+        if [ "${CLAUDE_FIXER_JUDGE_MODE:-false}" = "true" ]; then
+          # Security follow-up #6063: the Claude-mode [judge-fix] commit obeys the same
+          # workflow-edit policy and write guards as the review editor
+          # (scripts/review_commit_changes.sh) before anything is committed or pushed.
+          if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -q '^\.github/workflows/'; then
+            echo "::warning::Workflow edits are not allowed (ALLOW_WORKFLOW_EDITS=false); dropping .github/workflows changes from the Claude-fixer judge fix."
+            git restore --source=HEAD --staged --worktree -- .github/workflows || true
+            STAGED_FILES="$(git diff --cached --name-only || true)"
+          fi
+          _rb_judge_guard_list="$(mktemp "${TMPDIR:-/tmp}/rb-judge-write-guard.XXXXXX")"
+          printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${_rb_judge_guard_list}"
+          # shellcheck source=/dev/null
+          if ! { [ -r "${SUPPORT_SCRIPTS_DIR}/write_guard.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/write_guard.sh"; }; then
+            echo "Error: write_guard.sh is unavailable; the Claude-fixer judge fix is not committed."
+            rm -f "${_rb_judge_guard_list}"
+            exit 1
+          fi
+          if ! write_guard_check review_editor "${_rb_judge_guard_list}"; then
+            echo "Error: the Claude-fixer judge fix touches a write-guarded path; nothing is committed."
+            rm -f "${_rb_judge_guard_list}"
+            exit 1
+          fi
+          rm -f "${_rb_judge_guard_list}"
+        fi
         if ! git diff --cached --quiet; then
           git commit -m "${RB_FIX_COMMIT_SUBJECT:-[judge-fix] address review-blocked issues}
 

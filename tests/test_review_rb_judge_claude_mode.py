@@ -240,6 +240,40 @@ def test_sticky_ruling_never_demotes_a_different_claim_near_it():
 	assert moved == 2
 
 
+def test_sticky_newest_matching_ruling_decides_and_code_must_be_unchanged():
+	"""Security follow-up #6062: a newer upheld ruling keeps the finding; an invalid ruling only
+	demotes when file_unchanged(file, head) says the judged code is unchanged."""
+	invalid = {"ruling": "invalid", "file": "scripts/a.sh", "line": 10, "claim": "unquoted expansion", "run": "1", "head": "a" * 40}
+	upheld = {**invalid, "ruling": "upheld", "run": "2", "head": "b" * 40}
+	# rulings arrive newest first
+	assert judge.sticky(LEDGER, [upheld, invalid], file_unchanged=lambda f, h: True)[1] == 0
+	assert judge.sticky(LEDGER, [invalid, upheld], file_unchanged=lambda f, h: True)[1] == 2
+	seen = []
+	moved = judge.sticky(LEDGER, [invalid], file_unchanged=lambda f, h: seen.append((f, h)) or False)[1]
+	assert moved == 0 and seen and seen[0] == ("scripts/a.sh", "a" * 40)
+
+
+def test_git_file_unchanged_fails_closed():
+	assert judge.git_file_unchanged("scripts/a.sh", None) is False
+	assert judge.git_file_unchanged("scripts/a.sh", "not-a-sha") is False
+	assert judge.git_file_unchanged("scripts/a.sh", "d" * 40) is False  # unknown commit
+	assert judge.git_file_unchanged("", "d" * 40) is False
+
+
+def test_rb_judge_claude_mode_fix_obeys_workflow_edit_policy_and_write_guard():
+	"""Security follow-up #6063: the [judge-fix] writer drops .github/workflows edits unless
+	ALLOW_WORKFLOW_EDITS is true and runs write_guard_check before the commit."""
+	text = RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+	guard = text.index("Security follow-up #6063")
+	commit = text.index('git commit -m "${RB_FIX_COMMIT_SUBJECT')
+	assert guard < commit
+	block = text[guard:commit]
+	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]' in block
+	assert "git restore --source=HEAD --staged --worktree -- .github/workflows" in block
+	assert 'write_guard_check review_editor "${_rb_judge_guard_list}"' in block
+	assert block.count("exit 1") >= 2
+
+
 def test_a_round_with_only_sticky_findings_is_clean_for_the_handoff_count():
 	text, moved = judge.sticky(LEDGER, [
 		{"ruling": "invalid", "file": "scripts/a.sh", "line": 10, "claim": "unquoted expansion", "run": "1"},
