@@ -582,6 +582,7 @@ def _reconcile_run(
 	issue_payload: dict | None,
 	*,
 	known_issue_payload: dict | None = None,
+	known_pr_payload: dict | None = None,
 ) -> tuple[list[str], str, str, int]:
 	"""Run _reconcile_merged_pr_issue for issue 5618 / PR 9001.
 
@@ -614,7 +615,7 @@ def _reconcile_run(
 		export GITHUB_REPOSITORY='{_TEST_REPO}'
 		gh() {{ printf '%s\\n' "$*" >> gh_calls.log; }}
 		gh_retry() {{ "$@"; }}
-		_fetch_pr_json() {{ if [ -s pr.json ]; then cat pr.json; else echo '{{}}'; fi; }}
+		_fetch_pr_json() {{ printf 'pr-read\\n' >> gh_calls.log; if [ -s pr.json ]; then cat pr.json; else echo '{{}}'; fi; }}
 		_safe_gh_jq() {{ printf 'issue-read\\n' >> gh_calls.log; if [ -s issue.json ]; then cat issue.json; else return 1; fi; }}
 		add_healing_note() {{ printf '%s\\n' "$*" >> healing.log; }}
 		tg_notify() {{ :; }}
@@ -623,7 +624,8 @@ def _reconcile_run(
 		: > gh_calls.log
 		: > healing.log
 		known_issue_json="$(cat known_issue.json)"
-		if _reconcile_merged_pr_issue '5618' 'ai:done' 'retrigger_review' '9001' "${{known_issue_json}}"; then
+		known_pr_json="$(cat known_pr.json)"
+		if _reconcile_merged_pr_issue '5618' 'ai:done' 'retrigger_review' '9001' "${{known_issue_json}}" "${{known_pr_json}}"; then
 			echo 0 > rc.txt
 		else
 			echo $? > rc.txt
@@ -631,6 +633,9 @@ def _reconcile_run(
 		""")
 		(tmp / "known_issue.json").write_text(
 			json.dumps(known_issue_payload) if known_issue_payload is not None else "", encoding="utf-8"
+		)
+		(tmp / "known_pr.json").write_text(
+			json.dumps(known_pr_payload) if known_pr_payload is not None else "", encoding="utf-8"
 		)
 		r = _run_bash(script, cwd=tmp)
 		assert r.returncode == 0, f"reconcile harness exited {r.returncode}: {r.stderr}"
@@ -658,6 +663,18 @@ def test_reconcile_default_branch_merge_is_tagged():
 	assert "tagged ai:merged" in notes
 	assert rc == 0, "a verified merge skips the stall action"
 
+
+def test_reconcile_reuses_the_pr_json_the_caller_already_read():
+	"""PR #5633 review round 13 (CLAUDE.md §15): the REST fallbacks already fetched `pulls/<n>`; passed as the sixth
+	argument it is used instead of a second read, but only when its number is the PR being judged."""
+	pr = _merged_payload("main", "claude/fix") | {"number": 9001}
+	calls, _, _, rc = _reconcile_run(pr, _issue_payload("Plain issue."), known_pr_payload=pr)
+	assert _labelled(calls), calls
+	assert "pr-read" not in calls, calls
+	assert rc == 0
+	other = pr | {"number": 9002}
+	calls, _, _, _ = _reconcile_run(pr, _issue_payload("Plain issue."), known_pr_payload=other)
+	assert calls.count("pr-read") == 1, calls
 
 def test_reconcile_integration_branch_merge_from_automation_head_is_tagged():
 	issue = _issue_payload("- Integration branch: `claude/implement-plan-issue-4813-x`\n")

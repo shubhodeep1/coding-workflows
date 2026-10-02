@@ -15949,21 +15949,30 @@ _heal_rejected_merged_state() {
 # Optional $5: the issue's REST `issues/<n>` JSON when the caller already
 # read it (the managed path does, for its closed-issue guard); the issue is
 # then not fetched again.
+# Optional $6: the PR's REST `pulls/<n>` JSON when the caller already read
+# it (the REST fallbacks do); used only when its `.number` is $4, so the PR
+# is then not fetched again (PR #5633 review round 13).
 # §15 audit: the callers' cache shapes (GraphQL linked_pr, the synthesised
 # {number,state,merged}, the managed-path cache) lack the base's default
 # branch, the head repository, and the issue body, so this issues one
-# `pulls/<n>` REST read, plus one `issues/<n>` read when $5 is absent,
-# only on a merged-PR hit.
+# `pulls/<n>` REST read when $6 is absent, plus one `issues/<n>` read when
+# $5 is absent, only on a merged-PR hit.
 _reconcile_merged_pr_issue() {
   local issue_num="$1"
   local phase="$2"
   local action="$3"
   local pr_num="$4"
   local _rmpi_known_issue_json="${5:-}"
+  local _rmpi_known_pr_json="${6:-}"
 
   local _rmpi_pr_json _rmpi_issue_json _rmpi_body _rmpi_issue_base="" _rmpi_project_branch=""
   local _rmpi_reason="" _rmpi_stall_action="run"
-  _rmpi_pr_json="$(_fetch_pr_json "${pr_num}")"
+  if [ -n "${_rmpi_known_pr_json}" ] && [ "${_rmpi_known_pr_json}" != "{}" ] \
+    && [ "$(_jq_field "${_rmpi_known_pr_json}" '.number')" = "${pr_num}" ]; then
+    _rmpi_pr_json="${_rmpi_known_pr_json}"
+  else
+    _rmpi_pr_json="$(_fetch_pr_json "${pr_num}")"
+  fi
   if [ -z "${_rmpi_pr_json}" ] || [ "${_rmpi_pr_json}" = "{}" ]; then
     _rmpi_reason="pr_fetch_failed"
     _rmpi_stall_action="skip"
@@ -16643,7 +16652,7 @@ PY
         fi
         if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}" \
           && [ "${STALL_MERGED_PR_NUM}" != "${_std_merged_rejected_pr}" ]; then
-          if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"; then
+          if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}" "" "${_std_lpr_json:-}"; then
             echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipped '${action}'."
             if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
               write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
@@ -17741,7 +17750,7 @@ recover_stalled_issue() {
             if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ] && [ "${_lpr_merged}" = "true" ] \
               && [ "${_lpr_num}" != "${_mgd_merged_rejected_pr}" ]; then
               STALL_HEALING_CHANGED=true
-              if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${_lpr_num}" "${_mgd_issue_json}"; then
+              if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${_lpr_num}" "${_mgd_issue_json}" "${_lpr_json}"; then
                 echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${_lpr_num} phase=${phase} action=${action} source=rest_fallback"
                 return 1  # Signal: no action taken (caller should not increment counter)
               fi
