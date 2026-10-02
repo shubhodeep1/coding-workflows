@@ -109,6 +109,27 @@ def test_cap_reached_with_security_or_data_loss_holds():
 	assert judge.decide(_model("fix", {"F1": ("upheld", "security")}), _findings(), 0, 2)["decision"] == "fix"
 
 
+def test_cap_reached_with_an_unruled_or_uncategorized_upheld_finding_holds():
+	"""Security follow-up #6050: at the cap, a finding the model left out (or upheld without a
+	valid category) may be a security finding; it holds instead of merging with a follow-up."""
+	omitted = judge.decide(_model("fix", {"F1": ("upheld", "correctness"), "F3": ("invalid", "other")}), _findings(), 2, 2)
+	assert omitted["decision"] == "hold" and omitted["reason"] == "upheld_unruled_or_uncategorized_at_cap"
+	for category in ("", "critical"):
+		result = judge.decide(_model("fix", {"F1": ("upheld", category), "F2": ("upheld", "other"), "F3": ("invalid", "other")}), _findings(), 2, 2)
+		assert result["decision"] == "hold", category
+	# An invalid ruling without a category is not upheld, so the cap still merges with a follow-up.
+	result = judge.decide(_model("fix", {"F1": ("upheld", "correctness"), "F2": ("upheld", "other"), "F3": ("invalid", "")}), _findings(), 2, 2)
+	assert result["decision"] == "merge_with_followup"
+	# A duplicate upheld ruling without a category holds whichever order the duplicates come in.
+	for order in ((("upheld", "correctness"), ("upheld", "")), (("upheld", ""), ("upheld", "correctness"))):
+		model = {"action": "fix", "rulings": [{"finding": "F1", "ruling": r, "category": c, "reason": "x"} for r, c in order]
+			+ [{"finding": "F2", "ruling": "upheld", "category": "other", "reason": "x"}, {"finding": "F3", "ruling": "invalid", "category": "other", "reason": "x"}]}
+		result = judge.decide(model, _findings(), 2, 2)
+		assert result["decision"] == "hold" and result["reason"] == "upheld_unruled_or_uncategorized_at_cap", order
+	# Below the cap the omitted finding is fixed as before.
+	assert judge.decide(_model("fix", {"F1": ("upheld", "correctness")}), _findings(), 0, 2)["decision"] == "fix"
+
+
 def test_close_and_reissue_and_model_hold_become_hold():
 	for action in ("close_and_reissue", "hold"):
 		result = judge.decide(_model(action, {"F1": ("invalid", "other")}), _findings(), 0, 2)
@@ -185,8 +206,8 @@ def test_duplicate_rulings_keep_the_most_cautious_one():
 
 # ---- sticky rulings ----
 
-def _sticky(line: int, file_name: str = "scripts/a.sh") -> tuple[str, int]:
-	return judge.sticky(LEDGER, [{"ruling": "invalid", "file": file_name, "line": line, "run": "77"}])
+def _sticky(line: int, file_name: str = "scripts/a.sh", claim: str = "unquoted expansion") -> tuple[str, int]:
+	return judge.sticky(LEDGER, [{"ruling": "invalid", "file": file_name, "line": line, "claim": claim, "run": "77"}])
 
 
 def test_sticky_ruling_demotes_findings_within_three_lines():
@@ -204,14 +225,25 @@ def test_sticky_ruling_leaves_other_lines_files_and_upheld_rulings_alone():
 	for line, file_name in ((14, "scripts/a.sh"), (6, "scripts/a.sh"), (10, "scripts/other.sh")):
 		text, moved = _sticky(line, file_name)
 		assert moved == 0 and text == LEDGER, (line, file_name)
-	text, moved = judge.sticky(LEDGER, [{"ruling": "upheld", "file": "scripts/a.sh", "line": 10}])
+	text, moved = judge.sticky(LEDGER, [{"ruling": "upheld", "file": "scripts/a.sh", "line": 10, "claim": "unquoted expansion"}])
 	assert moved == 0 and text == LEDGER
+
+
+def test_sticky_ruling_never_demotes_a_different_claim_near_it():
+	"""Security follow-up #6051: a new finding within 3 lines of a rejected one stays blocking
+	unless it makes the same claim (compared case- and whitespace-insensitively)."""
+	for claim in ("authorization bypass in the caller check", "", None):
+		text, moved = judge.sticky(LEDGER, [{"ruling": "invalid", "file": "scripts/a.sh", "line": 10, "claim": claim, "run": "77"}])
+		assert moved == 0 and text == LEDGER, claim
+	# The same claim with other case and spacing is still the same finding.
+	text, moved = _sticky(10, claim="  Unquoted   EXPANSION ")
+	assert moved == 2
 
 
 def test_a_round_with_only_sticky_findings_is_clean_for_the_handoff_count():
 	text, moved = judge.sticky(LEDGER, [
-		{"ruling": "invalid", "file": "scripts/a.sh", "line": 10, "run": "1"},
-		{"ruling": "invalid", "file": "scripts/b.py", "line": 41, "run": "1"},
+		{"ruling": "invalid", "file": "scripts/a.sh", "line": 10, "claim": "unquoted expansion", "run": "1"},
+		{"ruling": "invalid", "file": "scripts/b.py", "line": 41, "claim": "missing timeout", "run": "1"},
 	])
 	assert moved == 3
 	assert judge.parse_findings(text) == []

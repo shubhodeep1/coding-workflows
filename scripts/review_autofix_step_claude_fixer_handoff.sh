@@ -39,7 +39,8 @@
 #
 # Sticky judge rulings (CLAUDE_FIXER_JUDGE_ENABLED, default true): before the
 # ledger is counted, every finding that matches an `invalid` ruling of an
-# earlier GPT judge run on this PR (same file, start line within +/-3; rulings
+# earlier GPT judge run on this PR (same file, start line within +/-3, same
+# claim, security follow-up #6051; rulings
 # read back from verified judge evidence, newest 3 runs) moves into a
 # `=== NON-BLOCKING FINDINGS ===` block that is not counted, so a round with
 # only such findings is clean (scripts/review_claude_fixer_judge.py sticky).
