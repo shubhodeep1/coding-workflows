@@ -815,3 +815,5 @@ def test_readme_variables_table_lists_the_resume_limit():
 	assert len(rows) == 1
 	assert rows[0].startswith("| `CLAUDE_USAGE_LIMIT_RESUME_LIMIT` | `20` |")
 	assert "1..40" in rows[0]
+	# A cap, not a typical count (PR #6085 review round 1).
+	assert "Maximum number of sessions the pickup resumes per wake" in rows[0]

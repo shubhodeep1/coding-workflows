@@ -2095,7 +2095,7 @@ through `clarify → plan → implement → review`.
 | `CLAUDE_ISSUE_ROUTINE_ID` | — | Deprecated (#4525), coding-workflows only. The intake no longer fires the "Claude issue dispatcher" routine; when set it only logs `routine_deprecated`. Can be deleted. |
 | `CLAUDE_ISSUE_ROUTINE_BETA` | `experimental-cc-routine-2026-04-01` | Deprecated (#4525), unused: the intake no longer calls the routine `/fire` endpoint. |
 | `CLAUDE_ISSUE_QUEUE_STALE_HOURS` | `3` | coding-workflows only. Age after which `claude-issue-queue-watchdog.yml` flags an open `ai:claude-issue-queue` item `ai:claude-issue-queue-stale` and sends a Telegram ERROR (the pickup has stopped). |
-| `CLAUDE_USAGE_LIMIT_RESUME_LIMIT` | `20` | coding-workflows only. Set in the Claude issue pickup session's environment, not as a repo variable. Most sessions the pickup resumes per wake after a usage-limit stop (`.claude/scripts/usage_limit_resumes.py`, pickup step 1a, #5660), clamped to 1..40; a value that is not an integer falls back to `20`. The rest are reported as `limit_pending` and resumed on later wakes. See "Claude issue implementer". |
+| `CLAUDE_USAGE_LIMIT_RESUME_LIMIT` | `20` | coding-workflows only. Set in the Claude issue pickup session's environment, not as a repo variable. Maximum number of sessions the pickup resumes per wake after a usage-limit stop (`.claude/scripts/usage_limit_resumes.py`, pickup step 1a, #5660), clamped to 1..40; a value that is not an integer falls back to `20`. The rest are reported as `limit_pending` and resumed on later wakes. See "Claude issue implementer". |
 
 ## Semantic Cache (Clarification Only)
 
