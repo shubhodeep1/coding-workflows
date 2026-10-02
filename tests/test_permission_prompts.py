@@ -394,6 +394,13 @@ def _bash(command):
 		("echo x > \"$(mysql -pS3cretPass)\"", "S3cretPass", "echo x > \"$(mysql -p***)\""),
 		# A here-string fed to a shell is a command line of its own.
 		("bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "bash <<< 'mysql -p*** app'"),
+		# GNU `env -S` / `--split-string` splits its argument into a command line of its own (PR #5401 review round 3).
+		("env -S 'mysql -uroot -pS3cretPass app'", "S3cretPass", "env -S 'mysql -uroot -p*** app'"),
+		("env -S \"curl -u deploy:mycustompwd https://a.b\"", "mycustompwd", "env -S \"curl -u *** https://a.b\""),
+		("env -iS'mysql -pS3cretPass app'", "S3cretPass", "env -iS'mysql -p*** app'"),
+		("env --split-string='sshpass -p hunter22 ssh host'", "hunter22", "env --split-string='sshpass -p *** ssh host'"),
+		("env --split='mysql -pS3cretPass app'", "S3cretPass", "env --split='mysql -p*** app'"),
+		("sudo env -u HOME -S 'mysql -pS3cretPass ./run.sh'", "S3cretPass", "sudo env -u HOME -S 'mysql -p*** ./run.sh'"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -548,6 +555,11 @@ def test_credential_free_commands_are_unchanged(command):
 		("sh -c </dev/null -x '-y; mysql -pS3cretPass app'", "sh -c < *"),
 		("sh -c 2>/dev/null 'mysql -pS3cretPass app' >log", "sh -c 2> * > *"),
 		("bash <<< 'mysql -pS3cretPass app'", "bash <<< *"),
+		# An `env -S` command line is one value, attached or not, even when it ends like a script name (PR #5401 review round 3).
+		("env -S 'sshpass -p hunter22 ./deploy.sh'", "env -S *"),
+		("env -iS'mysql -pS3cretPass app'", "env -iS*"),
+		("env --split-string='mysql -pS3cretPass app'", "env --split-string=*"),
+		("sudo env -S 'mysql -pS3cretPass ./run.sh'", "sudo * -S *"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):

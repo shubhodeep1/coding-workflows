@@ -261,6 +261,14 @@ _SHELL_COMMAND_ATTACHED_RE = re.compile(rf"^(?:{_SHELL_COMMAND_FLAG_NAMES})[=:](
 # A short-flag cluster with `c` (any case) before its end: `su -c'mysql -p…'` (the rest is the attached command
 # line) or `bash -ce 'mysql -p…'` (the next word is it). Both are parsed when a runner precedes it.
 _SHELL_COMMAND_CLUSTER_RE = re.compile(r"^(-[A-Za-z]*?c)(.+)$", re.IGNORECASE | re.DOTALL)
+# GNU `env -S STRING` / `--split-string=STRING` (any unambiguous prefix, `--s` on) splits STRING into a command
+# line of its own (`env -S 'mysql -p…'`, also as a script's `#!/usr/bin/env -S` line). In a short-flag cluster the
+# argument starts after the `S` when only `env`'s boolean flags (`-i`, `-v`, `-0`) come before it (`env -iS'…'`),
+# and is the next word when nothing follows the `S`. It is parsed like a shell's `-c` command line.
+_SPLIT_STRING_RUNNERS = frozenset({"env"})
+_SPLIT_STRING_LONG_NAMES = "|".join(re.escape("split-string"[:length]) for length in range(len("split-string"), 0, -1))
+_SPLIT_STRING_FLAG_RE = re.compile(rf"^(?:-[iv0]*S|--(?:{_SPLIT_STRING_LONG_NAMES}))$")
+_SPLIT_STRING_ATTACHED_RE = re.compile(rf"^(-[iv0]*S|--(?:{_SPLIT_STRING_LONG_NAMES})=)(.+)$", re.DOTALL)
 # Deeper nesting of `-c` command lines than this withholds the command (fail closed).
 MAX_NESTED_COMMAND_DEPTH = 3
 _HEADER_WORD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(\S.*?)\s*$", re.DOTALL)
@@ -403,6 +411,11 @@ def _shell_runner_before(words: list[str], start: int, position: int) -> bool:
 	return any(earlier.rsplit("/", 1)[-1] in _SHELL_COMMAND_RUNNERS for earlier in words[start:position])
 
 
+def _split_string_runner_before(words: list[str], start: int, position: int) -> bool:
+	"""True when a word from the segment's command at `start` up to (not including) `position` names a _SPLIT_STRING_RUNNERS command (`env`, also behind `sudo`)."""
+	return any(earlier.rsplit("/", 1)[-1] in _SPLIT_STRING_RUNNERS for earlier in words[start:position])
+
+
 def _shell_command_line_words(words: list[str], index: int) -> list[str]:
 	"""The words from `index` that may hold a shell's command line: each one up to and including the first that does not start with `-`.
 
@@ -506,6 +519,11 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			elif attached_command and not attached_command.group(2).isalpha():
 				# An attached `-c` command line (`su -c'mysql -p…'`) is one value; `-ce` stays a flag cluster.
 				cut = attached_command.group(1) + "*"
+			split_before = cut is None and _split_string_runner_before(tokens, command_position, index - 1)
+			split_attached = _SPLIT_STRING_ATTACHED_RE.match(token) if split_before and not attached_flag and not attached_command else None
+			if split_attached:
+				# `env -S'mysql -p…'`, `env --split-string='…'`: the flag stays, its command line is one value.
+				cut = split_attached.group(1) + "*"
 			if cut is None and "$(" in token.split("=", 1)[0]:
 				# A command substitution attached to a flag (`-o"$(mysql -p…)"`) is a value: it never reaches the shape.
 				cut = token[: token.index("$(")] + "*"
@@ -527,6 +545,12 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 						shape.append(line_word[1:])
 					elif shape[-1] != "*":
 						shape.append("*")
+				continue
+			if split_before and _SPLIT_STRING_FLAG_RE.match(token) and index < len(tokens) and not tokens[index].startswith("\x00"):
+				# `env -S 'mysql -p…'`: the next word is a command line, never part of the shape (not even as a script name).
+				index += 1
+				if shape[-1] != "*":
+					shape.append("*")
 				continue
 			if index < len(tokens) and tokens[index].startswith("-") and _credential_flag_awaits_value(token, command, subcommand, _segment_flag_letters(tokens, command_position, index - 1)):
 				# A next word that starts with `-` may be this flag's value (`--password -s3cret`): it never reaches the shape.
@@ -625,7 +649,7 @@ def _word_credentials(word: str) -> set[str]:
 
 
 def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
-	"""Credential values in one simple command: word credentials, credential long flags, the credential short flags of its credential commands, and the credentials of a shell's `-c` command line or of a command substitution inside a quoted word.
+	"""Credential values in one simple command: word credentials, credential long flags, the credential short flags of its credential commands, and the credentials of a shell's `-c` command line, an `env -S` command line, or a command substitution inside a quoted word.
 
 	Raises ValueError, like _command_line_credentials, when such a command line cannot be parsed.
 	"""
@@ -662,6 +686,15 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 			if attached_command.group(2).isalpha():
 				for line in _shell_command_line_words(words, index):
 					values.update(_command_line_credentials(line, depth + 1))
+		if index - 1 > start and _split_string_runner_before(words, start, index - 1):
+			split_attached = _SPLIT_STRING_ATTACHED_RE.match(word)
+			if split_attached:
+				# `env -S'mysql -p…'`, `env --split-string='mysql -p…'`: the attached text is a command line of its own.
+				values.update(_command_line_credentials(split_attached.group(2), depth + 1))
+			elif _SPLIT_STRING_FLAG_RE.match(word) and index < len(words):
+				# `env -S 'mysql -p…'`: the next word is a command line of its own, even when it starts with `-`; it is
+				# still read as a word of its own below.
+				values.update(_command_line_credentials(words[index], depth + 1))
 		if word.startswith("--"):
 			name, has_value, value = word.partition("=")
 			if _CREDENTIAL_LONG_FLAG_RE.match(name):
@@ -745,8 +778,9 @@ def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
 	`command_shape` uses. Credential values are the values of credential-named
 	assignments, credential header fields, credential long flags, and the
 	`_CREDENTIAL_SHORT_FLAGS` of every credential command in a segment,
-	including those inside a shell's `-c` command line, a here-string fed to a
-	shell, and a `$(…)` or backtick command substitution; a redirection between
+	including those inside a shell's `-c` command line, an `env -S` /
+	`--split-string` command line, a here-string fed to a shell, and a `$(…)`
+	or backtick command substitution; a redirection between
 	a flag and its value or command line does not separate them. Returns None
 	when the text (or such a command line) cannot be tokenized, or when a
 	value is shorter than MIN_MASKED_VALUE_CHARS or does not occur verbatim in
