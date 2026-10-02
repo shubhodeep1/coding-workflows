@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -31,6 +32,23 @@ def _normalize_text(content: str) -> str:
 	if not normalized.endswith("\n"):
 		normalized += "\n"
 	return normalized
+
+
+def _assert_prompt_bytes_match(prompt_name: str, expected: str, actual: str) -> None:
+	expected_bytes = expected.encode("utf-8")
+	actual_bytes = actual.encode("utf-8")
+	if expected_bytes == actual_bytes:
+		return
+	first_difference = next(
+		(index for index in range(min(len(expected_bytes), len(actual_bytes)))
+		 if expected_bytes[index] != actual_bytes[index]),
+		min(len(expected_bytes), len(actual_bytes)),
+	)
+	raise AssertionError(
+		f"{prompt_name}: prompt byte parity mismatch at offset {first_difference}: "
+		f"expected bytes={len(expected_bytes)} sha256={hashlib.sha256(expected_bytes).hexdigest()}, "
+		f"actual bytes={len(actual_bytes)} sha256={hashlib.sha256(actual_bytes).hexdigest()}"
+	)
 
 
 def _copy_prompt_runtime_scripts(repo_root: Path) -> None:
@@ -75,7 +93,28 @@ def test_assembled_templates_match_legacy_prompt_bytes() -> None:
 
 		assert proc.returncode == 0, f"{prompt_name}: {proc.stderr}"
 		assert proc.stderr == ""
-		assert proc.stdout == _normalize_text(legacy_prompt.read_text(encoding="utf-8"))
+		_assert_prompt_bytes_match(
+			prompt_name, _normalize_text(legacy_prompt.read_text(encoding="utf-8")), proc.stdout
+		)
+
+
+def test_prompt_parity_mismatch_diagnostics_are_bounded() -> None:
+	for expected, actual, offset in (
+		("a\u00e9z\n", "a\u00e9x\n", 3),
+		("abc\n", "abc\nextra", 4),
+		("abc\nextra", "abc\n", 4),
+	):
+		try:
+			_assert_prompt_bytes_match("mode-sample.txt", expected, actual)
+		except AssertionError as exc:
+			message = str(exc)
+		else:
+			raise AssertionError("Expected mismatched prompt bytes to fail")
+		assert f"offset {offset}" in message
+		for label, content in (("expected", expected), ("actual", actual)):
+			encoded = content.encode("utf-8")
+			assert f"{label} bytes={len(encoded)} sha256={hashlib.sha256(encoded).hexdigest()}" in message
+			assert content not in message
 
 
 def test_assemble_prompt_reports_missing_fragment() -> None:
