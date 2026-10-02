@@ -9,7 +9,8 @@ On 2026-09-29 a twin-sync push from a detached worktree onto an open PR's branch
 | Path resolution | `cd` lexical (physical with `-P`), `git -C` and the git directory physical; a quoted or escaped `~` (`"~"`, `'~'`, `\~`, `--git-dir=~`) is a literal directory, not `$HOME`, read per word so a quoted copy elsewhere does not change an unquoted `~/x` |
 | Git calls after a reserved word | `then git push`, `do git commit`, `else …`, `! git …`, `time git …` are guarded like a bare `git` call |
 | Push refspecs judged on the target | `<src>:<dst>`, `HEAD:<dst>`, `+<src>:refs/heads/<dst>`, `<branch>` |
-| Not judged | `--delete`, `:<dst>`, `refs/tags/…` (patterns such as `refs/tags/*` included), `--tags` (or `--tag`) with no refspec, also in a directory the guard cannot resolve |
+| Push options read as git reads them | short-option clusters (`-fd` deletes, `-uo <value>` takes a push option) and unambiguous long-option prefixes (`--del`, `--pu <value>`, `--rep <remote>`) |
+| Not judged | `--delete` (and `-d`, `--del`, `-fd`), `:<dst>`, `refs/tags/…` (patterns such as `refs/tags/*` included), `--tags` (or `--tag`) with no refspec, also in a directory the guard cannot resolve |
 | Judged on the current branch, then a confirmation prompt | `--all`, `--branches`, `--mirror` (and prefixes such as `--al`), the `:` matching refspec, `*` pattern refspecs |
 | Judged on the session checkout, with a warning | refspecs containing `$`, a backtick, `*`, `?`, `[`, `{` or `~`; `heads/` / `tags/` / `remotes/` shorthands; a `-`-prefixed source |
 | GitHub API calls | at most 1 per `(slug, branch)` pair judged, 0 when the 300-second cache holds it |

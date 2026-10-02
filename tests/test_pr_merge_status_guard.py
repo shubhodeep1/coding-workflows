@@ -1438,6 +1438,10 @@ def test_a_subshell_only_affects_later_commands(tmp_path: Path) -> None:
 	[
 		"git push origin --delete feature/x",
 		"git push -d origin feature/x",
+		"git push -fd origin feature/x",
+		"git push -df origin feature/x",
+		"git push --de origin feature/x",
+		"git push --del origin feature/x",
 		"git push origin :feature/x",
 		"git push origin refs/tags/v1.0",
 		"git push origin v1.0:refs/tags/v1.0",
@@ -1468,6 +1472,16 @@ def test_deletions_tags_and_unguarded_calls_yield_no_target(tmp_path: Path, comm
 		("git push origin feature/y", "feature/y", "feature/y"),
 		("git push origin +HEAD:refs/heads/feature/y", "feature/y", "HEAD"),
 		("git push -o ci.skip --repo origin origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push -uo ci.skip origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push -uoci.skip origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push -od origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push --pu ci.skip origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push --push-o ci.skip origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push --rep origin origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push --rece git-receive-pack origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push --e git-receive-pack origin HEAD:feature/y", "feature/y", "HEAD"),
+		("git push -uo ci.skip origin", "", "HEAD"),
+		("git push --pu ci.skip origin", "", "HEAD"),
 		("git push --force-with-lease=feature/y origin @:feature/y", "feature/y", "HEAD"),
 		("git push origin -- HEAD:feature/y", "feature/y", "HEAD"),
 	],
@@ -1533,6 +1547,20 @@ def test_push_options_that_are_not_bulk_flags_are_not_mistaken_for_them() -> Non
 		assert not twin_guard._is_push_bulk_flag(token), token
 	for token in ("--all", "--al", "--branches", "--br", "--mirror", "--mirr"):
 		assert twin_guard._is_push_bulk_flag(token), token
+
+
+def test_push_short_clusters_and_long_prefixes_are_read_as_git_reads_them() -> None:
+	"""Conformance audit of issue #5144: git reads `-fd` as `-f -d`, `-uo <v>`
+	as `-u -o <v>`, and any unambiguous long-option prefix as the option, so
+	the refspec parser must too (git 2.43: `--d`, `--p`, `--re` are ambiguous)."""
+	for token in ("-d", "--delete", "--de", "--dele", "-fd", "-df", "-vfd"):
+		assert twin_guard._is_push_delete_option(token), token
+	for token in ("--d", "--dry-run", "-f", "-od", "-ofd", "--force", "-n", "--no-delete"):
+		assert not twin_guard._is_push_delete_option(token), token
+	for token in ("-o", "-uo", "-fvo", "--pu", "--push-o", "--push-option", "--rep", "--repo", "--rece", "--e", "--exec"):
+		assert twin_guard._push_option_takes_next_word(token), token
+	for token in ("-u", "-oci.skip", "-uoci.skip", "-oo", "--p", "--re", "--rec", "--repo=origin", "--push-option=x", "--prune", "--porcelain"):
+		assert not twin_guard._push_option_takes_next_word(token), token
 
 
 def test_every_guarded_call_in_a_command_is_a_target(tmp_path: Path) -> None:
@@ -1668,6 +1696,35 @@ def test_e2e_fresh_worktree_push_to_a_merged_branch_is_allowed(worktree_repo) ->
 	repo, worktree, stub_bin, _, _ = worktree_repo
 	proc = _run_twin_hook(repo, stub_bin, f"cd {worktree} && git push origin HEAD:feature/x")
 	assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(
+	"command",
+	["git push -uo ci.skip origin", "git push -fo ci.skip origin", "git push --pu ci.skip origin"],
+)
+def test_e2e_push_option_value_does_not_hide_the_current_branch(worktree_repo, command: str) -> None:
+	"""Conformance audit of issue #5144: git reads `-uo ci.skip` as `-u -o
+	ci.skip` and pushes the stranded current branch, so the push is blocked
+	as the old hook blocked it, not judged on a branch named `origin`."""
+	repo, _, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+
+
+@pytest.mark.parametrize(
+	"command",
+	["git push -fd origin feature/x", "git push -df origin feature/x", "git push --del origin feature/x"],
+)
+def test_e2e_clustered_or_prefixed_delete_of_a_merged_branch_is_allowed(worktree_repo, command: str) -> None:
+	"""Conformance audit of issue #5144 (AD-4): a deletion lands no commits,
+	so deleting a merged branch whose local copy still sits on the merged
+	head is not judged, however the delete option is spelled."""
+	repo, _, stub_bin, _, _ = worktree_repo
+	_git(repo, "checkout", "-q", "main")
+	proc = _run_twin_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None
 
 
 def test_e2e_git_dash_c_behaves_like_cd(worktree_repo) -> None:
