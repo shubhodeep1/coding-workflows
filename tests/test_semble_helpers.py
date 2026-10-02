@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -95,11 +96,55 @@ def test_semble_query_block_success_keeps_stdout_prompt_only() -> None:
 
 		assert result.returncode == 0, result.stderr
 		assert result.stdout == "=== SEMBLE: Reviewer Context ===\nchunk 1\nchunk 2\n=== END SEMBLE ===\n"
-		assert "SEMBLE_QUERY target=reviewer-context chunks=20 bytes=" in result.stderr
+		assert re.search(
+			r"SEMBLE_QUERY target=reviewer-context chunks=20 bytes=16 ms=\d+ "
+			r"query_bytes=26 returned_bytes=16 included_bytes=16 "
+			r"deduplicated_bytes=unavailable avoided_prompt_bytes=unavailable",
+			result.stderr,
+		)
 		assert "context=contract-test" in result.stderr
 		assert "SEMBLE_FALLBACK" not in result.stderr
 		assert "SEMBLE_QUERY" not in result.stdout
 		assert "SEMBLE_FALLBACK" not in result.stdout
+
+
+def test_semble_query_block_counts_multibyte_content_and_added_newline() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		fake_semble = bin_dir / "semble"
+		for ends_in_newline in (False, True):
+			content = "résumé" + ("\n" if ends_in_newline else "")
+			printf_content = "résumé\\n" if ends_in_newline else "résumé"
+			_write_executable(
+				fake_semble,
+				"#!/usr/bin/env bash\n"
+				f"printf '{printf_content}'\n",
+			)
+			result = _run_bash(
+				f"source {HELPERS}\nsemble_query_block 'café' 2 'Editor Context'",
+				root,
+				env={
+					"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+					"SEMBLE_AVAILABLE": "true",
+					"SEMBLE_INDEX_AVAILABLE": "true",
+					"SEMBLE_INDEX_PATH": str(index_dir),
+				},
+			)
+			assert result.returncode == 0, result.stderr
+			assert result.stdout == f"=== SEMBLE: Editor Context ===\n{content}{'' if ends_in_newline else chr(10)}=== END SEMBLE ===\n"
+			returned_bytes = len(content.encode("utf-8"))
+			included_bytes = returned_bytes + (not ends_in_newline)
+			assert re.search(
+				f"SEMBLE_QUERY target=editor-context chunks=2 bytes={returned_bytes} ms=\\d+ "
+				f"query_bytes=5 returned_bytes={returned_bytes} included_bytes={included_bytes} "
+				r"deduplicated_bytes=unavailable avoided_prompt_bytes=unavailable",
+				result.stderr,
+			)
+			assert "SEMBLE_FALLBACK" not in result.stderr
 
 
 def test_semble_query_block_bails_out_without_index_and_keeps_stdout_empty() -> None:
@@ -151,7 +196,34 @@ def test_semble_query_block_command_failure_stays_fail_open() -> None:
 		assert "SEMBLE_FALLBACK target=editor-context reason=exit=7 raw failure from semble" in result.stderr
 		assert "context=contract-test" in result.stderr
 		assert " ms=" in result.stderr
+		assert "SEMBLE_QUERY" not in result.stderr
 		assert "SEMBLE_QUERY" not in result.stdout
+
+
+def test_semble_query_block_empty_and_whitespace_results_fall_back() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		fake_semble = bin_dir / "semble"
+		for content in ("", " \t\n "):
+			_write_executable(fake_semble, "#!/usr/bin/env bash\n" f"printf '%s' '{content}'\n")
+			result = _run_bash(
+				f"source {HELPERS}\nsemble_query_block 'summary' 3 'Editor Context'",
+				root,
+				env={
+					"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+					"SEMBLE_AVAILABLE": "true",
+					"SEMBLE_INDEX_AVAILABLE": "true",
+					"SEMBLE_INDEX_PATH": str(index_dir),
+				},
+			)
+			assert result.returncode != 0
+			assert result.stdout == ""
+			assert "SEMBLE_FALLBACK target=editor-context reason=empty-result" in result.stderr
+			assert "SEMBLE_QUERY" not in result.stderr
 
 
 def test_semble_elapsed_ms_clamps_negative_duration_to_zero() -> None:
