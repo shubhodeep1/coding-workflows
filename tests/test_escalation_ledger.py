@@ -33,8 +33,27 @@ def _load():
 ledger = _load()
 
 
+# A fake `/tmp/claude-<uid>` for each test: `--evidence-file` and `--why-file`
+# are read only from `<root>/<project>/<session>/scratchpad/`.
+_scratchpad_root_for_test: Path | None = None
+
+
+@pytest.fixture(autouse=True)
+def _fake_scratchpad_root(tmp_path):
+	global _scratchpad_root_for_test
+	_scratchpad_root_for_test = tmp_path / "claude-0"
+	_scratch(tmp_path).mkdir(parents=True)
+	yield
+	_scratchpad_root_for_test = None
+
+
+def _scratch(tmp_path):
+	"""The session scratchpad inside the fake root."""
+	return tmp_path / "claude-0" / "-home-user-repo" / "session-1" / "scratchpad"
+
+
 def _run(capsys, *argv):
-	code = ledger.main(list(argv), today=TODAY)
+	code = ledger.main(list(argv), today=TODAY, scratchpad_root=_scratchpad_root_for_test)
 	out = capsys.readouterr().out.strip()
 	return code, json.loads(out)
 
@@ -60,7 +79,7 @@ def _entry(n, stop="security-cap", fp=FP, choice="budget", why="narrower fix"):
 def _pr_evidence(tmp_path, stop, pr=12):
 	"""An evidence file for a PR-scoped stop and the fingerprint it gives."""
 	evidence = {"checks": ["unit tests"], "pr": pr}
-	path = tmp_path / f"evidence-{stop}-{pr}.json"
+	path = _scratch(tmp_path) / f"evidence-{stop}-{pr}.json"
 	path.write_text(json.dumps(evidence), encoding="utf-8")
 	return str(path), ledger.fingerprint(stop, evidence)
 
@@ -94,7 +113,7 @@ def test_fingerprint_cli_accepts_json_and_file(tmp_path, capsys):
 	evidence = {"checks": ["lint", "unit"]}
 	code, out = _run(capsys, "fingerprint", "--stop", "validation-cap", "--evidence", json.dumps(evidence))
 	assert code == 0
-	path = tmp_path / "evidence.json"
+	path = _scratch(tmp_path) / "evidence.json"
 	path.write_text(json.dumps(evidence), encoding="utf-8")
 	code, out_file = _run(capsys, "fingerprint", "--stop", "validation-cap", "--evidence-file", str(path))
 	assert code == 0
@@ -335,7 +354,7 @@ def test_pr_scoped_record_refuses_a_reason_naming_another_pr(tmp_path, capsys, s
 @pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective", "security-cap"])
 def test_record_refuses_evidence_that_does_not_give_the_fingerprint(tmp_path, capsys, stop):
 	# FP was not computed from this evidence, so the entry would name another failure.
-	evidence_file = tmp_path / "evidence.json"
+	evidence_file = _scratch(tmp_path) / "evidence.json"
 	evidence_file.write_text(json.dumps({"issues": [7], "pr": 12}), encoding="utf-8")
 	code, out = _run(
 		capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", FP,
@@ -361,7 +380,7 @@ def test_project_scoped_record_accepts_matching_evidence(tmp_path, capsys):
 
 def test_record_reads_the_reason_from_a_file_verbatim(tmp_path, capsys):
 	# `--why-file` keeps shell syntax in the reason as literal text.
-	why_file = tmp_path / "why.txt"
+	why_file = _scratch(tmp_path) / "why.txt"
 	why_file.write_text("PR #12: retry `make test` and $(rerun)\n", encoding="utf-8")
 	evidence_file, fp = _pr_evidence(tmp_path, "intervention-cap")
 	code, out = _run(
@@ -373,7 +392,7 @@ def test_record_reads_the_reason_from_a_file_verbatim(tmp_path, capsys):
 
 
 def test_record_why_file_still_needs_the_pr_prefix(tmp_path, capsys):
-	why_file = tmp_path / "why.txt"
+	why_file = _scratch(tmp_path) / "why.txt"
 	why_file.write_text("retry the failing check", encoding="utf-8")
 	code, out = _run(
 		capsys, "record", "--log", str(_log(tmp_path)), "--stop", "fix-check-defective", "--fingerprint", FP,
@@ -382,14 +401,107 @@ def test_record_why_file_still_needs_the_pr_prefix(tmp_path, capsys):
 	assert code == 1 and "must start with 'PR #<N>: '" in out["error"]
 
 
+SECRET = "TOKEN=do-not-print-me"
+
+
+def _outside_paths(tmp_path):
+	"""Files `--evidence-file` / `--why-file` must refuse, each holding SECRET."""
+	root = tmp_path / "claude-0"
+	repo_file = tmp_path / "repo" / "notes.md"
+	beside_scratchpad = root / "-home-user-repo" / "session-1" / "notes.json"
+	shallow_scratchpad = root / "scratchpad" / "e.json"
+	deep_wrong_name = root / "-home-user-repo" / "session-1" / "scratch" / "e.json"
+	target = tmp_path / "secret.env"
+	for path in (repo_file, beside_scratchpad, shallow_scratchpad, deep_wrong_name, target):
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text(SECRET, encoding="utf-8")
+	link = _scratch(tmp_path) / "link.json"
+	link.symlink_to(target)
+	traversal = _scratch(tmp_path) / ".." / ".." / ".." / ".." / "secret.env"
+	return {
+		"repo file": repo_file,
+		"beside the scratchpad": beside_scratchpad,
+		"scratchpad at the wrong depth": shallow_scratchpad,
+		"wrong directory name": deep_wrong_name,
+		"symlink out of the scratchpad": link,
+		"dot-dot traversal": traversal,
+		"the scratchpad directory itself": _scratch(tmp_path),
+	}
+
+
+@pytest.mark.parametrize("case", [
+	"repo file", "beside the scratchpad", "scratchpad at the wrong depth", "wrong directory name",
+	"symlink out of the scratchpad", "dot-dot traversal", "the scratchpad directory itself",
+])
+@pytest.mark.parametrize("flag", ["--evidence-file", "--why-file"])
+def test_file_arguments_outside_the_scratchpad_are_refused_unread(tmp_path, capsys, case, flag):
+	# What these files hold can reach the committed log or a PR comment, so a
+	# path taken from failure evidence must never read a repo file or a secret.
+	path = str(_outside_paths(tmp_path)[case])
+	if flag == "--evidence-file":
+		argv = ["fingerprint", "--stop", "security-cap", "--evidence-file", path]
+	else:
+		argv = [
+			"record", "--log", str(_log(tmp_path)), "--stop", "security-cap", "--fingerprint", FP,
+			"--choice", "budget", "--why-file", path,
+		]
+	code = ledger.main(argv, today=TODAY, scratchpad_root=_scratchpad_root_for_test)
+	out = capsys.readouterr().out
+	assert code == 1
+	assert "must be a file in the session scratchpad" in json.loads(out)["error"]
+	assert SECRET not in out
+
+
+def test_symlink_inside_the_scratchpad_to_a_scratchpad_file_is_read(tmp_path, capsys):
+	# Only the resolved path counts, so a link between scratchpad files is fine.
+	real = _scratch(tmp_path) / "real.json"
+	real.write_text(json.dumps({"checks": ["lint"]}), encoding="utf-8")
+	link = _scratch(tmp_path) / "link.json"
+	link.symlink_to(real)
+	code, out = _run(capsys, "fingerprint", "--stop", "validation-cap", "--evidence-file", str(link))
+	assert code == 0 and out["fingerprint"] == ledger.fingerprint("validation-cap", {"checks": ["lint"]})
+
+
+def test_another_sessions_scratchpad_is_accepted(tmp_path, capsys):
+	# Operator decision Q1: A: the shape is checked, not the session id.
+	other = tmp_path / "claude-0" / "-home-user-other" / "session-2" / "scratchpad" / "nested" / "e.json"
+	other.parent.mkdir(parents=True)
+	other.write_text(json.dumps({"checks": ["lint"]}), encoding="utf-8")
+	code, _ = _run(capsys, "fingerprint", "--stop", "validation-cap", "--evidence-file", str(other))
+	assert code == 0
+
+
+def test_default_scratchpad_root_is_this_users_claude_tmp_dir(monkeypatch):
+	monkeypatch.setattr(ledger.os, "getuid", lambda: 1234, raising=False)
+	assert ledger._default_scratchpad_root() == Path("/tmp/claude-1234")
+	monkeypatch.delattr(ledger.os, "getuid", raising=False)
+	assert ledger._default_scratchpad_root() is None
+
+
+def test_file_arguments_are_refused_without_a_uid(tmp_path, capsys, monkeypatch):
+	monkeypatch.setattr(ledger, "_default_scratchpad_root", lambda: None)
+	path = _scratch(tmp_path) / "e.json"
+	path.write_text("{}", encoding="utf-8")
+	code = ledger.main(["fingerprint", "--stop", "security-cap", "--evidence-file", str(path)], today=TODAY)
+	assert code == 1
+	assert "cannot be checked against a session scratchpad" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_no_flag_or_variable_moves_the_scratchpad_root():
+	# Operator decision Q2: A: only a keyword argument of main() / run() does.
+	source = TEMPLATE_SCRIPT.read_text(encoding="utf-8")
+	assert "--scratchpad" not in source
+	assert "environ" not in source and "getenv" not in source
+
+
 @pytest.mark.parametrize("which", ["both", "neither", "missing", "empty"])
 def test_record_takes_exactly_one_readable_reason(tmp_path, capsys, which):
-	why_file = tmp_path / "why.txt"
+	why_file = _scratch(tmp_path) / "why.txt"
 	why_file.write_text("  \n", encoding="utf-8")
 	extra = {
 		"both": ["--why", "x", "--why-file", str(why_file)],
 		"neither": [],
-		"missing": ["--why-file", str(tmp_path / "absent.txt")],
+		"missing": ["--why-file", str(_scratch(tmp_path) / "absent.txt")],
 		"empty": ["--why-file", str(why_file)],
 	}[which]
 	code, _ = _run(

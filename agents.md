@@ -923,7 +923,10 @@ that stop and fingerprint, `escalation_ledger.py grants`, to its cap), `descope`
 reviewed revert PR plus an `AD-<n>` entry), or `close` (the chain's PRs
 and the source issue closed as not planned). It records an `ES-<n>` line
 in the log's `## Escalations` section (`record --why-file`, so a reason
-that quotes failure evidence never passes through shell quoting), posts
+that quotes failure evidence never passes through shell quoting; the
+ledger reads `--evidence-file` and `--why-file` only from a session
+scratchpad, `/tmp/claude-<uid>/<project>/<session>/scratchpad/` with
+symlinks resolved, and refuses any other path unread with exit 1), posts
 `<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fp> choice=<choice> -->`,
 and hands the checker the next stage through another escalation wait. It
 never repeats `budget` or `descope` for the same fingerprint (`close`

@@ -141,6 +141,11 @@ def test_judge_passes_the_reason_through_a_file(judge):
 	assert '--why "' not in record
 
 
+def test_judge_says_the_ledger_reads_files_only_from_the_scratchpad(judge):
+	record = judge[judge.index("5. **Record.**"):judge.index("6. **Post the escalation comment**")]
+	assert "Both files must be in your session scratchpad: the script reads `--evidence-file` and `--why-file` only from `/tmp/claude-<uid>/<project>/<session>/scratchpad/` (symlinks resolved) and refuses any other path unread (exit 1)" in record
+
+
 def test_judge_records_with_the_fingerprint_evidence(judge):
 	# `record` checks the PR in `why=` against the evidence's `pr`, so the
 	# judge passes the step 2 evidence file it computed the fingerprint from.
