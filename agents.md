@@ -1301,8 +1301,15 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   `Claude <noreply@anthropic.com>`. The CLI runs under `timeout`
   (`timeout_minutes` per type, at most 350; the job limit adds 10, capped at
   360). A smoke run's CLI limit is 20 minutes and its job limit also covers
-  the 15 minutes of smoke checks after it (45). Exit 124/137 is a timeout. Before upload, `redact`, run from a fresh
-  checkout of the select job's `pool_sha` (the worker can write `pool/`),
+  the 15 minutes of smoke checks after it (45). Exit 124/137 is a timeout.
+  Every CLI run (worker and smoke checks) starts without `GITHUB_ENV`,
+  `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STATE`, or `GITHUB_STEP_SUMMARY`;
+  after it the step kills every process it left running and empties its
+  `$GITHUB_ENV`, `$GITHUB_PATH`, and `$GITHUB_OUTPUT` files (`CLAUDE_POOL
+  contain step=work|smoke`), so a worker cannot hand a later step a
+  `BASH_ENV`, `PATH`, or `LD_PRELOAD`. Before upload, `redact`, run from a fresh
+  checkout of the select job's `pool_sha` (the worker can write `pool/`) by
+  `/usr/bin/python3 -B -E -s` in a bash started without `BASH_ENV`,
   replaces the token, the raw token, `GH_PAT`, the base64 `x-access-token:`
   form of each, each one's complete standalone base64 encoding (padded and
   unpadded), and each one's base64 text at every byte offset (standard and
@@ -1333,7 +1340,7 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   `x.y.z`), `handoff_author_login`, `verdict_bot_login` (GitHub logins or
   empty), `retire_pickup` (`false`).
 - Log prefix `CLAUDE_POOL` (`config`, `accounts`, `probe`, `choose`,
-  `prompt`, `work`, `smoke`, `redact`, `probe_skipped`, `result`, `failed`, and the `*_failed`
+  `prompt`, `work`, `contain`, `smoke`, `redact`, `probe_skipped`, `result`, `failed`, and the `*_failed`
   errors). Tests: `tests/test_claude_pool.py`, its own `ci.yml` step.
 
 ## Repo-specific batching helpers

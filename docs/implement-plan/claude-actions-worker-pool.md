@@ -8,12 +8,12 @@
 - Activation: not started
 - Waiting on: PR #6100
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 4 (conflict) stage (session_01QFtuh6z4joi6M5R2GLZNu1), ids in its report
+- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 5 stage (session_016YrCAFxZjJCVwUsBBjTQ7p), ids in its report
 - Last updated: 2026-10-02
-- Last note: review round 4 on PR #6100 (session_01QFtuh6z4joi6M5R2GLZNu1): conflict hand-off — merged the project branch (main's #6098 parity-plan rewrite) into the phase branch; the one conflicting line in `docs/plans/claude-codex-process-parity-plan.md` keeps the base side, which already drops the stale `docs/plans/claude-multi-account-pool-plan.md` path phase 1 had repointed
+- Last note: review round 5 on PR #6100 (hand-off round 1 on head 81717d6, session_016YrCAFxZjJCVwUsBBjTQ7p): the one consensus finding (the auto-mode worker can hand the redaction step a `BASH_ENV` / `PATH` through `$GITHUB_ENV` / `$GITHUB_PATH`) is valid and fixed: the CLI runs without file-command paths, the step then kills what the worker left running and empties its file commands, and redaction runs `/usr/bin/python3 -B -E -s` in a bash started without `BASH_ENV`
 
 ## Phases
-1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 4 (round 4: conflict); interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
+1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 5 (round 4: conflict; round 5: worker containment); interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
    - `scripts/claude_pool.py` [new]: `accounts`, `normalize`, `probe-parse`, `choose`, `prompt`, `classify`, `run-name`; also `config` (the workflow reads the pool config through it) and `redact` (AD-4)
    - `.github/workflows/claude-pool-worker.yml` [new]: `workflow_call`, jobs `select` / `work` / `report`
    - `.github/ai/claude_pool.json` [new]: `dispatch_types: []` (pool off)
@@ -74,6 +74,7 @@
 - [source:intervention] In a multi-job workflow that reads scripts from a mutable ref, resolve the ref once in the first job, export its SHA as a job output, and check that SHA out in every later job (falling back to the ref only where the first job may not have run). (files: .github/workflows/claude-pool-worker.yml)
 - [source:plan-deviation] A new `.github/workflows/*.yml` file changes the auto-generated repo tree in agents.md; run `make generate` in the same PR, or the CI `make generate-check` drift step fails. (files: agents.md, tools/repo_tree/update_repo_tree.py)
 - [source:plan-deviation] CLAUDE.md §18.F wants a `docs/scripts-pending-removal.md` entry even for permanent scripts and workflows (`Removal trigger: permanent — review annually`); a plan line saying "no new entry; the scripts are permanent" does not exempt them. (files: docs/scripts-pending-removal.md)
+- [source:intervention] A step after an auto-mode Claude step inherits whatever the agent appended to `$GITHUB_ENV` / `$GITHUB_PATH` (`BASH_ENV`, `PATH`, `LD_PRELOAD`) and any process it left running; run the CLI without the file-command variables, then kill its leftover processes and empty the step's file-command files before the step ends. (files: .github/workflows/claude-pool-worker.yml)
 
 ## Notes
 - 2026-10-02: the operator's runner repo now holds pool secrets `CLAUDE_POOL_TOKEN_FUNTOKEN1` and `_FUNTOKEN2` (TEST1/TEST2 gone), and `GH_PAT` there is already the classic token: spike round 9 (run 37012676689) and the phase 1 smoke run read check runs on private consumers. Activation gate 1 looks done; the activation stage re-checks it.

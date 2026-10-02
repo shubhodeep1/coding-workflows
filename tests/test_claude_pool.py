@@ -10,6 +10,8 @@ import importlib.util
 import io
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -587,7 +589,7 @@ def test_smoke_job_limit_covers_the_cli_and_the_smoke_checks():
 	# cover the CLI's limit (plus its kill-after) and both check runs.
 	steps = _workflow()["jobs"]["work"]["steps"]
 	smoke = next(step for step in steps if step.get("name", "").startswith("Smoke checks"))
-	check_seconds = sum(int(value) for value in re.findall(r"timeout (\d+) claude", smoke["run"]))
+	check_seconds = sum(int(value) for value in re.findall(r"timeout (\d+) \"\$\{pool_no_files\[@\]\}\" claude", smoke["run"]))
 	assert check_seconds == 900
 	assert check_seconds <= pool.SMOKE_CHECKS_MINUTES * 60
 	run_claude = next(step for step in steps if step.get("name") == "Run Claude")
@@ -737,9 +739,109 @@ def test_redaction_runs_from_a_fresh_checkout_and_gates_the_upload():
 	assert checkout["with"]["persist-credentials"] is False
 	assert steps[redact]["id"] == "redact"
 	assert "set -euo pipefail" in steps[redact]["run"]
-	assert "python3 pool-redact/scripts/claude_pool.py redact" in steps[redact]["run"]
+	assert "/usr/bin/python3 -B -E -s pool-redact/scripts/claude_pool.py redact" in steps[redact]["run"]
 	assert steps[upload]["if"] == "always() && steps.redact.outcome == 'success'"
 	assert data["jobs"]["select"]["outputs"]["pool_sha"] == "${{ steps.config.outputs.pool_sha }}"
+
+
+def test_steps_that_run_the_cli_contain_the_worker():
+	# Review of head 81717d6 (PR #6100): the auto-mode worker could append BASH_ENV,
+	# PATH or LD_PRELOAD to its step's $GITHUB_ENV / $GITHUB_PATH, or leave a
+	# background job running, and so subvert the redaction step after it.
+	steps = {step.get("name"): step for step in _workflow()["jobs"]["work"]["steps"]}
+	no_files = "env -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_OUTPUT -u GITHUB_STATE -u GITHUB_STEP_SUMMARY"
+	for name in ("Run Claude", "Smoke checks (deny rule, GH_PAT check runs, GitHub MCP)"):
+		run = steps[name]["run"]
+		assert no_files in run, name
+		assert "pool_procs_before=$(pool_procs)" in run, name
+		assert 'kill -KILL "$pid"' in run, name
+		assert 'for f in "${GITHUB_ENV:-}" "${GITHUB_PATH:-}" "${GITHUB_OUTPUT:-}"; do' in run, name
+		# Every CLI call runs without the file-command paths, and the
+		# containment runs after the last one.
+		calls = [m.start() for m in re.finditer(r"\bclaude -p\b", run)]
+		assert calls, name
+		for start in calls:
+			line_start = run.rfind("\n", 0, start)
+			window = run[max(0, line_start - 200):start]
+			assert no_files in window or '"${pool_no_files[@]}" claude -p' in run[start - 30:start + 9], name
+		assert run.rindex("pool_contain\n") > calls[-1], name
+	redact = steps["Redact secrets from the transcript"]
+	assert redact["shell"] == "/usr/bin/env -u BASH_ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}"
+
+
+def _namespace_bash_available() -> bool:
+	if not all(shutil.which(tool) for tool in ("unshare", "setsid", "jq", "ps", "comm", "timeout")):
+		return False
+	try:
+		probe = subprocess.run(
+			["unshare", "--user", "--map-root-user", "--pid", "--fork", "--mount-proc", "true"],
+			capture_output=True, timeout=30, check=False,
+		)
+	except (OSError, subprocess.SubprocessError):
+		return False
+	return probe.returncode == 0
+
+
+def test_run_claude_step_drops_file_commands_and_kills_leftovers(tmp_path):
+	# Runs the real step body against a stub CLI that behaves like a hostile
+	# worker. It runs in its own PID namespace, so the step's kill of every new
+	# process cannot reach anything outside the test.
+	if not _namespace_bash_available():
+		pytest.skip("needs unshare with user and PID namespaces, setsid, jq, ps")
+	run = next(step for step in _workflow()["jobs"]["work"]["steps"] if step.get("name") == "Run Claude")["run"]
+	temp = tmp_path / "runner_temp"
+	(temp / "pool-out").mkdir(parents=True)
+	(temp / "pool-prompt.txt").write_text("prompt", encoding="utf-8")
+	files = {name: tmp_path / f"{name.lower()}.txt" for name in ("GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT")}
+	for path in files.values():
+		path.write_text("", encoding="utf-8")
+	stub_bin = tmp_path / "bin"
+	stub_bin.mkdir()
+	stub = stub_bin / "claude"
+	stub.write_text(
+		"#!/bin/bash\n"
+		'echo "${GITHUB_ENV-unset}" > "$STUB_DIR/seen"\n'
+		'printf \'BASH_ENV=%s\\n\' "$STUB_DIR/evil.sh" >> "$STUB_ENV_FILE"\n'
+		'printf \'%s\\n\' "$STUB_DIR/evilbin" >> "$STUB_PATH_FILE"\n'
+		"setsid sleep 300 < /dev/null > /dev/null 2>&1 &\n"
+		'echo $! > "$STUB_DIR/bg.pid"\n'
+		"echo \'{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\'\n",
+		encoding="utf-8",
+	)
+	stub.chmod(0o755)
+	step = tmp_path / "step.sh"
+	step.write_text(run, encoding="utf-8")
+	result = tmp_path / "bg-state.txt"
+	check = (
+		'bash "$1"; pid=$(cat "$2"); '
+		'state=$(awk \'/^State:/{print $2}\' "/proc/$pid/status" 2>/dev/null); '
+		'if [ -n "$state" ] && [ "$state" != Z ]; then echo alive; else echo dead; fi > "$3"'
+	)
+	env = {
+		"PATH": f"{stub_bin}:/usr/local/bin:/usr/bin:/bin",
+		"HOME": str(tmp_path),
+		"RUNNER_TEMP": str(temp),
+		"ITEM_TIMEOUT_MINUTES": "1",
+		"RUN_MODEL": "stub",
+		"RUN_EFFORT": "low",
+		"STUB_DIR": str(tmp_path),
+		"STUB_ENV_FILE": str(files["GITHUB_ENV"]),
+		"STUB_PATH_FILE": str(files["GITHUB_PATH"]),
+		**{name: str(path) for name, path in files.items()},
+	}
+	proc = subprocess.run(
+		["unshare", "--user", "--map-root-user", "--pid", "--fork", "--mount-proc",
+			"bash", "-c", check, "_", str(step), str(tmp_path / "bg.pid"), str(result)],
+		env=env, capture_output=True, text=True, timeout=120, check=False,
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert (tmp_path / "seen").read_text(encoding="utf-8").strip() == "unset"
+	assert (tmp_path / "bg.pid").read_text(encoding="utf-8").strip()
+	assert result.read_text(encoding="utf-8").strip() == "dead"
+	for name, path in files.items():
+		assert path.read_text(encoding="utf-8") == "", name
+	assert "CLAUDE_POOL contain step=work" in proc.stdout
+	assert json.loads((temp / "pool-out" / "exit.json").read_text(encoding="utf-8")) == {"exit_code": 0, "timed_out": False}
 
 
 def test_work_and_report_check_out_the_select_jobs_commit():

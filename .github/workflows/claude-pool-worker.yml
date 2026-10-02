@@ -285,11 +285,32 @@ jobs:
         run: |
           set +e
           out="$RUNNER_TEMP/pool-out"
+          # The auto-mode worker must not shape the steps after it: it gets no
+          # file-command paths, and pool_contain (below) kills what it leaves
+          # running and drops what it wrote to this step's file commands.
+          pool_procs() { ps -u "$(id -u)" -o pid= | tr -d ' ' | sort; }
+          pool_contain() {
+            local pid f
+            for _ in 1 2 3; do
+              for pid in $(comm -13 <(printf '%s\n' "$pool_procs_before") <(pool_procs)); do
+                [ "$pid" = "$$" ] || kill -KILL "$pid" 2>/dev/null
+              done
+            done
+            for f in "${GITHUB_ENV:-}" "${GITHUB_PATH:-}" "${GITHUB_OUTPUT:-}"; do
+              [ -n "$f" ] || continue
+              rm -rf -- "$f"
+              : > "$f"
+            done
+            echo "CLAUDE_POOL contain step=work"
+          }
+          pool_procs_before=$(pool_procs)
           timeout --signal=TERM --kill-after=60 "${ITEM_TIMEOUT_MINUTES}m" \
+            env -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_OUTPUT -u GITHUB_STATE -u GITHUB_STEP_SUMMARY \
             claude -p "$(cat "$RUNNER_TEMP/pool-prompt.txt")" --model "$RUN_MODEL" --effort "$RUN_EFFORT" \
             --permission-mode auto --settings "$RUNNER_TEMP/pool-deny.json" --mcp-config "$RUNNER_TEMP/pool-mcp.json" \
             --output-format stream-json --verbose > "$out/transcript.jsonl" 2> "$out/stderr.txt"
           code=$?
+          pool_contain
           timed_out=false
           if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then timed_out=true; fi
           jq -n --argjson c "$code" --argjson t "$timed_out" '{exit_code: $c, timed_out: $t}' > "$out/exit.json"
@@ -308,8 +329,26 @@ jobs:
           out="$RUNNER_TEMP/pool-out"
           ws="$GITHUB_WORKSPACE/target"
           fail=0
+          # Same containment as the Run Claude step: these checks run the CLI too.
+          pool_procs() { ps -u "$(id -u)" -o pid= | tr -d ' ' | sort; }
+          pool_contain() {
+            local pid f
+            for _ in 1 2 3; do
+              for pid in $(comm -13 <(printf '%s\n' "$pool_procs_before") <(pool_procs)); do
+                [ "$pid" = "$$" ] || kill -KILL "$pid" 2>/dev/null
+              done
+            done
+            for f in "${GITHUB_ENV:-}" "${GITHUB_PATH:-}" "${GITHUB_OUTPUT:-}"; do
+              [ -n "$f" ] || continue
+              rm -rf -- "$f"
+              : > "$f"
+            done
+            echo "CLAUDE_POOL contain step=smoke"
+          }
+          pool_procs_before=$(pool_procs)
+          pool_no_files=(env -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_OUTPUT -u GITHUB_STATE -u GITHUB_STEP_SUMMARY)
           # 1. The anchored deny rule blocks .claude/** and leaves the twins writable.
-          (cd "$ws" && timeout 600 claude -p "This is a permissions test; do each step with exactly one tool call, in order, and do not retry or work around a denial. 1) Use the Write tool to create .claude/pool-smoke-probe.md containing probe. 2) Use the Write tool to create workflow-templates/.claude/pool-smoke-probe.md containing probe. Then report, for each step, succeeded or denied." \
+          (cd "$ws" && timeout 600 "${pool_no_files[@]}" claude -p "This is a permissions test; do each step with exactly one tool call, in order, and do not retry or work around a denial. 1) Use the Write tool to create .claude/pool-smoke-probe.md containing probe. 2) Use the Write tool to create workflow-templates/.claude/pool-smoke-probe.md containing probe. Then report, for each step, succeeded or denied." \
             --model "$WORKER_MODEL" --effort low --permission-mode auto --settings "$RUNNER_TEMP/pool-deny.json" \
             --output-format stream-json --verbose > "$out/smoke-deny.jsonl" 2>> "$out/stderr.txt")
           if [ -e "$ws/.claude/pool-smoke-probe.md" ]; then
@@ -335,7 +374,7 @@ jobs:
           expected=$(gh api "repos/$GITHUB_REPOSITORY/readme" --jq .content 2>/dev/null | base64 -d 2>/dev/null | head -n 1)
           owner="${GITHUB_REPOSITORY%%/*}"; repo="${GITHUB_REPOSITORY#*/}"
           dir=$(mktemp -d)
-          (cd "$dir" && timeout 300 claude -p "Use the GitHub MCP tool get_file_contents to read README.md from owner $owner, repo $repo, then reply with its first line only. If no GitHub MCP tool is available or the call fails, reply with the exact error." \
+          (cd "$dir" && timeout 300 "${pool_no_files[@]}" claude -p "Use the GitHub MCP tool get_file_contents to read README.md from owner $owner, repo $repo, then reply with its first line only. If no GitHub MCP tool is available or the call fails, reply with the exact error." \
             --model "$PROBE_MODEL" --mcp-config "$RUNNER_TEMP/pool-mcp.json" --strict-mcp-config --allowedTools "mcp__github__*" \
             --output-format stream-json --verbose > "$out/smoke-mcp.jsonl" 2>> "$out/stderr.txt")
           got=$(jq -r 'select(.type == "result") | .result' "$out/smoke-mcp.jsonl" 2>/dev/null)
@@ -344,13 +383,18 @@ jobs:
           else
             echo "CLAUDE_POOL smoke check=github_mcp result=failed"; fail=1
           fi
+          pool_contain
           exit "$fail"
 
       # The auto-mode worker can write anywhere in the workspace, pool/
       # included, so the redaction helper comes from a fresh checkout of the
-      # commit the select job read. A worker that uses the runner's sudo could
-      # still tamper with the VM itself; the transcript artifact stays private
-      # to the runner repo with short retention either way.
+      # commit the select job read. The steps that run the CLI kill what it
+      # left running and drop its file commands (BASH_ENV, PATH, LD_PRELOAD,
+      # outputs), and redaction starts bash without BASH_ENV and runs
+      # /usr/bin/python3 with -B -E -s, so no worker-set environment reaches it.
+      # A worker that uses the runner's sudo could still tamper with the VM
+      # itself; the transcript artifact stays private to the runner repo with
+      # short retention either way.
       - name: Check out the redaction helper again
         if: always()
         uses: actions/checkout@v5
@@ -364,6 +408,7 @@ jobs:
       - name: Redact secrets from the transcript
         id: redact
         if: always()
+        shell: /usr/bin/env -u BASH_ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
         env:
           CLAUDE_POOL_RAW_TOKEN: ${{ secrets[format('CLAUDE_POOL_TOKEN_{0}', needs.select.outputs.account)] }}
           CLAUDE_POOL_GH_PAT: ${{ secrets.GH_PAT }}
@@ -371,7 +416,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          python3 pool-redact/scripts/claude_pool.py redact --env-var CLAUDE_CODE_OAUTH_TOKEN --env-var CLAUDE_POOL_RAW_TOKEN \
+          /usr/bin/python3 -B -E -s pool-redact/scripts/claude_pool.py redact --env-var CLAUDE_CODE_OAUTH_TOKEN --env-var CLAUDE_POOL_RAW_TOKEN \
             --env-var CLAUDE_POOL_GH_PAT "$RUNNER_TEMP"/pool-out/*
 
       # Only a redacted transcript is uploaded; without it the report job
