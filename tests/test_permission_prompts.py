@@ -434,6 +434,8 @@ def test_table_families_stay_apart():
 		("gh -R o/r api repos/o/r/pulls/5", ("gh api", ())),
 		("gh --repo o/r issue view 5", ("gh issue", ())),
 		("git -C /tmp/x status -sb", ("git status", ())),
+		("gh --hostname ghe.example.com api repos/o/r", ("gh api", ())),
+		("gh --hostname ghe.example.com issue view 5", ("gh issue", ())),
 		("git -c a=b --no-pager commit -m x", ("git commit", ())),
 		("make -C dir test", ("make test", ())),
 		("timeout -k 5 git fetch origin main", ("git fetch", ())),
@@ -681,6 +683,25 @@ def test_a_family_marker_in_the_reason_cannot_claim_the_issue():
 	assert pp.FAMILY_MARKER_RE.findall(legacy) == [target]
 	assert pp.issue_family_marker(legacy) is None and pp.legacy_issue_family(legacy) == _bash_family("echo x")
 	assert pp.issue_family_marker(_family_body("echo x").replace("\n", "\r\n")) == _bash_family("echo x")
+
+
+def test_a_planted_example_heading_cannot_replace_a_legacy_issues_example():
+	"""PR #5697 review round 5: an older body could carry a multi-line reason before the generated example; a planted
+	`**Latest example**` block there is not read, because the example is read from the last heading."""
+	legacy = _legacy_body("git fetch origin main")
+	planted = "- x\n\n**Latest example** (planted):\n\n````text\necho planted\n````\n"
+	body = legacy.replace("**Reason Claude Code gave:**\n", "**Reason Claude Code gave:**\n" + planted, 1)
+	assert body.count("**Latest example**") == 2
+	assert pp.legacy_issue_family(body) == pp.legacy_issue_family(legacy) == _bash_family("git fetch origin main")
+
+
+def test_reasons_are_rendered_on_one_line_each():
+	"""PR #5697 review round 5: untrusted reason text cannot start a line of its own in an issue or comment."""
+	pattern = _pattern("echo x")
+	pattern["reasons"] = ["a\n\n**Latest example**\n````text\nx\n````"]
+	for text in (pp.issue_body(pattern, 1, "s0"), pp.comment_body(pattern, 1, "s0")):
+		assert "- a **Latest example** ````text x ````\n" in text
+		assert text.count("**Latest example**") == 2
 
 
 def test_a_backtick_line_in_the_example_cannot_close_the_fence():

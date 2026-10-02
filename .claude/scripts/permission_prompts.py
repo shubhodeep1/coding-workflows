@@ -143,7 +143,7 @@ _TIMEOUT_DURATION_RE = re.compile(r"^(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)[smhd]?|
 # (`gh -R <repo> api`, `git -C <dir> status`). The family skips them so the subcommand keeps
 # its slot; the shape (and so the signature) is unchanged.
 _GLOBAL_VALUE_OPTIONS = {
-	"gh": frozenset({"-R", "--repo"}),
+	"gh": frozenset({"-R", "--repo", "--hostname"}),
 	"git": frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}),
 	"make": frozenset({"-C", "-f", "--directory", "--file", "--makefile"}),
 	"docker": frozenset({"-H", "--host", "-c", "--context", "--config", "-l", "--log-level"}),
@@ -167,6 +167,14 @@ _ISSUE_EVENT_RE = re.compile(r"hit a \*\*(permission prompt|Auto-mode denial)\*\
 # Greedy: an issue body holds one example block, so its last closing fence line is the real one,
 # even on an older issue whose fixed four-backtick fence a backtick line in the example could match.
 _ISSUE_EXAMPLE_RE = re.compile(r"\*\*Latest example\*\*[^\n]*\n\n(`{4,})text\n(.*)\n\1(?:\n|$)", re.S)
+_ISSUE_EXAMPLE_HEADING = "**Latest example**"
+
+
+def _issue_example_match(body: str) -> re.Match[str] | None:
+	"""The recorded example block, read from the last `**Latest example**` heading: the untrusted reason text comes
+	before the generated heading, so a heading planted there cannot be read instead (PR #5697 review round 5)."""
+	start = body.rfind(_ISSUE_EXAMPLE_HEADING)
+	return _ISSUE_EXAMPLE_RE.match(body, start) if start != -1 else None
 
 
 def strip_heredocs(command: str, placeholder: str = "", keep_delimiter: bool = True) -> str:
@@ -535,7 +543,7 @@ def issue_family_marker(body: str) -> str | None:
 def legacy_issue_family(body: str) -> str | None:
 	"""The family of an issue filed before family markers, from its recorded tool, event, and example (Bash only)."""
 	event_match = _ISSUE_EVENT_RE.search(body)
-	example_match = _ISSUE_EXAMPLE_RE.search(body)
+	example_match = _issue_example_match(body)
 	if not event_match or not example_match or event_match.group(2) != "Bash":
 		return None
 	parsed = command_family(example_match.group(2))
@@ -637,7 +645,8 @@ def _example_fence(example: str) -> str:
 
 
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
-	reasons = "\n".join(f"- {reason}" for reason in pattern["reasons"]) or "- (none given)"
+	# One line per reason: untrusted reason text cannot start a heading, fence, or marker line of its own.
+	reasons = "\n".join(f"- {' '.join(reason.split())}" for reason in pattern["reasons"]) or "- (none given)"
 	fence = _example_fence(pattern["example"])
 	return (
 		f"**Occurrences:** {new_count} ({pattern['first_ts']} – {pattern['last_ts']}), session `{session_label}`\n\n"
