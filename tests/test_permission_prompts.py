@@ -502,6 +502,13 @@ def test_example_masks_credentials(command, secret, expected):
 		("eval \"$(printf %s mysql\\\\ -pS3cretPass)\"", "S3cretPass", None),
 		("$(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
 		("\"$(printf %s 'mysql -pS3cretPass')\" app", "S3cretPass", "*"),
+		# A backtick inside a single-quoted shell line or here-string is a substitution too, and `source` / `.` run what
+		# they read (PR #5401 review round 14).
+		("bash -c '`printf %s \"mysql -pS3cretPass\"`'", "S3cretPass", None),
+		("bash <<< '`printf %s \"mysql -pS3cretPass\"`'", "S3cretPass", None),
+		("source <(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
+		(". <(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
+		("printf %s 'mysql -pS3cretPass' | source /dev/stdin", "S3cretPass", None),
 		# Hex and octal escapes Bash decodes (`\x2d` and `\055` are `-`) are not reproduced, so the command is withheld
 		# (PR #5401 review round 12).
 		("bash -c $'mysql \\x2dpS3cretPass app'", "S3cretPass", "unparseable: bash"),
@@ -530,6 +537,9 @@ def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape
 		(["ssh", "host", "/bin/bash"], True),
 		(["grep", "shell"], False),
 		(["PWSH.EXE", "-"], True),
+		(["source", "/dev/stdin"], True),
+		([".", "/dev/stdin"], True),
+		(["find", ".", "-name", "x"], False),
 		(["xargs", "-I{}", "sh", "-c", "{}"], True),
 		(["2", "sh"], True),
 		(["{", "sh"], True),

@@ -477,6 +477,12 @@ def _shell_runner_before(words: list[str], start: int, position: int) -> bool:
 _SHELL_RUNNER_WRAPPERS = frozenset({"sudo", "doas", "env", "nice", "nohup", "command", "exec", "time", "timeout", "stdbuf", "ionice", "xargs"})
 
 
+# Builtins that run a file's text as code in the current shell: as the command word they read a pipe
+# (`… | source /dev/stdin`) or a process substitution (`. <(…)`) like a shell does (PR #5401 review round 14).
+# Only the command word counts, so a `.` path argument (`find . | …`) does not.
+_SOURCE_COMMANDS = frozenset({"source", "."})
+
+
 def _segment_runs_a_shell(words: list[str]) -> bool:
 	"""True when the simple command `words` may run a _SHELL_COMMAND_RUNNERS shell on its stdin: any of its words,
 	from the command word on, names one. The commands that hand their stdin to a shell named in their arguments are
@@ -488,6 +494,8 @@ def _segment_runs_a_shell(words: list[str]) -> bool:
 		(position for position, word in enumerate(words) if not (_ASSIGNMENT_RE.match(word) or word in ("{", "!") or word.isdigit())),
 		len(words),
 	)
+	if start < len(words) and words[start] in _SOURCE_COMMANDS:
+		return True
 	return _shell_runner_before(words, start, len(words))
 
 
@@ -786,7 +794,9 @@ def _shell_line_credentials(line: str, depth: int) -> set[str]:
 	(`bash -c "$(printf %s 'mysql -p…')"`), which no scan of the words can know, so the command is withheld (PR #5401
 	review round 13). This also withholds a harmless `bash -c 'echo $(date)'`, which is the safe side.
 	"""
-	if "$(" in line:
+	if "$(" in line or "`" in line:
+		# A backtick is a substitution too (`bash -c '`printf …`'`); the outer lexer only rewrites backticks outside
+		# single quotes, so the line can still hold one (PR #5401 review round 14).
 		raise ValueError("command line built by a command substitution")
 	return _command_line_credentials(line, depth + 1)
 
