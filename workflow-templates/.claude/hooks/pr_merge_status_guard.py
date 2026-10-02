@@ -147,7 +147,11 @@ _COMMAND_RESERVED_WORD_PREFIXES = _DIRECTORY_KEYWORD_PREFIXES
 _COMPOUND_OPENING_WORDS = frozenset({"if", "while", "until", "for", "case", "select"})
 _COMPOUND_CLOSING_WORDS = frozenset({"fi", "done", "esac"})
 # `git push` options that consume the following word as their value.
-_PUSH_OPTS_WITH_VALUE = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
+# Reference lists only (issue #6088): `_PUSH_OPTION_TABLE` below decides how
+# a push word is read, and these constants are kept as they were named.
+_PUSH_OPTS_WITH_VALUE = frozenset(
+	{"-o", "--push-option", "--repo", "--receive-pack", "--exec", "--recurse-submodules"}
+)
 _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
 # git also accepts any unambiguous prefix of a long option, so these shortest
 # prefixes (git 2.43: `--d`, `--p`, `--r`, `--re` and `--rec` are ambiguous)
@@ -159,16 +163,96 @@ _PUSH_LONG_OPT_MIN_PREFIXES_WITH_VALUE = {
 	"--repo": "--rep",
 	"--receive-pack": "--rece",
 	"--exec": "--e",
+	"--recurse-submodules": "--recu",
 }
 _PUSH_DELETE_MIN_PREFIX = "--de"
 # `git push` options that write every local branch. git accepts any
-# unambiguous prefix of a long option (`--al`, `--mir`), so a word of four or
-# more characters that starts one of these counts as it.
+# unambiguous prefix of a long option, so `--b` (`--branches`), `--m`
+# (`--mirror`) and `--al` (`--all`; `--a` is ambiguous with `--atomic`)
+# count as them too.
 _PUSH_BULK_FLAGS = ("--all", "--branches", "--mirror")
 # The only `git push` option that, given with no refspec, writes no branch.
 # git also accepts its unambiguous prefixes `--ta` and `--tag` (`--t` is
 # ambiguous with `--thin` and refused).
 _PUSH_TAGS_ONLY_FLAG = "--tags"
+
+
+class _PushOptionSpec(NamedTuple):
+	"""One `git push` option as git 2.43's `builtin/push.c` declares it.
+
+	`effect` is what the guard tracks: "delete", "all" (`--all` and its alias
+	`--branches`), "mirror", "tags", or "" for an option that does not change
+	which refs the push writes. `value` is "required" for an option that
+	reads a value (attached as `=<value>` or, if not attached, the next word),
+	"optional" for one that only takes an attached `=<value>`, and "" for one
+	that takes none. `negatable` is False for the options git declares
+	without a `--no-` form. `alias_group` names the option an alias copies
+	(`branches` → `all`), so a prefix matching both is not ambiguous.
+	"""
+
+	long_name: str
+	short_name: str
+	effect: str
+	value: str
+	negatable: bool
+	alias_group: str
+
+
+# Every `git push` option of git 2.43 (`git push -h`, plus the hidden
+# `--branches` listed by `git push --git-completion-helper-all`). git reads
+# them in order through parse-options, so a later `--no-delete` undoes an
+# earlier `--delete` (issue #6088). An option word this table cannot read is
+# one git 2.43 rejects too; the guard blocks it rather than guess.
+_PUSH_OPTION_TABLE = (
+	_PushOptionSpec("verbose", "v", "", "", True, "verbose"),
+	_PushOptionSpec("quiet", "q", "", "", True, "quiet"),
+	_PushOptionSpec("repo", "", "", "required", True, "repo"),
+	_PushOptionSpec("all", "", "all", "", True, "all"),
+	_PushOptionSpec("branches", "", "all", "", True, "all"),
+	_PushOptionSpec("mirror", "", "mirror", "", True, "mirror"),
+	_PushOptionSpec("delete", "d", "delete", "", True, "delete"),
+	_PushOptionSpec("tags", "", "tags", "", True, "tags"),
+	_PushOptionSpec("dry-run", "n", "", "", True, "dry-run"),
+	_PushOptionSpec("porcelain", "", "", "", True, "porcelain"),
+	_PushOptionSpec("force", "f", "", "", True, "force"),
+	_PushOptionSpec("force-with-lease", "", "", "optional", True, "force-with-lease"),
+	_PushOptionSpec("force-if-includes", "", "", "", True, "force-if-includes"),
+	_PushOptionSpec("recurse-submodules", "", "", "required", True, "recurse-submodules"),
+	_PushOptionSpec("thin", "", "", "", True, "thin"),
+	_PushOptionSpec("receive-pack", "", "", "required", True, "receive-pack"),
+	_PushOptionSpec("exec", "", "", "required", True, "exec"),
+	_PushOptionSpec("set-upstream", "u", "", "", True, "set-upstream"),
+	_PushOptionSpec("progress", "", "", "", True, "progress"),
+	_PushOptionSpec("prune", "", "", "", True, "prune"),
+	_PushOptionSpec("no-verify", "", "", "", True, "no-verify"),
+	_PushOptionSpec("follow-tags", "", "", "", True, "follow-tags"),
+	_PushOptionSpec("signed", "", "", "optional", True, "signed"),
+	_PushOptionSpec("atomic", "", "", "", True, "atomic"),
+	_PushOptionSpec("push-option", "o", "", "required", True, "push-option"),
+	_PushOptionSpec("ipv4", "4", "", "", False, "ipv4"),
+	_PushOptionSpec("ipv6", "6", "", "", False, "ipv6"),
+)
+# Long words parse-options answers with usage or a completion list before
+# any push runs (`--help`, `--help-all`; the completion helpers when alone,
+# and an unknown-option error otherwise): git writes nothing.
+_PUSH_USAGE_LONG_WORDS = frozenset({"help", "help-all", "git-completion-helper", "git-completion-helper-all"})
+# Words that end option parsing; every later word is a positional.
+_PUSH_END_OF_OPTIONS_WORDS = frozenset({"--", "--end-of-options"})
+
+
+class _PushOptionRead(NamedTuple):
+	"""How git reads one `git push` option word.
+
+	`effects` are the (effect, is_set) pairs the word applies, in order;
+	`takes_next_word` says the following word is the option's value;
+	`prints_usage` says git prints usage there and exits without writing;
+	`unreadable_reason` says why git rejects the word ("" when it does not).
+	"""
+
+	effects: tuple[tuple[str, bool], ...] = ()
+	takes_next_word: bool = False
+	prints_usage: bool = False
+	unreadable_reason: str = ""
 # A push refspec word containing any of these is a shell expansion or a
 # pattern the guard cannot turn into one branch name.
 _UNRESOLVABLE_REFSPEC_MARKERS = ("$", "`", "*", "?", "[", "{", "~")
@@ -491,7 +575,11 @@ class GuardTarget(NamedTuple):
 	`bulk_reason` is set for a push that writes more branches than the one
 	judged (`--all`, `--branches`, `--mirror`, the `:` matching refspec, a
 	`*` pattern): the checked-out branch is judged as before and the push
-	also asks for confirmation.
+	also asks for confirmation. `unreadable_reason` is set for a push whose
+	options the guard cannot read the way git does (an unknown or ambiguous
+	option word, a value where none is taken, a missing value): what it
+	writes cannot be determined, so the hook blocks it without judging
+	(issue #6088).
 	"""
 
 	subcommand: str
@@ -501,6 +589,7 @@ class GuardTarget(NamedTuple):
 	reaches_remote: bool
 	fallback_reason: str = ""
 	bulk_reason: str = ""
+	unreadable_reason: str = ""
 
 
 def _literal_tilde_words(command: str) -> frozenset[str]:
@@ -707,38 +796,59 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 	that git would read as an option — keeps the old behaviour: the session
 	checkout's branch and HEAD, with a `fallback_reason`. A `*` pattern that
 	can write several branches also carries a `bulk_reason`.
+
+	Options are read in order, wherever they stand among the positionals,
+	exactly as git 2.43 reads them (`_read_push_option_word`): a later
+	`--no-delete`, `--no-tags`, `--no-all` / `--no-branches` or `--no-mirror`
+	undoes the earlier option, and only the state after the last word decides
+	(issue #6088). An option word git would reject (unknown, ambiguous, a
+	value where none is taken, a missing value) yields one target carrying an
+	`unreadable_reason`, which the hook blocks: the guard cannot tell what the
+	push writes. A word that makes git print usage (`-h`, `--help`) yields no
+	target, since git exits there without pushing.
 	"""
 	positionals: list[str] = []
 	index = 0
 	options_done = False
-	bulk_option_reason = ""
+	deletes = False
+	all_option_reason = ""
+	mirror_option_reason = ""
 	pushes_tags = False
 	while index < len(args):
 		token = args[index]
 		if not options_done:
-			if token == "--":
+			if token in _PUSH_END_OF_OPTIONS_WORDS:
 				options_done = True
 				index += 1
 				continue
-			if _is_push_delete_option(token):
-				return []
-			if _push_option_takes_next_word(token):
-				index += 2
-				continue
-			if _is_push_bulk_flag(token):
-				bulk_option_reason = bulk_option_reason or f"`git push {token}` writes every local branch"
-				index += 1
-				continue
-			if _is_push_tags_only_flag(token):
-				pushes_tags = True
-				index += 1
-				continue
 			if token.startswith("-") and len(token) > 1:
-				index += 1
+				option_read = _read_push_option_word(token)
+				if option_read.prints_usage:
+					return []
+				unreadable_reason = option_read.unreadable_reason
+				if not unreadable_reason and option_read.takes_next_word and index + 1 >= len(args):
+					unreadable_reason = f"`{token}` needs a value and no word follows it"
+				if unreadable_reason:
+					return [GuardTarget("push", repo_dir, "", "HEAD", True, unreadable_reason=unreadable_reason)]
+				for effect, is_set in option_read.effects:
+					if effect == "delete":
+						deletes = is_set
+					elif effect == "tags":
+						pushes_tags = is_set
+					elif effect == "all":
+						all_option_reason = f"`git push {token}` writes every local branch" if is_set else ""
+					elif effect == "mirror":
+						mirror_option_reason = f"`git push {token}` writes every local branch" if is_set else ""
+				index += 2 if option_read.takes_next_word else 1
 				continue
 		positionals.append(token)
 		index += 1
 
+	if deletes:
+		# git deletes the refspecs' destinations (or refuses the push): no
+		# commits land on a branch.
+		return []
+	bulk_option_reason = all_option_reason or mirror_option_reason
 	if bulk_option_reason:
 		# git refuses a refspec beside these options, so nothing narrows the push.
 		return [GuardTarget("push", repo_dir, "", "HEAD", True, bulk_reason=bulk_option_reason)]
@@ -797,49 +907,178 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 	return targets
 
 
+def _read_push_option_word(token: str) -> _PushOptionRead:
+	"""Read one `git push` option word the way git 2.43's parse-options does.
+
+	`token` starts with `-` and is not `-`, `--` or `--end-of-options`. A
+	`--` word goes through `_read_long_push_option`, anything else through
+	`_read_short_push_option_cluster`.
+	"""
+	if token.startswith("--"):
+		return _read_long_push_option(token[2:])
+	return _read_short_push_option_cluster(token[1:])
+
+
+def _read_long_push_option(arg: str) -> _PushOptionRead:
+	"""Read `--<arg>` as `parse_long_opt` in git's parse-options.c does.
+
+	An exact long name (or `no-<name>`) wins at once. Otherwise every option
+	the word abbreviates is a candidate: `<prefix>` of a name, `no-<prefix>`
+	of a negatable name, `n` / `no` / `no-` of every negatable name, and, for
+	a name that itself starts with `no-` (`no-verify`), the rest of it
+	(`--verify`, `--verif`) as its negation. More than one candidate that are
+	not aliases of one option is ambiguous, and git refuses the word.
+	"""
+	if arg in _PUSH_USAGE_LONG_WORDS:
+		return _PushOptionRead(prints_usage=True)
+	name_end = arg.find("=")
+	name_part = arg if name_end < 0 else arg[:name_end]
+	attached_value = None if name_end < 0 else arg[name_end + 1 :]
+	candidates: list[tuple[_PushOptionSpec, bool]] = []
+	for spec in _PUSH_OPTION_TABLE:
+		long_name = spec.long_name
+		name_negates = False
+		while True:
+			word_negates = False
+			rest = arg[len(long_name) :] if arg.startswith(long_name) else None
+			if rest is None:
+				if long_name.startswith(name_part):
+					candidates.append((spec, name_negates))
+					break
+				if not spec.negatable:
+					break
+				if "no-".startswith(arg):
+					candidates.append((spec, not name_negates))
+					break
+				if not arg.startswith("no-"):
+					if long_name.startswith("no-"):
+						# `--verify` negates `--no-verify`: look again for the
+						# name without its `no-`.
+						long_name = long_name[3:]
+						name_negates = True
+						continue
+					break
+				word_negates = True
+				if not arg[3:].startswith(long_name):
+					if long_name.startswith(arg[3:]):
+						candidates.append((spec, word_negates != name_negates))
+					break
+				rest = arg[3 + len(long_name) :]
+			if rest and not rest.startswith("="):
+				break
+			return _push_option_value_read(
+				f"--{arg}", spec, word_negates != name_negates, rest[1:] if rest else None
+			)
+	if not candidates:
+		return _PushOptionRead(unreadable_reason=f"`--{arg}` is not a `git push` option")
+	candidate_groups = sorted({spec.alias_group for spec, _negates in candidates})
+	if len(candidate_groups) > 1:
+		return _PushOptionRead(
+			unreadable_reason=(
+				f"`--{arg}` is ambiguous: it could be "
+				+ " or ".join(f"`--{group}`" for group in candidate_groups)
+			)
+		)
+	spec, negates = candidates[-1]
+	return _push_option_value_read(f"--{arg}", spec, negates, attached_value)
+
+
+def _push_option_value_read(
+	word: str, spec: _PushOptionSpec, negates: bool, attached_value: str | None
+) -> _PushOptionRead:
+	"""The read of `word`, resolved to `spec`, as git's `get_value` takes it.
+
+	A negated option and an option that takes no value refuse an attached
+	`=<value>`; a required value is the attached one or else the next word.
+	"""
+	if attached_value is not None and (negates or not spec.value):
+		return _PushOptionRead(unreadable_reason=f"`{word}` gives a value to an option that takes none")
+	effects = ((spec.effect, not negates),) if spec.effect else ()
+	takes_next_word = not negates and spec.value == "required" and attached_value is None
+	return _PushOptionRead(effects=effects, takes_next_word=takes_next_word)
+
+
+def _read_short_push_option_cluster(cluster: str) -> _PushOptionRead:
+	"""Read `-<cluster>` as `parse_short_opt` in git's parse-options.c does.
+
+	Letters are options in order; `o` takes the rest of the cluster as its
+	value, or the next word when it is last. An unknown letter is refused,
+	except `h`, which prints usage. After the first letter, a cluster of three
+	or more characters that starts with `no-` or begins a long option name
+	(`-dele`, `-for`) is refused as a long option missing a dash, as git's
+	`check_typos` does.
+	"""
+	short_specs = {spec.short_name: spec for spec in _PUSH_OPTION_TABLE if spec.short_name}
+	looks_like_long_option = len(cluster) >= 3 and (
+		cluster.startswith("no-") or any(spec.long_name.startswith(cluster) for spec in _PUSH_OPTION_TABLE)
+	)
+	effects: list[tuple[str, bool]] = []
+	for position, letter in enumerate(cluster):
+		spec = short_specs.get(letter)
+		if spec is None:
+			if position == 0 and looks_like_long_option:
+				return _PushOptionRead(unreadable_reason=f"`-{cluster}` looks like a long option written with one dash")
+			if letter == "h":
+				return _PushOptionRead(prints_usage=True)
+			return _PushOptionRead(unreadable_reason=f"`-{cluster}` uses `-{letter}`, which is not a `git push` option")
+		if spec.value == "required":
+			# The rest of the cluster is the value; with none left, the next word.
+			return _PushOptionRead(effects=tuple(effects), takes_next_word=position == len(cluster) - 1)
+		if spec.effect:
+			effects.append((spec.effect, True))
+		if position == 0 and len(cluster) > 1 and looks_like_long_option:
+			return _PushOptionRead(unreadable_reason=f"`-{cluster}` looks like a long option written with one dash")
+	return _PushOptionRead(effects=tuple(effects))
+
+
+def _push_option_effect_after(token: str, effect: str) -> bool:
+	"""Whether `effect` is set once git has read the option word `token`
+	(False for a word git rejects, a usage word, or a positional)."""
+	if not token.startswith("-") or len(token) < 2 or token in _PUSH_END_OF_OPTIONS_WORDS:
+		return False
+	option_read = _read_push_option_word(token)
+	if option_read.unreadable_reason or option_read.prints_usage:
+		return False
+	is_set = False
+	for read_effect, read_is_set in option_read.effects:
+		if read_effect == effect:
+			is_set = read_is_set
+	return is_set
+
+
 def _is_push_delete_option(token: str) -> bool:
 	"""Whether a `git push` word makes the push delete its refspecs: `-d`,
 	`--delete`, a prefix git expands to it (`--de`, `--del`), or a short-option
 	cluster with `d` before any `o` (`-fd`, `-df`; in `-od` the `d` is the
-	push option's value)."""
-	if token in _PUSH_DELETE_FLAGS:
-		return True
-	if token.startswith("--"):
-		return len(token) >= len(_PUSH_DELETE_MIN_PREFIX) and "--delete".startswith(token)
-	if token.startswith("-") and len(token) > 2:
-		return "d" in token[1:].split("o", 1)[0]
-	return False
+	push option's value). `--no-delete` undoes it; the refspec walker reads
+	the words in order (issue #6088)."""
+	return _push_option_effect_after(token, "delete")
 
 
 def _push_option_takes_next_word(token: str) -> bool:
 	"""Whether `git push` reads the word after this option as its value:
-	`-o`, `--push-option`, `--repo`, `--receive-pack`, `--exec`, a prefix git
-	expands to one of them (`--pu`, `--rep`, `--rece`, `--e`), or a
-	short-option cluster whose first `o` is its last letter (`-uo <value>`).
-	A `--opt=<value>` word or a cluster with the value attached (`-uoci.skip`)
-	carries its own value."""
-	if token in _PUSH_OPTS_WITH_VALUE:
-		return True
-	if token.startswith("--"):
-		return any(
-			len(token) >= len(min_prefix) and option.startswith(token)
-			for option, min_prefix in _PUSH_LONG_OPT_MIN_PREFIXES_WITH_VALUE.items()
-		)
-	if not token.startswith("-") or len(token) <= 2:
+	`-o`, `--push-option`, `--repo`, `--receive-pack`, `--exec`,
+	`--recurse-submodules`, a prefix git expands to one of them (`--pu`,
+	`--rep`, `--rece`, `--e`, `--recu`), or a short-option cluster whose
+	first `o` is its last letter (`-uo <value>`). A `--opt=<value>` word, a
+	negated `--no-<opt>`, or a cluster with the value attached (`-uoci.skip`)
+	does not."""
+	if not token.startswith("-") or len(token) < 2 or token in _PUSH_END_OF_OPTIONS_WORDS:
 		return False
-	return token.find("o", 1) == len(token) - 1
+	option_read = _read_push_option_word(token)
+	return not option_read.unreadable_reason and option_read.takes_next_word
 
 
 def _is_push_bulk_flag(token: str) -> bool:
 	"""Whether a `git push` word is `--all`, `--branches` or `--mirror`, or a
-	prefix of four or more characters git would expand to one."""
-	return len(token) >= 4 and any(flag.startswith(token) for flag in _PUSH_BULK_FLAGS)
+	prefix git expands to one (`--al`, `--b`, `--m`)."""
+	return _push_option_effect_after(token, "all") or _push_option_effect_after(token, "mirror")
 
 
 def _is_push_tags_only_flag(token: str) -> bool:
 	"""Whether a `git push` word is `--tags` or a prefix git expands to it
 	(`--ta`, `--tag`)."""
-	return len(token) >= 4 and _PUSH_TAGS_ONLY_FLAG.startswith(token)
+	return _push_option_effect_after(token, "tags")
 
 
 def _pattern_refspec_bulk_reason(spec: str) -> str:
@@ -964,6 +1203,10 @@ def _git_invocation_targets(
 			parsed_push_targets = _push_refspec_targets(args[index:], session_cwd, session_cwd)
 			if not parsed_push_targets:
 				return []
+			unreadable_targets = [target for target in parsed_push_targets if target.unreadable_reason]
+			if unreadable_targets:
+				# Blocked wherever it runs: the directory does not matter.
+				return unreadable_targets
 			fallback_bulk_reason = next(
 				(target.bulk_reason for target in parsed_push_targets if target.bulk_reason),
 				"",
@@ -1788,6 +2031,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if target in judged:
 			continue
 		judged.add(target)
+		if target.unreadable_reason:
+			# What the push writes cannot be determined, so it is not judged
+			# and issues no API call (issue #6088).
+			blocks.append(_unreadable_push_message(target))
+			continue
 		if target.fallback_reason:
 			notices.append(
 				f"merged-PR guard: could not resolve where `git {target.subcommand}` runs "
@@ -1840,6 +2088,19 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	elif notices:
 		print(json.dumps({"systemMessage": "\n".join(notices)}))
 	return 0, ""
+
+
+def _unreadable_push_message(target: GuardTarget) -> str:
+	"""The block message for a push whose options the guard cannot read."""
+	return (
+		"BLOCKED: merged-PR guard (CLAUDE.md §21) cannot tell which branch this "
+		f"`git push` writes: {target.unreadable_reason}. git reads push options in "
+		"order (a later `--no-delete` undoes `--delete`), so an option word the guard "
+		"cannot read the way git 2.43 does could change what is pushed. git rejects "
+		"such a word too, unless it is an option newer than the guard's table. Spell "
+		"each option out in full (for example `--delete`, `--no-delete`, "
+		"`--push-option=<value>`) or drop it, and run the push again."
+	)
 
 
 def _judge_guard_target(

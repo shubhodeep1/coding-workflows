@@ -929,7 +929,18 @@ without a refspec judges the current branch. A bulk push (`--all`, `--branches`,
 `--mirror`, or a prefix git expands to one, the `:` matching refspec, or a `*`
 pattern refspec) judges the current branch as usual and, when that does not
 block, also asks for confirmation, since the other branches it writes are not
-listed; the ask issues no API call and applies on the default branch too. When the directory cannot be resolved (a variable or command
+listed; the ask issues no API call and applies on the default branch too.
+Push options are read in order, the way git 2.43 reads them, wherever they
+stand on the command line: exact names, unambiguous prefixes (`--del`,
+`--b`, `--m`), `--no-<option>` and its prefixes, and short-option clusters.
+Whether a push deletes, is a bulk push, or pushes only tags is decided by
+the state after the last option, so `git push --delete --no-delete origin
+HEAD:<branch>` is judged as the push it is (issue #6088). An option word git
+would reject (an unknown or ambiguous option, a value given to an option
+that takes none, a missing value, a long option written with one dash)
+**blocks** the push, since what it writes cannot be determined; the block
+issues no API call and applies on the default branch and in an unresolvable
+directory too. `-h` and `--help` push nothing and are not judged. When the directory cannot be resolved (a variable or command
 substitution, a subshell, `pushd`/`popd`, a `cd` joined by `||`, `&` or `|`,
 a `cd` after `&&` behind a command that may fail once its `&&` chain ends
 (`a && cd x; git push`), a `cd` inside a list sent to the background with `&`,
