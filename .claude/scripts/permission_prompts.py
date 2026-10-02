@@ -129,11 +129,36 @@ _BULKY_INPUT_KEYS = frozenset({"content", "new_string", "old_string", "new_sourc
 _LOOP_KEYWORDS = frozenset({"for", "while", "until"})
 # `timeout` options that take the next word as their value.
 _TIMEOUT_VALUE_FLAGS = frozenset({"-k", "-s", "--kill-after", "--signal"})
+# A `timeout` duration: a number with an optional `s`/`m`/`h`/`d` suffix, or a shell variable.
+_TIMEOUT_DURATION_RE = re.compile(r"^(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)[smhd]?|\$.+)$")
+# Global options that take the next word as their value and can come before the subcommand
+# (`gh -R <repo> api`, `git -C <dir> status`). The family skips them so the subcommand keeps
+# its slot; the shape (and so the signature) is unchanged.
+_GLOBAL_VALUE_OPTIONS = {
+	"gh": frozenset({"-R", "--repo"}),
+	"git": frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}),
+	"make": frozenset({"-C", "-f", "--directory", "--file", "--makefile"}),
+	"docker": frozenset({"-H", "--host", "-c", "--context", "--config", "-l", "--log-level"}),
+	"kubectl": frozenset({"-n", "--namespace", "--context", "--kubeconfig", "--cluster", "--user", "-s", "--server"}),
+	"npm": frozenset({"--prefix", "-w", "--workspace"}),
+	"pnpm": frozenset({"-C", "--dir", "-F", "--filter"}),
+	"yarn": frozenset({"--cwd"}),
+	"go": frozenset({"-C"}),
+	"cargo": frozenset({"-C", "--config", "-Z"}),
+	"uv": frozenset({"--directory", "--project", "--config-file"}),
+	"doctl": frozenset({"-t", "--access-token", "--context", "-o", "--output", "-c", "--config"}),
+	"wrangler": frozenset({"-c", "--config", "-e", "--env", "--cwd"}),
+	"gcloud": frozenset({"--project", "--account", "--configuration"}),
+	"aws": frozenset({"--profile", "--region", "--output", "--endpoint-url"}),
+	"az": frozenset({"--subscription", "-o", "--output"}),
+}
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Closed issues that can still be a family's issue; one closed as `duplicate` points elsewhere.
 _FAMILY_CLOSED_REASONS = frozenset({"completed", "not_planned", ""})
 _ISSUE_EVENT_RE = re.compile(r"hit a \*\*(permission prompt|Auto-mode denial)\*\* for `([^`\n]+)`")
-_ISSUE_EXAMPLE_RE = re.compile(r"\*\*Latest example\*\*[^\n]*\n\n(`{4,})text\n(.*?)\n\1(?:\n|$)", re.S)
+# Greedy: an issue body holds one example block, so its last closing fence line is the real one,
+# even on an older issue whose fixed four-backtick fence a backtick line in the example could match.
+_ISSUE_EXAMPLE_RE = re.compile(r"\*\*Latest example\*\*[^\n]*\n\n(`{4,})text\n(.*)\n\1(?:\n|$)", re.S)
 
 
 def strip_heredocs(command: str, placeholder: str = "", keep_delimiter: bool = True) -> str:
@@ -315,7 +340,9 @@ def _family_core(words: list[str]) -> list[str]:
 			index += 1
 			if flag in _TIMEOUT_VALUE_FLAGS:
 				index += 1
-		index += 1
+		# A malformed `timeout` with no duration keeps its command word.
+		if index < len(words) and _TIMEOUT_DURATION_RE.match(words[index]):
+			index += 1
 	return words[index:]
 
 
@@ -349,9 +376,25 @@ def _has_command_substitution(text: str) -> bool:
 	return False
 
 
+def _drop_global_value_options(core: list[str]) -> list[str]:
+	"""`core` without the `_GLOBAL_VALUE_OPTIONS` (and their values) that come before its first positional word."""
+	options = _GLOBAL_VALUE_OPTIONS.get(core[0].rsplit("/", 1)[-1], frozenset()) if core else frozenset()
+	if not options:
+		return core
+	kept = core[:1]
+	index = 1
+	while index < len(core) and core[index].startswith("-") and len(core[index]) > 1 and core[index] != "--":
+		if core[index] in options:
+			index += 2
+			continue
+		kept.append(core[index])
+		index += 1
+	return kept + core[index:]
+
+
 def _family_word(core: list[str]) -> str:
 	"""The command, plus the subcommand or script its shape keeps (a script by its basename)."""
-	shape = _segment_shape(core)
+	shape = _segment_shape(_drop_global_value_options(core))
 	if not shape:
 		return ""
 	for word in shape[1:]:
@@ -512,13 +555,19 @@ def issue_title(pattern: dict) -> str:
 	return f"[permission-prompt] {pattern['tool_name']}: {subject}"
 
 
+def _example_fence(example: str) -> str:
+	"""A backtick fence longer than any backtick run in the example (at least four), so the example cannot close it."""
+	return "`" * max(4, max((len(run) for run in re.findall(r"`+", example)), default=0) + 1)
+
+
 def _occurrence_block(pattern: dict, new_count: int, session_label: str) -> str:
 	reasons = "\n".join(f"- {reason}" for reason in pattern["reasons"]) or "- (none given)"
+	fence = _example_fence(pattern["example"])
 	return (
 		f"**Occurrences:** {new_count} ({pattern['first_ts']} – {pattern['last_ts']}), session `{session_label}`\n\n"
 		f"**Reason Claude Code gave:**\n{reasons}\n\n"
 		"**Latest example** (untrusted data from the session; heredoc bodies removed, token-like strings masked):\n\n"
-		f"````text\n{pattern['example']}\n````\n"
+		f"{fence}text\n{pattern['example']}\n{fence}\n"
 	)
 
 
