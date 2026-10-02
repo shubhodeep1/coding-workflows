@@ -15279,6 +15279,172 @@ def test_reconciliation_rejects_merged_pr_into_non_target_base():
 	assert "reason=non_target_base" in combined, combined
 
 
+def _stale_merged_state(stored_status: str = "merged", heal_marker: dict | None = None) -> dict:
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = stored_status
+	if heal_marker is not None:
+		issue["merged_state_heal"] = heal_marker
+	return state
+
+
+_STALE_WRONG_BASE_PR = {
+	"number": 953,
+	"state": "closed",
+	"merged": True,
+	"merged_at": "2026-09-30T10:00:00Z",
+	"baseRefName": "feature/unrelated",
+	"headRefName": "claude/unrelated-fix",
+	"headRefFromApi": "claude/unrelated-fix",
+	"body": "Fixes #10",
+}
+
+
+def _issue_comment_bodies(result: dict, issue: str) -> list[str]:
+	return [c.get("body", "") if isinstance(c, dict) else str(c) for c in result["issues"][issue].get("comments", [])]
+
+
+def test_reconcile_heals_stale_merged_state_back_to_awaiting_approval():
+	"""PR #5633 round 2 (Q9 B, Q11 A, Q12 A): an open current-wave child whose
+	ai:merged label and stored `merged` status rest only on a merge the #5618
+	rule rejects is healed once: ai:merged goes, ai:awaiting-approval comes
+	(so auto_approve re-runs implementation), the stored status returns to
+	in_progress, and the heal is recorded and explained on the issue."""
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+	)
+	combined = result["stdout"] + result["stderr"]
+	labels = result["issues"]["10"]["labels"]
+	assert "ai:merged" not in labels, labels
+	assert "ai:awaiting-approval" in labels, labels
+	assert "MERGED_STATE_HEALED issue=10 pr=953 reason=non_target_base label=ai:awaiting-approval stored_status=merged" in combined, combined
+	issue_state = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_state["status"] != "merged", issue_state
+	assert issue_state["merged_state_heal"]["pr"] == 953, issue_state
+	assert issue_state["merged_state_heal"]["label"] == "ai:awaiting-approval", issue_state
+	assert any("no longer counts as merged" in body for body in _issue_comment_bodies(result, "10"))
+
+
+def test_reconcile_heals_stale_merged_state_to_done_when_own_pr_is_open():
+	"""Q12 A: when the issue's own implementation PR (ai/issue-<n> head) is
+	still open, the healed issue re-enters at ai:done."""
+	own_open_pr = {
+		"number": 954,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"body": "Closes #10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_poller(
+		state=_stale_merged_state(stored_status="pending"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953, 954]},
+		prs=[dict(_STALE_WRONG_BASE_PR), own_open_pr],
+	)
+	combined = result["stdout"] + result["stderr"]
+	labels = result["issues"]["10"]["labels"]
+	assert "ai:merged" not in labels, labels
+	assert "ai:done" in labels, labels
+	assert "label=ai:done" in combined and "own_open_pr=954" in combined, combined
+
+
+def test_reconcile_only_alerts_for_stale_merged_state_on_closed_issue():
+	"""Q11 A: a closed issue is never healed; it is logged and alerted once."""
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_closed={10: True},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert "MERGED_STATE_STALE issue=10 pr=953 reason=non_target_base" in combined, combined
+	assert "action=alert why=issue_closed" in combined, combined
+	assert "MERGED_STATE_HEALED" not in combined
+	assert result["latest_state"]["waves"][0]["issues"][0]["merged_state_heal"]["alerted"] is True
+
+
+def test_reconcile_heals_stale_merged_state_only_once():
+	"""Q13 A: an issue healed before is never healed again; a relapse only
+	alerts."""
+	result = _run_poller(
+		state=_stale_merged_state(heal_marker={"pr": 953, "reason": "non_target_base", "label": "ai:awaiting-approval", "at": 1}),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert "action=alert why=already_healed" in combined, combined
+	assert "MERGED_STATE_HEALED" not in combined
+
+
+def test_reconcile_stale_merged_state_heal_can_be_disabled():
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+		env_overrides={"ENABLE_MERGED_STATE_HEAL": "false"},
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert "action=alert why=heal_disabled" in combined, combined
+	assert "MERGED_STATE_HEALED" not in combined
+
+
+def test_reconcile_does_not_heal_on_a_rejection_without_base_ref():
+	"""A merged PR payload without a base ref proves nothing about where it
+	merged, so it never un-merges an issue (fail closed)."""
+	no_base_pr = dict(_STALE_WRONG_BASE_PR)
+	del no_base_pr["baseRefName"]
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953]},
+		prs=[no_base_pr],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert "MERGED_STATE_HEALED" not in combined
+	assert "MERGED_STATE_STALE" not in combined
+
+
+def test_reconcile_leaves_merged_label_without_rejected_merge_alone():
+	"""An ai:merged label with no merged linked PR at all (a person, the close
+	sweep) is not this rule's business and stays."""
+	result = _run_poller(
+		state=_stale_merged_state(stored_status="pending"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert "MERGED_STATE_HEALED" not in combined
+	assert "MERGED_STATE_STALE" not in combined
+
+
 def test_backward_scan_does_not_promote_merged_pr_into_non_target_base():
 	"""Issue #5618: the backward scan promotes a prior-wave ai:ready-to-merge
 	child only when its merged PR landed on the default branch or the

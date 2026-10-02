@@ -4,15 +4,15 @@
 - Source issue: shubhodeep1/coding-workflows#5618
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Base branch: claude/implement-plan-issue-4813-close-sweep-target-branch-merges
-- Project branch: claude/implement-plan-issue-5618-reconcile-target-branch-merges   Final PR: #5633 draft (into claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
+- Project branch: claude/implement-plan-issue-5618-reconcile-target-branch-merges   Final PR: #5633, ready for review (into claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
-- Waiting on: the completion PR from claude/implement-plan-issue-5618-reconcile-target-branch-merges-complete
+- Waiting on: final-merge review of PR #5633 (review round 2 fixes pushed)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_016KrwLrGKBe3mJCxcGowd7W   safety net and hand-back: see the completion stage report
-- Last updated: 2026-10-01
-- Last note: completion stage: validation cycle 1 passed (run 36808188447, 10/10 tests, project branch at a7803a2); plan moved to docs/completed/; conformance run 1 CONFORMANT; security skipped (plan header). Next: final-merge 1/1 marks #5633 ready and closes #5618 with `ai:merged` once it merges.
+- Last updated: 2026-10-02
+- Last note: final-merge review rounds 1–2 on PR #5633 fixed by the owner's supervising session (owner decisions AD-7 → B, AD-8 → B, Q7 A, Q9 B, Q11 A, Q12 A, Q13 A; see Notes). Validation for the post-review head is covered by the #4813 project's validation (Q10 A). Earlier: completion stage: validation cycle 1 passed (run 36808188447, 10/10 tests, project branch at a7803a2); plan moved to docs/completed/; conformance run 1 CONFORMANT; security skipped (plan header). Next: final-merge 1/1 marks #5633 ready and closes #5618 with `ai:merged` once it merges.
 
 ## Phases
 1. [x] Phase 1 — gate every poller path that marks an issue merged (current-wave reconcile, validation-dispatch wave gate, stall-recovery `ai:merged` tag, backward-scan promotion) on the issue's target branch, with tests, README and changelog — PR #5646 merged 2026-10-01 (54f0851, merged by the operator under Q2: A, evidence https://github.com/shubhodeep1/coding-workflows/pull/5646#issuecomment-5923041874); review rounds: 2 (round 1 fixed in 8ff985c; all 26 round-2 entries rejected, the reviewers read `main`'s tree instead of the stacked base, #5824); interventions: 0
@@ -26,10 +26,11 @@
 ## Validation
 - Run 36804574017 2026-10-01 (target_ref: claude/implement-plan-issue-5618-reconcile-target-branch-merges): failed before validating (GitHub API rate limit, HTTP 403, in "Authorize explicit validation target"); not counted as a cycle (operator Q3: A, #5504).
 - Cycle 1 — run 36808188447 2026-10-01 (target_ref: claude/implement-plan-issue-5618-reconcile-target-branch-merges, head a7803a2): status=pass raw_status=pass — Runtime validation passed (10/10 tests, 274s).
+- Post-review head (2026-10-02, owner Q10: A): the final-merge review rounds on PR #5633 changed poller control flow after cycle 1 (head `a7803a2`). No new run here: PR #5633 merges into the #4813 project branch, and the #4813 project's own security pass and runtime validation cover this code before anything reaches `main` (the stacked-project rule in docs/operations/master-session.md).
 
 ## Completion
-- Completion PR from claude/implement-plan-issue-5618-reconcile-target-branch-merges-complete (open) — doc moved to docs/completed/issue-5618-reconcile-target-branch-merges-plan.md
-- Final PR #5633 draft
+- Completion PR #5885 from claude/implement-plan-issue-5618-reconcile-target-branch-merges-complete merged 2026-10-01 (`5e85d03`) — doc moved to docs/completed/issue-5618-reconcile-target-branch-merges-plan.md
+- Final PR #5633, ready for review (final-merge review rounds in progress)
 
 ## Activation
 - n/a: the base is the #4813 project branch, so this change goes live with project #4813.
@@ -51,6 +52,7 @@
 - [source:validation] Before trusting a read-result run, confirm its `target_ref` input in the run log: two stage sessions that dispatch `internal-validate.yml` seconds apart can each record the other's run id (#5016). (files: .claude/scripts/dispatch_workflow.py, .claude/commands/implement-plan-claude.md)
 
 ## Notes
+- Final-merge review round 2 on PR #5633 (2026-10-02, owner's supervising session): merged state an earlier poll wrote on a merge the #5618 rule now rejects is healed by `_heal_rejected_merged_state` in the current-wave reconcile loop (Q9 B, Q11 A: open current-wave children only, closed issues alerted; Q12 A: re-enter at `ai:done` with the issue's own open automation PR, else `ai:awaiting-approval`; Q13 A: once per issue). `ENABLE_MERGED_STATE_HEAL` (default `true`) turns it into alerts only.
 - Security pass: skip (`security_pass_skip.py`: ai:security, created and labelled by the issue automation).
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5618#issuecomment-5909984944
 - Plan widened during planning (AD-1): the finding names the reconcile loop, but the #4813 project checker's context recorded that conformance run 1 had flagged `_reconcile_merged_pr_issue` too; tracing every `ai:merged` writer found four paths.

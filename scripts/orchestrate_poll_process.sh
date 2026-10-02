@@ -1918,6 +1918,19 @@ else
   ENABLE_STALL_MERGED_PR_GUARD="false"
 fi
 
+# ENABLE_MERGED_STATE_HEAL — heal a current-wave child whose ai:merged
+# label or stored `merged` status rests only on merges the issue #5618
+# target-branch rule rejects (owner decisions on PR #5633, review round 2:
+# Q9 B, Q11 A, Q12 A, Q13 A). See _heal_rejected_merged_state.
+# Default true; set to false to log and alert only, never change labels or
+# state.
+ENABLE_MERGED_STATE_HEAL="${ENABLE_MERGED_STATE_HEAL:-true}"
+if is_truthy "${ENABLE_MERGED_STATE_HEAL}"; then
+  ENABLE_MERGED_STATE_HEAL="true"
+else
+  ENABLE_MERGED_STATE_HEAL="false"
+fi
+
 MAX_RECOVERY_ATTEMPTS="${MAX_RECOVERY_ATTEMPTS:-3}"
 if ! [[ "${MAX_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_RECOVERY_ATTEMPTS}" -lt 1 ]; then
   echo "::warning::MAX_RECOVERY_ATTEMPTS must be a positive integer; defaulting to 3"
@@ -15710,6 +15723,131 @@ _check_open_pr_conflict_guard() {
   return 0
 }
 
+# _heal_rejected_merged_state <issue> <issue state> <labels JSON> <rejected PR> <reason> [<own open PR>]
+#
+# Heal a current-wave child whose `ai:merged` label or stored `merged` wave
+# status rests only on merges the issue #5618 target-branch rule rejects —
+# state an earlier poll could write before the rule existed (PR #5633
+# review round 2; owner decisions Q9 B, Q11 A, Q12 A, Q13 A).
+#
+# The caller (the current-wave reconcile loop) calls it only when, for this
+# issue, at least one merged linked PR was rejected for a branch or
+# identity reason (non_target_base, unverified_identity, foreign_base_repo),
+# no linked PR passed as merged, and no linked-PR read failed this cycle.
+# An issue with no merged linked PR at all is never passed in, so an
+# `ai:merged` from another source (a person, the close sweep) is left alone.
+#
+# Heal (open issue, ENABLE_MERGED_STATE_HEAL=true, never healed before):
+#   - remove `ai:merged`; add `ai:done` when the issue's own implementation
+#     PR (an automation head in this repository) is still open, otherwise
+#     `ai:awaiting-approval`, so the existing auto_approve stall step posts
+#     /approved and implementation re-runs from the existing plan under the
+#     normal caps;
+#   - a stored `merged` wave status goes back to `in_progress`;
+#   - record `.merged_state_heal = {pr, reason, label, at}` on the wave
+#     issue (one heal per issue), post one explanatory comment, log
+#     `MERGED_STATE_HEALED`, add a healing note, and send a Telegram WARNING.
+# Otherwise (closed issue, healing disabled, already healed once, or no
+# wave entry) nothing changes: it logs `MERGED_STATE_STALE … action=alert`
+# every cycle and alerts once, recorded as `.merged_state_heal.alerted`.
+# A failed label edit changes nothing, so the next cycle retries.
+#
+# Sets MERGED_HEAL_LABELS_JSON (the issue's labels after the call) and
+# MERGED_HEAL_STATE_CHANGED (true when the state file changed). API calls:
+# on a heal, one label edit and one comment; on the first alert, none
+# beyond Telegram. Reads only data the caller already fetched.
+declare -g MERGED_HEAL_LABELS_JSON='[]'
+declare -g MERGED_HEAL_STATE_CHANGED='false'
+_heal_rejected_merged_state() {
+  local issue_num="$1"
+  local issue_state="$2"
+  local labels_json="$3"
+  local rejected_pr="$4"
+  local reason="$5"
+  local own_open_pr="${6:-}"
+  MERGED_HEAL_LABELS_JSON="${labels_json}"
+  MERGED_HEAL_STATE_CHANGED="false"
+
+  local _mhs_has_label _mhs_entry _mhs_lid _mhs_stored _mhs_marker_pr _mhs_marker_alerted _mhs_why=""
+  _mhs_has_label="$(printf '%s' "${labels_json}" | jq -r 'if type == "array" then (index("ai:merged") != null) else false end' 2>/dev/null || echo "false")"
+  _mhs_entry="$(jq -c --argjson wi "${WAVE_IDX}" --arg n "${issue_num}" '[.waves[$wi].issues[]? | select((.github_issue | tostring) == $n)][0] // {}' "${STATE_FILE}" 2>/dev/null || echo '{}')"
+  [ -n "${_mhs_entry}" ] || _mhs_entry='{}'
+  _mhs_lid="$(printf '%s' "${_mhs_entry}" | jq -r '.id // ""' 2>/dev/null || echo "")"
+  _mhs_stored="$(printf '%s' "${_mhs_entry}" | jq -r '.status // ""' 2>/dev/null || echo "")"
+  if [ "${_mhs_has_label}" != "true" ] && [ "${_mhs_stored}" != "merged" ]; then
+    return 0
+  fi
+  _mhs_marker_pr="$(printf '%s' "${_mhs_entry}" | jq -r '.merged_state_heal.pr // "" | tostring' 2>/dev/null || echo "")"
+  _mhs_marker_alerted="$(printf '%s' "${_mhs_entry}" | jq -r '.merged_state_heal.alerted // false | tostring' 2>/dev/null || echo "false")"
+
+  if [ "${ENABLE_MERGED_STATE_HEAL:-true}" != "true" ]; then
+    _mhs_why="heal_disabled"
+  elif [ "${issue_state}" != "open" ]; then
+    _mhs_why="issue_closed"
+  elif [ -n "${_mhs_marker_pr}" ]; then
+    _mhs_why="already_healed"
+  elif [ -z "${_mhs_lid}" ]; then
+    _mhs_why="no_state_entry"
+  fi
+
+  if [ -n "${_mhs_why}" ]; then
+    echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=alert why=${_mhs_why}" >&2
+    if [ -n "${_mhs_lid}" ] && [ "${_mhs_marker_alerted}" != "true" ]; then
+      if declare -F tg_notify >/dev/null 2>&1; then
+        tg_notify "Orchestrator: issue #${issue_num} still counts as merged, but its only merged linked PR #${rejected_pr} is not its merge into the target branch (${reason}). Not healed (${_mhs_why}); check it by hand."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${rejected_pr}")" "WARNING" || true
+      fi
+      if declare -F add_healing_note >/dev/null 2>&1; then
+        add_healing_note "Issue #${issue_num}: still counts as merged on rejected PR #${rejected_pr} (${reason}); not healed (${_mhs_why})"
+      fi
+      if jq --argjson wi "${WAVE_IDX}" --arg lid "${_mhs_lid}" \
+        '(.waves[$wi].issues[] | select(.id == $lid)) |= (.merged_state_heal = ((.merged_state_heal // {}) + {alerted: true}))' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        MERGED_HEAL_STATE_CHANGED="true"
+      else
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      fi
+    fi
+    return 0
+  fi
+
+  local _mhs_target_label="ai:awaiting-approval"
+  [[ "${own_open_pr}" =~ ^[0-9]+$ ]] && _mhs_target_label="ai:done"
+  if declare -F ensure_label_exists >/dev/null 2>&1; then
+    ensure_label_exists "${_mhs_target_label}" >/dev/null 2>&1 || true
+  fi
+  local _mhs_edit_args=(--add-label "${_mhs_target_label}")
+  [ "${_mhs_has_label}" = "true" ] && _mhs_edit_args+=(--remove-label "ai:merged")
+  if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${_mhs_edit_args[@]}" >/dev/null 2>&1; then
+    echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=retry why=label_edit_failed" >&2
+    return 0
+  fi
+  MERGED_HEAL_LABELS_JSON="$(printf '%s' "${labels_json}" | jq -c --arg add "${_mhs_target_label}" '(if type == "array" then . else [] end) | map(select(. != "ai:merged")) + [$add] | unique' 2>/dev/null || echo "${labels_json}")"
+
+  if jq --argjson wi "${WAVE_IDX}" --arg lid "${_mhs_lid}" --arg pr "${rejected_pr}" --arg reason "${reason}" --arg label "${_mhs_target_label}" --argjson now "$(date +%s)" '
+    (.waves[$wi].issues[] | select(.id == $lid)) |= (
+      (if .status == "merged" then .status = "in_progress" else . end)
+      | .merged_state_heal = {pr: ($pr | tonumber? // $pr), reason: $reason, label: $label, at: $now}
+    )' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    MERGED_HEAL_STATE_CHANGED="true"
+  else
+    rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    echo "::warning::MERGED_STATE_HEALED issue=${issue_num}: labels healed but the state file update failed; the stored status is re-checked next cycle." >&2
+  fi
+
+  local _mhs_next="its plan is re-approved by the poller's auto-approve step and implementation runs again"
+  [ "${_mhs_target_label}" = "ai:done" ] && _mhs_next="review and merge continue on its open implementation PR #${own_open_pr}"
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+    -f body="🔧 **Orchestrator: this issue no longer counts as merged.** Its only merged linked PR, #${rejected_pr}, did not merge into the issue's target branch (\`${reason}\`; issue #5618 rule), so the earlier \`ai:merged\` / \`merged\` state was not this issue's work. The label is now \`${_mhs_target_label}\`: ${_mhs_next}. This heal runs once per issue." >/dev/null 2>&1 || true
+  echo "MERGED_STATE_HEALED issue=${issue_num} pr=${rejected_pr} reason=${reason} label=${_mhs_target_label} stored_status=${_mhs_stored:-none} own_open_pr=${own_open_pr:-none}" >&2
+  if declare -F add_healing_note >/dev/null 2>&1; then
+    add_healing_note "Issue #${issue_num}: healed merged state resting on rejected PR #${rejected_pr} (${reason}); now ${_mhs_target_label}"
+  fi
+  if declare -F tg_notify >/dev/null 2>&1; then
+    tg_notify "Orchestrator: healed issue #${issue_num}. Its ai:merged / merged state rested only on PR #${rejected_pr}, which did not merge into the issue's target branch (${reason}). Now ${_mhs_target_label}."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${rejected_pr}")" "WARNING" || true
+  fi
+  return 0
+}
+
 # _reconcile_merged_pr_issue — Tag an issue whose linked PR is merged
 # with ai:merged so close_merged_issues_sweep will close it on the
 # next cycle, and emit a one-line healing note + Telegram alert.  Used
@@ -19952,6 +20090,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     LINKED_PR_NUM=""
     PR_STATE="unknown"
     PR_MERGED="false"
+    # Evidence for _heal_rejected_merged_state (PR #5633 review round 2):
+    # the first merged candidate rejected for a branch or identity reason,
+    # whether any candidate read failed, and the issue's own open
+    # implementation PR (an automation head in this repository).
+    _rcl_rejected_merged_pr=""
+    _rcl_rejected_merged_reason=""
+    _rcl_candidate_fetch_failed="false"
+    _rcl_own_open_pr=""
     # Inspect every cross-reference so a later mention-only PR cannot mask an
     # earlier implementation PR. Prefer merged evidence, while retaining the
     # last verified unmerged implementation PR as a fallback truth signal.
@@ -19962,6 +20108,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       _linked_pr_candidate_json="$(_fetch_pr_json "${_linked_pr_candidate}")"
       if [ -z "${_linked_pr_candidate_json}" ] || [ "${_linked_pr_candidate_json}" = "{}" ]; then
         echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} reason=pr_fetch_failed" >&2
+        _rcl_candidate_fetch_failed="true"
         continue
       fi
       if ! _pr_json_is_issue_implementation_pr "${inum}" "${_linked_pr_candidate_json}"; then
@@ -19978,7 +20125,25 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       if [ "${_linked_pr_candidate_merged}" = "true" ] \
         && ! _pr_json_merged_into_issue_target "${inum}" "${_linked_pr_candidate_json}" "${CWS_INTEGRATION_BRANCH:-}"; then
         echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} base=$(_jq_field "${_linked_pr_candidate_json}" '.base.ref') head=$(_jq_field "${_linked_pr_candidate_json}" '.head.ref') head_repo=$(_jq_field "${_linked_pr_candidate_json}" '.head.repo.full_name') project_base=${CWS_INTEGRATION_BRANCH:-none} reason=${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}" >&2
+        # Heal evidence needs a well-formed rejection: a payload without a
+        # base ref proves nothing about where the PR merged, so it never
+        # un-merges an issue (fail closed).
+        case "${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}" in
+          non_target_base|unverified_identity|foreign_base_repo)
+            if [ -z "${_rcl_rejected_merged_pr}" ] \
+              && [ -n "$(_jq_field "${_linked_pr_candidate_json}" '.base.ref')" ]; then
+              _rcl_rejected_merged_pr="${_linked_pr_candidate}"
+              _rcl_rejected_merged_reason="${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}"
+            fi
+            ;;
+        esac
         continue
+      fi
+      if [ "${_linked_pr_candidate_state}" = "open" ] && [ -z "${_rcl_own_open_pr}" ] \
+        && [ "$(_jq_field "${_linked_pr_candidate_json}" '.head.repo.full_name')" = "${GITHUB_REPOSITORY}" ] \
+        && type pr_head_ref_is_issue_automation_branch >/dev/null 2>&1 \
+        && pr_head_ref_is_issue_automation_branch "${inum}" "$(_jq_field "${_linked_pr_candidate_json}" '.head.ref')"; then
+        _rcl_own_open_pr="${_linked_pr_candidate}"
       fi
       LINKED_PR_NUM="${_linked_pr_candidate}"
       PR_STATE="${_linked_pr_candidate_state:-unknown}"
@@ -19988,6 +20153,24 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
     done
     PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || echo "${PR_STATES_JSON}")"
+
+    # Merged state written before the #5618 rule could rest on a merge the
+    # rule now rejects; heal it (or alert) before labels are reconciled and
+    # check-wave-status reads them. Only when a merged link was rejected for
+    # a branch or identity reason, none passed, and every read succeeded.
+    if [ "${PR_MERGED}" != "true" ] && [ -n "${_rcl_rejected_merged_pr}" ] \
+      && [ "${_rcl_candidate_fetch_failed}" != "true" ]; then
+      _heal_rejected_merged_state "${inum}" "${ISSUE_STATE}" \
+        "$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')" \
+        "${_rcl_rejected_merged_pr}" "${_rcl_rejected_merged_reason}" "${_rcl_own_open_pr}"
+      if [ "${MERGED_HEAL_STATE_CHANGED}" = "true" ]; then
+        RECONCILE_LABELS_CHANGED=true
+      fi
+      if [ "$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')" != "${MERGED_HEAL_LABELS_JSON}" ]; then
+        RECONCILE_LABELS_CHANGED=true
+        LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${MERGED_HEAL_LABELS_JSON}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
+      fi
+    fi
 
     BEFORE_LABELS="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')"
     AFTER_LABELS="$(reconcile_managed_issue_labels "${inum}" "${BEFORE_LABELS}" "${ISSUE_STATE}" "${PR_STATE}" "${PR_MERGED}")"
