@@ -109,6 +109,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
 	"retire_pickup": False,
 }
 SMOKE_TIMEOUT_MINUTES = 20
+# The smoke job's checks after the CLI run: the deny-rule run (600 s) and the
+# GitHub MCP run (300 s) in claude-pool-worker.yml. The smoke job's limit
+# covers both on top of SMOKE_TIMEOUT_MINUTES.
+SMOKE_CHECKS_MINUTES = 15
 
 REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 WORKFLOW_FILE_RE = re.compile(r"^[A-Za-z0-9_.-]+\.ya?ml$")
@@ -418,14 +422,19 @@ def _known_peak(probe: dict[str, Any]) -> float | None:
 
 
 def _usable_at(probe: dict[str, Any], gate: float) -> int | None:
-	"""When a gated account drops back under the gate: the latest reset of the windows holding it."""
+	"""When a gated account drops back under the gate: the latest reset of the windows holding it.
+
+	When none of those windows reported its own reset (a rejected probe with no
+	reading over the gate, or a window over the gate without ``resetsAt``), the
+	event's top-level ``resetsAt`` stands in for it.
+	"""
 	resets: list[int] = []
 	for name in ("five_hour", "seven_day"):
 		utilization = probe.get(name)
 		reset = probe.get(f"{name}_resets_at")
 		if utilization is not None and utilization >= gate and reset is not None:
 			resets.append(reset)
-	if probe.get("status") == "rejected" and not resets and probe.get("resets_at") is not None:
+	if not resets and probe.get("resets_at") is not None:
 		resets.append(probe["resets_at"])
 	return max(resets) if resets else None
 
@@ -779,7 +788,9 @@ def _cmd_config(args: argparse.Namespace) -> int:
 	if args.item_type:
 		minutes = item_timeout_minutes(config, args.item_type)
 		config["item_timeout_minutes"] = minutes
-		config["job_timeout_minutes"] = job_timeout_minutes(minutes)
+		# A smoke job runs its checks after the CLI, so its limit covers both.
+		checks = SMOKE_CHECKS_MINUTES if args.item_type == "smoke" else 0
+		config["job_timeout_minutes"] = job_timeout_minutes(minutes + checks)
 	_print(config)
 	return 0
 

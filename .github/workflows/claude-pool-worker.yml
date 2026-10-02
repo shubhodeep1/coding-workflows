@@ -193,11 +193,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.select.outputs.job_timeout_minutes) }}
     steps:
+      # The commit the select job resolved pool_ref to, so selection, the
+      # prompt, and redaction all run the same pool code even if the ref
+      # moves during the run.
       - name: Check out the pool scripts (coding-workflows)
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ inputs.pool_ref }}
+          ref: ${{ needs.select.outputs.pool_sha }}
           path: pool
           fetch-depth: 1
           persist-credentials: false
@@ -389,11 +392,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # The select job's commit, like the work job; pool_ref only when the
+      # select job failed before it recorded one.
       - name: Check out the pool scripts (coding-workflows)
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ inputs.pool_ref }}
+          ref: ${{ needs.select.outputs.pool_sha || inputs.pool_ref }}
           path: pool
           fetch-depth: 1
           persist-credentials: false

@@ -1262,6 +1262,9 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   `payload_b64`; `push` to `claude/**` runs the `smoke` job), which calls it at
   `@main` with `secrets: inherit`. The reusable workflow's `pool_ref` input
   (default `main`) picks the coding-workflows ref its scripts are read from.
+  The select job resolves it once to `pool_sha`; the work and report jobs
+  check out that commit (report falls back to `pool_ref` only when select
+  failed before recording it), so one run never mixes two pool revisions.
 - **Run name (contract).** `pool <item_type> q<queue issue> a<attempt>`
   (`claude_pool.py run-name`, regex `^pool (issue|pr_fix|stage|smoke)
   q([0-9]{1,10}) a([0-9]{1,3})$`). The dispatcher keys a queue item's runs on
@@ -1297,7 +1300,8 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   `CLAUDE_FIXER_VERDICT_BOT_LOGIN` from the config; git identity
   `Claude <noreply@anthropic.com>`. The CLI runs under `timeout`
   (`timeout_minutes` per type, at most 350; the job limit adds 10, capped at
-  360). Exit 124/137 is a timeout. Before upload, `redact`, run from a fresh
+  360). A smoke run's CLI limit is 20 minutes and its job limit also covers
+  the 15 minutes of smoke checks after it (45). Exit 124/137 is a timeout. Before upload, `redact`, run from a fresh
   checkout of the select job's `pool_sha` (the worker can write `pool/`),
   replaces the token, the raw token, `GH_PAT`, the base64 `x-access-token:`
   form of each, each one's complete standalone base64 encoding (padded and

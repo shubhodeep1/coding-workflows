@@ -8,12 +8,12 @@
 - Activation: not started
 - Waiting on: PR #6100
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 2 stage (session_01LhNKV59QBGPCoQXBkDQrDH), ids in its report
+- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 3 stage (session_01Ayv4nfo5aPfb8xV99FmVR6), ids in its report
 - Last updated: 2026-10-02
-- Last note: review round 2 on PR #6100 (session_01LhNKV59QBGPCoQXBkDQrDH): 3 findings fixed (full standalone base64 redaction, one over-gate window gates the account, `docs/scripts-pending-removal.md` entry per AD-10), 0 rejected
+- Last note: review round 3 on PR #6100 (session_01Ayv4nfo5aPfb8xV99FmVR6): 3 findings fixed (work/report jobs check out the select job's `pool_sha`, `all_gated` falls back to the top-level `resetsAt`, smoke job limit covers the smoke checks), 0 rejected
 
 ## Phases
-1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 2; interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
+1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 3; interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
    - `scripts/claude_pool.py` [new]: `accounts`, `normalize`, `probe-parse`, `choose`, `prompt`, `classify`, `run-name`; also `config` (the workflow reads the pool config through it) and `redact` (AD-4)
    - `.github/workflows/claude-pool-worker.yml` [new]: `workflow_call`, jobs `select` / `work` / `report`
    - `.github/ai/claude_pool.json` [new]: `dispatch_types: []` (pool off)
@@ -71,6 +71,7 @@
 ## Lessons
 - [source:intervention] `ci.yml` does not run on PRs into a `claude/implement-plan-*` project branch, so a new workflow or script missing from `docs/INVENTORY.md` only fails at the final PR; run `tests/inventory_parity.py` locally before opening a phase PR that adds files. (files: docs/INVENTORY.md, tests/inventory_parity.py)
 - [source:intervention] A step that runs after an auto-mode Claude job must not execute code from a checkout that job could write; check the helper out again at a SHA recorded before the job ran, and gate any artifact upload on that step's success. (files: .github/workflows/claude-pool-worker.yml)
+- [source:intervention] In a multi-job workflow that reads scripts from a mutable ref, resolve the ref once in the first job, export its SHA as a job output, and check that SHA out in every later job (falling back to the ref only where the first job may not have run). (files: .github/workflows/claude-pool-worker.yml)
 - [source:plan-deviation] A new `.github/workflows/*.yml` file changes the auto-generated repo tree in agents.md; run `make generate` in the same PR, or the CI `make generate-check` drift step fails. (files: agents.md, tools/repo_tree/update_repo_tree.py)
 - [source:plan-deviation] CLAUDE.md §18.F wants a `docs/scripts-pending-removal.md` entry even for permanent scripts and workflows (`Removal trigger: permanent — review annually`); a plan line saying "no new entry; the scripts are permanent" does not exempt them. (files: docs/scripts-pending-removal.md)
 

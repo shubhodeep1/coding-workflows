@@ -263,6 +263,20 @@ def test_choose_all_gated_reports_the_earliest_usable_time():
 	assert verdict["resets_at"] == 500
 
 
+def test_choose_all_gated_falls_back_to_the_top_level_reset():
+	# Review round 3: an allowed probe gated by a window that reported no reset
+	# of its own still reports the event's top-level resetsAt.
+	over = {**_probe("A", 0.95, 0.10, five_reset=None, seven_reset=None), "resets_at": 400}
+	verdict = pool.choose_account([over], 0.9)
+	assert verdict["outcome"] == "all_gated"
+	assert verdict["resets_at"] == 400
+	# A window-specific reset still wins over the top-level one.
+	held = {**_probe("B", 0.95, 0.10, five_reset=700), "resets_at": 300}
+	assert pool.choose_account([held], 0.9)["resets_at"] == 700
+	# No reset anywhere stays unknown.
+	assert pool.choose_account([{**over, "resets_at": None}], 0.9)["resets_at"] is None
+
+
 def test_choose_skips_failed_probes():
 	probes = [_probe("A", None, None, error="auth_failed"), _probe("B", 0.7, 0.7), _probe("C", None, None, error="probe_failed")]
 	verdict = pool.choose_account(probes, 0.9)
@@ -562,7 +576,24 @@ def test_config_cli_adds_the_item_timeouts(tmp_path, capsys):
 	assert (config["item_timeout_minutes"], config["job_timeout_minutes"]) == (350, 360)
 	assert pool.main(["config", "--config", str(tmp_path / "none.json"), "--item-type", "smoke"]) == 0
 	config = json.loads(capsys.readouterr().out)
-	assert (config["item_timeout_minutes"], config["job_timeout_minutes"]) == (pool.SMOKE_TIMEOUT_MINUTES, pool.SMOKE_TIMEOUT_MINUTES + 10)
+	assert (config["item_timeout_minutes"], config["job_timeout_minutes"]) == (
+		pool.SMOKE_TIMEOUT_MINUTES,
+		pool.SMOKE_TIMEOUT_MINUTES + pool.SMOKE_CHECKS_MINUTES + 10,
+	)
+
+
+def test_smoke_job_limit_covers_the_cli_and_the_smoke_checks():
+	# Review round 3: the smoke checks run after the CLI, so the job limit must
+	# cover the CLI's limit (plus its kill-after) and both check runs.
+	steps = _workflow()["jobs"]["work"]["steps"]
+	smoke = next(step for step in steps if step.get("name", "").startswith("Smoke checks"))
+	check_seconds = sum(int(value) for value in re.findall(r"timeout (\d+) claude", smoke["run"]))
+	assert check_seconds == 900
+	assert check_seconds <= pool.SMOKE_CHECKS_MINUTES * 60
+	run_claude = next(step for step in steps if step.get("name") == "Run Claude")
+	assert "--kill-after=60" in run_claude["run"]
+	job_limit = pool.job_timeout_minutes(pool.SMOKE_TIMEOUT_MINUTES + pool.SMOKE_CHECKS_MINUTES)
+	assert job_limit * 60 > pool.SMOKE_TIMEOUT_MINUTES * 60 + 60 + check_seconds
 
 
 # --- redaction -------------------------------------------------------------
@@ -709,6 +740,20 @@ def test_redaction_runs_from_a_fresh_checkout_and_gates_the_upload():
 	assert "python3 pool-redact/scripts/claude_pool.py redact" in steps[redact]["run"]
 	assert steps[upload]["if"] == "always() && steps.redact.outcome == 'success'"
 	assert data["jobs"]["select"]["outputs"]["pool_sha"] == "${{ steps.config.outputs.pool_sha }}"
+
+
+def test_work_and_report_check_out_the_select_jobs_commit():
+	# Review round 3: pool_ref is resolved once, by the select job; the later
+	# jobs never re-resolve it, so one run never mixes two pool revisions.
+	data = _workflow()
+	refs = {}
+	for job in ("select", "work", "report"):
+		step = next(s for s in data["jobs"][job]["steps"] if s.get("name") == "Check out the pool scripts (coding-workflows)")
+		refs[job] = step["with"]["ref"]
+	assert refs["select"] == "${{ inputs.pool_ref }}"
+	assert refs["work"] == "${{ needs.select.outputs.pool_sha }}"
+	assert refs["report"] == "${{ needs.select.outputs.pool_sha || inputs.pool_ref }}"
+	assert "git -C pool rev-parse HEAD" in next(s for s in data["jobs"]["select"]["steps"] if s.get("id") == "config")["run"]
 
 
 def test_only_the_worker_workflow_names_pool_tokens():
