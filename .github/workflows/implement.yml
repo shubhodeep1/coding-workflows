@@ -1782,6 +1782,7 @@ jobs:
           echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
 
       - name: Claim /approved command
+        id: claim_approved_command
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1814,10 +1815,27 @@ jobs:
             --metadata-json "$(jq -cn --arg issue_url "${ISSUE_URL}" --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '{issue_url: $issue_url, run_url: $run_url}')")"
 
           memory_enabled="$(printf '%s' "${AI_MEMORY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
-          if [ -z "${claim_json}" ] && ! [[ "${memory_enabled}" =~ ^(1|true|yes|on)$ ]]; then
+          if ! [[ "${memory_enabled}" =~ ^(1|true|yes|on)$ ]]; then
             claimed="true"
+          elif printf '%s' "${claim_json}" | jq -e --arg run_id "${{ github.run_id }}" --arg run_attempt "${{ github.run_attempt }}" \
+            --arg issue_number "${ISSUE_NUMBER}" --arg comment_id "${APPROVAL_COMMENT_ID}" '
+              .ok == true and ((has("enabled") | not) or .enabled == true)
+              and .operation_result.claimed == true
+              and .operation_result.entry.status == "claimed"
+              and .operation_result.entry.workflow == "implement"
+              and .operation_result.entry.command == "approved"
+              and .operation_result.entry.run_id == $run_id
+              and (.operation_result.entry.run_attempt | type) == "number"
+              and (.operation_result.entry.run_attempt | tostring) == $run_attempt
+              and (.operation_result.entry.issue_number | type) == "number"
+              and (.operation_result.entry.issue_number | tostring) == $issue_number
+              and (.operation_result.entry.comment_id | type) == "number"
+              and (.operation_result.entry.comment_id | tostring) == $comment_id
+            ' >/dev/null 2>&1; then
+            claimed="true"
+            echo "owned=true" >> "$GITHUB_OUTPUT"
           else
-            claimed="$(printf '%s' "${claim_json}" | jq -r '.operation_result.claimed // .claimed // false')"
+            claimed="false"
           fi
           if [ "${claimed}" != "true" ]; then
             echo "Approval comment ${APPROVAL_COMMENT_ID} was not claimed for this run. Skipping duplicate implementation run."
@@ -4171,6 +4189,7 @@ jobs:
           bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"
 
       - name: Handle no-op implementation
+        id: handle_noop
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -4216,17 +4235,26 @@ jobs:
             gh_retry gh label create 'ai:closed' --repo "${REPO}" \
               --color '6b7280' --description 'Issue closed by automation (superseded, duplicated, or already complete)' \
               2>/dev/null || true
-            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+            success_noop_labeled=false
+            if gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
               --remove-label 'ai:done' --remove-label 'ai:implementing' \
               --remove-label 'ai:planning' --remove-label 'ai:clarification' \
               --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
-              --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || \
-            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
-              --add-label 'ai:closed' 2>/dev/null || true
-            gh_retry gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" \
-              --comment "${success_noop_body}" 2>/dev/null || \
-            gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
-              -f body="${success_noop_body}" >/dev/null 2>&1 || true
+              --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null; then
+              success_noop_labeled=true
+            elif gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --add-label 'ai:closed' 2>/dev/null; then
+              success_noop_labeled=true
+            fi
+            if gh_retry gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --comment "${success_noop_body}" 2>/dev/null; then
+              if [ "${success_noop_labeled}" = "true" ]; then
+                echo "confirmed_closure=true" >> "$GITHUB_OUTPUT"
+              fi
+            else
+              gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+                -f body="${success_noop_body}" >/dev/null 2>&1 || true
+            fi
             exit 0
           fi
 
@@ -4979,19 +5007,6 @@ jobs:
             --pr-number "${PR_NUMBER_STR}" \
             --source-refs "${{ steps.create_pr.outputs.pr_url }}"
 
-      - name: Complete /approved processed command
-        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
-        run: |
-          set -euo pipefail
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
-
-          memory_processed_command_complete \
-            --issue-number "${ISSUE_NUMBER}" \
-            --comment-id "${APPROVAL_COMMENT_ID}" \
-            --command approved \
-            --status completed \
-            --metadata-json "$(jq -c '.' "${PR_METADATA_FILE}")"
-
       - name: Finalize implementation task lineage as in_progress
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
@@ -5535,6 +5550,79 @@ jobs:
           fi
 
           PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/serena_stats_emit.py" "${serena_stat_args[@]}"
+
+      - name: Complete /approved processed command
+        if: always()
+        env:
+          OWNED_APPROVAL_CLAIM: ${{ steps.claim_approved_command.outputs.owned }}
+          IMPLEMENT_JOB_STATUS: ${{ job.status }}
+          IMPLEMENT_SKIP: ${{ env.SKIP_IMPLEMENT }}
+          IMPLEMENT_DID_COMMIT: ${{ steps.commit_changes.outputs.did_commit }}
+          IMPLEMENT_PR_STEP_OUTCOME: ${{ steps.create_pr.outcome }}
+          IMPLEMENT_PR_URL: ${{ steps.create_pr.outputs.pr_url }}
+          IMPLEMENT_NOOP_STEP_OUTCOME: ${{ steps.handle_noop.outcome }}
+          IMPLEMENT_CONFIRMED_CLOSURE: ${{ steps.handle_noop.outputs.confirmed_closure }}
+        run: |
+          set -euo pipefail
+          completion_attempted=false
+          completion_status=failed
+          outcome_evidence=unknown
+
+          if [ "${OWNED_APPROVAL_CLAIM}" != "true" ]; then
+            echo "IMPLEMENT_OUTCOME_V1 outcome=skipped evidence=unowned_claim completion_attempted=false"
+            exit 0
+          fi
+
+          # Only a URL from the successful PR step for this repository is
+          # evidence; neither a successful job nor an unverified URL is proof.
+          pr_path="${IMPLEMENT_PR_URL#https://github.com/${GITHUB_REPOSITORY}/pull/}"
+          if [ "${IMPLEMENT_JOB_STATUS}" = "success" ] && [ "${IMPLEMENT_SKIP}" != "true" ]; then
+            if [ "${IMPLEMENT_DID_COMMIT}" = "true" ] && [ "${IMPLEMENT_PR_STEP_OUTCOME}" = "success" ] && \
+              [ "${pr_path}" != "${IMPLEMENT_PR_URL}" ] && [[ "${pr_path}" =~ ^[1-9][0-9]*$ ]]; then
+              completion_status=completed
+              outcome_evidence=pr_confirmed
+            elif [ "${IMPLEMENT_DID_COMMIT}" = "false" ] && [ "${IMPLEMENT_NOOP_STEP_OUTCOME}" = "success" ] && \
+              [ "${IMPLEMENT_CONFIRMED_CLOSURE}" = "true" ]; then
+              completion_status=completed
+              outcome_evidence=already_satisfied_closed
+            elif [ "${IMPLEMENT_DID_COMMIT}" = "true" ]; then
+              outcome_evidence=pr_unverified
+            elif [ "${IMPLEMENT_DID_COMMIT}" = "false" ]; then
+              outcome_evidence=noop_unconfirmed
+            fi
+          elif [ "${IMPLEMENT_JOB_STATUS}" = "failure" ] || [ "${IMPLEMENT_JOB_STATUS}" = "cancelled" ]; then
+            outcome_evidence=job_${IMPLEMENT_JOB_STATUS}
+          fi
+
+          completion_metadata="$(jq -cn --arg outcome "${completion_status}" --arg evidence "${outcome_evidence}" \
+            '{implementation_outcome: $outcome, evidence: $evidence}')"
+          if [ "${outcome_evidence}" = "pr_confirmed" ]; then
+            # Preserve the existing PR metadata when the metadata step ran.
+            if [ -s "${PR_METADATA_FILE:-}" ] && jq -e --arg url "${IMPLEMENT_PR_URL}" \
+              'type == "object" and .pr_url == $url' "${PR_METADATA_FILE}" >/dev/null 2>&1; then
+              completion_metadata="$(jq -c '.' "${PR_METADATA_FILE}")"
+            else
+              completion_metadata="$(jq -cn --arg url "${IMPLEMENT_PR_URL}" \
+                '{implementation_outcome: "completed", evidence: "pr_confirmed", pr_url: $url}')"
+            fi
+          fi
+
+          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh" ]; then
+            if source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"; then
+              completion_attempted=true
+              memory_processed_command_complete \
+                --issue-number "${ISSUE_NUMBER}" \
+                --comment-id "${APPROVAL_COMMENT_ID}" \
+                --command approved \
+                --status "${completion_status}" \
+                --metadata-json "${completion_metadata}" || echo "::warning::Processed command completion unavailable (fail-open)."
+            else
+              echo "::warning::Memory helpers unavailable (fail-open)."
+            fi
+          else
+            echo "::warning::Memory helpers unavailable (fail-open)."
+          fi
+          echo "IMPLEMENT_OUTCOME_V1 outcome=${completion_status} evidence=${outcome_evidence} completion_attempted=${completion_attempted}"
 
       - name: Run workspace before_remove hook
         if: always() && env.SKIP_IMPLEMENT != 'true'
