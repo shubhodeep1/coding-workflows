@@ -20,8 +20,8 @@ Security pass: run
   - #4909 (loops): 2 issues;
   - #5139: 1 issue;
   - #4858: 1 issue.
-- **Prototype check.** The family key below was prototyped and run over the 60 issues' recorded tool, event, and example command. It yields 21 families.
-  - The 29 #4678 duplicates fall into one family, `python3` with a heredoc, apart from 5 edge variants (a `$(…)` inside, a denial, and a heredoc behind `grep` / `mkdir`).
+- **Prototype check.** The family key below was prototyped and run over the 60 issues' recorded tool, event, and example command. It yields 22 families with the final code (21 in the first prototype, which named a heredoc family by its receiving command, AD-10).
+  - #4678 and its 29 duplicates fall into one family, `python3` with a heredoc, apart from 5 edge variants: a `$(…)` inside, a denial, a heredoc behind `grep` or behind `mkdir`, and a `python3 -c`.
   - No family mixes causes that the operator kept apart. The one mixed family is `gh api --help` (#5413 and #5475, both open with the same cause).
   - The outage denials are grouped by the command they denied. #4750's own project removes them from filing, so they need nothing here.
 - **In-flight work on the same file.** #4750 (skip classifier-outage denials), #4858 (skip expected denies), #4867 (a command-class marker `ai:permission-prompt-class:v1` and a `duplicate-check` subcommand), and #5124 (credential masking, per-session reports) all edit `permission_prompts.py` on their project branches.
@@ -41,7 +41,7 @@ Security pass: run
 ## Goals
 
 1. Every pattern carries a **family**: its event, its tool, and, for `Bash`, the command and the constructs present in it.
-   - The command is the first command word (with its subcommand or script) after stripping env assignments, `export` of assignments, `cd …` prefixes, and `timeout <duration>`.
+   - The command is the first command word (with its subcommand or script) after stripping env assignments, `export` of variables, `cd …` prefixes, and `timeout <duration>`.
    - The constructs are a heredoc, a loop (`for` / `while` / `until`), and a `$(…)` substitution.
    - The family id is the first 12 hex digits of a SHA-1, like the signature.
 2. A new issue carries the unchanged `sig=` marker and a new `<!-- ai:permission-prompt-family:v1 family=<id> -->` marker, plus a readable `**Family:**` line.
@@ -151,7 +151,7 @@ Phase 1:
   - `legacy_issue_family` over a body `issue_body` generated;
   - `file_patterns` against the existing `FakeIssues` double, extended with `state_reason`.
 - **Twin overlay:** the full file also passes with the twin copied over the root script, which is the post-sync state.
-- **Data check** (recorded in the log, not a committed test): the 60 current issues map to about 21 families, with no family mixing causes the operator kept apart.
+- **Data check** (recorded in the log, not a committed test): the 60 current issues map to 22 families, with no family mixing causes the operator kept apart.
 
 ## Risks & Mitigations
 
@@ -178,13 +178,13 @@ Phase 1:
 
 ## Auto-decisions
 
-- AD-1 [plan, 2026-09-30] What is the family's command word? — Picked: A — the first command word plus its subcommand (tools whose shape keeps one: git, gh, npm, …) or its script basename (`python3 x.py`), as the shape keeps them. Alternatives: B — the first command word alone. Why: allow rules are keyed on command and subcommand or script, so this is "the same permission rule", and #5668's own table keeps `git status` and `git fetch` apart. It also stops a closed family issue from absorbing unrelated scripts. On the 60 issues it gives 21 families, with no harmful merges. Applied in: phase 1 PR. Status: pending review
+- AD-1 [plan, 2026-09-30] What is the family's command word? — Picked: A — the first command word plus its subcommand (tools whose shape keeps one: git, gh, npm, …) or its script basename (`python3 x.py`), as the shape keeps them. Alternatives: B — the first command word alone. Why: allow rules are keyed on command and subcommand or script, so this is "the same permission rule", and #5668's own table keeps `git status` and `git fetch` apart. It also stops a closed family issue from absorbing unrelated scripts. On the 60 issues it gives 22 families, with no harmful merges. Applied in: phase 1 PR. Status: pending review
 - AD-2 [plan, 2026-09-30] Where does the family id go? — Picked: A — a separate `<!-- ai:permission-prompt-family:v1 family=<id> -->` line, with the v1 `sig=` marker unchanged. Alternatives: B — a `family=` field inside the v1 marker, as #5668 proposes, with `MARKER_RE` widened. Why: under B, every exact `sig=… -->` reader stops recognising new issues: old checkouts in running sessions, and #4867's `duplicate-check`. A keeps them working (§6, §1 backward compatibility) and follows #4867's class-marker precedent, and the lookup still accepts both marker styles. Applied in: phase 1 PR. Status: pending review
 - AD-3 [plan, 2026-09-30] How are legacy issues (sig marker only) matched by family? — Picked: A — derive their family from the recorded tool, event, and example command (Bash only), in addition to signature matching. Alternatives: B — signature only. Why: with A, new variants land on the existing open issue (#4678) from the first run. B files one bootstrap duplicate per family, and those would need manual marker edits (§18). Applied in: phase 1 PR. Status: pending review
 - AD-4 [plan, 2026-09-30] Which issues can be a family's issue? — Picked: A — open first, then closed as `completed`, `not_planned`, or with no reason; never an issue closed as `duplicate`. Alternatives: B — any family issue, duplicates included. Why: #5668 names `completed` / `not_planned`. A duplicate points elsewhere, and a comment on it would hide a real new cause, such as a non-outage `git fetch` denial after the outage duplicates. Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-09-30] Which match wins, the exact signature or the family? — Picked: A — the exact signature, as today, then the family, then a new issue. Alternatives: B — an open family issue before a closed signature issue. Why: §5. The family only replaces the "new issue" branch, which is what #5668 asks for. Applied in: phase 1 PR. Status: pending review
 - AD-6 [plan, 2026-09-30] What is the family for non-Bash tools? — Picked: A — event, tool, and shape (the signature's granularity). Alternatives: B — event and tool only. Why: an `Edit` prompt under `.claude/**` is closed as not planned by design (§23.I), and it must not absorb `Edit` prompts elsewhere. Applied in: phase 1 PR. Status: pending review
-- AD-7 [plan, 2026-09-30] Which prefixes are stripped? — Picked: A — leading `NAME=value` words, segments that are only assignments or `export` of assignments, `cd …` followed by `&&` or `;`, and `timeout [options] <duration>`. Alternatives: B — only env words on the command, `timeout <n>`, and `cd … &&`. Why: `F=x && python3 <<` (#4905) and `export X && python3 <<` (#5470) are the same harmless variations #5668 targets. Applied in: phase 1 PR. Status: pending review
+- AD-7 [plan, 2026-09-30] Which prefixes are stripped? — Picked: A — leading `NAME=value` words, segments that are only assignments or `export` of variables, `cd …` followed by `&&` or `;`, and `timeout [options] <duration>`. Alternatives: B — only env words on the command, `timeout <n>`, and `cd … &&`. Why: `F=x && python3 <<` (#4905) and `export X && python3 <<` (#5470) are the same harmless variations #5668 targets. Applied in: phase 1 PR. Status: pending review
 - AD-8 [plan, 2026-09-30] Which script file do the tests load? — Picked: A — the `workflow-templates/.claude/` twin, with `test_template_parity` pinning the root copy. Alternatives: B — the root copy, with new tests red until the sync. Why: the `/implement-plan-claude` twin-first rule says tests of new `.claude/` behaviour read the twin. Applied in: phase 1 PR. Status: pending review
 - AD-9 [plan, 2026-09-30] What counts as a substitution? — Picked: A — `$(` outside single quotes, excluding `$((`. Alternatives: B — also backticks. Why: #5668 names `$(…)`. Arithmetic is not command substitution, and backticks are rare in the logs. Applied in: phase 1 PR. Status: pending review
 - AD-10 [plan, 2026-09-30] For a heredoc behind another command (`grep …; python3 - <<EOF`), which command names the family? — Picked: A — the first command word, as #5668 says. Alternatives: B — the command that receives the heredoc. Why: on the 60 issues B saves one family (21 vs 22) and misplaces #5202. A is simpler and literal. Applied in: phase 1 PR. Status: pending review

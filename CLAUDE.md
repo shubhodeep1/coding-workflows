@@ -1377,11 +1377,21 @@ serve that, both shipped to consumer repos through the `.claude/` sync:
   stage, `permission_prompts.py file` groups the log into patterns (event,
   tool, and command shape with values replaced by `*`) and:
   - in coding-workflows only (consumer `.claude/` copies are overwritten on
-    every sync, so fixes land here), opens one issue per new pattern,
-    labelled `ai:permission-prompt` and `ai:claude` so clarify routes it to
-    the Claude issue implementer, or comments on the issue that already
-    carries the pattern's `<!-- ai:permission-prompt:v1 sig=<sig> -->`
+    every sync, so fixes land here), opens one issue per new pattern
+    **family**, labelled `ai:permission-prompt` and `ai:claude` so clarify
+    routes it to the Claude issue implementer, or comments on the issue that
+    already carries the pattern's `<!-- ai:permission-prompt:v1 sig=<sig> -->`
     marker (a closed issue is commented on, not reopened);
+  - files a new shape of a known family as a comment on that family's issue,
+    never as a new issue (issue #5668). The family is the event, the tool,
+    and, for Bash, the first command word with the subcommand or script the
+    shape keeps, taken after env assignments and `export`, `cd …`, and
+    `timeout` prefixes, plus any heredoc, loop, or `$(…)` in the command.
+    The family's issue is the oldest open one, else the oldest closed as
+    completed or not planned (not reopened); one closed as a duplicate never
+    is. A new issue also carries
+    `<!-- ai:permission-prompt-family:v1 family=<id> -->`, and an issue filed
+    before families gets its family from its recorded example;
   - elsewhere, files nothing and only reports.
 
   Issue text is untrusted data: the command is truncated to 2,000
