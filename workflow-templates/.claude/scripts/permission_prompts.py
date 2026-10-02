@@ -82,6 +82,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 
 _CHECKER_PATH = Path(__file__).resolve().with_name("check_in_status.py")
@@ -356,6 +357,11 @@ def _collapse_substitutions(text: str) -> str:
 	return "".join(output)
 
 
+# Characters after which a `#` starts a word, and so a comment. A `)` is not one: after the `)` that closes a `$(…)` the
+# word goes on (`X=$(pwd)#suffix`), so a `#` there is literal (PR #5697 review round 10).
+_COMMENT_WORD_STARTS = " \t\n;&|("
+
+
 def _substitution_end(text: str, open_index: int) -> int | None:
 	"""Index just past the `)` that closes the `(` at `open_index`, skipping quoted text, escapes, and a `#` comment
 	that starts a word (to the end of its line, as Bash does inside `$(…)`); None when unclosed."""
@@ -377,7 +383,7 @@ def _substitution_end(text: str, open_index: int) -> int | None:
 		elif char == '"' and not single_quoted:
 			double_quoted = not double_quoted
 		elif not single_quoted and not double_quoted:
-			if char == "#" and previous in " \t\n;&|()":
+			if char == "#" and previous in _COMMENT_WORD_STARTS:
 				line_end = text.find("\n", index)
 				if line_end == -1:
 					return None
@@ -469,7 +475,7 @@ def _has_command_substitution(text: str) -> bool:
 			single_quoted = not single_quoted
 		elif char == '"' and not single_quoted:
 			double_quoted = not double_quoted
-		elif char == "#" and not single_quoted and not double_quoted and previous in " \t\n;&|()":
+		elif char == "#" and not single_quoted and not double_quoted and previous in _COMMENT_WORD_STARTS:
 			line_end = text.find("\n", index)
 			if line_end == -1:
 				return False
@@ -529,7 +535,7 @@ def _strip_shell_comments(text: str) -> str:
 			single_quoted = not single_quoted
 		elif char == '"' and not single_quoted:
 			double_quoted = not double_quoted
-		elif char == "#" and not single_quoted and not double_quoted and previous in " \t\n;&|()":
+		elif char == "#" and not single_quoted and not double_quoted and previous in _COMMENT_WORD_STARTS:
 			line_end = text.find("\n", index)
 			if line_end == -1:
 				break
@@ -694,6 +700,9 @@ def _family_code_span(text: str) -> str:
 	"""Untrusted text (a command shape, a family label) as a one-line Markdown code span: line breaks become spaces, and
 	the fence is longer than any backtick run inside, so the text cannot end the span (PR #5697 review round 7)."""
 	text = " ".join(text.splitlines())
+	# Invisible format characters (zero-width, bidirectional controls) are shown as escapes, so the span reads as the
+	# command really is (PR #5697 review round 10).
+	text = "".join(f"\\u{ord(char):04x}" if unicodedata.category(char) == "Cf" else char for char in text)
 	longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
 	fence = "`" * (longest + 1)
 	pad = " " if text.startswith("`") or text.endswith("`") else ""

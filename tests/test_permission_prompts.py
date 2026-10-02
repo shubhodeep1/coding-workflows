@@ -847,3 +847,15 @@ def test_a_legacy_body_with_crlf_line_ends_keeps_its_family():
 	legacy = _legacy_body("git fetch origin main")
 	assert pp.legacy_issue_family(legacy.replace("\n", "\r\n")) == pp.legacy_issue_family(legacy) == _bash_family("git fetch origin main")
 
+
+def test_a_hash_after_a_closing_substitution_is_not_a_comment():
+	"""PR #5697 review round 10: after the `)` that closes a `$(…)` the word goes on, so `#suffix` is literal and the
+	command after `;` keeps its family."""
+	assert pp.command_family("X=$(pwd)#suffix; git status") == ("git status", ("subst",))
+	assert pp.command_family("echo $(date)#$(id)")[1] == ("subst",)
+
+
+def test_invisible_format_characters_are_escaped_in_code_spans():
+	"""PR #5697 review round 10: zero-width and bidirectional control characters are shown as escapes."""
+	assert pp._family_code_span("a\u202eb\u200bc") == "`a\\u202eb\\u200bc`"
+
