@@ -457,7 +457,10 @@ def _has_command_substitution(text: str) -> bool:
 	while index < len(text):
 		char = text[index]
 		if char == "\\" and not single_quoted:
-			previous = "\\"
+			if text[index + 1 : index + 2] != "\n":
+				# Bash removes a backslash-newline, so it leaves `previous` as it was (`x \<newline># $(date)` is still a
+				# comment); any other escaped character continues the word (PR #5697 review round 8).
+				previous = "\\"
 			index += 2
 			continue
 		if char == "'" and not double_quoted:

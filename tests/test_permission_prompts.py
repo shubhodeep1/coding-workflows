@@ -800,6 +800,10 @@ def test_a_substitution_in_a_comment_is_not_a_construct():
 	assert pp.command_family("curl https://a.b\n# $(date)\ngit status")[1] == ()
 	assert pp.command_family('echo "#$(date)"')[1] == ("subst",)
 	assert pp.command_family("echo a#$(date)")[1] == ("subst",)
+	# Bash removes a backslash-newline, so a `#` after one still starts a comment when a space came before it, and
+	# does not when the word runs on (PR #5697 review round 8).
+	assert pp.command_family("curl https://a.b \\\n# $(date)")[1] == ()
+	assert pp.command_family("echo a\\\n#$(date)")[1] == ("subst",)
 
 
 def test_an_unclosed_substitution_has_no_command_family():
