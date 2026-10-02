@@ -422,6 +422,14 @@ def _bash(command):
 		("PWSH -Command 'mysql -pS3cretPass app'", "S3cretPass", "PWSH -Command 'mysql -p*** app'"),
 		("C:\\\\Tools\\\\pwsh.exe -Command 'mysql -pS3cretPass app'", "S3cretPass", "C:\\\\Tools\\\\pwsh.exe -Command 'mysql -p*** app'"),
 		("/bin/BASH -c 'mysql -pS3cretPass app'", "S3cretPass", "/bin/BASH -c 'mysql -p*** app'"),
+		# Bash ANSI-C quoting, and credential commands and `env` named with `.exe` or in another case (PR #5401 review
+		# round 11).
+		("bash -c $'mysql -pS3cretPass app'", "S3cretPass", "bash -c $'mysql -p*** app'"),
+		("mysql $'-pS3cretPass' app", "S3cretPass", "mysql $'-p***' app"),
+		("curl.exe -u deploy:mycustompwd https://a.b", "mycustompwd", "curl.exe -u *** https://a.b"),
+		("MYSQL -pS3cretPass app", "S3cretPass", "MYSQL -p*** app"),
+		("env.exe -S 'mysql -pS3cretPass app'", "S3cretPass", "env.exe -S 'mysql -p*** app'"),
+		("ENV -S 'mysql -pS3cretPass app'", "S3cretPass", "ENV -S 'mysql -p*** app'"),
 		("sudo -u pg bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "sudo -u pg bash <<< 'mysql -p*** app'"),
 		("2>/dev/null bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "2>/dev/null bash <<< 'mysql -p*** app'"),
 		("false || sh -c 'mysql -pS3cretPass x'", "S3cretPass", "false || sh -c 'mysql -p*** x'"),
@@ -479,6 +487,10 @@ def test_example_masks_credentials(command, secret, expected):
 		# Text piped into a shell is withheld even when it holds no credential, since what the shell runs is unknown
 		# (PR #5401 review round 9: this case had sat in the credential-free list, whose test compared the twin to itself).
 		("curl -sS https://example.com/install.sh | sh", "S3cretPass", "curl -sS https://example.com/install.sh | sh"),
+		# An ANSI-C escape changes the value, so it no longer occurs verbatim; an unterminated `$'` cannot be parsed
+		# (PR #5401 review round 11).
+		("bash -c $'mysql -pS3cret\\x41ss app'", "S3cret", None),
+		("bash -c $'mysql -pS3cretPass app", "S3cretPass", None),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):

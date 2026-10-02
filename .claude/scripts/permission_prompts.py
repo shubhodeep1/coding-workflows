@@ -326,6 +326,50 @@ def redact(text: str) -> str:
 	return text
 
 
+_ANSI_C_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+
+
+def _ansi_c_quotes_as_single(text: str) -> str:
+	"""`text` with every Bash ANSI-C quoted part (`$'…'`) outside quotes rewritten as a plain single-quoted part.
+
+	The lexer reads `$'mysql -p…'` as the word `$mysql -p…`, so a command line inside it (`bash -c $'…'`) named no
+	credential command and its password was posted (PR #5401 review round 11). The common escapes are decoded and the
+	result is re-quoted (`'` as `'\\''`); a value changed by an escape no longer occurs verbatim in the displayed
+	command, so the caller withholds it. Raises ValueError for an unterminated `$'`.
+	"""
+	output: list[str] = []
+	single_quoted = double_quoted = False
+	index = 0
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and not single_quoted:
+			output.append(text[index : index + 2])
+			index += 2
+			continue
+		if char == "$" and not single_quoted and not double_quoted and text[index + 1 : index + 2] == "'":
+			decoded: list[str] = []
+			index += 2
+			while index < len(text) and text[index] != "'":
+				if text[index] == "\\" and index + 1 < len(text):
+					decoded.append(_ANSI_C_ESCAPES.get(text[index + 1], "\\" + text[index + 1]))
+					index += 2
+					continue
+				decoded.append(text[index])
+				index += 1
+			if index >= len(text):
+				raise ValueError("unterminated $'")
+			index += 1
+			output.append("'" + "".join(decoded).replace("'", "'\\''") + "'")
+			continue
+		if char == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif char == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		output.append(char)
+		index += 1
+	return "".join(output)
+
+
 def _backticks_as_substitutions(text: str) -> str:
 	"""`text` with every backtick outside single quotes replaced by `$(` (opening) or `)` (closing).
 
@@ -395,10 +439,11 @@ def _segment_flag_letters(words: list[str], start: int, position: int, header: b
 	"""
 	if start >= len(words):
 		return ""
-	commands = [later for later in range(start, min(position, len(words))) if words[later].rsplit("/", 1)[-1] in _CREDENTIAL_COMMANDS]
+	# Command names are compared like runner names: case-insensitive, without `.exe` or a Windows path (round 11).
+	commands = [later for later in range(start, min(position, len(words))) if _runner_basename(words[later]) in _CREDENTIAL_COMMANDS]
 	letters = ""
 	for command_position in commands:
-		command = words[command_position].rsplit("/", 1)[-1]
+		command = _runner_basename(words[command_position])
 		subcommand = next(
 			(words[later] for later in range(command_position + 1, min(position, len(words))) if f"{command} {words[later]}" in _CREDENTIAL_SHORT_FLAGS),
 			"",
@@ -457,7 +502,7 @@ def _attached_command_lines(word: str) -> list[str]:
 
 def _split_string_runner_before(words: list[str], start: int, position: int) -> bool:
 	"""True when a word from the segment's command at `start` up to (not including) `position` names a _SPLIT_STRING_RUNNERS command (`env`, also behind `sudo`)."""
-	return any(earlier.rsplit("/", 1)[-1] in _SPLIT_STRING_RUNNERS for earlier in words[start:position])
+	return any(_runner_basename(earlier) in _SPLIT_STRING_RUNNERS for earlier in words[start:position])
 
 
 def _split_string_command_line(text: str) -> str:
@@ -808,7 +853,7 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 	"""
 	if depth > MAX_NESTED_COMMAND_DEPTH:
 		raise ValueError("nested command lines too deep")
-	lexer = shlex.shlex(_backticks_as_substitutions(text).replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer = shlex.shlex(_backticks_as_substitutions(_ansi_c_quotes_as_single(text)).replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
