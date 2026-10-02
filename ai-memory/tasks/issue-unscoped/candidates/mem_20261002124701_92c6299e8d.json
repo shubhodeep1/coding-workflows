@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:449 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `report()` returns `allow_rule` without redaction, so `report` and `file` can print credential-shaped values in JSON output.\n  WHY: The issue/comment rendering path redacts the value, but the JSON output does not; reviewers disagreed on severity (NIT vs MAJOR), so this uses the highest reported severity.\n- workflow-templates/.claude/scripts/permission_prompts.py:445-450 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: `report()` returns `allow_rule` without redaction, so `report` and `file` can print credential-shaped values in JSON output.\n  WHY: The issue/comment rendering path redacts the value, but the JSON output does not.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py:445-450; workflow-templates/.claude/scripts/permission_prompts.py:445-450 | severity=low | confidence=4\n  File: .claude/scripts/permission_prompts.py (and byte-identical workflow-templates/.claude/scripts/permission_prompts.py)\n  Line or code reference: `report()` at lines 445-450, printed by `main()` at line 664 (report command) and line 670 (file command via `file_patterns` at line 607)\n  PROBLEM: `report()` returns `allow_rule` as a raw string without applying `redact()`, so the JSON output of both `report` and `file` can expose a token-like string.\n  WHY: The issue/comment body redacts `allow_rule`, but the stdout JSON does not, allowing a matching credential-bearing rule to reach the session transcript.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/permission_prompts.py:445-450; workflow-templates/.claude/scripts/permission_prompts.py:445-450 | severity=low | confidence=4\n  File: .claude/scripts/permission_prompts.py; workflow-templates/.claude/scripts/permission_prompts.py\n  Line or code reference: report() at line 445-450 returning `allow_rule` unredacted; main() at line 664 printing `json.dumps(report(log_dir))`; file_patterns() at line 607 building `summary = report(log_dir)` and main() at line 670 printing `json.dumps(summary)`.\n  PROBLEM: The `report()` output returns `allow_rule` raw, so the JSON printed by `report` and `file` can expose a bearer token.\n  WHY: The value is redacted when rendered in issue/comment bodies but not in the stdout JSON, which can reach workflow logs and stage reports.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py:449 | severity=high | confidence=5\n  File: .claude/scripts/permission_prompts.py\n  Line or code reference: `report()` line 449; `main()` lines 663\u2013670\n  PROBLEM: The new `allow_rule` value is returned without redaction, and both `report` and `file` print the resulting JSON.\n  WHY: A matching rule containing a literal credential, such as the bearer-token rule shape exercised in `tests/test_permission_prompts.py:565`, is emitted to session output when `permission_prompts.py report` or `file` runs.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py:445-450 | severity=low | confidence=4\n  File: workflow-templates/.claude/scripts/permission_prompts.py\n  Line or code reference: `report()` function, lines 445-450 \u2014 the `allow_rule` key is returned raw from the pattern dict without passing through `redact()`.\n  PROBLEM: `report()` returns the raw allow-rule string in its JSON output, so the `file` dry-run summary can expose a credential in stdout.\n  WHY: The issue body redacts the rule, but `report` and `file --dry-run` print the raw value to stdout, which flows into workflow logs.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "129d66d7b1f1798b86cd18bf6d032be7951374fb28d3a2041cb11e383bab89ec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5918,
+    "run_id": "37005129685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37005129685",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002124701_92c6299e8d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5918,
+    "run_id": "37005129685"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T12:47:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
