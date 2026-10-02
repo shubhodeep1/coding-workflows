@@ -179,16 +179,27 @@ def test_judge_notifies_when_it_ends_blocked_without_a_choice(judge):
 
 def test_judge_close_checks_the_head_ref_before_closing(judge):
 	# The PR numbers come from the editable progress log, so the judge
-	# closes only PRs whose head proves they belong to this project, and
-	# reports the rest instead of stopping (Copilot thread 4157744323).
+	# closes only PRs whose head and base prove they belong to this project,
+	# and reports the rest instead of stopping (Copilot thread 4157744323).
+	# A bare `claude/implement-plan-<slug>-` prefix is not enough: project
+	# `foo-bar`'s branches start with `claude/implement-plan-foo-` too.
 	close = judge[judge.index("**`close`** → close the project yourself"):judge.index("9. **Report**")]
-	assert "Close a PR only when that same read shows it is this project's: its head ref is exactly `claude/implement-plan-<slug>` or starts with `claude/implement-plan-<slug>-`, and its head repository (`head.repo.full_name`) is this repository." in close
-	assert "A PR that fails this check is not closed: go on with the rest, and list its number and head ref in the report so a human can decide." in close
+	assert "Its head repository (`head.repo.full_name`) must be this repository" in close
+	assert "(a) the final PR: head exactly `claude/implement-plan-<slug>`;" in close
+	assert "(b) project mode, any other PR: head starts with `claude/implement-plan-<slug>-` and base is exactly `claude/implement-plan-<slug>`;" in close
+	assert "(c) a PR whose base is the default branch (project mode: only an activation fix; legacy mode: every PR): head is exactly `claude/implement-plan-<slug>-<kind>`, optionally followed by a `-<digits>` collision suffix" in close
+	for kind in ("`activation-fix-<k>`", "`phase-<n>`", "`complete`", "`conformance-fix-<k>`", "`conformance-fix-budget-<n>`", "`validation-fix-<cycle>`", "`descope-<n>`"):
+		assert kind in close, kind
+	assert "A plain prefix is not enough: another project's slug can start with this one's (`foo` and `foo-bar`)" in close
+	assert "A PR that fails this check is not closed: go on with the rest, and list its number, head ref, and base ref in the report so a human can decide." in close
+	# The old prefix-only rule is gone.
+	assert "its head ref is exactly `claude/implement-plan-<slug>` or starts with `claude/implement-plan-<slug>-`, and its head repository" not in close
 	# The check reuses the state read, so it runs before any close call.
 	assert close.index("Read each one's state first") < close.index("Close a PR only when that same read shows it is this project's")
 	claude = _flat(CLAUDE_MD)
 	section = claude.split("### G) Escalation Judge", 1)[1].split("## FINAL REMINDER", 1)[0]
-	assert "it closes a PR from the log only when its head ref is `claude/implement-plan-<slug>` or starts with `claude/implement-plan-<slug>-` and its head is in this repository, and lists any other PR in its report instead" in section
+	assert "it closes a PR from the log only when its head is in this repository and its head and base refs prove it is this project's" in section
+	assert "so a project whose slug starts with this one's is never matched, and it lists any other PR in its report instead" in section
 
 
 def test_judge_close_report_says_to_reopen_the_issue_first(judge):
