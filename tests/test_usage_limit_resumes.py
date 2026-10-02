@@ -254,6 +254,7 @@ def test_unanswered_request_in_the_external_metadata_copy_is_skipped(tmp_path, c
 		"wait for the usage limit to reset, then resume",
 		"Usage limit resets at 11am (UTC); try again then",
 		"resend the last message after the session limit resets",
+		"Retry after the reset",
 		"   ",
 	],
 )
@@ -283,6 +284,11 @@ def test_text_signal_with_only_a_limit_wait_still_resumes(tmp_path, capsys, need
 		"Usage limit reached. Please retry the request now.",
 		"Wait for the limit. Please retry now.",
 		"Usage limit reached. Please retry the request.",
+		# PR #6112 review round 3: a deferral in another sentence, "retry until", or a negated wait
+		"Usage limit reached. Please retry the request. The limit resets later.",
+		"Retry until the usage limit resets",
+		"Usage limit reached. Retry the request, not waiting until the limit resets.",
+		"Wait for the limit. Please retry the request.",
 	],
 )
 def test_a_limit_wait_that_also_asks_a_human_is_skipped(tmp_path, capsys, needs_action):
@@ -349,6 +355,27 @@ def test_permission_prompt_still_wins_over_needs_input(tmp_path, capsys):
 		("Usage limit reached. Retry the request after it resets.", True),
 		("Wait for the limit. Then retry the request.", True),
 		("Usage limit reached. Please try again later.", True),
+		# PR #6112 review round 3: the deferral must sit in the retry's own sentence, in a closed form
+		("Usage limit reached. Please retry the request. The limit resets later.", False),
+		("Retry until the usage limit resets", False),
+		("Usage limit reached. Retry the request, not waiting until the limit resets.", False),
+		("Usage limit reached. Retry the request, not waiting until the reset.", False),
+		("Not waiting until the limit resets", False),
+		("Do not wait for the limit to reset", False),
+		("Wait for the limit. Please retry the request.", False),
+		("Usage limit reached. Message the session at 5pm.", False),
+		("Usage limit reached. Reset the session.", False),
+		("Usage limit reached. Limit the requests.", False),
+		("Usage limit reached. Then retry.", False),
+		("Retry after 5pm", False),
+		("retry the request then wait for the limit", False),
+		("Retry after the reset", True),
+		("Retry the request after the usage limit reset", True),
+		("retry when the limit resets", True),
+		("Once the limit resets, retry", True),
+		("Wait until the usage limit resets at 5pm UTC and then try again", True),
+		("The limit resets at 5pm. Then retry the request.", True),
+		("Rate limited until 5pm", True),
 	],
 )
 def test_is_limit_wait(text, expected):

@@ -330,8 +330,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
       non-empty `needs_action` in either summary copy that is not only a
       wait for the limit; a limit wait is made only of limit-wait words
       (`LIMIT_WAIT_VOCABULARY`), so any other word such as merge or push
-      makes it a request, and a retry, resend, or resume counts only when
-      the text defers it to the reset; a Q-ID, `?`, or reply / answer / decide / confirm
+      makes it a request, and every sentence must match one of the closed
+      limit-wait forms (the error or status text, the reset, a wait, a retry
+      tied to the reset in its own sentence, or "then retry" right after a
+      wait or reset sentence), so a deferral in another sentence, a "retry
+      until", or a negated wait makes it a request; a Q-ID, `?`, or reply / answer / decide / confirm
       / choose / approve is never a limit wait; on the `rate_limit_info`
       signal a `need_input` category too), `not_reset` (its own limit still
       in the future), `wake_pending` (a pending `Resume after usage limit`
