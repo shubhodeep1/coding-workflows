@@ -56,7 +56,10 @@ Subcommands:
       the log with its Edit tool. `--why-file` reads the rationale from a
       UTF-8 file, so text drawn from failure evidence never passes through
       shell quoting (a `$(...)` or backtick in a double-quoted `--why` would
-      run before this script sees it). A `budget` or `descope` already used for
+      run before this script sees it). A reason holding `<!--` or `-->` is
+      refused: it is posted in the judge's escalation comment, and an HTML
+      comment quoted from evidence could read as an escalation marker. A
+      `budget` or `descope` already used for
       that stop and fingerprint is refused, and so is a PR-scoped stop
       whose reason does not start with `PR #<N>: ` (the intervention cap
       counts an entry only for the PR its `why` names). The evidence the
@@ -78,7 +81,8 @@ stop id, a malformed fingerprint or evidence, a PR-scoped stop without
 `pr` or without the `PR #<N>: ` prefix on its reason, a PR-scoped
 `record` without evidence or whose reason names another PR than the
 evidence, `record` evidence that does not give `--fingerprint`, not
-exactly one readable `--why` / `--why-file`, an `--evidence-file` or
+exactly one readable `--why` / `--why-file`, a reason holding `<!--` or
+`-->`, an `--evidence-file` or
 `--why-file` outside the session scratchpad, a used choice); 2 when the
 log cannot be read or an `## Escalations` line is malformed (a line that
 starts `- ` but does not match the format, a date that is not a real
@@ -132,6 +136,10 @@ PR_NUMBER_RE = re.compile(r"^#?([1-9][0-9]*)$")
 # A PR-scoped entry's `why` names its PR first, so the intervention cap of
 # one PR counts only the rounds granted for that PR.
 WHY_PR_PREFIX_RE = re.compile(r"^PR #([1-9][0-9]*): \S")
+# HTML comment delimiters a reason must not hold: the reason is posted in the
+# judge's escalation comment, whose last line is its `ai:claude-escalation:v1`
+# marker, and evidence the reason quotes could otherwise carry a forged one.
+WHY_FORBIDDEN_DELIMITERS = ("<!--", "-->")
 
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{12}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -317,6 +325,11 @@ def record_line(
 	why = " ".join(why.split())
 	if not why:
 		raise UsageError("--why must not be empty")
+	# The judge posts the reason in its escalation comment, and a later judge
+	# reads `ai:claude-escalation:v1` markers back from such comments: an HTML
+	# comment repeated from failure evidence must never reach it.
+	if any(delimiter in why for delimiter in WHY_FORBIDDEN_DELIMITERS):
+		raise UsageError(f"--why must not contain {' or '.join(WHY_FORBIDDEN_DELIMITERS)}: write the reason in your own words")
 	why_pr = WHY_PR_PREFIX_RE.match(why)
 	if stop in PR_SCOPED_STOP_IDS and not why_pr:
 		raise UsageError(f"stop {stop!r} is about one PR: --why must start with 'PR #<N>: ', got {why!r}")
