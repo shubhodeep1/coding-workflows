@@ -5024,6 +5024,112 @@ def _run_reviewer_loop_guard_function(function_names: list[str], script_body: st
 	)
 
 
+def _run_shared_pr_state_workers(runtime_dir: Path, workers: int = 1) -> subprocess.CompletedProcess[str]:
+	reviewers_text = _reviewers_text()
+	definitions = []
+	for function_name in ("reviewer_pr_state_lookup", "reviewer_shared_pr_state"):
+		match = re.search(rf"(?ms)^{function_name}\(\) \{{\n.*?^\}}\n", reviewers_text)
+		assert match, function_name
+		definitions.append(match.group(0))
+	script = "\n".join(definitions) + """
+gh_retry() { "$@"; }
+gh() {
+	printf 'call\\n' >> "${MOCK_PR_CALLS}"
+	if [ -f "${MOCK_PR_FAILURE}" ]; then return 1; fi
+	cat "${MOCK_PR_STATE}"
+}
+for ((worker_idx=0; worker_idx<MOCK_PR_WORKERS; worker_idx++)); do
+	reviewer_shared_pr_state &
+done
+wait
+"""
+	return subprocess.run(
+		["bash", "-c", "set -euo pipefail\n" + script],
+		text=True,
+		capture_output=True,
+		check=False,
+		env={
+			**os.environ,
+			"RUNTIME_DIR": str(runtime_dir),
+			"REPOSITORY": "owner/repo",
+			"PR_NUMBER": "123",
+			"MOCK_PR_CALLS": str(runtime_dir / "calls.txt"),
+			"MOCK_PR_STATE": str(runtime_dir / "state.txt"),
+			"MOCK_PR_FAILURE": str(runtime_dir / "failure"),
+			"MOCK_PR_WORKERS": str(workers),
+		},
+	)
+
+
+def test_reviewer_pr_state_poll_shares_fresh_result_and_refreshes_expired_cache(tmp_path: Path) -> None:
+	state_file = tmp_path / "state.txt"
+	calls_file = tmp_path / "calls.txt"
+	cache_file = tmp_path / "reviewer_pr_state_observation.txt"
+	state_file.write_text("open\n", encoding="utf-8")
+	first = _run_shared_pr_state_workers(tmp_path, workers=8)
+	assert first.returncode == 0, first.stderr
+	assert first.stdout.splitlines() == ["open"] * 8
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 1
+
+	# A fresh open does not mask a closure forever; the next expired refresh
+	# detects it and all concurrent workers see the same closed observation.
+	state_file.write_text("closed\n", encoding="utf-8")
+	fresh = _run_shared_pr_state_workers(tmp_path, workers=4)
+	assert fresh.returncode == 0, fresh.stderr
+	assert fresh.stdout.splitlines() == ["open"] * 4
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 1
+	cache_file.write_text(f"owner/repo|123|open|{int(time.time()) - 31}\n", encoding="utf-8")
+	expired = _run_shared_pr_state_workers(tmp_path, workers=8)
+	assert expired.returncode == 0, expired.stderr
+	assert expired.stdout.splitlines() == ["closed"] * 8
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 2
+	assert "|closed|" in cache_file.read_text(encoding="utf-8")
+	watchdog = _reviewers_text()
+	assert 'pr_state="$(reviewer_shared_pr_state)"' in watchdog
+	assert "printf 'pr_closed_api' > \"${wd_reason_file}\"" in watchdog
+	assert 'touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"' in watchdog
+	assert 'echo "PR_CLOSED=true" >> "$GITHUB_ENV"' in watchdog
+
+
+def test_reviewer_pr_state_poll_falls_back_on_invalid_cache_api_and_lock(tmp_path: Path) -> None:
+	state_file = tmp_path / "state.txt"
+	calls_file = tmp_path / "calls.txt"
+	cache_file = tmp_path / "reviewer_pr_state_observation.txt"
+	state_file.write_text("merged\n", encoding="utf-8")
+	for bad_record in ("corrupt\n", f"owner/other|123|open|{int(time.time())}\n", f"owner/repo|123|open|{int(time.time()) + 60}\n"):
+		cache_file.write_text(bad_record, encoding="utf-8")
+		result = _run_shared_pr_state_workers(tmp_path)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.strip() == "merged"
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 3
+
+	cache_file.write_text(f"owner/repo|123|closed|{int(time.time()) - 60}\n", encoding="utf-8")
+	(tmp_path / "failure").touch()
+	failed = _run_shared_pr_state_workers(tmp_path)
+	assert failed.returncode == 0, failed.stderr
+	assert failed.stdout.strip() == "open"
+	assert "|closed|" in cache_file.read_text(encoding="utf-8"), "an API failure must not publish open"
+	(tmp_path / "failure").unlink()
+	closed = _run_shared_pr_state_workers(tmp_path)
+	assert closed.returncode == 0, closed.stderr
+	assert closed.stdout.strip() == "merged"
+
+	cache_file.unlink()
+	state_file.write_text("bogus\n", encoding="utf-8")
+	invalid_response = _run_shared_pr_state_workers(tmp_path)
+	assert invalid_response.returncode == 0, invalid_response.stderr
+	assert invalid_response.stdout.strip() == "open"
+	assert not cache_file.exists()
+	state_file.write_text("merged\n", encoding="utf-8")
+	(tmp_path / "reviewer_pr_state_observation.lock").unlink()
+	(tmp_path / "reviewer_pr_state_observation.lock").mkdir()
+	lock_failed = _run_shared_pr_state_workers(tmp_path)
+	assert lock_failed.returncode == 0, lock_failed.stderr
+	assert lock_failed.stdout.strip() == "merged"
+	assert not cache_file.exists()
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 7
+
+
 def _reviewer_tool_use_event(tool: str, tool_input: dict[str, object]) -> str:
 	# Shape of an OpenCode 1.18.23 `run --format json` completed tool call.
 	return json.dumps(

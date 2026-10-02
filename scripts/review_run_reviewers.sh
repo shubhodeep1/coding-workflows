@@ -185,6 +185,65 @@ print(window[0][0])
 ' "${repeat_limit}"
 }
 
+# Return only a validated live PR state. A failed read must not be cached as
+# open: the next watchdog may need to discover a closure.
+reviewer_pr_state_lookup() {
+  local observed_state=""
+  observed_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null)" || return 1
+  case "${observed_state}" in
+    open|closed|merged) printf '%s\n' "${observed_state}" ;;
+    *) return 1 ;;
+  esac
+}
+
+# All reviewer watchdogs in this run share one short-lived observation. The
+# lock covers both the freshness recheck and refresh; a slow API read cannot
+# hold the other watchdogs longer than the bounded flock wait.
+reviewer_shared_pr_state() {
+  local shared_pr_lock_fd="" shared_pr_now="" shared_pr_record="" shared_pr_state=""
+  local shared_pr_cache_path="${RUNTIME_DIR:-}/reviewer_pr_state_observation.txt"
+  local shared_pr_tmp=""
+
+  if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ] \
+    || ! command -v flock >/dev/null 2>&1 \
+    || ! exec {shared_pr_lock_fd}>"${RUNTIME_DIR}/reviewer_pr_state_observation.lock" \
+    || ! flock -w 2 "${shared_pr_lock_fd}"; then
+    reviewer_pr_state_lookup || printf 'open\n'
+    return 0
+  fi
+
+  shared_pr_now="$(date +%s)" || shared_pr_now=""
+  if ! [[ "${shared_pr_now}" =~ ^[0-9]{1,12}$ ]]; then
+    reviewer_pr_state_lookup || printf 'open\n'
+    return 0
+  fi
+  shared_pr_record="$(cat "${shared_pr_cache_path}" 2>/dev/null)" || shared_pr_record=""
+  # The timestamp must be current and no more than 30 seconds old. Compare
+  # the identity as well as the state so an unrelated observation is ignored.
+  if [[ "${shared_pr_record}" =~ ^([^|]+)\|([1-9][0-9]*)\|(open|closed|merged)\|([0-9]{1,12})$ ]] \
+    && [ "${BASH_REMATCH[1]}" = "${REPOSITORY}" ] \
+    && [ "${BASH_REMATCH[2]}" = "${PR_NUMBER}" ] \
+    && [ "${BASH_REMATCH[4]}" -le "${shared_pr_now}" ] \
+    && [ $((shared_pr_now - 10#${BASH_REMATCH[4]})) -le 30 ]; then
+    printf '%s\n' "${BASH_REMATCH[3]}"
+    return 0
+  fi
+
+  if shared_pr_state="$(reviewer_pr_state_lookup)"; then
+    shared_pr_now="$(date +%s)" || shared_pr_now=""
+    shared_pr_tmp="$(mktemp "${RUNTIME_DIR}/reviewer_pr_state_observation.XXXXXX" 2>/dev/null)" || shared_pr_tmp=""
+    if [ -n "${shared_pr_tmp}" ] && [[ "${shared_pr_now}" =~ ^[0-9]{1,12}$ ]]; then
+      printf '%s|%s|%s|%s\n' "${REPOSITORY}" "${PR_NUMBER}" "${shared_pr_state}" "${shared_pr_now}" > "${shared_pr_tmp}" \
+        && mv -f -- "${shared_pr_tmp}" "${shared_pr_cache_path}" || rm -f -- "${shared_pr_tmp}"
+    elif [ -n "${shared_pr_tmp}" ]; then
+      rm -f -- "${shared_pr_tmp}"
+    fi
+    printf '%s\n' "${shared_pr_state}"
+  else
+    printf 'open\n'
+  fi
+}
+
 emit_run_budget_gate_note() {
   local budget_scope="$1"
   local minimum_required_secs="${2:-1}"
@@ -4204,7 +4263,7 @@ execute_reviewer_attempt() {
 
       wd_iter=$((wd_iter + 1))
       if [ $((wd_iter % 9)) -eq 0 ]; then
-        pr_state="$({ gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open"; } 2>/dev/null)"
+        pr_state="$(reviewer_shared_pr_state)"
         if [ "${pr_state}" != "open" ]; then
           echo "Reviewer ${effective_model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
           printf 'pr_closed_api' > "${wd_reason_file}"
