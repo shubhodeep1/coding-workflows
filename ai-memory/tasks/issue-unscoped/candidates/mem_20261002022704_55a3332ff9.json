@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:169-172 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The cap-exhaustion error message interpolates `MAX_JSON_START_CANDIDATES` in the first string segment but leaves its literal name in the second, making the diagnostic redundantly show both the value and the constant name.\n  WHY: When the scan reaches its cap, operators see a confusing diagnostic; reviewers note that tests do not check the second segment.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:200-203 | severity=low\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The cap-exhaustion error message shows the resolved candidate limit followed by the literal constant name, which is redundant.\n  WHY: The diagnostic is functional but slightly confusing to operators reading `limit_pending=unknown` logs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py, lines 200-203 | The cap-exhaustion error message concatenates an f-string (which substitutes the numeric value of MAX_JSON_START_CANDIDATES, e.g. 50) with a plain string that carries the literal text MAX_JSON_START_CANDIDATES. The result reads: \"...first 50 `{`/`[` positions (MAX_JSON_START_CANDIDATES); later...\" \u2014 the constant name appears as literal text immediately after its resolved value, which is redundant but not incorrect.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py, lines 169-172 (the cap-exhaustion raise inside `_decode_json_text`); the same code is in `.claude/scripts/usage_limit_resumes.py` (byte-parity tested by `test_template_parity`). | severity=NIT | confidence=5\n  PROBLEM: The first line is an f-string, so the first `{MAX_JSON_START_CANDIDATES}` interpolates to its resolved value (`50`). The second line is a plain string literal, so the token `MAX_JSON_START_CANDIDATES` is not interpolated there. The operator-visible error is therefore a hybrid: `\u2026found in the first 50 `{`/`[` positions (MAX_JSON_START_CANDIDATES); later positions were not tried`. The duplication of the value (`50`) alongside the literal token (`MAX_JSON_START_CANDIDATES`) makes the diagnostic harder to read; reviewers and operators misread it as two distinct placeholders or a bug.\n  WHY: When the scan hits the cap (pathological input with \u226550 `{`/`[` characters before the JSON), the pickup surfaces this error in the `limit_pending=unknown` report and in any log the operator reads. A literal `MAX_JSON_START_CANDIDATES` in the rendered message adds no information the operator can act on and makes the message look like it contains a placeholder that was never substituted.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py, lines 169-172, the cap-exhaustion `InputError` in `_decode_json_text` | severity=NIT | confidence=4\n  PROBLEM: The error message concatenates an f-string (which substitutes `{MAX_JSON_START_CANDIDATES}` with `50`) and a plain string (which keeps the literal text `MAX_JSON_START_CANDIDATES`). The rendered message reads `... in the first 50 `{`/`[` positions (MAX_JSON_START_CANDIDATES); later positions were not tried`, showing both the resolved value and the redundant literal constant name.\n  WHY: When the scan cap is reached, the operator sees a confusing diagnostic where the constant name appears as if it were a second value. The message is not actionable as written; the literal `(MAX_JSON_START_CANDIDATES)` after `50` looks like a formatting bug rather than documentation. The test `test_json_start_scan_stops_at_the_cap` only matches the first half of the message (`in the first {cap} `), so it does not catch the redundancy.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py, location _decode_json_text, cap-exhaustion InputError (lines 169-172) | The error message shows both the interpolated value (`{MAX_JSON_START_CANDIDATES}` \u2192 50) and the literal constant name `(MAX_JSON_START_CANDIDATES)` in the same string, which is slightly redundant. The second string segment is not an f-string so the constant name appears literally. Functional but cosmetically odd.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0a117cb7215975a0da50d9d659f760097f3722f4dda32904fca01999272d3ce0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5718,
+    "run_id": "36953824506",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36953824506",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002022704_55a3332ff9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5718,
+    "run_id": "36953824506"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T02:27:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
