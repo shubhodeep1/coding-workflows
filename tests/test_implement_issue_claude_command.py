@@ -296,7 +296,50 @@ def test_pickup_reports_queue_age_limit_and_resume_order(pickup_cmd):
 	assert "`QUEUE_PICKUP_LIMIT` (20), or the session's `CLAUDE_ISSUE_PICKUP_LIMIT` clamped to 1..30" in pickup_cmd
 	assert "at most 10 are started per wake" not in pickup_cmd
 	assert "first 3 × `limit` targets (60 at the default)" in pickup_cmd
-	assert "failed <f>; oldest_waiting=<oldest_waiting_minutes, or none>; catch_up=<scheduled | pending | none | failed>`" in pickup_cmd
+	assert "failed <f>; oldest_waiting=<oldest_waiting_minutes, or none>; catch_up=<scheduled | pending | none | failed>; limit_resumed=<n>; limit_pending=<n, or unknown>`" in pickup_cmd
+
+
+def test_pickup_resumes_sessions_stopped_by_the_usage_limit(pickup_cmd):
+	"""Issue #5660: the cron-backed pickup is the first session to run after a reset."""
+	assert "1a. **Resume sessions stopped by the usage limit** (`start`, `— wake.`, and `— wake. — catch-up`; issue #5660)." in pickup_cmd
+	# Order: one pickup first, then resumes, then the queue.
+	assert pickup_cmd.index("**Keep exactly one pickup.**") < pickup_cmd.index("**Resume sessions stopped by the usage limit**") < pickup_cmd.index("**Read the queue.**")
+	assert "Then continue with step 1a now, so stopped sessions are resumed and the queue is drained immediately." in pickup_cmd
+	assert "Then continue with step 2 now" not in pickup_cmd
+	# Listing: 3 days of sessions, bounded pages; the script decides.
+	assert "`list_sessions` with `mine: true` and `limit: 100`" in pickup_cmd
+	assert "less than 72 hours old, at most 10 pages" in pickup_cmd
+	assert "`list_triggers` with `enabled: true` and `limit: 100`" in pickup_cmd
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/usage_limit_resumes.py --sessions <your get_session file> --sessions <file> … --triggers <file> … --pickup-session <your session id> --handoff-author-login <login>" in pickup_cmd
+	# PR #5718 review round 1: the pickup runs for weeks, so its own entry comes from its own get_session.
+	assert "write this wake's step 0 `get_session` result to a file in your scratchpad" in pickup_cmd
+	assert "with your own `get_session` file as the first `--sessions`" in pickup_cmd
+	assert "created more than 3 days ago" in pickup_cmd
+	assert "`gh api user --jq .login`" in pickup_cmd
+	assert "The script decides. Never pick sessions yourself" in pickup_cmd
+	assert "`CLAUDE_USAGE_LIMIT_RESUME_LIMIT` (default 20, clamped to 1..40)" in pickup_cmd
+	# One self-contained one-shot trigger per session, copied from the script.
+	assert "`name` = its `trigger_name`, copied exactly" in pickup_cmd
+	assert "`prompt` = its `prompt`, copied exactly" in pickup_cmd
+	# Fire spacing (owner comment, 16:39Z): each trigger fires at its script-given offset from its creation.
+	assert "`run_once_at` = its `fire_offset_minutes` from now, read when you create that trigger" in pickup_cmd
+	assert "spaces the wakes at 4 every 3 minutes" in pickup_cmd
+	assert "a session whose resumed turn fails on a limit again is picked again on the next wake" in pickup_cmd
+	# Pacing (owner comment, 16:13Z): 8 per minute across the wake, a background wait, bounded retries.
+	assert "After every 8th `create_trigger` call of this wake" in pickup_cmd
+	# PR #5718 review round 1: step 1's hourly trigger in `start` mode counts toward the same budget.
+	assert "**Pacing** (steps 1, 1a, and 3 together; in `start` mode, step 1's `Claude issue pickup: hourly` trigger is the wake's first call)" in pickup_cmd
+	assert "(this step and step 3 together)" not in pickup_cmd
+	assert "they count toward the same 8 per minute" in pickup_cmd
+	assert "10 per minute" not in pickup_cmd
+	assert "`Trigger creation rate limit reached. Try again in <n>s`" in pickup_cmd
+	assert "run `sleep 60` as its own Bash call with `run_in_background: true`" in pickup_cmd
+	assert "A call refused three times is left for the next wake." in pickup_cmd
+	assert "Pace these `create_trigger` calls as step 1a.4 describes" in pickup_cmd
+	assert "report `limit_resumed=0; limit_pending=unknown` and go on to step 2" in pickup_cmd
+	# Still no new session for the pickup's own wakes, and no second create_session target.
+	assert pickup_cmd.count("`create_session` with") == 2
+	assert "`get_session`, `list_sessions`, `create_session`, `create_trigger`, `list_triggers`" in pickup_cmd
 
 
 def test_pickup_arms_check_ins_for_deep_sessions(pickup_cmd):

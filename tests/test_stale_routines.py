@@ -17,7 +17,9 @@ TEMPLATE_SCRIPT_PATH = ROOT / "workflow-templates" / ".claude" / "scripts" / "st
 CLAUDE_MD = ROOT / "CLAUDE.md"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
-_spec = importlib.util.spec_from_file_location("stale_routines", SCRIPT_PATH)
+# The twin leads while `.claude/**` is synced from it (twin-first, Q40);
+# test_template_parity keeps the two copies equal.
+_spec = importlib.util.spec_from_file_location("stale_routines", TEMPLATE_SCRIPT_PATH)
 sweep = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sweep)
 
@@ -86,6 +88,9 @@ def _deleted_ids(result):
 		"PR #12 status check-in: subscriber",
 		"PR #12 status check-in: fixer start",
 		"dispatch shubhodeep1/coding-workflows#4539: start",
+		"Resume after usage limit (#5660)",
+		"Resume after usage limit (PR #5678)",
+		"Resume after usage limit (x3EWDyDd)",
 	],
 )
 def test_ended_routines_of_ours_are_deleted(monkeypatch, tmp_path, capsys, name):
@@ -113,6 +118,9 @@ def test_session_gone_routine_is_deleted(monkeypatch, tmp_path, capsys):
 		"probe: routine wake repro",
 		"dispatch nightly: start",
 		"Swap heal phase-4 checker to Sonnet",
+		"Resume after usage limit",
+		"resume after usage limit (#5660)",
+		"Manual: Resume after usage limit (#5660)",
 	],
 )
 def test_routines_the_flows_do_not_create_are_never_deleted(monkeypatch, tmp_path, capsys, name):
@@ -127,6 +135,14 @@ def test_user_paused_routine_is_kept(monkeypatch, tmp_path, capsys):
 	"""Disabled with no ended_reason means the user paused it."""
 	calls = _stub(monkeypatch, {})
 	_, result = _run(tmp_path, capsys, [_routine("trig_p", "PR #7 status check-in", enabled=False)])
+	assert result["delete"] == [] and result["kept"] == 1
+	assert calls == []
+
+
+def test_pending_usage_limit_resume_is_kept_without_api_calls(monkeypatch, tmp_path, capsys):
+	"""Issue #5660: a resume trigger that has not fired yet is the stopped session's wake."""
+	calls = _stub(monkeypatch, {})
+	_, result = _run(tmp_path, capsys, [_routine("trig_r", "Resume after usage limit (#5660)", prompt="Resume after usage limit (issue #5660): …")])
 	assert result["delete"] == [] and result["kept"] == 1
 	assert calls == []
 

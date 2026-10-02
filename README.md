@@ -1282,6 +1282,23 @@ mode).
    issue and labels it `ai:merged`. Verify-activation and `/deploy-activate`
    run only for projects based on the default branch.
 
+   The pickup also resumes sessions that the account usage limit stopped (#5660). When the limit is hit, every running session fails its turn: a checker's `send_later` chain dies, and stage, fixer, and implementation sessions stop mid-task. The pickup's cron wakes keep firing, so it is the first session to run after the reset. On every wake (step 1a):
+   - It lists sessions (3 days back) and enabled triggers, and runs `.claude/scripts/usage_limit_resumes.py` with its own `get_session` result first (the pickup runs for weeks, so its own entry is rarely on that listing, and the account-wide hold-off reads it).
+   - The script selects `IDLE` sessions whose last summary carries the usage-limit error, plus checkers whose `rate_limit_info` shows a `rejected` limit that has since reset and that have no trigger at all.
+   - It skips a session that is:
+     - archived, running, or on a permission prompt;
+     - the pickup itself;
+     - created more than 72 hours ago (the last page listed can reach further back; those stay with the manual fallback);
+     - still limited;
+     - bound to a pending resume trigger, or to another trigger due within 30 minutes (for a checker, any trigger, because its triggers are its own check-ins).
+   - The pickup sends each selected session a one-shot `Resume after usage limit (#<N>)` trigger. Checkers repeat their latest checker instructions; other sessions re-read their state and continue. Each prompt names `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN`.
+   - Checkers go first, then the oldest, at most `CLAUDE_USAGE_LIMIT_RESUME_LIMIT` per wake (set it in the pickup session's environment; default 20, clamped to 1..40). Triggers are created at most 8 per minute across the wake, counting the pickup's own hourly trigger in `start` mode and the queue's session starts.
+   - The wakes are spaced at 4 every 3 minutes (the script's `fire_offset_minutes`: 2, 2, 2, 2, 5, …), because waking every stopped session at once made the resumed turns fail on a rate limit again. A session whose resumed turn fails on a limit again is picked again on the next wake.
+   - Nothing is resumed while the account is still limited.
+   - The one-line report adds `limit_resumed=<n>; limit_pending=<n>`.
+
+   The stale Routine sweep deletes the resume triggers once they have fired.
+
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without
 `ai:codex` (`AI_PHASE_GATE_V1 … reason=claude_routed`,
