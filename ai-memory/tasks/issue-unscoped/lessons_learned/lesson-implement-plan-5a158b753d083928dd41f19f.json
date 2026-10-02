@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T14:30:44Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a plan lists the docs a change must update (\"the env var table\"), check each named place, not only that the variable appears somewhere in the file: a prose mention does not put a row in the variables table.",
+  "phase": "implement_plan",
+  "pr_number": 6085,
+  "record_id": "lesson-implement-plan-5a158b753d083928dd41f19f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:README.md"
+  ]
+}
