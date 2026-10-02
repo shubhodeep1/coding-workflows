@@ -2430,7 +2430,9 @@ repo that receives this file via the `@stable` sync.
     fix or a legacy-mode PR), so a
     project whose slug starts with this one's is never matched, a PR
     another account opened from a branch named like the chain's is never
-    closed, and it lists any other PR in its report instead.
+    closed, and it lists any other PR in its report instead (with the
+    `get_me` login it compared the author with), as it does a PR or issue
+    whose state read fails twice, which it never closes.
 - **The fingerprint rule.** A failure is its stop id plus a fingerprint:
   the SHA-1 (first 12 hex characters) of the normalised failing check
   names, finding ids, follow-up issue numbers, validation class and

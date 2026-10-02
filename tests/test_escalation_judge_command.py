@@ -209,12 +209,18 @@ def test_judge_close_checks_the_head_ref_before_closing(judge):
 	assert "`activation-fix-<k>` in project mode and, in legacy mode, one of the project-branch kinds or `activation-fix-<k>`" in close
 	assert "A plain prefix is not enough: another project's slug can start with this one's (`foo` and `foo-bar`)" in close
 	assert "any other PR can be opened against the project branch from a head named `claude/implement-plan-<slug>-<anything>`" in close
-	assert "A PR that fails this check is not closed: go on with the rest, and list its number, author, head ref, and base ref in the report so a human can decide." in close
+	assert "A PR that fails this check is not closed: go on with the rest, and list its number, author, head ref, and base ref in the report so a human can decide, together with the `get_me` login the author was compared with" in close
+	# A failed state read is no proof of ownership: retried once, then left
+	# open and reported (review round 1 on 1e623fe).
+	assert "A read that fails (an API or MCP error, or not found) is retried once; if it fails again, do not close that PR or issue, because an unread PR proves nothing about whose it is" in close
+	assert "list its number and the read error in the report so a human can finish it" in close
+	assert close.index("A read that fails") < close.index("Close a PR only when that same read shows it is this project's")
+	assert "one the check refused, one whose read or close failed, or all of them" in close
 	# Refs alone are not proof the chain opened a PR: anyone with push access
 	# can open one from a branch named like the chain's, so the author must be
 	# the account the chain opens its PRs with (review round 1 on e3c9cbf).
 	assert "Its author (`user.login`) must be the account this chain opens its PRs with: the login `mcp__github__get_me` returns, read once before the first close" in close
-	assert "If that read fails, close no PR and list them all in the report." in close
+	assert "If that read fails, close no PR and list them all in the report with the `get_me` error." in close
 	assert "a PR another account opened is listed, never closed, even when its refs fit" in close
 	assert close.index("Its author (`user.login`) must be") < close.index("Its head repository (`head.repo.full_name`) must be")
 	# The old prefix-only rule is gone.
@@ -227,6 +233,7 @@ def test_judge_close_checks_the_head_ref_before_closing(judge):
 	assert "so a project whose slug starts with this one's is never matched, a PR another account opened from a branch named like the chain's is never closed, and it lists any other PR in its report instead" in section
 	assert "never closes a PR the chain did not open (the one thing it closes that the chain did not open is the source issue the plan header names, in issue mode)" in section
 	assert "never closes anything the chain did not open" not in section
+	assert "(with the `get_me` login it compared the author with), as it does a PR or issue whose state read fails twice, which it never closes" in section
 
 
 def test_judge_close_report_says_to_reopen_the_issue_first(judge):
