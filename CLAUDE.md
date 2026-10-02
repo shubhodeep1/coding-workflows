@@ -2419,9 +2419,11 @@ repo that receives this file via the `@stable` sync.
     deletes a branch and never closes anything the chain did not open: it
     closes a PR from the log only when its head is in this repository and
     its head and base refs prove it is this project's (the final PR's head
-    is exactly `claude/implement-plan-<slug>`; another PR targets that
-    project branch, or, when it targets the default branch, its head is
-    `claude/implement-plan-<slug>-<kind>` with a known branch kind), so a
+    is exactly `claude/implement-plan-<slug>` and it targets the default
+    branch or the issue base; any other PR's head is exactly
+    `claude/implement-plan-<slug>-<kind>` with a known branch kind, and it
+    targets the project branch, or the default branch for an activation
+    fix or a legacy-mode PR), so a
     project whose slug starts with this one's is never matched, and it
     lists any other PR in its report instead.
 - **The fingerprint rule.** A failure is its stop id plus a fingerprint:

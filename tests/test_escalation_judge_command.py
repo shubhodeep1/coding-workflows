@@ -190,7 +190,7 @@ def test_judge_close_checks_the_head_ref_before_closing(judge):
 	# `foo-bar`'s branches start with `claude/implement-plan-foo-` too.
 	close = judge[judge.index("**`close`** → close the project yourself"):judge.index("9. **Report**")]
 	assert "Its head repository (`head.repo.full_name`) must be this repository" in close
-	assert "(a) the final PR: head exactly `claude/implement-plan-<slug>`;" in close
+	assert "(a) the final PR: head exactly `claude/implement-plan-<slug>` and base the default branch or, in issue mode, the plan header's `Base branch:` (a PR from the project branch into any other base is not the final PR);" in close
 	# Rule (b) names the exact project-branch kinds too: a head such as
 	# `claude/implement-plan-<slug>-unrelated` into the project branch is not
 	# the chain's (review round on 3ab4439).
