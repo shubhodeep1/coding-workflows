@@ -1177,7 +1177,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   `duplicate`. New issues carry a second marker line,
   `<!-- ai:permission-prompt-family:v1 family=<12 hex> -->` (the v1 `sig=`
   marker is unchanged); older issues get their family from their recorded
-  tool, event, and example. Same single list read, no extra API calls.
+  tool, event, and example (none when the body holds more than one
+  `**Latest example**` heading line, since a planted one cannot be told from
+  the real one). Same single list read, no extra API calls.
   `filed-state.json` next to the logs keeps a later run in the same session
   from filing the same occurrences again. No cap on open issues. Issue text
   masks token-like strings, removes heredoc bodies, and truncates commands to

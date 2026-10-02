@@ -168,13 +168,21 @@ _ISSUE_EVENT_RE = re.compile(r"hit a \*\*(permission prompt|Auto-mode denial)\*\
 # even on an older issue whose fixed four-backtick fence a backtick line in the example could match.
 _ISSUE_EXAMPLE_RE = re.compile(r"\*\*Latest example\*\*[^\n]*\n\n(`{4,})text\n(.*)\n\1(?:\n|$)", re.S)
 _ISSUE_EXAMPLE_HEADING = "**Latest example**"
+# A line that could open the example block: the heading at the start of a line, a blank line, a fence of four or
+# more backticks followed by `text`.
+_ISSUE_EXAMPLE_START_RE = re.compile(r"^\*\*Latest example\*\*[^\n]*\n\n`{4,}text\n", re.M)
 
 
 def _issue_example_match(body: str) -> re.Match[str] | None:
-	"""The recorded example block, read from the last `**Latest example**` heading: the untrusted reason text comes
-	before the generated heading, so a heading planted there cannot be read instead (PR #5697 review round 5)."""
-	start = body.rfind(_ISSUE_EXAMPLE_HEADING)
-	return _ISSUE_EXAMPLE_RE.match(body, start) if start != -1 else None
+	"""The recorded example block, or None when the body holds more than one line that could open it.
+
+	An older body has untrusted text on both sides of the generated heading (a multi-line reason before it, the
+	recorded example after it), so a planted heading on either side cannot be told from the real one by position.
+	Reading no example then means no family: the report files by signature, as for any issue without a family,
+	and never under a planted command's family (PR #5697 review rounds 5 and 6). Bodies written since then put each
+	reason on one line and fence the example longer than any backtick run in it."""
+	starts = [match.start() for match in _ISSUE_EXAMPLE_START_RE.finditer(body)]
+	return _ISSUE_EXAMPLE_RE.match(body, starts[0]) if len(starts) == 1 else None
 
 
 def strip_heredocs(command: str, placeholder: str = "", keep_delimiter: bool = True) -> str:

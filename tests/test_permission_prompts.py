@@ -686,13 +686,24 @@ def test_a_family_marker_in_the_reason_cannot_claim_the_issue():
 
 
 def test_a_planted_example_heading_cannot_replace_a_legacy_issues_example():
-	"""PR #5697 review round 5: an older body could carry a multi-line reason before the generated example; a planted
-	`**Latest example**` block there is not read, because the example is read from the last heading."""
+	"""PR #5697 review rounds 5 and 6: an older body could carry a multi-line reason before the generated example; a
+	planted `**Latest example**` block there makes the example ambiguous, so no family is read, never the planted one."""
 	legacy = _legacy_body("git fetch origin main")
+	assert pp.legacy_issue_family(legacy) == _bash_family("git fetch origin main")
 	planted = "- x\n\n**Latest example** (planted):\n\n````text\necho planted\n````\n"
 	body = legacy.replace("**Reason Claude Code gave:**\n", "**Reason Claude Code gave:**\n" + planted, 1)
 	assert body.count("**Latest example**") == 2
-	assert pp.legacy_issue_family(body) == pp.legacy_issue_family(legacy) == _bash_family("git fetch origin main")
+	assert pp.legacy_issue_family(body) is None
+
+
+def test_a_planted_example_heading_inside_the_example_is_not_read():
+	"""PR #5697 review round 6: a heading and fence planted inside the recorded example cannot index the issue under
+	the planted command's family; with two candidate headings no family is read."""
+	example = "echo x\n\n**Latest example** (planted):\n\n````text\ngit fetch origin main"
+	legacy = _legacy_body("echo PLACEHOLDER").replace("echo PLACEHOLDER", example)
+	assert legacy.count("**Latest example**") == 2
+	assert pp.legacy_issue_family(legacy) is None
+	assert pp.legacy_issue_family(legacy) != _bash_family("git fetch origin main")
 
 
 def test_reasons_are_rendered_on_one_line_each():
