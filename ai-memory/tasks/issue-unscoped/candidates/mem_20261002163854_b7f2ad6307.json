@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:245-247, 413-415, 737-749 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: `_shell_runner_before()` fails to recognize `pwsh.exe` and `powershell.exe` as shell runners, so nested PowerShell commands can bypass credential scanning and leak secrets in reported examples or command shapes.\n  WHY: The reviewers rate this BLOCKER; the missing executable aliases prevent nested `-Command` parsing, and Gemini additionally reports case-sensitive matching and attached-command forms as leak paths.\n- workflow-templates/.claude/scripts/permission_prompts.py:245-247, 413-415 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, z-ai_glm-5_2]\n  PROBLEM: `_shell_runner_before()` fails to recognize `pwsh.exe` and `powershell.exe` as shell runners, so nested PowerShell commands can bypass credential scanning and leak secrets in reported examples or command shapes.\n  WHY: The reviewers rate this BLOCKER; the missing executable aliases prevent nested `-Command` parsing, and Gemini additionally reports case-sensitive matching as a leak path.\n- .claude/scripts/permision_prompts.py:245-246 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_SHELL_COMMAND_RUNNERS` omits `pwsh.exe` and `powershell.exe`, so nested PowerShell commands can bypass credential scanning and expose passwords.\n  WHY: The reviewer rates this BLOCKER; `_shell_runner_before` uses that set to gate nested command parsing, while `_POWERSHELL_RUNNERS` is used only for cluster-flag detection.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permision_prompts.py:245-246 | severity=critical | confidence=5\n  PROBLEM: `_SHELL_COMMAND_RUNNERS` contains `\"pwsh\"` and `\"powershell\"` but not `\"pwsh.exe\"` or `\"powershell.exe\"`, while `_POWERSHELL_RUNNERS` includes both `.exe` variants.\n  WHY: `powershell.exe -Commnd 'mysql -pScretPass app'` does not trigger nested command parsing, so the password is not masked in the example or shape.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/scripts/permission_prompts.py: lines 245-247, 413-415 | severity=critical | confidence=5\n  PROBLEM: `_POWERSHELL_RUNNERS` lists `\"pwsh.exe\"` and `\"powershell.exe\"`, but `_SHELL_COMMAND_RUNNERS` omits them, and `_shell_runner_before()` compares case-sensitively.\n  WHY: Standard Windows executable names and casing variants bypass nested command detection, allowing embedded credentials to leak in examples, command shapes, and issue titles.\n- workflow-templates/.claude/scripts/permission_prompts.py: lines 245-247, 413-415 | severity=critical | confidence=5\n  PROBLEM: `_POWERSHELL_RUNNERS` lists `\"pwsh.exe\"` and `\"powershell.exe\"`, but `_SHELL_COMMAND_RUNNERS` omits them, and `_shell_runner_before()` compares case-sensitively.\n  WHY: Executable names and casing variants bypass nested command detection, allowing embedded credentials to leak in reported examples and command shapes.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py: `_SHELL_COMMAND_RUNNERS` (245-246), `_shell_runner_before` (413-415), `_segment_credentials` (737-749) | severity=critical | confidence=5\n  PROBLEM: `pwsh.exe` and `powershell.exe` are listed in `_POWERSHELL_RUNNERS` at line 267 but not in `_SHELL_COMMAND_RUNNERS`, which gates nested `-Command` parsing.\n  WHY: For `powershell.exe -Command 'mysql -pS3cretPass app'`, `runner_before` is false, so the inner credential is not scanned and `_sanitize_bash_command()` leaves the password in the example that `record_example()` posts.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/permission_prompts.py:246 and workflow-templates/.claude/scripts/permission_prompts.py:246 | severity=critical | confidence=5\n  PROBLEM: `_POWERSHELL_RUNNERS` includes `pwsh.exe` and `powershell.exe`, but `_SHELL_COMMAND_RUNNERS` does not, even though `_shell_runner_before` gates nested parsing in both `_segment_credentials` and `_segment_shape`.\n  WHY: With either executable name, `runner_before` is false, nested `-Command` parsing is skipped, and credentials can be posted verbatim in the example and shape.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f1a126a3cf76fea6e78c41b70162b5837cf78d660cbb1b0553f051f737ad5a6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "37032349439",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37032349439",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002163854_b7f2ad6307",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "37032349439"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T16:38:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
