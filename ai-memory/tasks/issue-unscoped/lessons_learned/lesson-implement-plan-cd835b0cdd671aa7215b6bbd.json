@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T13:19:10Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A helper that reads a positive number from the environment must reject non-finite values with `math.isfinite`: `float(\"inf\")` and `float(\"1e309\")` pass a `value > 0` check, turning a time bound or lease into \"never expires\", and `int()` of the result raises `OverflowError`",
+  "phase": "implement_plan",
+  "pr_number": 5944,
+  "record_id": "lesson-implement-plan-cd835b0cdd671aa7215b6bbd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5927-bound-plain-mode-hold",
+    "file:.claude/scripts/check_in_status.py",
+    "file:.claude/scripts/claude_fix_claim.py"
+  ]
+}
