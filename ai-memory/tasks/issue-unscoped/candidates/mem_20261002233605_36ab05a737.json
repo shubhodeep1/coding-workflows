@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_pool.py:689-763 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Base64 redaction matches only contiguous encodings, so line-wrapped base64 representations of secrets can survive redaction and be uploaded in the 14-day transcript artifact.\n  WHY: GNU base64 wraps output at 76 columns, inserting newlines that prevent literal matching; reviewers rated this BLOCKER except deepseek, which rated it MAJOR.\n- scripts/claude_pool.py:512-527 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `decode_payload` strips only outer whitespace before strict base64 decoding, so wrapped payloads with internal whitespace are rejected.\n  WHY: `base64.b64decode(..., validate=True)` rejects embedded newlines; reviewers rated this MAJOR or NIT, with MAJOR the highest rating. The current Python dispatcher emits contiguous base64, so reviewers describe this as affecting wrapped external or manually supplied payloads.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_pool.py | _base64_forms (lines 709-735) and redact_text (lines 738-763) | severity=high | confidence=5\n  PROBLEM: The base64 redaction generates and matches only contiguous base64 sequences, so GNU base64 output wrapped with embedded newlines is not redacted.\n  WHY: Literal replacement cannot match the full contiguous form across line breaks, allowing wrapped credentials to enter the 14-day `claude-pool-transcript` artifact.\n- scripts/claude_pool.py | decode_payload (lines 512-527) | severity=low | confidence=3\n  PROBLEM: `decode_payload` uses strict base64 decoding after stripping only leading and trailing whitespace, so internal newlines cause payload decoding to fail.\n  WHY: GNU base64 wraps output at 76 columns, but the current Python dispatcher emits contiguous output; this affects manually dispatched wrapped payloads.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/claude_pool.py | lines 709-763 (_base64_forms and redact_text) | severity=critical | confidence=5\n  PROBLEM: Redaction matches only contiguous single-line base64 representations and fails to redact base64-encoded credentials containing line breaks.\n  WHY: Embedded newlines prevent candidate strings from matching, so credentials can survive in `transcript.jsonl` and `stderr.txt` uploaded to the 14-day artifact.\n- scripts/claude_pool.py | lines 514-520 (decode_payload) | severity=high | confidence=4\n  PROBLEM: `decode_payload` strips only outer whitespace before calling `base64.b64decode(text, validate=True)`, rejecting payloads with internal line breaks or whitespace.\n  WHY: Wrapped base64 raises `binascii.Error` and `PoolError`, aborting prompt construction for those queue payloads.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_pool.py | lines 712-737 (`_base64_forms`) and lines 738-763 (`redact_text`) | severity=critical | confidence=5\n  PROBLEM: Base64 redaction generates only contiguous encodings, and literal replacement cannot match strings interrupted by newlines.\n  WHY: GNU base64 wraps output at 76 columns by default, so a wrapped credential can survive redaction and be uploaded in the 14-day `claude-pool-transcript` artifact.\n- scripts/claude_pool.py | lines 512-527 (`decode_payload`) | severity=high | confidence=4\n  PROBLEM: `base64.b64decode(text, validate=True)` rejects internal whitespace that remains after `text.strip()`.\n  WHY: Although the current dispatcher emits contiguous base64, wrapped payloads from a future dispatcher or manual queue-item edit raise `binascii.Error`, wrapped in `PoolError`, and abort prompt construction.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_pool.py | `_base64_forms()` lines 726-734 and `redact_text()` lines 758-763 | severity=critical | confidence=5\n  PROBLEM: Redaction does not match line-wrapped Base64 encodings of secrets.\n  WHY: GNU base64 inserts a newline when wrapping output at 76 columns, but the redactor replaces only contiguous strings; the successful-redaction upload gate can therefore permit an artifact to retain the recoverable credential.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_pool.py | _base64_forms (lines 689-709), redact_text (lines 712-737) | severity=critical | confidence=5\n  PROBLEM: Base64 redaction matches only contiguous encodings, so wrapped credentials containing embedded newlines survive redaction.\n  WHY: The redaction step exits successfully and the upload gate passes, leaving the encoded credential in the 14-day `claude-pool-transcript` artifact.\n- scripts/claude_pool.py | decode_payload, lines 512-527 | severity=low | confidence=4\n  PROBLEM: `base64.b64decode(text, validate=True)` rejects internal whitespace and newlines remaining after outer whitespace is stripped.\n  WHY: The current Python encoding does not wrap, but wrapped externally encoded payloads raise `binascii.Error`, which is wrapped in `PoolError` and aborts prompt construction.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_pool.py | redact_text (lines 738-763) and _base64_forms (lines 709-735) | severity=critical | confidence=5\n  PROBLEM: Redaction matches only contiguous base64 strings, so line-wrapped encodings of secrets are not replaced.\n  WHY: `text.replace` cannot match across the inserted newline, allowing wrapped credentials to be uploaded in the 14-day `claude-pool-transcript` artifact.\n- scripts/claude_pool.py | decode_payload (lines 512-527), `base64.b64decode(text, validate=True)` after only `.strip()` | severity=low | confidence=3\n  PROBLEM: Strict base64 decoding rejects internal newlines that remain after `.strip()`.\n  WHY: A wrapped payload from a future dispatcher or manual `workflow_dispatch` input raises `binascii.Error`, wrapped as `PoolError`, and aborts prompt construction.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f0bd1168878f887a0bba39e51b5fc31e247d2e975a56266b7b4e31c1568da585",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6100,
+    "run_id": "37076856006",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37076856006",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002233605_36ab05a737",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6100,
+    "run_id": "37076856006"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T23:36:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
