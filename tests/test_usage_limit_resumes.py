@@ -622,8 +622,11 @@ def test_json_start_scan_stops_at_the_cap():
 	cap = resumes.MAX_JSON_START_CANDIDATES
 	payload = json.dumps({"data": []})
 	assert resumes._decode_json_text("[" * (cap - 1) + payload, "f") == {"data": []}
-	with pytest.raises(resumes.InputError, match=f"no JSON object or array found in the first {cap} "):
+	with pytest.raises(resumes.InputError) as raised:
 		resumes._decode_json_text("[" * cap + payload, "f")
+	assert str(raised.value) == (
+		f"f: no JSON object or array found in the first {cap} `{{`/`[` start positions; later positions were not tried"
+	)
 
 
 def test_the_cap_is_named_only_when_the_scan_hit_it():

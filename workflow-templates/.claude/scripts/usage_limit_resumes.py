@@ -199,7 +199,7 @@ def _decode_json_text(text: str, path: str) -> object:
 	if len(positions) == MAX_JSON_START_CANDIDATES:
 		raise InputError(
 			f"{path}: no JSON object or array found in the first {MAX_JSON_START_CANDIDATES} "
-			"`{`/`[` positions (MAX_JSON_START_CANDIDATES); later positions were not tried"
+			"`{`/`[` start positions; later positions were not tried"
 		)
 	raise InputError(f"{path}: no JSON object or array found")
 
