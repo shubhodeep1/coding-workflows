@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:55:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A security gate that reads an API list must fail closed on entries it cannot parse, not skip them: a count check (`changed_files > len(files)`) catches missing entries but not present-but-malformed ones, so count unreadable entries and treat them like truncation.",
+  "phase": "implement_plan",
+  "pr_number": 4973,
+  "record_id": "lesson-implement-plan-b7ee7417b69426464dabfaff",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py"
+  ]
+}

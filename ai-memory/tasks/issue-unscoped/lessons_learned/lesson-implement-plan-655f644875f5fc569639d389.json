@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:55:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In Claude-fixer mode the review workflow checks `MAX_AUTOFIX_ITERATIONS` before it reviews, so the head carrying the last allowed `[claude-autofix]` commit is never reviewed: the PR is labelled `ai:review-blocked` with no finding open. Expect that hand-back after the cap-th fix, and clear it with a `[claude-intervention]` commit (which restarts the count) plus removing the label, instead of looking for a finding to fix.",
+  "phase": "implement_plan",
+  "pr_number": 4973,
+  "record_id": "lesson-implement-plan-655f644875f5fc569639d389",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

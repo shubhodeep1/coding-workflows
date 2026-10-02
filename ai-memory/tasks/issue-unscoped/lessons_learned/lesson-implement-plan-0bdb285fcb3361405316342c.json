@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:55:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A gate that refuses a call bound to a stale head must still judge the current head for any cleanup it owns (here, turning off a pending auto-merge): returning early on the mismatch leaves the very state the cleanup exists for.",
+  "phase": "implement_plan",
+  "pr_number": 4973,
+  "record_id": "lesson-implement-plan-0bdb285fcb3361405316342c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py"
+  ]
+}

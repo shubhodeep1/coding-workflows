@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-10-02T01:55:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a later change widens what a value is used for (here AD-13 made unprotected merges bind to the checked head), revisit every earlier relaxation that assumed the narrower use: the check that let an unprotected PR through without a well-formed head SHA became an unbound-merge gap. Test fakes that use placeholder SHAs hide such gaps, so give them well-formed values.",
+  "phase": "implement_plan",
+  "pr_number": 4973,
+  "record_id": "lesson-implement-plan-1c90f8b5cfb95317c5f89b87",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py",
+    "file:scripts/protected_path_gate.sh",
+    "file:tests/test_orchestrate_poll_process.py"
+  ]
+}

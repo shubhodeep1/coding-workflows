@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:55:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A range-based release check (`git rev-list <previous>..<candidate>`) only sees what the candidate adds: require the previous release to be an ancestor of the candidate, or a rollback that drops guarded changes passes with an empty range.",
+  "phase": "implement_plan",
+  "pr_number": 4973,
+  "record_id": "lesson-implement-plan-aaf43984dafdac2bad8ec2d0",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py"
+  ]
+}

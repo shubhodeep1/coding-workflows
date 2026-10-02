@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:55:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a security check requires an API field to be explicitly null, test that the key is present before testing its value: `dict.get(key) is None` cannot tell a missing field from a null one, so a payload without the field passes.",
+  "phase": "implement_plan",
+  "pr_number": 4973,
+  "record_id": "lesson-implement-plan-d853559eb44243f54dbcf3ee",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py"
+  ]
+}

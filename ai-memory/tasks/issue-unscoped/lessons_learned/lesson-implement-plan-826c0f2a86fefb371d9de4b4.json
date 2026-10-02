@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T01:55:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An approval bound to a PR's head SHA only covers commits that head contains: a release check that maps a commit to its PR with `commits/{sha}/pulls` must not let that approval cover a merge commit made outside the head (GitHub links a locally made merge pushed straight to a branch to the PR it merged), so test containment with `git merge-base --is-ancestor` or require an approval naming the merge commit itself.",
+  "phase": "implement_plan",
+  "pr_number": 4973,
+  "record_id": "lesson-implement-plan-826c0f2a86fefb371d9de4b4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-4919-gate-protected-path-merges",
+    "file:scripts/protected_path_authorization.py"
+  ]
+}
