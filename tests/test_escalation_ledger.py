@@ -314,11 +314,21 @@ def test_record_starts_at_one_and_takes_an_explicit_date(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective"])
-@pytest.mark.parametrize("why", ["retry the tests", "#12: retry", "PR 12: retry", "PR #12 retry", "PR #12:", "PR #012: retry", "fix PR #12: retry"])
+@pytest.mark.parametrize("why", ["retry the tests", "#12: retry", "PR 12: retry", "PR #12 retry", "PR #012: retry", "fix PR #12: retry"])
 def test_pr_scoped_record_requires_the_pr_prefix(tmp_path, capsys, stop, why):
 	# The intervention cap counts an entry only for the PR its `why=` names.
 	code, out = _run(capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", FP, "--choice", "budget", "--why", why)
 	assert code == 1 and "must start with 'PR #<N>: '" in out["error"]
+
+
+@pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective"])
+@pytest.mark.parametrize("why", ["PR #12:", "  PR #12:   "])
+def test_pr_scoped_record_names_a_missing_reason_after_the_prefix(tmp_path, capsys, stop, why):
+	# The prefix is there; the reason after it is not, and the error says so
+	# (review round 1 on 198b715).
+	code, out = _run(capsys, "record", "--log", str(_log(tmp_path)), "--stop", stop, "--fingerprint", FP, "--choice", "budget", "--why", why)
+	assert code == 1 and "holds only the 'PR #<N>: ' prefix" in out["error"]
+	assert "must start with" not in out["error"]
 
 
 @pytest.mark.parametrize("stop", ["intervention-cap", "fix-check-defective"])

@@ -137,6 +137,8 @@ PR_NUMBER_RE = re.compile(r"^#?([1-9][0-9]*)$")
 # A PR-scoped entry's `why` names its PR first, so the intervention cap of
 # one PR counts only the rounds granted for that PR.
 WHY_PR_PREFIX_RE = re.compile(r"^PR #([1-9][0-9]*): \S")
+# The prefix alone, with no reason after it, after whitespace is collapsed.
+WHY_PR_PREFIX_ONLY_RE = re.compile(r"^PR #[1-9][0-9]*:$")
 # HTML comment delimiters a reason must not hold: the reason is posted in the
 # judge's escalation comment, whose last line is its `ai:claude-escalation:v1`
 # marker, and evidence the reason quotes could otherwise carry a forged one.
@@ -333,6 +335,8 @@ def record_line(
 	if any(delimiter in why for delimiter in WHY_FORBIDDEN_DELIMITERS):
 		raise UsageError(f"--why must not contain {' or '.join(WHY_FORBIDDEN_DELIMITERS)}: write the reason in your own words")
 	why_pr = WHY_PR_PREFIX_RE.match(why)
+	if stop in PR_SCOPED_STOP_IDS and WHY_PR_PREFIX_ONLY_RE.match(why):
+		raise UsageError(f"stop {stop!r}: --why holds only the 'PR #<N>: ' prefix, got {why!r}; write the reason after it")
 	if stop in PR_SCOPED_STOP_IDS and not why_pr:
 		raise UsageError(f"stop {stop!r} is about one PR: --why must start with 'PR #<N>: ', got {why!r}")
 	if evidence is None:

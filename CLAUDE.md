@@ -2261,7 +2261,8 @@ This is an explicit carve-out from §0 and §2 (including §2's
   cycles), a security or validation run that did not conclude `success`,
   a terminal validation class (`harness_error`, `infeasible`,
   `codex_failure`, unknown payload), a security follow-up closed without
-  a merged PR. These are failures, not clarifications: picking a
+  a merged PR or blocked, a conformance fix check that reports
+  FIX-DEFECTIVE. These are failures, not clarifications: picking a
   "recommended" way past them could skip the security pass or loop
   forever. These stops are not auto-decided, but they no longer wait for a
   human: the escalation judge answers them under the operator's standing

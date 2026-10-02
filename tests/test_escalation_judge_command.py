@@ -220,7 +220,7 @@ def test_judge_close_checks_the_head_ref_before_closing(judge):
 	# can open one from a branch named like the chain's, so the author must be
 	# the account the chain opens its PRs with (review round 1 on e3c9cbf).
 	assert "Its author (`user.login`) must be the account this chain opens its PRs with: the login `mcp__github__get_me` returns, read once before the first close" in close
-	assert "If that read fails, close no PR and list them all in the report with the `get_me` error." in close
+	assert "If that read fails, close no PR and list them all in the report with the `get_me` error:" in close
 	assert "a PR another account opened is listed, never closed, even when its refs fit" in close
 	assert close.index("Its author (`user.login`) must be") < close.index("Its head repository (`head.repo.full_name`) must be")
 	# The old prefix-only rule is gone.
@@ -314,6 +314,10 @@ def test_judge_close_notification_names_prs_left_open(judge):
 	close = judge[judge.index("**`close`** → close the project yourself"):judge.index("9. **Report**")]
 	assert "read once before the first close (every stage opens its PRs with `mcp__github__create_pull_request` under that account), retried once when it fails." in close
 	assert "adding `; <k> PRs left open for a human, see the report` when any PR the log names is still open" in close
+	# After a failed `get_me` read the count is still only the PRs left open,
+	# and an unclosed source issue is named too (review round 2 on afb2964).
+	assert "every PR the state reads above showed still open, and every PR whose state read failed, never one already merged or closed" in close
+	assert "counting only the PRs the report lists; and, in issue mode, adding `; source issue #<N> left open, see the report` when its state read or its close failed" in close
 	assert close.count("`PushNotification`") == 1
 
 
@@ -579,6 +583,9 @@ def test_claude_md_section_28g():
 	assert "and only that fallback notifies" in failure
 	assert "so for that fallback the ask is delivered on the source issue" in failure
 	assert "In issue mode nobody watches the session, so the ask is delivered" not in failure
+	# The summary names every kind of escalation stop, the fix check's
+	# FIX-DEFECTIVE included (review round 1 on 198b715).
+	assert "a security follow-up closed without a merged PR or blocked, a conformance fix check that reports FIX-DEFECTIVE." in failure
 
 
 @pytest.mark.parametrize("name", ["escalation-judge.md", "implement-plan-claude.md"])
