@@ -5,13 +5,26 @@
   "entry_id": "processed_command_6035_5944436197_approved",
   "issue_number": 6035,
   "metadata": {
+    "branch": "ai/issue-6035",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "tests/inventory_parity.py",
+      "tests/test_assemble_prompt.py",
+      "tests/test_ci_inventory_parity_order_contract.py",
+      "tests/test_phase_wrapper_predicate_contract.py"
+    ],
+    "issue_number": 6035,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6035",
+    "pr_number": 6041,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6041",
+    "run_attempt": "1",
+    "run_id": "36955429244",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36955429244"
   },
   "run_attempt": 1,
   "run_id": "36955429244",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-02T02:26:15Z",
+  "status": "completed",
+  "timestamp": "2026-10-02T02:39:23Z",
   "workflow": "implement"
 }
