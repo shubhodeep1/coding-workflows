@@ -416,6 +416,12 @@ def _bash(command):
 		# them) is read past at every cluster length (PR #5401 review round 9).
 		("bash -ce'mysql -pS3cretPass app'", "S3cretPass", "bash -ce'mysql -p*** app'"),
 		("sudo bash -xce'mysql -pS3cretPass app'", "S3cretPass", "sudo bash -xce'mysql -p*** app'"),
+		# A runner named with `.exe`, another case, or a Windows path is still a shell (PR #5401 review round 10).
+		("pwsh.exe -Command 'mysql -pS3cretPass app'", "S3cretPass", "pwsh.exe -Command 'mysql -p*** app'"),
+		("powershell.exe -c 'mysql -pS3cretPass app'", "S3cretPass", "powershell.exe -c 'mysql -p*** app'"),
+		("PWSH -Command 'mysql -pS3cretPass app'", "S3cretPass", "PWSH -Command 'mysql -p*** app'"),
+		("C:\\\\Tools\\\\pwsh.exe -Command 'mysql -pS3cretPass app'", "S3cretPass", "C:\\\\Tools\\\\pwsh.exe -Command 'mysql -p*** app'"),
+		("/bin/BASH -c 'mysql -pS3cretPass app'", "S3cretPass", "/bin/BASH -c 'mysql -p*** app'"),
 		("sudo -u pg bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "sudo -u pg bash <<< 'mysql -p*** app'"),
 		("2>/dev/null bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "2>/dev/null bash <<< 'mysql -p*** app'"),
 		("false || sh -c 'mysql -pS3cretPass x'", "S3cretPass", "false || sh -c 'mysql -p*** x'"),
@@ -496,6 +502,7 @@ def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape
 		(["docker", "run", "-i", "alpine", "sh"], True),
 		(["ssh", "host", "/bin/bash"], True),
 		(["grep", "shell"], False),
+		(["PWSH.EXE", "-"], True),
 		(["xargs", "-I{}", "sh", "-c", "{}"], True),
 		(["2", "sh"], True),
 		(["{", "sh"], True),

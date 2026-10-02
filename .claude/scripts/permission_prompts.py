@@ -410,9 +410,16 @@ def _segment_flag_letters(words: list[str], start: int, position: int, header: b
 	return letters
 
 
+def _runner_basename(word: str) -> str:
+	"""A command word as a runner name: its last path part (`/` or `\\`), lower-cased, without a `.exe` suffix, so
+	`/bin/BASH`, `pwsh.exe`, and `C:\\…\\powershell.exe` name their shells (PR #5401 review round 10)."""
+	name = re.split(r"[\\/]", word)[-1].lower()
+	return name[: -len(".exe")] if name.endswith(".exe") else name
+
+
 def _shell_runner_before(words: list[str], start: int, position: int) -> bool:
 	"""True when a word from the segment's command at `start` up to (not including) `position` names a _SHELL_COMMAND_RUNNERS command."""
-	return any(earlier.rsplit("/", 1)[-1] in _SHELL_COMMAND_RUNNERS for earlier in words[start:position])
+	return any(_runner_basename(earlier) in _SHELL_COMMAND_RUNNERS for earlier in words[start:position])
 
 
 # Commands that run the command in their later words with the same stdin (`sudo -u pg bash`, `env -i sh`). Since
@@ -595,7 +602,7 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			# A cluster such as `-ce` makes the next word the command line, but PowerShell has no clusters: its
 			# `-NonInteractive` is a parameter of its own and the words after it stay in the shape (PR #5401 review round 9).
 			cluster_flag = bool(attached_command and attached_command.group(2).isalpha()) and not any(
-				earlier.rsplit("/", 1)[-1].lower() in _POWERSHELL_RUNNERS for earlier in tokens[command_position : index - 1]
+				_runner_basename(earlier) in _POWERSHELL_RUNNERS for earlier in tokens[command_position : index - 1]
 			)
 			if runner_before and (_SHELL_COMMAND_FLAG_RE.match(token) or cluster_flag):
 				# A shell's command line is one value: the first word after its options (`bash -c -- '…'`), which can
