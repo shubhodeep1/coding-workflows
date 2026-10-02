@@ -80,9 +80,12 @@ records a request to a human: a non-empty `needs_action`, in
 only a wait for the usage limit. A limit wait is made only of limit-wait
 words (`LIMIT_WAIT_VOCABULARY`: the usage-limit error wording, wait words,
 times, and connectives; any other word, such as merge or push, makes it a
-request), and it carries the usage-limit error text or starts with the wait
-or the limit and names a limit together with reset, wait, retry, resume,
-resend, or try again; a `needs_action` with a Q-ID (`Q1`), a question mark,
+request, and so does "now"), and it carries the usage-limit error text or
+starts with the wait or the limit and names a limit together with reset,
+wait, retry, resume, resend, or try again. A retry, resend, resume, or try
+counts only when the text defers it to the reset (a wait word, until, till,
+later, or the limit resets; "not waiting" does not), so "Usage limit
+reached. Please retry the request" is a request; a `needs_action` with a Q-ID (`Q1`), a question mark,
 or the words reply, answer, decide, confirm, choose, or approve is never
 one. Unknown
 wording is a request, so the session stays stopped and is listed. On the
@@ -180,9 +183,9 @@ LIMIT_WAIT_VOCABULARY = frozenset(
 		"request", "requests", "tokens", "has", "exceeded", "server", "is", "temporarily", "limiting", "not",
 		"limited", "reached", "usage", "limit", "limits", "limit's", "rate", "session", "account", "weekly",
 		"daily", "hourly", "monthly", "hour", "hours", "opus", "sonnet", "model",
-		# waiting for it
+		# waiting for it ("now" is not one: PR #6112 review round 2, acting now is not waiting)
 		"wait", "waiting", "retry", "retrying", "resume", "resuming", "resumes", "resend", "try", "again",
-		"reset", "resets", "resetting", "please", "later", "now", "soon", "automatically", "last",
+		"reset", "resets", "resetting", "please", "later", "soon", "automatically", "last",
 		# connectives
 		"the", "a", "an", "to", "for", "until", "till", "after", "once", "then", "when", "it", "its", "it's",
 		"are", "have", "been", "be", "will", "should", "at", "on", "in", "by", "and", "next", "about",
@@ -196,6 +199,11 @@ LIMIT_WAIT_VOCABULARY = frozenset(
 		"tue", "tues", "wed", "thu", "thurs", "fri", "sat", "sun",
 	)
 )
+# PR #6112 review round 2: a retry, resend, or resume is a limit wait only when the text defers it to the
+# reset (a wait word, until, till, later, or the limit resets), so "Usage limit reached. Please retry the
+# request" stays a request.
+LIMIT_RETRY_WORD_PATTERN = re.compile(r"\b(?:retry\w*|resend\w*|resum\w*|try)\b", re.IGNORECASE)
+LIMIT_DEFERRAL_PATTERN = re.compile(r"(?<!\bnot\s)\b(?:wait\w*|until|till|later|resets|resetting)\b", re.IGNORECASE)
 # One session has two id forms: `session_<x>` (list_sessions, get_session) and
 # `cse_<x>` (seen as a trigger's `persistent_session_id`, 2026-10-02).
 RESUME_SESSION_ID_PATTERN = re.compile(r"^(?:session|cse)_(?P<suffix>[A-Za-z0-9]+)$")
@@ -384,6 +392,8 @@ def is_limit_wait(needs_action: str) -> bool:
 		return False
 	words = LIMIT_WAIT_TOKEN_PATTERN.findall(needs_action.lower().replace("’", "'"))
 	if any(not word.isdigit() and word not in LIMIT_WAIT_VOCABULARY for word in words):
+		return False
+	if LIMIT_RETRY_WORD_PATTERN.search(needs_action) and not LIMIT_DEFERRAL_PATTERN.search(needs_action):
 		return False
 	if has_limit_text(needs_action):
 		return True
