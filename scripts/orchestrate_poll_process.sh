@@ -20184,7 +20184,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     [ -n "${ISSUE_STATE}" ] || ISSUE_STATE="open"
     ISSUE_STATES_JSON="$(echo "${ISSUE_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${ISSUE_STATE}" '. + {($key): $state}' 2>/dev/null || echo "${ISSUE_STATES_JSON}")"
 
-    LINKED_PR_CANDIDATES="$(_issue_cross_ref_pr_numbers_unique "${inum}" 2>/dev/null || echo "")"
+    # A failed timeline read is recorded, not read as "no linked PR": it
+    # blocks the heal and holds the wave like a failed PR read (PR #5633
+    # review round 14).
+    _rcl_timeline_failed="false"
+    if ! LINKED_PR_CANDIDATES="$(_issue_cross_ref_pr_numbers_unique "${inum}" 2>/dev/null)"; then
+      LINKED_PR_CANDIDATES=""
+      _rcl_timeline_failed="true"
+    fi
     LINKED_PR_NUM=""
     PR_STATE="unknown"
     PR_MERGED="false"
@@ -20194,7 +20201,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # implementation PR (an automation head in this repository).
     _rcl_rejected_merged_pr=""
     _rcl_rejected_merged_reason=""
-    _rcl_candidate_fetch_failed="false"
+    _rcl_candidate_fetch_failed="${_rcl_timeline_failed}"
     # A merged candidate the rule could not judge (no base ref, malformed
     # payload): not evidence for a heal, but no verified merge either.
     _rcl_merge_unverified="false"
@@ -20296,6 +20303,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       # rounds 9 and 10, the latter for a fetch failure with no rejected link
       # known); the next cycle with good reads heals or confirms it.
       _rcl_hold_why="pr_fetch_failed"
+      [ "${_rcl_timeline_failed}" = "true" ] && _rcl_hold_why="timeline_read_failed"
       [ "${_rcl_candidate_fetch_failed}" = "true" ] || _rcl_hold_why="merge_unverified"
       [ "${_rcl_issue_state_confirmed}" = "true" ] || _rcl_hold_why="issue_state_unread"
       _rcl_hold_label="$(echo "${LABELS_JSON}" | jq -r --arg key "${inum}" '(.[$key] // []) | if type == "array" then (index("ai:merged") != null) else false end' 2>/dev/null || echo "false")"

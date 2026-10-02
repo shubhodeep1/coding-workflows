@@ -8,7 +8,7 @@
 - Status: COMPLETE
 - Stage: final-merge
 - Activation: n/a (base claude/implement-plan-issue-4813-close-sweep-target-branch-merges)
-- Waiting on: final-merge review of PR #5633 (review rounds 3–13 fixed; interventions 1 and 2 after the workflow's `ai:review-blocked` at `MAX_AUTOFIX_ITERATIONS`)
+- Waiting on: final-merge review of PR #5633 (review rounds 3–14 fixed; interventions 1 and 2 after the workflow's `ai:review-blocked` at `MAX_AUTOFIX_ITERATIONS`)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_016KrwLrGKBe3mJCxcGowd7W   safety net and hand-back: see the completion stage report
 - Last updated: 2026-10-02
@@ -61,6 +61,7 @@
 - Final-merge review round 11 on PR #5633 (2026-10-02, owner's supervising session, after intervention 2): a failed stored-status rewrite in the heal now also holds the wave (`MERGED_HEAL_WAVE_HOLD`, `why=state_write_failed wave_hold=true`), since the stored `merged` is still there. Rejected with evidence: the README compact-table gap (the `ENABLE_MERGED_STATE_HEAL` row is already the last row, line 2031, of the one Required Variables table under its anchor).
 - Final-merge review round 12 on PR #5633 (2026-10-02, owner's supervising session): a merged link the rule cannot judge (`missing_base`, `invalid_input`, or a branch rejection without a base ref) sets `_rcl_merge_unverified`: it never heals (it could be the real merge, so it also blocks a heal from another rejected link) but holds the wave (`why=merge_unverified wave_hold=true`).
 - Final-merge review round 13 on PR #5633 (2026-10-02, owner's supervising session): `_reconcile_merged_pr_issue` takes the caller's `pulls/<n>` JSON as an optional sixth argument (used only when its number matches), so the managed and standalone REST fallbacks no longer read the same PR twice (CLAUDE.md §15). Task gaps rejected with evidence: no missing implementation site (the reviewer names none), and the README Required Variables row (already its last row, line 2031).
+- Final-merge review round 14 on PR #5633 (2026-10-02, owner's supervising session): a failed timeline read in the reconcile loop is recorded (`_rcl_timeline_failed`) instead of read as no linked PR; it blocks the heal and holds the wave (`why=timeline_read_failed wave_hold=true`).
 - Security pass: skip (`security_pass_skip.py`: ai:security, created and labelled by the issue automation).
 - Progress comment: https://github.com/shubhodeep1/coding-workflows/issues/5618#issuecomment-5909984944
 - Plan widened during planning (AD-1): the finding names the reconcile loop, but the #4813 project checker's context recorded that conformance run 1 had flagged `_reconcile_merged_pr_issue` too; tracing every `ai:merged` writer found four paths.
