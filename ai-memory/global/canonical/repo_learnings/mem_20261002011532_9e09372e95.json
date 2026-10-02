@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validation changes in this repository span the renderer, shell scripts, and GitHub Actions bootstrap; treat their interfaces as a tested contract.",
   "timestamps": {
     "created_at": "2026-10-02T01:15:32Z",
