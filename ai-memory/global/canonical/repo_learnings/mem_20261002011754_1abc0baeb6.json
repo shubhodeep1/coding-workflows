@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and agent security changes should preserve explicit isolation boundaries for untrusted processes and fixer handoffs.",
   "timestamps": {
     "created_at": "2026-10-02T01:17:54Z",
