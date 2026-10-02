@@ -25,6 +25,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
 	"claude-issue-intake.yml": "Claude issue intake is repository_dispatch automation that queues the issue for the Claude issue pickup from the default branch; it runs no orchestrator issue phase and reads no issue metadata into a checkout ref.",
 	"claude-issue-queue-watchdog.yml": "Claude issue queue watchdog is scheduled default-branch automation that labels stale queue issues; it runs no orchestrator issue phase and reads no issue metadata into a checkout ref.",
+	"claude-pool-worker.yml": "Claude pool worker is a workflow_call job run from the claude-workers runner repo; it checks out coding-workflows at its pool_ref for scripts and the target repo of a queue item at its default branch, and executes no orchestrator issue phase.",
 	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
 	"issue_pr_status.yml": "Issue/PR status utility workflow does not execute orchestrator issue phases.",
 	"lint-plan-archival.yml": "Plan-archival lint validates pull_request body/diff state rather than orchestrator issue-phase integration refs.",
