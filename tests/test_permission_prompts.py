@@ -491,6 +491,10 @@ def test_example_masks_credentials(command, secret, expected):
 		# (PR #5401 review round 11).
 		("bash -c $'mysql -pS3cret\\x41ss app'", "S3cret", None),
 		("bash -c $'mysql -pS3cretPass app", "S3cretPass", None),
+		# Hex and octal escapes Bash decodes (`\x2d` and `\055` are `-`) are not reproduced, so the command is withheld
+		# (PR #5401 review round 12).
+		("bash -c $'mysql \\x2dpS3cretPass app'", "S3cretPass", "unparseable: bash"),
+		("bash -c $'mysql \\055pS3cretPass app'", "S3cretPass", "unparseable: bash"),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
@@ -1531,3 +1535,11 @@ def test_powershell_parameters_are_not_read_as_a_command_cluster():
 	)
 	# A POSIX shell's cluster still takes the next word as its command line.
 	assert pp_mask_twin.command_shape("bash -ce ./x.sh") == "bash -ce *"
+
+
+def test_shape_reads_ansi_c_quoted_flags_like_the_scan():
+	"""PR #5401 review round 12: the shape lexer rewrites `$'…'` as the credential scan does, so an ANSI-C quoted
+	attached credential flag is cut like any other."""
+	assert pp_mask_twin.command_shape("curl $'-udeploy:mycustompwd' https://a.b") == "curl -u* *"
+	assert pp_mask_twin.command_shape("mysql $'-pS3cretPass' app") == "mysql -p* *"
+

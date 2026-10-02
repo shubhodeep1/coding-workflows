@@ -335,8 +335,8 @@ def _ansi_c_quotes_as_single(text: str) -> str:
 	The lexer reads `$'mysql -p…'` as the word `$mysql -p…`, so a command line inside it (`bash -c $'…'`) named no
 	credential command and its password was posted (PR #5401 review round 11). The common escapes are decoded and the
 	result is re-quoted (`'` as `'\\''`); a value changed by an escape no longer occurs verbatim in the displayed
-	command, so the caller withholds it. Raises ValueError for an unterminated `$'`.
-	"""
+	command, so the caller withholds it. Raises ValueError for an unterminated `$'` and for any other escape (hex,
+	octal, Unicode, control), so the caller withholds the command. The shape lexer reads it the same way (round 12)."""
 	output: list[str] = []
 	single_quoted = double_quoted = False
 	index = 0
@@ -351,7 +351,11 @@ def _ansi_c_quotes_as_single(text: str) -> str:
 			index += 2
 			while index < len(text) and text[index] != "'":
 				if text[index] == "\\" and index + 1 < len(text):
-					decoded.append(_ANSI_C_ESCAPES.get(text[index + 1], "\\" + text[index + 1]))
+					if text[index + 1] not in _ANSI_C_ESCAPES:
+						# `\x2d`, `\055`, `\u…`, `\c…` decode to characters this rewrite does not reproduce (a `-` that
+						# makes a credential flag): fail closed, so the command is withheld (PR #5401 review round 12).
+						raise ValueError("ANSI-C escape not decoded")
+					decoded.append(_ANSI_C_ESCAPES[text[index + 1]])
 					index += 2
 					continue
 				decoded.append(text[index])
@@ -695,11 +699,12 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 def command_shape(command: str) -> str:
 	"""Return the Bash command's shape: structure kept, literal values replaced by `*`."""
 	stripped = strip_heredocs(command, keep_delimiter=False)
-	lexer = shlex.shlex(_backticks_as_substitutions(stripped).replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
-	lexer.commenters = ""
-	lexer.whitespace = " \t\r"
-	lexer.whitespace_split = True
 	try:
+		# Split like the credential scan does, `$'…'` included (PR #5401 review round 12).
+		lexer = shlex.shlex(_backticks_as_substitutions(_ansi_c_quotes_as_single(stripped)).replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+		lexer.commenters = ""
+		lexer.whitespace = " \t\r"
+		lexer.whitespace_split = True
 		tokens = list(lexer)
 	except ValueError:
 		# Fail closed: an unparseable line can carry a credential, so only its command word is kept (issue #5124).
