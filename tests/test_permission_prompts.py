@@ -407,8 +407,11 @@ def _bash(command):
 		("env -S 'mysql\\_-pS3cretPass app'", "S3cretPass", "env -S 'mysql\\_-p*** app'"),
 		("env -S \"mysql\\_-pS3cretPass app\"", "S3cretPass", "env -S \"mysql\\_-p*** app\""),
 		("env -iS'mysql\\_-pS3cretPass'", "S3cretPass", "env -iS'mysql\\_-p***'"),
-		# A shell name passed to another command is not a shell reading the pipe or here-string (PR #5401 review round 6).
-		("curl -u deploy:mycustompwd https://a.b | grep sh", "mycustompwd", "curl -u *** https://a.b | grep sh"),
+		# A shell behind any command reading a here-string has its credentials masked, and a flag joined to its
+		# quoted command line is read at every flag length (PR #5401 review round 8).
+		("docker run -i alpine sh <<< 'mysql -pS3cretPass app'", "S3cretPass", "docker run -i alpine sh <<< 'mysql -p*** app'"),
+		("pwsh -Command'mysql -pS3cretPass app'", "S3cretPass", "pwsh -Command'mysql -p*** app'"),
+		("pwsh -comm'mysql -pS3cretPass app'", "S3cretPass", "pwsh -comm'mysql -p*** app'"),
 		("sudo -u pg bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "sudo -u pg bash <<< 'mysql -p*** app'"),
 		("2>/dev/null bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "2>/dev/null bash <<< 'mysql -p*** app'"),
 		("false || sh -c 'mysql -pS3cretPass x'", "S3cretPass", "false || sh -c 'mysql -p*** x'"),
@@ -456,6 +459,13 @@ def test_example_masks_credentials(command, secret, expected):
 		("printf '%s\\n' 'mysql -pS3cretPass app' | xargs -I{} sh -c '{}'", "S3cretPass", None),
 		("printf 'mysql -pS3cretPass' | tee >(sh)", "S3cretPass", None),
 		("bash <(printf 'mysql -pS3cretPass')", "S3cretPass", None),
+		# Any command with a shell among its words may run it on the pipe (`docker run -i … sh`, `ssh host sh`,
+		# `kubectl exec -i … -- sh`); a shell name that is only an argument (`grep sh`) is withheld too, which is the
+		# safe side (PR #5401 review round 8).
+		("printf 'mysql -pS3cretPass app' | docker run -i alpine sh", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' | ssh host sh", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' | kubectl exec -i pod -- sh", "S3cretPass", None),
+		("curl -u deploy:mycustompwd https://a.b | grep sh", "mycustompwd", None),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
@@ -475,7 +485,10 @@ def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape
 		(["FOO=1", "bash"], True),
 		(["sudo", "-u", "pg", "bash", "-s"], True),
 		(["env", "-i", "sh"], True),
-		(["grep", "sh"], False),
+		(["grep", "sh"], True),
+		(["docker", "run", "-i", "alpine", "sh"], True),
+		(["ssh", "host", "/bin/bash"], True),
+		(["grep", "shell"], False),
 		(["xargs", "-I{}", "sh", "-c", "{}"], True),
 		(["2", "sh"], True),
 		(["{", "sh"], True),
@@ -484,7 +497,7 @@ def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape
 	],
 )
 def test_segment_runs_a_shell_reads_the_command_word(command, runs_a_shell):
-	"""PR #5401 review round 6: only the command word, or a shell behind a wrapper, counts as a shell."""
+	"""PR #5401 review rounds 6 and 8: a shell name among the command's words counts, whatever command runs it."""
 	assert pp_mask_twin._segment_runs_a_shell(command) is runs_a_shell
 
 

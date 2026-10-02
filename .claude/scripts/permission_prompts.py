@@ -411,26 +411,32 @@ def _shell_runner_before(words: list[str], start: int, position: int) -> bool:
 	return any(earlier.rsplit("/", 1)[-1] in _SHELL_COMMAND_RUNNERS for earlier in words[start:position])
 
 
-# Commands that run the command in their later words with the same stdin (`sudo -u pg bash`, `env -i sh`): behind
-# one of them, a shell still reads piped text or a here-string as its script.
+# Commands that run the command in their later words with the same stdin (`sudo -u pg bash`, `env -i sh`). Since
+# PR #5401 review round 8 _segment_runs_a_shell no longer consults this list (any shell word counts); it is kept for
+# readers of the name.
 _SHELL_RUNNER_WRAPPERS = frozenset({"sudo", "doas", "env", "nice", "nohup", "command", "exec", "time", "timeout", "stdbuf", "ionice", "xargs"})
 
 
 def _segment_runs_a_shell(words: list[str]) -> bool:
-	"""True when the simple command `words` runs a _SHELL_COMMAND_RUNNERS shell: its command word is one, or it is a
-	_SHELL_RUNNER_WRAPPERS command with a shell among its later words. A shell name passed to another command as an
-	argument (`grep sh`) does not count. Leading assignments, a group's `{`, `!`, and a redirection's file-descriptor
-	digit (`2>/dev/null sh`) come before the command word and are passed over."""
+	"""True when the simple command `words` may run a _SHELL_COMMAND_RUNNERS shell on its stdin: any of its words,
+	from the command word on, names one. The commands that hand their stdin to a shell named in their arguments are
+	an open set (`sudo`, `env`, `xargs`, `docker run -i … sh`, `ssh host sh`, `kubectl exec -i … -- sh`), so no list
+	of them is safe (PR #5401 review round 8); a shell name that is only an argument (`grep sh`) also counts, which
+	only withholds a command that could have been shown. Leading assignments, a group's `{`, `!`, and a
+	redirection's file-descriptor digit (`2>/dev/null sh`) come before the command word and are passed over."""
 	start = next(
 		(position for position, word in enumerate(words) if not (_ASSIGNMENT_RE.match(word) or word in ("{", "!") or word.isdigit())),
 		len(words),
 	)
-	if start >= len(words):
-		return False
-	command = words[start].rsplit("/", 1)[-1]
-	if command in _SHELL_COMMAND_RUNNERS:
-		return True
-	return command in _SHELL_RUNNER_WRAPPERS and _shell_runner_before(words, start + 1, len(words))
+	return _shell_runner_before(words, start, len(words))
+
+
+def _attached_command_lines(word: str) -> list[str]:
+	"""The text after every prefix of `word` that is itself a shell command flag (_SHELL_COMMAND_FLAG_RE), shortest
+	prefix first. The shell joins a flag and its quoted command line into one word (`pwsh -Command'mysql -p…'`
+	becomes `-Commandmysql -p…`), and the word does not say where the flag ends (`-C`, `-Co`, … `-Command`), so each
+	reading is parsed and their credentials are all masked (PR #5401 review round 8)."""
+	return [word[length:] for length in range(2, len(word)) if _SHELL_COMMAND_FLAG_RE.match(word[:length])]
 
 
 def _split_string_runner_before(words: list[str], start: int, position: int) -> bool:
@@ -732,7 +738,8 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 			# word (or the first after the shell's options), which is still read as a word of its own below.
 			# The word itself is read as a flag too, since a user name such as `bash` before it (`sudo -u
 			# bash mysql -pScret…`) can match.
-			values.update(_command_line_credentials(attached_command.group(2), depth + 1))
+			for line in _attached_command_lines(word):
+				values.update(_command_line_credentials(line, depth + 1))
 			if attached_command.group(2).isalpha():
 				for line in _shell_command_line_words(words, index):
 					values.update(_command_line_credentials(line, depth + 1))
