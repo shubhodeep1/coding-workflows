@@ -357,9 +357,21 @@ def _collapse_substitutions(text: str) -> str:
 	return "".join(output)
 
 
-# Characters after which a `#` starts a word, and so a comment. A `)` is not one: after the `)` that closes a `$(…)` the
-# word goes on (`X=$(pwd)#suffix`), so a `#` there is literal (PR #5697 review round 10).
-_COMMENT_WORD_STARTS = " \t\n;&|("
+# Characters after which a `#` starts a word, and so a comment. A `)` counts only when it closes a `( … )` group
+# (`(cd x)# c` is a comment); after the `)` that closes a `$(…)` the word goes on (`X=$(pwd)#suffix` is literal), so
+# the scanners record that `)` as a word character (_paren_previous; PR #5697 review rounds 10 and 11).
+_COMMENT_WORD_STARTS = " \t\n;&|()"
+
+
+def _paren_previous(text: str, index: int, parens: list[bool]) -> str:
+	"""The scanner's `previous` after the `(` or `)` at `index`, outside quotes. `parens` holds, per open parenthesis,
+	whether it opened a `$(` (or `$((`) substitution; a `)` that closes one continues the word, so it is returned as a
+	word character, and any other `)` as itself."""
+	if text[index] == "(":
+		parens.append(text[index - 1 : index] == "$")
+		return "("
+	closes_substitution = parens.pop() if parens else False
+	return "x" if closes_substitution else ")"
 
 
 def _substitution_end(text: str, open_index: int) -> int | None:
@@ -367,6 +379,7 @@ def _substitution_end(text: str, open_index: int) -> int | None:
 	that starts a word (to the end of its line, as Bash does inside `$(…)`); None when unclosed."""
 	depth = 0
 	single_quoted = double_quoted = False
+	parens: list[bool] = []
 	# The character before this one as Bash reads it: a backslash-newline is removed, so it does not count.
 	previous = "("
 	index = open_index
@@ -389,12 +402,13 @@ def _substitution_end(text: str, open_index: int) -> int | None:
 					return None
 				index = line_end
 				continue
-			if char == "(":
-				depth += 1
-			elif char == ")":
-				depth -= 1
+			if char in "()":
+				depth += 1 if char == "(" else -1
 				if depth == 0:
 					return index + 1
+				previous = _paren_previous(text, index, parens)
+				index += 1
+				continue
 		previous = char
 		index += 1
 	return None
@@ -460,6 +474,7 @@ def _has_command_substitution(text: str) -> bool:
 	"""True when `$(` appears outside single quotes and a `#` comment and is not arithmetic `$((`. A comment starts at
 	a `#` that begins a word outside quotes and runs to the end of its line (PR #5697 review round 7)."""
 	single_quoted = double_quoted = False
+	parens: list[bool] = []
 	previous = "\n"
 	index = 0
 	while index < len(text):
@@ -483,6 +498,10 @@ def _has_command_substitution(text: str) -> bool:
 			continue
 		elif char == "$" and not single_quoted and text[index + 1 : index + 2] == "(" and text[index + 2 : index + 3] != "(":
 			return True
+		elif char in "()" and not single_quoted and not double_quoted:
+			previous = _paren_previous(text, index, parens)
+			index += 1
+			continue
 		previous = char
 		index += 1
 	return False
@@ -521,6 +540,7 @@ def _strip_shell_comments(text: str) -> str:
 	its own tokens (PR #5697 review round 9)."""
 	output: list[str] = []
 	single_quoted = double_quoted = False
+	parens: list[bool] = []
 	previous = "\n"
 	index = 0
 	while index < len(text):
@@ -542,7 +562,7 @@ def _strip_shell_comments(text: str) -> str:
 			index = line_end
 			continue
 		output.append(char)
-		previous = char
+		previous = _paren_previous(text, index, parens) if char in "()" and not single_quoted and not double_quoted else char
 		index += 1
 	return "".join(output)
 

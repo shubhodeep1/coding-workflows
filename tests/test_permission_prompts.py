@@ -853,6 +853,9 @@ def test_a_hash_after_a_closing_substitution_is_not_a_comment():
 	command after `;` keeps its family."""
 	assert pp.command_family("X=$(pwd)#suffix; git status") == ("git status", ("subst",))
 	assert pp.command_family("echo $(date)#$(id)")[1] == ("subst",)
+	# A `)` that closes a `( … )` group does end the word, so a `#` after it is a comment (PR #5697 review round 11).
+	assert pp.command_family("(cd /tmp)# $(date)") == pp.command_family("(cd /tmp)")
+	assert pp.command_family("echo $((1+2))#x; git status")[1] == ()
 
 
 def test_invisible_format_characters_are_escaped_in_code_spans():
