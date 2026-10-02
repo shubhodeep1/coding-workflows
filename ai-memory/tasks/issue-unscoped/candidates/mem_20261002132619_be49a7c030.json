@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:169-177, 647-656 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: `_issue_example_match` can select a planted `**Latest example**` heading and fenced command inside the recorded example, causing `legacy_issue_family` to index the issue under the planted command's family.\n  WHY: The highest severity is high because minimax rated the issue MAJOR while deepseek rated it NIT.\n- workflow-templates/.claude/scripts/permission_prompts.py:171-177, 539-553 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_issue_example_match` can select a planted `**Latest example**` heading and fenced command inside the recorded example, causing `legacy_issue_family` to index the issue under the planted command's family.\n  WHY: The highest severity is high because minimax rated the issue MAJOR while the other reviewers rated it NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py: _issue_example_match (line 173-177), _occurrence_block (line 647-656), _ISSUE_EXAMPLE_RE (line 169) | severity=low | confidence=4\n  PROBLEM: `_issue_example_match` uses `body.rfind(\"**Latest example**\")` and can select a matching planted heading and fenced block inside the recorded example.\n  WHY: `legacy_issue_family` may derive the family from the planted command, routing later patterns to the wrong issue.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/permission_prompts.py (also .claude/scripts/permission_prompts.py, identical twin): lines 171-177 (_issue_example_match) and 543-553 (legacy_issue_family) | severity=high | confidence=4\n  PROBLEM: `_issue_example_match` can select a planted `**Latest example**` heading and fenced command inside the recorded example.\n  WHY: `legacy_issue_family` may index the issue under the planted command's family, routing later prompts to the wrong issue.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/permission_prompts.py: _issue_example_match, line 176; legacy_issue_family, lines 546-553 | severity=low | confidence=4\n  PROBLEM: `_issue_example_match` can select an embedded \u201cLatest example\u201d heading and fenced command from the recorded Bash example.\n  WHY: For a legacy issue without a family marker, the issue can be indexed under the planted command's family, misrouting later reports.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/permission_prompts.py: `_issue_example_match` (lines 171-174), `legacy_issue_family` (lines 539-549) | severity=low | confidence=2\n  PROBLEM: `_issue_example_match` can select an embedded `**Latest example**` heading and fenced command inside the recorded Bash example.\n  WHY: `legacy_issue_family` may derive the family from the planted command, causing later prompts of the real family to open a new issue instead of commenting on the legacy one.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/permission_prompts.py: _issue_example_match :171-177, legacy_issue_family :539-549 | severity=low | confidence=3\n  PROBLEM: `_issue_example_match` can select a planted `**Latest example**` heading and fenced command inside the recorded Bash example.\n  WHY: `legacy_issue_family` may index the issue under the planted command's family, routing later prompts to the wrong issue.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "40e4702ff53626d02233af2f8255691873bcdf500e35df39de2710d99a76c5cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5697,
+    "run_id": "37010788005",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37010788005",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002132619_be49a7c030",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5697,
+    "run_id": "37010788005"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T13:26:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
