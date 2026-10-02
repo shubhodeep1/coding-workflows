@@ -5215,6 +5215,138 @@ build_cross_pollination_summary() {
   echo "${summary_file}"
 }
 
+# A missing or partial first-pass input must never authorize skipping the
+# independent pass. The local Git comparison also checks the raw PR path list
+# against the checked-out head, rather than trusting a model or a cached list.
+reviewer_pass2_skip_reason() {
+  local metadata="" protected="unknown" paths_state="unknown"
+  local metadata_key metadata_value
+  [ -n "${PR_NUMBER:-}" ] || { echo no_pr; return; }
+  [ "${HAS_PR_DIFF:-}" = "true" ] || { echo diff_unavailable; return; }
+  [ "${REVIEWER_SCOPED_CONTEXT_ACTIVE:-false}" != "true" ] || { echo scoped_context; return; }
+  [ "${FORCE_FULL_REVIEW_TIER:-false}" != "true" ] || { echo forced_review; return; }
+  [ "${REVIEWER_RISK_TIER_FORCED_FULL:-false}" != "true" ] || { echo risk_forced_full; return; }
+  [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" != "true" ] || { echo conflict; return; }
+  [ -s "${RAW_REVIEWER_PR_DIFF_FILE:-}" ] && [ -s "${RAW_REVIEWER_PR_CHANGED_FILES_FILE:-}" ] || { echo diff_unavailable; return; }
+  if ! metadata="$(reviewer_collect_review_tier_path_metadata "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" "${RAW_REVIEWER_PR_DIFF_FILE}")"; then
+    echo path_metadata_unavailable; return
+  fi
+  while IFS='=' read -r metadata_key metadata_value; do
+    case "${metadata_key}" in
+      protected) protected="${metadata_value}" ;;
+      paths_state) paths_state="${metadata_value}" ;;
+    esac
+  done <<< "${metadata}"
+  [ "${paths_state}" = "available" ] && [ "${protected}" = "false" ] || { echo protected_or_unknown_path; return; }
+  [ -n "${BASE_BRANCH:-}" ] && [ -n "${INITIAL_HEAD_SHA:-}" ] || { echo head_unknown; return; }
+  [ "$(git rev-parse HEAD 2>/dev/null || true)" = "${INITIAL_HEAD_SHA}" ] || { echo head_moved; return; }
+  git merge-tree --write-tree "origin/${BASE_BRANCH}" HEAD >/dev/null 2>&1 || { echo merge_unknown_or_conflicted; return; }
+
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_ACTIVE_MODELS_FILE}" "${PREVIOUS_REVIEWS_DIR}" \
+    "${PASS1_LEDGER_FILE}" "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" "${RAW_REVIEWER_PR_DIFF_FILE}" "origin/${BASE_BRANCH}...HEAD" <<'PY'
+import pathlib
+import re
+import subprocess
+import sys
+
+models_path, output_dir, ledger_path, paths_path, patch_path, comparison = sys.argv[1:]
+
+def reject(reason):
+	print(reason)
+	sys.exit(0)
+
+try:
+	models = pathlib.Path(models_path).read_text(encoding="utf-8").splitlines()
+	if len(models) < 2 or len(set(models)) != len(models) or not all(models):
+		reject("panel_incomplete")
+	outputs = pathlib.Path(output_dir)
+	slugs = [re.sub(r"[/.:]", "_", model) for model in models]
+	if len(set(slugs)) != len(slugs):
+		reject("panel_incomplete")
+	if {p.name for p in outputs.glob("status_pass1_*.txt")} != {f"status_pass1_{slug}.txt" for slug in slugs}:
+		reject("slot_unaccounted")
+	if {p.name for p in outputs.glob("pass1_*.txt")} != {f"pass1_{slug}.txt" for slug in slugs}:
+		reject("slot_unaccounted")
+	for slug in slugs:
+		if (outputs / f"status_pass1_{slug}.txt").read_text(encoding="utf-8").strip() != "success":
+			reject("slot_not_success")
+		# An explicit standalone NONE is the only raw output that attests to
+		# no defects AND no task gaps; narration or mixed findings is uncertain.
+		if (outputs / f"pass1_{slug}.txt").read_text(encoding="utf-8").strip() != "NONE":
+			reject("raw_not_clean")
+	ledger = pathlib.Path(ledger_path).read_text(encoding="utf-8")
+	blocks = re.findall(r"(?ms)^=== (CONSENSUS FINDINGS|CONSENSUS TASK GAPS|FINDINGS FROM ([A-Za-z0-9_]+)) ===\n(.*?)^=== END \1 ===\s*(?=^===|\Z)", ledger)
+	if len(blocks) != len(slugs) + 2 or [block[0] for block in blocks] != ["CONSENSUS FINDINGS", "CONSENSUS TASK GAPS"] + [f"FINDINGS FROM {slug}" for slug in slugs]:
+		reject("ledger_malformed")
+	if [block[2].strip() for block in blocks] != ["(No findings reported.)", "(No task gaps reported.)"] + ["(No findings reported.)"] * len(slugs):
+		reject("ledger_not_clean")
+	if re.sub(r"(?ms)^=== .*? ===\n.*?^=== END .*? ===\s*", "", ledger).strip():
+		reject("ledger_malformed")
+	paths = pathlib.Path(paths_path).read_text(encoding="utf-8").splitlines()
+	if not paths or len(paths) != len(set(paths)) or any(not re.fullmatch(r"[A-Za-z0-9_./-]+", path) or path.startswith("/") or ".." in path.split("/") for path in paths):
+		reject("paths_malformed")
+	if any(re.search(r"(?:^|[/_.-])(auth|login|session|security|secret|credential|token|payment|payments|billing|money|wallet|crypto|webhook|bank|transfer|refund|payout|permission|user|account|admin|password|identity)(?:[/_.-]|$)", path, re.I) for path in paths):
+		reject("security_path")
+	if len(paths) > 10:
+		reject("diff_inconsistent_or_large")
+	local_paths = subprocess.run(["git", "diff", "--name-only", "-z", comparison], capture_output=True, check=True).stdout.decode("utf-8").strip("\0").split("\0")
+	if set(paths) != set(local_paths) or len(paths) != len(local_paths):
+		reject("paths_inconsistent")
+	patch = pathlib.Path(patch_path).read_text(encoding="utf-8")
+	local_patch = subprocess.run(["git", "diff", "--no-ext-diff", comparison], capture_output=True, check=True).stdout.decode("utf-8")
+	def patch_evidence(text):
+		files = re.findall(r"(?m)^diff --git a/([^\n]+) b/([^\n]+)$", text)
+		hunks = re.findall(r"(?m)^@@ .* @@.*$", text)
+		# Compare context too: dropping unchanged lines from the supplied PR
+		# patch could hide evidence from the first-pass reviewers.
+		hunk_bodies = re.findall(r"(?ms)^@@ [^\n]* @@[^\n]*\n(.*?)(?=^@@ |^diff --git |\Z)", text)
+		changes = [line for line in text.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++ ", "--- "))]
+		return files, hunks, hunk_bodies, changes
+	files, hunks, bodies, changes = patch_evidence(patch)
+	local_files, local_hunks, local_bodies, local_changes = patch_evidence(local_patch)
+	if not files or not hunks or not changes or len(changes) > 200 or len(local_patch) > 20000 or (files, hunks, bodies, changes) != (local_files, local_hunks, local_bodies, local_changes):
+		reject("diff_inconsistent_or_large")
+	if any(re.search(r"\b(auth|secret|credential|token|password|csrf|encrypt|payment|debit|credit|webhook|permission|privilege)\b", line, re.I) for line in local_changes):
+		reject("security_diff")
+except (OSError, UnicodeError, ValueError, subprocess.CalledProcessError):
+	reject("evidence_unavailable")
+print("skip")
+PY
+}
+
+reviewer_publish_clean_pass1() {
+  local slug source target
+  local -a staged=()
+  # Validate every source again before publishing; never leave a partial set
+  # of review successes that a same-head resume might treat as complete.
+  for source in "${PREVIOUS_REVIEWS_DIR}"/status_pass1_*.txt; do
+    [ -f "${source}" ] || return 1
+    slug="${source##*/status_pass1_}"
+    slug="${slug%.txt}"
+    [ -s "${PREVIOUS_REVIEWS_DIR}/pass1_${slug}.txt" ] || return 1
+  done
+  for source in "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt "${PREVIOUS_REVIEWS_DIR}"/status_pass1_*.txt; do
+    [ -f "${source}" ] || continue
+    target="${source##*/}"
+    target="${PREVIOUS_REVIEWS_DIR}/${target/pass1_/review_}"
+    cp "${source}" "${target}.pass1_tmp" || { reviewer_discard_clean_pass1; return 1; }
+    staged+=("${target}.pass1_tmp")
+  done
+  cp "${PASS1_LEDGER_FILE}" "${REVIEWER_CONSENSUS_FILE}.pass1_tmp" || { reviewer_discard_clean_pass1; return 1; }
+  for source in "${staged[@]}"; do
+    mv "${source}" "${source%.pass1_tmp}" || { reviewer_discard_clean_pass1; return 1; }
+  done
+  mv "${REVIEWER_CONSENSUS_FILE}.pass1_tmp" "${REVIEWER_CONSENSUS_FILE}" || { reviewer_discard_clean_pass1; return 1; }
+}
+
+reviewer_discard_clean_pass1() {
+  local source
+  for source in "${PREVIOUS_REVIEWS_DIR}"/review_*.txt "${PREVIOUS_REVIEWS_DIR}"/status_review_*.txt "${PREVIOUS_REVIEWS_DIR}"/*.pass1_tmp; do
+    [ -f "${source}" ] && rm -f -- "${source}"
+  done
+  rm -f -- "${REVIEWER_CONSENSUS_FILE}" "${REVIEWER_CONSENSUS_FILE}.pass1_tmp"
+}
+
 rm -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" 2>/dev/null || true
 reviewers_successful=0
 
@@ -5269,6 +5401,21 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
     echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
   fi
+
+  pass2_decision="$(reviewer_pass2_skip_reason)" || pass2_decision="evidence_unavailable"
+  if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    pass2_decision="pr_closed"
+  fi
+  if [ "${pass2_decision}" = "skip" ] && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    if reviewer_publish_clean_pass1; then
+      echo "REVIEW_PASS_DECISION_V1 pass=2 decision=skip reason=complete_clean_pass1"
+      echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+      exit 0
+    fi
+    echo "::error::Failed to publish clean pass-one reviewer artifacts." >&2
+    exit 1
+  fi
+  echo "REVIEW_PASS_DECISION_V1 pass=2 decision=run reason=${pass2_decision:-pr_closed}"
 
   # ── Build cross-pollination summary (header-wrapped ledger) ──
   CROSS_POLLINATION_FILE="$(build_cross_pollination_summary "${PASS1_LEDGER_FILE}")"
