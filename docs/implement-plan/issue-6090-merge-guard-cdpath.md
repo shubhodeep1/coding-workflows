@@ -3,7 +3,7 @@
 - Plan: docs/plans/issue-6090-merge-guard-cdpath-plan.md
 - Source issue: shubhodeep1/coding-workflows#6090
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5144-merge-guard-effective-repo
-- Project branch: claude/implement-plan-issue-6090-merge-guard-cdpath   Final PR: (opening)
+- Project branch: claude/implement-plan-issue-6090-merge-guard-cdpath   Final PR: #6109 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
@@ -11,7 +11,7 @@
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-02
-- Last note: project branch opened from the #5144 project branch at ce455fe; phase 1 starting (twin-first).
+- Last note: phase 1 implemented twin-first (44f0e50): 396 guard tests pass against the twin except `test_template_copies_are_identical` (red until the `[claude-twin-sync]` copy); 478 related tests pass. Phase PR opening; twin-sync blocker follows.
 
 ## Phases
 1. [ ] Phase 1 — block guarded git calls after a CDPATH-redirectable `cd` / `pushd` — protected paths: `.claude/hooks/pr_merge_status_guard.py`
@@ -38,8 +38,10 @@
 - AD-4 [plan, 2026-10-02] Does the rule cover `pushd`, and a `cd` after the directory is already unknown? — Picked: A — yes to both. Alternatives: B — `cd` with a known directory only. Why: same CDPATH search, same incorrect allow under the fallback. Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-10-02] Does the block apply to `git commit` as well as `git push`? — Picked: A — both. Alternatives: B — push only. Why: the issue says deny the write; both are §21-guarded writes. Applied in: phase 1 PR. Status: pending review
 - AD-6 [plan, 2026-10-02] Fix the `CDPATH` row now although #6038 lists it and is deferred until #5163 merges? — Picked: A — yes, only the `CDPATH` row, on the issue's project branch. Alternatives: B — leave it to #6038 and close this as a duplicate. Why: #6090 is the #5144 project's own security follow-up, which its security pass needs fixed on the project branch. Applied in: phase 1 PR. Status: pending review
+- AD-7 [phase 1, 2026-10-02] Should a `cd` / `pushd` run through `builtin` or `command` count for the CDPATH rule, although wrapper prefixes in general are #6038's scope? — Picked: A — yes, for the CDPATH rule only. Alternatives: B — no, leave every wrapper to #6038. Why: `CDPATH=.. builtin cd .git` is a direct bypass of this fix; the walker still does not follow those wrappers' directory changes otherwise (#6038). Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
 
 ## Notes
+- Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)
 - Security pass: `Security pass: skip` per `security_pass_skip.py` (`ai:security` created and labelled by the issue automation).
