@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5927
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5927-bound-plain-mode-hold   Final PR: #5940 draft
-- Status: BLOCKED
+- Status: IN_PROGRESS
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #5944: twin sync (review round 2)
+- Waiting on: PR #5944 review on its current head (a review round after the round-2 twin sync)
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01KJT4qCwfkmhUAkLh3hXDbg   safety net none   hand-back none (no wait armed while the twin sync is pending)
-- Last updated: 2026-10-01
-- Last note: Review round 2 on PR #5944 (head 31b27bc, workflow hand-off round 1): `_env_positive_float` now rejects non-finite values (`inf`, `nan`, `1e309`), so an infinite `CLAUDE_FIX_HOLD_MAX_HOURS` can no longer lift the bound; the same reader also stops an infinite claim lease and an `OverflowError` on an infinite hand-back cap. Tests extended, changelog headline says the limit is a configurable default, this log and the PR body no longer claim the reverted #5667 row edit. The fix changes the `check_in_status.py` twin, so the head is on hold again for a third `[claude-twin-sync]`; the project resumes on `/reclarify` after that push.
+- Check-in: checker session_01KJT4qCwfkmhUAkLh3hXDbg   safety net none   hand-back none (the stage after /reclarify arms the wait)
+- Last updated: 2026-10-02
+- Last note: Review round 3 on PR #5944 (workflow round 1 on the synced head 8b4107a): this log now records the round-2 twin sync as done and the project as in progress instead of BLOCKED on it. Earlier: review round 2 on PR #5944 (head 31b27bc, workflow hand-off round 1): `_env_positive_float` now rejects non-finite values (`inf`, `nan`, `1e309`), so an infinite `CLAUDE_FIX_HOLD_MAX_HOURS` can no longer lift the bound; the same reader also stops an infinite claim lease and an `OverflowError` on an infinite hand-back cap. Tests extended, changelog headline says the limit is a configurable default, this log and the PR body no longer claim the reverted #5667 row edit. The fix changes the `check_in_status.py` twin, so the head is on hold again for a third `[claude-twin-sync]`; the project resumes on `/reclarify` after that push.
 
 ## Phases
-1. [ ] Phase 1 — plain PR mode bounds a hold by age — PR #5944 open (round 2 twin sync pending); review rounds: 2; interventions: 0 — protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/implement-plan-claude.md` (twins only)
+1. [ ] Phase 1 — plain PR mode bounds a hold by age — PR #5944 open (round-2 twin sync done; review round 3 done); review rounds: 3; interventions: 0 — protected paths: `.claude/scripts/check_in_status.py`, `.claude/commands/implement-plan-claude.md` (twins only)
    - [x] `check_pr` in `workflow-templates/.claude/scripts/check_in_status.py`: a trusted hold on the current head waits only while younger than `CLAUDE_FIX_HOLD_MAX_HOURS` (`DEFAULT_FIX_HOLD_MAX_HOURS` `:161`; check `:275-288`); an older or undatable hold reports `state: blocked` (done) with `head_sha` and `claim`; module docstring (`:51-59`) and inline comment updated
    - [x] Command twin: done-waiting *PR* bullet **Held** names the bound and what a stale hold routes to (`workflow-templates/.claude/commands/implement-plan-claude.md:223`)
    - [x] Tests against the twin in `tests/test_check_in_status.py:1023-1127` (fresh / stale / env override / bad timestamp / newer hold / call budget / `--hand-back` unchanged / command twin); 18 new cases fail against the old script and pass against the twin
@@ -23,7 +23,8 @@
    - [x] Review round 1 (head 49bb384): `_parse_time` rejects a timestamp with no UTC offset as unreadable, so a timezone-less hold time hands back as blocked and a timezone-less claim time is not live instead of raising `TypeError` into `action: retry` (`workflow-templates/.claude/scripts/check_in_status.py:243-252`); tests `tests/test_check_in_status.py` (timezone-less cases in `test_hold_with_an_unreadable_time_is_handed_back`, new `test_claim_with_a_timezone_less_time_is_not_live`); #5667 fragment edit reverted (AD-8)
    - [x] `[claude-twin-sync]` copy of the round 1 `check_in_status.py` twin into `.claude/` (human, after the twin-sync blocker) — landed as 31b27bc (2026-10-01, human, Q2: A; sha256 c0be415c94653a11983af2d52314461f2486db4ca8ddef04e35c533436e47906 verified against the twin; 722 passed, 1 skipped reported)
    - [x] Review round 2 (head 31b27bc): `_env_positive_float` falls back to the default for non-finite values (`workflow-templates/.claude/scripts/check_in_status.py:107`, `:532-543`), covering `CLAUDE_FIX_HOLD_MAX_HOURS`, `CLAUDE_FIX_CLAIM_LEASE_HOURS`, and `CLAUDE_FIX_HAND_BACK_CAP`; tests `tests/test_check_in_status.py:1105` (`inf`, `+inf`, `Infinity`, `-inf`, `nan`, `1e309` added) and `:1117` (new `test_non_finite_env_numbers_fall_back_to_defaults`), 8 new cases fail against the old twin; `README.md:92` and the changelog fragment updated; log line for the reverted #5667 row corrected
-   - [ ] `[claude-twin-sync]` copy of the round 2 `check_in_status.py` twin into `.claude/` (human, after the twin-sync blocker)
+   - [x] `[claude-twin-sync]` copy of the round 2 `check_in_status.py` twin into `.claude/` (human, after the twin-sync blocker) — landed as 8b4107a (2026-10-02, pushed by the owner's supervising session; sha256 4a12a9ad17b5ab4dd96db9f3d3b5b5f7ba3d28b5355fb40a6d6791f11f7ace20 verified equal to the twin)
+   - [x] Review round 3 (head 8b4107a, workflow round 1): Status, Waiting on, Check-in, Last note, the phase row, and the round-2 sync item now reflect the synced state (no code change)
 
 ## Conformance
 
