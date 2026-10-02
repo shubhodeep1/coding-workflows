@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#5144
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-5144-merge-guard-effective-repo   Final PR: #5163 draft
-- Status: BLOCKED until the `[claude-twin-sync]` commit for review round 9 lands (twin sha256 `18d09f49…0786`); IN_PROGRESS from that commit on
-- Stage: phase 1/1 — review round
+- Status: BLOCKED until the `[claude-twin-sync]` commit for conformance fix PR #6070 lands (twin sha256 `d38f5eef…5ee9`); IN_PROGRESS from that commit on
+- Stage: conformance 1/3
 - Activation: not started
-- Waiting on: PR #5173: twin sync of the round-9 twin, then the next review round
+- Waiting on: PR #6070: twin sync, then its review rounds; next stage `conformance 2/3` once it merges
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_012bXVKFrhBSuPGD6croSjLV (idle; reused after the sync)   safety net none   hand-back none
-- Last updated: 2026-10-01
-- Last note: review round 9 (workflow round 1 on head bec2ce314549, run 36830178139, ledger `fc104715…833e`), the round after twin sync `bec2ce3`: fixed in the twin the literal-tilde state being shared by every occurrence of the same text (now read per word), git calls after a reserved word (`then git push`, `do git commit`, `! git …`) not being guarded, and a `cd` inside an `if`, loop or `case` body being treated as unconditional; refreshed this header (the task gap). Rejected the `--git-dir=~` expansion finding (Bash leaves it literal) and the target-dedup finding (equal targets get equal verdicts). The twin is now `18d09f49…0786` and the `.claude/` copy `2c507cbb…d703` until the `[claude-twin-sync]` commit copies it; blocker posted on #5144.
+- Check-in: none (checker session_012bXVKFrhBSuPGD6croSjLV is gone; the stage `/reclarify` resumes creates a new project checker when it arms the wait on PR #6070)
+- Last updated: 2026-10-02
+- Last note: conformance 1/3 (session_01VCJ1yY78o8Ed3BPfmPFtAW, started by hand after `/reclarify` because the pickup is disabled): phase PR #5173 merged; project branch synced with main at 8fd1f48 (clean; 705 tests passed). Audit: INCOMPLETE — 1 BLOCKER (`git push -uo <v> origin` / `--pu <v>` shifted the remote into the refspecs and the stranded current branch went unjudged), 2 CONCERNs (`-fd` / `--del` deletions judged as pushes; stale `blocking_pull_request` docstring), all fixed twin-first in PR #6070. The #6038 gaps are left to that issue. Hold claim and twin-sync blocker posted on #5144.
 
 ## Phases
-1. [ ] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 open (round 9 pushed; waits on the round-9 twin sync, then the next review round); review rounds: 9; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [x] Phase 1 — effective repository and push target ref for the §21 guard   — PR #5173 merged 2026-10-02 (1487699); review rounds: 9 recorded here; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Command walker: effective directory across `cd`, `git -C`, `GIT_DIR=`, `--git-dir`; unresolvable constructs fall back with a warning
    - Push refspec parser: `<src>:<dst>` judged on `<dst>` with `<src>` as tip; deletions and tags skipped; no refspec judges the current branch
    - Per-target judge with one cached REST call per `(slug, branch)`; one merged hook result
@@ -22,6 +22,7 @@
    - Done: new tests pass against the twin; all other tests pass except `test_template_copies_are_identical` until the `[claude-twin-sync]` copy
 
 ## Conformance
+- Run 1 — 2026-10-02: INCOMPLETE — fix PR #6070 (pre-security). 1 BLOCKER, 2 CONCERNs, all EVIDENCE-BASED and fixed twin-first; `#6038` gaps excluded by the operator.
 
 ## Security pass
 
@@ -58,6 +59,7 @@
 - [source:intervention] Resolve a path the way the program that uses it does: `cd` is lexical unless `-P`, but `git -C`, `GIT_DIR` and `--git-dir` go through `chdir`, which follows symlinks before `..`; and a builtin's options end at its first operand (`cd x -P` is a second operand, so the `cd` fails). (files: .claude/hooks/pr_merge_status_guard.py)
 
 - [source:intervention] A guard that needs quoting facts about shell words must keep them per occurrence, lined up with the tokenizer's words, not in a set keyed by word text: the same text can be quoted in one place and bare in another. Check the alignment and fall back when it fails. (files: .claude/hooks/pr_merge_status_guard.py)
+- [source:conformance] A parser that reads a git command's options must follow git's parse-options rules: a short-option cluster (`-fd` is `-f -d`, `-uo <v>` is `-u -o <v>`) and any unambiguous long-option prefix (`--del`, `--pu <v>`, `--rep <v>`) count as the option, or an option value shifts the positionals and the guard judges the wrong ref. (files: .claude/hooks/pr_merge_status_guard.py)
 - [source:intervention] Bash reserved words (`then`, `do`, `else`, `!`, `time`) are not wrappers: the command after them runs, so a guard that only looks at a segment's first word must skip them, and a `cd` inside an `if`, loop or `case` body is conditional. (files: .claude/hooks/pr_merge_status_guard.py)
 
 ## Notes
@@ -77,3 +79,4 @@
 - Review round 7 (session_01Mm4vPcFoXxqihGf1c1VGDX, 2026-10-01): workflow round 1 on head b6a2a6f4a806 (ledger `6543b32c…8b85`) after twin sync `b6a2a6f`. Fixed the stale header (the task gap) and added `test_e2e_linked_worktree_git_dir_is_judged_by_its_own_head`; rejected the empty-destination refspec, `GIT_DIR` inspection and `cd … 2>/dev/null` findings. Neither hook copy changed (both `10546fc7…be8f`), so no twin sync is needed; checker session_012bXVKFrhBSuPGD6croSjLV reused.
 - Review round 8 (session_011Wt84SnSigqdNznps71zDm, 2026-10-01): workflow round 2 on head 3c67300d9464 (ledger `af2aacc1…3c00`). Fixed the quoted-tilde and `cd -P` findings in the twin, plus adjacent defects in the same flow (physical `git -C` / git-dir resolution, `--git-dir=~`, `cd` option parsing); rejected the `evaluate` audit finding. New twin sha256 `2c507cbb217664b2fac297f51eaa67a9dafd164b3faaad0c6b2abf7ce569d703` (the `.claude/` copy is still `10546fc7…be8f`); hold claim and new blocker posted on #5144. Project branch was already up to date with main.
 - Review round 9 (session_01X9PaJPjt3zMqTXSg9P159R, 2026-10-01): workflow round 1 on head bec2ce314549 (ledger `fc104715…833e`). Project branch synced with main at d262bce (clean; 296 tests passed) and merged into the phase branch (clean). Fixed the per-occurrence tilde finding and the reserved-word bypass in the twin, plus the adjacent `cd` inside an `if`, loop or `case` body; refreshed the stale header; rejected the `--git-dir=~` and target-dedup findings. New twin sha256 `18d09f49cae2239051634c5c3627ce515f65e073a008286b0c35185cb81c0786` (the `.claude/` copy is `2c507cbb…d703` until the sync); hold claim and new blocker posted on #5144.
+- Conformance 1/3 (session_01VCJ1yY78o8Ed3BPfmPFtAW, 2026-10-02): started by hand from the operator's review session session_01QAjMKN7ui2G42nCbJ39BJf after `/reclarify` (the Claude issue pickup is disabled); the old checker and the round-9 stage session were gone, zombie checkers archived: 0. Operator context: the `case`-arm finding and the other gaps the old hook also has are deferred to #6038 and were not audited as findings here. Fix PR #6070 edits only the twin (new sha256 `d38f5eefe68d2ea400970204f46f154182b442e5ab9604fbeff6cdc91ae85ee9`; the `.claude/` copy is still `190f4299…85db`); hold claim and twin-sync blocker posted on #5144. The changelog fragment of this project gained one row instead of a second fragment.
