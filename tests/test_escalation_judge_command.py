@@ -310,12 +310,40 @@ def test_security_clean_pass_checks_earlier_followups(plan):
 	# while the finding is unfixed (review round 1 on 8950396).
 	step9 = plan[plan.index("9. **Security pass"):plan.index("10. **Runtime validation.**")]
 	clean = step9[step9.index("**Conclusion `success` and no follow-up issues opened"):step9.index("**Follow-up issues opened**")]
-	assert "when the run audited and its run line reports `findings=0`, or when every follow-up issue the log's `## Security pass` lists from earlier cycles is closed and labelled `ai:merged`" in clean
+	assert "the pass is clean, and you go to step 10, only when the run skipped as unchanged or audited and its run line reports `findings=0`" in clean
 	assert "`scripts/security_audit.sh` matches the `ai:security-finding` marker on every `ai:security` issue" in clean
-	assert "A listed follow-up that is still open and not blocked → arm the wait on the issue list again (next stage `security-pass <k+1>/5`)" in clean
-	assert "One closed without `ai:merged`, or blocked → escalation stop `security-followup-unmerged`" in clean
+	assert "A follow-up issue the log's `## Security pass` lists that is still open and not blocked → arm the wait on the issue list again (next stage `security-pass <k+1>/5`)" in clean
+	assert "Otherwise (every listed follow-up is closed, with or without `ai:merged`, or one is blocked) → escalation stop `security-followup-unmerged`" in clean
 	assert "→ the pass is clean; go to step 10." not in clean
-	assert "a pass is clean only when it opened no follow-up and either surfaced no finding or every earlier follow-up is closed with `ai:merged` (step 9)" in plan
+	assert "a pass is clean only when it opened no follow-up and surfaced no finding: a finding it still reports is unfixed even when its earlier follow-up merged (step 9)" in plan
+	table_row = "| `security-followup-unmerged` | step 9 | a follow-up closed without a merged PR, or blocked, or a finding the audit still reports after its follow-up closed |"
+	assert table_row in plan
+
+
+def test_security_finding_reported_after_its_followup_merged_is_not_clean(plan):
+	# A merged follow-up whose fix did not remove the finding: the re-dispatch
+	# reports `findings` above 0 with `followups_created=0` (the finding's
+	# marker suppresses a second follow-up). Merged follow-ups must never make
+	# that pass clean (review rounds on 973f295 and 8a69cfe).
+	step9 = plan[plan.index("9. **Security pass"):plan.index("10. **Runtime validation.**")]
+	clean = step9[step9.index("**Conclusion `success` and no follow-up issues opened"):step9.index("**Follow-up issues opened**")]
+	assert "A run that reports `findings` above 0 is never clean, whatever state its earlier follow-ups are in" in clean
+	assert "equally after a follow-up merged whose fix did not remove the finding" in clean
+	# The old OR branch that let merged follow-ups pass a run with findings is gone.
+	assert "or when every follow-up issue the log's `## Security pass` lists from earlier cycles is closed and labelled `ai:merged`" not in clean
+	assert "either surfaced no finding or every earlier follow-up is closed with `ai:merged`" not in plan
+	# The repeat stop names the follow-ups that cover a finding the run still lists.
+	assert "whose evidence names the follow-up issues whose `ai:security-finding` marker matches a `Finding ID:` the run's tracker section still lists" in clean
+
+
+def test_judge_descope_applied_in_names_the_blocked_pr_for_intervention_cap(judge, plan):
+	# An `intervention-cap` descope is a commit on the blocked PR's branch and
+	# opens no revert PR, so its AD entry must point at that PR (review round
+	# 1 on 8a69cfe).
+	step5 = judge[judge.index("5. **Record.**"):judge.index("6. **Post the escalation comment**")]
+	assert "`Applied in:` the revert PR, or for `intervention-cap`, which opens no revert PR, the blocked PR that receives the `[claude-intervention] descope ES-<n>` commit" in step5
+	section = plan[plan.index("## Escalations"):plan.index("## Progress Log")]
+	assert "remove the failing part from the blocked PR's own branch in one `[claude-intervention] descope ES-<n>` commit" in section
 
 
 def test_plan_command_lists_exactly_the_ledger_stop_ids(plan):
