@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T20:45:00Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A parser behind a fail-closed authorization check must treat every entry it cannot read (a non-object, or a present but null field) as unreadable and refuse, not skip it; skipping lets one readable entry authorize the whole record.",
+  "phase": "implement_plan",
+  "pr_number": 6108,
+  "record_id": "lesson-implement-plan-f84162e26042a28e2805e893",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6101-authorize-usage-limit-resumes",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}

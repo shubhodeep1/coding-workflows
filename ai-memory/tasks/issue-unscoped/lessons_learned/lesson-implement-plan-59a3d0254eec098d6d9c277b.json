@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T20:45:00Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "The Claude-fixer hand-off counts every `- ` bullet inside a reviewer block as a ledger entry, so a reviewer that writes its clean verdict as a \"- Review summary:\" bullet turns a zero-defect review into a findings hand-off; read the entries before judging, and with no verdict bot close such a round with the next real push, never an empty commit.",
+  "phase": "implement_plan",
+  "pr_number": 6108,
+  "record_id": "lesson-implement-plan-59a3d0254eec098d6d9c277b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6101-authorize-usage-limit-resumes",
+    "file:scripts/review_autofix_step_claude_fixer_handoff.sh"
+  ]
+}
