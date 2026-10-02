@@ -15344,10 +15344,37 @@ def test_backward_scan_does_not_promote_merged_pr_into_non_target_base():
 	assert "[backward-scan] #35 ai:ready-to-merge; linked PR #935 is merged but rejected=non_target_base" in result["stdout"], result["stdout"]
 
 
+def _standalone_stall_state_from_comments(comments: list) -> dict:
+	"""Return the newest AI_STANDALONE_STALL_STATE_V1 payload in an issue's
+	comments (each a dict with a ``body`` or a plain string)."""
+	found = {}
+	for comment in comments:
+		body = comment.get("body", "") if isinstance(comment, dict) else str(comment)
+		if "AI_STANDALONE_STALL_STATE_V1" not in body:
+			continue
+		payload = body.split("AI_STANDALONE_STALL_STATE_V1", 1)[1].rsplit("AI_STANDALONE_STALL_STATE_V1", 1)[0].strip()
+		found = json.loads(payload)
+	return found
+
+
+def _wrong_base_merged_pr(number: int, closes: int) -> dict:
+	return {
+		"number": number,
+		"body": f"Closes #{closes}",
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-09-07T21:30:00Z",
+		"baseRefName": "feature/unrelated",
+		"headRefName": "claude/unrelated-fix",
+	}
+
+
 def test_standalone_stall_recovery_does_not_tag_merged_pr_into_non_target_base():
-	"""Issue #5618: stall recovery still skips the command for a merged
-	linked PR, but tags ai:merged only for a merge into the issue's target
-	branch."""
+	"""Issue #5618: a merged linked PR that landed outside the issue's target
+	branch is not tagged ai:merged. Owner decisions on PR #5633 (AD-8 changed
+	to B, Q7: A): in ai:done the recovery rungs act on the linked PR, so the
+	rejected PR's branch is left alone, and the attempt is counted so the
+	recovery ladder still reaches exhaustion or escalation."""
 	state = _base_state(status="complete")
 	standalone_state_comment = (
 		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
@@ -15367,20 +15394,50 @@ def test_standalone_stall_recovery_does_not_tag_merged_pr_into_non_target_base()
 		issue_comments={501: [standalone_state_comment]},
 		issue_linked_prs={501: 419},
 		mock_gh_issue_list_label_filter=True,
-		prs=[{
-			"number": 419,
-			"body": "Closes #501",
-			"state": "closed",
-			"merged": True,
-			"merged_at": "2026-09-07T21:30:00Z",
-			"baseRefName": "feature/unrelated",
-			"headRefName": "claude/unrelated-fix",
-		}],
+		prs=[_wrong_base_merged_pr(419, 501)],
 	)
 	combined = result["stdout"] + result["stderr"]
 	assert "ai:merged" not in result["issues"]["501"]["labels"], result["issues"]["501"]["labels"]
 	assert "STALL_MERGED_LABEL_REJECTED issue=501 pr=419" in combined, combined
-	assert "reason=non_target_base" in combined, combined
+	assert "reason=non_target_base stall_action=run" in combined, combined
+	assert "STALL_SKIP issue=501 reason=merged_link_rejected pr=419 phase=ai:done" in combined, combined
+	assert "Re-triggering review" not in combined, combined
+	assert "empty-commit retrigger" not in combined, combined
+	stall_state = _standalone_stall_state_from_comments(result["issues"]["501"]["comments"])
+	assert stall_state.get("stall_recovery_count") == 3, stall_state
+
+
+def test_standalone_stall_recovery_runs_early_phase_action_for_rejected_merge():
+	"""PR #5633 (AD-8 changed to B): in an early phase a rejected merged link
+	no longer short-circuits stall recovery; the phase's normal action runs."""
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:planning",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 502: ["ai:planning"]},
+		issue_comments={502: [standalone_state_comment]},
+		issue_linked_prs={502: 420},
+		mock_gh_issue_list_label_filter=True,
+		prs=[_wrong_base_merged_pr(420, 502)],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" not in result["issues"]["502"]["labels"], result["issues"]["502"]["labels"]
+	assert "STALL_MERGED_LABEL_REJECTED issue=502 pr=420" in combined, combined
+	assert "reason=merged_link_rejected" not in combined, combined
+	assert "is MERGED — skipped" not in combined, combined
+	assert combined.count("STALL_MERGED_LABEL_REJECTED issue=502 pr=420") == 1, "the second merged-PR guard must not re-check a rejected PR"
+	assert "merged but not into the issue's target branch — continuing with 'retrigger_plan'" in combined, combined
 
 
 def test_linkage_paths_distinguish_pr_fetch_failure_from_rejection():
@@ -16940,6 +16997,60 @@ def test_managed_stall_recovery_reconciles_merged_pr_with_stale_merge_train_labe
 	assert "ai:done" not in result["issues"]["10"]["labels"]
 	assert result["latest_state"]["waves"][0]["issues"][0]["status"] == "merged"
 	assert "reason=merge_train_queued pr=88" not in result["stdout"]
+
+
+def test_managed_stall_recovery_counts_attempt_for_rejected_merge_in_done_phase():
+	"""Owner decisions on PR #5633 (AD-8 changed to B, Q7: A): a wave child in
+	ai:done whose merged linked PR landed outside its target branch is not
+	tagged ai:merged, the rejected PR's branch gets no empty commit, and the
+	attempt counts toward the stall budget."""
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 88},
+		prs=[_wrong_base_merged_pr(88, 10)],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" not in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["status"] != "merged"
+	assert "STALL_SKIP issue=10 reason=merged_link_rejected pr=88 phase=ai:done" in combined, combined
+	assert "reason=merged_linked_pr pr=88" not in combined, combined
+	assert "Re-triggering review" not in combined, combined
+	assert result["latest_state"]["waves"][0]["issues"][0].get("stall_recovery_count") == 1, result["latest_state"]["waves"][0]["issues"][0]
+
+
+def test_managed_stall_recovery_runs_early_phase_action_for_rejected_merge():
+	"""PR #5633 (AD-8 changed to B): in an early phase the rejected merged
+	link no longer skips recovery; retrigger_plan runs and is counted."""
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:planning"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:planning"]},
+		issue_linked_prs={10: 89},
+		prs=[_wrong_base_merged_pr(89, 10)],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "ai:merged" not in result["issues"]["10"]["labels"], result["issues"]["10"]["labels"]
+	assert "reason=merged_linked_pr pr=89" not in combined, combined
+	assert "reason=merged_link_rejected" not in combined, combined
+	assert combined.count("STALL_MERGED_LABEL_REJECTED issue=10 pr=89") == 1, "later merged-PR guards must not re-check a rejected PR"
+	assert "Re-triggering plan for issue #10" in combined, combined
+	assert result["latest_state"]["waves"][0]["issues"][0].get("stall_recovery_count") == 1, result["latest_state"]["waves"][0]["issues"][0]
 
 
 def test_linked_pr_graphql_queries_request_full_label_page():

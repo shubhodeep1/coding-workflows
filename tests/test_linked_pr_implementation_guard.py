@@ -562,10 +562,19 @@ def test_target_any_listed_target_counts():
 # ---------------------------------------------------------------------------
 
 
-def _reconcile_run(pr_payload: dict | None, issue_payload: dict | None) -> tuple[list[str], str, str]:
+def _reconcile_run(
+	pr_payload: dict | None,
+	issue_payload: dict | None,
+	*,
+	known_issue_payload: dict | None = None,
+) -> tuple[list[str], str, str, int]:
 	"""Run _reconcile_merged_pr_issue for issue 5618 / PR 9001.
 
-	Returns (gh calls, stderr, healing notes)."""
+	``known_issue_payload`` is passed as the optional fifth argument (the
+	issue JSON the managed caller already read). Returns (gh calls, stderr,
+	healing notes, return code). Return code 0 means the caller skips the
+	stall action, 1 means it runs it (PR #5633, AD-8). Reads of the issue
+	through _safe_gh_jq are logged to gh_calls.log as ``issue-read``."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		_bootstrap_target_helpers(
@@ -591,20 +600,29 @@ def _reconcile_run(pr_payload: dict | None, issue_payload: dict | None) -> tuple
 		gh() {{ printf '%s\\n' "$*" >> gh_calls.log; }}
 		gh_retry() {{ "$@"; }}
 		_fetch_pr_json() {{ if [ -s pr.json ]; then cat pr.json; else echo '{{}}'; fi; }}
-		_safe_gh_jq() {{ if [ -s issue.json ]; then cat issue.json; else return 1; fi; }}
+		_safe_gh_jq() {{ printf 'issue-read\\n' >> gh_calls.log; if [ -s issue.json ]; then cat issue.json; else return 1; fi; }}
 		add_healing_note() {{ printf '%s\\n' "$*" >> healing.log; }}
 		tg_notify() {{ :; }}
 		_gh_url() {{ printf 'https://github.com/%s/%s' "${{GITHUB_REPOSITORY}}" "$1"; }}
 		source helpers.sh
 		: > gh_calls.log
 		: > healing.log
-		_reconcile_merged_pr_issue '5618' 'ai:done' 'retrigger_review' '9001'
+		known_issue_json="$(cat known_issue.json)"
+		if _reconcile_merged_pr_issue '5618' 'ai:done' 'retrigger_review' '9001' "${{known_issue_json}}"; then
+			echo 0 > rc.txt
+		else
+			echo $? > rc.txt
+		fi
 		""")
+		(tmp / "known_issue.json").write_text(
+			json.dumps(known_issue_payload) if known_issue_payload is not None else "", encoding="utf-8"
+		)
 		r = _run_bash(script, cwd=tmp)
 		assert r.returncode == 0, f"reconcile harness exited {r.returncode}: {r.stderr}"
 		calls = [c for c in (tmp / "gh_calls.log").read_text(encoding="utf-8").splitlines() if c]
 		notes = (tmp / "healing.log").read_text(encoding="utf-8")
-		return calls, r.stderr, notes
+		rc = int((tmp / "rc.txt").read_text(encoding="utf-8").strip())
+		return calls, r.stderr, notes, rc
 
 
 def _merged_payload(base: str, head: str, body: str = "Fixes #5618", head_repo: str = _TEST_REPO) -> dict:
@@ -620,65 +638,233 @@ def _labelled(calls: list[str]) -> bool:
 
 
 def test_reconcile_default_branch_merge_is_tagged():
-	calls, _, notes = _reconcile_run(_merged_payload("main", "claude/fix"), _issue_payload("Plain issue."))
+	calls, _, notes, rc = _reconcile_run(_merged_payload("main", "claude/fix"), _issue_payload("Plain issue."))
 	assert _labelled(calls), calls
 	assert "tagged ai:merged" in notes
+	assert rc == 0, "a verified merge skips the stall action"
 
 
 def test_reconcile_integration_branch_merge_from_automation_head_is_tagged():
 	issue = _issue_payload("- Integration branch: `claude/implement-plan-issue-4813-x`\n")
-	calls, _, _ = _reconcile_run(_merged_payload("claude/implement-plan-issue-4813-x", "ai/issue-5618"), issue)
+	calls, _, _, rc = _reconcile_run(_merged_payload("claude/implement-plan-issue-4813-x", "ai/issue-5618"), issue)
 	assert _labelled(calls), calls
+	assert rc == 0
 
 
 def test_reconcile_managed_child_project_branch_merge_is_tagged():
 	issue = _issue_payload("Tracking issue: #5600\n", ["ai:orchestrator-managed"])
-	calls, _, _ = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), issue)
+	calls, _, _, rc = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), issue)
 	assert _labelled(calls), calls
+	assert rc == 0
 
 
 def test_reconcile_unlabelled_project_branch_merge_is_not_tagged():
 	"""Body text alone never makes an issue managed (issue #4957)."""
 	issue = _issue_payload("Tracking issue: #5600\nManaged by: AI Orchestrator\n")
-	calls, err, notes = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), issue)
+	calls, err, notes, rc = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), issue)
 	assert not _labelled(calls), calls
 	assert "STALL_MERGED_LABEL_REJECTED issue=5618 pr=9001" in err
-	assert "reason=non_target_base" in err
-	assert "not tagged ai:merged" in notes
+	assert "reason=non_target_base stall_action=run" in err
+	assert "running stall recovery" in notes and "not tagged ai:merged" in notes
+	assert rc == 1, "a rejected merge must not skip stall recovery (PR #5633, AD-8)"
 
 
 def test_reconcile_wrong_base_merge_is_not_tagged():
-	"""The finding's scenario through the stall path."""
+	"""The finding's scenario through the stall path: the merge is not this
+	issue's, so the caller runs stall recovery instead of skipping it."""
 	issue = _issue_payload("- Integration branch: `claude/implement-plan-issue-4813-x`\n")
-	calls, err, _ = _reconcile_run(_merged_payload("feature/unrelated", "claude/unrelated"), issue)
+	calls, err, _, rc = _reconcile_run(_merged_payload("feature/unrelated", "claude/unrelated"), issue)
 	assert not _labelled(calls), calls
-	assert "reason=non_target_base" in err
+	assert "reason=non_target_base stall_action=run" in err
+	assert rc == 1
 
 
 def test_reconcile_foreign_head_into_integration_branch_is_not_tagged():
 	issue = _issue_payload("- Integration branch: `claude/implement-plan-issue-4813-x`\n")
-	calls, err, _ = _reconcile_run(_merged_payload("claude/implement-plan-issue-4813-x", "claude/unrelated"), issue)
+	calls, err, _, rc = _reconcile_run(_merged_payload("claude/implement-plan-issue-4813-x", "claude/unrelated"), issue)
 	assert not _labelled(calls), calls
-	assert "reason=unverified_identity" in err
+	assert "reason=unverified_identity stall_action=run" in err
+	assert rc == 1
 
 
 def test_reconcile_mention_only_or_unmerged_pr_is_not_tagged():
-	calls, err, _ = _reconcile_run(_merged_payload("main", "claude/fix", body="Refs #5618"), _issue_payload(""))
+	calls, err, _, rc = _reconcile_run(_merged_payload("main", "claude/fix", body="Refs #5618"), _issue_payload(""))
 	assert not _labelled(calls), calls
-	assert "reason=not_implementation_pr" in err
+	assert "reason=not_implementation_pr stall_action=run" in err
+	assert rc == 1
 	unmerged = _merged_payload("main", "ai/issue-5618") | {"merged_at": None}
-	calls, err, _ = _reconcile_run(unmerged, _issue_payload(""))
+	calls, err, _, rc = _reconcile_run(unmerged, _issue_payload(""))
 	assert not _labelled(calls), calls
-	assert "reason=not_merged" in err
+	assert "reason=not_merged stall_action=run" in err
+	assert rc == 1
 
 
 def test_reconcile_fetch_failures_fail_closed():
-	calls, err, _ = _reconcile_run(None, _issue_payload(""))
+	"""A failed read verifies nothing: no label, and the stall action is
+	skipped this cycle so the next cycle retries (return 0)."""
+	calls, err, notes, rc = _reconcile_run(None, _issue_payload(""))
 	assert not _labelled(calls), calls
-	assert "reason=pr_fetch_failed" in err
-	calls, err, _ = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), None)
+	assert "reason=pr_fetch_failed stall_action=skip" in err
+	assert "retrying next cycle" in notes
+	assert rc == 0
+	calls, err, _, rc = _reconcile_run(_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"), None)
 	assert not _labelled(calls), calls
-	assert "reason=issue_fetch_failed" in err
+	assert "reason=issue_fetch_failed stall_action=skip" in err
+	assert rc == 0
+
+
+def test_reconcile_reuses_known_issue_json_without_reading_the_issue():
+	"""The managed path hands over the issue JSON it already read for its
+	closed-issue guard; the reconcile then makes no second issue read
+	(PR #5633 review round 1, finding 5)."""
+	issue = _issue_payload("Tracking issue: #5600\n", ["ai:orchestrator-managed"])
+	calls, _, _, rc = _reconcile_run(
+		_merged_payload(_PROJECT_BRANCH, "ai/issue-5618"),
+		None,
+		known_issue_payload=issue,
+	)
+	assert "issue-read" not in calls, calls
+	assert _labelled(calls), calls
+	assert rc == 0
+
+
+def test_reconcile_reads_issue_when_no_known_issue_json_is_passed():
+	issue = _issue_payload("Plain issue.")
+	calls, _, _, rc = _reconcile_run(_merged_payload("main", "claude/fix"), issue, known_issue_payload=None)
+	assert "issue-read" in calls, calls
+	assert rc == 0
+
+
+def test_rejected_merged_link_counts_attempt_only_for_pr_acting_rungs():
+	"""Q7: A on PR #5633: in ai:done / ai:ready-to-merge a rejected merged link
+	counts the attempt instead of running a rung that acts on the linked PR;
+	exhaustion (`skip`) and `escalate_human` still run, and every earlier
+	phase runs its normal recovery."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap_target_helpers(tmp, ["_stall_rejected_merged_link_counts_attempt"], [])
+		cases = [
+			("ai:done", "retrigger_review", 0),
+			("ai:done", "run_stall_judge", 0),
+			("ai:ready-to-merge", "attempt_merge", 0),
+			("ai:done", "skip", 1),
+			("ai:done", "escalate_human", 1),
+			("ai:ready-to-merge", "escalate_human", 1),
+			("ai:planning", "retrigger_plan", 1),
+			("no_labels", "retrigger_pipeline", 1),
+			("ai:implementing", "retrigger_implement", 1),
+		]
+		lines = ["set -euo pipefail", "source helpers.sh"]
+		for phase, action, _ in cases:
+			lines.append(
+				f"if _stall_rejected_merged_link_counts_attempt '{phase}' '{action}'; then echo '{phase} {action} 0'; else echo '{phase} {action} 1'; fi"
+			)
+		r = _run_bash("\n".join(lines), cwd=tmp)
+		assert r.returncode == 0, r.stderr
+		got = r.stdout.strip().splitlines()
+		assert got == [f"{p} {a} {rc}" for p, a, rc in cases], got
+
+
+def test_wave_gate_downgrade_failure_fails_the_gate_instead_of_wiping_states():
+	"""PR #5633 review round 1, finding 4: a failed downgrade write returns 1
+	(the caller defers the validate dispatch) rather than replacing every
+	issue's linked-PR state with `{}`."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	gate = script.split("refresh_validation_dispatch_wave_gate() {", 1)[1].split("\n}\n", 1)[0]
+	assert "'. + {($key): {state: \"unknown\", merged: false}}' 2>/dev/null || echo '{}'" not in gate
+	assert "wave-merge gate unavailable this cycle" in gate
+	downgrade_block = gate.split("could not downgrade the rejected linked PR", 1)[1]
+	assert downgrade_block.lstrip().split("\n", 2)[1].strip() == "return 1", downgrade_block[:200]
+
+
+# ---------------------------------------------------------------------------
+# validation_fix_issue_has_merged_pr_evidence — the validation fix-up loop's
+# ai:merged backfill. With the `issue_target` rule the merged PR must pass
+# _pr_json_merged_into_issue_target (owner decision on PR #5633, AD-7): a
+# `Fixes #<n>` PR merged into an unrelated branch is not evidence. Without a
+# rule, an expected base keeps its exact-match meaning (security-pass
+# callers). _issue_timeline_with_cross_refs_json and _fetch_pr_json are
+# stubbed.
+# ---------------------------------------------------------------------------
+
+
+def _validation_evidence_rc(pr_payload: str, *args: str) -> tuple[int, str]:
+	"""Return (rc, stderr) of validation_fix_issue_has_merged_pr_evidence for
+	fix issue 5618 whose timeline holds merged PR 9001."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap_target_helpers(
+			tmp,
+			[
+				"_pr_json_closes_issue",
+				"_pr_json_is_issue_implementation_pr",
+				"_pr_json_merged_into_issue_target",
+				"validation_fix_issue_has_merged_pr_evidence",
+			],
+			["pr_head_ref_is_issue_automation_branch"],
+		)
+		timeline = [{
+			"event": "cross-referenced",
+			"source": {"issue": {"number": 9001, "merged": True, "pull_request": {"url": "https://example.invalid/pulls/9001"}}},
+		}]
+		(tmp / "timeline.json").write_text(json.dumps(timeline), encoding="utf-8")
+		(tmp / "pr.json").write_text(pr_payload, encoding="utf-8")
+		quoted = " ".join(f"'{a}'" for a in args)
+		script = textwrap.dedent(f"""
+		set -euo pipefail
+		export GITHUB_REPOSITORY='{_TEST_REPO}'
+		_issue_timeline_with_cross_refs_json() {{ cat timeline.json; }}
+		_fetch_pr_json() {{ cat pr.json; }}
+		source helpers.sh
+		if validation_fix_issue_has_merged_pr_evidence '5618' {quoted}; then
+			echo 0 > rc.txt
+		else
+			echo $? > rc.txt
+		fi
+		""")
+		r = _run_bash(script, cwd=tmp)
+		assert r.returncode == 0, f"validation evidence harness exited {r.returncode}: {r.stderr}"
+		return int((tmp / "rc.txt").read_text(encoding="utf-8").strip()), r.stderr
+
+
+def test_validation_evidence_issue_target_rejects_wrong_base_merge():
+	pr = _target_pr(5618, base="feature/unrelated", head="claude/unrelated")
+	rc, err = _validation_evidence_rc(pr, "orchestrator/project-5600", "issue_target")
+	assert rc == 1, err
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=5618 candidate_pr=9001 rejected=non_target_base" in err
+
+
+def test_validation_evidence_issue_target_rejects_foreign_head_into_project_branch():
+	pr = _target_pr(5618, base="orchestrator/project-5600", head="claude/unrelated")
+	rc, err = _validation_evidence_rc(pr, "orchestrator/project-5600", "issue_target")
+	assert rc == 1, err
+	assert "rejected=unverified_identity" in err
+
+
+def test_validation_evidence_issue_target_accepts_automation_head_into_project_branch():
+	pr = _target_pr(5618, base="orchestrator/project-5600", head="ai/issue-5618")
+	rc, err = _validation_evidence_rc(pr, "orchestrator/project-5600", "issue_target")
+	assert rc == 0, err
+
+
+def test_validation_evidence_issue_target_accepts_default_branch_merge():
+	"""With no integration branch the project's target is the default branch."""
+	pr = _target_pr(5618, base="main", head="ai/issue-5618")
+	rc, err = _validation_evidence_rc(pr, "", "issue_target")
+	assert rc == 0, err
+	rc, err = _validation_evidence_rc(_target_pr(5618, base="release/x", head="ai/issue-5618"), "", "issue_target")
+	assert rc == 1, err
+	assert "rejected=non_target_base" in err
+
+
+def test_validation_evidence_without_rule_keeps_exact_base_match():
+	"""The security-pass callers pass an expected base and no rule: the base
+	must equal it exactly, and a default-branch merge does not count."""
+	rc, err = _validation_evidence_rc(_target_pr(5618, base="main", head="ai/issue-5618"), "orchestrator/project-5600")
+	assert rc == 1, err
+	assert "rejected=base_mismatch" in err
+	rc, err = _validation_evidence_rc(_target_pr(5618, base="orchestrator/project-5600", head="claude/any"), "orchestrator/project-5600")
+	assert rc == 0, err
 
 
 # ---------------------------------------------------------------------------

@@ -2742,7 +2742,7 @@ refresh_validation_dispatch_wave_gate() {
   # repository, so base_repo must be this one (reason=foreign_base_repo).
   # No API call: the batch above already carries base_ref, base_repo,
   # head_ref, head_repo, and default_branch.
-  local _vdg_inum _vdg_pr_json
+  local _vdg_inum _vdg_pr_json _vdg_downgraded_states
   for _vdg_inum in $(printf '%s' "${candidate_details_json}" | jq -r 'to_entries[] | select((.value.linked_pr.merged // false) == true) | .key' 2>/dev/null || true); do
     [[ "${_vdg_inum}" =~ ^[0-9]+$ ]] || continue
     _vdg_pr_json="$(printf '%s' "${candidate_details_json}" | jq -c --arg key "${_vdg_inum}" '
@@ -2755,9 +2755,16 @@ refresh_validation_dispatch_wave_gate() {
     ' 2>/dev/null || echo '{}')"
     if ! _pr_json_merged_into_issue_target "${_vdg_inum}" "${_vdg_pr_json}" "${integration_branch}"; then
       echo "LINKED_PR_CROSS_REF_REJECTED issue=${_vdg_inum} pr=$(_jq_field "${_vdg_pr_json}" '.number') base=$(_jq_field "${_vdg_pr_json}" '.base.ref') base_repo=$(_jq_field "${_vdg_pr_json}" '.base.repo.full_name') head=$(_jq_field "${_vdg_pr_json}" '.head.ref') head_repo=$(_jq_field "${_vdg_pr_json}" '.head.repo.full_name') project_base=${integration_branch:-none} reason=${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base} path=validation_dispatch_gate" >&2
-      # Fail closed: if the downgrade cannot be written, drop every linked-PR
-      # signal rather than keep the rejected merge.
-      pr_states_json="$(printf '%s' "${pr_states_json}" | jq -c --arg key "${_vdg_inum}" '. + {($key): {state: "unknown", merged: false}}' 2>/dev/null || echo '{}')"
+      # Fail closed: if the downgrade cannot be written, report the gate as
+      # unavailable (return 1) rather than keep the rejected merge or wipe
+      # every other issue's linked-PR state; the caller defers the validate
+      # dispatch this cycle (PR #5633 review round 1, finding 4).
+      if ! _vdg_downgraded_states="$(printf '%s' "${pr_states_json}" | jq -c --arg key "${_vdg_inum}" '. + {($key): {state: "unknown", merged: false}}' 2>/dev/null)" \
+        || [ -z "${_vdg_downgraded_states}" ]; then
+        echo "::warning::[validation-dispatch] could not downgrade the rejected linked PR for issue #${_vdg_inum}; wave-merge gate unavailable this cycle." >&2
+        return 1
+      fi
+      pr_states_json="${_vdg_downgraded_states}"
     fi
   done
 
@@ -3726,9 +3733,26 @@ has_label() {
   echo "${labels_json}" | jq -e --arg label "${label}" 'index($label) != null' >/dev/null 2>&1
 }
 
+# validation_fix_issue_has_merged_pr_evidence <issue> [expected base] [base rule]
+#
+# Return 0 when the issue's timeline holds a merged implementation PR for
+# it, 1 when it holds none, 2 on a lookup failure (retry next cycle).
+# Base rule, by the optional third argument:
+#   (empty) — with a non-empty expected base, the PR's base must equal it
+#             exactly (the security-pass callers); with no expected base,
+#             any base counts (legacy).
+#   issue_target — the PR must pass _pr_json_merged_into_issue_target with
+#             the expected base as the project's target branch: a merge
+#             into the default branch, or into that branch from a
+#             same-repository automation head for the issue. Used by the
+#             validation fix-up loop, so an unrelated `Fixes #<n>` PR
+#             merged into another branch no longer backfills ai:merged
+#             (owner decision on PR #5633, AD-7 changed to B; issue #5618).
+#             Rejections log `rejected=<reason>`. No extra API call.
 validation_fix_issue_has_merged_pr_evidence() {
   local issue_num="$1"
   local expected_base="${2:-}"
+  local validation_base_rule="${3:-}"
   local timeline_json
   local validation_merged_pr_candidates validation_candidate_pr validation_candidate_pr_json
   local validation_candidate_base
@@ -3764,17 +3788,23 @@ validation_fix_issue_has_merged_pr_evidence() {
       echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=pr_fetch_failed" >&2
       continue
     fi
-    if [ -n "${expected_base}" ]; then
+    if [ "${validation_base_rule}" != "issue_target" ] && [ -n "${expected_base}" ]; then
       validation_candidate_base="$(printf '%s' "${validation_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
       if [ -z "${validation_candidate_base}" ] || [ "${validation_candidate_base}" != "${expected_base}" ]; then
         echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=base_mismatch" >&2
         continue
       fi
     fi
-    if _pr_json_is_issue_implementation_pr "${issue_num}" "${validation_candidate_pr_json}"; then
-      return 0
+    if ! _pr_json_is_issue_implementation_pr "${issue_num}" "${validation_candidate_pr_json}"; then
+      echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=not_implementation_pr" >&2
+      continue
     fi
-    echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=not_implementation_pr" >&2
+    if [ "${validation_base_rule}" = "issue_target" ] \
+      && ! _pr_json_merged_into_issue_target "${issue_num}" "${validation_candidate_pr_json}" "${expected_base}"; then
+      echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=${ISSUE_TARGET_MERGE_REJECT_REASON:-non_target_base}" >&2
+      continue
+    fi
+    return 0
   done
 
   if [ "${validation_pr_lookup_failed}" = "true" ]; then
@@ -15429,6 +15459,35 @@ _check_merged_pr_guard() {
   return 0
 }
 
+# _stall_rejected_merged_link_counts_attempt <phase> <action>
+#
+# Called after _reconcile_merged_pr_issue rejected a merged linked PR (it
+# merged into the wrong target branch, or is not the issue's implementation
+# PR). Returns 0 when the stall action must NOT run but must be counted as
+# an attempt: in ai:done and ai:ready-to-merge every recovery rung other than
+# `skip` (exhaustion) and `escalate_human` acts on the linked PR — an empty
+# commit pushed to its branch, a merge retry, the stall judge — and the
+# linked PR here is a rejected, unrelated merge. Counting the attempt keeps
+# the recovery ladder moving to its existing exhaustion and escalation, so
+# the issue cannot sit stuck without a signal (owner decisions on PR #5633:
+# AD-8 changed to B, Q7: A). Returns 1 otherwise; earlier phases then run
+# their normal recovery. No API call.
+_stall_rejected_merged_link_counts_attempt() {
+  local phase="$1"
+  local action="$2"
+  case "${phase}" in
+    ai:done|ai:ready-to-merge)
+      case "${action}" in
+        skip|escalate_human)
+          return 1
+          ;;
+      esac
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 # _check_fresh_push_guard — Shared guard used by both stall recovery
 # paths.  Returns 0 when the linked PR's head commit was pushed within
 # the last _FRESH_PUSH_SUPPRESS_SECS (50 minutes, hardcoded) AND the
@@ -15668,32 +15727,55 @@ _check_open_pr_conflict_guard() {
 # branch the issue body names on its `Integration branch:` /
 # `Target branch:` line, or a labelled ai:orchestrator-managed child's
 # project branch (the targets close_merged_issues_sweep uses). Otherwise
-# it logs `STALL_MERGED_LABEL_REJECTED issue=<n> pr=<p> reason=<r> …` and
-# adds no label; the caller still skips the stall action. A failed fetch
-# adds no label either (fail closed).
+# it logs `STALL_MERGED_LABEL_REJECTED issue=<n> pr=<p> reason=<r> …
+# stall_action=<run|skip>` and adds no label.
+#
+# Return value (owner decision on PR #5633, AD-8 changed to B):
+#   0 — the caller skips the stall action: the merge was verified and
+#       ai:merged was added, or a fetch failed (pr_fetch_failed,
+#       issue_fetch_failed), so nothing could be verified this cycle and
+#       the next cycle retries (fail closed, stall_action=skip).
+#   1 — the link is definitively not this issue's merge into its target
+#       branch (not_merged, not_implementation_pr, foreign_base_repo,
+#       non_target_base, unverified_identity): the caller runs the stall
+#       action as if no merged PR existed, so the stall budget counts and
+#       its escalation alerts fire instead of the issue sitting stuck with
+#       no signal (stall_action=run).
+#
+# Optional $5: the issue's REST `issues/<n>` JSON when the caller already
+# read it (the managed path does, for its closed-issue guard); the issue is
+# then not fetched again.
 # §15 audit: the callers' cache shapes (GraphQL linked_pr, the synthesised
 # {number,state,merged}, the managed-path cache) lack the base's default
 # branch, the head repository, and the issue body, so this issues one
-# `pulls/<n>` and one `issues/<n>` REST read, only on a merged-PR hit.
+# `pulls/<n>` REST read, plus one `issues/<n>` read when $5 is absent,
+# only on a merged-PR hit.
 _reconcile_merged_pr_issue() {
   local issue_num="$1"
   local phase="$2"
   local action="$3"
   local pr_num="$4"
+  local _rmpi_known_issue_json="${5:-}"
 
   local _rmpi_pr_json _rmpi_issue_json _rmpi_body _rmpi_issue_base="" _rmpi_project_branch=""
-  local _rmpi_reason=""
+  local _rmpi_reason="" _rmpi_stall_action="run"
   _rmpi_pr_json="$(_fetch_pr_json "${pr_num}")"
   if [ -z "${_rmpi_pr_json}" ] || [ "${_rmpi_pr_json}" = "{}" ]; then
     _rmpi_reason="pr_fetch_failed"
+    _rmpi_stall_action="skip"
   elif [ "$(_jq_field "${_rmpi_pr_json}" '.merged_at != null' 'true|false')" != "true" ]; then
     _rmpi_reason="not_merged"
   elif ! _pr_json_is_issue_implementation_pr "${issue_num}" "${_rmpi_pr_json}"; then
     _rmpi_reason="not_implementation_pr"
   else
-    _rmpi_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" 2>/dev/null || echo "")"
+    if [ -n "${_rmpi_known_issue_json}" ] && printf '%s' "${_rmpi_known_issue_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      _rmpi_issue_json="${_rmpi_known_issue_json}"
+    else
+      _rmpi_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" 2>/dev/null || echo "")"
+    fi
     if [ -z "${_rmpi_issue_json}" ] || ! printf '%s' "${_rmpi_issue_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
       _rmpi_reason="issue_fetch_failed"
+      _rmpi_stall_action="skip"
     else
       _rmpi_body="$(printf '%s' "${_rmpi_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
       if type issue_body_integration_branch >/dev/null 2>&1; then
@@ -15709,11 +15791,17 @@ _reconcile_merged_pr_issue() {
     fi
   fi
   if [ -n "${_rmpi_reason}" ]; then
-    echo "STALL_MERGED_LABEL_REJECTED issue=${issue_num} pr=${pr_num} phase=${phase} action=${action} base=$(_jq_field "${_rmpi_pr_json}" '.base.ref') head=$(_jq_field "${_rmpi_pr_json}" '.head.ref') head_repo=$(_jq_field "${_rmpi_pr_json}" '.head.repo.full_name') issue_base=${_rmpi_issue_base:-none} project_base=${_rmpi_project_branch:-none} reason=${_rmpi_reason}" >&2
-    if declare -F add_healing_note >/dev/null 2>&1; then
-      add_healing_note "Issue #${issue_num}: skipped stall recovery '${action}' (phase=${phase}) — linked PR #${pr_num} reads merged but is not verified as the issue's merge into its target branch (${_rmpi_reason}); not tagged ai:merged"
+    echo "STALL_MERGED_LABEL_REJECTED issue=${issue_num} pr=${pr_num} phase=${phase} action=${action} base=$(_jq_field "${_rmpi_pr_json}" '.base.ref') head=$(_jq_field "${_rmpi_pr_json}" '.head.ref') head_repo=$(_jq_field "${_rmpi_pr_json}" '.head.repo.full_name') issue_base=${_rmpi_issue_base:-none} project_base=${_rmpi_project_branch:-none} reason=${_rmpi_reason} stall_action=${_rmpi_stall_action}" >&2
+    if [ "${_rmpi_stall_action}" = "skip" ]; then
+      if declare -F add_healing_note >/dev/null 2>&1; then
+        add_healing_note "Issue #${issue_num}: skipped stall recovery '${action}' (phase=${phase}) — linked PR #${pr_num} reads merged but could not be verified this cycle (${_rmpi_reason}); not tagged ai:merged, retrying next cycle"
+      fi
+      return 0
     fi
-    return 0
+    if declare -F add_healing_note >/dev/null 2>&1; then
+      add_healing_note "Issue #${issue_num}: running stall recovery '${action}' (phase=${phase}) — linked PR #${pr_num} reads merged but is not the issue's merge into its target branch (${_rmpi_reason}); not tagged ai:merged"
+    fi
+    return 1
   fi
 
   if declare -F ensure_label_exists >/dev/null 2>&1; then
@@ -15726,8 +15814,9 @@ _reconcile_merged_pr_issue() {
     add_healing_note "Issue #${issue_num}: skipped stall recovery '${action}' (phase=${phase}) — linked PR #${pr_num} already merged; tagged ai:merged for close_merged_issues_sweep"
   fi
   if declare -F tg_notify >/dev/null 2>&1; then
-    tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because linked PR #${pr_num} is already merged. Tagged ai:merged."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${pr_num}")" "WARNING"
+    tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because linked PR #${pr_num} is already merged. Tagged ai:merged."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${pr_num}")" "WARNING" || true
   fi
+  return 0
 }
 
 # release_staged_support_needs_human_latches
@@ -16255,13 +16344,36 @@ PY
       fi
       continue
     fi
+    # A merged link that _reconcile_merged_pr_issue rejects (wrong target
+    # branch, not the issue's implementation PR) is not this issue's merge:
+    # remember it so the second merged-PR guard below does not re-check the
+    # same PR, and fall through to normal stall recovery (PR #5633, AD-8).
+    local _std_merged_rejected_pr=""
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
-      echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
-      _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
-      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
-        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"; then
+        echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipped '${action}'."
+        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        fi
+        continue
       fi
-      continue
+      _std_merged_rejected_pr="${STALL_MERGED_PR_NUM}"
+      if _stall_rejected_merged_link_counts_attempt "${phase}" "${action}"; then
+        # Never act on the rejected PR's branch; count the attempt so the
+        # recovery ladder still reaches exhaustion or escalation (Q7: A).
+        echo "STALL_SKIP issue=${issue_num} reason=merged_link_rejected pr=${_std_merged_rejected_pr} phase=${phase} action=${action}"
+        tg_notify_issue "${issue_num}" "Standalone stall recovery: linked PR #${_std_merged_rejected_pr} is merged but not into the issue's target branch, so '${action}' was not run against it (stuck ${elapsed_minutes}m in '${phase}', attempt $((recovery_count + 1))). Counting as an attempt so the recovery ladder can escalate." "WARNING"
+        updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --argjson now "$(date +%s)" '
+          .stall_recovery_count = ((.stall_recovery_count | tonumber? // 0) + 1)
+          | .phase_attempts = (if (.phase_attempts | type) == "object" then .phase_attempts else {} end)
+          | .phase_attempts[$phase] = ((.phase_attempts[$phase] | tonumber? // 0) + 1)
+          | .status_since_ts = $now
+          | .updated_ts = $now
+        ' 2>/dev/null || echo "${updated_state}")"
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        continue
+      fi
+      echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is merged but not into the issue's target branch — continuing with '${action}'."
     fi
 
     # Fresh-push guard complements issue_has_active_workflow above; see
@@ -16316,13 +16428,16 @@ PY
             fi
           fi
         fi
-        if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
-          echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
-          _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
-          if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
-            write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}" \
+          && [ "${STALL_MERGED_PR_NUM}" != "${_std_merged_rejected_pr}" ]; then
+          if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"; then
+            echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipped '${action}'."
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
           fi
-          continue
+          echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is merged but not into the issue's target branch — continuing with '${action}'."
         fi
         ;;
     esac
@@ -17213,8 +17328,15 @@ recover_stalled_issue() {
   # Defence-in-depth for the current poll cycle: even if the state file
   # hasn't been updated yet, don't post recovery comments on closed issues
   # (e.g. issues whose PRs were already merged).
-  local _gh_issue_state
-  _gh_issue_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.state' || echo "")"
+  # One `issues/<n>` read serves both this guard and the merged-PR guards
+  # below, which hand it to _reconcile_merged_pr_issue instead of letting
+  # it read the issue again (§15; PR #5633 review round 1, finding 5).
+  local _gh_issue_state _mgd_issue_json
+  _mgd_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" || echo "")"
+  if ! printf '%s' "${_mgd_issue_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    _mgd_issue_json=""
+  fi
+  _gh_issue_state="$(printf '%s' "${_mgd_issue_json}" | jq -r '.state // ""' 2>/dev/null || echo "")"
   if [ "${_gh_issue_state}" = "closed" ]; then
     local _closed_labels
     _closed_labels="$(get_issue_labels_json "${issue_num}")"
@@ -17268,11 +17390,29 @@ recover_stalled_issue() {
     echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_fresh_lpr_entry}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
     return 1  # Intentional train wait; do not consume stall budget or alert.
   fi
+  # A merged link that _reconcile_merged_pr_issue rejects (wrong target
+  # branch, not the issue's implementation PR) is not this issue's merge:
+  # remember it so the later merged-PR guards do not re-check the same PR,
+  # and fall through to normal stall recovery (PR #5633, AD-8).
+  local _mgd_merged_rejected_pr=""
   if _check_merged_pr_guard "${issue_num}" "${_fresh_lpr_entry}"; then
-    echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
-    _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
     STALL_HEALING_CHANGED=true
-    return 1  # Signal: no action taken (caller should not increment counter)
+    if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}" "${_mgd_issue_json}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
+      return 1  # Signal: no action taken (caller should not increment counter)
+    fi
+    _mgd_merged_rejected_pr="${STALL_MERGED_PR_NUM}"
+    if _stall_rejected_merged_link_counts_attempt "${phase}" "${action}"; then
+      # Never act on the rejected PR's branch; count the attempt so the
+      # recovery ladder still reaches exhaustion or escalation (Q7: A).
+      echo "STALL_SKIP issue=${issue_num} reason=merged_link_rejected pr=${_mgd_merged_rejected_pr} phase=${phase} action=${action}"
+      if declare -F tg_notify >/dev/null 2>&1; then
+        tg_notify "Stall recovery: linked PR #${_mgd_merged_rejected_pr} of issue #${issue_num} is merged but not into the issue's target branch, so '${action}' was not run against it (stuck ${stall_minutes}m in '${phase}', attempt $((recovery_count + 1))). Counting as an attempt so the recovery ladder can escalate."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_mgd_merged_rejected_pr}")" "WARNING" || true
+      fi
+      STALL_RECOVERY_SHOULD_INCREMENT="true"
+      STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_merged_link_rejected"
+      return 0  # Signal: attempt counted (caller increments the counter)
+    fi
   fi
   if _check_fresh_push_guard_with_fallback "${issue_num}" "${_fresh_lpr_entry}" "${phase}"; then
     local _fp_src_suffix=""
@@ -17313,20 +17453,26 @@ recover_stalled_issue() {
       fi
 
       # --- Merged-PR sub-guard (uses cache only; fails open on miss) ---
-      if _check_merged_pr_guard "${issue_num}" "${_lpr_cache_entry}"; then
-        echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
-        _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+      if _check_merged_pr_guard "${issue_num}" "${_lpr_cache_entry}" \
+        && [ "${STALL_MERGED_PR_NUM}" != "${_mgd_merged_rejected_pr}" ]; then
         STALL_HEALING_CHANGED=true
-        return 1  # Signal: no action taken (caller should not increment counter)
+        if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}" "${_mgd_issue_json}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
+          return 1  # Signal: no action taken (caller should not increment counter)
+        fi
+        _mgd_merged_rejected_pr="${STALL_MERGED_PR_NUM}"
       fi
 
       if [ -z "${_lpr_cache_entry}" ] || [ "${_lpr_cache_entry}" = "null" ] || [ "${_lpr_cache_entry}" = "{}" ]; then
         _lpr_cache_entry="$(_single_issue_linked_pr_status_graphql "${issue_num}")"
-        if _check_merged_pr_guard "${issue_num}" "${_lpr_cache_entry}"; then
-          echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action} source=single_issue_graphql"
-          _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+        if _check_merged_pr_guard "${issue_num}" "${_lpr_cache_entry}" \
+          && [ "${STALL_MERGED_PR_NUM}" != "${_mgd_merged_rejected_pr}" ]; then
           STALL_HEALING_CHANGED=true
-          return 1  # Signal: no action taken (caller should not increment counter)
+          if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}" "${_mgd_issue_json}"; then
+            echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action} source=single_issue_graphql"
+            return 1  # Signal: no action taken (caller should not increment counter)
+          fi
+          _mgd_merged_rejected_pr="${STALL_MERGED_PR_NUM}"
         fi
       fi
 
@@ -17374,11 +17520,14 @@ recover_stalled_issue() {
             # flag still gives full opt-out.  No extra API calls — the
             # REST fallback has already fetched the PR payload on the
             # preceding line.
-            if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ] && [ "${_lpr_merged}" = "true" ]; then
-              echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${_lpr_num} phase=${phase} action=${action} source=rest_fallback"
-              _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${_lpr_num}"
+            if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ] && [ "${_lpr_merged}" = "true" ] \
+              && [ "${_lpr_num}" != "${_mgd_merged_rejected_pr}" ]; then
               STALL_HEALING_CHANGED=true
-              return 1  # Signal: no action taken (caller should not increment counter)
+              if _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${_lpr_num}" "${_mgd_issue_json}"; then
+                echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${_lpr_num} phase=${phase} action=${action} source=rest_fallback"
+                return 1  # Signal: no action taken (caller should not increment counter)
+              fi
+              _mgd_merged_rejected_pr="${_lpr_num}"
             fi
           fi
         fi
@@ -18712,7 +18861,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         # loop missed (fix-up issue closed with the ai:closed label but state
         # cache still says open) while still short-circuiting the evidence
         # walk for issues that are genuinely still open (the common case).
-        if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
+        if validation_fix_issue_has_merged_pr_evidence "${fix_num}" "$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")" issue_target; then
           FIX_EVIDENCE_STATUS=0
           echo "Validation fix-up issue #${fix_num}: closed with merged PR evidence; backfilling ai:merged."
           # Pass the labels we already fetched at the top of this
@@ -18785,7 +18934,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
           # (not inside a function); see the comment at the proactive-
           # backfill site for the same reason STALL_HEALING_CHANGED
           # cannot be set here.
-          if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
+          if validation_fix_issue_has_merged_pr_evidence "${fix_num}" "$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")" issue_target; then
             FIX_EVIDENCE_STATUS=0
             echo "Validation fix-up issue #${fix_num}: ai:ready-to-merge with merged PR evidence; proactively backfilling ai:merged."
             if backfill_validation_fix_issue_merged_label "${fix_num}" "${FIX_LABELS}"; then
