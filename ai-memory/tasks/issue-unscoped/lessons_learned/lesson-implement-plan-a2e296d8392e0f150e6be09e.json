@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T01:15:55Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An issue-mode plan that edits `.claude/` twins still needs the `write-plan.md` sections the whole-project review checks: a `## Automation (CLAUDE.md \u00a718.E)` section near the top and a Rollout that names the consumers from `.github/ai/consumer_repos.json` (\u00a714), even when the change only renders differently in coding-workflows.",
+  "phase": "implement_plan",
+  "pr_number": 5833,
+  "record_id": "lesson-implement-plan-a2e296d8392e0f150e6be09e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5810-escape-class-comment-pattern",
+    "file:docs/completed/issue-5810-escape-class-comment-pattern-plan.md",
+    "file:.claude/commands/write-plan.md"
+  ]
+}
