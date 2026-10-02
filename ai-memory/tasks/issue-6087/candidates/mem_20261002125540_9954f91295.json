@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-6031` at `2313b136ee872975adf187ac47fa9829755632bd`; it matches the issue\u2019s integration branch.\n\nScope-mode: Hold Scope\nReuse-audit: extends `render_judge_semble_prefetch_from_query_file`\nScope-mode justification: Cover all five existing query-capable judge paths through their shared prefetch function, rather than optimizing only the wave judge. This completes the requested behavior without a new dependency or interface. Under unattended instructions \u00a76, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and lifecycle\n- Extend the existing poller; introduce no script, supervisor, or database operation. No future-removal registry entry is needed.\n- Keep `.github/workflows/internal-orchestrate-poll.yml`\u2019s existing `*/5` schedule as the entry point. No scheduler change is needed.\n\n## Files likely to change\n- `.github/workflows/orchestrate_poll.yml`: retain the named `setup-uv`, `Install semble`, and `Build semble index` steps, but stop them from performing eager setup. Preserve optional support-file staging and the initial unavailable defaults.\n- `scripts/orchestrate_poll_process.sh`: defer setup to the first nonempty query reaching the shared judge-prefetch function.\n- `tests/test_judge_semble_prefetch_contract.py`: update workflow-wiring assertions and add focused lazy-setup contract coverage.\n- `tests/test_orchestrate_poll_process.py`: add sandboxed behavior tests with stubbed Semble helpers; do not perform a real package install.\n\n## Functions, state, and interfaces\n- Extend `render_judge_semble_prefetch_from_query_file`, leaving its five callers and their prompt construction unchanged. Check `SEMBLE_ENABLED`, helper availability, and query content before attempting setup.\n- Use a run-local attempted marker under `RUNTIME_DIR`, written **before** setup. The marker must survive the function\u2019s command-substitution subshells, so subsequent judge queries neither reinstall nor rebuild, including after failure.\n- Reuse `scripts/install_semble.sh` and `scripts/build_semble_wrapper.sh`. Read only their expected `SEMBLE_*` results into the current shell; writes to GitHub\u2019s `$GITHUB_ENV` alone do not update that shell. Keep the index and existing diagnostic log under `RUNTIME_DIR`. A failed or incomplete setup yields empty prefetch and normal judge execution.\n- Preserve existing `SEMBLE_ENABLED` and `SEMBLE_*` names, query limits, and prompt placeholders. Add no GitHub API call, public endpoint, or new external interface.\n\nData flow: A scheduled poll stages trusted support and processes tracking work without Semble setup. The first judge with a nonempty query attempts install and index once, then queries if both are available. Later judges reuse the result\u2014or continue without Semble if setup failed.\n\n## Decisions\n### D1 \u2014 Share lazy setup across judge paths\n- **Chosen:** Initialize on first use inside the shared prefetch path, with a run-local attempted marker.\n- **Alternatives considered:** Set up at poll start; add separate setup calls to each judge.\n- **Why:** The shared path covers wave, stall, review-blocked, integration-conflict, and security-pass exhaustion judges while avoiding work on ordinary ticks.\n\n### D2 \u2014 Preserve workflow step names without eager work\n- **Chosen:** Keep the three named workflow steps visible but make them inactive for eager setup; perform optional setup in the poller.\n- **Alternatives considered:** Delete the steps or retain their current install/index work.\n- **Why:** This preserves the requested workflow structure and staging while removing the unnecessary ordinary-tick work.\n\n## Security considerations\n- The poller\u2019s privileged workflow and staged support scripts remain the execution boundary. Treat indexed repository content as data, not commands; do not `source` or `eval` generated environment output.\n- Add no endpoint or authorization surface. Preserve existing workflow permissions and judge safety gates; Semble failure must never suppress a required audit, judge, or merge check.\n- Keep setup artifacts run-local. An empty or failed query must not trigger installation, and malformed setup output must not be interpreted as shell code.\n\n## Risks and edge cases\n- Command substitution loses shell-variable mutations: test reuse across separate judge calls, not just repeated calls within one shell scope.\n- Installer or builder failure, missing staged helper, or missing expected output must leave Semble unavailable for that run without retrying on every query. A successful build must make its wrapper path usable immediately by the current judge.\n- Preserve prompt content when Semble succeeds and the existing empty-prefetch behavior when it does not.\n- No factual conflict was found between the issue\u2019s branch metadata and the checkout. The supplied context does not include the referenced `files_touched` allowlist.\n\n## Testing and verification\n- Assert an ordinary no-query tick invokes neither helper; the first query invokes each once; later queries reuse the index; and setup failure still permits judge prompt rendering.\n- Cover disabled Semble and missing optional support. Update the existing workflow contract test to require retained step names and deferred execution.\n- Run shell syntax/lint and the focused Python tests on the repository\u2019s pinned toolchain, then check the scoped diff. Keep implementation within the 55-minute target and the actual `files_touched` allowlist.\n\nPLAN_SELF_CHECK: WARNING: The explicit `files_touched` allowlist was not supplied; confirm it before editing, without expanding beyond the listed files.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0d25ea065a63e15520a0ad7ce16852a0851b768e8f5563470f94e24f30c98fbb",
+  "lineage": {
+    "issue_number": 6087,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37008963953",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37008963953",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6087"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261002125540_9954f91295",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6087,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37008963953"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6087",
+  "timestamps": {
+    "created_at": "2026-10-02T12:55:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
