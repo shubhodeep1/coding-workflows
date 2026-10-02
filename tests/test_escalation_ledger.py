@@ -107,6 +107,10 @@ def test_fingerprint_ignores_empty_values():
 	assert ledger.fingerprint("security-cap", {}) == ledger.fingerprint(
 		"security-cap", {"checks": [], "findings": [" "], "validation_class": None}
 	)
+	# `null` is no evidence for a list key too, as for the scalar keys and `pr`.
+	assert ledger.fingerprint("security-cap", {}) == ledger.fingerprint(
+		"security-cap", {"checks": None, "findings": None, "issues": None, "pr": None}
+	)
 
 
 def test_fingerprint_cli_accepts_json_and_file(tmp_path, capsys):

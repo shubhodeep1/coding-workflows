@@ -197,7 +197,8 @@ def normalise_evidence(evidence: object) -> dict:
 		raise UsageError(f"unknown evidence keys: {unknown}; allowed: {list(known)}")
 	canonical: dict = {}
 	for key in EVIDENCE_LIST_KEYS:
-		if key not in evidence:
+		# `null` means no such evidence, as for the scalar keys and `pr`.
+		if key not in evidence or evidence[key] is None:
 			continue
 		values = evidence[key]
 		if not isinstance(values, list):
