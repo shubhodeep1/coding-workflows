@@ -407,11 +407,9 @@ def _bash(command):
 		("env -S 'mysql\\_-pS3cretPass app'", "S3cretPass", "env -S 'mysql\\_-p*** app'"),
 		("env -S \"mysql\\_-pS3cretPass app\"", "S3cretPass", "env -S \"mysql\\_-p*** app\""),
 		("env -iS'mysql\\_-pS3cretPass'", "S3cretPass", "env -iS'mysql\\_-p***'"),
-		# A word piped into a shell that reads its script from stdin is a command line of its own (PR #5401 review round 5).
-		("printf '%s\\n' 'mysql -pS3cretPass app' | sh", "S3cretPass", "printf '%s\\n' 'mysql -p*** app' | sh"),
-		("echo 'mysql -pS3cretPass ./run.sh' | bash", "S3cretPass", "echo 'mysql -p*** ./run.sh' | bash"),
-		("echo 'mysql -pS3cretPass app' | sudo bash -s", "S3cretPass", "echo 'mysql -p*** app' | sudo bash -s"),
-		("echo 'curl -u deploy:mycustompwd https://a.b' |& sh", "mycustompwd", "echo 'curl -u *** https://a.b' |& sh"),
+		# A shell name passed to another command is not a shell reading the pipe or here-string (PR #5401 review round 6).
+		("curl -u deploy:mycustompwd https://a.b | grep sh", "mycustompwd", "curl -u *** https://a.b | grep sh"),
+		("sudo -u pg bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "sudo -u pg bash <<< 'mysql -p*** app'"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -439,6 +437,14 @@ def test_example_masks_credentials(command, secret, expected):
 		# A digit word before a redirection is a file descriptor or a value; read both ways, the value that
 		# follows the redirection (`ssh`) is too short to mask, so the command is withheld.
 		("sshpass -p 123456789 >log ssh host", "123456789", "sshpass -p * > *"),
+		# Text piped into a shell that reads its script from stdin is whatever the earlier stages print, which the
+		# words cannot show, so the command is withheld (PR #5401 review round 6).
+		("printf '%s\\n' 'mysql -pS3cretPass app' | sh", "S3cretPass", "printf * | sh"),
+		("echo 'mysql -pS3cretPass ./run.sh' | bash", "S3cretPass", "echo * | bash"),
+		("echo 'mysql -pS3cretPass app' | sudo bash -s", "S3cretPass", "echo * | sudo * -s"),
+		("echo 'curl -u deploy:mycustompwd https://a.b' |& sh", "mycustompwd", "echo * |& sh"),
+		("printf 'mysql -pS3cretPass' | sed s/x/y/ | bash", "S3cretPass", "printf * | sed * | bash"),
+		("printf '%s %s' 'curl -u' 'deploy:mycustompwd' | sh", "mycustompwd", "printf * | sh"),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
@@ -447,6 +453,25 @@ def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape
 	# The withheld text goes through redact() like any example, which may widen a `NAME=*` in the shape to `NAME=***`.
 	assert example.endswith(f"shape: {pp_mask_twin.redact(shape)}>")
 	assert secret not in example
+
+
+@pytest.mark.parametrize(
+	("command", "runs_a_shell"),
+	[
+		(["sh"], True),
+		(["/bin/bash", "-s"], True),
+		(["FOO=1", "bash"], True),
+		(["sudo", "-u", "pg", "bash", "-s"], True),
+		(["env", "-i", "sh"], True),
+		(["grep", "sh"], False),
+		(["xargs", "-n1", "echo", "bash"], False),
+		(["FOO=1"], False),
+		([], False),
+	],
+)
+def test_segment_runs_a_shell_reads_the_command_word(command, runs_a_shell):
+	"""PR #5401 review round 6: only the command word, or a shell behind a wrapper, counts as a shell."""
+	assert pp_mask_twin._segment_runs_a_shell(command) is runs_a_shell
 
 
 def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():

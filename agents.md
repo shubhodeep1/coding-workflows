@@ -1152,9 +1152,10 @@ reviews, comments, and conflicts stay a direct §12 request.
   backtick command substitution, and with a redirection between the
   flag and its value),
   URL userinfo, and credential query parameters become
-  `***`. A command that cannot be parsed, or whose credential is shorter
-  than 4 characters or does not occur verbatim, is withheld and only its
-  shape is posted; the shape keeps no raw text
+  `***`. A command that cannot be parsed, that pipes text into a shell
+  reading its stdin (`printf 'mysql -p…' | sh`), or whose credential is
+  shorter than 4 characters or does not occur verbatim, is withheld and
+  only its shape is posted; the shape keeps no raw text
   (`unparseable: <command word>`, `-u*` for an attached value). Other
   tools' input shows `***` for
   credential-named keys. In consumer repos it only reports. Occurrences that

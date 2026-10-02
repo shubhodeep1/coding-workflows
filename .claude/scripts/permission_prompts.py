@@ -411,6 +411,24 @@ def _shell_runner_before(words: list[str], start: int, position: int) -> bool:
 	return any(earlier.rsplit("/", 1)[-1] in _SHELL_COMMAND_RUNNERS for earlier in words[start:position])
 
 
+# Commands that run the command in their later words with the same stdin (`sudo -u pg bash`, `env -i sh`): behind
+# one of them, a shell still reads piped text or a here-string as its script.
+_SHELL_RUNNER_WRAPPERS = frozenset({"sudo", "doas", "env", "nice", "nohup", "command", "exec", "time", "timeout", "stdbuf", "ionice"})
+
+
+def _segment_runs_a_shell(words: list[str]) -> bool:
+	"""True when the simple command `words` runs a _SHELL_COMMAND_RUNNERS shell: its command word is one, or it is a
+	_SHELL_RUNNER_WRAPPERS command with a shell among its later words. A shell name passed to another command as an
+	argument (`grep sh`) does not count."""
+	start = next((position for position, word in enumerate(words) if not _ASSIGNMENT_RE.match(word)), len(words))
+	if start >= len(words):
+		return False
+	command = words[start].rsplit("/", 1)[-1]
+	if command in _SHELL_COMMAND_RUNNERS:
+		return True
+	return command in _SHELL_RUNNER_WRAPPERS and _shell_runner_before(words, start + 1, len(words))
+
+
 def _split_string_runner_before(words: list[str], start: int, position: int) -> bool:
 	"""True when a word from the segment's command at `start` up to (not including) `position` names a _SPLIT_STRING_RUNNERS command (`env`, also behind `sudo`)."""
 	return any(earlier.rsplit("/", 1)[-1] in _SPLIT_STRING_RUNNERS for earlier in words[start:position])
@@ -770,9 +788,8 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 	# lexer cannot tell apart, so the segment is read both without it (`segment`) and with it (`with_digits`).
 	segment: list[str] = []
 	with_digits: list[str] = []
-	# The words of the simple command before a `|`: when the command after it runs a shell that reads its script
-	# from stdin (`printf 'mysql -p…' | sh`), each of them may be that script and is parsed as a command line.
-	piped_words: list[str] = []
+	# True when the simple command being read gets the previous one's output on stdin (it follows a `|` or `|&`).
+	piped_into = False
 	redirect = ""
 	for token in tokens + [";"]:
 		is_punctuation = bool(token) and set(token) <= set(_SHELL_PUNCTUATION_CHARS)
@@ -780,7 +797,7 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 			# A target can run a command substitution (`> "$(mysql -p…)"`), and a here-string fed to a shell
 			# (`bash <<< 'mysql -p…'`) is a command line of its own.
 			values.update(_segment_credentials([token], depth))
-			if redirect == "<<<" and _shell_runner_before(with_digits, 0, len(with_digits)):
+			if redirect == "<<<" and _segment_runs_a_shell(with_digits):
 				values.update(_command_line_credentials(token, depth + 1))
 			redirect = ""
 			continue
@@ -793,10 +810,12 @@ def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
 			values.update(_segment_credentials(segment, depth))
 			if with_digits != segment:
 				values.update(_segment_credentials(with_digits, depth))
-			if piped_words and _shell_runner_before(segment, 0, len(segment)):
-				for piped_word in piped_words:
-					values.update(_command_line_credentials(piped_word, depth + 1))
-			piped_words = list(with_digits) if token in ("|", "|&") else []
+			if piped_into and _segment_runs_a_shell(with_digits):
+				# A shell reading a pipe runs whatever the earlier stages print (`printf 'mysql -p…' | sh`, `cat f |
+				# sed … | bash`, arguments `printf` joins), which no scan of their words can know: withhold the
+				# command (PR #5401 review round 6).
+				raise ValueError("text piped into a shell")
+			piped_into = token in ("|", "|&")
 			segment = []
 			with_digits = []
 		else:
@@ -814,11 +833,12 @@ def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
 	assignments, credential header fields, credential long flags, and the
 	`_CREDENTIAL_SHORT_FLAGS` of every credential command in a segment,
 	including those inside a shell's `-c` command line, an `env -S` /
-	`--split-string` command line, a here-string fed to a shell, a word piped
-	into a shell (`printf 'mysql -p…' | sh`), and a `$(…)` or backtick command
-	substitution; a redirection between
+	`--split-string` command line, a here-string fed to a shell, and a `$(…)`
+	or backtick command substitution; a redirection between
 	a flag and its value or command line does not separate them. Returns None
-	when the text (or such a command line) cannot be tokenized, or when a
+	when the text (or such a command line) cannot be tokenized, when it pipes
+	text into a shell that reads it from stdin (`printf 'mysql -p…' | sh`:
+	what the shell runs cannot be known from the words), or when a
 	value is shorter than MIN_MASKED_VALUE_CHARS or does not occur verbatim in
 	`display` (quoting or escapes changed it), so the caller posts the shape
 	instead.
