@@ -15448,6 +15448,43 @@ def test_reconcile_does_not_heal_when_issue_state_is_unreadable():
 	assert "MERGED_STATE_HEALED" not in combined
 
 
+def test_reconcile_holds_the_wave_when_a_failed_read_skips_the_heal():
+	"""PR #5633 review round 9: with the issue's state unreadable the heal is skipped, but the issue still counts as
+	merged on a rejected merge; the wave is not read as complete this cycle, so it cannot advance past the issue
+	before a later cycle heals it."""
+	result = _run_poller(
+		state=_stale_merged_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="error",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+		fail_issue_get_for=[10],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "MERGED_STATE_HEALED" not in combined
+	assert "MERGED_STATE_STALE issue=10 pr=953 reason=non_target_base label_merged=true stored_status=merged action=retry why=issue_state_unread wave_hold=true" in combined, combined[-4000:]
+	assert "MERGED_STATE_WAVE_HOLD" in combined
+	assert "Wave 1 not yet complete." in combined, combined[-4000:]
+
+
+def test_reconcile_wave_hold_needs_a_stale_merged_signal():
+	"""PR #5633 review round 9 control: an issue that does not count as merged is not a reason to hold the wave."""
+	result = _run_poller(
+		state=_stale_merged_state(stored_status="pending"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="error",
+		issue_labels={10: ["ai:in-progress"]},
+		issue_linked_prs={10: [953]},
+		prs=[dict(_STALE_WRONG_BASE_PR)],
+		fail_issue_get_for=[10],
+	)
+	combined = result["stdout"] + result["stderr"]
+	assert "wave_hold=true" not in combined
+	assert "MERGED_STATE_WAVE_HOLD" not in combined
+
 def test_reconcile_heal_label_edit_failure_stays_retryable():
 	"""PR #5633 round 3: the label edit failing leaves the label, writes no
 	once-only marker, and logs a retry, so the next cycle heals."""

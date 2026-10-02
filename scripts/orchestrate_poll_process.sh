@@ -20144,6 +20144,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   ISSUE_STATES_JSON='{}'
   PR_STATES_JSON='{}'
   RECONCILE_LABELS_CHANGED=false
+  # Set below when a read failure keeps the heal from running on an issue
+  # that still counts as merged on a rejected merge; the wave is then not
+  # read as complete this cycle (PR #5633 review round 9).
+  MERGED_HEAL_WAVE_HOLD="false"
   for inum in ${ISSUE_NUMS}; do
     if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
       continue
@@ -20251,6 +20255,22 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         RECONCILE_LABELS_CHANGED=true
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${MERGED_HEAL_LABELS_JSON}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
       fi
+    elif [ "${PR_MERGED}" != "true" ] && [ -n "${_rcl_rejected_merged_pr}" ]; then
+      # A read failed this cycle (the issue's state, or another linked PR),
+      # so the heal cannot run. If the issue still counts as merged (the
+      # `ai:merged` label or a stored `merged` status), check-wave-status
+      # would count that rejected merge and could advance the wave, after
+      # which the current-wave heal never sees the issue again. Hold the
+      # wave this cycle instead (PR #5633 review round 9); the next cycle
+      # with good reads heals it.
+      _rcl_hold_why="pr_fetch_failed"
+      [ "${_rcl_issue_state_confirmed}" = "true" ] || _rcl_hold_why="issue_state_unread"
+      _rcl_hold_label="$(echo "${LABELS_JSON}" | jq -r --arg key "${inum}" '(.[$key] // []) | if type == "array" then (index("ai:merged") != null) else false end' 2>/dev/null || echo "false")"
+      _rcl_hold_stored="$(jq -r --argjson wi "${WAVE_IDX}" --arg n "${inum}" '[.waves[$wi].issues[]? | select((.github_issue | tostring) == $n)][0].status // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      if [ "${_rcl_hold_label}" = "true" ] || [ "${_rcl_hold_stored}" = "merged" ]; then
+        MERGED_HEAL_WAVE_HOLD="true"
+        echo "MERGED_STATE_STALE issue=${inum} pr=${_rcl_rejected_merged_pr} reason=${_rcl_rejected_merged_reason} label_merged=${_rcl_hold_label} stored_status=${_rcl_hold_stored:-none} action=retry why=${_rcl_hold_why} wave_hold=true" >&2
+      fi
     fi
 
     BEFORE_LABELS="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')"
@@ -20295,6 +20315,11 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
   ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
   PROJECT_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.project_complete')"
+  if [ "${MERGED_HEAL_WAVE_HOLD:-false}" = "true" ] && { [ "${WAVE_COMPLETE}" = "true" ] || [ "${PROJECT_COMPLETE}" = "true" ]; }; then
+    echo "MERGED_STATE_WAVE_HOLD wave=${CURRENT_WAVE:-?} wave_complete=${WAVE_COMPLETE} project_complete=${PROJECT_COMPLETE} action=hold why=heal_pending_read_failed" >&2
+    WAVE_COMPLETE="false"
+    PROJECT_COMPLETE="false"
+  fi
 
   # Ensure the integration→default PR exists as soon as the integration
   # branch is ahead of default, even before validation completes. Fail
@@ -22071,6 +22096,10 @@ ${RB_FIX_DESC}
         --labels-json "${LABELS_JSON}")"
       WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
       ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
+      if [ "${MERGED_HEAL_WAVE_HOLD:-false}" = "true" ] && [ "${WAVE_COMPLETE}" = "true" ]; then
+        echo "MERGED_STATE_WAVE_HOLD wave=${CURRENT_WAVE:-?} wave_complete=true action=hold why=heal_pending_read_failed" >&2
+        WAVE_COMPLETE="false"
+      fi
       echo "Updated wave status after review-blocked handling: complete=${WAVE_COMPLETE}, failed=${ANY_FAILED}"
     fi
   fi
