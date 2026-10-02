@@ -43,8 +43,9 @@ modes its occurrences were logged under) and `allow_rule`, the first
 any run of characters, and a trailing ` *` or `:*` also matches the bare
 command, when that is the rule's only wildcard), or None. Only a single
 command is checked: one with a newline, or with a shell operator, a backtick,
-or `$(` outside quotes, never matches (inside double quotes a backtick or `$(`
-still counts, since the shell runs it), and neither does one with an unclosed
+or `$(` outside quotes and not escaped by a backslash, never matches (inside
+double quotes a backtick or `$(` still counts, since the shell runs it), and
+neither does one with an unclosed
 quote or ANSI-C `$'...'` quoting. A record whose `cwd` lies outside the checkout that holds the
 settings file is not checked either, since that checkout's rules did not
 apply to it. Records are ordered by their `ts`, so "latest" is the newest

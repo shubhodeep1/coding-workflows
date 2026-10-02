@@ -1173,9 +1173,10 @@ reviews, comments, and conflicts stay a direct §12 request.
   2,000 characters. In consumer repos it only reports.
   The issue body and each "Seen again" comment also show the permission
   mode the occurrences were logged under. When the denied call is a single
-  command (no newline, and no shell operator, backtick, or `$(` outside
-  quotes; inside double quotes a backtick or `$(` still counts, and an
-  unclosed quote or `$'...'` never matches) that a `Bash(...)`
+  command (no newline, and no shell operator, backtick, or `$(` that is
+  outside quotes and not escaped by a backslash; inside double quotes a
+  backtick or `$(` still counts, and an unclosed quote or `$'...'` never
+  matches) that a `Bash(...)`
   rule in the checkout's `.claude/settings.json` `permissions.allow`
   matches, they add an **Already allowlisted** line naming the rule. That
   call was decided despite the rule, so reshaping it or adding another rule
