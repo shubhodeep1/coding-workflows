@@ -32,7 +32,11 @@
 #
 # and exports CLAUDE_FIXER_JUDGE_READY=true. Unverified evidence exports
 # CLAUDE_FIXER_JUDGE_READY=false with CLAUDE_FIXER_JUDGE_SKIP_REASON, and the
-# judge then decides nothing (the PR is labelled ai:review-blocked).
+# judge then decides nothing (the PR is labelled ai:review-blocked). So does a
+# ledger with no findings (reason no_findings): such a hand-off comes from a
+# round that fell below the reviewer panel floor, and a judge that "merges"
+# it would merge a head too few reviewers looked at; only a re-run of the
+# reviewers can clear it.
 #
 # Inputs (environment): PR_NUMBER, GH_TOKEN, GITHUB_REPOSITORY, HEAD_SHA,
 # HEAD_REF, DEFAULT_BRANCH, CLAUDE_FIXER_JUDGE_RUN_ID, CLAUDE_FIXER_JUDGE_ROUND,
@@ -86,6 +90,12 @@ fi
 PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_judge.py" findings \
   --ledger "${claude_fixer_judge_dir}/ledger.txt" > "${claude_fixer_judge_dir}/findings.json" \
   || claude_fixer_judge_not_ready "findings_unparseable"
+# A findings hand-off whose ledger has no finding was not a clean round only
+# because too few reviewers returned (the #5964 panel floor). Nothing is left
+# to rule on, and "nothing upheld" would merge an under-reviewed head.
+if [ "$(jq 'if type == "array" then length else 0 end' "${claude_fixer_judge_dir}/findings.json" 2>/dev/null || echo 0)" = "0" ]; then
+  claude_fixer_judge_not_ready "no_findings"
+fi
 
 claude_fixer_judge_comments="${PR_ISSUE_COMMENTS_FILE:-}"
 if [ ! -s "${claude_fixer_judge_comments}" ]; then

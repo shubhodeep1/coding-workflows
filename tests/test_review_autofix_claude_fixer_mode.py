@@ -571,6 +571,15 @@ def test_handoff_below_panel_floor_is_not_clean():
 		assert f"successful={successful} active={len(statuses)} floor_met={floor_met}" in proc.stdout
 		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env, statuses
 		assert len(calls) == 1 and "kind=findings" in calls[0]["payload"]["body"]
+		body = calls[0]["payload"]["body"]
+		assert f"Only {successful} of {len(statuses)} reviewers returned a result, below the panel floor" in body
+		assert "there is nothing for the GPT judge to rule on" in body
+
+
+def test_handoff_above_panel_floor_has_no_floor_note():
+	with tempfile.TemporaryDirectory() as td:
+		_proc, calls, _posts, _env = _run_handoff(Path(td), ledger=LEDGER_WITH_FINDINGS, panel_statuses=["success"] * 5 + ["failed"], reviewers_successful="5")
+	assert "below the panel floor" not in calls[0]["payload"]["body"]
 
 
 def test_handoff_real_finding_blocks_even_when_panel_floor_is_met():
@@ -1532,7 +1541,7 @@ if __name__ == "__main__":
 """
 
 
-def _run_prepare(tmp: Path, *, verdict: dict, comments: list[dict]):
+def _run_prepare(tmp: Path, *, verdict: dict, comments: list[dict], ledger: str = LEDGER_WITH_FINDINGS):
 	support = tmp / "support"
 	support.mkdir()
 	(support / "review_claude_fixer_evidence.py").write_text(FAKE_EVIDENCE, encoding="utf-8")
@@ -1557,7 +1566,7 @@ def _run_prepare(tmp: Path, *, verdict: dict, comments: list[dict]):
 		"GITHUB_ENV": str(github_env),
 		"MOCK_VERIFY": json.dumps(verdict),
 		"MOCK_VERIFY_ARGS": str(tmp / "verify_args.json"),
-		"MOCK_LEDGER": LEDGER_WITH_FINDINGS,
+		"MOCK_LEDGER": ledger,
 	}
 	proc = subprocess.run(["bash", "-c", f'source "{PREPARE_SCRIPT}"'], env=env, capture_output=True, text=True)
 	verify_args = json.loads((tmp / "verify_args.json").read_text()) if (tmp / "verify_args.json").exists() else None
@@ -1589,6 +1598,19 @@ def test_prepare_step_collects_verified_inputs():
 		index = verify_args.index(pair[0])
 		assert verify_args[index + 1] == pair[1], pair
 	assert "action=prepared findings=2 prior_rulings=0 rejection=found handoff_run=4321" in proc.stdout
+
+
+def test_prepare_step_refuses_a_ledger_with_no_findings():
+	"""Conformance 3/3: a below-floor round is handed off with an empty ledger; the
+	judge must not rule "nothing upheld" and merge a head too few reviewers saw."""
+	with tempfile.TemporaryDirectory() as td:
+		proc, github_env, _args, inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=[], ledger=LEDGER_EMPTY)
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_JUDGE_READY=false" in github_env
+		assert "CLAUDE_FIXER_JUDGE_SKIP_REASON=no_findings" in github_env
+		assert "CLAUDE_FIXER_JUDGE_READY=true" not in github_env
+		assert json.loads((inputs / "findings.json").read_text()) == []
+	assert "action=not_ready reason=no_findings" in proc.stdout
 
 
 def test_prepare_step_fails_closed_on_unverified_evidence_or_bad_inputs():
