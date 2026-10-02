@@ -28,7 +28,9 @@
 #          finding, location or severity text; issues #5114, #5298), and
 #          the ledger has a block for every reviewer slot the runner ran
 #          (issue #5297), logged as CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS (see
-#          the clean-ledger check).
+#          the clean-ledger check). A ledger with no failed slot is checked
+#          against the runner too: a block for every slot the runner ran and
+#          a `success` status behind every block (issue #5579).
 #
 # The hand-off marker is
 #   <!-- ai:claude-fixer-handoff:v1 kind=<findings|conflict> head=<sha> round=<n> -->
@@ -136,8 +138,15 @@ fi
 #             and ':' mapped to '_', the runner's safe_name);
 #   finding - anything else.
 # A failed slot is a missing vote: never a finding and never a clean vote
-# (issue #4835). Without a failed block the rule is unchanged (every block
-# clean). With one, the ledger is clean only when no block is a finding, the
+# (issue #4835). Every ledger is reconciled with the runner's own files, with
+# or without a failed block (issue #5579: the ledger can leave a failed
+# reviewer out, or show it as clean, and read all-clean). Without a failed
+# block, the ledger is clean only when every block is clean, the runner's
+# status file ${PREVIOUS_REVIEWS_DIR}/status_review_<slug>.txt reads "success"
+# for every block, no slug repeats, and every slot the runner wrote a
+# status_review_<slug>.txt or review_<slug>.txt for has its own block; there
+# is no minimum and the runner output is not read (issue #5579 AD-1, AD-2).
+# With a failed block, the ledger is clean only when no block is a finding, the
 # runner's status file ${PREVIOUS_REVIEWS_DIR}/status_review_<slug>.txt reads
 # "failed" for every failed block and "success" for every clean one, the
 # runner's output file ${PREVIOUS_REVIEWS_DIR}/review_<slug>.txt is exactly the
@@ -345,10 +354,16 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
     END { if (invalid || block || blocks < 3) exit 1 }
   ' "${REVIEWER_CONSENSUS_FILE}")"; then
   # Pattern matches, not `printf | grep -q`: under pipefail an early grep exit
-  # can SIGPIPE the writer and read as "no failed block", which fails open.
-  if [[ $'\n'"${claude_fixer_ledger_blocks}" != *$'\n'"failed "* ]]; then
-    claude_fixer_clean_ledger="true"
-  else
+  # can SIGPIPE the writer and read as "no failed block", which would skip
+  # the failed-slot checks below.
+  claude_fixer_ledger_has_failed_slot="false"
+  if [[ $'\n'"${claude_fixer_ledger_blocks}" == *$'\n'"failed "* ]]; then
+    claude_fixer_ledger_has_failed_slot="true"
+  fi
+  # Every ledger is reconciled with the runner below, failed block or not
+  # (issue #5579). The awk above only succeeds with at least one reviewer
+  # block, so this guard only keeps an empty list from reading as clean.
+  if [ -n "${claude_fixer_ledger_blocks}" ]; then
     claude_fixer_failed_slots_verified="true"
     # A failed record is "failed <slug> <line>" (the slug has no space); a
     # clean one is "clean <slug>" with the slug as written in the ledger.
@@ -371,6 +386,14 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
       fi
       case "${claude_fixer_block_kind}:${claude_fixer_block_status}" in
         clean:success)
+          # Without a failed block every slot must have voted, and the
+          # `success` status plus full roster coverage is the reconciliation
+          # (issue #5579 AD-1: the strict output format stays on the
+          # failed-slot path).
+          if [ "${claude_fixer_ledger_has_failed_slot}" != "true" ]; then
+            claude_fixer_clean_reviewers="$((claude_fixer_clean_reviewers + 1))"
+            continue
+          fi
           # A success status only says the reviewer finished. The clean vote
           # comes from the runner's own review_<slug>.txt, never from the
           # ledger's text (issue #5114). The guards repeat the status read's.
@@ -420,9 +443,9 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
           ;;
       esac
     done <<< "${claude_fixer_ledger_blocks}"
-    # Roster check (issue #5297). The ledger is model output and can leave a
-    # reviewer out entirely, and the loop above only sees the blocks it
-    # contains. Every slot the runner wrote a status_review_<slug>.txt or
+    # Roster check (issue #5297; for every ledger since issue #5579). The
+    # ledger is model output and can leave a reviewer out entirely, and the
+    # loop above only sees the blocks it contains. Every slot the runner wrote a status_review_<slug>.txt or
     # review_<slug>.txt for (the files the summariser reads) must have its own
     # block, or the ledger is not clean. Pattern matches, not `printf | grep -q`,
     # for the pipefail reason above.
@@ -458,6 +481,11 @@ if [ "${claude_fixer_ledger_state}" = "ok" ] && [ "${claude_fixer_finding_count}
       claude_fixer_failed_slots_verified="false"
     fi
     if [ "${claude_fixer_failed_slots_verified}" = "true" ] \
+      && [ "${claude_fixer_ledger_has_failed_slot}" != "true" ]; then
+      # No failed slot: every slot the runner ran has a clean block over a
+      # `success` status, so no minimum applies (issue #4835 AD-1).
+      claude_fixer_clean_ledger="true"
+    elif [ "${claude_fixer_failed_slots_verified}" = "true" ] \
       && [ "${claude_fixer_clean_reviewers}" -ge "${claude_fixer_min_clean_reviewers}" ]; then
       claude_fixer_clean_ledger="true"
       echo "CLAUDE_FIXER_CLEAN_WITH_FAILED_SLOTS pr=${PR_NUMBER} head=${HEAD_SHA} round=${claude_fixer_round} failed_slots=${claude_fixer_failed_slots} clean_reviewers=${claude_fixer_clean_reviewers} min=${claude_fixer_min_clean_reviewers}"
