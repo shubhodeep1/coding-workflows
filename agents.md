@@ -259,11 +259,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
     = refused) must have `admin`/`write` on the target repo (one
     `collaborators/<login>/permission` read each), the target must be an open
     issue in that repo (one issue read; PRs and transferred issues refused),
-    and its author must pass clarify's gate or a trusted `User` must have
+    it must still carry the `ai:claude` claim and no `ai:codex` label
+    (`claim_label_refusal`, #6057; checked from the same issue read, before
+    the author), and its author must pass clarify's gate or a trusted `User` must have
     commented `/reclarify` (comments read only for an untrusted author). A
     refusal (`CLAUDE_ISSUE_INTAKE rejected reason=<dispatcher_unknown |
     dispatcher_not_authorized | target_not_issue | target_repo_mismatch |
-    issue_closed | untrusted_issue_author | authorization_read_failed>`)
+    issue_closed | claude_label_removed | codex_label_added |
+    untrusted_issue_author | authorization_read_failed>`)
     queues nothing, writes nothing to the target issue, sends a Telegram
     ERROR, and exits 1. Otherwise it queues it as one
     `ai:claude-issue-queue` issue in coding-workflows (title
@@ -300,10 +303,29 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `— wake. — catch-up`), unless one is already pending; a catch-up wake
     never schedules another, and the one-line report adds
     `oldest_waiting=<minutes | none>` and `catch_up=<scheduled | pending |
-    none | failed>`. The pickup
+    none | failed>`. Before it lists a target as `pending`,
+    `queue-pending --fetch-repo` re-reads the live issue (#6057,
+    `fetch_dispatch_targets` + `apply_dispatch_claim_check`; one REST
+    `repos/<repo>/issues/<N>` GET per pending issue target, so at most the
+    start limit per wake, none for `pr_fix` items). A target that is closed
+    (`issue_closed`), lost its `ai:claude` claim (`claude_label_removed`),
+    gained `ai:codex` (`codex_label_added`), or is not that issue
+    (`target_not_issue`, `target_repo_mismatch`) moves to `refused`, with
+    the queue issues to close. A failed read (a consumer repo not attached
+    to the pickup session answers 403) leaves the target `pending`
+    (fail-open; the intake checked the claim when it queued it) and lists
+    it under `claim_check_failed`. So removing `ai:claude` parks a queued
+    issue; adding it back and commenting `/reclarify` queues it again (no
+    workflow reacts to the label alone). The handoff never dispatches an
+    issue it could not claim: a failed `ai:claude` POST takes the
+    `ai:claude-handoff-failed` path (`error claim_label_failed`), so the
+    label's absence always means "parked". A manual `workflow_dispatch`
+    intake of an unlabelled issue is refused `claude_label_removed`; add
+    `ai:claude` first. The pickup
     starts one Opus session per target issue via `claude-issue-dispatch.md`
     step 2, and closes the queue issues with a `Dispatched:` line (no
-    comment). A claude.ai routine run cannot do this: it gets no
+    comment). It closes a `refused` entry's queue issues `not_planned` with
+    a final `Refused: <reason> …` line instead (no comment, no session). A claude.ai routine run cannot do this: it gets no
     claude-code-remote tools (#4525), so `CLAUDE_ISSUE_ROUTINE_ID` /
     `CLAUDE_ISSUE_ROUTINE_TOKEN` / `CLAUDE_ISSUE_ROUTINE_BETA` are deprecated
     and unused. `claude-issue-queue-watchdog.yml` (hourly :17) labels items
