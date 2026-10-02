@@ -48,6 +48,26 @@ Only the cases where nothing branch-shaped can be checked at all — unparseable
 payload, not a git repo, detached HEAD, underivable `<owner>/<repo>` — still
 allow with a warning.
 
+"The current branch" and HEAD are those of the repository each guarded git
+call actually runs in, not the session's checkout (issue #5144): the hook's
+`cwd`, moved by every earlier `cd <path>` in the same command, then by
+`git -C <path>`, then by `GIT_DIR=<path>` / `--git-dir`. Paths resolve as the
+shell and git do: `cd` lexically unless `-P` is in force, `-C` and the git
+directory physically (symlinks followed), and a `~` that is quoted or escaped
+(`"~"`, `'~'`, `\\~`, or one in `--git-dir=`) as a literal directory name.
+A push that names a refspec is judged on the branch it writes to —
+`git push origin HEAD:<ref>`
+checks `<ref>`, with the refspec's source as the commit that would stack on
+it — so a detached worktree pushing to an open PR's branch is allowed while a
+worktree pushing merged history to a merged branch is blocked, whatever the
+main checkout is on. Deletions and tag refspecs are not judged. When the
+directory cannot be resolved (a variable, a subshell, `pushd`, a `cd` joined
+by `||`, `&` or `|`, a path that does not exist yet), or a refspec cannot be
+turned into one branch (a variable, a glob, a `heads/` shorthand, a source
+starting with `-`), that call is judged on the session checkout as before
+and a warning names the reason. Each `(slug, branch)` pair is looked up once
+per hook call.
+
 The same check guards the GitHub MCP push tools (`mcp__github__push_files`,
 `mcp__github__create_or_update_file`), which write to a remote branch without
 touching the local checkout: the remote branch tip is fetched and takes the
@@ -82,6 +102,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 
 # Guarded git subcommands. `push` is included alongside `commit` because
@@ -106,6 +127,42 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
+
+# Effective-repository resolution (issue #5144). A path word containing any of
+# these needs shell expansion the guard does not perform.
+_UNRESOLVABLE_PATH_MARKERS = ("$", "`", "*", "?", "[")
+# Builtins that change the directory in ways the command walker does not model.
+_UNMODELLED_DIRECTORY_COMMANDS = frozenset({"pushd", "popd"})
+# Shell keywords that can prefix a directory change inside the same segment
+# (`if cd x; then …`), which the walker cannot place in the command's flow.
+_DIRECTORY_KEYWORD_PREFIXES = frozenset({"if", "then", "else", "elif", "do", "while", "until", "!", "time"})
+# Reserved words Bash accepts ahead of a simple command (`then git push`,
+# `do git commit`, `! git push`): the command after them still runs, so it is
+# found past them. The same set as the directory-change prefixes above.
+_COMMAND_RESERVED_WORD_PREFIXES = _DIRECTORY_KEYWORD_PREFIXES
+# Words that open or close an `if`, loop or `case` body. A `cd` inside such a
+# body may not run (or may run several times), so the directory after it is
+# unknown. `if` / `while` / `until` can follow other reserved words
+# (`then if …`); `for`, `case` and `select` only start a segment.
+_COMPOUND_OPENING_WORDS = frozenset({"if", "while", "until", "for", "case", "select"})
+_COMPOUND_CLOSING_WORDS = frozenset({"fi", "done", "esac"})
+# `git push` options that consume the following word as their value.
+_PUSH_OPTS_WITH_VALUE = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
+_PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
+# `git push` options that write every local branch. git accepts any
+# unambiguous prefix of a long option (`--al`, `--mir`), so a word of four or
+# more characters that starts one of these counts as it.
+_PUSH_BULK_FLAGS = ("--all", "--branches", "--mirror")
+# The only `git push` option that, given with no refspec, writes no branch.
+# git also accepts its unambiguous prefixes `--ta` and `--tag` (`--t` is
+# ambiguous with `--thin` and refused).
+_PUSH_TAGS_ONLY_FLAG = "--tags"
+# A push refspec word containing any of these is a shell expansion or a
+# pattern the guard cannot turn into one branch name.
+_UNRESOLVABLE_REFSPEC_MARKERS = ("$", "`", "*", "?", "[", "{", "~")
+# Destination shorthands git expands against the remote's refs (`heads/x` →
+# `refs/heads/x`), which make the branch name ambiguous.
+_AMBIGUOUS_REFSPEC_PREFIXES = ("heads/", "tags/", "remotes/")
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -203,6 +260,44 @@ def _shell_segments(command: str) -> list[list[str]]:
 	if current_segment:
 		segments.append(current_segment)
 	return segments
+
+
+def _shell_segments_with_separators(command: str) -> list[tuple[list[str], str, str]]:
+	"""`_shell_segments`, keeping the separator before and after each segment.
+
+	Returns (tokens, separator before, separator after), with "" at the ends
+	of the command. The segments are exactly those of `_shell_segments`.
+	"""
+	lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer.commenters = ""
+	lexer.whitespace = " \t\r"
+	lexer.whitespace_split = True
+	# One pass collects alternating segments and (merged) separator runs.
+	pieces: list[list[str] | str] = []
+	for token in lexer:
+		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
+			if pieces and isinstance(pieces[-1], str):
+				pieces[-1] += token
+			else:
+				pieces.append(token)
+			continue
+		if pieces and isinstance(pieces[-1], list):
+			pieces[-1].append(token)
+		else:
+			pieces.append([token])
+	segments: list[tuple[list[str], str, str]] = []
+	for index, piece in enumerate(pieces):
+		if isinstance(piece, list):
+			before = pieces[index - 1] if index > 0 else ""
+			after = pieces[index + 1] if index + 1 < len(pieces) else ""
+			segments.append((piece, before, after))
+	return segments
+
+
+def _is_sequential_separator(separator: str) -> bool:
+	"""True for "", `;`, `&&` and newlines: the next segment runs in the same
+	shell after this one. `||`, `&`, `|` and redirections are not."""
+	return separator.replace("\n", "") in ("", ";", "&&")
 
 
 def _contains_shell_substitution(command: str) -> bool:
@@ -331,10 +426,12 @@ def git_subcommands(command: str) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
 	Only counts `git` when it is the first real token of a shell segment, after
-	any leading `VAR=value` assignments. That keeps `man git commit` and
+	any leading reserved words (`then`, `do`, `else`, `!`, `time`, …) and
+	`VAR=value` assignments. That keeps `man git commit` and
 	`echo "git commit"` from tripping the guard, at the cost of missing
 	wrapper-prefixed invocations like `sudo git commit` — an acceptable trade,
 	since a false block is more disruptive than a missed check on a rare form.
+	A reserved word is not a wrapper: `if …; then git push; fi` runs the push.
 	"""
 	found: set[str] = set()
 	try:
@@ -343,8 +440,11 @@ def git_subcommands(command: str) -> set[str]:
 		# Unbalanced quotes — the command is not something we can read.
 		return found
 	for tokens in segments:
-		# Drop leading environment assignments (`GIT_DIR=... git commit`).
+		# Drop leading reserved words (`then git push`), then environment
+		# assignments (`GIT_DIR=... git commit`).
 		index = 0
+		while index < len(tokens) and tokens[index] in _COMMAND_RESERVED_WORD_PREFIXES:
+			index += 1
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
 			index += 1
 		if index >= len(tokens):
@@ -366,6 +466,623 @@ def git_subcommands(command: str) -> set[str]:
 				continue
 			index += 1
 	return found
+
+
+class GuardTarget(NamedTuple):
+	"""One (repository, branch) pair a guarded git invocation writes to.
+
+	`cwd` is the directory the guard runs git in to judge it: the effective
+	repository of the invocation, or the session checkout when that could not
+	be resolved (then `fallback_reason` says why). `branch` is the branch the
+	write lands on, "" for the checked-out branch of `cwd`. `tip` is the
+	commit that would stack on it: HEAD, or a push refspec's source.
+	`bulk_reason` is set for a push that writes more branches than the one
+	judged (`--all`, `--branches`, `--mirror`, the `:` matching refspec, a
+	`*` pattern): the checked-out branch is judged as before and the push
+	also asks for confirmation.
+	"""
+
+	subcommand: str
+	cwd: str
+	branch: str
+	tip: str
+	reaches_remote: bool
+	fallback_reason: str = ""
+	bulk_reason: str = ""
+
+
+def _literal_tilde_words(command: str) -> frozenset[str]:
+	"""Words of `command`, as the tokenizer returns them, whose `~` Bash leaves literal.
+
+	The tokenizer drops quoting, so `cd "~"`, `cd '~'`, `cd \\~` and
+	`cd ~"/x"` reach the resolver as `~` / `~/x` although Bash expands none
+	of them. Bash expands a `~` only at the start of a word (or right after
+	the first `=` of an assignment word) when nothing up to the first
+	unquoted `/` is quoted. Splits words where `_shell_segments` does.
+
+	A set of texts cannot tell two occurrences of the same text apart;
+	`guard_targets` uses the per-word `_tilde_word_flags` instead.
+	"""
+	return frozenset(text for text, tilde_is_literal in _tilde_word_flags(command) if tilde_is_literal)
+
+
+def _tilde_word_flags(command: str) -> list[tuple[str, bool]]:
+	"""Every word of `command` in order, as the tokenizer returns it, with
+	whether Bash leaves its `~` literal (`_literal_tilde_words`).
+
+	Words split where `_shell_segments` does, and a word made only of quotes
+	(`""`) is kept as "" as the tokenizer keeps it, so the list lines up one
+	to one with the segments' tokens.
+	"""
+	word_flags: list[tuple[str, bool]] = []
+	word: list[tuple[str, bool]] = []
+	word_started = False
+
+	def tilde_is_literal(start: int) -> bool:
+		if start >= len(word) or word[start][0] != "~":
+			return False
+		for character, quoted in word[start:]:
+			if character == "/" and not quoted:
+				return False
+			if quoted:
+				return True
+		return False
+
+	def finish_word() -> None:
+		nonlocal word_started
+		if not word and not word_started:
+			return
+		text = "".join(character for character, _quoted in word)
+		positions = [0]
+		assignment = re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", text)
+		if assignment and not any(quoted for _character, quoted in word[: assignment.end()]):
+			positions.append(assignment.end())
+		word_flags.append((text, any(tilde_is_literal(position) for position in positions)))
+		word.clear()
+		word_started = False
+
+	single_quoted = False
+	double_quoted = False
+	escaped = False
+	for character in command:
+		if escaped:
+			escaped = False
+			if double_quoted and character not in '"\\':
+				# Inside double quotes a backslash escapes only `"` and `\`.
+				word.append(("\\", True))
+			word.append((character, True))
+			continue
+		if single_quoted:
+			if character == "'":
+				single_quoted = False
+			else:
+				word.append((character, True))
+			continue
+		if character == "\\":
+			escaped = True
+			word_started = True
+			continue
+		if double_quoted:
+			if character == '"':
+				double_quoted = False
+			else:
+				word.append((character, True))
+			continue
+		if character == "'":
+			single_quoted = True
+			word_started = True
+			continue
+		if character == '"':
+			double_quoted = True
+			word_started = True
+			continue
+		if character in " \t\r" or character in _SHELL_PUNCTUATION_CHARS:
+			finish_word()
+			continue
+		word.append((character, False))
+	finish_word()
+	return word_flags
+
+
+def _resolve_guard_path(
+	value: str, base: str, physical: bool = False, expand_tilde: bool = True
+) -> tuple[str | None, str]:
+	"""Resolve a `cd` / `-C` / `GIT_DIR` path word against `base`.
+
+	Returns (absolute directory, "") or (None, reason) when the word needs
+	shell expansion the guard does not perform, or names no existing
+	directory this process can enter at hook time. `physical` follows
+	symlinks before `..` as `cd -P` and git's `chdir` do; otherwise `..`
+	removes the previous component, as a plain `cd` does. `expand_tilde` is
+	False for a `~` the shell leaves literal (`_literal_tilde_words`), which
+	then names a directory called `~`.
+	"""
+	if not value:
+		return None, "an empty path"
+	if value == "-":
+		return None, "`cd -`"
+	if any(marker in value for marker in _UNRESOLVABLE_PATH_MARKERS):
+		return None, f"`{value}` needs shell expansion"
+	if value.startswith("~") and expand_tilde:
+		if value != "~" and not value.startswith("~/"):
+			return None, f"`{value}` names another user's home directory"
+		value = os.path.expanduser(value)
+	if physical:
+		resolved = os.path.realpath(os.path.join(base, value))
+	else:
+		resolved = os.path.normpath(os.path.join(base, value))
+	if not os.path.isdir(resolved):
+		return None, f"`{resolved}` is not an existing directory"
+	if not os.access(resolved, os.X_OK):
+		# `cd` into it fails, so the commands after it run where they were.
+		return None, f"`{resolved}` cannot be entered (no search permission)"
+	return resolved, ""
+
+
+def _cd_destination(
+	args: list[str], base: str, literal_tilde_words: frozenset[str] = frozenset()
+) -> tuple[str | None, str]:
+	"""Directory a `cd <args>` segment moves to, or (None, reason).
+
+	Options end at `--` or the first operand, as for the builtin, so a word
+	after the directory is a second operand (`cd a -P` fails). The last of
+	`-L` / `-P` decides between lexical and physical resolution; any other
+	option than those and `-e` makes `cd` fail, so it is unresolvable.
+	"""
+	operands: list[str] = []
+	options_done = False
+	physical = False
+	for arg in args:
+		if not options_done and arg == "--":
+			options_done = True
+			continue
+		if not options_done and arg.startswith("-") and arg != "-":
+			for flag in arg[1:]:
+				if flag == "P":
+					physical = True
+				elif flag == "L":
+					physical = False
+				elif flag != "e":
+					return None, f"`cd {arg}` (an option the guard does not model)"
+			continue
+		options_done = True
+		operands.append(arg)
+	if not operands:
+		return _resolve_guard_path("~", base, physical=physical)
+	if len(operands) > 1:
+		return None, "`cd` with several operands"
+	return _resolve_guard_path(
+		operands[0], base, physical=physical, expand_tilde=operands[0] not in literal_tilde_words
+	)
+
+
+def _cd_redefinition_reason(executable: str, args: list[str]) -> str:
+	"""Why a segment redefines `cd`, or "" when it does not.
+
+	`cd() { …; }`, `cd () …`, `function cd { …; }` and `alias cd=…` make a
+	later `cd` run the redefinition instead of the builtin, so the directory
+	after it is unknown (PR #5173 operator review). A quoted operand that
+	starts with `(` (`cd "(dir)"`) also matches; it only costs a fallback.
+	"""
+	if executable.startswith("cd(") or (executable == "cd" and args and args[0].startswith("(")):
+		return "a redefinition of `cd` as a function"
+	if executable == "function" and args and (args[0] == "cd" or args[0].startswith("cd(")):
+		return "a redefinition of `cd` as a function"
+	if executable == "alias" and any(arg.startswith("cd=") for arg in args):
+		return "a redefinition of `cd` as an alias"
+	return ""
+
+
+def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> list[GuardTarget]:
+	"""Targets for `git push <args>` run in `repo_dir`.
+
+	`<src>:<dst>` (with an optional leading `+` and `refs/heads/` prefix) is
+	judged on `<dst>` with `<src>` as the tip; a refspec without a colon on
+	the branch it names; `HEAD` on the checked-out branch. Deletions
+	(`--delete`, `:<dst>`) and non-branch refs (`refs/tags/…`) land no commits
+	on a branch and yield no target, and so does `--tags` with no refspec,
+	which pushes only tags. A push that names no refspec judges the
+	checked-out branch with HEAD, as before.
+
+	A bulk push — `--all`, `--branches`, `--mirror` (or a prefix git expands
+	to one), or the `:` matching refspec — writes branches the guard cannot
+	list one by one: it judges the checked-out branch and carries a
+	`bulk_reason`, so the hook also asks for confirmation.
+
+	A refspec the guard cannot turn into one branch — a shell expansion or
+	pattern (`$B`, `refs/heads/*`), a `heads/` / `tags/` / `remotes/`
+	shorthand git expands against the remote, or a source starting with `-`
+	that git would read as an option — keeps the old behaviour: the session
+	checkout's branch and HEAD, with a `fallback_reason`. A `*` pattern that
+	can write several branches also carries a `bulk_reason`.
+	"""
+	positionals: list[str] = []
+	index = 0
+	options_done = False
+	bulk_option_reason = ""
+	pushes_tags = False
+	while index < len(args):
+		token = args[index]
+		if not options_done:
+			if token == "--":
+				options_done = True
+				index += 1
+				continue
+			if token in _PUSH_DELETE_FLAGS:
+				return []
+			if token in _PUSH_OPTS_WITH_VALUE:
+				index += 2
+				continue
+			if _is_push_bulk_flag(token):
+				bulk_option_reason = bulk_option_reason or f"`git push {token}` writes every local branch"
+				index += 1
+				continue
+			if _is_push_tags_only_flag(token):
+				pushes_tags = True
+				index += 1
+				continue
+			if token.startswith("-") and len(token) > 1:
+				index += 1
+				continue
+		positionals.append(token)
+		index += 1
+
+	if bulk_option_reason:
+		# git refuses a refspec beside these options, so nothing narrows the push.
+		return [GuardTarget("push", repo_dir, "", "HEAD", True, bulk_reason=bulk_option_reason)]
+	refspecs = positionals[1:]
+	if not refspecs:
+		if pushes_tags:
+			# `git push --tags <remote>` pushes refs/tags/* and no branch.
+			return []
+		return [GuardTarget("push", repo_dir, "", "HEAD", True)]
+	targets: list[GuardTarget] = []
+	for refspec in refspecs:
+		spec = refspec[1:] if refspec.startswith("+") else refspec
+		if spec == ":":
+			# "Matching" push: it writes every branch that also exists on the
+			# remote. Judge the checked-out branch, as before, and ask.
+			targets.append(
+				GuardTarget(
+					"push",
+					repo_dir,
+					"",
+					"HEAD",
+					True,
+					bulk_reason="`git push` with the `:` refspec writes every branch that also exists on the remote",
+				)
+			)
+			continue
+		if _refspec_writes_no_branch(spec):
+			continue
+		unresolvable_reason = _unresolvable_refspec_reason(refspec)
+		if unresolvable_reason:
+			targets.append(
+				GuardTarget(
+					"push", session_cwd, "", "HEAD", True, unresolvable_reason, _pattern_refspec_bulk_reason(spec)
+				)
+			)
+			continue
+		source, colon, destination = spec.partition(":")
+		if not colon:
+			destination = source
+		if not source:
+			continue
+		# `<src>:` with an empty destination is not a valid push refspec: git
+		# exits with `fatal: invalid refspec` and writes nothing. It is judged
+		# as for a push without a refspec: the checked-out branch with HEAD.
+		if colon and not destination:
+			targets.append(GuardTarget("push", repo_dir, "", "HEAD", True))
+			continue
+		if destination.startswith("refs/heads/"):
+			destination = destination[len("refs/heads/") :]
+		elif destination.startswith("refs/"):
+			continue
+		if destination in ("HEAD", "@"):
+			destination = ""
+		tip = "HEAD" if source in ("HEAD", "@") else source
+		targets.append(GuardTarget("push", repo_dir, destination, tip, True))
+	return targets
+
+
+def _is_push_bulk_flag(token: str) -> bool:
+	"""Whether a `git push` word is `--all`, `--branches` or `--mirror`, or a
+	prefix of four or more characters git would expand to one."""
+	return len(token) >= 4 and any(flag.startswith(token) for flag in _PUSH_BULK_FLAGS)
+
+
+def _is_push_tags_only_flag(token: str) -> bool:
+	"""Whether a `git push` word is `--tags` or a prefix git expands to it
+	(`--ta`, `--tag`)."""
+	return len(token) >= 4 and _PUSH_TAGS_ONLY_FLAG.startswith(token)
+
+
+def _pattern_refspec_bulk_reason(spec: str) -> str:
+	"""The `bulk_reason` for a `*` pattern refspec (without its leading `+`)
+	that can write several branches; "" for anything else.
+
+	A word with `$` or a backtick is a shell expansion, not a pattern; a
+	deletion (`:<dst>`) or a tag pattern writes no branch.
+	"""
+	if "*" not in spec or "$" in spec or "`" in spec or spec.startswith("-"):
+		return ""
+	pattern_source, pattern_colon, pattern_destination = spec.partition(":")
+	if not pattern_colon:
+		pattern_destination = pattern_source
+	if not pattern_source or pattern_destination.startswith("refs/tags/"):
+		return ""
+	return f"`git push` with the pattern refspec `{spec}` can write several branches"
+
+
+def _refspec_writes_no_branch(spec: str) -> bool:
+	"""Whether a refspec (without its leading `+`) writes only a non-branch
+	ref, such as `refs/tags/*` or `refs/tags/v*:refs/tags/v*`.
+
+	A `*` / `?` / `[` pattern keeps its literal `refs/<kind>/` prefix, so a
+	tag pattern is skipped like a single tag. A word with `$`, a backtick or
+	`{` can expand into other refspecs and is left to the unresolvable check.
+	"""
+	if any(marker in spec for marker in ("$", "`", "{")):
+		return False
+	pattern_source, pattern_colon, pattern_destination = spec.partition(":")
+	if not pattern_colon:
+		pattern_destination = pattern_source
+	return pattern_destination.startswith("refs/") and not pattern_destination.startswith("refs/heads/")
+
+
+def _unresolvable_refspec_reason(refspec: str) -> str:
+	"""Why a push refspec cannot be judged on a single branch; "" when it can."""
+	if any(marker in refspec for marker in _UNRESOLVABLE_REFSPEC_MARKERS):
+		return f"refspec `{refspec}` needs shell expansion or is a pattern"
+	spec = refspec[1:] if refspec.startswith("+") else refspec
+	source, colon, destination = spec.partition(":")
+	if not colon:
+		destination = source
+	if source.startswith("-") or destination.startswith("-"):
+		return f"refspec `{refspec}` starts with `-`, which git would read as an option"
+	if destination.startswith(_AMBIGUOUS_REFSPEC_PREFIXES):
+		return f"refspec destination `{destination}` is a shorthand git expands against the remote's refs"
+	return ""
+
+
+def _git_invocation_targets(
+	args: list[str],
+	assignments: dict[str, str],
+	directory: str | None,
+	unresolved: str,
+	session_cwd: str,
+	literal_tilde_words: frozenset[str] = frozenset(),
+) -> list[GuardTarget]:
+	"""Targets for one `git <args>` segment; [] when it is not guarded.
+
+	`directory` is where the segment runs after earlier `cd`s (None when that
+	is unknown, with `unresolved` saying why). `git -C <path>` then applies,
+	then `GIT_DIR=<path>` / `--git-dir`, each relative to the directory
+	reached so far and with symlinks followed, as git's `chdir` resolves
+	them. A `~` the shell leaves literal (quoted, or after `--git-dir=`)
+	names a directory called `~`. An unresolvable directory falls back to the
+	session checkout's branch and HEAD.
+	"""
+	repo_dir = directory
+	reason = unresolved
+	git_dir = assignments.get("GIT_DIR")
+	git_dir_expands_tilde = f"GIT_DIR={git_dir}" not in literal_tilde_words
+	subcommand = ""
+	index = 0
+	while index < len(args):
+		token = args[index]
+		if not token.startswith("-"):
+			subcommand = token
+			index += 1
+			break
+		if token == "-C":
+			value = args[index + 1] if index + 1 < len(args) else ""
+			if repo_dir is not None:
+				repo_dir, path_reason = _resolve_guard_path(
+					value, repo_dir, physical=True, expand_tilde=value not in literal_tilde_words
+				)
+				if repo_dir is None:
+					reason = f"`git -C` names {path_reason}"
+			index += 2
+			continue
+		if token == "--git-dir":
+			git_dir = args[index + 1] if index + 1 < len(args) else ""
+			git_dir_expands_tilde = git_dir not in literal_tilde_words
+			index += 2
+			continue
+		if token.startswith("--git-dir="):
+			git_dir = token.split("=", 1)[1]
+			# `--git-dir=` is not an assignment word, so the shell never
+			# expands a `~` in it and git receives it as written.
+			git_dir_expands_tilde = False
+			index += 1
+			continue
+		if token in GIT_GLOBAL_OPTS_WITH_VALUE:
+			index += 2
+			continue
+		index += 1
+	if subcommand not in GUARDED_SUBCOMMANDS:
+		return []
+	if git_dir is not None and repo_dir is not None:
+		repo_dir, path_reason = _resolve_guard_path(
+			git_dir, repo_dir, physical=True, expand_tilde=git_dir_expands_tilde
+		)
+		if repo_dir is None:
+			reason = f"the git directory is {path_reason}"
+	reaches_remote = subcommand == "push"
+	if repo_dir is None:
+		# A bulk push still asks when its directory is unknown. A push that
+		# writes no branch (a deletion, tags only) lands no commits whatever
+		# the directory, so it yields no target here either.
+		fallback_bulk_reason = ""
+		if reaches_remote:
+			parsed_push_targets = _push_refspec_targets(args[index:], session_cwd, session_cwd)
+			if not parsed_push_targets:
+				return []
+			fallback_bulk_reason = next(
+				(target.bulk_reason for target in parsed_push_targets if target.bulk_reason),
+				"",
+			)
+		return [GuardTarget(subcommand, session_cwd, "", "HEAD", reaches_remote, reason, fallback_bulk_reason)]
+	if subcommand == "commit":
+		return [GuardTarget(subcommand, repo_dir, "", "HEAD", False)]
+	return _push_refspec_targets(args[index:], repo_dir, session_cwd)
+
+
+def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
+	"""Every (repository, branch) pair the guarded git calls in `command` write to.
+
+	Replays the shell segments in order. `cd <path>` moves the effective
+	directory for later segments; `pushd`/`popd`, a subshell or command group,
+	a shell keyword ahead of a directory change, `export GIT_DIR` or a bare
+	`GIT_DIR=` assignment, and any path word that needs expansion make it
+	unknown for the rest of the command, and the git calls after that point
+	keep the old behaviour (the session checkout) with a `fallback_reason`.
+	So does a `cd` after `&&` behind a command that may fail, once its `&&`
+	chain ends (`a && cd x; git push`, `a && cd x && b || git push`), a
+	`cd` inside a list sent to the background with `&`, and a `cd` inside an
+	`if`, loop or `case` body (`if a; then b; cd x; fi`), and a segment that
+	redefines `cd` as a function or alias (`cd() { :; }`, `alias cd=true`).
+	The same segments count as git calls as in `git_subcommands`, so nothing
+	it ignores is judged here; reserved words ahead of `git` (`then git push`)
+	are skipped as there. Whether a `~` is literal is read per word, so a
+	quoted `"~/x"` in one place does not change an unquoted `~/x` elsewhere.
+	"""
+	try:
+		segments = _shell_segments_with_separators(command)
+	except ValueError:
+		return []
+	# Whether each word's `~` is literal, per occurrence: a quoted `"~/x"` in
+	# one segment must not make an unquoted `~/x` elsewhere literal too. When
+	# the per-word flags cannot be lined up with the tokens, a `~` path word
+	# is unresolvable instead.
+	# A word made only of separator characters (a quoted `";"`) is a
+	# separator to `_shell_segments` as well, so it is dropped here too.
+	tilde_word_flags = [
+		(text, tilde_is_literal)
+		for text, tilde_is_literal in _tilde_word_flags(command)
+		if not (text and set(text) <= set(_SHELL_PUNCTUATION_CHARS))
+	]
+	tilde_flags_aligned = [text for text, _tilde_is_literal in tilde_word_flags] == [
+		token for tokens, _before, _after in segments for token in tokens
+	]
+	word_offset = 0
+	compound_depth = 0
+	targets: list[GuardTarget] = []
+	directory: str | None = session_cwd
+	unresolved = ""
+	# One `&&` / `||` list at a time (the segments between `;`, `&` and
+	# newlines). A `cd` after `&&` that follows a command which may fail is
+	# skipped when that command fails; the rest of its `&&` chain is skipped
+	# with it, but whatever follows `||` or the end of the list runs in either
+	# directory. A list ended by `&` runs in a background subshell, so a `cd`
+	# inside it does not reach the commands after it.
+	list_start_directory = directory
+	list_may_fail = False
+	conditional_cd = False
+	for tokens, separator_before, separator_after in segments:
+		list_boundary = separator_before.replace("\n", "")
+		if list_boundary in ("", ";", "&"):
+			if directory is not None:
+				if list_boundary == "&" and directory != list_start_directory:
+					directory, unresolved = None, "a `cd` in a command list run in the background by `&`"
+				elif conditional_cd:
+					directory, unresolved = None, "a `cd` after `&&` that may not have run"
+			list_start_directory = directory
+			list_may_fail = False
+			conditional_cd = False
+		elif list_boundary == "||" and conditional_cd and directory is not None:
+			directory, unresolved = None, "a `cd` after `&&` that may not have run"
+		may_fail_before_segment = list_may_fail
+		list_may_fail = True
+		segment_tilde_flags = tilde_word_flags[word_offset : word_offset + len(tokens)] if tilde_flags_aligned else []
+		word_offset += len(tokens)
+		literal_tilde_texts = {text for text, tilde_is_literal in segment_tilde_flags if tilde_is_literal}
+		expanding_texts = {text for text, tilde_is_literal in segment_tilde_flags if not tilde_is_literal}
+		segment_literal_tilde_words = frozenset(literal_tilde_texts - expanding_texts)
+		tilde_quoting_reason = ""
+		if not tilde_flags_aligned and any("~" in token for token in tokens):
+			tilde_quoting_reason = "a `~` whose quoting the guard could not read"
+		elif literal_tilde_texts & expanding_texts:
+			tilde_quoting_reason = "the same `~` path quoted in one place and unquoted in another"
+		if tokens and tokens[0] in _COMPOUND_CLOSING_WORDS:
+			compound_depth = max(0, compound_depth - 1)
+		# Reserved words ahead of the command (`then git push`, `! git commit`).
+		index = 0
+		while index < len(tokens) and tokens[index] in _COMMAND_RESERVED_WORD_PREFIXES:
+			index += 1
+		leading_reserved_words = tokens[:index]
+		compound_depth += sum(1 for word in leading_reserved_words if word in _COMPOUND_OPENING_WORDS)
+		assignments: dict[str, str] = {}
+		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+			name, value = tokens[index].split("=", 1)
+			assignments[name] = value
+			index += 1
+		if index >= len(tokens):
+			if "GIT_DIR" in assignments and directory is not None:
+				directory, unresolved = None, "a `GIT_DIR=` assignment may apply to later commands"
+			continue
+		executable = tokens[index]
+		args = tokens[index + 1 :]
+		if executable in _COMPOUND_OPENING_WORDS:
+			# `for …`, `case …`, `select …`: not a command, but a body follows.
+			compound_depth += 1
+		cd_redefinition = _cd_redefinition_reason(executable, args)
+		if directory is not None:
+			if cd_redefinition:
+				directory, unresolved = None, cd_redefinition
+			elif executable.startswith(("(", "{")):
+				directory, unresolved = None, "a subshell or command group"
+			elif (leading_reserved_words or executable in _COMPOUND_OPENING_WORDS) and any(
+				word == "cd" or word in _UNMODELLED_DIRECTORY_COMMANDS for word in [executable, *args]
+			):
+				directory, unresolved = None, f"a directory change after `{tokens[0]}`"
+			elif executable in _UNMODELLED_DIRECTORY_COMMANDS:
+				directory, unresolved = None, f"`{executable}`"
+			elif executable == "cd" and compound_depth > 0:
+				# `if a; then b; cd x; fi`: the body may not run, or may run
+				# several times, so the directory after it is unknown.
+				directory, unresolved = None, "a `cd` inside an `if`, loop or `case` body"
+				continue
+			elif executable == "export" and any(arg.split("=", 1)[0] == "GIT_DIR" for arg in args):
+				directory, unresolved = None, "`export GIT_DIR`"
+			elif executable == "cd" and not (
+				_is_sequential_separator(separator_before) and _is_sequential_separator(separator_after)
+			):
+				# `cd x || …`, `cd x & …`, `… | cd x`: the shell may not run the
+				# cd, or runs it in a subshell, so later commands' directory is
+				# unknown.
+				joined_by = separator_after if not _is_sequential_separator(separator_after) else separator_before
+				directory, unresolved = None, f"a `cd` joined by `{joined_by.strip()}`"
+				continue
+			elif executable == "cd" and tilde_quoting_reason:
+				directory, unresolved = None, f"`cd` with {tilde_quoting_reason}"
+				continue
+			elif executable == "cd":
+				destination, cd_reason = _cd_destination(args, directory, segment_literal_tilde_words)
+				if destination is None:
+					directory, unresolved = None, f"`cd` to {cd_reason}"
+				else:
+					directory = destination
+					# A `cd` to an existing directory succeeds, so it does not
+					# make the rest of its `&&` chain conditional by itself.
+					list_may_fail = may_fail_before_segment
+					if separator_before.replace("\n", "") == "&&" and may_fail_before_segment:
+						conditional_cd = True
+				continue
+		if executable != "git" and not executable.endswith("/git"):
+			continue
+		git_directory, git_unresolved = directory, unresolved
+		if git_directory is not None and tilde_quoting_reason:
+			# Only this call: its own `-C` / `GIT_DIR` / `--git-dir` word may
+			# be the ambiguous one; later commands keep the directory.
+			git_directory, git_unresolved = None, f"`git` with {tilde_quoting_reason}"
+		targets.extend(
+			_git_invocation_targets(
+				args, assignments, git_directory, git_unresolved, session_cwd, segment_literal_tilde_words
+			)
+		)
+	return targets
 
 
 def extract_repo_slug(url: str) -> str:
@@ -878,26 +1595,27 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 	verified for a remote-only push. The human confirms the PR is still open;
 	a denial sends the reason back to Claude.
 	"""
+	print(json.dumps(_confirmation_payload(reason, prompt_reason)))
+
+
+def _confirmation_payload(reason: str, prompt_reason: str | None = None) -> dict:
+	"""The hook output `_request_confirmation` prints, as a dict."""
 	# The prompt is read by a human: `reason` carries the full transport
 	# error for the log, `prompt_reason` a one-paragraph version for the prompt.
 	short_reason = prompt_reason or reason
-	print(
-		json.dumps(
-			{
-				"systemMessage": f"merged-PR guard needs confirmation: {reason}",
-				"hookSpecificOutput": {
-					"hookEventName": "PreToolUse",
-					"permissionDecision": "ask",
-					"permissionDecisionReason": (
-						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
-						f"pull request for this branch is still open. If it has merged, "
-						f"deny — the branch must be rebuilt from the default branch and "
-						f"a new PR opened."
-					),
-				},
-			}
-		)
-	)
+	return {
+		"systemMessage": f"merged-PR guard needs confirmation: {reason}",
+		"hookSpecificOutput": {
+			"hookEventName": "PreToolUse",
+			"permissionDecision": "ask",
+			"permissionDecisionReason": (
+				f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
+				f"pull request for this branch is still open. If it has merged, "
+				f"deny — the branch must be rebuilt from the default branch and "
+				f"a new PR opened."
+			),
+		},
+	}
 
 
 def _request_api_write_confirmation() -> None:
@@ -946,13 +1664,38 @@ def _unreachable_outcome(
 	asks for confirmation when git history is inconclusive, a local commit is
 	allowed with a warning because the work only strands once pushed.
 	"""
+	code, message, kind, reason, prompt_reason = _unreachable_decision(
+		api_failure, tip, branch, base, cwd, reaches_remote, target_slug
+	)
+	if kind == "ask":
+		_request_confirmation(reason, prompt_reason)
+	elif kind == "warn":
+		_warn(reason)
+	return code, message
+
+
+def _unreachable_decision(
+	api_failure: str,
+	tip: str,
+	branch: str,
+	base: str,
+	cwd: str,
+	reaches_remote: bool,
+	target_slug: str = "",
+) -> tuple[int, str, str, str, str]:
+	"""`_unreachable_outcome` without the printing.
+
+	Returns (exit code, stderr message, kind, reason, prompt reason), where
+	kind is "block" (exit 2), "ask", or "warn", so a caller judging several
+	targets can merge them into one hook result.
+	"""
 	verdict, detail = (
 		git_history_verdict(tip, branch, base, cwd)
 		if tip
 		else (VERDICT_UNAVAILABLE, f"no local checkout of {target_slug or 'the target repository'} to inspect")
 	)
 	if verdict == VERDICT_STRANDED:
-		return 2, _history_block_message(branch, base, detail, api_failure)
+		return 2, _history_block_message(branch, base, detail, api_failure), "block", "", ""
 	reason = (
 		f"could not reach GitHub to check PR status for `{branch}` ({api_failure}); "
 		f"git history is {verdict}: {detail}."
@@ -962,11 +1705,7 @@ def _unreachable_outcome(
 		f"could not reach GitHub to check PR status for `{branch}` ({brief_failure}...); "
 		f"git history is {verdict}: {detail}."
 	)
-	if reaches_remote:
-		_request_confirmation(reason, prompt_reason)
-	else:
-		_warn(reason)
-	return 0, ""
+	return 0, "", "ask" if reaches_remote else "warn", reason, prompt_reason
 
 
 def _evaluate_bash(payload: dict) -> tuple[int, str]:
@@ -989,49 +1728,150 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	if not guarded_git_subcommands:
 		return 0, ""
 
-	cwd = _payload_cwd(payload)
+	session_cwd = _payload_cwd(payload)
 
-	branch = current_branch(cwd)
+	# Each guarded git call is judged in the repository it runs in and, for a
+	# push, on the branch it writes to (issue #5144), not on the session
+	# checkout's branch. One merged hook result is printed at the end.
+	blocks: list[str] = []
+	asks: list[tuple[str, str]] = []
+	notices: list[str] = []
+	pull_request_memo: dict[tuple[str, str], tuple[list[dict] | LookupUnavailable, bool]] = {}
+	judged: set[GuardTarget] = set()
+	for target in guard_targets(command, session_cwd):
+		if target in judged:
+			continue
+		judged.add(target)
+		if target.fallback_reason:
+			notices.append(
+				f"merged-PR guard: could not resolve where `git {target.subcommand}` runs "
+				f"({target.fallback_reason}); judged the session checkout `{target.cwd}` instead."
+			)
+		code, message, kind, reason, prompt_reason = _judge_guard_target(
+			target, session_cwd, pull_request_memo
+		)
+		if code == 2:
+			blocks.append(message)
+			continue
+		if kind == "warn":
+			notices.append(f"merged-PR guard skipped: {reason}")
+		if target.bulk_reason:
+			# The checked-out branch passed; the other branches the push
+			# writes are not listed, so a human confirms none of them is
+			# stranded (issue #5144 review). No API calls, and not skipped on
+			# the default branch.
+			bulk_ask_reason = (
+				f"{target.bulk_reason} in `{target.cwd}`, and the guard judges only the checked-out "
+				"branch, so it cannot check the others. Confirm that none of them belongs to a "
+				"merged pull request with no open one."
+			)
+			if kind == "ask":
+				# One confirmation reason per push: fold the bulk reason into
+				# the judge's ask instead of adding a second entry.
+				asks.append((f"{reason} {bulk_ask_reason}", f"{prompt_reason or reason} {bulk_ask_reason}"))
+			else:
+				asks.append((bulk_ask_reason, bulk_ask_reason))
+		elif kind == "ask":
+			asks.append((reason, prompt_reason))
+
+	if blocks:
+		# Keep every notice (fallback and skip warnings) beside the block, so a
+		# multi-target command still reports the targets it could not judge.
+		return 2, "\n\n".join(blocks + notices)
+	if asks:
+		hook_output = _confirmation_payload(asks[0][0], asks[0][1])
+		extra_asks = asks[1:]
+		if extra_asks:
+			hook_output["systemMessage"] += "\n" + "\n".join(
+				f"merged-PR guard needs confirmation: {extra_ask_reason}" for extra_ask_reason, _prompt in extra_asks
+			)
+			hook_output["hookSpecificOutput"]["permissionDecisionReason"] += " " + " ".join(
+				extra_prompt_reason or extra_ask_reason for extra_ask_reason, extra_prompt_reason in extra_asks
+			)
+		if notices:
+			hook_output["systemMessage"] += "\n" + "\n".join(notices)
+		print(json.dumps(hook_output))
+	elif notices:
+		print(json.dumps({"systemMessage": "\n".join(notices)}))
+	return 0, ""
+
+
+def _judge_guard_target(
+	target: GuardTarget,
+	session_cwd: str,
+	pull_request_memo: dict[tuple[str, str], tuple[list[dict] | LookupUnavailable, bool]],
+) -> tuple[int, str, str, str, str]:
+	"""Apply the §21 rule to one target without printing.
+
+	Returns (exit code, stderr message, kind, reason, prompt reason) like
+	`_unreachable_decision`; kind is "" for a plain allow or block.
+
+	Batching contract (CLAUDE.md §15, §21.D): `pull_request_memo` holds the PR
+	list (or the lookup failure) per `(slug, branch)` for the current hook
+	call, with whether it came from a live call, so a command that judges the
+	same pair twice issues one API call.
+	A fresh cache entry costs no call; a cache-derived block is re-verified
+	with one live call, whose result (or failure) replaces the memo entry.
+	"""
+	cwd = target.cwd
+	branch = target.branch or current_branch(cwd)
 	if not branch:
 		# Detached HEAD, or not a git repo — nothing branch-shaped to check.
-		return 0, ""
+		return 0, "", "", "", ""
 	base = default_branch(cwd)
 	if base and branch == base:
-		# Committing on the default branch is not the stranded-work scenario.
-		return 0, ""
+		# Writing to the default branch is not the stranded-work scenario.
+		return 0, "", "", "", ""
 
 	slug = repo_slug(cwd)
 	if not slug:
-		_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
-		return 0, ""
+		return 0, "", "warn", f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)", ""
 
-	reaches_remote = "push" in guarded_git_subcommands
-	cached = _read_cache(slug, branch)
-	try:
-		pull_requests = cached if cached is not None else query_pull_requests(slug, branch, cwd)
-	except LookupUnavailable as exc:
-		return _unreachable_outcome(str(exc), "HEAD", branch, base, cwd, reaches_remote)
+	memo_key = (slug, branch)
+	if memo_key in pull_request_memo:
+		memo_entry, live = pull_request_memo[memo_key]
+	else:
+		cached = _read_cache(slug, branch)
+		live = cached is None
+		if cached is not None:
+			memo_entry = cached
+		else:
+			try:
+				memo_entry = query_pull_requests(slug, branch, cwd)
+			except LookupUnavailable as exc:
+				memo_entry = exc
+			else:
+				_write_cache(slug, branch, memo_entry)
+		pull_request_memo[memo_key] = (memo_entry, live)
+	if isinstance(memo_entry, LookupUnavailable):
+		return _unreachable_decision(str(memo_entry), target.tip, branch, base, cwd, target.reaches_remote)
 
-	offender = blocking_pull_request(pull_requests, cwd, base)
+	offender = blocking_pull_request(memo_entry, cwd, base, target.tip)
 
 	# Re-verify a block against live data. Cheap allows may come from cache;
 	# blocks may not, so that opening a new PR clears the guard immediately
 	# rather than after the TTL expires.
-	if offender is not None and cached is not None:
+	if offender is not None and not live:
 		try:
 			pull_requests = query_pull_requests(slug, branch, cwd)
 		except LookupUnavailable as exc:
-			return _unreachable_outcome(
-				f"could not re-verify: {exc}", "HEAD", branch, base, cwd, reaches_remote
+			# Remember the failed live call, so a later target for the same
+			# pair does not call GitHub again (§21.D budget).
+			reverify_failure = LookupUnavailable(f"could not re-verify: {exc}")
+			pull_request_memo[memo_key] = (reverify_failure, True)
+			return _unreachable_decision(
+				str(reverify_failure), target.tip, branch, base, cwd, target.reaches_remote
 			)
 		_write_cache(slug, branch, pull_requests)
-		offender = blocking_pull_request(pull_requests, cwd, base)
-	elif cached is None:
-		_write_cache(slug, branch, pull_requests)
+		pull_request_memo[memo_key] = (pull_requests, True)
+		offender = blocking_pull_request(pull_requests, cwd, base, target.tip)
 
 	if offender is None:
-		return 0, ""
-	return 2, _block_message(offender, branch, base)
+		return 0, "", "", "", ""
+	message = _block_message(offender, branch, base, "HEAD" if target.tip == "HEAD" else f"`{target.tip}`")
+	if cwd != session_cwd:
+		message += f"\n\nJudged in: {cwd} (where this `git {target.subcommand}` runs)."
+	return 2, message, "", "", ""
 
 
 def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:

@@ -903,6 +903,47 @@ still sitting on the merged commits (block). Squash- and rebase-merged PRs
 never put the merged head into the default branch, so plain ancestry
 already decides for them.
 
+"The current branch" and `HEAD` are those of the **effective repository**
+each guarded git call runs in, not the session's own checkout (issue #5144).
+The guard replays the command line: the hook's working directory, moved by
+every earlier `cd <path>` in the same command, then by `git -C <path>`, then
+by a `GIT_DIR=<path>` prefix or `--git-dir` option. Paths resolve the way
+the shell and git resolve them: `cd` lexically unless `-P` is in force,
+`git -C` and the git directory physically (symlinks followed before `..`),
+and a `~` that is quoted or escaped (`"~"`, `'~'`, `\~`, or one inside
+`--git-dir=`) as a literal directory name rather than the home directory;
+quoting is read per word, so a quoted `"~/x"` elsewhere in the command leaves
+an unquoted `~/x` to the home directory. A git call after a reserved word
+(`then git push`, `do git commit`, `! git commit`) is guarded like a bare one. A
+`cd` that Bash rejects (an unknown option, or a second operand such as
+`cd x -P`) leaves the directory unknown. A push that names a
+refspec is judged on the branch it writes to: for
+`git push <remote> <src>:<dst>` (and `HEAD:<dst>`) the conditions are checked
+for `<dst>`, with `<src>` taking the role of `HEAD`. A detached scratch
+worktree pushing to an open PR's branch is therefore allowed, and a worktree
+pushing merged history to a merged branch with no open PR is blocked,
+whatever the main checkout is on. Deletions, tag refspecs (patterns such as
+`refs/tags/*` included), and `--tags` (or `--tag`) with no refspec land no commits on a
+branch and are not judged, even when the directory cannot be resolved; a push
+without a refspec judges the current branch. A bulk push (`--all`, `--branches`,
+`--mirror`, or a prefix git expands to one, the `:` matching refspec, or a `*`
+pattern refspec) judges the current branch as usual and, when that does not
+block, also asks for confirmation, since the other branches it writes are not
+listed; the ask issues no API call and applies on the default branch too. When the directory cannot be resolved (a variable or command
+substitution, a subshell, `pushd`/`popd`, a `cd` joined by `||`, `&` or `|`,
+a `cd` after `&&` behind a command that may fail once its `&&` chain ends
+(`a && cd x; git push`), a `cd` inside a list sent to the background with `&`,
+a `cd` inside an `if`, loop or `case` body, a `cd` redefined earlier in the
+command as a function or alias (`cd() { :; }`, `alias cd=true`), the same `~` path quoted and
+unquoted in one git call, `export GIT_DIR`, a path that does not exist yet or cannot be entered), or a refspec cannot be
+turned into one branch (a variable, a glob or brace pattern, a `heads/` /
+`tags/` / `remotes/` shorthand, a word starting with `-`), that call is
+judged on the session checkout as before and the guard emits a warning naming
+the reason; it never fails open silently.
+Several guarded calls in one command are each judged: any block blocks,
+otherwise the warnings and at most one confirmation prompt are merged into one
+hook result.
+
 The same hook guards the GitHub MCP push tools — `mcp__github__push_files`
 and `mcp__github__create_or_update_file` — through a second `PreToolUse`
 matcher in `.claude/settings.json`. Those tools write to a remote branch
@@ -947,7 +988,10 @@ confirmation safeguard remains active in both cases.
 
 Per §15, the guard issues **one** API call per guarded command — a single
 `state=all` request answers both the merged and the open question — and
-caches the result for 300 seconds keyed on `<slug>/<branch>`. Cached data may
+caches the result for 300 seconds keyed on `<slug>/<branch>`. A command whose
+guarded calls judge several branches or repositories (§21.B) issues at most
+one API call per `(slug, branch)` pair it judges, and none for a pair the
+cache already holds. Cached data may
 satisfy an *allow*; a *block* is always re-verified against a live call first,
 so opening a new PR clears the guard immediately instead of after the TTL.
 
