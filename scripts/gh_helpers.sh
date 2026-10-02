@@ -1655,25 +1655,140 @@ PY
 #   issue #12
 #   issues/12
 #   Closes: #12
+#   owner/repo/issues/56#issuecomment-123
+#   https://github.com/owner/repo/issues/78#any-fragment
+#   https://github.com/owner/repo/issues/78?notification_referrer_id=1#issuecomment-2
+#   owner/repo/issues/56/#x
+#   https://github.com/owner/repo/issues/78?q=(a)#issuecomment-2
+#
+# A URL or path that carries a `#` fragment points at something inside
+# the issue (usually a comment), not at the issue as the PR's subject, so
+# it is not a linked issue (issue #5776). Each URL/path is taken whole,
+# the way GitHub renders it as one link: it runs to the first whitespace,
+# `<`, or `>`, and a Markdown link destination (`[t](…)`) also ends at
+# its first unmatched `)`, so `?q=(a)` stays inside it. A `#` anywhere in
+# that URL after the issue number drops it, and a repo-scoped issue path
+# inside its query or fragment is part of it, never a link of its own:
+#   https://github.com/owner/repo/issues/1?next=owner/repo/issues/2#c
+#   https://github.com/owner/repo/issues/1#see-owner/repo/issues/2
+# both yield nothing, and https://github.com/owner/repo/issues/1,owner/repo/issues/2
+# (no whitespace, one link on GitHub) yields 1. Markdown links side by
+# side still count on their own, because each destination ends at its
+# `)`:
+#   [one](https://github.com/owner/repo/issues/1?q=1),[two](https://github.com/owner/repo/issues/2)
+#   yields 1 and 2.
+# The same holds for an issue path inside any other URL: when the text
+# before it in the same run (after a Markdown `](`) holds `://`, `?`,
+# or `#`, or ends with `/`, the path is part of that URL and never a
+# link, so https://example.com/?next=owner/repo/issues/2,
+# https://example.com/#see-owner/repo/issues/2, and
+# https://example.com/owner/repo/issues/2 yield nothing. A lone `/`
+# right before the path, at the start of the run or after a character
+# that cannot end a host or path segment (`(`, `*`, `:`), makes it a
+# root-relative path, which is a link: /owner/repo/issues/2,
+# [t](/owner/repo/issues/2), and (/owner/repo/issues/2) yield 2, while
+# x/owner/repo/issues/2, ./owner/repo/issues/2, and
+# //owner/repo/issues/2 yield nothing. The
+# `github.com/` lead must start a hostname, so a longer host ending in
+# it (evilgithub.com/owner/repo/issues/2, gist.github.com/…) is another
+# host's URL and yields nothing either. Inside a
+# Markdown link destination a backslash-escaped character (`\)`, `\(`,
+# `\#`) is part of the URL, as GitHub reads it, so
+# [c](https://github.com/owner/repo/issues/1?q=a\)b#c) yields nothing.
+# A closing keyword counts unless it sits inside such a URL, and the
+# match before it never hides it ("Fixes #1 fixes #2" yields 1 and 2).
+#
+# The scan runs in python3 (one left-to-right pass over the text,
+# linear in its length), because the URL extent depends on parenthesis
+# depth, which a grep pattern cannot track.
 #
 # Fail-open:
-#   empty text or malformed repository input emits no matches
+#   empty text, malformed repository input, or a python3 failure emits
+#   no matches
 # ---------------------------------------------------------------
 extract_repo_scoped_issue_refs_from_text()
 {
 	local _repository="${1:-}"
 	local _text="${2:-}"
-	local _repository_escaped
 
 	if [ -z "${_repository}" ] || [ -z "${_text}" ] || ! [[ "${_repository}" =~ ^[^/]+/[^/]+$ ]]; then
 		return 0
 	fi
 
-	_repository_escaped="$(printf '%s' "${_repository}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
-	printf '%s\n' "${_text}" \
-		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
-		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
-		| sort -un || true
+	printf '%s' "${_text}" | python3 -c '
+import bisect
+import re
+import string
+import sys
+
+repository = sys.argv[1]
+text = sys.stdin.buffer.read().decode("utf-8", "replace")
+issue_path = re.compile(r"(?<!\w)" + re.escape(repository) + r"/issues/([0-9]+)", re.IGNORECASE)
+host_prefix = re.compile(r"(?<![\w.-])(?:(?:https?:)?//)?(?:www\.)?github\.com/\Z", re.IGNORECASE)
+keyword_ref = re.compile(
+	r"(?<![\w/-])(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#\s*([0-9]+)(?!\w)",
+	re.IGNORECASE,
+)
+word_char = re.compile(r"\w")
+root_relative_lead = re.compile(r"(?:\A|[^\w.~%/-])/\Z")
+
+found = set()
+url_starts = []
+url_stops = []
+pos = 0
+while True:
+	match = issue_path.search(text, pos)
+	if match is None:
+		break
+	host = host_prefix.search(text, max(0, match.start() - 32), match.start())
+	url_start = host.start() if host else match.start()
+	lead_start = url_start
+	while lead_start > pos and not (text[lead_start - 1].isspace() or text[lead_start - 1] in "<>"):
+		lead_start -= 1
+	destination_open = text.rfind("](", lead_start, url_start)
+	if destination_open >= 0:
+		lead_start = destination_open + 2
+	lead = text[lead_start:url_start]
+	root_relative = host is None and root_relative_lead.search(lead) is not None
+	if root_relative:
+		url_start -= 1
+	embedded = "://" in lead or "?" in lead or "#" in lead or (lead.endswith("/") and not root_relative)
+	if embedded:
+		url_start = lead_start
+	markdown_destination = text[max(0, url_start - 2):url_start] == "]("
+	depth = 0
+	stop = url_start
+	while stop < len(text):
+		char = text[stop]
+		if stop >= match.end() and (char.isspace() or char in "<>"):
+			break
+		if markdown_destination and char == "\\" and stop + 1 < len(text) and text[stop + 1] in string.punctuation:
+			stop += 2
+			continue
+		if markdown_destination and char == "(":
+			depth += 1
+		elif markdown_destination and char == ")":
+			if depth > 0:
+				depth -= 1
+			elif stop >= match.end():
+				break
+		stop += 1
+	tail = text[match.end():stop]
+	if not embedded and not word_char.match(tail) and "#" not in tail:
+		found.add(int(match.group(1)))
+	url_starts.append(url_start)
+	url_stops.append(stop)
+	pos = stop
+
+for match in keyword_ref.finditer(text):
+	index = bisect.bisect_right(url_starts, match.start()) - 1
+	if index >= 0 and match.start() < url_stops[index]:
+		continue
+	found.add(int(match.group(1)))
+
+for number in sorted(found):
+	print(number)
+' "${_repository}" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------
