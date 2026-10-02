@@ -8,7 +8,7 @@
 - Activation: not started
 - Waiting on: PR #6100
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net trig_011TjNGQevQtaMrp3G5f8GKd   hand-back trig_01MjziQQX88Drm9LvczHVcPd
 - Last updated: 2026-10-02
 - Last note: phase 1 PR #6100 opened (session_01Gpi41BKskELLT7oHKT8xaN); runner-repo wrapper PR shubhodeep1/claude-workers#1 opened (merge = activation gate 2); live smoke run 37015227644 green
 
