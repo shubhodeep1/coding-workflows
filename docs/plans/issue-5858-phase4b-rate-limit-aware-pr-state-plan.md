@@ -20,12 +20,14 @@ The stable release gate (`.github/workflows/test-and-mark-stable.yml`, step `Pha
 - A rate-limited read in `gh_api_with_retry` is detected from its stderr (`rate limit`, case-insensitive). It is not retried on the 2 s / 4 s schedule, and it returns a distinct exit code (`75`) that every existing `if !` / `||` caller still treats as a failure.
 - `fetch_pr_state` reports `rate_limited` for that exit code and `unknown` for every other failure, exactly as before.
 - In the Phase 4b poll loop, a `rate_limited` PR state is not counted toward `PR_STATE_FAILURE_LIMIT`. The loop waits for the limit to reset, using `GET /rate_limit` (`core.remaining == 0` → `core.reset - now + 1`; otherwise 60 s, GitHub's minimum wait for a secondary limit; unreadable → 60 s). The wait is capped at `DEADLINE`, and at `RETRY_REGISTRATION_DEADLINE` while no run is registered yet.
+- The poll loop's other reads, the post-dispatch run list and the pinned run's status, wait out a rate limit the same way (`phase4b_wait_out_rate_limit`, same caps) instead of re-reading a limited endpoint every 15 s. Added in review round 1 of PR #5874 (AD-8).
 - The PR-closure check (`pr_closed_during_retry`) and the 4-failure breaker for real `unknown` reads are unchanged. When the deadline expires while rate-limited, the step fails closed with the existing `retry_timeout` status.
 - A regression test runs the real Phase 4b retry block from the workflow with a stub `gh`. It feeds five consecutive rate-limited PR-state reads and then a successful one, and shows the step keeps polling the adopted run to completion and reaches attempt 2. Companion cases cover the rate-limited deadline expiry (fail closed, `retry_timeout`), a closed PR (still `pr_closed_during_retry`), and four plain failures (still `pr_state_check_failed`).
 
 ## Non-goals
 
 - No change to `EDITOR_RETRY_BUDGET_MINUTES`, the 90-second registration window, the aggregator's status list, Phase 4 / Phase 6 / Phase 7 polling, or `scripts/comprehensive_test_and_release_gh_api.sh`.
+- No rate-limit wait for Phase 4b's one-shot reads outside the poll loop: the attempt-1 and attempt-2 canary fetches, the PR-head read, and the pre-dispatch branch and run-list reads. They still fail on a rate limit, as before, now after one request instead of three.
 - No reduction in the release gate's GitHub API usage. Whatever spent the token's budget on 2026-10-01 is outside this issue.
 - No claim that the editor would have restored the canary in run 36797692597. The log ends before the adopted run's result.
 
