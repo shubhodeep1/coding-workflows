@@ -383,6 +383,54 @@ def test_check_before_an_unreadable_revision_is_null(claude_dir: Path, project: 
 	assert verdict["reason"].startswith("no record for this session")
 
 
+def test_check_refuses_a_before_value_git_would_read_as_an_option(claude_dir: Path, tmp_path: Path):
+	"""PR #5283 operator review N1: `--before=--output=<path>` made the
+	allowlisted check run `git show --output=<path>:./settings.json`, which
+	wrote a file. A `-`-prefixed value is now a bad argument and nothing runs."""
+	home = tmp_path / "home"
+	repo = _merged_repo(tmp_path / "repo", RECORDER_WIRING)
+	target = tmp_path / "out"
+	(tmp_path / "out:.").mkdir()
+	before_files = sorted(p for p in tmp_path.rglob("*") if ".git" not in p.parts)
+	for value in (f"--output={target}", "-p", "--stat"):
+		result = _run_check(claude_dir, repo, home, f"--before={value}", session_env="s-1")
+		assert result.returncode == 2, (value, result.stdout, result.stderr)
+		assert result.stdout == ""
+		assert "--before must be a revision name" in result.stderr
+	assert not (tmp_path / "out:." / "settings.json").exists()
+	assert sorted(p for p in tmp_path.rglob("*") if ".git" not in p.parts) == before_files
+
+
+@pytest.mark.parametrize("value", ("", "HEAD:other", "HEAD 1", "HEAD\n", "x;y"), ids=repr)
+def test_check_refuses_a_before_value_that_is_not_a_plain_revision(claude_dir: Path, project: Path, tmp_path: Path, value: str):
+	result = _run_check(claude_dir, project, tmp_path / "home", "--before", value, session_env="s-1")
+	assert result.returncode == 2, result.stdout
+	assert result.stdout == ""
+
+
+@pytest.mark.parametrize("value", ("HEAD", "HEAD^1", "HEAD~2", "HEAD@{1}", "origin/main", "claude/a-b", "34cce53"))
+def test_safe_before_revisions_are_accepted(claude_dir: Path, value: str):
+	assert _load(claude_dir / CHECK).is_safe_before_rev(value) is True
+
+
+def test_recorder_wired_at_never_passes_an_option_to_git(claude_dir: Path, tmp_path: Path, monkeypatch):
+	"""Direct callers get the same guard, and `git show` always gets
+	`--end-of-options` before the revision."""
+	module = _load(claude_dir / CHECK)
+	calls = []
+
+	def fake_run(argv, **kwargs):
+		calls.append(argv)
+		return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(RECORDER_WIRING), stderr="")
+
+	monkeypatch.setattr(module.subprocess, "run", fake_run)
+	settings = tmp_path / ".claude" / "settings.json"
+	assert module.recorder_wired_at(f"--output={tmp_path / 'x'}", settings) is None
+	assert calls == []
+	assert module.recorder_wired_at("HEAD^1", settings) is True
+	assert calls == [["git", "-C", str(settings.parent), "show", "--end-of-options", "HEAD^1:./settings.json"]]
+
+
 @pytest.mark.parametrize(
 	("settings_data", "wired"),
 	(

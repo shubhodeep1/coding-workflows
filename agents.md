@@ -1255,7 +1255,11 @@ reviews, comments, and conflicts stay a direct §12 request.
   with the hooks loaded before a change, so on a branch whose
   `settings.json` predates the recorder the merged file's reload is never
   recorded: `--before HEAD^1` then reports `"before_recorder_wired": false`
-  and a reason that says so. On a sync merge stopped by a conflict outside
+  and a reason that says so. `--before` takes a plain revision name only
+  (`HEAD^1`, `HEAD`, a branch, a sha): a value starting with `-`, or holding
+  `:` or whitespace, exits 2 and runs no `git`, and `git show` always gets
+  `--end-of-options` before the revision, so the allow rule cannot be used to
+  pass `git` options such as `--output=<path>` (PR #5283). On a sync merge stopped by a conflict outside
   `.claude/`, the same check runs as `--before HEAD` (the unfinished merge
   has no merge commit yet, and `HEAD` is still the branch before it) before
   any resolution, so no conflict work runs under unconfirmed wiring. The

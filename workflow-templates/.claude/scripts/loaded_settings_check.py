@@ -25,7 +25,12 @@ whether it wired the recorder under `ConfigChange`. Claude Code runs
 `settings.json` predates the recorder the merged file's reload can never be
 recorded; the reason then says so instead of claiming the file was not
 loaded, and also when no record exists at all (such a branch wires no
-recorder at SessionStart either). It never changes the verdict.
+recorder at SessionStart either). It never changes the verdict. `REV` must be
+a plain revision name such as `HEAD^1` (`_BEFORE_REV_RE`: no leading `-`, no
+`:`, no whitespace), and `git show` gets `--end-of-options` before it: a value
+that could be read as a `git` option exits 2 as a bad argument (PR #5283
+operator review N1, where `--before=--output=<path>` made the allowlisted
+check write a file).
 
 Claude Code's file watcher applies a change, and runs `ConfigChange`, a few
 seconds after the file changes on disk. So when the record is missing or names
@@ -66,6 +71,9 @@ RECORD_DIR_PARTS = (".claude", "loaded-settings")
 DEFAULT_SETTINGS = Path(".claude") / "settings.json"
 ABSENT = "absent"
 _SESSION_FILE_RE = re.compile(r"[^A-Za-z0-9_.-]")
+# A revision name for `--before`: no leading `-` (a `git` option), no `:` (it
+# would change the `<rev>:<path>` object name), no whitespace.
+_BEFORE_REV_RE = re.compile(r"[A-Za-z0-9_./^~@{}][A-Za-z0-9_./^~@{}-]*")
 RECORDER_SCRIPT_NAME = "settings_load_recorder.py"
 RECORDER_CONFIG_SOURCE = "project_settings"
 NOT_LOADED_REASON = "the session has not loaded this settings.json"
@@ -118,12 +126,19 @@ def recorder_wired(settings_data) -> bool:
 	return False
 
 
+def is_safe_before_rev(rev: str) -> bool:
+	"""Whether `rev` is a plain revision name `git show` cannot read as an option."""
+	return isinstance(rev, str) and _BEFORE_REV_RE.fullmatch(rev) is not None
+
+
 def recorder_wired_at(rev: str, settings: Path) -> bool | None:
 	"""Whether `rev`'s copy of `settings` wires the recorder; None when it cannot be read."""
+	if not is_safe_before_rev(rev):
+		return None
 	directory = settings.parent
 	try:
 		shown = subprocess.run(
-			["git", "-C", str(directory), "show", f"{rev}:./{settings.name}"],
+			["git", "-C", str(directory), "show", "--end-of-options", f"{rev}:./{settings.name}"],
 			capture_output=True,
 			# settings.json is UTF-8 whatever the locale; strict decoding keeps an undecodable revision null.
 			encoding="utf-8",
@@ -233,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
 	wait_seconds = default_wait_seconds() if args.wait_seconds is None else args.wait_seconds
 	if not math.isfinite(wait_seconds) or wait_seconds < 0:
 		parser.error("--wait-seconds must be a finite number, 0 or more")
+	if args.before is not None and not is_safe_before_rev(args.before):
+		parser.error("--before must be a revision name such as HEAD^1, not a git option")
 	result = check_with_wait(session_id, Path(args.settings), directory, args.before, wait_seconds)
 	print(json.dumps(result, sort_keys=True))
 	return 0 if result["current"] else 1
