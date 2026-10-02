@@ -20,7 +20,8 @@ everything that decides what happens to the PR lives here so it can be tested:
 	Maps the model's per-finding rulings to the decision (plan decision D2):
 	no finding upheld -> ``merge``; some upheld and ``fix-count < cap`` ->
 	``fix``; at the cap -> ``merge_with_followup``, or ``hold`` when an upheld
-	finding is ``security`` or ``data-loss``. A model ``hold`` or
+	finding is ``security`` or ``data-loss`` or has no ruling or no valid
+	category (security follow-up #6050: an omitted ruling must never merge). A model ``hold`` or
 	``close_and_reissue`` (never allowed for ``claude/*`` PRs) is ``hold``. A
 	finding the model did not rule on counts as upheld, and a finding it ruled
 	on more than once keeps the most cautious ruling (``upheld`` over
@@ -30,7 +31,9 @@ everything that decides what happens to the PR lives here so it can be tested:
 
 ``sticky --ledger FILE --rulings FILE``
 	Moves every ledger finding that matches a prior ``invalid`` ruling (same
-	file, start line within +/-3, the rule PR #4596 uses) out of the counted
+	file, start line within +/-3, the rule PR #4596 uses, and the same claim,
+	compared case- and whitespace-insensitively; security follow-up #6051:
+	a new claim near a rejected one stays blocking) out of the counted
 	blocks into a ``=== NON-BLOCKING FINDINGS ===`` block, tagged
 	``[sticky judge ruling run=<id>]``, rewriting the ledger in place. A block
 	left empty gets its ``(No ... reported.)`` placeholder back, so a round
@@ -131,6 +134,21 @@ def _bullets(lines: list[str]) -> list[dict[str, Any]]:
 	return spans
 
 
+def _bullet_claim(body: list[str]) -> str:
+	"""A bullet's claim: its PROBLEM: line, else its header line."""
+	header = body[0][2:].strip()
+	for extra in body[1:]:
+		stripped = extra.strip()
+		if stripped.startswith("PROBLEM:"):
+			return stripped[len("PROBLEM:"):].strip() or header
+	return header
+
+
+def _claim_key(claim: Any) -> str:
+	"""Claims compared for sticky rulings: case- and whitespace-insensitive, at the 500 characters rulings keep."""
+	return " ".join(str(claim or "").split())[:500].lower()
+
+
 def parse_findings(ledger_text: str) -> list[dict[str, Any]]:
 	lines = ledger_text.splitlines()
 	findings: list[dict[str, Any]] = []
@@ -138,12 +156,7 @@ def parse_findings(ledger_text: str) -> list[dict[str, Any]]:
 		body = lines[span["start"]:span["stop"]]
 		header = body[0][2:].strip()
 		file_name, line = _parse_location(header)
-		claim = header
-		for extra in body[1:]:
-			stripped = extra.strip()
-			if stripped.startswith("PROBLEM:"):
-				claim = stripped[len("PROBLEM:"):].strip() or header
-				break
+		claim = _bullet_claim(body)
 		findings.append({
 			"id": f"F{number}",
 			"block": span["block"].strip("= ").strip(),
@@ -191,10 +204,15 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 		if finding_id not in by_id or _ruling_caution(entry) > _ruling_caution(by_id[finding_id]):
 			by_id[finding_id] = entry
 	rulings: list[dict[str, Any]] = []
+	unclassified: list[str] = []
 	for finding in findings:
 		entry = by_id.get(finding["id"])
 		category = str((entry or {}).get("category") or "").strip().lower()
 		if category not in CATEGORIES:
+			# An unruled finding, or one ruled without a valid category, could be a security finding
+			# the model left out; it is shown as `other` but never merged at the cap (#6050).
+			if entry is None or str(entry.get("ruling") or "").strip().lower() == "upheld":
+				unclassified.append(finding["id"])
 			category = "other"
 		rulings.append({
 			"finding": finding["id"],
@@ -230,6 +248,8 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 		result.update(decision="fix", reason="upheld_below_cap")
 	elif any(ruling["category"] in HOLD_CATEGORIES for ruling in upheld):
 		result.update(decision="hold", reason="upheld_security_or_data_loss_at_cap")
+	elif any(ruling["finding"] in unclassified for ruling in upheld):
+		result.update(decision="hold", reason="upheld_unruled_or_uncategorized_at_cap")
 	else:
 		result.update(decision="merge_with_followup", reason="upheld_at_cap")
 	return result
@@ -247,8 +267,14 @@ def sticky(ledger_text: str, rulings: list[dict[str, Any]]) -> tuple[str, int]:
 		file_name, line = _parse_location(lines[span["start"]][2:].strip())
 		if not file_name or line <= 0:
 			continue
+		claim_key = _claim_key(_bullet_claim(lines[span["start"]:span["stop"]]))
 		for ruling in invalid:
-			if ruling["file"] == file_name and abs(int(ruling["line"]) - line) <= STICKY_LINE_WINDOW:
+			if (
+				ruling["file"] == file_name
+				and abs(int(ruling["line"]) - line) <= STICKY_LINE_WINDOW
+				and claim_key
+				and _claim_key(ruling.get("claim")) == claim_key
+			):
 				moved.append((span, str(ruling.get("run") or "unknown")))
 				break
 	if not moved:

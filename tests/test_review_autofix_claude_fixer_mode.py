@@ -1679,7 +1679,7 @@ def _run_handoff_with_rulings(tmp: Path, rulings: list[dict], *, enabled: str = 
 
 def test_handoff_demotes_findings_the_judge_ruled_invalid():
 	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff_with_rulings(Path(td), [{"file": "scripts/a.sh", "line": 12, "ruling": "invalid"}])
+		proc, calls, _posts, github_env = _run_handoff_with_rulings(Path(td), [{"file": "scripts/a.sh", "line": 12, "ruling": "invalid", "claim": "unquoted expansion"}])
 	assert proc.returncode == 0, proc.stderr
 	# Both ledger entries sat within 3 lines of the ruling: the round is clean.
 	assert "action=sticky_demoted findings=2" in proc.stdout
@@ -1688,7 +1688,7 @@ def test_handoff_demotes_findings_the_judge_ruled_invalid():
 
 
 def test_handoff_keeps_findings_outside_the_sticky_window_or_with_the_switch_off():
-	for rulings, enabled in (([{"file": "scripts/a.sh", "line": 14, "ruling": "invalid"}], "true"), ([{"file": "scripts/a.sh", "line": 10, "ruling": "invalid"}], "false")):
+	for rulings, enabled in (([{"file": "scripts/a.sh", "line": 14, "ruling": "invalid", "claim": "unquoted expansion"}], "true"), ([{"file": "scripts/a.sh", "line": 10, "ruling": "invalid", "claim": "unquoted expansion"}], "false"), ([{"file": "scripts/a.sh", "line": 10, "ruling": "invalid", "claim": "a different defect"}], "true")):
 		with tempfile.TemporaryDirectory() as td:
 			proc, calls, _posts, github_env = _run_handoff_with_rulings(Path(td), rulings, enabled=enabled)
 		assert proc.returncode == 0, proc.stderr

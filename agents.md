@@ -105,7 +105,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    fail; upheld below `CLAUDE_FIXER_JUDGE_FIX_CAP`, default 2, counted on
    `merge-base..HEAD` → `[judge-fix] claude-fixer round <r>: …` commit; at the
    cap → merge with a follow-up issue, or `ai:needs-human` for an upheld
-   security / data-loss finding; `close_and_reissue` → hold; a finding ruled
+   security / data-loss finding or an upheld finding with no ruling or no
+   valid category (security follow-up #6050); `close_and_reissue` → hold; a finding ruled
    on twice keeps the most cautious ruling). The follow-up issue is opened
    only when the PR is set to merge on that run (green checks, or checks
    pending); a failing or unreadable snapshot hands off without one, and the
@@ -123,7 +124,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    evidence artifact (uploaded by "Upload Claude-fixer judge evidence"); the
    hand-off step reads the newest 3 judge runs that collaborators' comments
    name (OWNER, MEMBER, or COLLABORATOR), verifies each, and moves findings
-   within 3 lines of an `invalid` ruling in the same file into a
+   within 3 lines of an `invalid` ruling in the same file that make the same
+   claim (case- and whitespace-insensitive; security follow-up #6051) into a
    `=== NON-BLOCKING FINDINGS ===` block (sticky rulings, log
    `CLAUDE_FIXER_JUDGE … action=sticky_demoted`). A judge that decides
    nothing leaves `judge_handled=false`, so the PR is labelled

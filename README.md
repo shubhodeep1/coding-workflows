@@ -1470,7 +1470,8 @@ rules on each finding in the workflow and merges, fixes what it upholds
 `ai:needs-human` (`CLAUDE_FIXER_JUDGE_ENABLED`, log prefixes
 `AUTOFIX_GATE_CLAUDE_FIXER_JUDGE` and `CLAUDE_FIXER_JUDGE`). Its rulings are
 kept in the run's evidence artifact, and later rounds list findings that
-match an `invalid` ruling as non-blocking. A hand-off with no finding (a
+match an `invalid` ruling (same file, within 3 lines, same claim) as
+non-blocking. A hand-off with no finding (a
 round below the reviewer panel floor described next) gives the judge nothing
 to rule on: it decides nothing and the PR is labelled `ai:review-blocked`
 (`claude_fixer_no_findings`), so only a new review run can clear the round.

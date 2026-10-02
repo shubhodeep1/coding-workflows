@@ -6,7 +6,7 @@ Until now, a Claude-fixer pull request whose findings the Claude session judged 
 | The numbers that matter | Value |
 | --- | --- |
 | Judge fixes per pull request (`CLAUDE_FIXER_JUDGE_FIX_CAP`) | 2, counted on the pull request's own commits, never reset |
-| Sticky-ruling window | same file, start line within 3 lines, newest 3 judge runs |
+| Sticky-ruling window | same file, start line within 3 lines, same claim, newest 3 judge runs |
 | Reviewer model calls per judge run | 0 (one judge call, plus one writer call for a fix) |
 | API calls to prepare a judge run | 3 or 4 REST reads for the hand-off evidence, plus 3 per earlier judge run (at most 3) |
 | New repository variables | `CLAUDE_FIXER_JUDGE_ENABLED` (default `true`), `CLAUDE_FIXER_JUDGE_FIX_CAP` (default `2`) |
