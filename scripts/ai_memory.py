@@ -370,6 +370,11 @@ def cmd_record_run_event(args: argparse.Namespace) -> int:
         return 0
 
     repo_root = _resolve_repo_root(args.repo_root)
+    poll_checkout_mode = None
+    if args.poll_checkout_dir:
+        if args.workflow != "orchestrate_poll" or args.event_type not in ("poll_started", "poll_completed"):
+            raise MemoryValidationError("poll checkout is only available for orchestrate_poll events")
+        poll_checkout_mode = "start" if args.event_type == "poll_started" else "end"
 
     def _op(clone_dir: Path) -> dict[str, Any]:
         memory_root = _resolve_memory_root(clone_dir, args.memory_root)
@@ -396,6 +401,8 @@ def cmd_record_run_event(args: argparse.Namespace) -> int:
             commit_message=f"ai-memory: record run event [{args.workflow}]",
             operation=_op,
             timings=timings,
+            **({"poll_checkout_dir": Path(args.poll_checkout_dir), "poll_checkout_mode": poll_checkout_mode}
+               if poll_checkout_mode else {}),
         )
     except Exception:
         # The existing error handler still owns the failure; telemetry must
@@ -2397,6 +2404,7 @@ def build_parser() -> argparse.ArgumentParser:
     event.add_argument("--pr-number", default=None)
     event.add_argument("--actor", required=True)
     event.add_argument("--metadata-json", default="{}")
+    event.add_argument("--poll-checkout-dir", default=None)
     event.set_defaults(func=cmd_record_run_event)
 
     candidate = subparsers.add_parser("record-candidate", help="Write candidate memory record")
