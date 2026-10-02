@@ -12,6 +12,12 @@ on each id it prints. The script never archives anything itself.
 It also lists the sessions stuck on a permission prompt (D12), so the pickup
 can notify once per stall and file it as an `ai:permission-prompt` issue.
 
+The pickup runs it with `--stalls-only` (operator Q3: A, 2026-10-02): the
+stale session sweep of CLAUDE.md §26.I (`scripts/claude_session_janitor.py`,
+pickup step 3a) is the only archiver, and this script only reports the
+prompt stalls (pickup step 3b). The archive rules below stay for a run
+without the flag.
+
 Input:
   --sessions FILE [FILE ...]  one or more saved `list_sessions` pages
                               (`mine: true`, `limit: 100`), newest page first.
@@ -25,7 +31,11 @@ Input:
   --triggers FILE [FILE ...]  every saved `list_triggers` page
                               (`enabled: true`, `limit: 100`), same shapes.
                               A session bound to a Routine on a page left out
-                              could be archived, so pass them all.
+                              could be archived, so pass them all. Required
+                              unless `--stalls-only` is given.
+  --stalls-only               report prompt stalls only: no archive rules, no
+                              `gh api` read, no paging (`archive` is empty and
+                              `next_after_id` null); `--triggers` is ignored.
   --grace-hours 24            hours a PR or issue must have been merged or
                               closed before its sessions are archived.
   --prompt-stall-minutes 20   minutes a session must have waited on a
@@ -55,6 +65,9 @@ acted on. A run that sets `next_after_id` is intermediate: it makes no
 `gh api` read and records no stall, and reports an empty `archive` and
 `stalled_on_prompt`, so the final run classifies every page once and reports
 each new stall as `new`.
+
+With `--stalls-only`, every given page is checked for stalls in one run and
+the stalls are recorded as in a final run.
 
 Exit status: 0 when a verdict was reached (a failed PR or issue read keeps
 that session and is listed in `errors`), 2 when an input file is missing or
@@ -510,7 +523,8 @@ def next_after_id(sessions: list[dict], pages: int, has_more: bool, last_id: str
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	parser.add_argument("--sessions", required=True, nargs="+", help="saved list_sessions pages, newest first")
-	parser.add_argument("--triggers", required=True, nargs="+", help="every saved list_triggers page (enabled: true)")
+	parser.add_argument("--triggers", nargs="+", help="every saved list_triggers page (enabled: true); required unless --stalls-only")
+	parser.add_argument("--stalls-only", action="store_true", help="report prompt stalls only; archive nothing, read nothing, page nothing")
 	parser.add_argument("--grace-hours", type=float, default=DEFAULT_GRACE_HOURS)
 	parser.add_argument("--prompt-stall-minutes", type=float, default=DEFAULT_PROMPT_STALL_MINUTES)
 	parser.add_argument("--horizon-days", type=float, default=DEFAULT_HORIZON_DAYS)
@@ -526,17 +540,33 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 	except (OSError, ValueError) as exc:
 		print(json.dumps({"archive": [], "error": f"cannot read --sessions: {exc}"}))
 		return 2
-	try:
-		triggers = [trigger for path in args.triggers for trigger in _page(_load_document(path))[0]]
-	except (OSError, ValueError) as exc:
-		print(json.dumps({"archive": [], "error": f"cannot read --triggers: {exc}"}))
-		return 2
+	triggers: list[dict] = []
+	if not args.stalls_only:
+		if not args.triggers:
+			print(json.dumps({"archive": [], "error": "--triggers is required unless --stalls-only is given"}))
+			return 2
+		try:
+			triggers = [trigger for path in args.triggers for trigger in _page(_load_document(path))[0]]
+		except (OSError, ValueError) as exc:
+			print(json.dumps({"archive": [], "error": f"cannot read --triggers: {exc}"}))
+			return 2
 	now = now or dt.datetime.now(dt.timezone.utc)
 	stall_log_dir = Path(args.stall_log_dir).expanduser().resolve()
-	following_page = next_after_id(
-		sessions, len(args.sessions), has_more, last_id, now, args.horizon_days, args.max_pages
-	)
-	if following_page is not None:
+	following_page = None
+	if not args.stalls_only:
+		following_page = next_after_id(
+			sessions, len(args.sessions), has_more, last_id, now, args.horizon_days, args.max_pages
+		)
+	if args.stalls_only:
+		# Pickup step 3b: the §26.I janitor archives; this run only reports stalls (operator Q3: A).
+		result = {"archive": [], "kept": 0, "not_ours": 0, "already_archived": 0, "errors": []}
+		stalls = stalled_on_prompt(sessions, args.prompt_stall_minutes, now)
+		try:
+			record_stalls(stalls, stall_log_dir, now)
+		except OSError as exc:
+			result["errors"].append(f"cannot write {stall_log_dir}: {exc}")
+		result["stalled_on_prompt"] = stalls
+	elif following_page is not None:
 		# An intermediate run: the pickup only lists the next page and acts on the final run, so this
 		# one makes no `gh api` read and records no stall (recording here would make the final run
 		# report this page's stalls as `new: false` and skip their notifications).

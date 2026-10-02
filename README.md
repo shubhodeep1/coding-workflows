@@ -1299,21 +1299,16 @@ mode).
    - Sessions that are running, waiting on a permission prompt, or holding
      an unanswered report question are left alone. So are checkers, stage
      sessions, and operator sessions.
-6. On every hourly wake the pickup also runs the **session janitor**
-   (`.claude/scripts/stale_sessions.py`). It archives automation sessions
-   whose work is finished: fixer, §26 checker, issue implementation, and
-   issue-mode `implement-plan` sessions once their pull request or issue has
-   been merged or closed for 24 hours, and a fixer at once when a newer fixer
-   for the same PR exists. A session that is running, waiting on a
-   permission prompt, or bound to an enabled Routine is never archived, and
-   neither is any other title (operator sessions, the pickup,
-   `/deploy-activate`). The janitor also finds sessions waiting on a
-   permission prompt for more than 20 minutes. For each one the pickup sends
-   one push notification and files it as an `ai:permission-prompt` issue
-   through `.claude/scripts/permission_prompts.py`, once per stall. A filing
-   that fails is retried on the next wake, and the janitor runs even when
-   that wake's queue read failed. The pickup's one-line report ends with
-   `archived <a>; stalls <s>`.
+6. On every hourly wake the pickup also reports **sessions stuck on a
+   permission prompt** (step 3b, `.claude/scripts/stale_sessions.py
+   --stalls-only`). It reads the newest `list_sessions` page and lists every
+   session, whatever its title, that has waited on a permission prompt for
+   more than 20 minutes. For each one the pickup sends one push notification
+   and files it as an `ai:permission-prompt` issue through
+   `.claude/scripts/permission_prompts.py`, once per stall. A filing that
+   fails is retried on the next wake. This step archives nothing: the step
+   3a sweep above is the only archiver. The pickup's one-line report ends
+   with `stalls <s>`.
 
 **No clash with the AI pipeline.** `plan.yml`, `implement.yml`, and the
 poller's standalone stall recovery skip issues that carry `ai:claude` without

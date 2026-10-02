@@ -1186,42 +1186,32 @@ reviews, comments, and conflicts stay a direct §12 request.
   so it cannot run from Actions. A byte-identical copy lives under
   `workflow-templates/.claude/scripts/`; `tests/test_stale_routines.py` has
   its own `ci.yml` step.
-- Session janitor (plan `claude-fixer-unattended-convergence` D7, D12):
-  `.claude/scripts/stale_sessions.py` reads saved `list_sessions` pages
-  (`mine: true`, newest first, the harness's untrusted-data wrapper
-  tolerated) and every `list_triggers` page (`enabled: true`), and prints the
-  session ids to archive; the hourly Claude issue pickup runs it on every
-  `— wake.` (step 3a of `.claude/commands/claude-issue-pickup.md`, never in
-  `start` mode) and calls `archive_session` on each. Only automation titles
-  are eligible (`PR [<repo>]#<N> — fix|fixed|on hold …`, `PR #<N> status
-  check-in…`, `PR #<N> merged|closed — …`, `issue [<repo>]#<N> — implement`,
-  `implement-plan <slug> — …` except `— deploy-activate`, each after one
-  optional `#<N> · ` prefix); every other title is `not_ours`. A session is
-  archived when it is not running, working, or on a permission prompt, no
-  enabled Routine is bound to it, and either its PR or issue merged or closed
-  at least 24 hours ago (`--grace-hours`; a `need_input` session too) or it
-  is a fixer superseded by a newer fixer for the same PR (not when it waits
-  on a question). An `implement-plan` slug names its issue only in the
-  issue-mode form `issue-<N>-…`; any other slug is kept. One cached REST read
-  per distinct PR or issue, a failed one included; a failed read keeps the
-  session (`errors`). Paging stops at 14 days (`--horizon-days`) or 10 pages
-  (`--max-pages`, `next_after_id`); a run that sets `next_after_id` is
-  intermediate and makes no read, records no stall, and names nothing, so
-  only the final run classifies the sessions and reports new stalls. It also lists `stalled_on_prompt`: any non-archived
-  session in `SESSION_STATUS_BUCKET_BLOCKED` whose `needs_action` starts
-  `Approve or deny`, idle more than 20 minutes (`--prompt-stall-minutes`).
-  A stall is `new` once per session and `updated_at`
-  (`~/.claude/stalled-sessions/reported-stalls.json`, `--stall-log-dir`), and
-  each new stall is appended to `stalled-sessions.jsonl` there as a
-  `PermissionRequest` record with tool `StalledSession(<tool>)`; the pickup
-  sends one `PushNotification` per new stall and runs `permission_prompts.py
-  file --log-dir <stall_log_dir>` on every wake, new stall or not, which
-  files or comments on the `ai:permission-prompt` issue with the session
-  title and `task_summary`. Filing progress is `permission_prompts.py`'s own
-  `filed-state.json` in that directory, advanced only after a successful
-  POST, so a failed filing is retried on the next wake (no API call when
-  nothing is left to file). A failed queue read (exit 3) still runs the
-  janitor.
+- Prompt-stall report (plan `claude-fixer-unattended-convergence` D12):
+  the hourly Claude issue pickup runs
+  `.claude/scripts/stale_sessions.py --stalls-only --sessions <newest page>`
+  on every `— wake.` (step 3b of `.claude/commands/claude-issue-pickup.md`,
+  after the §26.I sweep in step 3a; never in `start` mode). In that mode the
+  script reads the saved `list_sessions` page offline (the harness's
+  untrusted-data wrapper tolerated), makes no `gh api` read, pages nothing,
+  needs no `--triggers`, and returns an empty `archive` list: the §26.I
+  janitor (`scripts/claude_session_janitor.py`) is the only archiver
+  (operator Q3: A, 2026-10-02). It lists `stalled_on_prompt`: any
+  non-archived session in `SESSION_STATUS_BUCKET_BLOCKED` whose
+  `needs_action` starts `Approve or deny`, idle more than 20 minutes
+  (`--prompt-stall-minutes`). A stall is `new` once per session and
+  `updated_at` (`~/.claude/stalled-sessions/reported-stalls.json`,
+  `--stall-log-dir`), and each new stall is appended to
+  `stalled-sessions.jsonl` there as a `PermissionRequest` record with tool
+  `StalledSession(<tool>)`; the pickup sends one `PushNotification` per new
+  stall and runs `permission_prompts.py file --log-dir <stall_log_dir>` on
+  every wake, new stall or not, which files or comments on the
+  `ai:permission-prompt` issue with the session title and `task_summary`.
+  Filing progress is `permission_prompts.py`'s own `filed-state.json` in
+  that directory, advanced only after a successful POST, so a failed filing
+  is retried on the next wake (no API call when nothing is left to file).
+  Without `--stalls-only` the script still applies the plan's D7 archive
+  rules (24-hour grace, superseded fixers, `--triggers` required, paging to
+  14 days or 10 pages), but nothing runs it that way.
   `/fix-claude-pr` runs `permission_prompts.py file` before every report.
   A byte-identical copy lives under `workflow-templates/.claude/scripts/`;
   `tests/test_stale_sessions.py` has its own `ci.yml` step.

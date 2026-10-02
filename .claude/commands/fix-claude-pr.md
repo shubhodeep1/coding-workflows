@@ -1,4 +1,4 @@
-Fix **one `claude/*` pull request** that is waiting on Claude: a merge conflict, failed checks, a review hand-off from the reviewer panel, or a block label. Every PR-backed `claude/*` head runs in **Claude-fixer mode** (`review_autofix.yml`), so the GPT editor and conflict resolver never fix it; a Claude session does (CLAUDE.md §26). This file is that fix. It is followed by:
+Fix **one `claude/*` pull request** that is waiting on Claude: a merge conflict, failed checks, a review hand-off from the reviewer panel, or a block label. Every PR-backed `claude/*` head runs in **Claude-fixer mode** (`review_autofix.yml`), so the GPT editor never fixes it and the GPT conflict resolver takes only a conflict that touches `.claude/**`; a Claude session fixes the rest (CLAUDE.md §26). This file is that fix. It is followed by:
 
 - **the session that pushed the PR**, in place, when its §26 checker hands a due fix back (CLAUDE.md §26.D) — it holds the context, so it is the preferred fixer;
 - **a fresh session** the §26 checker starts when the pushing session is gone (§26.C step 5);

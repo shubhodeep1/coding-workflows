@@ -580,6 +580,35 @@ def test_prompt_stall_minutes_is_configurable(monkeypatch, tmp_path, capsys):
 	assert [stall["id"] for stall in result["stalled_on_prompt"]] == ["session_s"]
 
 
+def _run_stalls_only(tmp_path, capsys, pages, extra=()):
+	page_paths = [str(_write(tmp_path, f"stalls-only-{index}.json", page)) for index, page in enumerate(pages)]
+	code = janitor.main(["--stalls-only", "--sessions", *page_paths, "--stall-log-dir", str(tmp_path / "stalls"), *extra], now=NOW)
+	return code, json.loads(capsys.readouterr().out)
+
+
+def test_stalls_only_reports_stalls_without_archiving_reading_or_paging(monkeypatch, tmp_path, capsys):
+	"""Operator Q3: A: pickup step 3b runs --stalls-only; no triggers, no gh api read, no archive list."""
+	calls = _stub(monkeypatch, {})
+	finished_fixer = _session("session_f", "PR o/r#12 — fix review")  # would be archived without the flag
+	page = {"ccr": {"data": [finished_fixer, _blocked("session_s", minutes_ago=45)], "has_more": True, "last_id": "session_s"}}
+	code, result = _run_stalls_only(tmp_path, capsys, [page])
+	assert code == 0
+	assert calls == []
+	assert result["archive"] == [] and result["next_after_id"] is None
+	assert [stall["id"] for stall in result["stalled_on_prompt"]] == ["session_s"]
+	assert result["stalled_on_prompt"][0]["new"] is True
+	assert (tmp_path / "stalls" / "stalled-sessions.jsonl").exists()
+	_, again = _run_stalls_only(tmp_path, capsys, [page])
+	assert again["stalled_on_prompt"][0]["new"] is False
+
+
+def test_triggers_stay_required_without_stalls_only(tmp_path, capsys):
+	sessions = _write(tmp_path, "sessions.json", {"data": []})
+	code = janitor.main(["--sessions", str(sessions), "--stall-log-dir", str(tmp_path / "stalls")], now=NOW)
+	out = json.loads(capsys.readouterr().out)
+	assert code == 2 and out["archive"] == [] and "--triggers is required" in out["error"]
+
+
 def test_a_stall_is_new_once_and_filed_as_a_permission_prompt_record(monkeypatch, tmp_path, capsys):
 	_stub(monkeypatch, {})
 	stall = _blocked("session_s", title="implement-plan p — phase 1/2", minutes_ago=45)
@@ -684,20 +713,26 @@ def test_settings_preapprove_the_janitor(path):
 	assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_sessions.py *)" in allow
 
 
-def test_pickup_runs_the_janitor_only_on_wake():
+def test_pickup_reports_stalls_only_on_wake_and_leaves_archiving_to_the_26i_janitor():
+	"""Operator Q3: A (2026-10-02): main's §26.I janitor (step 3a) is the only
+	archiver; this script runs with --stalls-only as step 3b and archives nothing."""
 	text = PICKUP_PATH.read_text(encoding="utf-8")
-	assert "3a. **Archive finished sessions and report prompt stalls** (`— wake.` mode only; in `start` mode go to step 4)" in text
-	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_sessions.py --sessions" in text
-	assert "`list_triggers` with `enabled: true`" in text
-	assert "`archive_session` each `archive` id of the last run" in text
-	assert "with `new: true`, send one `PushNotification`" in text
-	assert "permission_prompts.py file --log-dir <stall_log_dir from the output>" in text
-	assert "archived <a>" in text
+	step_3a = text.split("3a. **Archive finished sessions**", 1)[1].split("3b. ", 1)[0]
+	assert "scripts/claude_session_janitor.py --sessions <file> --self <your session id>" in step_3a
+	assert "stale_sessions.py" not in step_3a
+	step_3b = text.split("3b. **Report prompt stalls** (`— wake.` mode only;", 1)[1].split("4. **Catch-up, then report.**", 1)[0]
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/stale_sessions.py --stalls-only --sessions <that file>" in step_3b
+	assert "it archives nothing and names nothing to archive (step 3a's janitor is the only archiver)" in step_3b
+	assert "with `new: true`, send one `PushNotification`" in step_3b
+	assert "permission_prompts.py file --log-dir <stall_log_dir from the output>" in step_3b
+	assert "archive_session" not in step_3b
+	assert "followed by `; stalls <s>`, the new stalls step 3b reported" in text
+	assert "report the sweep as failed in step 4 and go to step 3b." in text
 
 
 def test_pickup_files_stalls_on_every_wake_and_runs_the_janitor_after_a_failed_queue_read():
 	text = PICKUP_PATH.read_text(encoding="utf-8")
-	stall_step = text.split("   4. For each `stalled_on_prompt` entry", 1)[1].split("\n", 1)[0]
+	stall_step = text.split("   3. For each `stalled_on_prompt` entry", 1)[1].split("\n", 1)[0]
 	assert "whether or not any entry was new" in stall_step
 	assert "a filing that failed on an earlier wake is retried here even when no stall is new" in stall_step
 	assert "when any entry was new, run" not in stall_step
