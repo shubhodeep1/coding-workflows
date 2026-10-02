@@ -352,6 +352,7 @@ Phases 3 and 4 both add to `scripts/claude_pool_sweep.py` and `.github/workflows
 - **A wait marker forged by another collaborator.** Mitigation: only markers by `handoff_author_login` with owner/member/collaborator association count (#4622), and the worker re-checks author and `seq`.
 - **Tokens leak in logs.** Mitigation: normalise then `::add-mask::`, values only through `env:`, never echoed; a test greps for `CLAUDE_POOL_TOKEN` outside the runner repo.
 - **Double start during rollout.** Mitigation: `queue-pending` filters pooled types for the pickup; the dispatcher keys runs by queue issue and attempt.
+- **A later plan depends on pool mode.** `docs/plans/claude-codex-process-parity-plan.md` follows this plan: it starts after this project's final PR merges and builds on pool mode (phase 3), extending `claude_pool.py` `build_prompt` and `claude_pool_sweep.py`.
 
 ## Rollout
 
