@@ -1005,7 +1005,7 @@ jobs:
       - name: Claude-asset sync contract tests (session-start drift log, command text)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_session_start_claude_assets_drift.py tests/test_claude_asset_sync_command.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_session_start_claude_assets_drift.py tests/test_claude_asset_sync_command.py tests/test_settings_load_recorder.py
 
       - name: AI label precreation contract test
         run: |

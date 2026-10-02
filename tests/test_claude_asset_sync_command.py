@@ -9,6 +9,8 @@ checked; the twins must stay byte-identical.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -105,10 +107,64 @@ def test_claude_conflict_aborts_and_blocks(commands):
 	assert "$(" not in section
 
 
-def test_settings_change_applies_from_the_next_session(commands):
-	section = _section(commands["implement-plan-claude.md"], "### Claude-asset sync", "### Permission prompt report")
+def test_settings_change_is_verified_before_any_further_work(commands):
+	"""Issue #5259: a merged settings.json is checked, never assumed active."""
+	section = _section(commands["implement-plan-claude.md"], "### Claude-asset sync", "### Settings restart")
 	assert "Hook scripts are re-read on every call" in section
-	assert "new hook wiring applies from the next session" in section
+	# The old claim contradicted Claude Code's documented file watcher.
+	assert "reads `settings.json` only at session start" not in section
+	assert "new hook wiring applies from the next session" not in section
+	assert "the watcher can miss a change" in section
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py" in section
+	# A branch that predates the recorder cannot record the merged file's reload
+	# (ConfigChange runs the hooks loaded before a change); the check says so.
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py --before HEAD^1" in section
+	assert "`\"before_recorder_wired\": false` means the branch predates the recorder" in section
+	assert "Claude Code runs `ConfigChange` with the hooks loaded before a change" in section
+	assert "as its own Bash call before any other tool call" in section
+	assert "including no record, which fails closed" in section
+	assert "run it once more" in section
+	assert "make no further commit, push, claim, comment, label change, or dispatch for this work" in section
+	assert "[Settings restart](#settings-restart)" in section
+	# Step 4 never pushes the sync merge ahead of the step 6 check (PR #5511 review round 1).
+	assert "Push it with the push the caller already uses" not in section
+	assert "Do not push it on its own: the caller's own push carries it, and never before step 6 below has confirmed the settings when the merge changed `.claude/settings.json`" in section
+	assert "$(" not in section
+
+
+def test_settings_restart_hands_the_work_to_a_fresh_session_once(commands):
+	plan = commands["implement-plan-claude.md"]
+	assert plan.count("### Settings restart") == 1
+	restart = _section(plan, "### Settings restart", "### Permission prompt report")
+	assert "The sync merge stays local and unpushed" in restart
+	assert "No push, commit, claim, comment, label change, dispatch, or wait." in restart
+	# One restart per stage; a second miss is a failure escalation.
+	assert "do not restart again: that is a failure escalation (CLAUDE.md §28.C), never auto-decided" in restart
+	assert "`ai:claude-blocked:v1` comment on the issue" in restart
+	assert "post a hold claim" in restart
+	# This command: same stage, fresh session, marked as a restart.
+	assert "[two-step start](#two-step-start)" in restart
+	# Session titles (issue #4886): every session this command creates leads with the numbers.
+	assert "`<numbers>implement-plan <slug> — <stage> — settings restart`" in restart
+	assert "`Asset-sync restart: <this session's id>`" in restart
+	assert "`Previous stage session:` = this session's id" in restart
+	# /fix-claude-pr: fresh fixer that looks past this session's claim.
+	assert "/fix-claude-pr <PR URL> — kind <kind> — head <head_sha> — claim <this session's id> — settings restart" in restart
+	assert "`PR #<N> status check-in: fixer start`" in restart
+	assert "never continue here instead" in restart
+	assert "$(" not in restart
+	template = _section(plan, "## Stage Sessions", "### Claims")
+	assert "<Asset-sync restart: <session id>, only in a [settings restart](#settings-restart)>" in template
+	claims = _section(plan, "### Claims", "### Two-step start")
+	assert "add `--ignore-claim-by <id>` for the `Asset-sync restart:` session, whose claim you inherit" in claims
+	assert "a fixer, and a [settings restart](#settings-restart) of its own stage." in plan
+
+
+def test_fixer_routes_an_unconfirmed_settings_load_to_the_restart(commands):
+	fixer = commands["fix-claude-pr.md"]
+	step5 = _section(fixer, "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
+	assert "do not fix or push here: follow its [Settings restart](.claude/commands/implement-plan-claude.md#settings-restart)" in step5
+	assert "`— claim <session id> — settings restart`" in fixer
 
 
 def test_every_checkout_runs_the_sync(commands):
@@ -119,6 +175,8 @@ def test_every_checkout_runs_the_sync(commands):
 	# Step 2's merge stands in for the sync's step 4 and keeps its own subject.
 	assert "It takes the place of that section's step 4 and keeps the command and subject above" in step2
 	assert "the `[claude-asset-sync]` subject marks only the sync merge into a PR head" in step2
+	# Issue #5259: step 2 pushes its merge itself, so the settings check must come first.
+	assert "When the merge changed `.claude/settings.json`, run the sync's step 6 check right after the merge commit, before the repo's checks and before this push; when it ends in a [Settings restart](#settings-restart), nothing is pushed." in step2
 	section = _section(plan, "### Claude-asset sync", "### Permission prompt report")
 	assert "on the project branch itself, the merge in the **Sync the project branch** bullet of [Procedure](#procedure) step 2 is the sync merge and keeps that bullet's command and subject" in section
 	assert "The project branch itself needs only the default check: the merge in the **Sync the project branch** bullet of [Procedure](#procedure) step 2 already brings its own base in" in section
@@ -431,6 +489,123 @@ def test_outside_conflict_resolution_runs_under_the_merged_guards(tmp_path: Path
 	assert _git(clone, env, "log", "-1", "--format=%s") == "[claude-asset-sync] merge main for .claude/ guard updates"
 	assert len(_git(clone, env, "log", "-1", "--format=%P").split()) == 2
 	assert _git(clone, env, "show", "HEAD:.claude/hooks/guard.sh") == "new guard"
+
+
+@pytest.mark.parametrize("own_commit", (True, False), ids=("diverged-branch", "fast-forwardable-branch"))
+def test_project_branch_sync_merge_never_hides_a_settings_change_from_step_6(own_commit: bool, tmp_path: Path):
+	"""Procedure step 2's merge, run exactly as written, keeps `HEAD^1` the branch
+	before the merge. A fast-forward would move `HEAD^1` to the parent of the last
+	upstream commit, and step 6 would miss a `settings.json` change in an earlier
+	one (PR #5511 review round 1 on bfab7b4). Reads the twin until the twin sync;
+	`test_twins_are_byte_identical` covers the `.claude/` copy from then on."""
+	plan = _flat(TWIN_DIR / "implement-plan-claude.md")
+	step_2 = _section(plan, "**Sync the project branch**", "This and the step 3a log commit")
+	merge = re.search(r"`(git merge [^`]*origin/<default>)`", step_2)
+	assert merge, step_2
+	merge_command = merge.group(1).replace("<default>", "main")
+	section = _section(plan, "### Claude-asset sync", "### Permission prompt report")
+	settings = _documented_command(section, r"`(git diff --name-only [^`]*-- \.claude/settings\.json)`")
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/settings.json", "{}\n", "settings")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "config", "core.logAllRefUpdates", "false")
+	_git(clone, env, "checkout", "-q", "-b", "claude/implement-plan-demo")
+	if own_commit:
+		_commit(clone, env, "docs/implement-plan/demo.md", "log\n", "log")
+	before = _git(clone, env, "rev-parse", "HEAD")
+	_commit(origin, env, ".claude/settings.json", '{"hooks": {}}\n', "wiring")
+	_commit(origin, env, "later.md", "x\n", "a later commit that leaves settings.json alone")
+	_git(clone, env, "fetch", "-q", "origin", "main")
+	subprocess.run(["bash", "-c", merge_command], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert len(_git(clone, env, "log", "-1", "--format=%P").split()) == 2
+	assert _git(clone, env, "rev-parse", "HEAD^1") == before
+	changed = subprocess.run(["bash", "-c", settings], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert changed.stdout.strip() == ".claude/settings.json"
+	# An up-to-date branch still gets no commit.
+	head = _git(clone, env, "rev-parse", "HEAD")
+	subprocess.run(["bash", "-c", merge_command], cwd=clone, env=env, check=True, capture_output=True, text=True)
+	assert _git(clone, env, "rev-parse", "HEAD") == head
+
+
+@pytest.mark.parametrize("loaded", ("merged", "pre-merge"))
+def test_outside_conflict_checks_the_merged_settings_before_any_resolution(loaded: str, tmp_path: Path):
+	"""A sync merge stopped by a conflict outside `.claude/` has no merge commit
+	yet, so step 6's `HEAD^1` check cannot run; step 5 runs the same check with
+	`--before HEAD` before anything is resolved, and Procedure step 2 and
+	`/fix-claude-pr` defer to it (PR #5511 review round 2 on d192dbc). Runs the
+	documented commands mid-merge. Reads the twins until the twin sync;
+	`test_twins_are_byte_identical` covers the `.claude/` copies from then on."""
+	plan = _flat(TWIN_DIR / "implement-plan-claude.md")
+	section = _section(plan, "### Claude-asset sync", "### Permission prompt report")
+	step5 = _section(section, "5. **Conflict.**", "6. **Settings.**")
+	assert "the resolution runs under the current guards" not in step5
+	assert step5.index("loaded_settings_check.py --before HEAD`") < step5.index("`git add` the resolved files")
+	assert "as its own Bash call before any other tool call" in step5
+	# The failure path forbids resolution and staging outright (PR #5511 review
+	# round 1 on dfa204b): "resolve, `git add`, and commit nothing" read as
+	# three steps, the first two of them conflict work under unconfirmed wiring.
+	assert "commit nothing" not in step5
+	assert "do not resolve any conflict, run `git add`, or commit; go straight to [Settings restart](#settings-restart)" in step5
+	assert step5.index("do not resolve any conflict") < step5.index("`git add` the resolved files")
+	step2 = _section(plan, "**Sync the project branch**", "This and the step 3a log commit")
+	assert step2.index("step 5 settings check (`--before HEAD`)") < step2.index("then resolve it keeping both sides' intent")
+	fixer = _section(_flat(TWIN_DIR / "fix-claude-pr.md"), "5. **Fix it.**", "- **`claude/implement-plan-*` head**")
+	assert fixer.index("run the sync's step 5 settings check (`--before HEAD`) before resolving anything") < fixer.index("`git add` the resolved files")
+	assert "When the sync's step 5 or step 6 check cannot confirm" in fixer
+	bail_out = fixer.index("when it cannot confirm the load, do not resolve any conflict, run `git add`, or commit")
+	assert fixer.index("before resolving anything") < bail_out < fixer.index("`git add` the resolved files")
+	merge = _documented_command(section, r"`(git merge [^`]*origin/<source>)`")
+	changed = re.search(r"`(git diff --quiet HEAD -- \.claude/settings\.json)`", step5)
+	check = re.search(r"`(PYTHONDONTWRITEBYTECODE=1 python3 \.claude/scripts/loaded_settings_check\.py --before HEAD)`", step5)
+	assert changed and check, step5
+	home = tmp_path / "home"
+	home.mkdir()
+	env = _git_env(home)
+	origin = tmp_path / "origin"
+	origin.mkdir()
+	_git(origin, env, "init", "-q", "-b", "main")
+	_commit(origin, env, ".claude/settings.json", "{}\n", "settings")
+	_commit(origin, env, "work.md", "base\n", "work")
+	clone = tmp_path / "clone"
+	_git(tmp_path, env, "clone", "-q", str(origin), str(clone))
+	_git(clone, env, "config", "core.logAllRefUpdates", "false")
+	_git(clone, env, "checkout", "-q", "-b", "work")
+	_commit(clone, env, "work.md", "branch side\n", "branch work")
+	merged_settings = '{"hooks": {"PreToolUse": []}}\n'
+	_commit(origin, env, ".claude/settings.json", merged_settings, "new guard wiring")
+	_commit(origin, env, "work.md", "main side\n", "main work")
+	_git(clone, env, "fetch", "-q", "origin", "main")
+	before = _git(clone, env, "rev-parse", "HEAD")
+	stopped = subprocess.run(["bash", "-c", merge], cwd=clone, env=env, capture_output=True, text=True)
+	assert stopped.returncode != 0
+	assert _git(clone, env, "diff", "--name-only", "--diff-filter=U") == "work.md"
+	# Mid-merge, HEAD is still the branch before the merge and the merged file is on disk.
+	assert _git(clone, env, "rev-parse", "HEAD") == before
+	assert subprocess.run(["bash", "-c", changed.group(1)], cwd=clone, env=env).returncode == 1
+	record_dir = home / ".claude" / "loaded-settings"
+	record_dir.mkdir(parents=True)
+	content = merged_settings if loaded == "merged" else "{}\n"
+	(record_dir / "session-1.json").write_text(
+		json.dumps({"sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(), "event": "ConfigChange"}),
+		encoding="utf-8",
+	)
+	command = check.group(1).replace(".claude/scripts/loaded_settings_check.py", str(TWIN_DIR.parent / "scripts" / "loaded_settings_check.py"))
+	result = subprocess.run(["bash", "-c", command], cwd=clone, env={**env, "CLAUDE_CODE_SESSION_ID": "session-1", "LOADED_SETTINGS_CHECK_WAIT_SECONDS": "0"}, capture_output=True, text=True)
+	verdict = json.loads(result.stdout)
+	assert verdict["before_recorder_wired"] is False
+	if loaded == "merged":
+		assert result.returncode == 0 and verdict["current"] is True
+	else:
+		assert result.returncode == 1 and verdict["current"] is False
+		assert "before the merge (HEAD)" in verdict["reason"]
+	# The check leaves the unfinished merge as it was.
+	assert _git(clone, env, "diff", "--name-only", "--diff-filter=U") == "work.md"
 
 
 def test_failed_fetch_stops_instead_of_checking_a_stale_ref():

@@ -1212,7 +1212,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   only outside `.claude/` is resolved inside the sync merge
   (`git commit --no-edit` keeps the `[claude-asset-sync]` subject). The
   merge's source is the PR's base, and the merged `.claude/` files are
-  already in the working tree, so the fix runs under the current guards.
+  already in the working tree, so the merged hook scripts run; when the
+  merge brings a `settings.json` change, the settings check below runs
+  with `--before HEAD` before anything is resolved.
   When that resolution is not evident, the session aborts and stops as it
   does on any conflict it cannot resolve, and never continues the fix on
   the unsynced head (issue #5258). A failed `git fetch` of the default
@@ -1221,13 +1223,57 @@ reviews, comments, and conflicts stay a direct §12 request.
   as fresh. Only exit 1 from a drift check counts as drift: an exit above
   1 (`git diff` could not compare, for example `no merge base` in a
   shallow clone) stops with the same blocker. A merged `settings.json`
-  change applies from the next session. Local git only, no GitHub API
+  change is confirmed by the settings check below before anything is
+  pushed. Local git only, no GitHub API
   calls. The SessionStart hook logs the drift against the default branch
   only (it cannot learn a PR's base without an API call) as
   `[session-start] claude_assets=stale …`, or `claude_assets=diverged …`
   when shallow history has no merge base (stable log prefixes). Tests:
   `tests/test_claude_asset_sync_command.py`,
   `tests/test_session_start_claude_assets_drift.py` (one `ci.yml` step).
+- **Settings check and restart after the asset sync** (issue #5259,
+  [Settings restart](.claude/commands/implement-plan-claude.md#settings-restart)).
+  Claude Code's file watcher normally reloads a changed
+  `.claude/settings.json`, but it can miss a change, so a merged hook
+  registration is never assumed active.
+  `.claude/hooks/settings_load_recorder.py` (wired under `SessionStart` and
+  under `ConfigChange` with matcher `project_settings`) writes the sha256 of
+  the `settings.json` the session loaded to
+  `~/.claude/loaded-settings/<session id>.json`, outside the repository: at
+  `startup`, `resume`, and `fork`, and at every detected change (`clear` and
+  `compact` keep the earlier record). It prints nothing, never blocks, and
+  must stay the only `ConfigChange` hook. When a sync merge changed
+  `settings.json`, the sync's step 6 runs the allowlisted
+  `PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py --before HEAD^1`
+  (one JSON line; exit 0 current, 1 not current, 2 usage error; the session
+  id defaults to `CLAUDE_CODE_SESSION_ID`; a missing record, or no readable
+  `settings.json` on disk, is not current). The watcher applies a change a
+  few seconds after it lands on disk, so while the record is missing or
+  names another hash the check re-reads it every half second for up to
+  `--wait-seconds` (env `LOADED_SETTINGS_CHECK_WAIT_SECONDS`, default `10`;
+  `0` checks once) before it reports not current. Claude Code runs `ConfigChange`
+  with the hooks loaded before a change, so on a branch whose
+  `settings.json` predates the recorder the merged file's reload is never
+  recorded: `--before HEAD^1` then reports `"before_recorder_wired": false`
+  and a reason that says so. `--before` takes a plain revision name only
+  (`HEAD^1`, `HEAD`, a branch, a sha): a value starting with `-`, or holding
+  `:` or whitespace, exits 2 and runs no `git`, and `git show` always gets
+  `--end-of-options` before the revision, so the allow rule cannot be used to
+  pass `git` options such as `--output=<path>` (PR #5283). On a sync merge stopped by a conflict outside
+  `.claude/`, the same check runs as `--before HEAD` (the unfinished merge
+  has no merge commit yet, and `HEAD` is still the branch before it) before
+  any resolution, so no conflict work runs under unconfirmed wiring. The
+  verdict stays "not current" (fail closed),
+  so such a branch ends in the escalation below once, and a human confirms
+  the merged wiring and pushes the sync merge; after that the branch
+  carries the recorder.
+  Still not current after one re-run → the session writes nothing more for
+  that work and hands it to a fresh session: a `— settings restart` stage
+  session carrying `Asset-sync restart: <id>`, or a fresh `/fix-claude-pr`
+  with `— claim <id> — settings restart`. A restarted session that is still
+  not current stops as a §28.C escalation. No GitHub API calls. Tests:
+  `tests/test_settings_load_recorder.py` (in the Claude-asset sync `ci.yml`
+  step) and `tests/test_claude_asset_sync_command.py`.
 - The `ai:permission-prompt` label is in `.github/ai/label_contract.v1.json`
   and `scripts/label_helpers.sh`. Byte-identical copies of the hook and the
   three scripts live under `workflow-templates/.claude/`. Tests:

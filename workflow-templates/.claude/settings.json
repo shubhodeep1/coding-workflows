@@ -61,6 +61,8 @@
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/edit_comment.py *)",
       "Bash(python3 .claude/scripts/permission_prompts.py *)",
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/permission_prompts.py *)",
+      "Bash(python3 .claude/scripts/loaded_settings_check.py *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/loaded_settings_check.py *)",
       "mcp__github__create_pull_request",
       "mcp__github__update_pull_request",
       "mcp__github__add_issue_comment",
@@ -120,6 +122,15 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/settings_load_recorder.py",
+            "timeout": 10
           }
         ]
       }
@@ -195,6 +206,18 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/permission_prompt_logger.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "matcher": "project_settings",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/settings_load_recorder.py",
             "timeout": 10
           }
         ]
