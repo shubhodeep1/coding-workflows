@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:74-76; scripts/security_audit.sh:1677-1700 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: After a blocked or closed security follow-up, a budget grant can let the audit report no newly opened follow-ups, which the command treats as a clean pass.\n  WHY: The project can proceed past the security gate while the original finding remains present and its follow-up unresolved.\n- .claude/commands/escalation-judge.md:23, 45-48; .claude/scripts/escalation_ledger.py:317-342 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A judge can repeat an untrusted escalation marker from evidence in its rationale, allowing a later judge to import that marker as trusted.\n  WHY: Crafted evidence can inject a marker for the current fingerprint into the judge\u2019s comment, potentially exhausting budget and descope choices and leaving close as the only available choice.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/implement-plan-claude.md:74-76; scripts/security_audit.sh:1677-1700 | severity=critical | confidence=[5]\n  PROBLEM: After a security follow-up is blocked or closed without a merged fix, the judge can grant budget and the stage re-dispatches the audit. The audit deduplicates findings against markers on all ai:security issues, including blocked or closed ones, so it can report findings=1 and followups_created=0. The command treats a successful run with no newly opened follow-ups as a clean pass.\n  WHY: The project can proceed past the security gate with the original finding still present and its follow-up still unresolved.\n- .claude/commands/escalation-judge.md:23, 45-48; .claude/scripts/escalation_ledger.py:317-342 | severity=high | confidence=[4]\n  PROBLEM: The judge posts its free-text rationale in a comment, and the next judge imports matching markers from comments authored by the blocker\u2019s trusted account. The rationale is whitespace-normalized but not escaped or restricted, so a marker embedded in untrusted evidence that the rationale repeats remains parseable as a trusted escalation marker.\n  WHY: A crafted evidence string can inject a marker for the current fingerprint into the judge\u2019s comment. A later judge may import that forged choice, exhaust budget and descope, and leave close as the only available choice.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "57c33b020c5a250a614e01e08d6e7caf269272efabae12dd8b4bae61e24880ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36988017330",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36988017330",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002093855_2f032b8c35",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36988017330"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T09:38:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
