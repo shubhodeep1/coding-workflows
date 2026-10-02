@@ -80,12 +80,15 @@ records a request to a human: a non-empty `needs_action`, in
 only a wait for the usage limit. A limit wait is made only of limit-wait
 words (`LIMIT_WAIT_VOCABULARY`: the usage-limit error wording, wait words,
 times, and connectives; any other word, such as merge or push, makes it a
-request, and so does "now"), and it carries the usage-limit error text or
-starts with the wait or the limit and names a limit together with reset,
-wait, retry, resume, resend, or try again. A retry, resend, resume, or try
-counts only when the text defers it to the reset (a wait word, until, till,
-later, or the limit resets; "not waiting" does not), so "Usage limit
-reached. Please retry the request" is a request; a `needs_action` with a Q-ID (`Q1`), a question mark,
+request, and so does "now"), it names the limit or its reset, and every
+sentence in it matches one of a closed set of forms whole: the error or
+status wording ("Usage limit reached", "Rate limited until 5pm"), the reset
+("The limit resets at 11am"), a wait ("Wait until the limit resets, then
+retry"), a retry tied to the reset in the same sentence ("Retry after the
+reset", "Once the limit resets, retry"), or "then retry" right after a wait
+or reset sentence. No form holds a negation or a "retry until", so "Usage
+limit reached. Please retry the request. The limit resets later." and
+"Retry the request, not waiting until the reset" are requests; a `needs_action` with a Q-ID (`Q1`), a question mark,
 or the words reply, answer, decide, confirm, choose, or approve is never
 one. Unknown
 wording is a request, so the session stays stopped and is listed. On the
@@ -161,12 +164,6 @@ PERMISSION_PROMPT_PATTERN = re.compile(r"^\s*approve or deny\b|\bwaiting on perm
 # A `needs_action` that only waits for the usage limit (issue #6102): a limit
 # plus a wait word, and nothing that asks a human for an answer.
 LIMIT_WORD_PATTERN = re.compile(r"\blimits?\b", re.IGNORECASE)
-LIMIT_WAIT_WORD_PATTERN = re.compile(r"\b(?:resets?|wait|retry|resume|resend)\b|\btry again\b", re.IGNORECASE)
-# ... and that starts with the wait or the limit, so "merge PR #N once the limit resets" stays a request.
-LIMIT_WAIT_START_PATTERN = re.compile(
-	r"^\s*(?:please\s+)?(?:wait|retry|resume|resend|try again|(?:the\s+)?(?:(?:usage|session|weekly|account|rate)[ _-]?)?limits?)\b",
-	re.IGNORECASE,
-)
 HUMAN_REQUEST_PATTERN = re.compile(
 	r"\bQ\d+\b|\?|\b(?:repl\w*|answer\w*|decid\w*|decision\w*|confirm\w*|choos\w*|choice\w*|approv\w*)\b",
 	re.IGNORECASE,
@@ -199,11 +196,72 @@ LIMIT_WAIT_VOCABULARY = frozenset(
 		"tue", "tues", "wed", "thu", "thurs", "fri", "sat", "sun",
 	)
 )
-# PR #6112 review round 2: a retry, resend, or resume is a limit wait only when the text defers it to the
-# reset (a wait word, until, till, later, or the limit resets), so "Usage limit reached. Please retry the
-# request" stays a request.
-LIMIT_RETRY_WORD_PATTERN = re.compile(r"\b(?:retry\w*|resend\w*|resum\w*|try)\b", re.IGNORECASE)
-LIMIT_DEFERRAL_PATTERN = re.compile(r"(?<!\bnot\s)\b(?:wait\w*|until|till|later|resets|resetting)\b", re.IGNORECASE)
+# PR #6112 review round 3: a word-level search for a deferral word could not tie it to the retry it defers
+# (a deferral in another sentence, "retry until the reset", "not waiting until"). A limit wait is therefore a
+# run of sentences, each of which matches one of the closed forms below whole; any other sentence makes the
+# text a request. Sentences end at . ! ; | · • — – or a line break; inside one, the words are matched as one
+# lowercase string with every time word and number run collapsed to `#`.
+LIMIT_WAIT_SENTENCE_BREAK_PATTERN = re.compile(r"\.(?!\d)|[!;|\n·•—–]|\s-\s")
+LIMIT_WAIT_TIME_WORDS = frozenset(
+	(
+		"am", "pm", "utc", "gmt", "z", "t", "h", "m", "min", "mins", "minute", "minutes", "sec", "secs", "second",
+		"seconds", "hour", "hours", "local", "time", "today", "tomorrow", "tonight", "noon", "midnight",
+		"january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+		"november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct",
+		"nov", "dec", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon",
+		"tue", "tues", "wed", "thu", "thurs", "fri", "sat", "sun",
+	)
+)
+
+
+def _limit_wait_forms() -> tuple:
+	"""Build the closed sentence forms of a limit wait: `(status, reset, wait, retry, then)` full-match patterns."""
+	limit = r"(?:(?:claude|ai|usage|session|weekly|daily|hourly|monthly|account|rate|opus|sonnet|api|model) ){0,3}limits?"
+	the_limit = rf"(?:(?:the|your) )?{limit}"
+	time = r"(?:(?:at|on|in|by|around|about|approximately|next) )*#(?: (?:on|at|in|by|and) #)*"
+	resets = r"(?:resets|will reset|has reset|has been reset|is reset|resetting)"
+	reset_event = rf"(?:(?:{the_limit}|it) {resets}|(?:the|your) (?:{limit} )?reset)(?: {time})?"
+	again = r"(?:it |(?:the|your) request )?again"
+	retry = (
+		rf"(?:(?:retry|resend|resume)(?: (?:it|(?:the|your) (?:last )?(?:request|requests|message|session)))?(?: again)?"
+		rf"|try {again})"
+	)
+	please = r"(?:please )?"
+	hit = rf"(?:you've|you have) hit (?:your|the) {limit}(?: (?:resets|will reset)(?: {time})?)?"
+	reached = rf"{the_limit} (?:has been |is |has )?(?:reached|hit|exceeded)(?: (?:resets|will reset)(?: {time})?)?"
+	server = r"server is temporarily limiting requests(?: not your usage limit)?"
+	status = (
+		hit,
+		reached,
+		server,
+		r"rate limit error",
+		rf"(?:(?:you are|you have been|you've been|it is|it's|(?:the|your) (?:account|session) is) )?(?:rate )?limited"
+		rf"(?: (?:until|till) (?:{reset_event}|{time}))?",
+		rf"api error(?: #)?(?: type error error type rate limit error message)?"
+		rf"(?: (?:{reached}|rate limit error|number of request tokens has exceeded {the_limit}|{server}))?",
+	)
+	reset = (rf"(?:(?:{the_limit}|it) )?{resets}(?: (?:automatically|soon|later))?(?: {time})?",)
+	wait_for = rf"(?:(?:for|until|till) (?:{the_limit} to reset|{reset_event}|{the_limit}|{time})|on {the_limit})"
+	wait = (rf"{please}(?:wait|waiting) {wait_for}(?: {time})?(?: (?:and |then |and then ){retry})?",)
+	retry_forms = (
+		rf"{please}{retry} (?:(?:after|once|when) (?:{reset_event}|{time})|later|(?:at|after|in|on|by) {time})",
+		rf"{please}(?:after|once|when) {reset_event}(?: then)? {retry}",
+	)
+	# Only after a wait or reset sentence, whose reset the "then" points to.
+	then = (rf"{please}(?:then {retry}|{retry} then)",)
+	return tuple(
+		tuple(re.compile(form) for form in forms) for forms in (status, reset, wait, retry_forms, then)
+	)
+
+
+(
+	LIMIT_WAIT_STATUS_FORMS,
+	LIMIT_WAIT_RESET_FORMS,
+	LIMIT_WAIT_WAIT_FORMS,
+	LIMIT_WAIT_RETRY_FORMS,
+	LIMIT_WAIT_THEN_FORMS,
+) = _limit_wait_forms()
+LIMIT_WAIT_NAMES_LIMIT_PATTERN = re.compile(r"\b(?:reset\w*|limited)\b", re.IGNORECASE)
 # One session has two id forms: `session_<x>` (list_sessions, get_session) and
 # `cse_<x>` (seen as a trigger's `persistent_session_id`, 2026-10-02).
 RESUME_SESSION_ID_PATTERN = re.compile(r"^(?:session|cse)_(?P<suffix>[A-Za-z0-9]+)$")
@@ -390,18 +448,55 @@ def is_limit_wait(needs_action: str) -> bool:
 	"""True when a `needs_action` only waits for the usage limit and asks a human for nothing (issue #6102)."""
 	if HUMAN_REQUEST_PATTERN.search(needs_action):
 		return False
-	words = LIMIT_WAIT_TOKEN_PATTERN.findall(needs_action.lower().replace("’", "'"))
+	normalized = needs_action.lower().replace("’", "'")
+	words = LIMIT_WAIT_TOKEN_PATTERN.findall(normalized)
 	if any(not word.isdigit() and word not in LIMIT_WAIT_VOCABULARY for word in words):
 		return False
-	if LIMIT_RETRY_WORD_PATTERN.search(needs_action) and not LIMIT_DEFERRAL_PATTERN.search(needs_action):
+	if not (
+		has_limit_text(needs_action)
+		or LIMIT_WORD_PATTERN.search(needs_action)
+		or LIMIT_WAIT_NAMES_LIMIT_PATTERN.search(needs_action)
+	):
 		return False
-	if has_limit_text(needs_action):
-		return True
-	return bool(
-		LIMIT_WAIT_START_PATTERN.match(needs_action)
-		and LIMIT_WORD_PATTERN.search(needs_action)
-		and LIMIT_WAIT_WORD_PATTERN.search(needs_action)
-	)
+	sentences = [_limit_wait_sentence(part) for part in LIMIT_WAIT_SENTENCE_BREAK_PATTERN.split(normalized)]
+	sentences = [sentence for sentence in sentences if sentence]
+	previous = ""
+	for sentence in sentences:
+		kind = _limit_wait_sentence_kind(sentence, previous)
+		if not kind:
+			return False
+		previous = kind
+	return bool(sentences)
+
+
+def _limit_wait_sentence(text: str) -> str:
+	"""One sentence as lowercase words joined by spaces, each run of numbers and time words collapsed to `#`."""
+	words = []
+	for word in LIMIT_WAIT_TOKEN_PATTERN.findall(text):
+		if word.isdigit() or word in LIMIT_WAIT_TIME_WORDS:
+			if words and words[-1] == "#":
+				continue
+			word = "#"
+		words.append(word)
+	return " ".join(words)
+
+
+def _limit_wait_sentence_kind(sentence: str, previous: str) -> str:
+	"""The closed form a sentence matches whole (`status`, `reset`, `wait`, `retry`, `then`), or "" for none.
+
+	A `then` sentence ("then retry", "try again then") counts only right after a `wait` or `reset` sentence.
+	"""
+	for kind, forms in (
+		("status", LIMIT_WAIT_STATUS_FORMS),
+		("reset", LIMIT_WAIT_RESET_FORMS),
+		("wait", LIMIT_WAIT_WAIT_FORMS),
+		("retry", LIMIT_WAIT_RETRY_FORMS),
+	):
+		if any(form.fullmatch(sentence) for form in forms):
+			return kind
+	if previous in ("wait", "reset") and any(form.fullmatch(sentence) for form in LIMIT_WAIT_THEN_FORMS):
+		return "then"
+	return ""
 
 
 def has_unanswered_request(session: dict) -> bool:
