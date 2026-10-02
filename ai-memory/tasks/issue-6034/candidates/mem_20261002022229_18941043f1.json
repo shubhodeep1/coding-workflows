@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-6031` at `6ef54647e9467c3a38ee63762421e5fa4a416aea`; it matches the issue\u2019s integration branch.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `semble_query_block` in `scripts/semble_helpers.sh`  \nScope-mode justification: This is an additive measurement change to an existing helper, not a retrieval change. Measuring the successful result and covering failure and empty-result behavior completes the requested scope within the 35-minute target. Under `unattended_system_instructions.md` \u00a76, correctness and safety take precedence over speed; reporting unavailable savings is preferable to estimating them.\n\n## Automation wiring\n- Extend an existing script; add no script, dependency, supervisor, or database operation. No future-removal registry entry is needed.\n- Existing entry point: `.github/workflows/internal-review.yml` runs on `pull_request` opened/synchronize events and calls `.github/workflows/review_autofix.yml`, whose reviewer helper sources `semble_helpers.sh`. No workflow wiring change is planned.\n\n## Files likely to change\n- `scripts/semble_helpers.sh` \u2014 extend the successful `SEMBLE_QUERY` event in `semble_query_block`.\n- `tests/test_semble_helpers.py` \u2014 extend the existing helper tests, including failure and empty-result coverage.\n\n## Functions, data structures, and interfaces\n- In `semble_query_block`, measure the UTF-8 byte length of the exact query argument, raw successful Semble stdout, and Semble content actually included in stdout. Account for the helper\u2019s added newline when the result lacks one; define included bytes as content, excluding the existing block delimiters.\n- Keep `target`, `chunks`, `bytes`, and `ms` unchanged. Append `query_bytes`, `returned_bytes`, `included_bytes`, `deduplicated_bytes=unavailable`, and `avoided_prompt_bytes=unavailable`. The existing `bytes` remains the raw-result count.\n- The additive log fields also pass through the existing event emitter. Do not change the Semble command, retrieval results, fallback return values, or prompt-only stdout. The existing cost-audit parser continues to use `bytes`; no parser interface change is needed.\n\n## Decisions\n### D1 \u2014 Report only observable byte counts\n- **Chosen:** Measure query, returned, and included bytes locally; mark deduplication and avoided-prompt bytes `unavailable`.\n- **Alternatives considered:** Infer savings from query size or report zero savings.\n- **Why:** Neither inference measures bytes actually deduplicated or kept out of a downstream prompt.\n\n### D2 \u2014 Preserve fallback telemetry\n- **Chosen:** Emit the extended `SEMBLE_QUERY` only for a successful, nonempty result; retain existing `SEMBLE_FALLBACK` events for failed and empty queries.\n- **Alternatives considered:** Emit a zero-byte query event for fallback paths.\n- **Why:** A fallback is not a successfully returned and included query result.\n\n## Security considerations\n- No new endpoint or authorization surface is introduced. The existing Semble invocation and availability/index checks remain the trust boundary.\n- Log byte counts, not query text or returned content; both may contain sensitive or untrusted material. Do not turn Semble stderr into a new measurement field.\n- Keep failed and whitespace-only results out of prompt stdout. No payment or money-state surface is affected.\n\n## Risks and edge cases\n- Test multibyte query text and results, results with and without a final newline, and whitespace-only output; character counts or shell command-substitution trimming must not masquerade as byte counts.\n- Preserve the existing `chunks` value as the requested cap, not a newly claimed count of returned chunks.\n- **Scope-context gap:** The supplied issue text says \u201cstay within files_touched\u201d but contains no explicit `files_touched` list. Confirm the implementation run\u2019s authoritative allowlist admits the two files above; do not expand the edit if it does not.\n\n## Testing and pre-execution self-check\n- Extend `tests/test_semble_helpers.py` to assert exact additive counts and unchanged stdout on success, plus fallback-only stderr and empty stdout for command failure and empty results.\n- Run the focused helper tests and existing `tests/test_cost_audit_semble_metrics.py` regression tests on the repository\u2019s pinned test environment. No Serena exercise or claim is planned.\n- The planning ref matches, the reuse path exists, and no new external API contract is required.\n\nPLAN_SELF_CHECK: WARNING: The authoritative files_touched allowlist was not included in the planning context.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e825dcd108a6834afdcd2ca83d65703849dcf57fde2880c1f3053faf3df4b361",
+  "lineage": {
+    "issue_number": 6034,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36954818313",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36954818313",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6034"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261002022229_18941043f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6034,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36954818313"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6034",
+  "timestamps": {
+    "created_at": "2026-10-02T02:22:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
