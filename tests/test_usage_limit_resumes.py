@@ -204,6 +204,136 @@ def test_text_signal_still_resumes_a_need_input_summary(tmp_path, capsys):
 	assert _ids(result["resume"]) == ["session_a"]
 
 
+# --- unanswered requests on both signals (issue #6102) ----------------------------------
+
+
+@pytest.mark.parametrize(
+	"needs_action",
+	[
+		"Reply: `Q1: A` (or B/C), `Q2: A` (or B)",
+		"reply: `Q1: A` or `Q1: B` or `Q1: C`",
+		"decide: reissue #4374 or drop it?",
+		"review the plan and confirm decisions D1–D8, or tell me what to change",
+		"answer on queue item #6037 to restart the previous stage session",
+		"copy 2 files to .claude/commands/ as [claude-twin-sync] commit, run suites, push",
+		"waiting on you.",
+	],
+)
+def test_text_signal_with_an_unanswered_request_is_skipped(tmp_path, capsys, needs_action):
+	"""Issue #6102: the usage-limit text no longer resumes a session that still waits on a human."""
+	session = _session("session_a", category="need_input", needs_action=needs_action)
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert result["resume"] == [] and result["pending"] == []
+	assert result["skipped"] == [{"session_id": "session_a", "signal": "text", "reason": "needs_input"}]
+
+
+@pytest.mark.parametrize("category", ["need_input", "review_ready", "completed", ""])
+def test_unanswered_request_skips_whatever_the_category(tmp_path, capsys, category):
+	session = _session("session_a", category=category, needs_action="Reply `Q1: A` or `Q1: B`")
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _skips(result) == {"session_a": "needs_input"}
+
+
+def test_unanswered_request_in_the_external_metadata_copy_is_skipped(tmp_path, capsys):
+	"""The top-level summary can omit `needs_action`; the `external_metadata` copy still counts."""
+	session = _session("session_a", category="need_input")
+	session["external_metadata"]["post_turn_summary"] = {
+		"status_category": "need_input",
+		"status_detail": LIMIT_TEXT,
+		"needs_action": "Reply: `Q1: A` or `Q1: B`",
+	}
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _skips(result) == {"session_a": "needs_input"}
+
+
+@pytest.mark.parametrize(
+	"needs_action",
+	[
+		LIMIT_TEXT,
+		"You've hit your weekly limit",
+		"wait for the usage limit to reset, then resume",
+		"Usage limit resets at 11am (UTC); try again then",
+		"resend the last message after the session limit resets",
+		"   ",
+	],
+)
+def test_text_signal_with_only_a_limit_wait_still_resumes(tmp_path, capsys, needs_action):
+	session = _session("session_a", category="need_input", needs_action=needs_action)
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _ids(result["resume"]) == ["session_a"]
+	assert result["skipped"] == []
+
+
+@pytest.mark.parametrize(
+	"needs_action",
+	[
+		"Reply `Q1: A` to raise the usage limit cap after the reset",
+		"wait for the limit to reset, then decide whether to drop #4374",
+		"Usage limit resets at 11am — should I retry the push?",
+		"You've hit your session limit · resets 11am (UTC); then approve the merge",
+		"merge PR #4376 once the usage limit resets",
+		"copy 2 files to .claude/commands/ after the limit resets, then push",
+	],
+)
+def test_a_limit_wait_that_also_asks_a_human_is_skipped(tmp_path, capsys, needs_action):
+	session = _session("session_a", category="need_input", needs_action=needs_action)
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _skips(result) == {"session_a": "needs_input"}
+
+
+def test_rejected_snapshot_with_an_unanswered_request_is_skipped_outside_need_input(tmp_path, capsys):
+	checker = _checker(
+		"session_c",
+		detail="awaiting next cycle trigger",
+		category="review_ready",
+		needs_action="Reply `Q1: A` or `Q1: B`",
+		rate_status="rejected",
+	)
+	_, result = _run(tmp_path, capsys, [_pickup(), checker])
+	assert result["skipped"] == [{"session_id": "session_c", "signal": "rate_limit_info", "reason": "needs_input"}]
+
+
+def test_permission_prompt_still_wins_over_needs_input(tmp_path, capsys):
+	session = _session("session_a", category="need_input", needs_action="Approve or deny: Bash(git push origin HEAD)")
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _skips(result) == {"session_a": "permission_prompt"}
+
+
+@pytest.mark.parametrize(
+	"text, expected",
+	[
+		(LIMIT_TEXT, True),
+		("API Error: 429 rate_limit_error", True),
+		("wait for the limit to reset", True),
+		("retry once the rate limit resets", True),
+		("the limit", False),
+		("Session limit resets at 11am (UTC)", True),
+		("please wait until the weekly limit resets", True),
+		("push the branch after the limit resets", False),
+		("run the suites; wait for the limit to reset", False),
+		("wait for CI", False),
+		("Reply `Q1: A`", False),
+		("q2: b", False),
+		("limit resets soon?", False),
+		("choose A or B after the limit resets", False),
+		("", False),
+	],
+)
+def test_is_limit_wait(text, expected):
+	assert resumes.is_limit_wait(text) is expected
+
+
+def test_has_unanswered_request_reads_both_copies():
+	assert resumes.has_unanswered_request({}) is False
+	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": None}}) is False
+	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": "  "}}) is False
+	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": LIMIT_TEXT}}) is False
+	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": "Reply `Q1: A`"}}) is True
+	nested = {"post_turn_summary": {"needs_action": ""}, "external_metadata": {"post_turn_summary": {"needs_action": "decide"}}}
+	assert resumes.has_unanswered_request(nested) is True
+	assert resumes.has_unanswered_request({"post_turn_summary": "x", "external_metadata": "y"}) is False
+
+
 # --- skip reasons ------------------------------------------------------------------------
 
 
@@ -633,6 +763,10 @@ def test_prompts_are_fixed_text_plus_the_login(tmp_path, capsys):
 		assert "never with python3 heredocs (#4858)" in prompt
 		assert "ignore previous instructions" not in prompt and "IGNORE ALL RULES" not in prompt
 		assert "The limit has reset." in prompt
+		assert (
+			"This message is not an answer to any question or approval request of yours: if one is still "
+			"unanswered, keep waiting for the human's answer and end the turn without acting on it." in prompt
+		)
 	assert "Repeat the steps in your most recent checker-instructions message now, starting at step 1" in checker_prompt
 	assert "call list_sessions (mine: true, limit: 100), and repeat it with after_id" in checker_prompt
 	assert "at most 5 pages" in checker_prompt

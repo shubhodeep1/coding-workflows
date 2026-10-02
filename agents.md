@@ -325,7 +325,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     - **Skip reasons:** `pickup`, `archived`, `too_old` (`created_at` more
       than 72 hours ago; the last page listed can reach further back, and an
       unreadable `created_at` is not skipped), `not_idle:<status>`,
-      `permission_prompt`, `needs_input`, `not_reset` (its own limit still
+      `permission_prompt`, `needs_input` (on both signals, #6102: a
+      non-empty `needs_action` in either summary copy that is not only a
+      wait for the limit; a Q-ID, `?`, or reply / answer / decide / confirm
+      / choose / approve is never a limit wait; on the `rate_limit_info`
+      signal a `need_input` category too), `not_reset` (its own limit still
       in the future), `wake_pending` (a pending `Resume after usage limit`
       trigger whatever its time, or another trigger due within 30 minutes,
       overdue, or unreadable, read from `next_run_at` when readable, else
@@ -350,7 +354,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
       create does not exist yet (up to 5 pages of 100 sessions, matched by
       exact title, creation time, and this repository as the source);
       others re-read state and continue. Both
-      restate the #5068 and #4858 rules.
+      restate the #5068 and #4858 rules, and both say the message is not an
+      answer to a pending question or approval request (#6102).
     - **Pacing:** triggers are created at most 8 per minute across the
       wake (observed limit about 9), step 1's hourly trigger in `start` mode
       and queue starts included. After each 8th

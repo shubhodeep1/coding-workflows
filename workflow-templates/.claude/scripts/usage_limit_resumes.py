@@ -60,7 +60,7 @@ A candidate is skipped (listed under `skipped`) when it is the pickup
 can reach further back, and those older sessions stay with the manual
 fallback; an unreadable `created_at` is not skipped), not IDLE (`not_idle:<status>`), waiting
 on a permission prompt (`permission_prompt`), waiting on a human answer
-(`needs_input`, rate_limit_info signal only), still limited by its own
+(`needs_input`, below), still limited by its own
 `rate_limit_info` (`not_reset`), or bound to an enabled trigger that will
 wake it anyway (`wake_pending`: for a checker, any, because its triggers
 are its own check-ins and one means its chain is alive; for another
@@ -71,6 +71,20 @@ is never resumed twice for the same stop. A trigger's time is its
 `next_run_at` when readable, else its `run_once_at`. A resume trigger that has fired is
 disabled and no longer counts: when the resumed turn fails on the limit or
 on a rate limit again, the next wake picks the session again.
+
+`needs_input` (issue #6102) holds on both signals when the summary still
+records a request to a human: a non-empty `needs_action`, in
+`post_turn_summary` or `external_metadata.post_turn_summary`, that is not
+only a wait for the usage limit. A limit wait carries the usage-limit error
+text, or starts with the wait or the limit and names a limit together with
+reset, wait, retry, resume, resend, or try again; a `needs_action` with a
+Q-ID (`Q1`), a question mark, or the words reply, answer, decide, confirm,
+choose, or approve is never one. Unknown
+wording is a request, so the session stays stopped and is listed. On the
+rate_limit_info signal a `need_input` category holds too. On the text
+signal a `need_input` category with an empty `needs_action` does not: a
+turn that failed on the limit can show it, and the error text decides.
+Every resume prompt also says it is not an answer to a pending question.
 
 Session ids are compared in one form: `cse_<x>` and `session_<x>` name the
 same session (a trigger's `persistent_session_id` can carry either), so a
@@ -136,6 +150,19 @@ LIMIT_TEXT_PATTERNS = (
 	re.compile(r"\bAPI Error\b[^\n]{0,80}?\brate[ _-]?limit", re.IGNORECASE),
 )
 PERMISSION_PROMPT_PATTERN = re.compile(r"^\s*approve or deny\b|\bwaiting on permission\b", re.IGNORECASE)
+# A `needs_action` that only waits for the usage limit (issue #6102): a limit
+# plus a wait word, and nothing that asks a human for an answer.
+LIMIT_WORD_PATTERN = re.compile(r"\blimits?\b", re.IGNORECASE)
+LIMIT_WAIT_WORD_PATTERN = re.compile(r"\b(?:resets?|wait|retry|resume|resend)\b|\btry again\b", re.IGNORECASE)
+# ... and that starts with the wait or the limit, so "merge PR #N once the limit resets" stays a request.
+LIMIT_WAIT_START_PATTERN = re.compile(
+	r"^\s*(?:please\s+)?(?:wait|retry|resume|resend|try again|(?:the\s+)?(?:(?:usage|session|weekly|account|rate)[ _-]?)?limits?)\b",
+	re.IGNORECASE,
+)
+HUMAN_REQUEST_PATTERN = re.compile(
+	r"\bQ\d+\b|\?|\b(?:repl\w*|answer\w*|decid\w*|decision\w*|confirm\w*|choos\w*|choice\w*|approv\w*)\b",
+	re.IGNORECASE,
+)
 # One session has two id forms: `session_<x>` (list_sessions, get_session) and
 # `cse_<x>` (seen as a trigger's `persistent_session_id`, 2026-10-02).
 RESUME_SESSION_ID_PATTERN = re.compile(r"^(?:session|cse)_(?P<suffix>[A-Za-z0-9]+)$")
@@ -148,9 +175,16 @@ SIGNAL_REASONS = {
 	"rate_limit_info": "this session's last turn ran while the account was over its usage limit, and nothing is scheduled to wake it.",
 }
 
+# Issue #6102: a resume is never the answer a stopped session may be waiting for.
+NOT_AN_ANSWER_TEXT = (
+	"This message is not an answer to any question or approval request of yours: if one is still "
+	"unanswered, keep waiting for the human's answer and end the turn without acting on it. "
+)
+
 CHECKER_PROMPT = (
 	"Resume after usage limit (issue #5660): {why} The limit has reset. "
-	"Repeat the steps in your most recent checker-instructions message now, starting at step 1 "
+	+ NOT_AN_ANSWER_TEXT
+	+ "Repeat the steps in your most recent checker-instructions message now, starting at step 1 "
 	"(for a `PR #<n> status check-in` checker: your instructions message together with every later subscriber message). "
 	"Before any step creates a session, call list_sessions (mine: true, limit: 100), and repeat it with after_id = the "
 	"previous page's last_id while has_more is true and that page's oldest session was created after your most recent "
@@ -165,7 +199,8 @@ CHECKER_PROMPT = (
 
 OTHER_PROMPT = (
 	"Resume after usage limit (issue #5660): {why} The limit has reset. "
-	"Continue from your latest instructions. First re-read the current state: `git status -sb` and your branch, "
+	+ NOT_AN_ANSWER_TEXT
+	+ "Continue from your latest instructions. First re-read the current state: `git status -sb` and your branch, "
 	"the pull request or issue you were working on, and the progress log under docs/implement-plan/ when your task has one. "
 	"Do not redo work that already landed, and before you create a session, trigger, pull request, or comment, "
 	"check that it does not exist already. "
@@ -295,6 +330,39 @@ def has_limit_text(detail: str) -> bool:
 	return any(pattern.search(detail) for pattern in LIMIT_TEXT_PATTERNS)
 
 
+def _needs_action_texts(session: dict) -> list[str]:
+	"""The stripped, non-empty `needs_action` of both summary copies (top-level and `external_metadata`)."""
+	summaries = [session.get("post_turn_summary")]
+	metadata = session.get("external_metadata")
+	if isinstance(metadata, dict):
+		summaries.append(metadata.get("post_turn_summary"))
+	texts = []
+	for summary in summaries:
+		if isinstance(summary, dict):
+			text = _text(summary.get("needs_action")).strip()
+			if text:
+				texts.append(text)
+	return texts
+
+
+def is_limit_wait(needs_action: str) -> bool:
+	"""True when a `needs_action` only waits for the usage limit and asks a human for nothing (issue #6102)."""
+	if HUMAN_REQUEST_PATTERN.search(needs_action):
+		return False
+	if has_limit_text(needs_action):
+		return True
+	return bool(
+		LIMIT_WAIT_START_PATTERN.match(needs_action)
+		and LIMIT_WORD_PATTERN.search(needs_action)
+		and LIMIT_WAIT_WORD_PATTERN.search(needs_action)
+	)
+
+
+def has_unanswered_request(session: dict) -> bool:
+	"""True when either summary copy records a request to a human that is not only a limit wait."""
+	return any(not is_limit_wait(text) for text in _needs_action_texts(session))
+
+
 def session_kind(title: str) -> str:
 	return "checker" if any(marker in title for marker in CHECKER_TITLE_MARKERS) else "other"
 
@@ -407,7 +475,9 @@ def _skip_reason(
 		_text(summary.get("status_detail"))
 	):
 		return "permission_prompt"
-	if signal == "rate_limit_info" and _text(summary.get("status_category")) == "need_input":
+	if has_unanswered_request(session) or (
+		signal == "rate_limit_info" and _text(summary.get("status_category")) == "need_input"
+	):
 		return "needs_input"
 	if limit_holds(_rate_limit_info(session), now):
 		return "not_reset"
