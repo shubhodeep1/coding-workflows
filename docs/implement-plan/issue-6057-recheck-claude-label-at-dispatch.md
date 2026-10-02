@@ -7,14 +7,14 @@
 - Status: BLOCKED
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #6081: twin sync (review round 3)
+- Waiting on: PR #6081: twin sync (review round 4)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01USBFJWeRKFYoN4f41wAyq5 (kept; no wait handed to it while the PR is held)   safety net none   hand-back none
 - Last updated: 2026-10-02
-- Last note: review round 3 (head `252907d`): the consensus finding (the launch prompt relied on the new `/implement-issue-claude`, so a consumer on an older installed command re-adds `ai:claude`) is valid; fixed twin-first with a label check in the dispatch launch prompt itself. PR held for the twin sync (Q1: A, AD-11)
+- Last note: review round 4 (head `a23a441`): the consensus finding (the launch prompt did not say what to do when the label read fails) is valid; fixed twin-first by failing closed (retry once, then a blocker comment and no start). PR held for the twin sync (Q1: A, AD-11)
 
 ## Phases
-1. [ ] Phase 1 — re-check the `ai:claude` claim at dispatch time   — protected paths: .claude/commands/claude-issue-pickup.md (no twin; synced in `9d6cbf9`); PR #6081 open; review rounds: 3; interventions: 0
+1. [ ] Phase 1 — re-check the `ai:claude` claim at dispatch time   — protected paths: .claude/commands/claude-issue-pickup.md (no twin; synced in `9d6cbf9`); PR #6081 open; review rounds: 4; interventions: 0
 
 ## Conformance
 
@@ -55,3 +55,4 @@
 - Plan deviation: `_dispatch_refusal` also refuses `target_repo_mismatch` (a transferred issue), the same family as AD-4's `target_not_issue`; it matches the intake's `authorize_target()` check.
 - Review round 2 (head `2ce9fd2`, ledger `06db8da1…`, run 37010796674): one consensus finding plus the matching task gap from 5 of 6 reviewers, valid, fixed in one `[claude-autofix]` commit (AD-10). Twin-first: only `workflow-templates/.claude/commands/{implement-issue-claude,claude-issue-dispatch}.md` changed; `test_template_parity` for both stays red until the `[claude-twin-sync]` copy. Verified against a scratch copy with the twins copied into `.claude/`: the janitor, implement-issue, session-title, and route suites (429 passed) and the other 15 twin-reading suites (695 passed, 1 skipped).
 - Review round 3 (head `252907d`, run 37019541206): one consensus finding (5 reviewers) plus the matching task gap (3), valid: a consumer repo whose installed `/implement-issue-claude` predates the marker re-adds `ai:claude`. Fixed in one `[claude-autofix]` commit: the issue launch prompt in the `claude-issue-dispatch.md` twin first reads the labels and stops as `issue parked` without changing any label; the docs no longer state the check as unconditional on the command version. Twin sha256 after round 3: `implement-issue-claude.md` `8c96af2c6ac18284ca2d14f5f0e7b4021548f4d0707b93b38ccc2765c09eb44f` (unchanged), `claude-issue-dispatch.md` `e0373d528899b2d8828c7e2e9f7967848a45cde306113e59fb3eac3b6dd821b5`. Verified on a scratch copy with both twins copied into `.claude/`: the four blocker suites plus the changelog contract, 450 passed.
+- Review round 4 (head `a23a441`): one consensus finding (5 reviewers), valid: the launch prompt's label check had no failure branch. Fixed in one `[claude-autofix]` commit: a failed `get_labels` read is retried once, then the session starts nothing, changes no label, posts one `<!-- ai:claude-blocked:v1 -->` comment naming `/reclarify`, and replies `issue not started (label check failed)`. Twin sha256 after round 4: `implement-issue-claude.md` `8c96af2c6ac18284ca2d14f5f0e7b4021548f4d0707b93b38ccc2765c09eb44f` (unchanged), `claude-issue-dispatch.md` `355e0ecd06fff042832fd96511590f0bbb9b4bab48e488fa648c38031adc8794`. Verified on a scratch copy with both twins in `.claude/`: four blocker suites plus the changelog contract, 450 passed.

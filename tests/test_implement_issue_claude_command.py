@@ -180,7 +180,10 @@ def test_dispatched_session_stops_when_the_claim_was_removed():
 	# Review round 3: the launch prompt checks the label itself, so a target repo still
 	# on an older installed /implement-issue-claude cannot re-add a removed claim.
 	precheck = dispatch.index("First read the issue's labels (mcp__github__issue_read with method get_labels). If ai:claude is not among them, reply `issue parked (ai:claude removed) — nothing to do` and end the turn without changing any label")
-	assert precheck < dispatch.index("/implement-issue-claude <url> — dispatched")
+	# Review round 4: the check fails closed when the label read fails.
+	failed = dispatch.index("If the read fails, retry it once; if it fails again, do not follow the command below and change no label: post one comment on the issue starting `<!-- ai:claude-blocked:v1 -->` that says the dispatch label check failed and that a `/reclarify` comment re-queues the issue, reply `issue not started (label check failed)`, and end the turn.")
+	run = dispatch.index("Only when the read succeeded and ai:claude is among the labels, run: /implement-issue-claude <url> — dispatched")
+	assert precheck < failed < run
 	assert "follow it with <url> — dispatched as $ARGUMENTS." in dispatch
 	assert "A trailing `— dispatched` marks a session the Claude issue pickup started" in issue
 	parked = issue.index("**Parked** — `$ARGUMENTS` carries `— dispatched` and the issue no longer carries `ai:claude`")
