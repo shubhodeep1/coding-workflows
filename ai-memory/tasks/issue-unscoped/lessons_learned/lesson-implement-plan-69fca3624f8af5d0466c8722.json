@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T04:17:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When one script creates Routines by name and another sweeps them by name, match both with the same anchored pattern (and test that they agree), or a lookalike name is honoured by one and never cleaned up by the other.",
+  "phase": "implement_plan",
+  "pr_number": 5718,
+  "record_id": "lesson-implement-plan-69fca3624f8af5d0466c8722",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py",
+    "file:workflow-templates/.claude/scripts/stale_routines.py"
+  ]
+}

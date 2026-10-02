@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:17:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In a command file, state the success path's \"continue with step N\" before a failure branch that ends the turn, and mark the failure branch as the exception (\"Only if \u2026 instead\"); a \"Then continue\" sentence after \"end the turn\" reads as part of the failure branch to reviewers and models.",
+  "phase": "implement_plan",
+  "pr_number": 5718,
+  "record_id": "lesson-implement-plan-8b78d6291fbe592ab89b1218",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:.claude/commands/claude-issue-pickup.md"
+  ]
+}

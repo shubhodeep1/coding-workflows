@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:17:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Re-read the source issue's owner comments before arming a wait on a phase held for a twin sync: comments posted during the hold can change the twin-first code, and folding them in before the sync saves a second sync.",
+  "phase": "implement_plan",
+  "pr_number": 5718,
+  "record_id": "lesson-implement-plan-b5d32f75f7d885f31252d04a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:docs/implement-plan/issue-5660-resume-usage-limit-stops.md"
+  ]
+}

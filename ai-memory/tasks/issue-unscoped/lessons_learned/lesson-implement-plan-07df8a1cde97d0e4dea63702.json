@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:17:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A consumer of a listing paged \"while the oldest entry is inside the window\" must apply the window itself: the last page fetched crosses the boundary.",
+  "phase": "implement_plan",
+  "pr_number": 5718,
+  "record_id": "lesson-implement-plan-07df8a1cde97d0e4dea63702",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:17:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a reviewer repeats a misreading of a dense one-liner across rounds and no verdict bot can answer it, rewrite the line into a form that cannot be misread; a base merge only restarts the same review.",
+  "phase": "implement_plan",
+  "pr_number": 5718,
+  "record_id": "lesson-implement-plan-603eab171645f7fa852ca7e8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}

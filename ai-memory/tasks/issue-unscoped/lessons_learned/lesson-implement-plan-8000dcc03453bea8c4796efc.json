@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-02T04:17:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A `rejected` rate_limit_info snapshot does not mean a session stopped: turns completed on overage record it too, so it may only select checkers with no bound trigger.",
+  "phase": "implement_plan",
+  "pr_number": 5718,
+  "record_id": "lesson-implement-plan-8000dcc03453bea8c4796efc",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}

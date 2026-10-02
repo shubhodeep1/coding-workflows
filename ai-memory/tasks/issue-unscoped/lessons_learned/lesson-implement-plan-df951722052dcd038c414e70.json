@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-02T04:17:15Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A long-lived supervisor's own session is not on a recent-sessions listing; when its logic depends on its own entry, pass its own `get_session` result explicitly.",
+  "phase": "implement_plan",
+  "pr_number": 5718,
+  "record_id": "lesson-implement-plan-df951722052dcd038c414e70",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5660-resume-usage-limit-stops",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py",
+    "file:.claude/commands/claude-issue-pickup.md"
+  ]
+}
