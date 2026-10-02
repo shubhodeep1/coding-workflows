@@ -36,6 +36,9 @@ FUTURE_RESET = int(dt.datetime(2026, 9, 30, 13, 0, tzinfo=dt.timezone.utc).times
 PICKUP_ID = "session_pickup"
 LOGIN = "shubhodeep1"
 LIMIT_TEXT = "You've hit your session limit · resets 11am (UTC)"
+SELF_REPO_URL = "https://github.com/shubhodeep1/coding-workflows"
+CONSUMER_REPO = "shubhodeep1/digital_pa"
+WORKFLOW_ORIGIN = "claude_code_mcp_seed"
 
 
 def _session(
@@ -49,6 +52,9 @@ def _session(
 	resets_at=PAST_RESET,
 	updated_at="2026-09-30T10:40:00Z",
 	created_at=None,
+	sources=(SELF_REPO_URL,),
+	origin=WORKFLOW_ORIGIN,
+	parent_session_id="session_parent",
 ):
 	summary = {"status_category": category, "status_detail": detail}
 	if needs_action is not None:
@@ -65,6 +71,13 @@ def _session(
 	}
 	if created_at is not None:
 		session["created_at"] = created_at
+	# Server-set provenance (issue #6101): a session a workflow started with create_session.
+	if sources is not None:
+		session["session_context"] = {"sources": [{"git_repository": {"url": url}} for url in sources]}
+	if origin is not None:
+		session["origin"] = origin
+	if parent_session_id is not None:
+		session["parent_session_id"] = parent_session_id
 	return session
 
 
@@ -107,11 +120,14 @@ def _run(tmp_path, capsys, sessions, triggers=(), extra=(), environ=None, wrap=N
 	sessions_path.write_text(text, encoding="utf-8")
 	triggers_path = tmp_path / "triggers.json"
 	triggers_path.write_text(json.dumps({"data": list(triggers)}), encoding="utf-8")
+	registry_path = tmp_path / "consumer_repos.json"
+	registry_path.write_text(json.dumps([CONSUMER_REPO]), encoding="utf-8")
 	argv = [
 		"--sessions", str(sessions_path),
 		"--triggers", str(triggers_path),
 		"--pickup-session", PICKUP_ID,
 		"--handoff-author-login", LOGIN,
+		"--registry", str(registry_path),
 		*extra,
 	]
 	code = resumes.main(argv, now=NOW, environ=environ or {})
@@ -377,7 +393,8 @@ def test_select_keys_the_pickup_id_once_per_run(monkeypatch):
 
 	monkeypatch.setattr(resumes, "session_key", counting_session_key)
 	sessions = [_session("session_a"), _session("session_b"), _checker("session_c"), _pickup()]
-	result = resumes.select(sessions, [], "cse_pickup", LOGIN, 20, NOW)
+	allowed = frozenset({"shubhodeep1/coding-workflows"})
+	result = resumes.select(sessions, [], "cse_pickup", LOGIN, 20, NOW, allowed_repos=allowed)
 	assert _ids(result["resume"]) == ["session_c", "session_a", "session_b"]
 	assert pickup_calls == ["cse_pickup"]
 
@@ -759,6 +776,134 @@ def test_empty_pickup_session_exits_2(tmp_path, capsys):
 def test_no_api_calls():
 	text = TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8")
 	assert "subprocess" not in text and "urllib" not in text and "gh api" not in text
+
+
+# --- authorization: source, origin, lineage (issue #6101) --------------------------------
+
+
+@pytest.mark.parametrize(
+	("kwargs", "reason"),
+	[
+		({"sources": None}, "no_repo"),
+		({"sources": ()}, "no_repo"),
+		({"sources": ("https://github.com/someone-else/unrelated",)}, "foreign_repo"),
+		({"sources": (SELF_REPO_URL, "https://github.com/someone-else/unrelated")}, "foreign_repo"),
+		({"sources": ("https://gitlab.com/shubhodeep1/coding-workflows",)}, "foreign_repo"),
+		({"sources": ("not a url",)}, "foreign_repo"),
+		({"origin": None}, "unknown_origin"),
+		({"origin": "desktop_app"}, "unknown_origin"),
+		({"origin": ""}, "unknown_origin"),
+		({"parent_session_id": None}, "no_lineage"),
+		({"parent_session_id": ""}, "no_lineage"),
+		({"parent_session_id": "not-a-session"}, "no_lineage"),
+	],
+)
+def test_sessions_outside_the_registered_workflows_are_never_resumed(tmp_path, capsys, kwargs, reason):
+	"""Finding #6101: the account-wide listing must not let the pickup wake an unrelated session."""
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a", **kwargs)])
+	assert result["resume"] == [] and result["pending"] == []
+	assert _skips(result) == {"session_a": reason}
+
+
+def test_unauthorized_checkers_are_skipped_on_the_rate_limit_info_signal(tmp_path, capsys):
+	checker = _checker("session_c", detail="awaiting next cycle trigger", category="review_ready", rate_status="rejected", origin="desktop_app")
+	_, result = _run(tmp_path, capsys, [_pickup(), checker])
+	assert result["resume"] == []
+	assert result["skipped"] == [{"session_id": "session_c", "signal": "rate_limit_info", "reason": "unknown_origin"}]
+
+
+def test_authorization_is_checked_before_any_other_skip(tmp_path, capsys):
+	archived = _session("session_a", status="SESSION_STATUS_ARCHIVED", origin="desktop_app")
+	_, result = _run(tmp_path, capsys, [_pickup(), archived])
+	assert _skips(result) == {"session_a": "unknown_origin"}
+
+
+def test_consumer_registry_repositories_are_authorized(tmp_path, capsys):
+	consumer = _session("session_b", sources=(f"https://github.com/{CONSUMER_REPO}.git",))
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a"), consumer])
+	assert _ids(result["resume"]) == ["session_a", "session_b"]
+	assert result["errors"] == []
+
+
+def test_repository_match_ignores_case_and_a_trailing_slash(tmp_path, capsys):
+	session = _session("session_a", sources=("https://github.com/ShubhoDeep1/Coding-Workflows/",))
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _ids(result["resume"]) == ["session_a"]
+
+
+def test_cse_parent_ids_count_as_lineage(tmp_path, capsys):
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_a", parent_session_id="cse_01Parent")])
+	assert _ids(result["resume"]) == ["session_a"]
+
+
+def test_self_repo_is_configurable(tmp_path, capsys):
+	session = _session("session_a", sources=("https://github.com/acme/workflows",))
+	_, result = _run(tmp_path, capsys, [_pickup(), session], extra=("--self-repo", "acme/workflows"))
+	assert _ids(result["resume"]) == ["session_a"]
+	_, result = _run(tmp_path, capsys, [_pickup(), _session("session_b")], extra=("--self-repo", "acme/workflows"))
+	assert _skips(result) == {"session_b": "foreign_repo"}
+
+
+@pytest.mark.parametrize("self_repo", ["", "  ", "no-slash", "a/b/c", "a b/c"])
+def test_self_repo_must_be_a_slug(tmp_path, capsys, self_repo):
+	code, result = _run(tmp_path, capsys, [_session("session_a")], extra=(f"--self-repo={self_repo}",))
+	assert code == 2 and result["resume"] == [] and "--self-repo" in result["error"]
+
+
+@pytest.mark.parametrize("content", [None, "not json", '{"repos": []}'])
+def test_an_unusable_registry_authorizes_the_self_repo_only(tmp_path, capsys, content):
+	registry = tmp_path / "bad_registry.json"
+	if content is not None:
+		registry.write_text(content, encoding="utf-8")
+	consumer = _session("session_b", sources=(f"https://github.com/{CONSUMER_REPO}",))
+	code, result = _run(tmp_path, capsys, [_pickup(), _session("session_a"), consumer], extra=("--registry", str(registry)))
+	assert code == 0
+	assert _ids(result["resume"]) == ["session_a"]
+	assert _skips(result) == {"session_b": "foreign_repo"}
+	assert len(result["errors"]) == 1 and "only shubhodeep1/coding-workflows is authorized" in result["errors"][0]
+
+
+def test_registry_entries_that_are_not_slugs_are_ignored(tmp_path, capsys):
+	registry = tmp_path / "mixed_registry.json"
+	registry.write_text(json.dumps([7, "", "bad slug/x y", CONSUMER_REPO]), encoding="utf-8")
+	allowed = resumes.load_allowed_repos(str(registry), "shubhodeep1/coding-workflows", [])
+	assert allowed == frozenset({"shubhodeep1/coding-workflows", CONSUMER_REPO})
+
+
+def test_select_without_an_allowed_set_resumes_nothing():
+	"""AD-5: a caller that forgets `allowed_repos` fails closed."""
+	result = resumes.select([_session("session_a"), _checker("session_c")], [], PICKUP_ID, LOGIN, 20, NOW)
+	assert result["resume"] == []
+	assert _skips(result) == {"session_a": "foreign_repo", "session_c": "foreign_repo"}
+
+
+def test_the_pickup_command_line_works_unchanged_from_the_repo_root(tmp_path, capsys, monkeypatch):
+	"""Pickup step 1a passes no --self-repo or --registry: the defaults read the repo's own registry."""
+	monkeypatch.chdir(ROOT)
+	consumer = json.loads((ROOT / ".github" / "ai" / "consumer_repos.json").read_text(encoding="utf-8"))[0]
+	sessions_path = tmp_path / "sessions.json"
+	sessions = [_pickup(), _session("session_a"), _session("session_b", sources=(f"https://github.com/{consumer}",))]
+	sessions_path.write_text(json.dumps({"data": sessions}), encoding="utf-8")
+	triggers_path = tmp_path / "triggers.json"
+	triggers_path.write_text("[]", encoding="utf-8")
+	argv = ["--sessions", str(sessions_path), "--triggers", str(triggers_path), "--pickup-session", PICKUP_ID, "--handoff-author-login", LOGIN]
+	assert resumes.main(argv, now=NOW, environ={}) == 0
+	result = json.loads(capsys.readouterr().out)
+	assert _ids(result["resume"]) == ["session_a", "session_b"]
+	assert result["errors"] == []
+
+
+def test_docstring_documents_the_authorization():
+	text = " ".join(TEMPLATE_SCRIPT_PATH.read_text(encoding="utf-8").split())
+	for phrase in ("`no_repo`", "`foreign_repo`", "`unknown_origin`", "`no_lineage`", "`claude_code_mcp_seed`", "issue #6101"):
+		assert phrase in text
+
+
+def test_readme_and_agents_document_the_authorization():
+	for path in (README, AGENTS_MD):
+		text = _flat(path)
+		for phrase in ("#6101", "`claude_code_mcp_seed`", "`foreign_repo`", "`unknown_origin`", "`no_lineage`", "`parent_session_id`"):
+			assert phrase in text, (path.name, phrase)
 
 
 # --- parity, settings, wiring, docs ------------------------------------------------------
