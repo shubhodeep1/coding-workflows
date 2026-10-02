@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15966-15973, 17713-17744 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The managed REST fallback fetches the full PR JSON into `_lpr_json` but does not pass it to `_reconcile_merged_pr_issue`, which fetches the same PR again.\n  WHY: This causes a redundant `pulls/<n>` REST request for merged stalled issues on a cache miss, consuming shared GitHub API quota; all four reviewers rated it NIT, with no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Apply the same fail-closed target-branch and identity checks before supplying merged PR state to label reconciliation and wave status.\"\n  expected_change_site: N/A\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The review reports that the plan explicitly leaves `close_merged_issues_sweep` and `issue_pr_status.yml` unrefactored because they already enforce the rule, and that every path named by the finding is covered by the PR diff; it identifies no missing implementation site.\n- requirement: The PR documents `ENABLE_MERGED_STATE_HEAL` as a new repository variable.\n  expected_change_site: `README.md`, the append-only Required Variables table following the `required-variables-table` anchor\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The review says the variable was added to the main variables table and the coding-workflows-only table, but not the Required Variables table (lines 1794\u20131879), whose instruction says to append new environment variables at its bottom.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh | The REST fallback block in recover_stalled_issue that calls _reconcile_merged_pr_issue after fetching _lpr_json via REST (third merged-PR guard, lines ~17713-17744 in the diff) | severity=NIT | confidence=5\n  PROBLEM: The REST fallback fetches the full PR payload into _lpr_json, then calls _reconcile_merged_pr_issue with only _mgd_issue_json as the optional fifth argument. _reconcile_merged_pr_issue does not accept a known PR JSON as a sixth argument, so it calls _fetch_pr_json inside itself, issuing a second identical pulls/n REST read. The first fetch result is discarded.\n  WHY: No crash or correctness failure. Each merged-PR hit on the managed REST-fallback path consumes one redundant GitHub API call, which is unnecessary spend but not a correctness defect. The same class of issue was fixed for the issue JSON in round 1 finding 5 by passing _mgd_issue_json; the PR JSON was not covered.\n- TASK_GAP\n  Requirement: The linked issue (#5618) states \"Apply the same fail-closed target-branch and identity checks before supplying merged PR state to label reconciliation and wave status.\"\n  Expected change site: N/A\n  Evidence of absence: The plan's Non-goals section explicitly says \"close_merged_issues_sweep and issue_pr_status.yml: already enforce the rule (#4813, #5226); not refactored onto the new predicate (5).\" The PR diff shows five poller paths now gated (reconcile loop, validation-dispatch wave gate, stall-recovery tag, backward-scan promotion, validation fix-up backfill), matching the plan's Goals. Every path the finding named is covered.\n  severity=NIT | confidence=5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/orchestrate_poll_process.sh | lines 15966 and 17713-17744 | severity=NIT | confidence=5\n  PROBLEM: When the single-issue GraphQL query misses and the managed stall recovery falls back to REST, line 17713 fetches the full PR payload into _lpr_json. Line 17744 then calls _reconcile_merged_pr_issue without passing _lpr_json. Inside _reconcile_merged_pr_issue at line 15966, _fetch_pr_json executes an identical pulls/<n> REST API call for the same PR.\n  WHY: On a GraphQL cache miss for a merged stalled issue, this triggers an unnecessary duplicate GET /repos/{repo}/pulls/{n} REST request in the same poll tick, consuming shared GitHub API quota and contradicting the caller comment at lines 17738-17740 that the REST fallback has already fetched the PR payload on the preceding line.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh | `_reconcile_merged_pr_issue` at line 15966; managed REST fallback at lines 17713 and 17741\u201317744 | severity=NIT | confidence=5\n  PROBLEM: The managed REST fallback fetches the full PR JSON into `_lpr_json`, then calls `_reconcile_merged_pr_issue` without passing that payload. The helper fetches the same PR again.\n  WHY: On a cache miss for a stalled issue with a merged linked PR, each poll performs a redundant `pulls/<n>` request. This repeats on subsequent poll cycles while the issue remains stalled, consuming API quota despite the caller already having the required payload.\n- TASK_GAP\n  Requirement: The PR documents `ENABLE_MERGED_STATE_HEAL` as a new repository variable.\n  Expected change site: `README.md`, the append-only Required Variables table following the `required-variables-table` anchor.\n  Evidence of absence: The PR adds this variable to the main variables table and the coding-workflows-only table, but not the Required Variables table (lines 1794\u20131879). The table\u2019s instruction at lines 1790\u20131793 explicitly says to append new environment variables at its bottom.\n  severity=NIT | confidence=5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh | 17713-17744 (REST fallback in recover_stalled_issue), 15966-15973 (_reconcile_merged_pr_issue function) | severity=NIT | confidence=4\n  PROBLEM: The REST fallback fetches the full PR payload into `_lpr_json` at line 17704, then calls `_reconcile_merged_pr_issue` at line 17741 without passing it. The helper fetches the same PR again at line 15973.\n  WHY: When the linked-PR GraphQL cache misses, each merged stalled issue incurs a redundant `pulls/<n>` REST read. The helper's comment at lines 15956-15964 justifies the fetch by saying \"the callers' cache shapes lack the base's default branch, the head repository, and the issue body\", but the REST fallback caller just fetched the full PR JSON which contains all those fields. This contradicts the \"No extra API calls\" intent and wastes shared GitHub API quota on every poll tick while the issue remains stalled.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2d52e87995f8dea9d366dc7f6da8e7b4affb7345c3e9ae5535f6f4aa4d387d2e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "37063252457",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37063252457",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002213231_fc335d6154",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "37063252457"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T21:32:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
