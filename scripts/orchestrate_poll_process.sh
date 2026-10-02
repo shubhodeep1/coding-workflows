@@ -312,10 +312,14 @@ render_judge_semble_prefetch_from_query_file() {
   local max_chunks="${3:-${JUDGE_SEMBLE_MAX_CHUNKS}}"
   local query_text=""
   local prefetch_text=""
+  local semble_attempt_marker="${RUNTIME_DIR}/poll_semble_setup_attempted"
+  local semble_install_env="${RUNTIME_DIR}/poll_semble_install_env"
+  local semble_build_env="${RUNTIME_DIR}/poll_semble_build_env"
+  local semble_index_path="${RUNTIME_DIR}/.semble-index"
+  local semble_wrapper_path="${RUNTIME_DIR}/semble/bin/semble"
 
-  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
-    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
-    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
+  if [ "${SEMBLE_ENABLED:-true}" != "true" ] \
+    || [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
     || [ ! -s "${query_file}" ]; then
     return 0
   fi
@@ -324,7 +328,43 @@ render_judge_semble_prefetch_from_query_file() {
   query_text="${query_text:0:${JUDGE_SEMBLE_QUERY_MAX_BYTES}}"
   [ -n "${query_text}" ] || return 0
 
-  prefetch_text="$(semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
+  # The callers use command substitution, so a shell variable set here would
+  # disappear between judges. Persist the attempt *before* setup, including
+  # failures, to avoid repeated installs on later judge queries in this run.
+  if [ ! -e "${semble_attempt_marker}" ]; then
+    : > "${semble_attempt_marker}" || return 0
+    if [ ! -f scripts/install_semble.sh ] || [ ! -f scripts/build_semble_wrapper.sh ]; then
+      echo "::warning::Optional poll Semble setup helpers unavailable; continuing without judge prefetch." >&2
+      return 0
+    fi
+    : > "${semble_install_env}" || return 0
+    if ! GITHUB_ENV="${semble_install_env}" GITHUB_PATH= bash scripts/install_semble.sh > "${RUNTIME_DIR}/semble_install.log" 2>&1 \
+      || ! grep -Fxq 'SEMBLE_AVAILABLE=true' "${semble_install_env}"; then
+      echo "::warning::Poll Semble install unavailable; continuing without judge prefetch." >&2
+      return 0
+    fi
+    : > "${semble_build_env}" || return 0
+    if ! GITHUB_ENV="${semble_build_env}" GITHUB_PATH= SEMBLE_INDEX_PATH="${semble_index_path}" \
+      SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 \
+      || ! grep -Fxq 'SEMBLE_AVAILABLE=true' "${semble_build_env}" \
+      || ! grep -Fxq 'SEMBLE_INDEX_AVAILABLE=true' "${semble_build_env}" \
+      || ! grep -Fxq "SEMBLE_INDEX_PATH=${semble_index_path}" "${semble_build_env}" \
+      || ! grep -Fxq "SEMBLE_BIN=${semble_wrapper_path}" "${semble_build_env}" \
+      || [ ! -s "${semble_index_path}" ] || [ ! -x "${semble_wrapper_path}" ]; then
+      echo "::warning::Poll Semble index unavailable; continuing without judge prefetch." >&2
+      return 0
+    fi
+  fi
+
+  # Never source generated env data; only the fixed expected paths and exact
+  # availability keys from the trusted support scripts may enable queries.
+  if ! grep -Fxq 'SEMBLE_INDEX_AVAILABLE=true' "${semble_build_env}" 2>/dev/null \
+    || [ ! -s "${semble_index_path}" ] || [ ! -x "${semble_wrapper_path}" ]; then
+    return 0
+  fi
+  SEMBLE_AVAILABLE=true SEMBLE_INDEX_AVAILABLE=true SEMBLE_INDEX_PATH="${semble_index_path}" \
+    SEMBLE_BIN="${semble_wrapper_path}" \
+    prefetch_text="$(semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
   [ -n "${prefetch_text}" ] || return 0
 
   printf '%s\n' "${prefetch_text:0:${JUDGE_SEMBLE_CONTEXT_MAX_BYTES}}"
