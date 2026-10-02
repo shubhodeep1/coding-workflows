@@ -1873,6 +1873,62 @@ def test_e2e_tag_only_push_from_a_stranded_checkout_is_allowed(worktree_repo, co
 	assert not calls_log.exists() or not calls_log.read_text(encoding="utf-8").strip()
 
 
+def test_no_tags_flag_matches_the_spellings_git_accepts() -> None:
+	"""Issue #6089: git 2.43 reads `--no-tags` and its unambiguous prefixes
+	`--no-ta` / `--no-tag` as the negation of `--tags`; `--no-t` is refused as
+	ambiguous with `--no-thin`."""
+	for token in ("--no-tags", "--no-tag", "--no-ta"):
+		assert twin_guard._is_push_no_tags_flag(token), token
+	for token in ("--no-t", "--no-thin", "--tags", "--tag", "--no-delete", "--no-verify", "--no-tagsx", "-n"):
+		assert not twin_guard._is_push_no_tags_flag(token), token
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git push --tags --no-tags origin",
+		"git push --tags --no-tag origin",
+		"git push --ta --no-ta origin",
+		"git push origin --tags --no-tags",
+		"git push --tags origin --no-tags",
+		"git push --no-tags origin",
+		"git push --tags --no-tags --tags --no-tags origin",
+	],
+)
+def test_a_later_no_tags_turns_a_tags_push_back_into_a_branch_push(tmp_path: Path, command: str) -> None:
+	"""Issue #6089: the last of `--tags` / `--no-tags` decides, wherever they
+	sit, so a cancelled `--tags` pushes the checked-out branch and is judged."""
+	assert _targets(command, tmp_path) == [("push", str(tmp_path), "", "HEAD", True, False)]
+
+
+@pytest.mark.parametrize(
+	"command",
+	["git push --no-tags --tags origin", "git push --tags --no-tags --tags origin", "git push --no-tags origin --tags"],
+)
+def test_a_later_tags_still_makes_the_push_tags_only(tmp_path: Path, command: str) -> None:
+	assert twin_guard.guard_targets(command, str(tmp_path)) == []
+
+
+def test_unresolvable_directory_falls_back_for_a_cancelled_tags_push(tmp_path: Path) -> None:
+	"""Issue #6089: `--tags --no-tags` writes a branch, so an unknown directory
+	falls back to the session checkout with a reason instead of yielding no
+	target."""
+	targets = twin_guard.guard_targets("cd $WORKTREE && git push --tags --no-tags origin", str(tmp_path))
+	assert len(targets) == 1
+	assert (targets[0].cwd, targets[0].branch, targets[0].tip) == (str(tmp_path), "", "HEAD")
+	assert targets[0].fallback_reason
+
+
+@pytest.mark.parametrize("command", ["git push --tags --no-tags origin", "git push origin --tags --no-tag"])
+def test_e2e_cancelled_tags_push_from_a_stranded_checkout_is_blocked(worktree_repo, command: str) -> None:
+	"""Issue #6089: git pushes the stranded `feature/x` here, so the guard
+	blocks it as it blocks `git push origin`."""
+	repo, _, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+
+
 def test_e2e_bulk_ask_merges_with_other_notices_into_one_result(worktree_repo) -> None:
 	repo, _, stub_bin, _, _ = worktree_repo
 	_git(repo, "checkout", "-q", "main")
@@ -2102,6 +2158,7 @@ def test_block_keeps_skip_warnings_for_other_targets(monkeypatch, tmp_path: Path
 	"command",
 	[
 		"cd $WORKTREE && git push --tags origin",
+		"cd $WORKTREE && git push --no-tags --tags origin",
 		"cd $WORKTREE && git push origin 'refs/tags/*:refs/tags/*'",
 		"cd $WORKTREE && git push origin refs/tags/v1.0",
 		"cd $WORKTREE && git push --delete origin feature/x",

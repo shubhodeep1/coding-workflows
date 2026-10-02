@@ -169,6 +169,11 @@ _PUSH_BULK_FLAGS = ("--all", "--branches", "--mirror")
 # git also accepts its unambiguous prefixes `--ta` and `--tag` (`--t` is
 # ambiguous with `--thin` and refused).
 _PUSH_TAGS_ONLY_FLAG = "--tags"
+# Cancels an earlier `--tags` (the last of the two wins, wherever they sit
+# among the push arguments), so the push writes its default branch again
+# (issue #6089). git also accepts its unambiguous prefixes `--no-ta` and
+# `--no-tag` (`--no-t` is ambiguous with `--no-thin` and refused).
+_PUSH_NO_TAGS_FLAG = "--no-tags"
 # A push refspec word containing any of these is a shell expansion or a
 # pattern the guard cannot turn into one branch name.
 _UNRESOLVABLE_REFSPEC_MARKERS = ("$", "`", "*", "?", "[", "{", "~")
@@ -693,8 +698,9 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 	the branch it names; `HEAD` on the checked-out branch. Deletions
 	(`--delete`, `:<dst>`) and non-branch refs (`refs/tags/…`) land no commits
 	on a branch and yield no target, and so does `--tags` with no refspec,
-	which pushes only tags. A push that names no refspec judges the
-	checked-out branch with HEAD, as before.
+	which pushes only tags. The last of `--tags` / `--no-tags` decides, as
+	in git, so `--tags --no-tags` is a branch push (issue #6089). A push that
+	names no refspec judges the checked-out branch with HEAD, as before.
 
 	A bulk push — `--all`, `--branches`, `--mirror` (or a prefix git expands
 	to one), or the `:` matching refspec — writes branches the guard cannot
@@ -731,6 +737,10 @@ def _push_refspec_targets(args: list[str], repo_dir: str, session_cwd: str) -> l
 				continue
 			if _is_push_tags_only_flag(token):
 				pushes_tags = True
+				index += 1
+				continue
+			if _is_push_no_tags_flag(token):
+				pushes_tags = False
 				index += 1
 				continue
 			if token.startswith("-") and len(token) > 1:
@@ -840,6 +850,12 @@ def _is_push_tags_only_flag(token: str) -> bool:
 	"""Whether a `git push` word is `--tags` or a prefix git expands to it
 	(`--ta`, `--tag`)."""
 	return len(token) >= 4 and _PUSH_TAGS_ONLY_FLAG.startswith(token)
+
+
+def _is_push_no_tags_flag(token: str) -> bool:
+	"""Whether a `git push` word is `--no-tags` or a prefix git expands to it
+	(`--no-ta`, `--no-tag`), which cancels an earlier `--tags`."""
+	return len(token) >= len("--no-ta") and _PUSH_NO_TAGS_FLAG.startswith(token)
 
 
 def _pattern_refspec_bulk_reason(spec: str) -> str:
