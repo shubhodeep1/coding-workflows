@@ -1099,7 +1099,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   nobody answers. Before deleting a trigger named by id, the flow reads it
   with `get_trigger` and deletes only its own (`implement-plan <slug>: …`
   or `PR #<n> …`, bound to a session of that project or PR). Not found
-  counts as done. Only starting a stage, checker, or fixer, and arming a
+  counts as done. Any other failure is not retried either (`cleanup
+  skipped: <tool> failed (<error>)`), and a later sweep leaves that
+  trigger id out too. Only starting a stage, checker, or fixer, and arming a
   wait, may be retried, at most once. Leftovers are caught by
   `auto_disabled_session_gone`, the stale Routine sweep, and the checker's
   stale-wait check. Tests: `tests/test_implement_plan_claude_command.py`,

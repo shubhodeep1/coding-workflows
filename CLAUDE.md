@@ -2099,7 +2099,10 @@ sweep runs in the sessions that create them, never in Actions:
   example a `/implement-plan-claude` step 2 delete of a stale Routine, or
   the §26.D delete of the fired hand-back), because deleting it again
   would retry a denied cleanup call; record it as `cleanup skipped:
-  <trigger id> denied earlier`.
+  <trigger id> denied earlier`. Leave out, the same way, every id whose
+  `delete_trigger` failed earlier in this session for any reason other
+  than not found, because §26.I does not retry a failed cleanup call
+  either; record it as `cleanup skipped: <trigger id> failed earlier`.
 - **What it deletes**: only Routines these flows create, matched by name
   (`PR #<n> status check-in…`, `PR #<n> hand-back`,
   `implement-plan <slug>: …`, and the start trigger of a session the

@@ -396,6 +396,8 @@ def test_step_2_sweep_is_skipped_after_a_denied_delete(twin_text):
 	arming = _section(twin_text, "0. **Sweep, then the hand-back Routine.**", "1. **Find or create the project checker.**")
 	assert "Run the stale Routine sweep (CLAUDE.md §26.G), leaving out every trigger id whose `delete_trigger` was denied earlier in this session" in arming
 	assert "`cleanup skipped: <trigger id> denied earlier`" in arming
+	assert "every trigger id whose `delete_trigger` failed earlier in this session for any reason other than not found" in arming
+	assert "`cleanup skipped: <trigger id> failed earlier`" in arming
 
 
 def test_later_sweep_leaves_out_a_trigger_denied_earlier():
@@ -408,6 +410,8 @@ def test_later_sweep_leaves_out_a_trigger_denied_earlier():
 	assert "a `/implement-plan-claude` step 2 delete of a stale Routine" in sweep
 	assert "the §26.D delete of the fired hand-back" in sweep
 	assert "`cleanup skipped: <trigger id> denied earlier`" in sweep
+	assert "every id whose `delete_trigger` failed earlier in this session for any reason other than not found" in sweep
+	assert "`cleanup skipped: <trigger id> failed earlier`" in sweep
 	section = _section(claude_md, "### I) Denied cleanup calls are skipped, never retried", "## §27.")
 	assert "in that step or a later one (a later §26.G sweep leaves its id out)" in section
 	agents = _flat(AGENTS_MD)
