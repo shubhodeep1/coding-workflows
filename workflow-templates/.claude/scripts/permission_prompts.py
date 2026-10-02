@@ -446,7 +446,11 @@ def report(log_dir: Path, settings_path: Path | None = None) -> dict:
 	patterns = group_patterns(load_records(log_dir), settings_path)
 	return {
 		"total": sum(pattern["count"] for pattern in patterns),
-		"patterns": [{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons", "allow_rule")} for pattern in patterns],
+		"patterns": [
+			# The matched rule is shown redacted here as in the issue text: `report` and `file` print this JSON.
+			{**{key: pattern[key] for key in ("signature", "event", "tool_name", "shape", "count", "reasons")}, "allow_rule": redact(pattern["allow_rule"]) if pattern["allow_rule"] else pattern["allow_rule"]}
+			for pattern in patterns
+		],
 	}
 
 

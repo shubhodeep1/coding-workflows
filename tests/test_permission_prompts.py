@@ -529,6 +529,15 @@ def test_patterns_and_report_carry_the_rule_and_modes(tmp_path):
 	assert all("allow_rule" in p for p in report["patterns"])
 
 
+def test_report_redacts_the_matched_rule(tmp_path):
+	"""PR #5918 review round 8: `report` and `file` print this JSON, so a credential in the matched rule is masked."""
+	rule = "Bash(curl -H 'Authorization: Bearer abcdefghijklmnop' *)"
+	directory = _log(tmp_path, [_payload("curl -H 'Authorization: Bearer abcdefghijklmnop' https://a.b", event="PermissionDenied")])
+	report = pp_twin.report(directory, _settings(tmp_path, [rule]))
+	assert [p["allow_rule"] for p in report["patterns"]] == ["Bash(curl -H 'Authorization: Bearer ***' *)"]
+	assert "abcdefghijklmnop" not in json.dumps(report["patterns"][0]["allow_rule"])
+
+
 def test_signature_and_title_do_not_depend_on_the_rule(tmp_path):
 	directory = _log(tmp_path, [_payload(ISSUE_5899_COMMAND, event="PermissionDenied")])
 	with_rule = pp_twin.group_patterns(pp_twin.load_records(directory), _settings(tmp_path, ["Bash(git merge *)"]))[0]
