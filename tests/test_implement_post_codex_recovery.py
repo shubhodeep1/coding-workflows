@@ -5079,6 +5079,163 @@ def test_handle_noop_guard_zero_closes_with_ai_closed() -> None:
 	)
 
 
+def test_approved_claim_only_marks_a_matching_enabled_run_as_owned(tmp_path: Path) -> None:
+	block = _step_block_text("Claim /approved command")
+	assert "id: claim_approved_command" in block
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "memory_helpers.sh").write_text(
+		'memory_bootstrap() { :; }\n'
+		'memory_processed_command_check() { echo \'{"exists":false}\'; }\n'
+		'memory_processed_command_claim() { printf "%s\\n" "${MOCK_CLAIM_JSON}"; }\n',
+		encoding="utf-8",
+	)
+	entry = {
+		"status": "claimed", "workflow": "implement", "command": "approved",
+		"run_id": "777", "run_attempt": 1, "issue_number": 948, "comment_id": 42,
+	}
+	owned = {"ok": True, "operation_result": {"claimed": True, "entry": entry}}
+	for name, claim, memory_enabled, expected_owned, expected_skip in (
+		("owned", owned, "true", True, False),
+		("duplicate", {"ok": True, "operation_result": {"claimed": False, "entry": entry}}, "true", False, True),
+		("other_run", {"ok": True, "operation_result": {"claimed": True, "entry": {**entry, "run_id": "778"}}}, "true", False, True),
+		("other_attempt", {"ok": True, "operation_result": {"claimed": True, "entry": {**entry, "run_attempt": 2}}}, "true", False, True),
+		("other_comment", {"ok": True, "operation_result": {"claimed": True, "entry": {**entry, "comment_id": 43}}}, "true", False, True),
+		("disabled_response", {**owned, "enabled": False}, "true", False, True),
+		("disabled_memory", {**owned, "enabled": False}, "false", False, False),
+		("missing_entry", {"ok": True, "operation_result": {"claimed": True}}, "true", False, True),
+		("malformed", "not-json", "true", False, True),
+	):
+		output_file = tmp_path / f"{name}.output"
+		env_file = tmp_path / f"{name}.env"
+		proc = _run_shell_script(
+			_render_github_expressions(_extract_run_script("Claim /approved command"), {"github.run_attempt": "1"}),
+			cwd=tmp_path,
+			env={
+				"ISSUE_NUMBER": "948", "APPROVAL_COMMENT_ID": "42",
+				"ISSUE_URL": "https://github.com/owner/repo/issues/948",
+				"GITHUB_OUTPUT": str(output_file), "GITHUB_ENV": str(env_file),
+				"AI_MEMORY_ENABLED": memory_enabled,
+				"MOCK_CLAIM_JSON": claim if isinstance(claim, str) else json.dumps(claim),
+			},
+		)
+		assert proc.returncode == 0, (name, proc.stderr)
+		assert ("owned=true" in _read_file(str(output_file))) == expected_owned, name
+		assert ("SKIP_IMPLEMENT=true" in _read_file(str(env_file))) == expected_skip, name
+
+
+def test_success_noop_closure_output_requires_label_and_close(tmp_path: Path) -> None:
+	(tmp_path / "bin").mkdir()
+	(tmp_path / "runtime").mkdir()
+	(tmp_path / "runtime" / "codex_success_noop.flag").touch()
+	gh = tmp_path / "bin" / "gh"
+	gh.write_text(
+		'#!/usr/bin/env bash\n'
+		'printf "%s\\n" "$*" >> "${MOCK_GH_LOG}"\n'
+		'if [[ "$*" == "issue edit "* ]] && [ "${MOCK_LABEL_FAIL:-false}" = true ]; then exit 1; fi\n'
+		'if [[ "$*" == "issue close "* ]] && [ "${MOCK_CLOSE_FAIL:-false}" = true ]; then exit 1; fi\n',
+		encoding="utf-8",
+	)
+	gh.chmod(0o755)
+	for label_fail, close_fail, confirmed in ((False, False, True), (True, False, False), (False, True, False)):
+		output_file = tmp_path / "noop.output"
+		output_file.write_text("", encoding="utf-8")
+		log_file = tmp_path / "gh.log"
+		log_file.write_text("", encoding="utf-8")
+		proc = _run_shell_script(
+			_render_github_expressions(_extract_run_script("Handle no-op implementation")),
+			cwd=tmp_path,
+			env={
+				"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+				"RUNTIME_DIR": str(tmp_path / "runtime"), "ISSUE_NUMBER": "948",
+				"GITHUB_OUTPUT": str(output_file), "MOCK_GH_LOG": str(log_file),
+				"MOCK_LABEL_FAIL": str(label_fail).lower(), "MOCK_CLOSE_FAIL": str(close_fail).lower(),
+			},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert ("confirmed_closure=true" in output_file.read_text(encoding="utf-8")) == confirmed
+		assert "--add-label ai:closed" in log_file.read_text(encoding="utf-8")
+		assert "Already implemented" in log_file.read_text(encoding="utf-8")
+		assert ("/comments" in log_file.read_text(encoding="utf-8")) == close_fail
+
+
+def test_approved_command_finalizer_classifies_owned_terminal_outcomes(tmp_path: Path) -> None:
+	workflow = _workflow_text()
+	assert workflow.index("- name: Complete /approved processed command") > workflow.index("- name: Record implementation run failure event")
+	assert workflow.index("- name: Complete /approved processed command") < workflow.index("- name: Cleanup temporary artifacts")
+	assert "if: always()" in _step_block_text("Complete /approved processed command")
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "memory_helpers.sh").write_text(
+		'memory_processed_command_complete() { printf "%s\\n" "$*" >> "${MOCK_COMPLETIONS}"; '
+		'[ "${MOCK_MEMORY_FAIL:-false}" != true ]; }\n', encoding="utf-8",
+	)
+	cases = (
+		("pr_created", "true", "success", "false", "true", "success", "https://github.com/owner/repo/pull/123", "", "", "completed", "pr_confirmed"),
+		("pr_recovered", "true", "success", "false", "true", "success", "https://github.com/owner/repo/pull/124", "", "", "completed", "pr_confirmed"),
+		("noop", "true", "success", "false", "false", "skipped", "", "success", "true", "completed", "already_satisfied_closed"),
+		("noop_close_failed", "true", "success", "false", "false", "skipped", "", "success", "", "failed", "noop_unconfirmed"),
+		("blocked_guard", "true", "failure", "false", "", "skipped", "", "skipped", "", "failed", "job_failure"),
+		("failed", "true", "failure", "false", "true", "failure", "", "skipped", "", "failed", "job_failure"),
+		("cancelled", "true", "cancelled", "false", "", "skipped", "", "skipped", "", "failed", "job_cancelled"),
+		("unverified_pr", "true", "success", "false", "true", "success", "https://github.com/other/repo/pull/1", "skipped", "", "failed", "pr_unverified"),
+		("malformed_pr", "true", "success", "false", "true", "success", "https://github.com/owner/repo/pull/not-a-number", "skipped", "", "failed", "pr_unverified"),
+		("unknown", "true", "success", "false", "", "skipped", "", "skipped", "", "failed", "unknown"),
+		("precheck_skip", "", "success", "true", "", "skipped", "", "skipped", "", "skipped", "unowned_claim"),
+		("duplicate_skip", "", "success", "false", "", "skipped", "", "skipped", "", "skipped", "unowned_claim"),
+		("disabled", "", "success", "false", "true", "success", "https://github.com/owner/repo/pull/1", "", "", "skipped", "unowned_claim"),
+	)
+	for name, owned, job_status, skip, did_commit, pr_step, pr_url, noop_step, closure, status, evidence in cases:
+		completion_file = tmp_path / f"{name}.completions"
+		proc = _run_shell_script(
+			_extract_run_script("Complete /approved processed command"), cwd=tmp_path,
+			env={
+				"GITHUB_REPOSITORY": "owner/repo", "ISSUE_NUMBER": "948", "APPROVAL_COMMENT_ID": "42",
+				"OWNED_APPROVAL_CLAIM": owned, "IMPLEMENT_JOB_STATUS": job_status,
+				"IMPLEMENT_SKIP": skip, "IMPLEMENT_DID_COMMIT": did_commit,
+				"IMPLEMENT_PR_STEP_OUTCOME": pr_step, "IMPLEMENT_PR_URL": pr_url,
+				"IMPLEMENT_NOOP_STEP_OUTCOME": noop_step, "IMPLEMENT_CONFIRMED_CLOSURE": closure,
+				"MOCK_COMPLETIONS": str(completion_file),
+			},
+		)
+		assert proc.returncode == 0, (name, proc.stderr)
+		assert proc.stdout.count("IMPLEMENT_OUTCOME_V1") == 1, name
+		assert f"outcome={status} evidence={evidence}" in proc.stdout, name
+		calls = _read_file(str(completion_file)).splitlines()
+		assert len(calls) == (0 if status == "skipped" else 1), name
+		if calls:
+			assert f"--status {status}" in calls[0], name
+			assert "--issue-number 948 --comment-id 42 --command approved" in calls[0], name
+			assert "completion_attempted=true" in proc.stdout
+		else:
+			assert "completion_attempted=false" in proc.stdout
+
+	# Completion write failure is advisory and cannot change the run's outcome.
+	proc = _run_shell_script(
+		_extract_run_script("Complete /approved processed command"), cwd=tmp_path,
+		env={
+			"GITHUB_REPOSITORY": "owner/repo", "ISSUE_NUMBER": "948", "APPROVAL_COMMENT_ID": "42",
+			"OWNED_APPROVAL_CLAIM": "true", "IMPLEMENT_JOB_STATUS": "failure",
+			"IMPLEMENT_SKIP": "false", "IMPLEMENT_DID_COMMIT": "", "IMPLEMENT_PR_STEP_OUTCOME": "skipped",
+			"IMPLEMENT_PR_URL": "", "IMPLEMENT_NOOP_STEP_OUTCOME": "skipped",
+			"IMPLEMENT_CONFIRMED_CLOSURE": "", "MOCK_COMPLETIONS": str(tmp_path / "memory_failed.completions"),
+			"MOCK_MEMORY_FAIL": "true",
+		},
+	)
+	assert proc.returncode == 0
+	assert "outcome=failed evidence=job_failure completion_attempted=true" in proc.stdout
+	missing_helper_proc = _run_shell_script(
+		_extract_run_script("Complete /approved processed command"), cwd=tmp_path,
+		env={
+			"GITHUB_REPOSITORY": "owner/repo", "ISSUE_NUMBER": "948", "APPROVAL_COMMENT_ID": "42",
+			"OWNED_APPROVAL_CLAIM": "true", "IMPLEMENT_JOB_STATUS": "failure",
+			"IMPLEMENT_SKIP": "false", "IMPLEMENT_DID_COMMIT": "", "IMPLEMENT_PR_STEP_OUTCOME": "skipped",
+			"IMPLEMENT_PR_URL": "", "IMPLEMENT_NOOP_STEP_OUTCOME": "skipped",
+			"IMPLEMENT_CONFIRMED_CLOSURE": "", "IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(tmp_path / "absent"),
+		},
+	)
+	assert missing_helper_proc.returncode == 0
+	assert "outcome=failed evidence=job_failure completion_attempted=false" in missing_helper_proc.stdout
+
+
 def test_failure_log_artifact_upload_contract() -> None:
 	"""Pin the failure-only codex-log artifact upload added in #1940.
 
