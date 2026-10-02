@@ -65,19 +65,28 @@ Subcommands:
       `--fingerprint`, and a PR-scoped reason's `<N>` must equal its `pr`,
       so an entry can never name one PR while its fingerprint is another's.
 
+`--evidence-file` and `--why-file` are read only from a Claude Code session
+scratchpad: after symlinks are resolved, the file must sit under
+`/tmp/claude-<uid>/<project>/<session>/scratchpad/`, for this process's uid.
+What they hold can reach the committed log or a PR comment, so a path taken
+from failure evidence or a prompt must never read a repository file, a
+credential, or a system file. Any other path is refused (exit 1) without
+being read. On a platform without a uid every such path is refused.
+
 Output is one JSON line. Exit 0 on success; 1 on bad arguments (an unknown
 stop id, a malformed fingerprint or evidence, a PR-scoped stop without
 `pr` or without the `PR #<N>: ` prefix on its reason, a PR-scoped
 `record` without evidence or whose reason names another PR than the
 evidence, `record` evidence that does not give `--fingerprint`, not
-exactly one readable `--why` / `--why-file`, a used choice); 2 when the
+exactly one readable `--why` / `--why-file`, an `--evidence-file` or
+`--why-file` outside the session scratchpad, a used choice); 2 when the
 log cannot be read or an `## Escalations` line is malformed (a line that
 starts `- ` but does not match the format, a date that is not a real
 calendar date, or a repeated `ES-<n>` id). A log without an
 `## Escalations` section has no entries.
 
 No GitHub API calls and no network (CLAUDE.md §15): the script reads the
-log file and its arguments only.
+log file, its arguments, and scratchpad files only.
 """
 
 from __future__ import annotations
@@ -86,6 +95,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -131,6 +141,11 @@ ENTRY_RE = re.compile(
 	r"^- ES-(?P<n>[1-9][0-9]*) \[(?P<stop>[a-z-]+), (?P<date>\d{4}-\d{2}-\d{2})\] "
 	r"fingerprint=(?P<fp>[0-9a-f]{12}) choice=(?P<choice>budget|descope|close) why=(?P<why>\S.*)$"
 )
+
+
+# The last directory of a Claude Code session scratchpad,
+# `/tmp/claude-<uid>/<project>/<session>/scratchpad`.
+SCRATCHPAD_DIR_NAME = "scratchpad"
 
 
 class UsageError(Exception):
@@ -328,17 +343,51 @@ def record_line(
 	return {"id": f"ES-{next_id}", "line": line}
 
 
-def _load_evidence(args: argparse.Namespace, required: bool = True) -> object:
+def _default_scratchpad_root() -> Path | None:
+	"""`/tmp/claude-<uid>`, the parent of every session scratchpad of this user; None without a uid."""
+	getuid = getattr(os, "getuid", None)
+	if getuid is None:
+		return None
+	return Path(f"/tmp/claude-{getuid()}")
+
+
+def _read_scratchpad_file(path: str, flag: str, scratchpad_root: Path | None) -> str:
+	"""Read `path` only when it resolves to a file in a session scratchpad under `scratchpad_root`.
+
+	The real path (symlinks followed) must be
+	`<scratchpad_root>/<project>/<session>/scratchpad/...`. Anything else is
+	refused before it is read, so its contents never reach the output.
+	"""
+	if scratchpad_root is None:
+		raise UsageError(f"{flag} cannot be checked against a session scratchpad on this platform")
+	try:
+		resolved_root = scratchpad_root.resolve(strict=True)
+		resolved = Path(path).resolve(strict=True)
+	except (OSError, RuntimeError) as exc:
+		raise UsageError(f"cannot read {flag}: {exc}") from exc
+	try:
+		parts = resolved.relative_to(resolved_root).parts
+	except ValueError:
+		parts = ()
+	if len(parts) < 4 or parts[2] != SCRATCHPAD_DIR_NAME or not resolved.is_file():
+		raise UsageError(
+			f"{flag} must be a file in the session scratchpad "
+			f"({scratchpad_root}/<project>/<session>/{SCRATCHPAD_DIR_NAME}/...), got {path!r}"
+		)
+	try:
+		return resolved.read_text(encoding="utf-8")
+	except (OSError, UnicodeDecodeError) as exc:
+		raise UsageError(f"cannot read {flag}: {exc}") from exc
+
+
+def _load_evidence(args: argparse.Namespace, scratchpad_root: Path | None, required: bool = True) -> object:
 	"""The parsed evidence; None when it is optional and neither flag was given."""
 	if args.evidence is None and args.evidence_file is None and not required:
 		return None
 	if (args.evidence is None) == (args.evidence_file is None):
 		raise UsageError("pass exactly one of --evidence or --evidence-file")
 	if args.evidence_file is not None:
-		try:
-			raw = Path(args.evidence_file).read_text(encoding="utf-8")
-		except (OSError, UnicodeDecodeError) as exc:
-			raise UsageError(f"cannot read --evidence-file: {exc}") from exc
+		raw = _read_scratchpad_file(args.evidence_file, "--evidence-file", scratchpad_root)
 	else:
 		raw = args.evidence
 	try:
@@ -347,15 +396,12 @@ def _load_evidence(args: argparse.Namespace, required: bool = True) -> object:
 		raise UsageError(f"evidence is not valid JSON: {exc}") from exc
 
 
-def _load_why(args: argparse.Namespace) -> str:
+def _load_why(args: argparse.Namespace, scratchpad_root: Path | None) -> str:
 	if (args.why is None) == (args.why_file is None):
 		raise UsageError("pass exactly one of --why or --why-file")
 	if args.why_file is None:
 		return args.why
-	try:
-		return Path(args.why_file).read_text(encoding="utf-8")
-	except (OSError, UnicodeDecodeError) as exc:
-		raise UsageError(f"cannot read --why-file: {exc}") from exc
+	return _read_scratchpad_file(args.why_file, "--why-file", scratchpad_root)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -386,10 +432,13 @@ def build_parser() -> argparse.ArgumentParser:
 	return parser
 
 
-def run(argv: list[str] | None = None, today: dt.date | None = None) -> dict:
+def run(argv: list[str] | None = None, today: dt.date | None = None, scratchpad_root: Path | None = None) -> dict:
+	"""`scratchpad_root` replaces `/tmp/claude-<uid>` in tests only; no flag or variable sets it."""
 	args = build_parser().parse_args(argv)
+	if scratchpad_root is None:
+		scratchpad_root = _default_scratchpad_root()
 	if args.command == "fingerprint":
-		return {"stop": args.stop, "fingerprint": fingerprint(args.stop, _load_evidence(args))}
+		return {"stop": args.stop, "fingerprint": fingerprint(args.stop, _load_evidence(args, scratchpad_root))}
 	stop = _check_stop(args.stop)
 	fp = _check_fingerprint(args.fingerprint)
 	entries = _read_log(args.log)
@@ -403,12 +452,15 @@ def run(argv: list[str] | None = None, today: dt.date | None = None) -> dict:
 	if args.command == "grants":
 		return {"stop": stop, "fingerprint": fp, "grants": granted_rounds(entries, stop, fp)}
 	date = args.date or (today or dt.datetime.now(dt.timezone.utc).date()).isoformat()
-	return record_line(entries, stop, fp, args.choice, _load_why(args), date, _load_evidence(args, required=False))
+	return record_line(
+		entries, stop, fp, args.choice, _load_why(args, scratchpad_root), date,
+		_load_evidence(args, scratchpad_root, required=False),
+	)
 
 
-def main(argv: list[str] | None = None, today: dt.date | None = None) -> int:
+def main(argv: list[str] | None = None, today: dt.date | None = None, scratchpad_root: Path | None = None) -> int:
 	try:
-		result = run(argv, today)
+		result = run(argv, today, scratchpad_root)
 	except UsageError as exc:
 		print(json.dumps({"error": str(exc)}))
 		return 1
