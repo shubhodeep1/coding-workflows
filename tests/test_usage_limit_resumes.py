@@ -804,3 +804,14 @@ def test_docs_describe_the_resumes():
 	handbook = _flat(HANDBOOK)
 	assert "| Resuming sessions stopped by the usage limit | #5660" in handbook
 	assert "send each a one-shot \"resume after usage limit\" trigger" not in handbook
+
+
+def test_readme_variables_table_lists_the_resume_limit():
+	# Plan step 9 names the README env var table too (conformance run 2).
+	readme = README.read_text(encoding="utf-8")
+	section = readme[readme.index("## Required Variables"):]
+	section = section[:section.index("\n## ")]
+	rows = [line for line in section.splitlines() if line.startswith("| `CLAUDE_USAGE_LIMIT_RESUME_LIMIT` |")]
+	assert len(rows) == 1
+	assert rows[0].startswith("| `CLAUDE_USAGE_LIMIT_RESUME_LIMIT` | `20` |")
+	assert "1..40" in rows[0]
