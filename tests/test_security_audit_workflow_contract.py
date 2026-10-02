@@ -965,12 +965,14 @@ def test_security_audit_render_failure_preserves_status_and_reports_context() ->
 
 
 def test_security_audit_codex_failure_preserves_status_and_reports_context() -> None:
+	assert _SECURITY_AUDIT_PROMPT_ECHO_LINE, "no prompt line mentions Chief Security Officer"
 	proc, final_state = _run_security_audit(
 		_security_audit_tracker_state(),
 		extra_env={
 			"MOCK_CODEX_EXIT_CODE": "29",
 			"MOCK_CODEX_STDERR": (
-				"test-openrouter-key Chief Security Officer\n"
+				f"{_SECURITY_AUDIT_PROMPT_ECHO_LINE}\n"
+				"auth test-openrouter-key test-token\n"
 				"Error: No such file or directory (os error 2)\n"
 			),
 		},
@@ -983,8 +985,447 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 	assert proc.returncode == 29
 	assert "captured_path_error=" in proc.stderr
 	assert "os\\ error\\ 2" in proc.stderr
+	assert "Chief\\ Security\\ Officer" not in proc.stderr
 	assert len(final_state.get("codex_calls", [])) == 1
 	assert final_state.get("issue_comment_args", []) == []
+
+
+# A line of prompts/mode-security-audit.txt with no template placeholder, so it
+# reaches the rendered prompt verbatim; `codex exec` echoes the prompt to stderr.
+# An empty default keeps a prompt rewrite from breaking collection of the whole
+# module; the tests that use it assert it is non-empty.
+_SECURITY_AUDIT_PROMPT_ECHO_LINE = next(
+	(
+		prompt_line
+		for prompt_line in (REPO_ROOT / "prompts" / "mode-security-audit.txt").read_text(encoding="utf-8").splitlines()
+		if "Chief Security Officer" in prompt_line
+	),
+	"",
+)
+_CODEX_STDERR_TAIL_LINE_PREFIX = "security-audit: codex-stderr-tail line="
+
+
+def _codex_stderr_tail(stderr: str) -> tuple[str, list[str], str]:
+	"""Return (begin marker, tail payloads, failure line) from the script's stderr."""
+	stderr_lines = stderr.splitlines()
+	begin_indexes = [
+		index
+		for index, stderr_line in enumerate(stderr_lines)
+		if stderr_line.startswith("security-audit: codex-stderr-tail begin ")
+	]
+	end_indexes = [
+		index
+		for index, stderr_line in enumerate(stderr_lines)
+		if stderr_line == "security-audit: codex-stderr-tail end"
+	]
+	assert len(begin_indexes) == 1 and len(end_indexes) == 1, stderr
+	begin_index, end_index = begin_indexes[0], end_indexes[0]
+	assert begin_index < end_index, stderr
+	tail_lines = stderr_lines[begin_index + 1:end_index]
+	assert all(tail_line.startswith(_CODEX_STDERR_TAIL_LINE_PREFIX) for tail_line in tail_lines), stderr
+	failure_lines = [
+		stderr_line
+		for stderr_line in stderr_lines[end_index + 1:]
+		if stderr_line.startswith("security-audit: phase=codex-execution ")
+	]
+	assert len(failure_lines) == 1, stderr
+	return (
+		stderr_lines[begin_index],
+		[tail_line[len(_CODEX_STDERR_TAIL_LINE_PREFIX):] for tail_line in tail_lines],
+		failure_lines[0],
+	)
+
+
+def test_security_audit_codex_failure_prints_masked_stderr_tail_with_provider_402() -> None:
+	fake_openrouter_key = "sk-or-v1-" + "0123456789abcdef" * 4
+	fake_generic_key = "sk-proj-" + "Zx9" * 12
+	fake_github_token = "ghp_" + "A1b2C3d4E5" * 4
+	fake_base64_run = "QUJD" * 16 + "=="
+	assert _SECURITY_AUDIT_PROMPT_ECHO_LINE, "no prompt line mentions Chief Security Officer"
+	proc, final_state = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "7",
+			"MOCK_CODEX_STDERR": (
+				"OpenAI Codex v0.0.0 (research preview)\n"
+				"\n"
+				f"{_SECURITY_AUDIT_PROMPT_ECHO_LINE}\n"
+				f"Authorization: Bearer {fake_openrouter_key}\n"
+				f"keys {fake_generic_key} {fake_github_token} {fake_base64_run}\n"
+				"env test-openrouter-key test-token\n"
+				'ERROR: unexpected status 402 Payment Required: {"error":{"message":"Insufficient credits","code":402}}\n'
+			),
+		},
+	)
+
+	assert proc.returncode == 7, proc.stderr
+	begin_line, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert begin_line == "security-audit: codex-stderr-tail begin lines=5 omitted_lines=0", proc.stderr
+	assert failure_line.endswith(" provider=402"), failure_line
+	assert "error=Codex\\ exited\\ nonzero" in failure_line
+	assert proc.stderr.splitlines()[-1] == failure_line
+	assert tail_payloads[0] == "OpenAI\\ Codex\\ v0.0.0\\ \\(research\\ preview\\)"
+	assert "Payment\\ Required" in tail_payloads[-1]
+	assert "Insufficient\\ credits" in tail_payloads[-1]
+	for secret_value in (
+		fake_openrouter_key,
+		"0123456789abcdef",
+		fake_generic_key,
+		"Zx9Zx9Zx9",
+		fake_github_token,
+		"A1b2C3d4E5",
+		"QUJDQUJD",
+		"test-openrouter-key",
+		"test-token",
+	):
+		assert secret_value not in proc.stderr, secret_value
+	assert "redacted" in "".join(tail_payloads[1:4])
+	assert "Chief" not in proc.stderr
+	assert len(final_state.get("codex_calls", [])) == 1
+	assert final_state.get("issue_comment_args", []) == []
+
+
+def test_security_audit_codex_stderr_tail_masks_short_secrets_and_unpadded_base64() -> None:
+	# Review round 2 on PR #5816: secret-named values shorter than 8 chars are
+	# masked where they stand as a word, and standard base64 with `/` is masked
+	# whole whether padded or not.
+	unpadded_base64 = "QUJD/xyz" * 6
+	split_base64 = "Q" * 45 + "/" + "Zq" * 10
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "8",
+			"SHORT_API_KEY": "k3y9",
+			"MOCK_CODEX_STDERR": (
+				"auth k3y9 rejected, keep wordk3y9x\n"
+				f"blob {unpadded_base64} and {split_base64}=\n"
+			),
+		},
+	)
+	assert proc.returncode == 8, proc.stderr
+	_, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads[0] == "auth\\ \\[redacted\\]\\ rejected\\,\\ keep\\ wordk3y9x", tail_payloads
+	assert tail_payloads[1] == "blob\\ \\[redacted\\]\\ and\\ \\[redacted\\]", tail_payloads
+	for secret_fragment in (" k3y9", "QUJD", "xyz", "QQQQ", "ZqZq"):
+		assert secret_fragment not in proc.stderr, secret_fragment
+
+
+def test_security_audit_codex_stderr_masks_lowercase_and_mixed_case_secret_names() -> None:
+	# Review round 2 on PR #5816 head b788da3: secret-named env vars are
+	# matched by name in any letter case, in the tail and in
+	# captured_path_error=, while a non-secret lowercase name stays unmasked.
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "5",
+			"api_key": "lowerKeyValue71",
+			"Client_Secret": "m1x",
+			"auth_token": "authTokenVal88",
+			"plain_setting": "visibleSetting42",
+			"MOCK_CODEX_STDERR": (
+				"auth lowerKeyValue71 No such file or directory\n"
+				"client m1x rejected, keep xm1xy\n"
+				"bearer-less authTokenVal88 and visibleSetting42\n"
+			),
+		},
+	)
+	assert proc.returncode == 5, proc.stderr
+	_, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == [
+		"auth\\ \\[redacted\\]\\ No\\ such\\ file\\ or\\ directory",
+		"client\\ \\[redacted\\]\\ rejected\\,\\ keep\\ xm1xy",
+		"bearer-less\\ \\[redacted\\]\\ and\\ visibleSetting42",
+	], tail_payloads
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "\\[redacted\\]" in path_error_lines[0], path_error_lines
+	for secret_fragment in ("lowerKeyValue71", " m1x ", "authTokenVal88"):
+		assert secret_fragment not in proc.stderr, secret_fragment
+
+
+def test_security_audit_codex_stderr_masks_each_line_of_multiline_secrets() -> None:
+	# Review round 1 on PR #5816 head a9b6dcc: a multiline secret-named value
+	# (a PEM key, CRLF or LF) is masked line by line in the tail and in
+	# captured_path_error=, short lines only where they stand as a word.
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "6",
+			"MULTILINE_SECRET": "alphaFrag01\r\nbetaFragment02\n\nq7z\n",
+			"MOCK_CODEX_STDERR": (
+				"echo alphaFrag01 then\n"
+				"betaFragment02 No such file or directory\n"
+				"tail q7z ends, keep xq7zx\n"
+			),
+		},
+	)
+	assert proc.returncode == 6, proc.stderr
+	_, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == [
+		"echo\\ \\[redacted\\]\\ then",
+		"\\[redacted\\]\\ No\\ such\\ file\\ or\\ directory",
+		"tail\\ \\[redacted\\]\\ ends\\,\\ keep\\ xq7zx",
+	], tail_payloads
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "\\[redacted\\]" in path_error_lines[0], path_error_lines
+	for secret_fragment in ("alphaFrag01", "betaFragment02", " q7z"):
+		assert secret_fragment not in proc.stderr, secret_fragment
+
+
+def test_security_audit_codex_path_diagnostic_masks_secrets_on_path_error_line() -> None:
+	# Review round 3 on PR #5816: captured_path_error= prints Codex stderr
+	# before the tail, so it applies the same masks to the lines it selects.
+	fake_generic_key = "sk-proj-" + "Qw7" * 12
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "9",
+			"SHORT_API_KEY": "k3y9",
+			"MOCK_CODEX_STDERR": (
+				"provider failed: k3y9 No such file or directory\n"
+				f"load {fake_generic_key} test-openrouter-key: ENOENT\n"
+			),
+		},
+	)
+	assert proc.returncode == 9, proc.stderr
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "No\\ such\\ file\\ or\\ directory" in path_error_lines[0], path_error_lines
+	assert "ENOENT" in path_error_lines[0], path_error_lines
+	assert "\\[redacted\\]" in path_error_lines[0], path_error_lines
+	for secret_fragment in (" k3y9", "Qw7Qw7", "test-openrouter-key"):
+		assert secret_fragment not in proc.stderr, secret_fragment
+
+
+def test_security_audit_codex_path_diagnostic_drops_prompt_echo_lines() -> None:
+	# Review round 4 on PR #5816: `codex exec` echoes the prompt, project spec
+	# included, so a spec line with a path-error phrase must not reach
+	# captured_path_error= (which prints before the tail's prompt filter).
+	spec_line = "Spec note: the vault said No such file or directory for confidential-plan-zeta"
+	with tempfile.TemporaryDirectory(prefix="security-audit-path-prompt-") as td:
+		spec_path = Path(td) / "project-spec.md"
+		spec_path.write_text(spec_line + "\n", encoding="utf-8")
+		proc, _ = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(Path(td) / "findings.json"),
+				"MOCK_CODEX_EXIT_CODE": "5",
+				"MOCK_CODEX_STDERR": f"{spec_line}\nError: open config.toml: ENOENT\n",
+			},
+			script_args=(str(spec_path),),
+		)
+	assert proc.returncode == 5, proc.stderr
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "ENOENT" in path_error_lines[0], path_error_lines
+	assert "confidential" not in proc.stderr
+	assert "vault" not in proc.stderr
+
+
+def test_security_audit_codex_prompt_echo_filters_match_crlf_project_spec() -> None:
+	# Review round 5 on PR #5816: both prompt-echo filters strip CR from stderr,
+	# so they must strip it from the rendered prompt too, or an echoed line of a
+	# CRLF project spec escapes the exact-line match (and sets provider=).
+	path_spec_line = "Spec note: the vault said No such file or directory for confidential-plan-zeta"
+	provider_spec_line = "Spec note: billing HTTP Error 402: Payment Required for confidential-plan-eta"
+	with tempfile.TemporaryDirectory(prefix="security-audit-crlf-prompt-") as td:
+		spec_path = Path(td) / "project-spec.md"
+		spec_path.write_bytes(f"{path_spec_line}\r\n{provider_spec_line}\r\n".encode("utf-8"))
+		proc, _ = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(Path(td) / "findings.json"),
+				"MOCK_CODEX_EXIT_CODE": "5",
+				# One echo with the CR dropped, one with it kept.
+				"MOCK_CODEX_STDERR": f"{path_spec_line}\n{provider_spec_line}\r\nError: open config.toml: ENOENT\n",
+			},
+			script_args=(str(spec_path),),
+		)
+	assert proc.returncode == 5, proc.stderr
+	path_error_lines = [
+		stderr_line
+		for stderr_line in proc.stderr.splitlines()
+		if stderr_line.startswith("security-audit: captured_path_error=")
+	]
+	assert len(path_error_lines) == 1, proc.stderr
+	assert "ENOENT" in path_error_lines[0], path_error_lines
+	_, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == ["Error:\\ open\\ config.toml:\\ ENOENT"], tail_payloads
+	assert failure_line.endswith(" provider=unknown"), failure_line
+	assert "confidential" not in proc.stderr
+	assert "vault" not in proc.stderr
+	assert "Payment" not in proc.stderr
+
+
+def test_security_audit_codex_stderr_tail_byte_cap_holds_for_multibyte_text() -> None:
+	# The sanitizer keeps printable ASCII only, so the 4096 budget is in bytes.
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "3",
+			"LC_ALL": "C.UTF-8",
+			"MOCK_CODEX_STDERR": "".join(f"é {index} " + "ü" * 300 + " ok\n" for index in range(30)) + "Ω" * 5000 + "\n",
+		},
+	)
+	assert proc.returncode == 3, proc.stderr
+	_, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads, proc.stderr
+	assert all(tail_payload.isascii() for tail_payload in tail_payloads), tail_payloads
+	assert sum(len(tail_payload.encode("utf-8")) for tail_payload in tail_payloads) <= 4096
+
+
+def test_security_audit_codex_stderr_tail_is_capped_to_40_lines_and_4_kib() -> None:
+	many_lines = "".join(f"line-{index:03d} " + "word " * 58 + "\n" for index in range(200))
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={"MOCK_CODEX_EXIT_CODE": "3", "MOCK_CODEX_STDERR": many_lines},
+	)
+	assert proc.returncode == 3, proc.stderr
+	begin_line, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert 0 < len(tail_payloads) <= 40
+	assert sum(len(tail_payload) for tail_payload in tail_payloads) <= 4096
+	omitted_lines = int(begin_line.rsplit("omitted_lines=", 1)[1])
+	assert omitted_lines > 0 and omitted_lines + len(tail_payloads) == 40, begin_line
+	assert tail_payloads[-1].startswith("line-199\\ ")
+	assert "line-160" not in proc.stderr
+	assert failure_line.endswith(" provider=unknown"), failure_line
+
+	one_long_line = "word " * 2000 + "\n"
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={"MOCK_CODEX_EXIT_CODE": "3", "MOCK_CODEX_STDERR": one_long_line},
+	)
+	begin_line, tail_payloads, _ = _codex_stderr_tail(proc.stderr)
+	assert begin_line == "security-audit: codex-stderr-tail begin lines=1 omitted_lines=0"
+	assert len(tail_payloads[0]) == 4096
+
+
+def test_security_audit_codex_stderr_tail_cuts_partial_token_past_64_kib() -> None:
+	# Over 64 KiB only the file's end is read and the cut first line is dropped
+	# whole, so a fragment of a secret can never escape the prefix-based masks.
+	cut_stderr = (
+		"sk-or-v1-" + "f" * 70000 + " cut-line-tail\n"
+		"HTTP Error 402: Payment Required\n"
+	)
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={"MOCK_CODEX_EXIT_CODE": "5", "MOCK_CODEX_STDERR": cut_stderr},
+	)
+	assert proc.returncode == 5, proc.stderr
+	_, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == ["HTTP\\ Error\\ 402:\\ Payment\\ Required"], tail_payloads
+	assert "ffff" not in proc.stderr
+	assert "cut-line-tail" not in proc.stderr
+	assert failure_line.endswith(" provider=402"), failure_line
+
+	# A single line longer than 64 KiB is the cut line, so nothing is printed.
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "5",
+			"MOCK_CODEX_STDERR": "sk-or-v1-" + "f" * 70000 + " HTTP Error 402: Payment Required\n",
+		},
+	)
+	begin_line, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert begin_line == "security-audit: codex-stderr-tail begin lines=0 omitted_lines=0", proc.stderr
+	assert tail_payloads == []
+	assert "Payment" not in proc.stderr
+	assert failure_line.endswith(" provider=unknown"), failure_line
+
+
+def test_security_audit_codex_stderr_tail_keeps_complete_line_at_64_kib_boundary() -> None:
+	# When the 64 KiB boundary falls exactly at a line start, the extra byte read
+	# is the preceding newline, so the first complete line is kept.
+	boundary_line = "ERROR: unexpected status 503 Service Unavailable\n"
+	filler_line = "word " * 600 + "\n"
+	read_window = boundary_line + filler_line * 20
+	padding_size = 65536 - len(read_window)
+	assert padding_size > 1
+	read_window += ("end " * padding_size)[:padding_size - 1] + "\n"
+	assert len(read_window.encode("utf-8")) == 65536
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={"MOCK_CODEX_EXIT_CODE": "4", "MOCK_CODEX_STDERR": "A" * 100 + "\n" + read_window},
+	)
+	assert proc.returncode == 4, proc.stderr
+	_, _, failure_line = _codex_stderr_tail(proc.stderr)
+	assert failure_line.endswith(" provider=5xx"), failure_line
+	assert "AAAA" not in proc.stderr
+
+
+def test_security_audit_codex_stderr_tail_drops_prompt_line_cut_past_64_kib() -> None:
+	# `codex exec` echoes the prompt; a prompt line longer than 64 KiB is cut by
+	# the read window, and its remainder must neither print nor set provider.
+	long_prompt_line = "Spec note: " + "alpha beta " * 7000 + "HTTP Error 402: Payment Required"
+	with tempfile.TemporaryDirectory(prefix="security-audit-long-prompt-") as td:
+		spec_path = Path(td) / "project-spec.md"
+		spec_path.write_text(long_prompt_line + "\n", encoding="utf-8")
+		proc, _ = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(Path(td) / "findings.json"),
+				"MOCK_CODEX_EXIT_CODE": "6",
+				"MOCK_CODEX_STDERR": long_prompt_line + "\nError: stream disconnected before completion\n",
+			},
+			script_args=(str(spec_path),),
+		)
+	assert proc.returncode == 6, proc.stderr
+	_, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+	assert tail_payloads == ["Error:\\ stream\\ disconnected\\ before\\ completion"], tail_payloads
+	assert "Payment" not in proc.stderr
+	assert "alpha" not in proc.stderr
+	assert failure_line.endswith(" provider=unknown"), failure_line
+
+
+def test_security_audit_codex_failure_classifies_provider_status() -> None:
+	cases = {
+		"Error: HTTP Error 401: Unauthorized\n": "401",
+		"warn: status 429 Too Many Requests, retrying\n": "429",
+		"Error: Rate limit exceeded for model\n": "429",
+		"ERROR: unexpected status 503 Service Unavailable\n": "5xx",
+		# The newest matching line wins over an older retry message.
+		"stream error: status 429 Too Many Requests\nERROR: HTTP Error 402: Payment Required\n": "402",
+		# Bare numbers and audit wording are not provider failures.
+		"tokens used: 429\nreview missing rate limiting on login\n": "unknown",
+		# Context words count only as whole words (review round 1, head a9b6dcc).
+		"encode402 finished\nValueError 500 rows\n": "unknown",
+		# A status code glued to the context word is part of a longer word too
+		# (review round 3, head 84d953c).
+		"handler error402 hit\nloaded Error500Handler\n": "unknown",
+		'request failed: {"statusCode": 429}\n': "429",
+		"provider error_code=402\n": "402",
+		"": "unknown",
+	}
+	for codex_stderr, expected_provider in cases.items():
+		proc, _ = _run_security_audit(
+			_security_audit_tracker_state(),
+			extra_env={"MOCK_CODEX_EXIT_CODE": "1", "MOCK_CODEX_STDERR": codex_stderr},
+		)
+		assert proc.returncode == 1, proc.stderr
+		_, tail_payloads, failure_line = _codex_stderr_tail(proc.stderr)
+		assert failure_line.endswith(f" provider={expected_provider}"), (codex_stderr, failure_line)
+		if not codex_stderr:
+			assert tail_payloads == []
 
 
 def test_security_audit_missing_codex_reports_sanitized_context() -> None:

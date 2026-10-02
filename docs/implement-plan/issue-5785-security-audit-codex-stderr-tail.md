@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5785-security-audit-codex-stderr-tail-plan.md
 - Source issue: shubhodeep1/coding-workflows#5785
 - Repo: shubhodeep1/coding-workflows   Default branch: main
-- Project branch: claude/implement-plan-issue-5785-security-audit-codex-stderr-tail   Final PR: (opening) draft
+- Project branch: claude/implement-plan-issue-5785-security-audit-codex-stderr-tail   Final PR: #5806 draft
 - Status: IN_PROGRESS
-- Stage: phase 1/1
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none
+- Waiting on: PR #5816
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: none
+- Check-in: checker session_01SLmbVzcitKU2aiKHq634QY   (triggers in the latest stage report)
 - Last updated: 2026-10-01
-- Last note: project branch opened by /implement-issue-claude (issue mode); phase 1 starting.
+- Last note: review round 8 (workflow round 3 after intervention 1) on head 84d953c: a provider status code now needs at least one separator after its context word (`error402`, `Error500Handler` no longer classify); regression case added. Rejected 1 finding: short secret values are already masked as whole words (AD-8).
 
 ## Phases
-1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures
+1. [ ] Phase 1 — Codex stderr tail and provider class on codex-execution failures   — PR #5816 open (waiting); review rounds: 8; interventions: 1 (2026-10-01: autofix-iteration cap reached on 22c5180 with the reviewers skipped; `[claude-intervention]` commit to re-run review, label removed)
 
 ## Conformance
 
@@ -33,8 +33,21 @@
 - AD-4 [plan, 2026-10-01] Where do the tests go? — Picked: A — extend `tests/test_security_audit_workflow_contract.py`. Alternatives: B — new `tests/test_security_audit_codex_stderr_tail.py` registered in `ci.yml`. Why: it already has the fake-Codex harness, runs in CI, and holds the codex-failure test that must change anyway (§5). Applied in: phase 1 PR. Status: pending review
 - AD-5 [plan, 2026-10-01] The issue asks for an `agents.md` note only if the security-audit section describes failure output, which it does not. Add one? — Picked: A — add a one-sentence note to the security-audit bullet. Alternatives: B — no `agents.md` change. Why: §7 requires documenting failure-mode changes. Applied in: phase 1 PR. Status: pending review
 - AD-6 [plan, 2026-10-01] How are input bounding and the 4 KiB cap applied? — Picked: A — read at most the last 64 KiB (drop the partial first line when larger), drop blank lines, count the 4096-byte budget over sanitized line content keeping the newest lines, truncate a single over-budget newest line to its first 4096 bytes. Alternatives: B — cap raw bytes before sanitizing. Why: the issue's "sanitize first, then cap"; dropping the partial line stops a boundary-cut token from escaping the prefix masks. Applied in: phase 1 PR. Status: pending review
+- AD-7 [phase 1/1 — review round 1, 2026-10-01] Review round 1 found that rewriting the cut first line as `[cut] …` lets a fragment of a >64 KiB rendered-prompt line pass the exact prompt filter (and set `provider=`). How should the cut line be handled? — Picked: A — drop the cut first line whole, reading one extra byte so a boundary at a line start loses no complete line (the plan's original AD-6 wording). Alternatives: B — keep `[cut]` but first drop the cut line when its remainder is a suffix of a rendered-prompt line. Why: smallest change that lets no fragment of a prompt line or token escape (§1, §5); a >64 KiB single stderr line is almost always a prompt echo, not the provider error. Applied in: PR #5816 (review round 1). Status: pending review
+- AD-8 [phase 1/1 — review round 2, 2026-10-01] Review round 2 found that secret-named env values under 8 characters are never masked. Masking them as substrings would rewrite unrelated text (this runner has `MAX_THINKING_TOKENS=<5 digits>`). How should short values be masked? — Picked: A — mask every non-empty value: 8+ characters anywhere in the line, shorter values only where neither neighbour is a word character (`[[:alnum:]_-]`). Alternatives: B — keep the 8-character floor and document it; C — mask every value as a substring regardless of length. Why: closes the leak for short secrets (§1) while a short numeric setting cannot mangle digits inside words or ids. Applied in: PR #5816 (review round 2). Status: pending review
+- AD-9 [phase 1/1 — review round 3, 2026-10-01] Review round 3 found that `security_audit_emit_path_diagnostic` prints Codex stderr path-error lines (`captured_path_error=`) with only the old sanitizer, before the masked tail. The helper is shared by 6 phases. Where should the new masks apply? — Picked: A — an optional `mask` argument that runs `security_audit_mask_stderr_line` over the selected lines, passed only by the codex-execution call. Alternatives: B — mask in every phase's path diagnostic (would redact SHAs and long paths in other phases' lines, a plan non-goal); C — drop the path diagnostic on codex-execution (removes an existing, tested diagnostic). Why: closes the leak on the only call that reads Codex stderr (§1) and leaves every other phase's output unchanged (§5). Applied in: PR #5816 (review round 3). Status: pending review
+- AD-10 [phase 1/1 — review round 6, 2026-10-01] Review round 6 found that the provider-status context words (`http`, `status`, `code`, `error`) match inside longer words (`encode402`, `ValueError 500`). A plain left word boundary would also stop camel-case keys such as `statusCode: 429` from matching. How should the context be bounded? — Picked: A — require a non-alphanumeric character or line start before the context word, and add the compounds `statuscode` and `errorcode` as context words. Alternatives: B — left boundary only (loses `statusCode`/`errorCode` JSON keys); C — keep matching inside words but require at least one separator before the digits (still matches `encode: 402`). Why: removes the in-word false positives (§1 correctness) while keeping the common JSON key forms; `status_code`/`error_code` already pass because `_` is a separator. Applied in: PR #5816 (review round 6). Status: pending review
 
 ## Lessons
+- [source:intervention] When a log tail is bounded by bytes, drop the cut first line instead of rewriting it: any rewrite (such as a `[cut]` marker) makes the fragment fail later exact-match filters like a prompt-echo `grep -vxF`, so filtered text leaks. Read one extra byte so a boundary that falls at a line start costs no complete line. (files: scripts/security_audit.sh)
+- [source:intervention] A token-run mask must use one character class covering both base64 alphabets (`[[:alnum:]+/_-]{40,}={0,2}`): two ordered patterns (URL-safe, then padded standard) let an unpadded `/`-bearing value through or mask only its prefix. Mask secret env values of any length, matching short ones only as whole words. (files: scripts/security_audit.sh)
+- [source:intervention] When a change adds a stronger mask for one log source, apply it to every line printed from that source, including older diagnostics that run first (`captured_path_error=`): the first unmasked print leaks the secret no matter what the later output masks. (files: scripts/security_audit.sh)
+- [source:intervention] An early diagnostic that prints lines from the same source as a filtered tail needs every filter the tail applies, not only its masks: prompt-echo exclusion too, or an echoed spec line matching the diagnostic's own pattern prints first. (files: scripts/security_audit.sh)
+- [source:intervention] When an exact-line filter (`grep -vxF -f <patterns>`) compares a normalised stream against a pattern file, normalise the pattern file the same way (`-f <(tr -d '\000\r' < file)`): stripping CR from only one side lets every line of a CRLF input escape the match. (files: scripts/security_audit.sh)
+- [source:intervention] In Claude-fixer mode the review run on the head carrying the `MAX_AUTOFIX_ITERATIONS`-th consecutive `[claude-autofix]` commit skips the reviewer panel and labels the PR `ai:review-blocked`, so that round's fix is never reviewed; a `[claude-intervention]` commit (with the log update) ends the run and gets it reviewed. (files: .github/workflows/review_autofix.yml)
+- [source:intervention] A per-line secret mask must split each multiline secret value into its lines (normalised the way the log stream is, CR removed) and mask every non-empty line: a value matched as one string never matches a single log line, so a PEM key's lines all print. (files: scripts/security_audit.sh)
+- [source:intervention] Bash `case` globs are case-sensitive: match secret-looking env var names on `${name^^}` so lowercase and mixed-case names (`api_key`, `Client_Secret`) are masked too, and keep reading the value through the original name. (files: scripts/security_audit.sh)
+- [source:intervention] A separator class between a context word and the value it qualifies must be `{1,n}`, not `{0,n}`: a zero-width separator lets the value glue onto the word (`error402`, `Error500Handler`), so an identifier reads as a status code. (files: scripts/security_audit.sh)
 
 ## Notes
 - Issue mode: plan written by /implement-issue-claude from #5785; base branch main; security pass: run (`security_pass_skip.py`: no skip label).

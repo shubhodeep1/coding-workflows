@@ -41,8 +41,20 @@ security_audit_emit_failure() {
 	local failure_phase="${1:?failure phase required}"
 	local failure_path="${2:?failure path required}"
 	local failure_reason="${3:?failure reason required}"
+	# Optional: the provider failure class (402|401|429|5xx|unknown), only
+	# passed for codex-execution failures; other phases keep the 4-field line.
+	local failure_provider="${4:-}"
 	local failure_cwd
 	failure_cwd="$(pwd -P 2>/dev/null || printf '%s' '.')"
+	if [ -n "${failure_provider}" ]; then
+		printf 'security-audit: phase=%s cwd=%s path=%s error=%s provider=%s\n' \
+			"$(security_audit_sanitize_log_value "${failure_phase}")" \
+			"$(security_audit_sanitize_log_value "${failure_cwd}")" \
+			"$(security_audit_sanitize_log_value "${failure_path}")" \
+			"$(security_audit_sanitize_log_value "${failure_reason}")" \
+			"$(security_audit_sanitize_log_value "${failure_provider}")" >&2
+		return 0
+	fi
 	printf 'security-audit: phase=%s cwd=%s path=%s error=%s\n' \
 		"$(security_audit_sanitize_log_value "${failure_phase}")" \
 		"$(security_audit_sanitize_log_value "${failure_cwd}")" \
@@ -52,12 +64,214 @@ security_audit_emit_failure() {
 
 security_audit_emit_path_diagnostic() {
 	local diagnostic_file="${1:?diagnostic file required}"
+	# Optional: "mask" also runs security_audit_mask_stderr_line over the
+	# selected lines. Only the codex-execution call passes it, because Codex
+	# stderr can carry provider keys (#5785); other phases print as before.
+	local diagnostic_mask_mode="${2:-}"
+	# Optional: the rendered prompt. With it, lines that echo the prompt
+	# verbatim are dropped first, as the codex-stderr-tail does, because
+	# `codex exec` echoes the prompt (project spec included) to stderr.
+	# Both sides lose NUL and CR, so a CRLF project spec still matches.
+	local diagnostic_prompt_file="${3:-}"
 	local path_diagnostic
-	path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
+	if [ -n "${diagnostic_prompt_file}" ]; then
+		if [ ! -r "${diagnostic_prompt_file}" ]; then
+			diagnostic_prompt_file="/dev/null"
+		fi
+		path_diagnostic="$(LC_ALL=C tr -d '\000\r' 2>/dev/null < "${diagnostic_file}" \
+			| LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' \
+			| LC_ALL=C grep -vxF -f <(LC_ALL=C tr -d '\000\r' 2>/dev/null < "${diagnostic_prompt_file}") \
+			| tail -n 20 || true)"
+	else
+		path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
+	fi
 	if [ -n "${path_diagnostic}" ]; then
+		if [ "${diagnostic_mask_mode}" = "mask" ]; then
+			path_diagnostic="$(security_audit_mask_stderr_line "${path_diagnostic}")"
+		fi
 		printf 'security-audit: captured_path_error=%s\n' \
 			"$(security_audit_sanitize_log_value "${path_diagnostic}")" >&2
 	fi
+}
+
+# Provider failure class of the last codex-execution failure, set by
+# security_audit_emit_codex_stderr_tail: 402|401|429|5xx|unknown.
+SECURITY_AUDIT_CODEX_PROVIDER="unknown"
+
+# Masks token-shaped values in one Codex stderr line before it reaches
+# security_audit_sanitize_log_value: the literal value of every non-empty
+# exported variable whose name looks secret, in any letter case (8+ chars
+# anywhere in the line, shorter values where they stand as a whole word, so a
+# short setting such as MAX_THINKING_TOKENS=5 does not rewrite every digit; a
+# multiline value is
+# split into its lines, CR removed as in the stderr stream, and each non-empty
+# line is masked by the same rule), sk- keys, 32+ hex runs,
+# and 40+ base64 or token runs in either alphabet, padded or not. Values are
+# replaced with bash expansion, never passed in a process argv. Used only for
+# Codex stderr: the codex-stderr-tail lines and the codex-execution
+# captured_path_error= diagnostic (#5785).
+security_audit_mask_stderr_line() {
+	local stderr_line="${1-}"
+	local secret_env_name
+	local secret_env_value
+	local secret_value_rest
+	local secret_word_rest
+	local secret_word_masked
+	local secret_word_prefix
+	local secret_word_before
+	local secret_word_after
+	while IFS= read -r secret_env_name; do
+		# Match the name case-insensitively (api_key, Client_Secret), but read
+		# the value through the original name.
+		case "${secret_env_name^^}" in
+			*TOKEN*|*API_KEY*|*SECRET*|*PASSWORD*|PAT|*_PAT|PAT_*|*_PAT_*)
+				;;
+			*)
+				continue
+				;;
+		esac
+		# Stderr lines lose CR and are split on LF, so a multiline value
+		# (a PEM key) is matched line by line, never as one string.
+		secret_value_rest="${!secret_env_name-}"
+		secret_value_rest="${secret_value_rest//$'\r'/}"
+		while [ -n "${secret_value_rest}" ]; do
+			secret_env_value="${secret_value_rest%%$'\n'*}"
+			if [[ "${secret_value_rest}" == *$'\n'* ]]; then
+				secret_value_rest="${secret_value_rest#*$'\n'}"
+			else
+				secret_value_rest=""
+			fi
+			if [ -z "${secret_env_value}" ]; then
+				continue
+			fi
+			if [ "${#secret_env_value}" -ge 8 ]; then
+				stderr_line="${stderr_line//"${secret_env_value}"/[redacted]}"
+				continue
+			fi
+			# Short value: mask each occurrence not touching a word character.
+			secret_word_rest="${stderr_line}"
+			secret_word_masked=""
+			while [[ "${secret_word_rest}" == *"${secret_env_value}"* ]]; do
+				secret_word_prefix="${secret_word_rest%%"${secret_env_value}"*}"
+				secret_word_rest="${secret_word_rest#*"${secret_env_value}"}"
+				secret_word_masked+="${secret_word_prefix}"
+				secret_word_before="${secret_word_masked: -1}"
+				secret_word_after="${secret_word_rest:0:1}"
+				if [[ "${secret_word_before}" == [[:alnum:]_-] || "${secret_word_after}" == [[:alnum:]_-] ]]; then
+					secret_word_masked+="${secret_env_value}"
+				else
+					secret_word_masked+="[redacted]"
+				fi
+			done
+			stderr_line="${secret_word_masked}${secret_word_rest}"
+		done
+	done < <(compgen -e)
+	printf '%s' "${stderr_line}" \
+		| LC_ALL=C sed -E 's#(^|[^[:alnum:]_])sk-[[:alnum:]_-]{8,}#\1sk-[redacted]#g; s#[[:xdigit:]]{32,}#[redacted]#g; s#[[:alnum:]+/_-]{40,}={0,2}#[redacted]#g'
+}
+
+# Classifies one Codex stderr line as a provider failure. Prints
+# 402|401|429|5xx, or nothing when the line matches no class. A bare status
+# code counts only after the word http, status, code, or error (also the
+# compounds statuscode and errorcode) and at least one separator, never inside
+# a longer word such as encode, ValueError, or error402, so token counts and
+# ids never match. Within one line the order is 402, 401, 429, 5xx.
+security_audit_classify_codex_provider() {
+	local provider_line="${1-}"
+	provider_line="${provider_line,,}"
+	local provider_status_context='(^|[^[:alnum:]])(http/[0-9.]+|http|statuscode|status|errorcode|code|error)[^[:alnum:]]{1,16}'
+	local provider_402_pattern="payment required|insufficient credits|${provider_status_context}402([^0-9]|$)"
+	local provider_401_pattern="unauthorized|${provider_status_context}401([^0-9]|$)"
+	local provider_429_pattern="too many requests|rate[ _-]?limit([^i]|$)|${provider_status_context}429([^0-9]|$)"
+	local provider_5xx_pattern="internal server error|bad gateway|service unavailable|gateway timeout|${provider_status_context}5[0-9][0-9]([^0-9]|$)"
+	if [[ "${provider_line}" =~ ${provider_402_pattern} ]]; then
+		printf '402'
+	elif [[ "${provider_line}" =~ ${provider_401_pattern} ]]; then
+		printf '401'
+	elif [[ "${provider_line}" =~ ${provider_429_pattern} ]]; then
+		printf '429'
+	elif [[ "${provider_line}" =~ ${provider_5xx_pattern} ]]; then
+		printf '5xx'
+	fi
+}
+
+# Prints a sanitized, size-capped tail of Codex stderr between
+# `security-audit: codex-stderr-tail begin|end` marker lines (#5785), and sets
+# SECURITY_AUDIT_CODEX_PROVIDER from the newest line that names a provider
+# failure. Reads at most the last 64 KiB (dropping the cut first line, so no
+# fragment of a token or a prompt line escapes the masks or the prompt
+# filter), drops blank lines and lines that echo the rendered prompt
+# verbatim, keeps the last 40 lines, masks and sanitizes each, then keeps the
+# newest lines whose sanitized text fits in 4096 bytes. Never prints the raw
+# file. Fail-open: call it as `... || true`.
+security_audit_emit_codex_stderr_tail() {
+	local stderr_tail_file="${1:?stderr file required}"
+	local stderr_prompt_file="${2:-}"
+	local stderr_tail_max_lines=40
+	local stderr_tail_max_bytes=4096
+	local stderr_tail_read_bytes=65536
+	local -a stderr_window_lines=()
+	local -a stderr_kept_lines=()
+	local stderr_file_bytes=0
+	local stderr_used_bytes=0
+	local stderr_omitted_lines=0
+	local stderr_line_index
+	local stderr_line_class
+	local stderr_masked_line
+	local stderr_sanitized_line
+	SECURITY_AUDIT_CODEX_PROVIDER="unknown"
+	if [ -f "${stderr_tail_file}" ] && [ -r "${stderr_tail_file}" ]; then
+		stderr_file_bytes="$(wc -c < "${stderr_tail_file}" 2>/dev/null | tr -cd '0-9')"
+		[[ "${stderr_file_bytes}" =~ ^[0-9]+$ ]] || stderr_file_bytes=0
+		if [ -z "${stderr_prompt_file}" ] || [ ! -r "${stderr_prompt_file}" ]; then
+			stderr_prompt_file="/dev/null"
+		fi
+		# Over 64 KiB, read one extra byte and drop the first line: it is the
+		# cut line, or only the newline before a complete one. Never rewrite a
+		# cut line: a fragment of a prompt line would no longer match the
+		# exact prompt filter below, and a token fragment would lose its prefix.
+		# The prompt loses NUL and CR like the stderr lines, so an echoed line
+		# of a CRLF project spec still matches it.
+		mapfile -t stderr_window_lines < <(
+			if [ "${stderr_file_bytes}" -gt "${stderr_tail_read_bytes}" ]; then
+				tail -c "$(( stderr_tail_read_bytes + 1 ))" -- "${stderr_tail_file}" 2>/dev/null | LC_ALL=C sed '1d'
+			else
+				tail -c "${stderr_tail_read_bytes}" -- "${stderr_tail_file}" 2>/dev/null
+			fi \
+				| LC_ALL=C tr -d '\000\r' \
+				| LC_ALL=C grep -v '^[[:space:]]*$' \
+				| LC_ALL=C grep -vxF -f <(LC_ALL=C tr -d '\000\r' 2>/dev/null < "${stderr_prompt_file}") \
+				| tail -n "${stderr_tail_max_lines}"
+		)
+	fi
+	for (( stderr_line_index=${#stderr_window_lines[@]}-1; stderr_line_index>=0; stderr_line_index-- )); do
+		stderr_line_class="$(security_audit_classify_codex_provider "${stderr_window_lines[stderr_line_index]}")"
+		if [ -n "${stderr_line_class}" ]; then
+			SECURITY_AUDIT_CODEX_PROVIDER="${stderr_line_class}"
+			break
+		fi
+	done
+	for (( stderr_line_index=${#stderr_window_lines[@]}-1; stderr_line_index>=0; stderr_line_index-- )); do
+		stderr_masked_line="$(security_audit_mask_stderr_line "${stderr_window_lines[stderr_line_index]}")"
+		stderr_sanitized_line="$(security_audit_sanitize_log_value "${stderr_masked_line}")"
+		if (( stderr_used_bytes + ${#stderr_sanitized_line} > stderr_tail_max_bytes )); then
+			if (( ${#stderr_kept_lines[@]} == 0 )); then
+				stderr_kept_lines=("${stderr_sanitized_line:0:${stderr_tail_max_bytes}}")
+				stderr_omitted_lines="${stderr_line_index}"
+			else
+				stderr_omitted_lines=$(( stderr_line_index + 1 ))
+			fi
+			break
+		fi
+		stderr_kept_lines=("${stderr_sanitized_line}" "${stderr_kept_lines[@]}")
+		stderr_used_bytes=$(( stderr_used_bytes + ${#stderr_sanitized_line} ))
+	done
+	printf 'security-audit: codex-stderr-tail begin lines=%s omitted_lines=%s\n' \
+		"${#stderr_kept_lines[@]}" "${stderr_omitted_lines}" >&2
+	for stderr_sanitized_line in "${stderr_kept_lines[@]}"; do
+		printf 'security-audit: codex-stderr-tail line=%s\n' "${stderr_sanitized_line}" >&2
+	done
+	printf 'security-audit: codex-stderr-tail end\n' >&2
 }
 
 security_audit_require_file() {
@@ -1168,8 +1382,9 @@ if codex --ask-for-approval never \
 	:
 else
 	CODEX_EXECUTION_STATUS=$?
-	security_audit_emit_path_diagnostic "${CODEX_ERROR_FILE}"
-	security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero"
+	security_audit_emit_path_diagnostic "${CODEX_ERROR_FILE}" mask "${RENDERED_PROMPT_FILE}"
+	security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}" "${RENDERED_PROMPT_FILE}" || true
+	security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero" "${SECURITY_AUDIT_CODEX_PROVIDER:-unknown}"
 	exit "${CODEX_EXECUTION_STATUS}"
 fi
 
