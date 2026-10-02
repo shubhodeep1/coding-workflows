@@ -49,9 +49,14 @@ run and issue-list modes → `wait` / `next_stage`; --hand-back mode →
     workflow run is active (no 6-hour wait). An empty
     CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN disables comment hand-offs. A trusted
     `hold` claim on the current head (same trust rules as --hand-back) is
-    never done: `state: held`, whatever labels, hand-off, conflict or checks
-    the PR shows, until a push moves the head (issue #5667). Merged / closed
-    still end the wait.
+    not done: `state: held`, whatever labels, hand-off, conflict or checks
+    the PR shows, until a push moves the head or a newer trusted claim on
+    the same head replaces it (issue #5667). The wait is bounded: a hold at
+    least CLAUDE_FIX_HOLD_MAX_HOURS old (default 24, from its comment's
+    created_at), or one whose time cannot be read, is done as
+    `state: blocked`, so a stray or forged hold is handed back like a block
+    label instead of parking the checker for good (issue #5927). Merged /
+    closed still end the wait.
   * PR with --hand-back (the CLAUDE.md §26 checker and the catch-all sweep,
     scripts/claude_pr_sweep.py): merged / closed are terminal. On a
     `claude/*` head, a Claude fix is also due for a block label
@@ -99,6 +104,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import re
 import subprocess
@@ -151,6 +157,9 @@ FIX_CLAIM_RE = re.compile(
 FIX_CLAIM_TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 FIX_CLAIM_COUNTED_KINDS = ("conflict", "ci", "blocked")
 DEFAULT_FIX_CLAIM_LEASE_HOURS = 3.0
+# Plain PR mode honours a hold only this long (CLAUDE_FIX_HOLD_MAX_HOURS);
+# an older one is handed back as blocked (issue #5927).
+DEFAULT_FIX_HOLD_MAX_HOURS = 24.0
 DEFAULT_FIX_HAND_BACK_CAP = 3
 HAND_BACK_KIND_BY_STATE = {"conflict": "conflict", "review-round": "review", "ci-failed": "ci", "blocked": "blocked"}
 
@@ -235,7 +244,13 @@ def _label_names(obj: dict) -> list[str]:
 def _parse_time(value: str) -> dt.datetime:
 	if not isinstance(value, str):
 		raise ValueError(f"timestamp must be a string, got {type(value).__name__}")
-	return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+	parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+	# A time with no offset cannot be compared with the aware `now`; report it
+	# as unreadable rather than letting the subtraction raise TypeError
+	# (issue #5927: an undatable hold is handed back, not retried).
+	if parsed.tzinfo is None or parsed.utcoffset() is None:
+		raise ValueError(f"timestamp has no UTC offset: {value!r}")
+	return parsed
 
 
 def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, now: dt.datetime) -> dict:
@@ -254,8 +269,9 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	fixer_comments = None
 	if fixer_head:
 		# A trusted hold on the current head (the twin-first blocker's, or the
-		# §26.H cap's) waits for a human whatever else the PR shows; only a
-		# push that moves the head lifts it (issue #5667). The comment listing
+		# §26.H cap's) waits for a human whatever else the PR shows; a push
+		# that moves the head, or a newer trusted claim on the same head,
+		# lifts it (issue #5667). The comment listing
 		# is read once here and reused for the hand-off check below.
 		if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
 			raise ValueError("PR head sha must be 40 lowercase hex characters")
@@ -263,8 +279,20 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 		hold_claims = read_fix_claims(fixer_comments, head_sha, now, trusted_logins=_fix_claim_trusted_logins(pr))
 		hold_claim = hold_claims["claim"]
 		if hold_claim["state"] == "held":
-			return {"done": False, "state": "held", "head_sha": head_sha, "claim": hold_claim,
-				"reason": f"PR #{number} is on hold on head {head_sha[:12]} ({hold_claim['by']}): a human answers its blocker, and the push that answers it moves the head"}
+			# The wait is bounded (issue #5927): a hold nobody answered within
+			# CLAUDE_FIX_HOLD_MAX_HOURS, or one whose comment time cannot be
+			# read, is handed back as blocked, so a stray or forged marker
+			# cannot park the project checker for good.
+			hold_max_hours = _env_positive_float("CLAUDE_FIX_HOLD_MAX_HOURS", DEFAULT_FIX_HOLD_MAX_HOURS)
+			hold_age_hours = _hours_since(hold_claim.get("at"), now)
+			if hold_age_hours is not None and hold_age_hours < hold_max_hours:
+				return {"done": False, "state": "held", "head_sha": head_sha, "claim": hold_claim,
+					"reason": f"PR #{number} is on hold on head {head_sha[:12]} ({hold_claim['by']}): a human answers its blocker, and the push that answers it moves the head"}
+			hold_age_text = "of unknown age" if hold_age_hours is None else f"{hold_age_hours:.1f}h old"
+			stale_hold_labels = [name for name in _label_names(pr) if name in BLOCKING_LABELS]
+			stale_hold_suffix = f"; labels: {', '.join(stale_hold_labels)}" if stale_hold_labels else ""
+			return {"done": True, "state": "blocked", "head_sha": head_sha, "claim": hold_claim,
+				"reason": f"PR #{number} blocked: hold on head {head_sha[:12]} ({hold_claim['by']}) is {hold_age_text}, past the {hold_max_hours:g}h limit with no push answering it{stale_hold_suffix}"}
 
 	blocking = [name for name in _label_names(pr) if name in BLOCKING_LABELS]
 	if blocking:
@@ -502,12 +530,17 @@ def _check_claude_fixer_pr(repo: str, number: int, head_sha: str, head_ref: str,
 
 
 def _env_positive_float(name: str, default: float) -> float:
-	"""Read a positive number from the environment, falling back to `default`."""
+	"""Read a positive number from the environment, falling back to `default`.
+
+	`inf`, `nan`, and values that overflow to infinity (`1e309`) fall back too:
+	an infinite hold limit or claim lease would never expire, and `int()` of an
+	infinite hand-back cap raises `OverflowError` (issue #5927).
+	"""
 	try:
 		value = float(os.environ.get(name, "") or default)
 	except ValueError:
 		return default
-	return value if value > 0 else default
+	return value if math.isfinite(value) and value > 0 else default
 
 
 def _fix_claim_trusted_logins(pr: dict) -> tuple[str, ...]:
