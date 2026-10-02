@@ -35,7 +35,7 @@ opencode_run_cmd() {
 """
 
 
-def _run_summariser(tmp_path: Path) -> tuple[subprocess.CompletedProcess[str], str, Path]:
+def _run_summariser(tmp_path: Path, statuses: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], str, Path]:
 	reviews_dir = tmp_path / "previous_reviews"
 	runtime_dir = tmp_path / "runtime"
 	support_dir = tmp_path / "support"
@@ -57,6 +57,9 @@ def _run_summariser(tmp_path: Path) -> tuple[subprocess.CompletedProcess[str], s
 		"Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n",
 		encoding="utf-8",
 	)
+
+	for slug, status in (statuses or {}).items():
+		(reviews_dir / f"status_review_{slug}.txt").write_text(status + "\n", encoding="utf-8")
 
 	helpers = support_dir / "opencode_helpers.sh"
 	helpers.write_text(STUB_HELPERS, encoding="utf-8")
@@ -113,6 +116,45 @@ def test_summariser_prompt_still_inlines_every_input(tmp_path: Path) -> None:
 		assert f"--- END REVIEW OUTPUT FROM {slug} ---" in prompt
 	assert "File: scripts/foo.sh" in prompt
 	assert (tmp_path / "consensus.txt").read_text(encoding="utf-8").startswith("=== CONSENSUS FINDINGS ===")
+
+
+def test_summariser_excludes_slots_whose_status_is_not_success(tmp_path: Path) -> None:
+	result, prompt, _ = _run_summariser(
+		tmp_path,
+		statuses={
+			"z-ai_glm-5_2": "success",
+			"deepseek_deepseek-v4-pro": "success",
+			"minimax_minimax-m3": "failed",
+		},
+	)
+	assert result.returncode == 0, result.stderr
+	assert "--- BEGIN REVIEW OUTPUT FROM z-ai_glm-5_2 ---" in prompt
+	assert "--- BEGIN REVIEW OUTPUT FROM deepseek_deepseek-v4-pro ---" in prompt
+	assert "minimax_minimax-m3" not in prompt
+	assert "failed after non-retryable error" not in prompt
+	assert "compress 2 review code-review outputs" in prompt
+	assert "skipping review_minimax_minimax-m3.txt" in result.stderr
+
+
+def test_summariser_excludes_every_non_success_status(tmp_path: Path) -> None:
+	for status in ("failed", "skipped_budget", "skipped_unmapped", "skipped_open", "pr_closed", ""):
+		case_dir = tmp_path / (status or "empty")
+		case_dir.mkdir()
+		result, prompt, _ = _run_summariser(
+			case_dir,
+			statuses={"z-ai_glm-5_2": "success", "deepseek_deepseek-v4-pro": status},
+		)
+		assert result.returncode == 0, result.stderr
+		assert "deepseek_deepseek-v4-pro" not in prompt, status
+		assert "--- BEGIN REVIEW OUTPUT FROM z-ai_glm-5_2 ---" in prompt
+
+
+def test_summariser_keeps_inputs_without_a_status_file(tmp_path: Path) -> None:
+	# Older layout: only one slot has a status file; the others are kept.
+	result, prompt, _ = _run_summariser(tmp_path, statuses={"z-ai_glm-5_2": "success"})
+	assert result.returncode == 0, result.stderr
+	for slug in ("z-ai_glm-5_2", "deepseek_deepseek-v4-pro", "minimax_minimax-m3"):
+		assert f"--- BEGIN REVIEW OUTPUT FROM {slug} ---" in prompt
 
 
 def _telegram_failure_step() -> str:

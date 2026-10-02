@@ -1431,6 +1431,24 @@ Every PR-backed `claude/*` head runs in **Claude-fixer mode**
 GPT editor, conflict resolver, and review-blocked judge never run on it. A
 Claude session fixes it instead (CLAUDE.md §26 and §26.H).
 
+A review round is **clean** (auto-merge once the same-head check-run snapshot
+is fresh and ready) when the successful reviewers reported no finding and no
+task gap and at least half of the active reviewer panel, rounded up, returned
+`success` (6 active reviewers need 3, 5 need 3). A slot that only failed for
+infrastructure reasons (non-retryable error, output-token cap, empty output,
+retryable-failure limit, unmapped model) is dropped from the consensus ledger
+and does not block. A slot skipped for budget is not covered when it is the
+pass's only non-success slot: the pass then requests a partial finalize, no
+consensus ledger is written, and in Claude-fixer mode the hand-off step fails
+closed and hands the round to the Claude session (the partial-finalize
+continuation does not run for `claude/*` heads), as before. Beside a hard
+failure it is dropped like the others. A real finding or task gap
+from any successful reviewer still hands the round to Claude, and so does a
+round below the 50% floor. The hand-off step logs
+`CLAUDE_FIXER_PANEL_FLOOR successful=<n> active=<m> floor_met=<true|false|unknown>`;
+`unknown` (no status files and no active-models list) leaves today's rule in
+place.
+
 The deterministic pre-review skip (`AUTOFIX_SKIP_DOC_ONLY`,
 `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS`) applies to
 `claude/*` PRs exactly as to every other PR: a doc-only or small-diff PR that
@@ -1775,7 +1793,11 @@ through `clarify → plan → implement → review`.
   Test & Mark Stable Release run name, so every cycle shares one fingerprint),
   the failing step, and a normalised error signature built from the step's
   `##[error]` / `::error::` output (numbers, SHAs, URLs, and temp paths
-  stripped) — the same bug in ten consumers is one
+  stripped); a review/autofix report's signature comes from its evidence
+  without the reporter's own `failure_reason=` / `finalize_reason=` /
+  `consecutive_failed_runs=` / `flags:` header lines, led by the run's first
+  error (`AUTOFIX_FAILURE_FIRST_ERROR`), and an `identical_failure_cap` report's
+  from its validated `failure_fingerprint` — the same bug in ten consumers is one
   issue with an occurrence comment per report (`<!-- workflow-failure-heal:fp=… -->`).
   A recurrence after the previous heal issue closed increments the generation
   (`<!-- workflow-failure-heal:gen=N -->`, `root=…`); an escalation on a heal
@@ -2621,6 +2643,8 @@ Any workflow or script that routes GitHub API calls through `scripts/gh_helpers.
 ```
 
 **Wait computation (`curl_gh_api`):** the retry wait is derived from the 403/429 response headers. A numeric `Retry-After` (what GitHub sends on secondary rate limits) takes precedence and the helper sleeps that many seconds; otherwise it sleeps until `X-RateLimit-Reset` (the primary window). Both paths keep the 600 s cap, 1 s floor, and 30 s fallback of `_sleep_until_reset`. Before this ordering a secondary-limit 403 was timed against the primary reset, which can be up to an hour out, so the helper slept the full 600 s cap where GitHub had asked for a few seconds. The `gh_retry` family still reads the reset from `GET /rate_limit`.
+
+**Output of a retried call (`gh_retry`):** `gh api` prints the error response body to stdout when a call fails, so `gh_retry` buffers each attempt's stdout in a temp file and prints only the buffer of the attempt that succeeds. A caller's `> file` or `$(…)` capture therefore holds only the successful response, even after rate-limited attempts (issue #5495: clarify run 36670937896 read `null`, `null`, `5016` from a file that held two rate-limit bodies before the issue). A failed attempt's output is dropped, and one stderr line reports its size (`::warning::  gh_retry: dropped <N> bytes of stdout from failed attempt <a>/<m>`), never its content. A call that never succeeds prints nothing to stdout and returns 1. If the successful output cannot be delivered because the reader closed the pipe, `gh_retry` returns non-zero without running the command again. `gh_retry_to_file` and `gh_api_json_to_file` already truncate their output file on every attempt; on final failure, `gh_retry_to_file` leaves the last error body in the file for the caller to log. The two inline `gh_retry()` retry loops in `.github/workflows/review_autofix.yml` (the standalone-validate dispatch fallback and the deterministic-skip-merge step) follow the same stdout contract and print the same dropped-bytes warning.
 
 **Throttling:** alerts are globally throttled to at most one per `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600` s = 1 h) across **all** workflow runs. The cooldown state is kept in a Telegram **pinned message** in the admin chat via an embedded marker `<!-- gh_rl_ts:EPOCH -->`, read with `getChat`. This deliberately avoids any GitHub API call for dedup state so the throttle still works while the GitHub API itself is the resource being limited. Previous pinned alerts are unpinned best-effort after a new alert is pinned.
 
