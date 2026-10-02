@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/usage_limit_resumes.py:350\u2013353 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The lineage check accepts any syntactically valid parent session ID without establishing that the parent or its ancestry belongs to a workflow authorized to use the pickup.\n  WHY: An unrelated session created with `create_session` in a registered repository could pass the repository, origin, and parent-ID-shape checks; deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, and z-ai_glm-5_2 describe parent-chain validation as an explicitly rejected design choice.\n- .claude/scripts/usage_limit_resumes.py: session_repos (lines ~325-342 in the merged file) | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A source URL containing a subdirectory path for a registered repository does not match `SOURCE_URL_PATTERN`, so the session is skipped as `foreign_repo`.\n  WHY: This fails closed but can prevent a session working in a registered repository subdirectory from being authorized.\n- tests/test_usage_limit_resumes.py: line 813, test docstring of `test_github_urls_without_an_owner_and_repo_fail_closed` | severity=low | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The docstring says bare-hostname URLs never match `SOURCE_URL_PATTERN`, while this reviewer claims the trailing `?` makes the slug group optional and those URLs match with an empty `repo` capture.\n  WHY: Although the reviewer says the test still passes because the empty repo is not allowed, it considers the stated rejection mechanism misleading.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/usage_limit_resumes.py: session_repos (lines ~325-342 in the merged file) | severity=low | confidence=2\n  PROBLEM: A source URL containing a subdirectory path for a registered repository does not match `SOURCE_URL_PATTERN`, so the session is skipped as `foreign_repo`.\n  WHY: This fails closed but can prevent a session working in a registered repository subdirectory from being authorized.\n- .claude/scripts/usage_limit_resumes.py: SOURCE_URL_PATTERN definition (lines ~158-163)\n  PROBLEM: A session source URL containing a subdirectory path does not match the regex and is skipped as `foreign_repo`.\n  WHY: The reviewer suggests this could surprise an operator who registered the repo; HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/usage_limit_resumes.py:350\u2013353 | severity=high | confidence=4\n  PROBLEM: The lineage check accepts any syntactically valid parent session ID without establishing that the parent or its ancestry belongs to a workflow authorized to use the pickup.\n  WHY: An unrelated session created with `create_session` in a registered repository could pass the repository, origin, and parent-ID-shape checks.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_usage_limit_resumes.py: line 813, test docstring of `test_github_urls_without_an_owner_and_repo_fail_closed` | severity=low | confidence=4\n  PROBLEM: The docstring says bare-hostname URLs never match `SOURCE_URL_PATTERN`, while this reviewer claims the trailing `?` makes the slug group optional and those URLs match with an empty `repo` capture.\n  WHY: Although the reviewer says the test still passes because the empty repo is not allowed, it considers the stated rejection mechanism misleading.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1afcbd06b862a7cc259c37721ba9ba6143fe184cff9a6ff3d48eb7d6b3b800d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6106,
+    "run_id": "37074473414",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37074473414",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002230826_a7f5171c19",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6106,
+    "run_id": "37074473414"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T23:08:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
