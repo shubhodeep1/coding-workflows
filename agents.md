@@ -1076,6 +1076,34 @@ reviews, comments, and conflicts stay a direct §12 request.
   review counts too. The latest newer completed review
   of the PR that did not conclude `success`, or a marker that is no longer
   the live one on a re-read of the comments, returns `review_superseded`.
+  Those three dispatch workflows title a `workflow_dispatch` run
+  `<workflow name> [pr:<N>]` (`run-name`, issue #5906; parsed by
+  `DISPATCH_TITLE_PR_RE`): from the default branch, a finished one titled
+  for the PR is one of its reviews, one titled for another PR is ignored,
+  and a newer one that names no PR and did not conclude `success` also
+  returns `review_superseded` (fail closed). A run name only binds a
+  dispatch that ran from the default branch (theirs and
+  `internal-review.yml`'s): `check_review_runs()` takes the PR's
+  `default_branch`, and a dispatch from any other ref, the head branch
+  included (which the head-branch listing also returns), ran that ref's
+  workflow file, so its run name is never read: it is never a bound
+  review, a newer one that did not conclude `success` returns
+  `review_superseded` whatever PR its run name names, and an
+  `internal-review.yml` one still running returns `review_active`. With no
+  default branch known, no run name binds. On the head branch only a
+  `pull_request` run whose `head_repository` is this repository and whose
+  `pull_requests` lists this PR alone (`_is_this_repo_pull_request_run()`)
+  is a bound review; every other head-branch run of a review workflow (a
+  `push` run, the no-PR route of `internal-review.yml` that concludes
+  `success` once the branch has a PR; a head-branch dispatch; a fork's run
+  under the same branch name; a `pull_request` run whose `pull_requests`
+  is absent, malformed, or lists another PR or more than one, which may be
+  a sibling PR's on the same head branch, since GitHub lists every open PR
+  whose head matches) is
+  untrusted: never a bound review, and a newer one that did not conclude
+  `success` returns `review_superseded`. Every dispatch, from whichever
+  listing, and every such head-branch run goes through the one rule in
+  `_classify_review_dispatch()` (PR #5929 review rounds 1 to 5).
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be

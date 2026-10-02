@@ -1485,7 +1485,27 @@ dispatch titled for the PR, or any `review_autofix.yml` / `ai-review.yml` /
 older runs included: a listing that may go on past the pages it read is
 also listed by run status, and it never merges when
 the latest newer completed review of the PR did not succeed or the marker
-changed while it checked (`review_superseded`). A runs listing that holds
+changed while it checked (`review_superseded`). The `review_autofix.yml`,
+`ai-review.yml`, and `review_rb_judge_dispatch.yml` dispatches are titled
+`<workflow name> [pr:<N>]` by their `run-name` (issue #5906), so a finished
+one titled for the PR counts as a review of it, and a newer one that names no
+PR (a consumer wrapper before the `@stable` sync) and did not succeed also
+returns `review_superseded` (fail closed). A run name only binds a dispatch,
+of these workflows or `internal-review.yml`, that ran from the default
+branch: one from any other ref, the PR's head branch included, runs that
+ref's workflow file, which can title it for any PR, so its run name is never
+read. It never counts as a review of the PR, a newer one that did not succeed
+returns `review_superseded` whatever PR its run name names, and an
+`internal-review.yml` one still running keeps the PR waiting
+(`review_active`). On the head branch only a `pull_request` run whose head
+is in this repository and whose `pull_requests` lists this PR alone counts
+as a review of the PR: a `push` run of `internal-review.yml` (its no-PR
+route, which concludes `success` when the branch already has a PR), a
+fork's run listed under the same branch name, or a run that may be a
+sibling PR's (one head branch can have PRs into different bases, and GitHub
+lists every open PR on that head in each run) never clears a failed review,
+and a newer one that did not succeed returns `review_superseded`.
+A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read
 (`pending_checks_failed`), repeated every hour until a push, a base change,
 or a forced review sends the head through a new review. A check that fails

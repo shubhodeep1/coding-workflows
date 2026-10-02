@@ -2,6 +2,13 @@
 # automatically when upstream templates change. To opt out of auto-updates,
 # set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 name: AI Review
+# Dispatched runs carry their PR in the run name, as internal-review.yml's
+# do: a workflow_dispatch run has no pull_requests binding, and the
+# claude-pr-catch-all sweep's pending-checks pass
+# (scripts/claude_fixer_pending_checks.py, issue #5906) counts a finished
+# dispatch titled for a PR as a review of that PR. Every other event gets an
+# empty expression, which GitHub replaces with its default title.
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('AI Review [pr:{0}]', inputs.pr_number) || '' }}"
 on:
   # ready_for_review is included so that converting a draft PR to a
   # non-draft re-fires the review gate. This is the unlock path for
