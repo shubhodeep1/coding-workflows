@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T04:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A safeguard that one repo's launch prompt hands to a command installed in another repo holds only once that repo has synced the command; put the check in the launch prompt itself so it works with any installed version.",
+  "phase": "implement_plan",
+  "pr_number": 6081,
+  "record_id": "lesson-implement-plan-7f78a3e4eede2e1e96263df8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6057-recheck-claude-label-at-dispatch",
+    "file:.claude/commands/claude-issue-dispatch.md"
+  ]
+}

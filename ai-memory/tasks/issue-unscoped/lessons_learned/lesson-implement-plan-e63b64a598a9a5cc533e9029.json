@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T04:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A failure report that covers several independent writes must name each write that failed; one combined suffix misreports the case where only one of them failed.",
+  "phase": "implement_plan",
+  "pr_number": 6081,
+  "record_id": "lesson-implement-plan-e63b64a598a9a5cc533e9029",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6057-recheck-claude-label-at-dispatch",
+    "file:.claude/commands/claude-issue-dispatch.md"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T04:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A claim check done by a batch starter is check-then-act: the session it starts must re-check the claim and refuse when it is gone, not restore it, or any change in the gap is undone. Mark dispatched starts so the session can tell them from hand runs.",
+  "phase": "implement_plan",
+  "pr_number": 6081,
+  "record_id": "lesson-implement-plan-541acf2ed8ed8f2c4f8229e9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6057-recheck-claude-label-at-dispatch",
+    "file:.claude/commands/claude-issue-dispatch.md",
+    "file:.claude/commands/implement-issue-claude.md"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T04:37:41Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a step becomes a gate (the handoff's claim), every side effect after it must be gated too, not only the final action: a failed claim must also skip the cleanup and the success log, and the test must assert their absence.",
+  "phase": "implement_plan",
+  "pr_number": 6081,
+  "record_id": "lesson-implement-plan-9966a22d01862e52edb34c15",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6057-recheck-claude-label-at-dispatch",
+    "file:scripts/claude_issue_handoff.sh",
+    "file:tests/test_claude_issue_route.py"
+  ]
+}
