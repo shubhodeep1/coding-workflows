@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15816-15848 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When `ENABLE_MERGED_STATE_HEAL=false`, the alert-only path returns without setting `MERGED_HEAL_WAVE_HOLD` or clearing stale merged signals, allowing the wave to advance on a rejected merge.\n  WHY: Stale `ai:merged` labels or stored `merged` statuses survive reconciliation and cause `check-wave-status` to report the issue as merged; the disabled-heal tests do not assert that the wave is held.\n- scripts/orchestrate_poll_process.sh:20318-20327 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The wave-hold `why` cascade can report `merge_unverified` for a known-candidate PR rejected for branch or identity reasons.\n  WHY: The cascade's conditional assignments can select a misleading reason; this affects the log explanation, not whether the wave is held.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: 15816-15848 (_heal_rejected_merged_state alert-only path), 20294-20307 (reconcile loop caller), 15788 (MERGED_HEAL_WAVE_HOLD declaration) | severity=high | confidence=5\n  PROBLEM: When ENABLE_MERGED_STATE_HEAL=false, the alert-only path returns without setting MERGED_HEAL_WAVE_HOLD, leaving stale merged labels and status able to advance the wave.\n  WHY: The stale merged signals cause check-wave-status to return merged while the wave hold remains false.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: _heal_rejected_merged_state at 15816-15848, MERGED_HEAL_WAVE_HOLD check at 20372-20376 and 22153-22156 | severity=high | confidence=5\n  PROBLEM: With ENABLE_MERGED_STATE_HEAL=false, the alert-only path returns without setting MERGED_HEAL_WAVE_HOLD or clearing stale merged signals, allowing the wave to complete on a rejected merge.\n  WHY: Existing `ai:merged` and stored `merged` status survive reconciliation and make check-wave-status report the issue as merged; the disabled-heal test does not check that the wave is held.\n- scripts/orchestrate_poll_process.sh: 20318-20327 | severity=low | confidence=4\n  PROBLEM: The wave-hold `why` cascade can report `merge_unverified` when the actual reason is a branch or identity rejection on a known-candidate PR.\n  WHY: The conditional assignment precedence can produce a misleading log reason, though the wave is still held.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: `_heal_rejected_merged_state` lines 15816-15848; current-wave reconciliation lines 20330-20364; `reconcile_managed_issue_labels` lines 4263-4276; `scripts/orchestrate_lib.py` lines 2293-2304 | severity=high | confidence=5\n  PROBLEM: With ENABLE_MERGED_STATE_HEAL=false, the alert path leaves stale merged signals and does not set MERGED_HEAL_WAVE_HOLD.\n  WHY: Reconciliation preserves the existing `ai:merged` label and stored `merged` status, so check-wave-status can report merged and advance the wave.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: 15816-15848 (`_heal_rejected_merged_state` alert-only path), 20308-20334 (reconcile loop heal call site) | severity=high | confidence=5\n  PROBLEM: With ENABLE_MERGED_STATE_HEAL=false, the alert-only path returns without setting MERGED_HEAL_WAVE_HOLD or removing stale merged signals.\n  WHY: Reconciliation preserves the stale label and status, which `check-wave-status` treats as merged and allows the wave to complete.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh: _heal_rejected_merged_state alert-only path, lines 15816-15848; caller if/elif at lines 20294-20328; check-wave-status at line 20359 | severity=high | confidence=4\n  PROBLEM: With ENABLE_MERGED_STATE_HEAL=false, the alert-only path returns without setting MERGED_HEAL_WAVE_HOLD, so stale merged signals can allow the wave to advance.\n  WHY: The `elif` wave-hold branch is skipped after the heal call, and reconciliation preserves `ai:merged` when PR_MERGED=false.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6389299e978649ffe211c28b7d2548416fc535c668dca8141069a14d0075682f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "37089468066",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37089468066",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003023827_d21f1ef866",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "37089468066"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T02:38:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
