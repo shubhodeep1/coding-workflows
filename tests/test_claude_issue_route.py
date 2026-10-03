@@ -933,6 +933,76 @@ def test_parse_fire_text_round_trips():
 	assert route.parse_fire_text(route.build_fire_text(validated)) == validated
 
 
+def test_security_followup_dependency_verdict_and_validation():
+	repo = "shubhodeep1/digital_pa"
+	target = {
+		**_issue(["ai:security"], "<!-- ai:security-finding:abc -->\n- Depends on: #8", number=9),
+		"repository_url": f"https://api.github.com/repos/{repo}",
+	}
+	predecessor = {"number": 8, "repository_url": target["repository_url"], "state": "open", "labels": []}
+	assert route.security_dependency_verdict(target, predecessor)["reason"] == "dependency open"
+	predecessor["state"] = "closed"
+	assert route.security_dependency_verdict(target, predecessor)["reason"] == "dependency closed without ai:merged"
+	predecessor["labels"] = [{"name": "ai:merged"}]
+	assert route.security_dependency_verdict(target, predecessor)["status"] == "ready"
+	for invalid in ({**predecessor, "pull_request": {}}, None, {**predecessor, "repository_url": "https://api.github.com/repos/other/repo"}):
+		assert route.security_dependency_verdict(target, invalid)["status"] == "held"
+	for bad_body in (target["body"] + "\n- Depends on: #7", target["body"].replace("#8", "#9"), target["body"].replace("#8", "#0")):
+		assert route.security_dependency_verdict({**target, "body": bad_body}, predecessor)["status"] == "held"
+	assert route.security_dependency_verdict({**target, "labels": []}, predecessor)["status"] == "held"
+
+
+def test_bound_security_followups_wait_and_release_without_blocking_other_files():
+	dependent = _queue_item(10, {**_validated(number=9), "depends_on": 8})
+	independent = _queue_item(11, _validated(number=11))
+	bindings = _bindings({"1": _ok_record({10: dependent, 11: independent})})
+	prerequisite = {"number": 8, "repository_url": "https://api.github.com/repos/shubhodeep1/digital_pa", "state": "open", "labels": []}
+	reads = []
+	def lookup(repo, number):
+		reads.append((repo, number))
+		return prerequisite
+	out = route.queue_pending([dependent, independent], REGISTRY_ALLOWED, bindings=bindings, dependency_lookup=lookup)
+	assert [item["issue_number"] for item in out["pending"]] == [11]
+	assert "dependency open" in out["ignored"][0]["reason"]
+	assert reads == [("shubhodeep1/digital_pa", 8)]
+	prerequisite["state"] = "closed"
+	out = route.queue_pending([dependent, independent], REGISTRY_ALLOWED, bindings=bindings, dependency_lookup=lookup)
+	assert "closed without ai:merged" in out["ignored"][0]["reason"]
+	prerequisite["labels"] = ["ai:merged"]
+	out = route.queue_pending([dependent, independent], REGISTRY_ALLOWED, bindings=bindings, dependency_lookup=lookup)
+	assert [item["issue_number"] for item in out["pending"]] == [9, 11]
+	assert route.queue_pending([dependent], REGISTRY_ALLOWED, bindings=bindings, dependency_lookup=lambda *_: None)["pending"] == []
+	tampered = dict(dependent, body=dependent["body"].replace("depends_on: 8", "depends_on: 7"))
+	assert route.queue_pending([tampered], REGISTRY_ALLOWED, bindings=bindings, dependency_lookup=lookup)["ignored"][0]["reason"] == "binding_mismatch"
+
+
+def test_dependent_queue_watchdog_does_not_alert_on_an_open_prerequisite():
+	from datetime import datetime, timezone
+
+	dependent = _queue_item(10, {**_validated(number=9), "depends_on": 8})
+	prerequisite = {"number": 8, "repository_url": "https://api.github.com/repos/shubhodeep1/digital_pa", "state": "open", "labels": []}
+	now = datetime(2026, 9, 27, tzinfo=timezone.utc)
+	assert route.queue_stale([dependent], now, dependency_lookup=lambda *_: prerequisite) == []
+	assert route.queue_stale([dependent], now, dependency_lookup=lambda *_: None) == []
+	prerequisite["state"] = "closed"
+	assert route.queue_stale([dependent], now, dependency_lookup=lambda *_: prerequisite)[0]["reason"] == "dependency_closed_without_ai:merged"
+
+
+def test_codex_dependency_gates_and_scheduled_release_are_wired():
+	clarify = CLARIFY.read_text(encoding="utf-8")
+	implement = IMPLEMENT.read_text(encoding="utf-8")
+	poller = POLLER.read_text(encoding="utf-8")
+	assert 'security-dependency --issue-json "${ISSUE_META_FILE}"' in clarify
+	assert 'security-dependency --issue-json "${ISSUE_META_FILE}"' in implement
+	assert "reason=security_dependency_held" in poller
+	assert "ai:security-dependency-released:" in poller
+	assert "claude_issue_route.py" in (ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
+	watchdog_workflow = (ROOT / ".github/workflows/claude-issue-queue-watchdog.yml").read_text(encoding="utf-8")
+	assert "CLAUDE_ISSUE_DEPENDENCY_TOKEN: ${{ secrets.GH_PAT }}" in watchdog_workflow
+	assert "GH_TOKEN: ${{ github.token }}" in watchdog_workflow
+	assert 'GH_TOKEN="${CLAUDE_ISSUE_DEPENDENCY_TOKEN}" python3' in (ROOT / "scripts/claude_issue_queue_watchdog.sh").read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(
 	"mutate",
 	[
