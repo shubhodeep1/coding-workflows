@@ -54,6 +54,20 @@ jobs:
             echo "Note: If a previous clarify run was in progress, it has been cancelled by this run (cancel-in-progress: true)."
           fi
 
+      - name: Record GH_PAT budget at clarify start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=clarify job=clarify remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Resolve integration ref
         id: refctx
         env:
@@ -531,6 +545,7 @@ jobs:
           echo "CLAUDE_ISSUE_HANDOFF released issue=${ISSUE_NUMBER} reason=${{ steps.clarify_route.outputs.issue_implementer_reason }}"
 
       - name: Claude issue handoff
+        id: claude_handoff
         if: steps.clarify_route.outputs.issue_implementer == 'claude' && steps.clarify_route.outputs.is_closed != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1265,6 +1280,7 @@ jobs:
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "CRITICAL"
 
       - name: Post clarification questions
+        id: post_questions
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1309,6 +1325,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Post clear-to-proceed comment
+        id: post_clear
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1444,6 +1461,28 @@ jobs:
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="${REASON}"
 
+      # A token-created marker does not start a new workflow; the scheduled
+      # poller replays this command with the PAT once the budget recovers.
+      - name: Queue failed reclarify for poller
+        if: ${{ failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' || steps.clarify_route.outputs.issue_implementer == 'claude') && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success' && (steps.clarify_route.outputs.issue_implementer != 'claude' || steps.claude_handoff.outcome != 'success') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+          SOURCE_COMMENT_BODY: ${{ github.event.comment.body }}
+          SOURCE_ASSOCIATION: ${{ github.event.comment.author_association }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ && "${SOURCE_COMMENT_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "${SOURCE_COMMENT_BODY}" == /reclarify* ]] || exit 1
+          case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac
+          # Existing label contract is provisioned by sync_ai_labels; failure
+          # here remains a visible failed step rather than silently losing work.
+          gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" \
+            -f 'labels[]=ai:reclarify-requeue' >/dev/null
+          gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="<!-- ai:reclarify-requeue:v1 source=${SOURCE_COMMENT_ID} -->" >/dev/null
+
       - name: Telegram failure notification
         if: failure() || cancelled()
         env:
@@ -1466,3 +1505,16 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_phase_failure clarify "${MSG}" "ERROR" "${ISSUE_NUMBER}"
+
+      - name: Record GH_PAT budget at clarify end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
+        run: |
+          if [ -f scripts/gh_helpers.sh ]; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end clarify clarify "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown'
+          fi

@@ -53,6 +53,10 @@
       "color": "e11d48",
       "description": "Clarify workflow failed before producing a valid response"
     },
+    "ai:reclarify-requeue": {
+      "color": "fbca04",
+      "description": "Trusted /reclarify failed before routing; poller will retry after PAT budget recovers"
+    },
     "ai:clarify-respond-failed": {
       "color": "e11d48",
       "description": "Orchestrator clarify-respond workflow failed before posting an answer"
