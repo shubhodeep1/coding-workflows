@@ -483,6 +483,24 @@ _SHELL_RUNNER_WRAPPERS = frozenset({"sudo", "doas", "env", "nice", "nohup", "com
 _SOURCE_COMMANDS = frozenset({"source", "."})
 
 
+# Bash builtins that run the command named in their later words: `command source /dev/stdin`, `builtin eval '…'`
+# (PR #5401 review round 15).
+_BUILTIN_PREFIX_COMMANDS = frozenset({"command", "builtin"})
+
+
+def _past_builtin_prefixes(words: list[str], start: int) -> int:
+	"""The index of the word that `command` / `builtin` at `start` runs (`command -p -- source f` gives the index of
+	`source`), or `start` when `words[start]` is neither. `command -v` / `-V` only prints, so reading its next word as
+	the command it runs is the safe side."""
+	while start < len(words) and words[start] in _BUILTIN_PREFIX_COMMANDS:
+		start += 1
+		while start < len(words) and words[start].startswith("-"):
+			start += 1
+			if words[start - 1] == "--":
+				break
+	return start
+
+
 def _segment_runs_a_shell(words: list[str]) -> bool:
 	"""True when the simple command `words` may run a _SHELL_COMMAND_RUNNERS shell on its stdin: any of its words,
 	from the command word on, names one. The commands that hand their stdin to a shell named in their arguments are
@@ -494,7 +512,8 @@ def _segment_runs_a_shell(words: list[str]) -> bool:
 		(position for position, word in enumerate(words) if not (_ASSIGNMENT_RE.match(word) or word in ("{", "!") or word.isdigit())),
 		len(words),
 	)
-	if start < len(words) and words[start] in _SOURCE_COMMANDS:
+	source_index = _past_builtin_prefixes(words, start)
+	if source_index < len(words) and words[source_index] in _SOURCE_COMMANDS:
 		return True
 	return _shell_runner_before(words, start, len(words))
 
@@ -808,9 +827,11 @@ def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
 	"""
 	values: set[str] = set()
 	start = next((position for position, word in enumerate(words) if not _ASSIGNMENT_RE.match(word)), len(words))
-	if start + 1 < len(words) and _runner_basename(words[start]) == "eval":
-		# `eval` runs its arguments, joined by spaces, as a command line (PR #5401 review round 13).
-		values.update(_shell_line_credentials(" ".join(words[start + 1 :]), depth))
+	eval_index = _past_builtin_prefixes(words, start)
+	if eval_index + 1 < len(words) and _runner_basename(words[eval_index]) == "eval":
+		# `eval` runs its arguments, joined by spaces, as a command line (PR #5401 review round 13), also behind
+		# `command` / `builtin` (round 15).
+		values.update(_shell_line_credentials(" ".join(words[eval_index + 1 :]), depth))
 	index = 0
 	while index < len(words):
 		word = words[index]

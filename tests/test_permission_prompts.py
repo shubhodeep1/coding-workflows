@@ -431,6 +431,9 @@ def _bash(command):
 		("ENV -S 'mysql -pS3cretPass app'", "S3cretPass", "ENV -S 'mysql -p*** app'"),
 		# `eval` runs its arguments as a command line (PR #5401 review round 13).
 		("eval 'mysql -pS3cretPass app'", "S3cretPass", "eval 'mysql -p*** app'"),
+		# `command` / `builtin` run the `eval` named after them (PR #5401 review round 15).
+		("builtin eval 'mysql -pS3cretPass app'", "S3cretPass", "builtin eval 'mysql -p*** app'"),
+		("command -p eval 'mysql -pS3cretPass app'", "S3cretPass", "command -p eval 'mysql -p*** app'"),
 		("sudo -u pg bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "sudo -u pg bash <<< 'mysql -p*** app'"),
 		("2>/dev/null bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "2>/dev/null bash <<< 'mysql -p*** app'"),
 		("false || sh -c 'mysql -pS3cretPass x'", "S3cretPass", "false || sh -c 'mysql -p*** x'"),
@@ -509,6 +512,10 @@ def test_example_masks_credentials(command, secret, expected):
 		("source <(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
 		(". <(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
 		("printf %s 'mysql -pS3cretPass' | source /dev/stdin", "S3cretPass", None),
+		# `command` / `builtin` run the `source` / `.` named after them (PR #5401 review round 15).
+		("printf %s 'mysql -pS3cretPass' | command source /dev/stdin", "S3cretPass", None),
+		("printf %s 'mysql -pS3cretPass' | builtin . /dev/stdin", "S3cretPass", None),
+		("command -- source <(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
 		# Hex and octal escapes Bash decodes (`\x2d` and `\055` are `-`) are not reproduced, so the command is withheld
 		# (PR #5401 review round 12).
 		("bash -c $'mysql \\x2dpS3cretPass app'", "S3cretPass", "unparseable: bash"),
@@ -539,6 +546,11 @@ def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape
 		(["PWSH.EXE", "-"], True),
 		(["source", "/dev/stdin"], True),
 		([".", "/dev/stdin"], True),
+		(["command", "source", "/dev/stdin"], True),
+		(["builtin", ".", "/dev/stdin"], True),
+		(["command", "-p", "--", "source", "/dev/stdin"], True),
+		(["command", "-v", "git"], False),
+		(["builtin", "echo", "."], False),
 		(["find", ".", "-name", "x"], False),
 		(["xargs", "-I{}", "sh", "-c", "{}"], True),
 		(["2", "sh"], True),
