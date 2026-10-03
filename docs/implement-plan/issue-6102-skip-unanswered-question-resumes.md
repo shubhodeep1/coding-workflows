@@ -4,10 +4,10 @@
 - Source issue: shubhodeep1/coding-workflows#6102 (progress comment 5956408433)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5660-resume-usage-limit-stops
 - Project branch: claude/implement-plan-issue-6102-skip-unanswered-question-resumes   Final PR: #6105 draft
-- Status: BLOCKED
-- Stage: phase 1/1 — review round 5 (twin sync)
+- Status: IN_PROGRESS
+- Stage: phase 1/1 — review round 6
 - Activation: not started
-- Waiting on: PR #6112: sixth twin sync, of the review round 5 `[claude-autofix]` commit. The `[claude-twin-sync]` commit that copies it also sets these header lines to IN_PROGRESS (the exact edit is in the twin-sync blocker on #6102), so the log on the branch head is never left BLOCKED after the block ended.
+- Waiting on: PR #6112 (review of the sixth twin sync)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01HKnvTyY9wdNoZoKqLisFzv (idle, reused on resume)   safety net none   hand-back none
 - Last updated: 2026-10-03
