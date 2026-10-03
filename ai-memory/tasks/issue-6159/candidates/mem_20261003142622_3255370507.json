@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary.txt`\nScope-mode justification: The request specifies one file and two exact lines. A broader change would violate that scope. The complete change is the two-line edit; under \u00a76 Core Priorities, correctness and backward compatibility take precedence over speed.\n\nPlanning ref: `orchestrator/project-6158` at `3fa2629d5ed38ef32f6c9cb3ae24ea37df7ce075`. It matches the issue\u2019s integration branch.\n\n## Implementation plan\n\n**Files likely to change:** `tests/e2e_smoke_canary.txt` only.\n\n**Edit:** Keep line 1 as `status: ok`. Replace line 2, currently `run_id: 26151428977`, with exactly `decompose-run: 37128897320`. Preserve line 3 (`updated-by: ai-pipeline`), all other content, and line endings.\n\n**Data structures affected:** The canary\u2019s plain-text line format; no code or stored state.\n\n**API/interface changes:** None. This does change the canary\u2019s second-line key from `run_id` to `decompose-run`.\n\n## Decisions\n\n### D1 \u2014 Follow the issue\u2019s exact canary value\n- **Chosen:** Edit only the named file and set its first two lines exactly as requested.\n- **Alternatives considered:** Update the sibling canary specification or its tests.\n- **Why:** Those files are outside the issue\u2019s explicit edit boundary.\n\n## Security considerations\n\nThe edit introduces no endpoint, authorization surface, or external input. Treat the issue-supplied run number as the requested literal, not as a value to execute or use as a credential.\n\n## Risks and edge cases\n\nThe sibling `tests/e2e_smoke_canary_spec.txt` currently specifies a `run_id` second line. That is a **codebase contract conflict** with the requested literal `decompose-run` line; do not change the spec under this issue\u2019s one-file restriction. A byte-for-byte smoke-harness check may therefore require separate resolution.\n\n## Verification\n\nAfter the edit, check that lines 1 and 2 match the requested strings exactly, that line 3 and any remaining bytes are unchanged, and that the diff contains only `tests/e2e_smoke_canary.txt`. Do not treat the existing smoke-spec test as authoritative for this requested one-file change.\n\nAssumption: The explicit two-line instruction takes precedence over the existing sibling spec. No clarification answer or other required context is missing.\n\nPLAN_SELF_CHECK: WARNING: The existing sibling spec expects `run_id`, while the requested line uses `decompose-run`; the one-file restriction prevents reconciling both here.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "bfb954c92a02f2153b9e12b733b08c852e4a4058540f3a71abe649dfbee0ce29",
+  "lineage": {
+    "issue_number": 6159,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37129223407",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37129223407",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6159"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003142622_3255370507",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6159,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37129223407"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6159",
+  "timestamps": {
+    "created_at": "2026-10-03T14:26:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
