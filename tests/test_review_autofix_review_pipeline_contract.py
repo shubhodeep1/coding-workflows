@@ -343,7 +343,7 @@ if args[:1] == ["api"]:
 			response = responses[idx]
 			state["check_runs_index"] = idx + 1
 		else:
-			response = state.get("check_runs_default", {"json": []})
+			response = state.get("check_runs_default", {"json": [{"check_runs": []}]})
 		exit_code, stdout, stderr = render_response(response)
 		save()
 		if stdout:
@@ -3317,6 +3317,90 @@ def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
 	assert "failed_count: 1\n" in result["context_text"]
 
 
+def test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}},
+		check_runs_responses=[{"json": [{"check_runs": []}]}],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 0\n" in result["context_text"]
+	assert "No failed or incomplete check-runs detected" in result["context_text"]
+
+
+def test_collect_pr_check_runs_helper_rejects_malformed_successful_output() -> None:
+	bad_responses = [
+		({"stdout": ""}, "empty_output"),
+		({"stdout": "NOT-JSON-SECRET-MARKER"}, "invalid_json"),
+		({"stdout": '{"check_runs": []}{"check_runs": []}'}, "invalid_json"),
+		({"json": []}, "no_pages"),
+		({"json": {"message": "NOT-JSON-SECRET-MARKER"}}, "missing_check_runs"),
+		({"json": {"check_runs": None}}, "missing_check_runs"),
+		({"json": {"check_runs": {}}}, "missing_check_runs"),
+		({"json": [{"check_runs": []}, 1]}, "invalid_page"),
+		({"json": [{"check_runs": []}, {}]}, "missing_check_runs"),
+	]
+	for response, reason in bad_responses:
+		result = _run_collect_pr_check_runs_harness(
+			pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
+			check_runs_responses=[response],
+		)
+		assert result["returncode"] == 0, (reason, result)
+		assert "collection_status: api_error\n" in result["context_text"], (reason, result)
+		assert "total_check_runs: 0\n" in result["context_text"]
+		assert "No failed or incomplete check-runs detected" not in result["context_text"]
+		assert f"reason={reason} bytes=" in result["stdout"]
+		assert "head_sha=abc123" in result["stdout"]
+		assert "NOT-JSON-SECRET-MARKER" not in result["stdout"] + result["context_text"]
+		assert result["mock_state"]["check_runs_index"] == 1
+
+
+def test_collect_pr_check_runs_helper_recovers_from_malformed_snapshot() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="15", poll_interval_secs="5",
+		check_runs_responses=[{"stdout": "garbage"}, {"json": [{"check_runs": [
+			{"id": 1, "name": "ci", "status": "completed", "conclusion": "success"},
+		]}]}],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 1\n" in result["context_text"]
+	assert "reason=invalid_json" in result["stdout"]
+	assert result["mock_state"]["check_runs_index"] == 2
+
+
+def test_collect_pr_check_runs_helper_stops_malformed_repoll_at_deadline() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="1", poll_interval_secs="5",
+		check_runs_responses=[{"json": []}, {"json": [{"check_runs": [
+			{"id": 1, "status": "completed", "conclusion": "success"},
+		]}]}],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: api_error\n" in result["context_text"]
+	assert result["mock_state"]["check_runs_index"] == 1
+
+
+def test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout() -> None:
+	runs = [
+		{"id": idx, "name": f"check-{idx}", "status": "completed", "conclusion": "success"}
+		for idx in range(4)
+	]
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, gh_retry_max_attempts="2",
+		check_runs_responses=[
+			{"exit_code": 1, "stdout": '{"message":"FAILED-ATTEMPT-BODY"}', "stderr": "gh: HTTP 502: Bad Gateway"},
+			{"json": [{"check_runs": runs}]},
+		],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 4\n" in result["context_text"]
+	assert "failed_count: 0\n" in result["context_text"]
+	assert "FAILED-ATTEMPT-BODY" not in result["stdout"] + result["stderr"] + result["context_text"]
+	assert result["mock_state"]["check_runs_index"] == 2
+
+
 def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
 	disabled = _run_collect_pr_check_runs_harness(
 		pr_payload={"head": {"sha": "abc123"}},
@@ -3342,7 +3426,7 @@ def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
 	)
 	assert api_error["returncode"] == 0, api_error
 	assert "collection_status: api_error\n" in api_error["context_text"]
-	assert "Check-run API call failed; treat absence of failures as unknown rather than confirmed-passing.\n" in api_error["context_text"]
+	assert "Check-run API output was unavailable or invalid; treat absence of failures as unknown rather than confirmed-passing.\n" in api_error["context_text"]
 	assert "mock gh: check-runs failure\n" in api_error["stderr"]
 	assert "Check-run context bytes:" in api_error["stdout"]
 
@@ -3361,7 +3445,7 @@ def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 		context_file.write_text("stale-context\n", encoding="utf-8")
 
 		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
-			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="[]", stderr="")
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"check_runs": []}]', stderr="")
 
 		def _boom(*, raw_text: str, head_sha: str, final_status: str) -> str:
 			raise RuntimeError("boom")
@@ -3422,7 +3506,7 @@ def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None
 		context_file.write_text("stale-context\n", encoding="utf-8")
 
 		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
-			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="[]", stderr="")
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"check_runs": []}]', stderr="")
 
 		def _boom_wait_view(raw_text: str, self_run_id: str):
 			raise RuntimeError("wait-view boom")
@@ -7774,6 +7858,13 @@ def main() -> int:
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_closes_direct_log_redirect_response()
 	test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion()
+	test_post_review_snapshot_ignores_only_its_own_incomplete_check()
+	test_pending_and_startup_failure_checks_cannot_look_clean()
+	test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list()
+	test_collect_pr_check_runs_helper_rejects_malformed_successful_output()
+	test_collect_pr_check_runs_helper_recovers_from_malformed_snapshot()
+	test_collect_pr_check_runs_helper_stops_malformed_repoll_at_deadline()
+	test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout()
 	test_collect_pr_check_runs_helper_fail_open_contracts()
 	test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 	test_collect_pr_check_runs_helper_top_level_exception_is_fail_open()
