@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `ce66e86aec849e766fcb379374d4c11fcef41c25` on `claude/implement-plan-issue-4898-retrigger-dispatch-default-branch`; it matches the issue\u2019s Integration branch.\n\nScope-mode: Hold Scope\nReuse-audit: extends `smoke_review_checked_out_sha`\nScope-mode justification: The complete fix\u2014distinguishing an empty or whitespace-only log from a non-empty log with no checkout line\u2014fits the existing helper and tests, with no new dependency or external interface. It is within the \u226430 LOC and \u226410-minute completeness threshold. This follows `unattended_system_instructions.md` \u00a76 priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and lifecycle\n\nExtend an existing script; add no new script. The existing `.github/workflows/test-and-mark-stable.yml` `workflow_dispatch` release gate calls the helper in Phase 4 and Phase 4b, so no scheduler wiring is needed. No supervisor, database gate, or future-removal registry entry is required.\n\n## Files likely to change\n\n- `scripts/smoke_review_dispatch.sh` \u2014 classify a successfully read empty or whitespace-only job log as retryable.\n- `tests/test_smoke_review_dispatch.py` \u2014 extend the existing `GhStub`-based helper tests.\n- `changelog.d/5689-smoke-empty-job-log-retryable.md` \u2014 add an issue-specific bug-fix fragment.\n\n## Functions and data structures\n\nIn `smoke_review_checked_out_sha`, inspect the existing temporary log file after the successful read and before the line search. Return **1** with no output when it contains no non-whitespace byte; retain **2** for a non-empty log without the anchored checkout line. Preserve temporary-file cleanup and the existing first-anchored-match extraction. No data structure changes.\n\n## API/interface changes\n\nOnly the helper\u2019s return-code semantics change for empty or whitespace-only logs. Keep its arguments, SHA output, existing GitHub reads, and caller interfaces unchanged. Phase 4 and Phase 4b already retry rc=1 within their deadlines.\n\n## Decisions\n\n### D1 \u2014 Retry at the caller\n\n- **Chosen:** Return rc=1 for empty or whitespace-only logs and use the callers\u2019 existing bounded polling.\n- **Alternatives considered:** Add retries inside the helper.\n- **Why:** Reusing the established deadlines avoids another retry policy or an additional read on each helper invocation.\n\n## Security considerations\n\nThe existing GitHub job-log read is the trust boundary; this adds no endpoint or authorization surface. Keep repository/run-ID validation, the exact line-anchored pattern, and the **first-match** rule so later reviewed-content output cannot replace the trusted checkout line. A persistently empty log must exhaust the caller\u2019s deadline, not authorize an unverified run.\n\n## Risks and edge cases\n\nTest empty and whitespace-only bodies separately, including their lack of SHA output; a non-empty body without a match must remain rc=2. The planning checkout contains the helper and the reported defect, despite comments describing a fix merged into a different project branch. Existing unrelated worktree changes in `scripts/codex_model_catalog.json` and `scripts/gh_helpers.sh` must be left untouched.\n\n## Testing\n\nExtend the existing return-code cases for empty, whitespace-only, and non-empty unmatched logs; retain or strengthen the genuine-line and first-match assertions. Verify the existing API-call count does not increase. Run `bash -n scripts/smoke_review_dispatch.sh` and `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_review_dispatch.py`; the existing CI step also runs that test file.\n\nThe auto-posted `/answer` confirms no implementation clarification was needed. Earlier `Q1: A` replies concerned the retired Claude session\u2019s merge and audit handling, not this fix.\n\nPLAN_SELF_CHECK: WARNING: Unrelated pre-existing worktree changes must be preserved.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9b5d188d4e96e727b5c6f5bceb4bfbc3f06ea8119ae1c3ce3e7c1c3db3588a7b",
+  "lineage": {
+    "issue_number": 5689,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37101472261",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37101472261",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5689"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003060451_20c54f0f50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5689,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37101472261"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #5689",
+  "timestamps": {
+    "created_at": "2026-10-03T06:04:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
