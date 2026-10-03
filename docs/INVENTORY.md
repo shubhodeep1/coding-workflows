@@ -49,6 +49,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/claude-issue-intake.yml` — GitHub Actions workflow: Claude Issue Intake.
 - `.github/workflows/claude-issue-queue-watchdog.yml` — GitHub Actions workflow: Claude Issue Queue Watchdog.
+- `.github/workflows/claude-pool-worker.yml` — GitHub Actions workflow: Claude Pool Worker (reusable; called by the `shubhodeep1/claude-workers` wrapper).
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
 - `.github/workflows/drift-audit.yml` — GitHub Actions workflow: Drift Audit.
 - `.github/workflows/forward-merge-stable-to-main.yml` — GitHub Actions workflow: Forward-merge stable to main.
@@ -126,6 +127,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/claude_issue_intake.sh` — Validate one `claude-issue` payload and queue it as an `ai:claude-issue-queue` issue for the Claude issue pickup.
 - `scripts/claude_issue_queue_watchdog.sh` — Flag queued Claude issues the pickup left open past `CLAUDE_ISSUE_QUEUE_STALE_HOURS` and send one Telegram alert.
 - `scripts/claude_issue_route.py` — Route standalone issues to the Claude issue implementer or the Codex pipeline, and build/validate the handoff payload.
+- `scripts/claude_pool.py` — Claude worker pool logic for `claude-pool-worker.yml`: account probes and choice, prompts, run classification, transcript redaction (no API calls).
 - `scripts/claude_pr_sweep.py` — Catch-all sweep: queue a fresh Claude fixer (`/fix-claude-pr`) for `claude/*` PRs whose fix is overdue with no live claim.
 - `scripts/claude_session_janitor.py` — Stale session sweep: name the finished fixer, issue-start, and report sessions the Claude issue pickup archives (CLAUDE.md §26.I).
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.

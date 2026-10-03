@@ -1193,6 +1193,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `workflow-log-analysis.yml` | `workflow_dispatch` (typically called from comprehensive-test-and-release / test-and-mark-stable smoke gates) | Periodic Codex audit of workflow runs (analyze, deep-audit, api-redundancy passes); see [`probably_unnecessary_but_read_if_stuck.md`](probably_unnecessary_but_read_if_stuck.md) for the runbook |
 | `check_failure_triage.yml` | `check_run.completed` (failure) | LLM diagnoses a failing PR check and opens an `ai:check-triage` issue for the pipeline to fix. On by default; disable via `CHECK_FAILURE_TRIAGE_ENABLED=false`; see "Check Failure Triage Phase" below |
 | `claude-issue-intake.yml` | coding-workflows only: `repository_dispatch` (`claude-issue`), `workflow_dispatch` | Queues a standalone issue routed to Claude by `clarify.yml` as an `ai:claude-issue-queue` issue for the Claude issue pickup; see "Claude issue implementer" |
+| `claude-pool-worker.yml` | `workflow_call` from the `shubhodeep1/claude-workers` wrapper only | One headless Claude Code job on the least-used pool account; see "Claude worker pool" |
 | `claude-issue-queue-watchdog.yml` | coding-workflows only: `schedule` (hourly, :17), `workflow_dispatch` | Labels queue items nobody picked up within `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (default 3) `ai:claude-issue-queue-stale` and sends a Telegram ERROR; see "Claude issue implementer" |
 | `workflow_failure_heal.yml` | `issues.labeled`, `pull_request.labeled` (human-needed escalation labels) | Reports an `ai:needs-human` / terminal-latch escalation to coding-workflows, whose `workflow-failure-heal-intake.yml` diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline to fix (in coding-workflows for workflow defects, in the consumer for consumer defects). On by default; disable via `WORKFLOW_HEAL_ENABLED=false`; see "Workflow Failure Heal" below |
 
@@ -1513,6 +1514,91 @@ Stable log prefix: `CLAUDE_PR_SWEEP` (`start`, `skip`, `dry_run`,
 `binding_skipped`, `binding_failed`, `end`). A queued fix is bound to the
 sweep run like an intake item (see "Queue binding" under
 [Claude issue implementer](#claude-issue-implementer)).
+
+### Claude worker pool
+
+The Claude worker pool runs Claude work as headless Claude Code CLI jobs in
+GitHub Actions instead of long-lived claude.ai sessions
+(`docs/plans/claude-actions-worker-pool-plan.md`). It is being built in
+phases. This section describes what exists so far: the worker. Nothing is
+dispatched to it yet, and the Claude issue pickup and the §26 checkers keep
+running as described above.
+
+**Where things live.**
+
+| Piece | Repository | What it does |
+| --- | --- | --- |
+| `.github/workflows/claude-pool-worker.yml` | coding-workflows | Reusable workflow (`workflow_call` only). Picks a pool account, runs one job, reports the result |
+| `scripts/claude_pool.py` | coding-workflows | Every decision the workflow makes: account names, token clean-up, probe parsing, account choice, prompts, result classification, transcript redaction. No API calls |
+| `.github/ai/claude_pool.json` | coding-workflows | Pool settings. Ships with `dispatch_types: []`, which means pool off |
+| `.github/workflows/claude-pool-worker.yml` | `shubhodeep1/claude-workers` (private) | Thin wrapper: `workflow_dispatch` from the dispatcher, a smoke job on every push to `claude/**`, and `secrets: inherit` into the reusable workflow at `@main` |
+
+**One worker run** (`pool <item_type> q<queue issue> a<attempt>` is the run
+name; the dispatcher finds a queue item's runs by it):
+
+1. `select`: lists every `CLAUDE_POOL_TOKEN_<NAME>` secret, strips whitespace
+   from each token and masks it, and runs a one-word Haiku probe with it.
+   Each probe reports the account's 5-hour and 7-day utilization. The run
+   uses the account with the lowest `max(5-hour, 7-day)` below
+   `gate_utilization` (default 0.90); ties go to the alphabetically first
+   name. An account whose probe fails is skipped. Each probe gets only its
+   own token, is capped at 60 seconds, and no probe starts after 6 minutes.
+2. `work`: checks out the target repository with `GH_PAT`, trusts the
+   checkout so its allow list and hooks apply, denies the Edit, Write and
+   NotebookEdit tools on the checkout's own `.claude/**`
+   (`workflow-templates/.claude/**` stays writable; Bash is not denied, so
+   the commands' twin-first rule covers shell writes), and runs the item's
+   slash command (`/implement-issue-claude` or `/fix-claude-pr`) on
+   `claude-opus-5-5` at `--effort high` in `auto` permission mode, with the
+   GitHub MCP server named `github`. Stage items
+   (`/implement-plan-claude … — resume.`) are refused until phase 3 of the
+   plan adds their payload parser. The transcript, with every token value
+   (plain and base64) replaced by `***` by a freshly checked-out helper, is
+   uploaded as the `claude-pool-transcript` artifact (kept 14 days).
+3. `report`: writes `claude-pool-result.json` (artifact `claude-pool-result`)
+   with the outcome: `success`, `auth_failed`, `usage_limit`, `all_gated`,
+   `no_accounts`, `crashed`, or `timeout`. The run fails for every outcome
+   but `success`.
+
+**Secrets** (in `shubhodeep1/claude-workers` only; no coding-workflows
+workflow reads them):
+
+| Secret | Value |
+| --- | --- |
+| `CLAUDE_POOL_TOKEN_<NAME>` | One per pool account, made with `claude setup-token`. `<NAME>` is upper-case letters, digits and `_` |
+| `GH_PAT` | A **classic** token with `repo` and `workflow` scopes. A fine-grained token cannot read check runs on private repositories, and the fix commands need them |
+
+**Adding or removing an account.**
+
+1. Sign in to the account at claude.ai in a browser.
+2. Run `npx -y @anthropic-ai/claude-code setup-token` on any machine (nothing
+   is installed) and copy the token. A copy that wraps across lines is fine:
+   the worker strips whitespace.
+3. Add it to `shubhodeep1/claude-workers` → Settings → Secrets and variables →
+   Actions as `CLAUDE_POOL_TOKEN_<NAME>`. The next run probes it. Nothing else
+   changes.
+
+To remove an account, delete its secret. A token lasts one year; an expired
+one shows up as `auth_failed` for that account.
+
+**Smoke test.** Every push to a `claude/**` branch of `claude-workers` runs
+the `smoke` job: it probes every account, runs a Haiku no-op through all three
+jobs, checks that the `.claude/**` deny rule holds while a twin write
+succeeds, checks that the twin-first commit guard refuses a shell-written
+`.claude/**` change while a twin change commits, reads check runs on the
+first registered consumer with `GH_PAT`, and reads the runner repo's README
+through the GitHub MCP server.
+
+**Failure modes.** A failed probe skips that account. No account under the
+gate ends the run as `all_gated` (with the earliest reset time in the
+result); no `CLAUDE_POOL_TOKEN_*` secret at all ends it as `no_accounts`. A
+worker job that runs out of time (`timeout_minutes`: 350 for issues and
+stages, 120 for PR fixes) ends as `timeout`; one that ends without a result
+ends as `crashed`. A transcript that could not be redacted is not uploaded,
+and the run ends as `crashed`. Work the job did not push is lost; the next
+attempt starts again from GitHub.
+
+Stable log prefix: `CLAUDE_POOL`.
 
 ### Check Failure Triage Phase
 
