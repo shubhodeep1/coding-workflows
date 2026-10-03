@@ -124,7 +124,7 @@ def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Pa
 	run_env = dict(os.environ)
 	# The review workflow exports these names in the editor process. Tests must
 	# opt in explicitly rather than inherit the live PR's paths or base branch.
-	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH"):
+	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH", "IS_SMOKE_TEST"):
 		run_env.pop(inherited_name, None)
 	run_env.update({
 		"PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -174,6 +174,79 @@ def test_gate_queues_younger_overlapping_pr(tmp_path: Path) -> None:
 	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
 	# Own paths came from PR_DIFF_FILE: no pulls/4077/files call.
 	assert "pulls/4077/files" not in log_text
+
+
+def test_gate_smoke_bypasses_overlap_but_other_signals_queue(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	canary = "tests/e2e_smoke_canary.txt"
+	_write_files(fixtures, 4075, [canary])
+	_write_files(fixtures, 4077, [canary])
+	for signal in ("true", "TRUE", "false", None):
+		log.write_text("", encoding="utf-8")
+		kwargs = {"IS_SMOKE_TEST": signal} if signal is not None else {}
+		result, log_text, env_out = _run(
+			"gate", tmp_path, bin_dir, fixtures, log,
+			PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", **kwargs,
+		)
+		assert result.returncode == 0, result.stderr
+		if signal == "true":
+			assert "result=unblocked action=continue" in result.stdout
+			assert "pulls/4075/files" not in log_text
+			assert "pulls/4077/files" not in log_text
+			assert "issues/4077/labels" not in log_text
+			assert "issues/4077/comments" not in log_text
+			assert "AUTOFIX_MERGE_QUEUED" not in env_out
+			assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+		else:
+			assert "result=queued blockers=#4075" in result.stdout
+			assert "pulls/4075/files" in log_text
+			assert "labels[]=ai:merge-queued" in log_text
+			assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
+def test_gate_smoke_retires_prior_queue_before_removing_label(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([{
+		"id": 98,
+		"body": "<!-- merge-train:queued -->\nReview queued",
+	}]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["tests/e2e_smoke_canary.txt"])
+	_write_files(fixtures, 4077, ["tests/e2e_smoke_canary.txt"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", IS_SMOKE_TEST="true",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=gate" in result.stdout
+	assert "pulls/4075/files" not in log_text
+	assert "pulls/4077/files" not in log_text
+	assert "merge-train:queue-retired" in log_text
+	assert log_text.index("PATCH repos/acme/consumer/issues/comments/98") < log_text.index(
+		"DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued"
+	)
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+
+
+def test_gate_smoke_lookup_failure_does_not_retire_queue(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "fail_get").touch()
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", IS_SMOKE_TEST="true",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "::warning::" in result.stdout
+	assert "issues/4077/labels" not in log_text
+	assert "merge-train:queue-retired" not in log_text
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
 
 
 def test_gate_continues_when_older_pr_is_disjoint_or_younger(tmp_path: Path) -> None:
