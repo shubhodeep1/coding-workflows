@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Many merged changes touching scripts, workflows, or workspace-related files also update this manifest. When changing files that contribute to the workspace source set, check whether the manifest needs regeneration or an accompanying update.",
+  "fingerprint": "54f927ff007ab8851c0df930deaa1bad1fb9b6e3f20a5ad82f607810fa6a1d85",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37106035607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37106035607",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4542",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4552",
+      "https://github.com/shubhodeep1/coding-workflows/issues/5689",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6086",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6087",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6094",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6095",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6120",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6121",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6129"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261003072319_5f01267092",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep `.ai/.workspace_source_manifest.txt` in sync with workspace-source changes.",
+  "timestamps": {
+    "created_at": "2026-10-03T07:23:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
