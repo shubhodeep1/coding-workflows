@@ -316,7 +316,11 @@ def test_guard_pattern_matches_claude_twin_sync_guard_paths() -> None:
 		"settings.local.json",
 		"commands/settings.json",
 		"hooksx/a.py",
+		"scripts/a.py",
+		"scripts/lib/b.py",
 		"scripts/hooks/a.py",
+		"scriptsx/a.py",
+		"commands/scripts/a.py",
 		"commands/foo.md",
 	]
 	case_script = f'for rel in "$@"; do case "$rel" in {pattern}) echo "$rel";; esac; done'
@@ -664,32 +668,66 @@ def test_claude_sync_skips_a_reviewed_guard_that_resolves_outside_the_reviewed_t
 
 
 def test_claude_sync_skips_a_reviewed_guard_that_resolves_to_a_non_guard_file() -> None:
-	"""A guard linked to a non-guard file in .claude/ (e.g. scripts/, which the twin sync merges without the owner) is not reviewed guard content (PR #5654 review round 5)."""
+	"""A guard linked to a non-guard file in .claude/ (e.g. commands/, which the twin sync merges without the owner) is not reviewed guard content (PR #5654 review round 5; scripts/ is a guard since #5609)."""
 	twins = {
 		"hooks/real.py": "reviewed hook\n",
-		"hooks/to_script.py": "UNREVIEWED twin\n",
-		"hooks/scripts_dir/s.py": "UNREVIEWED dir twin\n",
-		"scripts/s.py": "twin script\n",
+		"hooks/to_command.py": "UNREVIEWED twin\n",
+		"hooks/commands_dir/c.md": "UNREVIEWED dir twin\n",
+		"commands/c.md": "twin command\n",
 	}
-	reviewed = {"hooks/real.py": "reviewed hook\n", "scripts/s.py": "UNREVIEWED script\n", "commands/c.md": "cmd\n"}
+	reviewed = {"hooks/real.py": "reviewed hook\n", "commands/c.md": "UNREVIEWED command\n", "commands/d.md": "cmd\n"}
 	reviewed_symlinks = {
 		# First pass: has a twin.
-		"hooks/to_script.py": "../scripts/s.py",
+		"hooks/to_command.py": "../commands/c.md",
 		# Second pass: no twin.
-		"hooks/no_twin_to_command.py": "../commands/c.md",
+		"hooks/no_twin_to_command.py": "../commands/d.md",
 		# A directory link onto a non-guard directory (first pass, via its twin).
-		"hooks/scripts_dir": "../scripts",
+		"hooks/commands_dir": "../commands",
 		# Guard to guard: still installed.
 		"settings.local.json": "hooks/real.py",
 	}
 	tree, stdout, outputs = _run_claude_sync(twins, reviewed, {}, reviewed_symlinks=reviewed_symlinks)
-	for rel in ("hooks/to_script.py", "hooks/no_twin_to_command.py", "hooks/scripts_dir/s.py"):
+	for rel in ("hooks/to_command.py", "hooks/no_twin_to_command.py", "hooks/commands_dir/c.md"):
 		assert rel not in tree
 		assert f"::warning::claude-guard-sync: .claude/{rel} in the stable .claude/ tree resolves outside its guard paths (a symlink to its twin, to a non-guard file, or out of the tree); nothing installed." in stdout
 	assert "UNREVIEWED" not in "".join(tree.values())
 	assert tree["settings.local.json"] == "reviewed hook\n"
 	assert tree["hooks/real.py"] == "reviewed hook\n"
-	assert tree["scripts/s.py"] == "twin script\n"
+	assert tree["commands/c.md"] == "twin command\n"
+
+
+def test_claude_sync_takes_scripts_from_the_reviewed_claude_tree() -> None:
+	"""`.claude/scripts/**` is a guard path since issue #5609, so a script twin that runs ahead of the owner-merged .claude/ copy never reaches a consumer."""
+	twins = {
+		"scripts/new.py": "UNREVIEWED twin\n",
+		"scripts/kept.py": "UNREVIEWED twin 2\n",
+		"scripts/same.py": "same script\n",
+		"scripts/twin_only.py": "UNREVIEWED twin only\n",
+		"commands/c.md": "twin command\n",
+	}
+	reviewed = {
+		"scripts/new.py": "reviewed script\n",
+		"scripts/kept.py": "reviewed script 2\n",
+		"scripts/same.py": "same script\n",
+		"scripts/lib/no_twin.py": "reviewed lib\n",
+	}
+	# A guard linked to a script is a guard-to-guard link: installed.
+	reviewed_symlinks = {"hooks/to_script.py": "../scripts/same.py"}
+	local = {"scripts/kept.py": "consumer script\n"}
+	tree, stdout, outputs = _run_claude_sync(twins, reviewed, local, reviewed_symlinks=reviewed_symlinks)
+	assert tree["scripts/new.py"] == "reviewed script\n"
+	assert tree["scripts/kept.py"] == "consumer script\n"
+	assert tree["scripts/same.py"] == "same script\n"
+	assert "scripts/twin_only.py" not in tree
+	assert tree["scripts/lib/no_twin.py"] == "reviewed lib\n"
+	assert tree["hooks/to_script.py"] == "same script\n"
+	assert tree["commands/c.md"] == "twin command\n"
+	assert "UNREVIEWED" not in "".join(value for rel, value in tree.items() if rel != "commands/c.md")
+	assert "::warning::claude-guard-sync: .claude/scripts/kept.py differs from its workflow-templates twin on stable (owner sync pending); kept the existing file." in stdout
+	assert "::warning::claude-guard-sync: .claude/scripts/twin_only.py is not in the stable .claude/ tree (its twin is not synced there yet); nothing installed." in stdout
+	for rel in ("scripts/lib/no_twin.py", "hooks/to_script.py"):
+		assert f"::warning::claude-guard-sync: .claude/{rel} has no regular-file workflow-templates twin on stable (owner sync pending, or the twin is a symlink); installed the .claude/ copy." in stdout
+	assert outputs["claude_changed"] == "5"
 
 
 def test_claude_sync_installs_a_reviewed_guard_whose_twin_sits_under_a_symlinked_directory() -> None:

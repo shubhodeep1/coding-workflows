@@ -64,6 +64,7 @@ def repo(tmp_path: Path) -> Path:
 	git(work, "remote", "add", "origin", str(origin))
 	for rel, text in {
 		"commands/a.md": "a v1\n",
+		"commands/c.md": "c v1\n",
 		"scripts/s.py": "s v1\n",
 		"hooks/h.py": "h v1\n",
 		"settings.json": "{}\n",
@@ -104,8 +105,10 @@ def test_unsafe_path_reason(rel, unsafe):
 	("settings.json", True),
 	("settings.local.json", True),
 	("commands/settings.json", False),
-	("scripts/check_in_status.py", False),
+	("scripts/check_in_status.py", True),
+	("scripts/nested/helper.sh", True),
 	("commands/hooks.md", False),
+	("commands/scripts.md", False),
 ])
 def test_is_guard_path(rel, guard):
 	assert sync.is_guard_path(rel) is guard
@@ -205,6 +208,19 @@ def test_plan_guard_copy_needs_the_owner(repo):
 	assert plan["guard"] and plan["needs_owner"]
 
 
+def test_plan_script_copy_needs_the_owner(repo):
+	"""Issue #5609: `.claude/settings.json` lets sessions run `.claude/scripts/**`
+	with their GitHub access and no prompt, so a script copy is a guard change."""
+	write(repo, twin("scripts/s.py"), "s v2\n")
+	write(repo, twin("scripts/new_helper.py"), "new\n")
+	commit(repo, "script twins ahead")
+	plan = sync.plan_sync(str(repo), "HEAD")
+	assert [c["path"] for c in plan["copies"]] == ["scripts/new_helper.py", "scripts/s.py"]
+	assert plan["guard_paths"] == ["scripts/new_helper.py", "scripts/s.py"]
+	assert plan["guard"] and plan["needs_owner"]
+	assert "`.claude/scripts/s.py`" in sync.render_body(plan)
+
+
 def test_plan_symlinks_are_conflicts(repo):
 	os.symlink("a.md", repo / twin("commands/link.md"))
 	write(repo, twin("commands/b.md"), "b\n")
@@ -296,21 +312,21 @@ def test_check_fails_for_a_claude_only_new_file_and_a_one_sided_delete(repo):
 def test_check_violation_messages_name_the_side_that_is_missing(repo):
 	base = git(repo, "rev-parse", "HEAD")
 	write(repo, claude("commands/only-here.md"), "x\n")
-	(repo / claude("scripts/s.py")).unlink()
+	(repo / claude("commands/c.md")).unlink()
 	write(repo, claude("commands/a.md"), "ahead\n")
 	head = commit(repo, "ahead")
 	reasons = {v["path"]: v["reason"] for v in sync.check_not_ahead(str(repo), base, head)["violations"]}
 	assert reasons[claude("commands/only-here.md")].startswith("has no twin at ")
 	assert "delete both copies together" in reasons[claude("commands/only-here.md")]
-	assert reasons[claude("scripts/s.py")].startswith("deleted while ")
-	assert "edit the twin" not in reasons[claude("scripts/s.py")]
+	assert reasons[claude("commands/c.md")].startswith("deleted while ")
+	assert "edit the twin" not in reasons[claude("commands/c.md")]
 	assert "edit the twin" in reasons[claude("commands/a.md")]
 
 
 def test_check_allows_a_synced_delete_and_upstream_only_edits(repo):
 	base = git(repo, "rev-parse", "HEAD")
-	(repo / claude("scripts/s.py")).unlink()
-	(repo / twin("scripts/s.py")).unlink()
+	(repo / claude("commands/c.md")).unlink()
+	(repo / twin("commands/c.md")).unlink()
 	write(repo, claude("commands/analyze-log.md"), "upstream edition v2\n")
 	write(repo, claude("commands/claude-issue-pickup.md"), "pickup\n")
 	head = commit(repo, "ok")
@@ -427,7 +443,7 @@ def test_is_sync_pr_head(ref, head_repo, base_repo, expected):
 	assert sync.is_sync_pr_head(ref, head_repo, base_repo) is expected
 
 
-@pytest.mark.parametrize("rel", ["hooks/h.py", "settings.json"])
+@pytest.mark.parametrize("rel", ["hooks/h.py", "settings.json", "scripts/s.py"])
 def test_check_ordinary_pr_editing_a_guard_path_and_its_twin_together_fails(repo, rel):
 	"""The #5246 bypass: identical content in both copies is not authorization."""
 	base, head = _both_in_one(repo, rel, "loosened\n")
@@ -445,13 +461,14 @@ def test_check_push_of_a_guard_edit_made_with_its_twin_fails(repo):
 	assert "differs from workflow-templates/.claude/hooks/h.py on the base commit" in result["violations"][0]["reason"]
 
 
-def test_check_ordinary_pr_copying_the_base_twin_into_a_guard_path_fails(repo):
+@pytest.mark.parametrize("rel", ["hooks/h.py", "scripts/s.py"])
+def test_check_ordinary_pr_copying_the_base_twin_into_a_guard_path_fails(repo, rel):
 	"""Only a sync PR (owner-merged) may copy a guard twin, even a reviewed one."""
-	base, head = _twin_then_copy(repo, "hooks/h.py", "h v2\n")
+	base, head = _twin_then_copy(repo, rel, "reviewed v2\n")
 	assert not sync.check_not_ahead(str(repo), base, head, **PR_ORDINARY)["ok"]
 
 
-@pytest.mark.parametrize("rel", ["hooks/h.py", "settings.json", "hooks/new_guard.py"])
+@pytest.mark.parametrize("rel", ["hooks/h.py", "settings.json", "hooks/new_guard.py", "scripts/s.py", "scripts/new_helper.py"])
 def test_check_sync_pr_and_its_merge_copying_the_base_twin_pass(repo, rel):
 	base, head = _twin_then_copy(repo, rel, "reviewed v2\n")
 	pr = sync.check_not_ahead(str(repo), base, head, **PR_SYNC)
@@ -478,10 +495,11 @@ def test_check_pull_request_without_head_context_fails_closed(repo):
 	assert not sync.check_not_ahead(str(repo), base, head, event="pull_request")["ok"]
 
 
-def test_check_guard_deletion_fails_even_with_its_twin(repo):
+@pytest.mark.parametrize("rel", ["hooks/h.py", "scripts/s.py"])
+def test_check_guard_deletion_fails_even_with_its_twin(repo, rel):
 	base = git(repo, "rev-parse", "HEAD")
-	(repo / claude("hooks/h.py")).unlink()
-	(repo / twin("hooks/h.py")).unlink()
+	(repo / claude(rel)).unlink()
+	(repo / twin(rel)).unlink()
 	head = commit(repo, "drop a guard")
 	for kwargs in ({}, PR_ORDINARY, PR_SYNC):
 		result = sync.check_not_ahead(str(repo), base, head, **kwargs)
@@ -605,6 +623,17 @@ def test_check_guard_provenance_refuses_a_mode_change_main_does_not_carry(repo):
 	assert [v["path"] for v in result["violations"]] == [claude("hooks/h.py")]
 
 
+def test_check_guard_provenance_covers_scripts(repo):
+	"""Issue #5609: script content that never passed `main`'s owner-reviewed sync PR cannot enter `stable`."""
+	main, stable = _main_and_stable(repo)
+	write(repo, claude("scripts/s.py"), "stable-only script\n")
+	write(repo, twin("scripts/s.py"), "stable-only script\n")
+	head = commit(repo, "script change straight into stable")
+	result = sync.check_not_ahead(str(repo), stable, head, main)
+	assert [v["path"] for v in result["violations"]] == [claude("scripts/s.py")]
+	assert "not on the default branch" in result["violations"][0]["reason"]
+
+
 def test_check_guard_provenance_ignores_non_guard_paths(repo):
 	main, stable = _main_and_stable(repo)
 	write(repo, claude("commands/a.md"), "stable-only fix\n")
@@ -658,6 +687,7 @@ def test_merge_check_accepts_a_pure_sync(repo):
 	({twin("commands/a.md"): "a v9\n", claude("commands/a.md"): "a v9\n"},
 		[{"filename": twin("commands/a.md"), "status": "modified"}, {"filename": claude("commands/a.md"), "status": "modified"}], "outside .claude/"),
 	({claude("hooks/h.py"): "h v1\n"}, [{"filename": claude("hooks/h.py"), "status": "modified"}], "guard path"),
+	({claude("scripts/s.py"): "s v1\n"}, [{"filename": claude("scripts/s.py"), "status": "modified"}], "guard path"),
 	({}, [{"filename": claude("scripts/s.py"), "status": "removed"}], "status removed"),
 	({}, [{"filename": claude("commands/analyze-log.md"), "status": "modified"}], "upstream-only"),
 	({}, [], "changes no file"),
@@ -838,7 +868,7 @@ def test_run_updates_an_open_pr_forward_when_main_moves(repo):
 	git(repo, "fetch", "-q", "origin")
 	old_head = git(repo, "rev-parse", f"origin/{branch}")
 	pr = _pr_from_origin(repo, branch)
-	main = _twin_ahead(repo, "scripts/s.py", "s v2\n")
+	main = _twin_ahead(repo, "commands/c.md", "c v2\n")
 	gh = FakeGitHub(prs=[pr])
 	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
 	assert summary["action"] == "updated" and summary["pr"] == 40
@@ -847,7 +877,7 @@ def test_run_updates_an_open_pr_forward_when_main_moves(repo):
 	new_head = git(repo, "rev-parse", f"origin/{branch}")
 	assert git(repo, "merge-base", "--is-ancestor", old_head, new_head) == ""
 	assert git(repo, "merge-base", "--is-ancestor", main, new_head) == ""
-	assert sorted(git(repo, "diff", "--name-only", main, new_head).splitlines()) == [claude("commands/a.md"), claude("scripts/s.py")]
+	assert sorted(git(repo, "diff", "--name-only", main, new_head).splitlines()) == [claude("commands/a.md"), claude("commands/c.md")]
 	assert summary["merge"] == "waiting for checks on the new head"
 
 
@@ -967,6 +997,21 @@ def test_run_guard_pr_is_labelled_alerted_and_never_merged(repo):
 	assert any("state=success" in w for w in approved.wrote("/statuses/"))
 	assert approved.merges() == [] and approved.wrote("labels[]") == []
 	assert not any(w for w in approved.writes if "APPROVE" in " ".join(w) or "/reviews" in " ".join(w))
+
+
+def test_run_script_sync_pr_needs_the_owner_and_is_never_merged(repo):
+	"""Issue #5609: a green script sync PR waits for the owner like a hook change."""
+	_twin_ahead(repo, "scripts/s.py", "s v2\n")
+	gh = FakeGitHub()
+	summary = sync.run_sync(str(repo), gh, "HEAD", "main", "owner", "77")
+	assert summary["needs_owner"] and summary["merge"] == "owner only"
+	assert ".claude/scripts/s.py" in summary["alert"]
+	assert gh.wrote(f"labels[]={sync.APPROVAL_LABEL}")
+	git(repo, "fetch", "-q", "origin")
+	pr = _pr_from_origin(repo, summary["branch"], labels=[sync.APPROVAL_LABEL])
+	green = FakeGitHub(prs=[pr], runs=[_run("lint")], files=[{"filename": claude("scripts/s.py"), "status": "modified"}])
+	summary = sync.run_sync(str(repo), green, "HEAD", "main", "owner", "77")
+	assert summary["merge"] == "owner only" and green.merges() == []
 
 
 def _approval_status(state, description):

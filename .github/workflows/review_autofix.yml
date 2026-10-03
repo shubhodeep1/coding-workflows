@@ -546,8 +546,9 @@ jobs:
           elif [[ "${pr_head_ref}" == claude/claude-twin-sync-* ]]; then
             # CLAUDE.md §28.C: a Claude twin sync PR copies already-reviewed
             # workflow-templates/.claude/** into .claude/**. It is merged by
-            # claude-twin-sync.yml (commands/scripts) or by the repository
-            # owner (hooks/settings), never by AI review, so a removed
+            # claude-twin-sync.yml (commands with no conflict) or by the
+            # repository owner (hooks, scripts since issue #5609, settings,
+            # or any listed conflict), never by AI review, so a removed
             # [skip ai] marker cannot route a guard change into auto-merge.
             SHOULD_RUN="false"
             SKIP_REASON="claude_twin_sync"

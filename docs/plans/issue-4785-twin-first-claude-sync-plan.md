@@ -6,7 +6,7 @@ Security pass: run
 
 ## Summary
 
-Unattended sessions cannot edit `.claude/**`: Claude Code never auto-approves those edits. So every `/implement-plan-claude` phase that changes a hook, a setting, a command, or a session script stops at `Status: BLOCKED` until an operator-watched session applies it. This plan makes the unprotected twin, `workflow-templates/.claude/**`, the only thing unattended sessions edit. A new workflow, `.github/workflows/claude-twin-sync.yml`, copies each changed twin into `.claude/**` through one sync PR after the change reaches `main`. Sync PRs that touch only commands and scripts merge themselves once CI is green. Sync PRs that touch hooks or settings wait for the repository owner.
+Unattended sessions cannot edit `.claude/**`: Claude Code never auto-approves those edits. So every `/implement-plan-claude` phase that changes a hook, a setting, a command, or a session script stops at `Status: BLOCKED` until an operator-watched session applies it. This plan makes the unprotected twin, `workflow-templates/.claude/**`, the only thing unattended sessions edit. A new workflow, `.github/workflows/claude-twin-sync.yml`, copies each changed twin into `.claude/**` through one sync PR after the change reaches `main`. Sync PRs that touch only commands merge themselves once CI is green. Sync PRs that touch hooks, scripts (since issue #5609), or settings wait for the repository owner.
 
 ## Context
 
@@ -43,7 +43,7 @@ Unattended sessions cannot edit `.claude/**`: Claude Code never auto-approves th
     - every check run on its head has completed with `success`, `neutral`, or `skipped`;
     - CI's `lint` run is among them;
     - every changed path is a non-guard, non-excluded `.claude/` file whose head content equals the twin on `main`.
-  - A sync PR that touches `.claude/hooks/**`, `.claude/settings.json`, or `.claude/settings.local.json`, or that lists a conflict, is labelled `ai:claude-sync-approval` and triggers one Telegram alert. The workflow never approves, merges, or enables auto-merge on it.
+  - A sync PR that touches `.claude/hooks/**`, `.claude/scripts/**` (since issue #5609), `.claude/settings.json`, or `.claude/settings.local.json`, or that lists a conflict, is labelled `ai:claude-sync-approval` and triggers one Telegram alert. The workflow never approves, merges, or enables auto-merge on it.
   - The workflow posts a commit status `claude-twin-sync/owner-approval` on every sync head. For a guard or conflict sync PR it reads `success` only when the owner's latest review on the current head is `APPROVED`, and `pending` otherwise. A non-guard sync PR gets `success`, so the status can be made a required check without blocking it.
 - G6: Automation cannot merge a sync PR by AI review alone. Sync PRs carry `[skip ai]`, and in addition `review_autofix.yml`'s gate and `scripts/claude_pr_sweep.py` skip any head starting `claude/claude-twin-sync-`, with no auto-merge.
 - G7: A new CI step runs `claude_twin_sync.py check`, so `.claude/` is never ahead of its twin. It fails when a PR, or a push to `main`/`stable`, changes a non-excluded `.claude/<file>` to anything other than the twin's content at the same commit. The twin may be ahead of `.claude/`.
@@ -138,7 +138,7 @@ A single phase. Issue mode (CLAUDE.md §28.A) authorises a single-phase plan: `/
 Phase 1:
 
 1. **`scripts/claude_twin_sync.py` [new]** (tabs, `#!/usr/bin/env python3`).
-   - Constants `TWIN_ROOT = "workflow-templates/.claude"`, `CLAUDE_ROOT = ".claude"`, `UPSTREAM_ONLY_PATHS` (6 entries), `GUARD_PATH_PREFIXES` (`hooks/`) and `GUARD_PATH_FILES` (`settings.json`, `settings.local.json`), `SYNC_BRANCH_PREFIX = "claude/claude-twin-sync-"`, `HISTORY_LIMIT = 500`.
+   - Constants `TWIN_ROOT = "workflow-templates/.claude"`, `CLAUDE_ROOT = ".claude"`, `UPSTREAM_ONLY_PATHS` (6 entries), `GUARD_PATH_PREFIXES` (`hooks/`, and `scripts/` since issue #5609) and `GUARD_PATH_FILES` (`settings.json`, `settings.local.json`), `SYNC_BRANCH_PREFIX = "claude/claude-twin-sync-"`, `HISTORY_LIMIT = 500`.
    - Subcommands `plan`, `check`, `merge-check`, and `run` (the workflow driver). The copies are written by `build_tree` on a temporary index, and the owner approval is decided in-process by `owner_approved` from the reviews list and the head sha (AD-11: the plan first named these `apply` and `approval` subcommands). Git access goes through `subprocess` with argument lists only.
    - Docstring per §15: input and output shape, API calls (none — git only), and fail-closed behaviour: any error exits 2, and the workflow treats that as "do not merge".
 2. **`.github/workflows/claude-twin-sync.yml` [new]**, 2-space YAML.

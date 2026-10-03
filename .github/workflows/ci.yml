@@ -213,7 +213,7 @@ jobs:
           # but the twin: the check fails when this PR or push changes a
           # .claude/ file to content that differs from its twin at HEAD.
           # On main (issue #5246), guard paths (.claude/hooks/**,
-          # .claude/settings*.json) fail closed: they may only become the twin
+          # .claude/scripts/**, .claude/settings*.json) fail closed: they may only become the twin
           # already on the base commit, are never deleted, and on a PR change
           # only from a same-repository claude/claude-twin-sync-* head, which
           # only the owner merges.

@@ -211,9 +211,10 @@ jobs:
           # stable ref, log it and skip the twin loop — the sync is
           # additive. Guards in the .claude/ tree are still checked.
           #
-          # Guard paths (hooks/**, settings.json, settings.local.json; the
-          # GUARD_PATH_PREFIXES / GUARD_PATH_FILES of
-          # scripts/claude_twin_sync.py) are the exception (issue #5607). A
+          # Guard paths (hooks/**, scripts/**, settings.json,
+          # settings.local.json; the GUARD_PATH_PREFIXES / GUARD_PATH_FILES of
+          # scripts/claude_twin_sync.py) are the exception (issue #5607;
+          # scripts/** since issue #5609). A
           # guard twin can reach main, and stable by promotion, while its
           # owner-only .claude/ sync PR is still pending, so the twin is not
           # reviewed content. A guard file is therefore copied from the same
@@ -242,8 +243,9 @@ jobs:
           # under a path that exists as something other than a directory; the
           # consumer's file is kept and nothing is installed there.
           # Each skipped or kept guard gets a ::warning:: line. In a shell
-          # `case` pattern `*` also matches `/`, so `hooks/*` below covers
-          # nested hooks (hooks/lib/x.py) like the Python startswith check.
+          # `case` pattern `*` also matches `/`, so `hooks/*` and `scripts/*`
+          # below cover nested files (hooks/lib/x.py) like the Python
+          # startswith check.
 
           UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
           CLAUDE_UPSTREAM_DIR="${UPSTREAM_DIR}/.claude"
@@ -255,7 +257,7 @@ jobs:
 
           # Returns 0 when $1 resolves to a guard path inside the stable
           # .claude/ tree, 1 when it resolves anywhere else (its twin, out of
-          # the tree, or a non-guard file there such as .claude/scripts/,
+          # the tree, or a non-guard file there such as .claude/commands/,
           # which the twin sync merges without the owner), and 2 when
           # realpath itself fails.
           guard_source_is_reviewed() {
@@ -266,7 +268,7 @@ jobs:
               *) return 1 ;;
             esac
             case "${guard_resolved_path#"${CLAUDE_REVIEWED_REAL}"/}" in
-              hooks/*|settings.json|settings.local.json) return 0 ;;
+              hooks/*|scripts/*|settings.json|settings.local.json) return 0 ;;
             esac
             return 1
           }
@@ -358,7 +360,7 @@ jobs:
             claude_source_path="${upstream_path}"
 
             case "${rel}" in
-              hooks/*|settings.json|settings.local.json)
+              hooks/*|scripts/*|settings.json|settings.local.json)
                 guard_twin_seen["${rel}"]=1
                 claude_source_path="${CLAUDE_REVIEWED_DIR}/${rel}"
                 if [ ! -f "${claude_source_path}" ]; then
@@ -429,7 +431,7 @@ jobs:
               [ -n "${reviewed_guard_path}" ] || continue
               rel="${reviewed_guard_path#${CLAUDE_REVIEWED_DIR}/}"
               case "${rel}" in
-                hooks/*|settings.json|settings.local.json) ;;
+                hooks/*|scripts/*|settings.json|settings.local.json) ;;
                 *) continue ;;
               esac
               if [ -n "${guard_twin_seen["${rel}"]+set}" ]; then

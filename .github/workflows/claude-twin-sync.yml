@@ -9,11 +9,13 @@ name: Claude Twin Sync
 # a twin change is on the default branch, scripts/claude_twin_sync.py copies
 # each changed twin file into .claude/** on claude/claude-twin-sync-<sha> and
 # opens (or updates, never duplicates) one PR:
-#   - Commands and scripts only: the script merges the PR once every check
+#   - Commands only: the script merges the PR once every check
 #     run on its head has passed (CI's lint included) and every changed file
 #     equals the default branch's twin.
-#   - Hooks or settings (.claude/hooks/**, .claude/settings.json,
-#     .claude/settings.local.json), or a conflict (a .claude/ file changed
+#   - Hooks, scripts, or settings (.claude/hooks/**, .claude/scripts/**,
+#     .claude/settings.json, .claude/settings.local.json; sessions run the
+#     scripts with their GitHub access and no prompt, issue #5609), or a
+#     conflict (a .claude/ file changed
 #     directly): labelled ai:claude-sync-approval, one Telegram alert per new
 #     head. The workflow never approves, merges, or enables auto-merge on it;
 #     the repository owner reviews and merges it. The status

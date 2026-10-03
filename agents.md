@@ -1234,15 +1234,17 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   and an open one is closed when the twins already match. With only
   conflicts, the PR carries an empty marker commit.
 - **Merge rule by path:**
-  - Only commands or scripts: the workflow merges it
+  - Only commands: the workflow merges it
     (`gh pr merge --squash --match-head-commit`) once every check run on the
     head has completed `success`/`neutral`/`skipped`, CI's `lint` run is
     among them, commit statuses (if any) combine to `success`, and every
     changed file is an `added`/`modified` non-guard `.claude/` file equal to
     `main`'s twin (`merge-check`). A push to the branch waits for the next
     CI run.
-  - `.claude/hooks/**`, `.claude/settings.json`, `.claude/settings.local.json`,
-    or any conflict: labelled `ai:claude-sync-approval`, one Telegram ERROR
+  - `.claude/hooks/**`, `.claude/scripts/**` (sessions run them through
+    `permissions.allow` with their GitHub access and no prompt, issue
+    #5609), `.claude/settings.json`, `.claude/settings.local.json`, or any
+    conflict: labelled `ai:claude-sync-approval`, one Telegram ERROR
     alert per new head (`scripts/tg_helpers.sh`). The workflow never
     approves, merges, or enables auto-merge on it; the repository owner
     reviews and merges it. Status `claude-twin-sync/owner-approval` is
@@ -1262,7 +1264,8 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   `main` the two match again once it merges. On `stable` (issue #5247) the
   step also passes `--guard-provenance-ref <main tip>` (a depth-1 fetch of
   `refs/heads/main`): a changed guard path (`.claude/hooks/**`,
-  `.claude/settings.json`, `.claude/settings.local.json`) must equal `main`'s
+  `.claude/scripts/**`, `.claude/settings.json`,
+  `.claude/settings.local.json`) must equal `main`'s
   copy, blob and mode, or be absent on both, even when it matches its twin.
   A guard change therefore reaches `stable` only after it landed on `main`,
   where it comes through the owner-reviewed sync PR. A `stable` backport of
@@ -1298,8 +1301,9 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   differing pair in a shallow clone.
 - **Guard paths fail closed in the sync-state check** (issue #5246):
   matching the twin at HEAD is not enough for `.claude/hooks/**`,
-  `.claude/settings.json`, or `.claude/settings.local.json`, because one PR
-  could change a hook and its twin together and skip the owner-only merge.
+  `.claude/scripts/**`, `.claude/settings.json`, or
+  `.claude/settings.local.json`, because one PR could change a hook or a
+  script and its twin together and skip the owner-only merge.
   A changed guard path must equal the twin's blob and mode on the **base**
   commit (the reviewed twin already on `main`) and is never deleted. On a PR
   into `main` it may change only from a same-repository
@@ -1311,7 +1315,7 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   above replaces this one: a guard path must equal `main`'s copy (a
   backport, or a deletion `main` already carries, passes), and this rule on
   `main` is what keeps that copy owner-reviewed. A deliberate direct change to
-  a hook or setting (a conflict fix, a removal) therefore fails the check,
+  a hook, script, or setting (a conflict fix, a removal) therefore fails the check,
   and the repository owner merges that PR by hand. Claude-fixer mode never
   auto-merges with a failing check, but `main` has no required status
   checks and the GPT review path only feeds failing checks to its reviewers,
@@ -1329,9 +1333,9 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   owner-only sync PR is pending, so the consumer sync
   (`update_workflows.yml`, step "Sync .claude/ assets from upstream") also
   checks out the `stable` commit's `.claude/` tree and, for
-  `.claude/hooks/**`, `.claude/settings.json`, and
-  `.claude/settings.local.json`, copies that `.claude/` file instead of the
-  twin. When the twin and the `.claude/` copy differ (bytes) and the consumer
+  `.claude/hooks/**`, `.claude/scripts/**` (since issue #5609),
+  `.claude/settings.json`, and `.claude/settings.local.json`, copies that
+  `.claude/` file instead of the twin. When the twin and the `.claude/` copy differ (bytes) and the consumer
   already has the file (a dangling symlink counts), the consumer keeps it; when the `.claude/` copy
   is missing at that commit, nothing is installed; when the compare itself
   fails (`cmp` exit 2+, a read error), nothing changes for that file and the
@@ -1342,7 +1346,7 @@ change reaches `main`, `.github/workflows/claude-twin-sync.yml` runs
   otherwise). A guard source must resolve to a guard path inside that
   `.claude/` tree: one that a symlink (on the file or a parent directory)
   points into its twin, out of the tree, or at a non-guard file there (such
-  as `.claude/scripts/`, which the twin sync merges without the owner)
+  as `.claude/commands/`, which the twin sync merges without the owner)
   installs nothing, and the consumer's file is left alone; a failing
   `realpath` installs nothing and says so. A dangling consumer symlink at a
   guard path is kept even when the twin and `.claude/` copies are equal,

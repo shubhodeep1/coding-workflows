@@ -19,6 +19,8 @@ The CI step "Claude twin sync state (CLAUDE.md §28.C)" in `.github/workflows/ci
   - The release job pushes one assembled-changelog commit (`mark-stable.yml:613`, `test-and-mark-stable.yml:5600`) that touches no `.claude/` path.
   - `mark-stable.yml` "Verify CI passed on stable" refuses a release while CI on the `stable` tip is failing, so a false positive on a `stable` push blocks releases.
 - On `main`, a guard path (`GUARD_PATH_PREFIXES` `hooks/`, `GUARD_PATH_FILES` `settings.json`, `settings.local.json`) reaches `.claude/` from its twin only through a sync PR that the repository owner reviews and merges (`claude-twin-sync.yml`, AD-2 of #4785). Nothing comparable exists for a PR straight into `stable`.
+
+  > **Extended by #5609** (2026-10-01): `GUARD_PATH_PREFIXES` is now `hooks/` and `scripts/` (`scripts/claude_twin_sync.py:95`), so `.claude/scripts/**` reaches `.claude/` only through an owner-merged sync PR too. The text above records the guard paths when #5247 shipped.
 - Binding rules: §1 (security first), §5 (minimal change), §6 (no renames; the step name and existing flags stay; new identifiers unique), §9 (tabs in Python, 2-space YAML), §15 (one REST call, documented), §19 (`Refs #5247` only), §20 (changelog fragment), §23.E (the step uses `github.token`, never a session variable), §27 (`ci.yml` is 54,946 bytes, far under 480,000).
 
 ## Goals
