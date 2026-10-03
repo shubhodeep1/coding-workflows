@@ -168,7 +168,6 @@ analysis/workflow-optimization-2026-10-01.md
 analysis/workflow-optimization-2026-10-02.md
 changelog.d/.gitkeep
 changelog.d/3965-validation-run-attribution.md
-changelog.d/4542-merge-train-smoke-bypass.md
 changelog.d/4586-checker-action-field.md
 changelog.d/4609-claude-pr-deterministic-skip.md
 changelog.d/4618-sweep-dispatch-default-branch.md
