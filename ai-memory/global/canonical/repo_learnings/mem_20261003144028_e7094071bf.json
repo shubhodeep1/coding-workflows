@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review-dispatch workflows need robust run discovery and dispatch edge-case handling.",
   "timestamps": {
     "created_at": "2026-10-03T14:40:28Z",
