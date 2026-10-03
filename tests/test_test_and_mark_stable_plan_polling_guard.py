@@ -44,13 +44,21 @@ elif path.startswith(issue_path + "/comments"):
 	payload = []
 elif "/pulls?" in path:
 	# wait-implement's PR lookup: one open PR when STUB_PR_NUMBER is set.
-	payload = [{"number": int(os.environ["STUB_PR_NUMBER"])}] if os.environ.get("STUB_PR_NUMBER") else []
+	with open(os.environ["STUB_GH_LOG"], encoding="utf-8") as log:
+		pr_reads = sum(1 for line in log if "/pulls?" in json.loads(line)[1])
+	pr_number = os.environ.get("STUB_PR_RECHECK_NUMBER") if pr_reads > 1 else os.environ.get("STUB_PR_NUMBER")
+	payload = [{"number": int(pr_number)}] if pr_number else []
 elif "/actions/runs?" in path and os.environ.get("STUB_UNPAGED_RUNS_INVALID") and "&page=" not in path:
 	# The other-active check's page-1 read (fetch_plan_runs_json) is the only
 	# runs request without &page=; this makes just that read unreadable.
 	payload = {"workflow_runs": None}
 elif "/actions/runs?" in path:
 	pages = json.loads(open(os.environ["STUB_RUN_PAGES"], encoding="utf-8").read())
+	if os.environ.get("STUB_RUN_PAGES_LATER"):
+		with open(os.environ["STUB_GH_LOG"], encoding="utf-8") as log:
+			runs_reads = sum(1 for line in log if "/actions/runs?" in json.loads(line)[1])
+		if runs_reads >= 3:
+			pages = json.loads(open(os.environ["STUB_RUN_PAGES_LATER"], encoding="utf-8").read())
 	match = re.search(r"[?&]page=(\d+)", path)
 	page = int(match.group(1)) if match else 1
 	if os.environ.get("STUB_RUN_PAGE_FAILS") == str(page):
@@ -58,6 +66,12 @@ elif "/actions/runs?" in path:
 		sys.stderr.write("HTTP 502: Bad Gateway\n")
 		sys.exit(1)
 	payload = {"workflow_runs": pages[page - 1] if page <= len(pages) else []}
+elif re.search(r"/actions/runs/\d+$", path):
+	payload = json.loads(os.environ.get("STUB_ACTIVE_RUN_JSON", "null"))
+elif re.search(r"/actions/runs/\d+/jobs\?", path):
+	payload = {"jobs": []}
+elif "/commits?" in path:
+	payload = []
 else:
 	sys.stderr.write("stub gh: unexpected path " + path + "\n")
 	sys.exit(1)
@@ -394,7 +408,7 @@ def _phase_step_script(step_id: str) -> str:
 	raise AssertionError(f"{step_id} step not found")
 
 
-def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE) -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, terminal: bool = False, failed_page: int | None = None, pr_recheck_number: int | None = None, active_run: dict | None = None, later_pages: list | None = None, terminal_timeout: str = "0") -> tuple[int, dict[str, str], list[list[str]], str]:
 	# Runs the real wait-clarify / wait-implement script against the stub gh
 	# and returns its exit code, GITHUB_OUTPUT, gh calls, and combined output.
 	with tempfile.TemporaryDirectory() as tmp:
@@ -407,8 +421,16 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 		sleep = bin_dir / "sleep"
 		sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 		sleep.chmod(0o755)
+		if terminal:
+			# Advance past the real 60-second grace period without waiting.
+			fake_date = bin_dir / "date"
+			fake_date.write_text('#!/bin/sh\nif [ "$1" != "+%s" ]; then exec /bin/date "$@"; fi\nn=$(cat "$STUB_DATE_COUNT" 2>/dev/null || echo 0)\necho "$((n + 1))" > "$STUB_DATE_COUNT"\nif [ "$n" -lt 2 ]; then echo 0; else echo "$((70 + (n - 2) * 120))"; fi\n', encoding="utf-8")
+			fake_date.chmod(0o755)
 		pages_file = tmp_path / "pages.json"
 		pages_file.write_text(json.dumps(pages), encoding="utf-8")
+		if later_pages is not None:
+			later_file = tmp_path / "later_pages.json"
+			later_file.write_text(json.dumps(later_pages), encoding="utf-8")
 		log_file = tmp_path / "gh.log"
 		log_file.touch()
 		output_file = tmp_path / "github_output"
@@ -428,6 +450,17 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 		})
 		if pr_number is not None:
 			env["STUB_PR_NUMBER"] = str(pr_number)
+		if pr_recheck_number is not None:
+			env["STUB_PR_RECHECK_NUMBER"] = str(pr_recheck_number)
+		if failed_page is not None:
+			env["STUB_RUN_PAGE_FAILS"] = str(failed_page)
+		if active_run is not None:
+			env["STUB_ACTIVE_RUN_JSON"] = json.dumps(active_run)
+		if terminal:
+			env["STUB_DATE_COUNT"] = str(tmp_path / "date_count")
+			env["PHASE_TIMEOUT"] = terminal_timeout
+		if later_pages is not None:
+			env["STUB_RUN_PAGES_LATER"] = str(later_file)
 		proc = subprocess.run(["bash", "-c", _phase_step_script(step_id)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
 		outputs: dict[str, str] = {}
 		for line in output_file.read_text(encoding="utf-8").splitlines():
@@ -521,6 +554,78 @@ def test_clarify_and_implement_fail_before_polling_without_an_issue_title() -> N
 		assert "run_id" not in outputs, outputs
 		assert f"::error::Missing issue title for {phase} run scoping" in log, log
 		assert calls == [], calls
+
+
+def test_implement_terminal_check_does_not_fail_for_active_issue_run_on_page_two() -> None:
+	# Regression: the first 50 runs belong to other issues; our run is still active.
+	pages = [[_run(1000 + i, name="Internal: AI Implement", title=ALT_TITLE) for i in range(100)], [_run(777, name="Internal: AI Implement", conclusion=None, status="in_progress")]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "All 1 implement workflow run(s) completed but no PR was created" not in log
+	assert any("&page=2&" in path for path in _run_pages_requested(calls)), calls
+	assert not any("/pulls?" in call[1] for call in calls[1:]), calls
+
+
+def test_implement_terminal_check_waits_for_older_active_issue_run() -> None:
+	# A completed matching run on page one cannot mask another active run.
+	pages = [[_run(778, name="Internal: AI Implement")] + [_run(1000 + i, name="Internal: AI Implement", title=ALT_TITLE) for i in range(99)], [_run(777, name="Internal: AI Implement", conclusion=None, status="queued")]]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "status=implement_failed" not in log
+
+
+def test_implement_terminal_check_reports_scoped_completed_run() -> None:
+	pages = [[_run(99, name="Internal: AI Implement", title=ALT_TITLE), _run(777, name="Internal: AI Implement", conclusion="failure")]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "implement_failed", (outputs, log)
+	assert "All 1 implement workflow run(s) completed but no PR was created (issue run_id=777 conclusion=failure)" in log
+	assert len(_run_pages_requested(calls)) == 3, calls  # progress + two scoped confirmations
+
+
+def test_implement_terminal_check_ignores_other_titles_and_skipped_runs() -> None:
+	pages = [[_run(99, name="Internal: AI Implement", title=ALT_TITLE), _run(777, name="Internal: AI Implement", conclusion="skipped")]]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "status=implement_failed" not in log
+
+
+def test_implement_terminal_check_treats_unreadable_and_malformed_pages_as_unknown() -> None:
+	first_page = [_run(1000 + i, name="Internal: AI Implement", title=ALT_TITLE) for i in range(100)]
+	for second_page, failed_page in (([], 2), (None, None), ([_run(777, name="Internal: AI Implement", conclusion="failure", status="bad_status")], None), ([_run(777, name="Internal: AI Implement", conclusion="failure") | {"id": "777"}], None), ([_run(777, name="Internal: AI Implement", conclusion="\n::error::injected")], None)):
+		rc, outputs, _calls, log = _run_phase_step("wait-implement", [first_page, second_page], terminal=True, failed_page=failed_page)
+		assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+
+
+def test_implement_terminal_check_treats_full_tenth_page_as_unknown() -> None:
+	pages = [[_run(777, name="Internal: AI Implement", conclusion="failure")] + _noise_page(1000, 99)] + [_noise_page(2000 + 100 * i) for i in range(9)]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert any("&page=10&" in path for path in _run_pages_requested(calls)), calls
+	assert not any("&page=11&" in path for path in _run_pages_requested(calls)), calls
+
+
+def test_implement_terminal_check_rechecks_newly_indexed_active_run() -> None:
+	pages = [[_run(777, name="Internal: AI Implement", conclusion="failure")]]
+	later = [[_run(778, name="Internal: AI Implement", conclusion=None, status="in_progress"), *pages[0]]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, later_pages=later)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert len(_run_pages_requested(calls)) == 3, calls
+
+
+def test_implement_terminal_check_reuses_known_active_run_id() -> None:
+	active = _run(777, name="Internal: AI Implement", conclusion=None, status="in_progress")
+	pages = [[_run(1000 + i, name="Internal: AI Implement", title=ALT_TITLE) for i in range(100)], [active]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, terminal_timeout="2", active_run=active)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert any(call[1].endswith("/actions/runs/777") for call in calls), calls
+	assert len([path for path in _run_pages_requested(calls) if "&page=" in path]) == 2, calls
+
+
+def test_implement_terminal_check_preserves_pr_recheck() -> None:
+	rc, outputs, calls, log = _run_phase_step("wait-implement", [[_run(777, name="Internal: AI Implement")]], terminal=True, pr_recheck_number=42)
+	assert rc == 0 and outputs.get("status") == "success", (outputs, log)
+	assert outputs.get("pr_number") == "42", outputs
+	assert len(_run_pages_requested(calls)) >= 2, calls
 
 
 def main() -> int:

@@ -1150,6 +1150,53 @@ jobs:
           # was skipped (plan auto-approved directly to ai:implementing).
           IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"
 
+          # The first-page metrics below are only progress signals. A terminal
+          # decision needs every page of this issue's runs (not other issues'
+          # Implement runs). A full tenth page or an unreadable page is unknown.
+          SCOPED_IMPL_ACTIVE_ID=""
+          SCOPED_IMPL_CAPPED=0
+          SCOPED_IMPL_NEXT_WALK=0
+          scoped_implement_runs_complete() {
+            local scoped_impl_page=1
+            local scoped_impl_json=""
+            local scoped_impl_summary=""
+            local scoped_impl_count=0
+            local scoped_impl_matches=0
+            SCOPED_IMPL_RUN_ID=""
+            SCOPED_IMPL_RUN_CONCLUSION=""
+            SCOPED_IMPL_RUN_TOTAL=0
+            SCOPED_IMPL_ACTIVE_ID=""
+            while [ "$scoped_impl_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
+              scoped_impl_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${scoped_impl_page}&created=>${IMPL_CREATED_AFTER}") || return 1
+              scoped_impl_summary=$(printf '%s' "$scoped_impl_json" | jq -sce --arg title "$ISSUE_TITLE" '
+                if length != 1 or (.[0].workflow_runs | type) != "array" or (.[0].workflow_runs | length) > 100 then error("invalid runs page") else .[0].workflow_runs end
+                | {count: length, matches: [.[] | select((.name | type) == "string" and (.name | test("Implement"; "i"))) | select(.display_title == $title) | select(.conclusion != "skipped")]}
+                | if all(.matches[]; (.id | type == "number" and . > 0 and floor == .) and
+                    (.status | type == "string" and IN("queued", "in_progress", "completed", "requested", "waiting", "pending")) and
+                    (if .status == "completed" then (.conclusion | IN("success", "failure", "cancelled", "timed_out", "action_required", "neutral", "stale", "startup_failure")) else .conclusion == null end))
+                  then . else error("invalid matching Implement run") end
+              ' 2>/dev/null) || return 1
+              scoped_impl_count=$(printf '%s' "$scoped_impl_summary" | jq -r '.count')
+              scoped_impl_matches=$(printf '%s' "$scoped_impl_summary" | jq -r '.matches | length')
+              SCOPED_IMPL_RUN_TOTAL=$((SCOPED_IMPL_RUN_TOTAL + scoped_impl_matches))
+              if [ -z "$SCOPED_IMPL_RUN_ID" ] && [ "$scoped_impl_matches" -gt 0 ]; then
+                SCOPED_IMPL_RUN_ID=$(printf '%s' "$scoped_impl_summary" | jq -r '.matches[0].id')
+                SCOPED_IMPL_RUN_CONCLUSION=$(printf '%s' "$scoped_impl_summary" | jq -r '.matches[0].conclusion // "unknown"')
+              fi
+              SCOPED_IMPL_ACTIVE_ID=$(printf '%s' "$scoped_impl_summary" | jq -r '[.matches[] | select(.status != "completed")] | first | .id // empty')
+              if [ -n "$SCOPED_IMPL_ACTIVE_ID" ]; then
+                return 2
+              fi
+              if [ "$scoped_impl_count" -lt 100 ]; then
+                [ "$SCOPED_IMPL_RUN_TOTAL" -gt 0 ] || return 1
+                return 0
+              fi
+              scoped_impl_page=$((scoped_impl_page + 1))
+            done
+            SCOPED_IMPL_CAPPED=1
+            return 1
+          }
+
           # Same rules as wait-plan's latest_scoped_run_field (issue #4723): only
           # runs whose display_title is OUR issue title count, so a parallel smoke
           # job's Implement run is never taken, and the lookup walks pages of the
@@ -1278,23 +1325,55 @@ jobs:
               PREV_STATE="$CUR_STATE"
             fi
 
-            # Detect implement workflow failure — only if ALL runs have completed
+            # Detect implement workflow failure — only if THIS issue's runs have completed
             # AND enough time has elapsed for the real implement workflow to start.
             # Without the grace period, stale completed runs (e.g. from
             # AUTO_IMPLEMENT_ON_CLEAR_PLAN auto-approval during the plan phase)
             # cause a false failure before the /approved-triggered run starts.
             ELAPSED_SECS=$((NOW - PHASE_START))
             if [ "$IMPL_RUN_TOTAL" -gt 0 ] && [ "$IMPL_RUN_IN_PROGRESS" -eq 0 ] && [ "$ELAPSED_SECS" -ge "$MIN_GRACE_SECONDS" ]; then
-              # All implement runs finished but no PR appeared — give one more cycle
-              sleep "$POLL_INTERVAL"
-              PR_RECHECK=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
-                --jq '.[0].number // empty' 2>/dev/null || echo "")
-              if [ -n "$PR_RECHECK" ]; then
-                continue
+              # A known active run is cheaper to check by ID than walking the
+              # repository-wide run list again. On completion, scan for peers.
+              if [ -n "$SCOPED_IMPL_ACTIVE_ID" ] && [ "$NOW" -ge "$SCOPED_IMPL_NEXT_WALK" ]; then
+                SCOPED_IMPL_ACTIVE_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs/${SCOPED_IMPL_ACTIVE_ID}") || SCOPED_IMPL_ACTIVE_JSON=""
+                if printf '%s' "$SCOPED_IMPL_ACTIVE_JSON" | jq -se --arg title "$ISSUE_TITLE" --argjson id "$SCOPED_IMPL_ACTIVE_ID" '
+                  length == 1 and (.[0].id == $id) and (.[0].display_title == $title) and
+                  (.[0].name | type == "string" and test("Implement"; "i")) and
+                  (.[0].status | IN("queued", "in_progress", "requested", "waiting", "pending"))
+                ' >/dev/null 2>&1; then
+                  SCOPED_IMPL_NEXT_WALK=0
+                elif printf '%s' "$SCOPED_IMPL_ACTIVE_JSON" | jq -se --argjson id "$SCOPED_IMPL_ACTIVE_ID" 'length == 1 and .[0].id == $id and .[0].status == "completed"' >/dev/null 2>&1; then
+                  SCOPED_IMPL_ACTIVE_ID=""
+                  SCOPED_IMPL_NEXT_WALK=0
+                else
+                  # An unreadable or malformed by-ID response is not proof of completion.
+                  SCOPED_IMPL_ACTIVE_ID=""
+                  SCOPED_IMPL_NEXT_WALK=$((NOW + 120))
+                fi
               fi
-              echo "::error::All ${IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created"
-              echo "status=implement_failed" >> "$GITHUB_OUTPUT"
-              exit 1
+              if [ -z "$SCOPED_IMPL_ACTIVE_ID" ] && [ "$SCOPED_IMPL_CAPPED" -eq 0 ] && [ "$NOW" -ge "$SCOPED_IMPL_NEXT_WALK" ]; then
+                SCOPED_IMPL_NEXT_WALK=$((NOW + 120))
+                if scoped_implement_runs_complete; then
+                  # Keep the existing PR recheck and confirm the run list again
+                  # after it: a newly indexed active run must not be missed.
+                  sleep "$POLL_INTERVAL"
+                  PR_RECHECK=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
+                    --jq '.[0].number // empty' 2>/dev/null || echo "")
+                  if [ -n "$PR_RECHECK" ]; then
+                    continue
+                  fi
+                  if scoped_implement_runs_complete; then
+                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})"
+                    echo "status=implement_failed" >> "$GITHUB_OUTPUT"
+                    exit 1
+                  fi
+                  if [ -n "$SCOPED_IMPL_ACTIVE_ID" ]; then
+                    SCOPED_IMPL_NEXT_WALK=0
+                  fi
+                elif [ -n "$SCOPED_IMPL_ACTIVE_ID" ]; then
+                  SCOPED_IMPL_NEXT_WALK=0
+                fi
+              fi
             elif [ "$IMPL_RUN_TOTAL" -gt 0 ] && [ "$IMPL_RUN_IN_PROGRESS" -eq 0 ] && [ "$ELAPSED_SECS" -lt "$MIN_GRACE_SECONDS" ]; then
               echo "  ⏳ All ${IMPL_RUN_TOTAL} implement run(s) completed but grace period active (${ELAPSED_SECS}s/${MIN_GRACE_SECONDS}s) — waiting for /approved-triggered run to start"
             fi
