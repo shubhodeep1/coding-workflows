@@ -154,7 +154,15 @@ def test_gate_declares_terminal_same_head_env_with_defaults() -> None:
 def test_gate_head_sha_rides_on_existing_pulls_fetch() -> None:
 	gate = _gate_block()
 	# §15: no second /pulls call — head_sha is added to the existing jq projection.
-	assert gate.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+	# The one exception is the stale claude/* auto-merge cancel (issue #5565),
+	# which re-reads `pulls/{n}` only after a failed cancel attempt to spot a
+	# lost response; it is checked on its own and excluded from the count.
+	cancel_start = gate.index("# claude/* PRs are merged synchronously after the hold gate and never")
+	cancel_end = gate.index('echo "AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED', cancel_start)
+	cancel = gate[cancel_start:cancel_end]
+	assert cancel.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+	assert cancel.index("--disable-auto") < cancel.index('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq \'.auto_merge == null\'')
+	assert (gate[:cancel_start] + gate[cancel_end:]).count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
 	assert 'head_sha: (.head.sha // "")' in gate
 	assert """pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")\"""" in gate
 	assert 'pr_head_sha_gate=""' in gate

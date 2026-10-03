@@ -485,6 +485,7 @@ jobs:
           pr_mergeable=""
           pr_mergeable_state=""
           pr_head_sha_gate=""
+          pr_auto_merge="false"
           pr_title_cached="${PR_TITLE:-}"
           pr_body_cached="${PR_BODY:-}"
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -509,10 +510,11 @@ jobs:
             # labels (force-review override check below), per-PR
             # additions/deletions totals (deterministic-skip size check), and
             # mergeable/mergeable_state (deterministic-skip conflict
-            # suppression below), and changed_files (to verify the paginated
-            # path list before either skip branch can run).
+            # suppression below), changed_files (to verify the paginated
+            # path list before either skip branch can run), and auto_merge
+            # (stale claude/* enrollment cancel below, issue #5565).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), auto_merge: (.auto_merge != null), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
@@ -524,12 +526,53 @@ jobs:
               pr_changed_files="$(printf '%s' "${_pr_gate}" | jq -r '.changed_files | if type == "number" and . == floor then tostring else "" end' 2>/dev/null || echo "")"
               pr_mergeable="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable // ""' 2>/dev/null || echo "")"
               pr_mergeable_state="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable_state // ""' 2>/dev/null || echo "")"
+              pr_auto_merge="$(printf '%s' "${_pr_gate}" | jq -r 'if (.auto_merge // false) then "true" else "false" end' 2>/dev/null || echo "false")"
               if [ -z "$(printf '%s' "${pr_title_cached}" | tr -d '[:space:]')" ]; then
                 pr_title_cached="$(printf '%s' "${_pr_gate}" | jq -r '.title // ""' 2>/dev/null || echo "")"
               fi
               if [ -z "$(printf '%s' "${pr_body_cached}" | tr -d '[:space:]')" ]; then
                 pr_body_cached="$(printf '%s' "${_pr_gate}" | jq -r '.body // ""' 2>/dev/null || echo "")"
               fi
+            fi
+          fi
+
+          # claude/* PRs are merged synchronously after the hold gate and never
+          # enrolled in auto-merge (issue #5565). An enrollment left by an older
+          # run, or made by hand, would merge a newer or held head without the
+          # gate, so every review run (every push starts one) cancels it, only
+          # when the PR object above shows an enrollment. `gh pr merge
+          # --disable-auto` is GraphQL (a PR lookup and the
+          # disablePullRequestAutoMerge mutation; there is no REST endpoint).
+          # Up to 3 attempts; after a failed one, one REST `pulls/{n}` read
+          # checks whether the enrollment is already gone (a cancel whose
+          # response was lost). A cancel that still fails warns with gh's
+          # first error line and the run continues.
+          if [ "${pr_state}" = "open" ] && [ "${pr_auto_merge}" = "true" ] && [[ "${pr_head_ref}" == claude/* ]]; then
+            _am_cancel_result="failed"
+            _am_cancel_err=""
+            for _am_cancel_attempt in 1 2 3; do
+              # Order matters: `2>&1` first points stderr at the command
+              # substitution, then `>/dev/null` drops only stdout, so
+              # _am_cancel_err keeps gh's error text for the warning below.
+              # `>/dev/null 2>&1` would silently discard it.
+              if _am_cancel_err="$(gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto 2>&1 >/dev/null)"; then
+                _am_cancel_result="disabled"
+                break
+              fi
+              if [ "$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.auto_merge == null' 2>/dev/null || echo "false")" = "true" ]; then
+                _am_cancel_result="disabled"
+                break
+              fi
+              if [ "${_am_cancel_attempt}" -lt 3 ]; then
+                sleep "$(( _am_cancel_attempt * 2 ))"
+              fi
+            done
+            echo "AUTOFIX_CLAUDE_AUTO_MERGE_CANCELLED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate:-unknown} result=${_am_cancel_result}"
+            if [ "${_am_cancel_result}" != "disabled" ]; then
+              _am_cancel_err="${_am_cancel_err%%$'\n'*}"
+              _am_cancel_err="${_am_cancel_err//$'\r'/}"
+              _am_cancel_err="${_am_cancel_err:0:300}"
+              echo "::warning::Could not cancel the auto-merge enrollment on claude/* PR #${PR_NUMBER} after 3 attempts (${_am_cancel_err:-no error output}); it can still merge without the merge hold gate. Disable auto-merge on the PR by hand."
             fi
           fi
 
@@ -1981,6 +2024,28 @@ jobs:
               fi
               auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
               echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
+            fi
+          elif [[ "${PR_HEAD_REF}" == claude/* ]]; then
+            # Synchronous merge right after the hold gate, never an auto-merge
+            # enrollment that could outlive a later hold or push (issue #5565;
+            # see scripts/review_enable_auto_merge.sh). REST, not `gh pr
+            # merge`, which enables auto-merge or queues the PR on a
+            # merge-queue base even when not asked to; one `pulls/{n}` read
+            # after a refusal counts a merge whose response was lost.
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash_sync"
+            det_skip_sync_merged="false"
+            if gh_retry gh api -X PUT "repos/${REPOSITORY}/pulls/${PR_NUMBER}/merge" -f merge_method=squash -f sha="${PR_HEAD_SHA}" >/dev/null; then
+              det_skip_sync_merged="true"
+            elif [ "$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '"\(.merged == true) \(.head.sha // "")"' 2>/dev/null || echo "")" = "true ${PR_HEAD_SHA}" ]; then
+              det_skip_sync_merged="true"
+            fi
+            if [ "${det_skip_sync_merged}" = "true" ]; then
+              auto_merge_ready_labels_allowed="true"
+              auto_merge_summary="MERGED (claude/* synchronous merge)"
+            else
+              auto_merge_summary="REFUSED (merge_not_ready: GitHub refused the synchronous claude/* merge)"
+              echo "AUTOFIX_AUTO_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} reason=merge_not_ready"
+              echo "::warning::GitHub refused the synchronous merge of claude/* PR #${PR_NUMBER}; required checks or reviews may still be pending, or the base requires a merge queue. No auto-merge was enrolled. The next review run re-checks the gate and merges."
             fi
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
