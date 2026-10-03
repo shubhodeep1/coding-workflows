@@ -166,8 +166,10 @@ analysis/workflow-optimization-2026-09-30.md
 analysis/workflow-optimization-2026-10-01-2.md
 analysis/workflow-optimization-2026-10-01.md
 analysis/workflow-optimization-2026-10-02.md
+analysis/workflow-optimization-2026-10-03.md
 changelog.d/.gitkeep
 changelog.d/3965-validation-run-attribution.md
+changelog.d/4542-merge-train-smoke-bypass.md
 changelog.d/4586-checker-action-field.md
 changelog.d/4609-claude-pr-deterministic-skip.md
 changelog.d/4618-sweep-dispatch-default-branch.md
@@ -178,12 +180,14 @@ changelog.d/4706-ci-lint-timeout-60.md
 changelog.d/4707-split-ci-lint-job.md
 changelog.d/4723-require-plan-run-id.md
 changelog.d/4734-validate-stacked-and-stable-targets.md
+changelog.d/4786-guard-read-loops.md
 changelog.d/4787-checker-renames-only-itself.md
 changelog.d/4798-standalone-helper-calls.md
 changelog.d/4869-conflict-sweep-skips-draft-claude-prs.md
 changelog.d/4886-numbered-session-titles.md
 changelog.d/4887-archive-finished-sessions.md
 changelog.d/4891-gh-api-guard-deny-jq-cli-options.md
+changelog.d/4909-guard-echo-read-substitutions.md
 changelog.d/4948-protected-path-twin-first-default.md
 changelog.d/4990-pickup-throughput.md
 changelog.d/5110-reviewer-loop-guards-gpt-6-luna.md
@@ -194,6 +198,7 @@ changelog.d/5889-release-gates-claude-assets.md
 changelog.d/5892-heal-autofix-fingerprint-header.md
 changelog.d/5964-reviewer-infra-nonblocking.md
 changelog.d/5999-restore-scoped-smoke-run-lookups.md
+changelog.d/6118-phase-0-standalone-issues-default-to-codex.md
 changelog.d/check-in-session-depth-limit.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/claude-issue-routed-alert-silent.md

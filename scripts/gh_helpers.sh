@@ -1957,6 +1957,7 @@ PY
 #   issue #12
 #   issues/12
 #   Closes: #12
+#   https://github.com/owner/repo/issues/78#issuecomment-123
 #
 # Fail-open:
 #   empty text or malformed repository input emits no matches
@@ -1965,15 +1966,71 @@ extract_repo_scoped_issue_refs_from_text()
 {
 	local _repository="${1:-}"
 	local _text="${2:-}"
-	local _repository_escaped
 
-	if [ -z "${_repository}" ] || [ -z "${_text}" ] || ! [[ "${_repository}" =~ ^[^/]+/[^/]+$ ]]; then
+	if [ -z "${_repository}" ] || [ -z "${_text}" ] || ! [[ "${_repository}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 		return 0
 	fi
 
-	_repository_escaped="$(printf '%s' "${_repository}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
-	printf '%s\n' "${_text}" \
-		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
-		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
-		| sort -un || true
+	python3 - "${_repository}" "${_text}" <<'PY'
+import re
+import sys
+
+repository, text = sys.argv[1:]
+issue_path = re.escape(repository) + r"/issues/([0-9]+)(?![A-Za-z0-9_])"
+issue_ref = re.compile(r"(?<![A-Za-z0-9_./-])/?(?:github\.com/)?" + issue_path, re.I)
+url_start = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://", re.I)
+closing_ref = re.compile(
+	r"(?<![A-Za-z0-9_/-])(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)"
+	r"\s+#[ \t]*([0-9]+)(?![A-Za-z0-9_])", re.I,
+)
+
+def token_end(start):
+	# Balanced or escaped parentheses may appear in a Markdown URL tail.
+	depth = 0
+	index = start
+	while index < len(text):
+		char = text[index]
+		if char.isspace() or char in "<>":
+			break
+		if char == "\\" and index + 1 < len(text):
+			index += 2
+			continue
+		if char == "(":
+			depth += 1
+		elif char == ")":
+			if depth == 0:
+				break
+			depth -= 1
+		index += 1
+	return index
+
+numbers = set()
+masked = list(text)
+index = 0
+while index < len(text):
+	url_match = url_start.match(text, index)
+	if url_match and (index == 0 or not (text[index - 1].isalnum() or text[index - 1] in "_./-")):
+		end = token_end(index)
+		url = text[index:end]
+		matched = re.match(r"https?://github\.com/" + issue_path, url, re.I)
+		if matched and "#" not in url:
+			numbers.add(int(matched.group(1)))
+		masked[index:end] = " " * (end - index)
+		index = end
+		continue
+	matched = issue_ref.match(text, index)
+	if matched:
+		end = token_end(index)
+		if "#" not in text[index:end]:
+			numbers.add(int(matched.group(1)))
+		masked[index:end] = " " * (end - index)
+		index = end
+		continue
+	index += 1
+
+for matched in closing_ref.finditer("".join(masked)):
+	numbers.add(int(matched.group(1)))
+for number in sorted(numbers):
+	print(number)
+PY
 }
