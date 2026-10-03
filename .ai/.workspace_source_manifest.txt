@@ -167,6 +167,7 @@ analysis/workflow-optimization-2026-10-01-2.md
 analysis/workflow-optimization-2026-10-01.md
 analysis/workflow-optimization-2026-10-02.md
 changelog.d/.gitkeep
+changelog.d/3965-validation-run-attribution.md
 changelog.d/4586-checker-action-field.md
 changelog.d/4609-claude-pr-deterministic-skip.md
 changelog.d/4618-sweep-dispatch-default-branch.md
@@ -304,10 +305,12 @@ docs/plans/orchestrator-prerequisite-gate-automation-plan.md
 docs/plans/orchestrator-sync-contract-list-union-plan.md
 docs/plans/orchestrator-validation-resilience-plan.md
 docs/plans/release-blocker-heal-reports-plan.md
+docs/plans/replace-claude-sessions-with-cli-engine-plan.md
 docs/plans/retire-master-session-plan.md
 docs/plans/review-autofix-deterministic-editor-failure-resume-plan.md
 docs/plans/review-blocked-approval-gate-trust-scope-plan.md
 docs/plans/security-pass-convergence-plan.md
+docs/plans/stateless-pr-status-master-checker-plan.md
 docs/plans/symphony-inspired-improvements-plan.md
 docs/postmortems/2026-05-18-project-2734-stall.md
 docs/scripts-pending-removal.md
