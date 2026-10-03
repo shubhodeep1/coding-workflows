@@ -1300,7 +1300,7 @@ mode).
    - The script selects `IDLE` sessions whose last summary carries the usage-limit error, plus checkers whose `rate_limit_info` shows a `rejected` limit that has since reset and that have no trigger at all.
    - It skips a session that is:
      - outside the pickup's workflows (#6101): it must work in coding-workflows or a `.github/ai/consumer_repos.json` repository (its `session_context.sources`), have been started by another session (`origin` `claude_code_mcp_seed`), and name its `parent_session_id`. A session a person opened in the app is never resumed, and anything unreadable is skipped (`no_repo`, `foreign_repo`, `unknown_origin`, `no_lineage`);
-     - archived, running, or on a permission prompt (an old session on a permission prompt is listed as `permission_prompt`, not `too_old`);
+     - archived, running, or on a permission prompt, recorded in either summary copy (an old session on a permission prompt is listed as `permission_prompt`, not `too_old`);
      - waiting on a human answer: its summary's `needs_action` asks for something other than waiting for the limit to reset, uses any word outside the limit-wait vocabulary, or holds a sentence outside the closed limit-wait forms (the error or status text, the reset, a wait, or a retry tied to the reset in the same sentence, such as `Retry after the reset`), so a retry deferred only by another sentence, a `retry until`, a negated wait, or a retry or wait at a bare time (`Retry after 5pm`; a time counts only as the reset's) is a request (#6102). An old session in this state is listed as `needs_input`, not `too_old`;
      - the pickup itself;
      - created more than 72 hours ago (the last page listed can reach further back; those stay with the manual fallback);

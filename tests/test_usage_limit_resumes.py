@@ -469,6 +469,30 @@ def test_an_old_session_on_a_permission_prompt_is_permission_prompt_not_needs_in
 	assert result["resume"] == [] and _skips(result) == {"session_a": "permission_prompt"}
 
 
+@pytest.mark.parametrize("created_at", [None, "2026-09-27T11:59:00Z"])
+@pytest.mark.parametrize(
+	"external_summary",
+	[
+		{"status_category": "need_input", "status_detail": "Waiting on permission: Bash"},
+		{"status_category": "need_input", "status_detail": LIMIT_TEXT, "needs_action": "Approve or deny: Bash(git push origin HEAD)"},
+	],
+)
+def test_a_permission_prompt_only_in_the_external_metadata_copy_is_skipped(tmp_path, capsys, created_at, external_summary):
+	"""PR #6112 review round 6: the top-level summary carries only the limit text; the external copy's prompt still counts."""
+	session = _session("session_a", created_at=created_at)
+	session["external_metadata"]["post_turn_summary"] = external_summary
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert result["resume"] == [] and _skips(result) == {"session_a": "permission_prompt"}
+
+
+def test_rejected_snapshot_with_need_input_only_in_the_external_metadata_copy_is_skipped(tmp_path, capsys):
+	"""PR #6112 review round 6: on the rate_limit_info signal, `need_input` in either summary copy is a human wait."""
+	checker = _checker("session_c", detail="awaiting next cycle trigger", category="review_ready", rate_status="rejected")
+	checker["external_metadata"]["post_turn_summary"] = {"status_category": "need_input", "status_detail": "Q2 needs an answer"}
+	_, result = _run(tmp_path, capsys, [_pickup(), checker])
+	assert result["resume"] == [] and _skips(result) == {"session_c": "needs_input"}
+
+
 def test_has_unanswered_request_reads_both_copies():
 	assert resumes.has_unanswered_request({}) is False
 	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": None}}) is False

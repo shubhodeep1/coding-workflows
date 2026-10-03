@@ -56,9 +56,9 @@ A session is a candidate when either signal holds:
     account rate-limit error text ("You've hit your session limit …");
   * rate_limit_info (checker sessions only): its
     `external_metadata.rate_limit_info.status` is `rejected` and its
-    `resetsAt` has passed, its `status_category` is not `need_input`, and no
-    enabled trigger is bound to it. A checker whose chain died this way can
-    still show a healthy summary. Stage sessions are left out: a turn that
+    `resetsAt` has passed, the `status_category` of neither summary copy is
+    `need_input`, and no enabled trigger is bound to it. A checker whose
+    chain died this way can still show a healthy summary. Stage sessions are left out: a turn that
     completed on overage also records `rejected`.
 
 Authorization (issue #6101): `list_sessions` with `mine: true` is
@@ -88,8 +88,10 @@ fallback; an unreadable `created_at` is not skipped; an old session waiting
 on a human answer is listed as `needs_input` instead, and one on a permission
 prompt as `permission_prompt`, so the manual fallback never resumes it past
 the question), not IDLE (`not_idle:<status>`), waiting
-on a permission prompt (`permission_prompt`), waiting on a human answer
-(`needs_input`, below), still limited by its own
+on a permission prompt (`permission_prompt`: a leading "Approve or deny" or
+"waiting on permission" in the `needs_action` or `status_detail` of either
+summary copy, `post_turn_summary` or `external_metadata.post_turn_summary`),
+waiting on a human answer (`needs_input`, below), still limited by its own
 `rate_limit_info` (`not_reset`), or bound to an enabled trigger that will
 wake it anyway (`wake_pending`: for a checker, any, because its triggers
 are its own check-ins and one means its chain is alive; for another
@@ -531,18 +533,22 @@ def has_limit_text(detail: str) -> bool:
 	return any(pattern.search(detail) for pattern in LIMIT_TEXT_PATTERNS)
 
 
-def _needs_action_texts(session: dict) -> list[str]:
-	"""The stripped, non-empty `needs_action` of both summary copies (top-level and `external_metadata`)."""
+def _summary_copies(session: dict) -> list[dict]:
+	"""Both summary copies that are objects: `post_turn_summary`, then `external_metadata.post_turn_summary`."""
 	summaries = [session.get("post_turn_summary")]
 	metadata = session.get("external_metadata")
 	if isinstance(metadata, dict):
 		summaries.append(metadata.get("post_turn_summary"))
+	return [summary for summary in summaries if isinstance(summary, dict)]
+
+
+def _needs_action_texts(session: dict) -> list[str]:
+	"""The stripped, non-empty `needs_action` of both summary copies (top-level and `external_metadata`)."""
 	texts = []
-	for summary in summaries:
-		if isinstance(summary, dict):
-			text = _text(summary.get("needs_action")).strip()
-			if text:
-				texts.append(text)
+	for summary in _summary_copies(session):
+		text = _text(summary.get("needs_action")).strip()
+		if text:
+			texts.append(text)
 	return texts
 
 
@@ -706,7 +712,6 @@ def _skip_reason(
 	`select` passes `pickup_key` (the pickup's `session_key`, computed once per run) and `allowed_repos`
 	(`load_allowed_repos`); without `allowed_repos` no session is authorized.
 	"""
-	summary = _summary(session)
 	status = _text(session.get("session_status"))
 	own_key = pickup_key if pickup_key is not None else session_key(pickup_session)
 	if session_key(_text(session.get("id"))) == own_key:
@@ -716,12 +721,17 @@ def _skip_reason(
 		return unauthorized
 	if status == ARCHIVED_STATUS:
 		return "archived"
+	# PR #6112 review round 6: like `has_unanswered_request`, the permission prompt and `need_input` read both summary
+	# copies, so a marker recorded only in `external_metadata.post_turn_summary` is not missed.
+	summaries = _summary_copies(session)
 	needs_input = has_unanswered_request(session) or (
-		signal == "rate_limit_info" and _text(summary.get("status_category")) == "need_input"
+		signal == "rate_limit_info"
+		and any(_text(summary_copy.get("status_category")) == "need_input" for summary_copy in summaries)
 	)
-	permission_prompt = bool(
-		PERMISSION_PROMPT_PATTERN.search(_text(summary.get("needs_action")))
-		or PERMISSION_PROMPT_PATTERN.search(_text(summary.get("status_detail")))
+	permission_prompt = any(
+		PERMISSION_PROMPT_PATTERN.search(_text(summary_copy.get("needs_action")))
+		or PERMISSION_PROMPT_PATTERN.search(_text(summary_copy.get("status_detail")))
+		for summary_copy in summaries
 	)
 	created_at = _parse_time(session.get("created_at"))
 	if created_at is not None and created_at < now - dt.timedelta(hours=SESSION_WINDOW_HOURS):
