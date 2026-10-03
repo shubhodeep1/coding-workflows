@@ -130,3 +130,72 @@ All 1,000 rows have `run_attempt=1` and `retries=0`. The all-run median is domin
 | Serena target not observed | 0 | 0 | 0 | 0 / 0 / 0 |
 
 No probe line was emitted for those targets; **0/0/0 denotes absent observations, not successful availability checks**. The distinct Semble rows cover deep dives only; the assembled context adds two reported queries/30,102 bytes from a summarized review run whose target cannot be verified here.
+
+## Deep Audit — Workflows & Scripts (2026-10-03)
+
+### Section 1: Bug & Correctness Sweep
+
+The read-only sweep parsed all 52 workflow YAML files, ran `bash -n` on all 97 shell scripts, and compiled all 63 Python scripts in memory; those checks found no syntax failures. It did not establish runtime correctness. The existing report’s cost-collector and check-wait findings are not repeated here.
+
+- **SEC-001 — Critical · security · `scripts/review_merge_train.sh:415-424`** (also `.github/workflows/review_autofix.yml:6424-6467,6644-6684`). **Description:** Merge-train release dispatches a review workflow with `--ref "${head}"`; both autofix redispatch blocks likewise use `--ref "${TARGET_BRANCH}"`. In this repository, those refs can be unmerged PR branches, while `internal-review.yml:37-40,59-73` grants write permissions and passes secrets to the reusable review. **Inference:** if an unmerged branch changes its workflow, dispatch can execute that branch’s workflow definition with privileged credentials. The sweep explicitly avoids this boundary at `.github/workflows/review_autofix_sweep.yml:325-332`. **[NEEDS VERIFICATION]** for which actors can write each eligible branch. **Recommended fix:** Dispatch the trusted default-branch workflow and pass the PR number as an input, following the sweep; update active-run matching to recognize `internal-review.yml:1-8`’s PR-scoped run name.
+
+- **BUG-001 — High · bug · `.github/workflows/review_autofix_sweep.yml:177-245`**. **Description:** Each active-status fetch ends in `|| true`. A failed fetch can therefore produce a valid-looking, incomplete `active` snapshot; the candidate loop interprets a missing key as zero at lines 297-311 and may dispatch a second review. **Recommended fix:** Track success separately for all six workflow/status reads. On any incomplete snapshot, warn and skip dispatch for that tick—or perform a bounded PR-specific fallback lookup—rather than treating absence as evidence of inactivity.
+
+- **BUG-002 — High · bug · `scripts/review_merge_train.sh:407-412,429-452`**. **Description:** The release dedup guard reads only `actions/runs?per_page=100`, without pagination or status filtering, then treats no matching branch as no active review. Active reviews outside the latest 100 *all-workflow* runs are invisible; an API failure likewise clears the guard and permits dispatch. The missed-run outcome is an inference, **[NEEDS VERIFICATION]** against a busy-run fixture. **Recommended fix:** Fetch paginated queued, pending, and in-progress snapshots as the sweep does, preserve an explicit “snapshot unavailable” state, and leave PRs queued when that state prevents a safe dispatch decision.
+
+- **BUG-003 — High · bug · `scripts/review_rb_judge.sh:1641-1658`**. **Description:** The pre-action merged-PR refresh deliberately addresses a race during judging, but `gh_retry _safe_gh_jq ... || echo '{}'` converts a failed refresh into `merged=false`. If a PR merged after the earlier check, `fix` or `close_and_reissue` can pass the guard; the latter closes and relabels linked work at lines 2503-2515. **Recommended fix:** For those two destructive actions, require a successful refresh containing a recognized PR state and merged indicator; otherwise skip with a diagnostic. Do not replace the separate judged-head merge constraint.
+
+- **BUG-004 — Medium · bug · `scripts/review_merge_train.sh:273-292`**. **Description:** `_mt_upsert_comment` swallows both PATCH and POST failures and returns success. A queued label can consequently persist without its explanatory marker, while callers cannot report the failed write. **Recommended fix:** Return the write status and let callers log a bounded warning; keep the label decision independent where the documented fail-open policy requires it. Coordinate with API-001’s lookup change.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are **code-path estimates per successful, single-page request**, not measured request telemetry. The existing report already covers the Claude PR sweep and cost accounting.
+
+- **API-001 — Medium · api-redundancy · `scripts/review_merge_train.sh:256-262,276-288`**. **Description:** For an existing marker, `_mt_find_marker_comment_id` lists comments but emits only the ID; `_mt_upsert_comment` then fetches that comment’s body. Current: **2 GETs per existing marker**; proposed: **1 GET**, with the same conditional PATCH. **Recommended fix:** Return the selected ID *and body* from the comments response through an output-variable helper, extending `_mt_pr_files_into`’s same-shell cache pattern at lines 115-137. Retain a single-comment fallback on incomplete data.
+
+- **BATCH-001 — Medium · api-batching · `scripts/review_merge_train.sh:124-137,203-231`**. **Description:** `_mt_blockers_for_into` calls `GET /pulls/{n}/files` inside its older-PR loop, up to `MERGE_TRAIN_MAX_OLDER_PRS` distinct PRs. With **N ≤ 20** and one file page each, the list-plus-files path is **1 + N calls**—up to **21**—versus a projected **1 + ceil(N/25)**—**2** at N=20—with aliased PR-file connections. **Recommended fix:** Add a batched prefetch that fills the existing `_MT_FILES_CACHE`; fall back to `_mt_pr_files_into` for missing entries or additional pages. Verify filename and pagination parity before replacing REST. **[NEEDS VERIFICATION]**
+
+- **BATCH-002 — Medium · api-batching · `scripts/review_resolve_review_threads.sh:259-267,297-339`**. **Description:** After a paginated thread read, the plan loop sends one GraphQL `resolveReviewThread` mutation per eligible thread. For **N** eligible threads and **I** required rationale replies, a one-page path uses **1 + N + I calls**; batching 25 independent mutation aliases projects **1 + ceil(N/25) + I**—at the 50-thread cap, **51 + I → 3 + I**. Replies must remain ordered before their resolutions. **Recommended fix:** Extend the aliased-query construction pattern of `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh:14717-14793`; validate every alias’s returned thread ID and state, with per-thread fallback on partial errors. Mutation failure semantics require verification. **[NEEDS VERIFICATION]**
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001 — Medium · duplication · `.github/workflows/mark-stable.yml:698-847`** (also `.github/workflows/test-and-mark-stable.yml:5893-6042`). **Description:** Both release steps carry the same large inline `publish_tag_with_remote_verification` routine and tag-publication body. A correction to remote verification must be made twice. **Recommended fix:** Put `publish_tag_with_remote_verification(tag_ref, publication_mode)` in a shared `scripts/release_tag_helpers.sh`, source it from both steps, and retain each workflow’s existing gate and outputs. Do not substitute `scripts/mark-stable.sh` wholesale: its CLI contract is different.
+
+- **DUP-002 — Medium · duplication · `.github/workflows/review_autofix.yml:6424-6468`** (also lines 6644-6685). **Description:** The post-commit and editor-changes-lost paths repeat the direct/caller/fallback workflow-dispatch sequence, including its ref selection. **Recommended fix:** After SEC-001’s trusted-ref correction, move dispatch selection into a verified support script exposing `dispatch_review_for_pr(pr_number, allow_workflow_edits, caller_workflow, trusted_ref)`. Keep each caller’s distinct peer check, retry budget, and output handling in its current step; register the new script in `scripts/stage_workflow_support.sh:53`.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+The scan measured the parsed YAML value—not indentation in the source file—of all **225 interpolated `run:` blocks**. Exactly one literal body exceeds 15,000 characters; none exceeds 18,000. Runtime interpolation lengths are not knowable from the static file. The longest parsed `if:` is 859 characters; no workflow exceeds 800 KB. The repository also documents a *stricter* 512,000-byte operational limit and 480,000-byte CI guard at `tests/test_workflow_file_size_limit.py:26-27`, rather than relying on the prompt’s 1 MB criterion.
+
+- **EXPR-001 — Medium · expression-limit · `.github/workflows/implement.yml:986-1342`**. **Description:** “Stage workflow support files” contains three `${{ }}` interpolations in a parsed `run:` body of approximately **16,985 characters**, leaving **4,015** below 21,000 before runtime expansion. That headroom is a static estimate. **[NEEDS VERIFICATION]** **Recommended fix:** Extract the body into a staged `scripts/` helper, pass the three expression values through step `env:`, and add the helper to the bootstrap registry and relevant contract tests.
+
+- **DEBT-001 — Medium · tech-debt · `.github/workflows/review_autofix.yml:1-7561`**. **Description:** The file is **458,436 bytes**, only **21,564 bytes** below this repository’s 480,000-byte CI guard, although it is nowhere near 800 KB. **Recommended fix:** Before the next substantial addition, extract another large inline step using the existing verified `review_autofix_step_*.sh` staging pattern documented in `agents.md:624-675`; retain the guard.
+
+### Section 5: Cross-Cutting Concerns
+
+- **CONSIST-001 — Medium · consistency · `scripts/orchestrate_poll_process.sh:14787-14803`** (also lines 14929-14946). **Description:** Both batched GraphQL helpers transform an HTTP-success response without checking its `.errors` array. Defaults such as `.data.repository // {}` can make a partial GraphQL response appear to be an ordinary cache miss; `scripts/gh_helpers.sh:897-925` explicitly checks errors and connection completeness for a comparable read. The effect of a particular partial response is an inference. **[NEEDS VERIFICATION]** **Recommended fix:** Validate `.errors` and required nodes per batch, warn with a bounded reason, and leave affected keys unavailable for the existing safe fallback.
+
+- **DEAD-001 — Low · dead-code · `scripts/review_rb_judge.sh:2121-2140`**. **Description:** `PR_HEAD_SHA` is initialized and assigned in the mergeability poll but never read elsewhere in this script; shellcheck reports SC2034. Its adjacent comment claims it binds the eventual merge to a head, which the unused assignment cannot do. **Recommended fix:** Remove the assignment and misleading comment; retain the existing `RB_JUDGED_HEAD_SHA`-bound merge calls rather than switching them to a newly polled SHA.
+
+No `TODO`, `FIXME`, or `HACK` marker was found in the scoped workflow and script files. The redirection and subshell shellcheck warnings inspected in `review_conflict_resolve.sh:2952-2962`, `review_commit_changes.sh:263-271`, and `resolve_integration_ref.sh:114-125` did not establish additional defects. Shellcheck timed out on the unusually large `orchestrate_poll_process.sh`; syntax checking completed for that file.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 1 | SEC-001 |
+| High | 3 | BUG-001, BUG-002, BUG-003 |
+| Medium | 9 | BUG-004, API-001, BATCH-001, BATCH-002, DUP-001, DUP-002, EXPR-001, DEBT-001, CONSIST-001 |
+| Low | 1 | DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 4 implementation files plus focused tests | Large |
+| API call optimization | 2 scripts plus focused tests | Medium |
+| Code modularization | 3 workflows, 2 shared modules, and staging/tests | Large |
+| Expression size reduction | `implement.yml`, 1 new script, staging/tests | Medium |
+| Medium/Low fixes | 4 existing files plus focused tests; overlaps rows above | Medium |
