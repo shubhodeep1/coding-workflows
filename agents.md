@@ -1313,7 +1313,9 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   replaces the token, the raw token, `GH_PAT`, the base64 `x-access-token:`
   form of each, each one's complete standalone base64 encoding (padded and
   unpadded), and each one's base64 text at every byte offset (standard and
-  URL-safe) with `***` in every output file. It exits 1 when a file cannot be
+  URL-safe) with `***` in every output file, also when line breaks (raw, or
+  JSON-escaped `\n` / `\r\n`) split the value, as wrapped `base64` output
+  does. It exits 1 when a file cannot be
   read or written (`redact_failed`), and the transcript is uploaded only when
   it succeeded. Bash is not denied on `.claude/**`; spike S13 saw a shell
   redirect there denied, but other shell writes rely on the twin-first rule.

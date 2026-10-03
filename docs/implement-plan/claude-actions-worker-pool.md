@@ -8,12 +8,12 @@
 - Activation: not started
 - Waiting on: PR #6100
 - Stage model: claude-opus-5-5   Permission mode: auto
-- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 5 stage (session_016YrCAFxZjJCVwUsBBjTQ7p), ids in its report
-- Last updated: 2026-10-02
-- Last note: review round 5 on PR #6100 (hand-off round 1 on head 81717d6, session_016YrCAFxZjJCVwUsBBjTQ7p): the one consensus finding (the auto-mode worker can hand the redaction step a `BASH_ENV` / `PATH` through `$GITHUB_ENV` / `$GITHUB_PATH`) is valid and fixed: the CLI runs without file-command paths, the step then kills what the worker left running and empties its file commands, and redaction runs `/usr/bin/python3 -B -E -s` in a bash started without `BASH_ENV`
+- Check-in: checker session_01BLqmi9wCW3iEmjdes3WCaE   safety net / hand-back: re-armed by the review round 6 stage (session_01DA3z77chxXqFcnmbAyzzWE), ids in its report
+- Last updated: 2026-10-03
+- Last note: review round 6 on PR #6100 (hand-off round 2 on head 3e3c90d, session_01DA3z77chxXqFcnmbAyzzWE): both consensus findings are valid and fixed: `redact` now matches every secret form with raw or JSON-escaped line breaks inside it (wrapped `base64` output), and `decode_payload` drops ASCII whitespace before its strict decode
 
 ## Phases
-1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 5 (round 4: conflict; round 5: worker containment); interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
+1. [ ] Phase 1 — pool core and worker   — PR #6100 open (waiting); review rounds: 6 (round 4: conflict; round 5: worker containment; round 6: wrapped base64); interventions: 0; runner-repo wrapper PR shubhodeep1/claude-workers#1 (open; operator merges it after the project lands, §23.C)
    - `scripts/claude_pool.py` [new]: `accounts`, `normalize`, `probe-parse`, `choose`, `prompt`, `classify`, `run-name`; also `config` (the workflow reads the pool config through it) and `redact` (AD-4)
    - `.github/workflows/claude-pool-worker.yml` [new]: `workflow_call`, jobs `select` / `work` / `report`
    - `.github/ai/claude_pool.json` [new]: `dispatch_types: []` (pool off)
@@ -75,6 +75,7 @@
 - [source:plan-deviation] A new `.github/workflows/*.yml` file changes the auto-generated repo tree in agents.md; run `make generate` in the same PR, or the CI `make generate-check` drift step fails. (files: agents.md, tools/repo_tree/update_repo_tree.py)
 - [source:plan-deviation] CLAUDE.md §18.F wants a `docs/scripts-pending-removal.md` entry even for permanent scripts and workflows (`Removal trigger: permanent — review annually`); a plan line saying "no new entry; the scripts are permanent" does not exempt them. (files: docs/scripts-pending-removal.md)
 - [source:intervention] A step after an auto-mode Claude step inherits whatever the agent appended to `$GITHUB_ENV` / `$GITHUB_PATH` (`BASH_ENV`, `PATH`, `LD_PRELOAD`) and any process it left running; run the CLI without the file-command variables, then kill its leftover processes and empty the step's file-command files before the step ends. (files: .github/workflows/claude-pool-worker.yml)
+- [source:intervention] Secret redaction must match each value with line breaks allowed inside it (raw CR/LF and the JSON-escaped `\n` / `\r\n` of a transcript): GNU `base64` wraps every 76 columns, so a literal `str.replace` misses a printed `base64(secret)`. (files: scripts/claude_pool.py)
 
 ## Notes
 - 2026-10-02: the operator's runner repo now holds pool secrets `CLAUDE_POOL_TOKEN_FUNTOKEN1` and `_FUNTOKEN2` (TEST1/TEST2 gone), and `GH_PAT` there is already the classic token: spike round 9 (run 37012676689) and the phase 1 smoke run read check runs on private consumers. Activation gate 1 looks done; the activation stage re-checks it.

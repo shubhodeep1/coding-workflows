@@ -510,8 +510,13 @@ def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 
 
 def decode_payload(payload_b64: str) -> str:
-	"""Strict base64 decode of the queue item's fire text; raise PoolError."""
-	text = (payload_b64 or "").strip()
+	"""Strict base64 decode of the queue item's fire text; raise PoolError.
+
+	ASCII whitespace is dropped first, so the line-wrapped output of GNU
+	``base64`` (a manual ``gh workflow run -f payload_b64="$(base64 …)"``)
+	decodes too; any other non-alphabet character is still rejected.
+	"""
+	text = re.sub(r"[ \t\r\n\f\v]+", "", payload_b64 or "")
 	if not text:
 		raise PoolError("empty payload")
 	try:
@@ -704,6 +709,8 @@ def classify_run(
 REDACTION = "***"
 # Shorter values are not redacted: they would match ordinary text.
 REDACT_MIN_LENGTH = 8
+# A raw CR/LF line break, or the two- and four-character JSON escapes of one.
+_REDACT_LINE_BREAK = r"(?:\r?\n|\\r\\n|\\n)?"
 
 
 def _base64_forms(value: str) -> set[str]:
@@ -735,6 +742,16 @@ def _base64_forms(value: str) -> set[str]:
 	return forms
 
 
+def _wrapped_pattern(value: str) -> re.Pattern[str]:
+	"""``value`` with an optional line break allowed between any two characters.
+
+	GNU ``base64`` wraps its output every 76 columns, so ``base64(secret)``
+	printed by a worker can carry a newline anywhere inside it: a real one in
+	``stderr.txt``, the JSON-escaped ``\\n`` / ``\\r\\n`` in ``transcript.jsonl``.
+	"""
+	return re.compile(_REDACT_LINE_BREAK.join(re.escape(char) for char in value))
+
+
 def redact_text(text: str, secrets: list[str]) -> tuple[str, int]:
 	"""Replace every occurrence of each secret; return the text and the count.
 
@@ -742,7 +759,9 @@ def redact_text(text: str, secrets: list[str]) -> tuple[str, int]:
 	offset (standard and URL-safe alphabets, so ``base64(secret)`` printed by
 	a worker or embedded in a longer encoded string is caught), and in the
 	base64 ``x-access-token:<secret>`` form ``actions/checkout`` writes into
-	the checkout's ``.git/config`` (a worker could print that file).
+	the checkout's ``.git/config`` (a worker could print that file). Every
+	form also matches with line breaks inside it (``_wrapped_pattern``), so a
+	wrapped encoding is replaced whole, breaks included.
 	"""
 	values: set[str] = set()
 	for secret in secrets:
@@ -756,10 +775,8 @@ def redact_text(text: str, secrets: list[str]) -> tuple[str, int]:
 	count = 0
 	# Longest first, so a secret that contains another is replaced whole.
 	for value in sorted(values, key=len, reverse=True):
-		hits = text.count(value)
-		if hits:
-			count += hits
-			text = text.replace(value, REDACTION)
+		text, hits = _wrapped_pattern(value).subn(REDACTION, text)
+		count += hits
 	return text, count
 
 

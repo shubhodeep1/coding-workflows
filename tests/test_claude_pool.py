@@ -103,6 +103,11 @@ def _b64(text):
 	return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
+def _wrap76(encoded):
+	"""``encoded`` split into the 76-column lines GNU ``base64`` prints."""
+	return [encoded[start:start + 76] for start in range(0, len(encoded), 76)]
+
+
 ISSUE_TEXT = (
 	"claude_issue.v1\nrepo: shubhodeep1/digital_pa\nissue: 42\n"
 	"url: https://github.com/shubhodeep1/digital_pa/issues/42\ntrigger: opened\nskip_security_pass: false\n"
@@ -399,6 +404,17 @@ def test_decode_payload_is_strict():
 			pool.decode_payload(bad)
 
 
+@pytest.mark.parametrize("line_break", ["\n", "\r\n"])
+def test_decode_payload_accepts_line_wrapped_base64(line_break):
+	# Review round 2 (head 3e3c90d): GNU base64 wraps every 76 columns, so a
+	# manual `-f payload_b64="$(base64 file)"` dispatch carries newlines.
+	wrapped = line_break.join(_wrap76(_b64(ISSUE_TEXT))) + line_break
+	assert line_break in wrapped.strip()
+	assert pool.decode_payload(wrapped) == ISSUE_TEXT
+	with pytest.raises(pool.PoolError):
+		pool.decode_payload(wrapped.replace(line_break, line_break + "!", 1))
+
+
 def test_prompt_cli(tmp_path, capsys):
 	registry = tmp_path / "consumer_repos.json"
 	registry.write_text(json.dumps(["shubhodeep1/digital_pa"]))
@@ -650,6 +666,45 @@ def test_redact_removes_every_character_of_a_standalone_base64_secret(length, en
 		redacted, count = pool.redact_text(f"output: {printed} done\n", [token])
 		assert count == 1
 		assert redacted == "output: *** done\n"
+
+
+@pytest.mark.parametrize("line_break", ["\n", "\r\n", "\\n", "\\r\\n"])
+@pytest.mark.parametrize("encode", [base64.b64encode, base64.urlsafe_b64encode])
+def test_redact_catches_line_wrapped_base64(line_break, encode):
+	# Review round 2 (head 3e3c90d): `base64` wraps at 76 columns, a raw break
+	# in stderr.txt and a JSON-escaped one in transcript.jsonl.
+	token = "sk-ant-oat01-" + "Ab0_-" * 19
+	printed = line_break.join(_wrap76(encode(token.encode()).decode()))
+	assert line_break in printed
+	redacted, count = pool.redact_text(f"output: {printed} done\n", [token])
+	assert count == 1
+	assert redacted == "output: *** done\n"
+
+
+@pytest.mark.parametrize("prefix", ["", "x", "xy", "Authorization: Bearer "])
+def test_redact_catches_wrapped_base64_of_a_longer_text(prefix):
+	token = "sk-ant-oat01-" + "Ab0_-" * 19
+	printed = "\n".join(_wrap76(base64.b64encode(f"{prefix}{token} trailing".encode()).decode()))
+	redacted, count = pool.redact_text(f"output: {printed}\n", [token])
+	assert count >= 1
+	unwrapped = redacted.replace("\n", "")
+	assert not any(form in unwrapped for form in pool._base64_forms(token))
+
+
+def test_redact_catches_a_line_break_at_every_position():
+	token = "sk-ant-oat01-" + "Ab0_-" * 19
+	encoded = base64.b64encode(token.encode()).decode()
+	for position in range(1, len(encoded)):
+		printed = encoded[:position] + "\n" + encoded[position:]
+		assert pool.redact_text(printed, [token]) == ("***", 1), position
+
+
+def test_redact_catches_a_wrapped_raw_secret_in_a_json_transcript():
+	token = "sk-ant-oat01-" + "z" * 95
+	line = json.dumps({"result": f"token {token[:60]}\n{token[60:]} end"})
+	redacted, count = pool.redact_text(line, [token])
+	assert count == 1
+	assert json.loads(redacted) == {"result": "token *** end"}
 
 
 def test_redact_base64_forms_leave_ordinary_text_alone():
