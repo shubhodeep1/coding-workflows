@@ -1,0 +1,26 @@
+{
+  "created_at": "2026-10-03T05:37:49Z",
+  "issue_number": 6057,
+  "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6057",
+  "lineage_id": "issue-6057",
+  "memory_record_ids": [],
+  "prs": [
+    {
+      "pr_number": 6067,
+      "state": "closed",
+      "url": "https://github.com/shubhodeep1/coding-workflows/pull/6067"
+    }
+  ],
+  "runs": [
+    {
+      "run_attempt": 1,
+      "run_id": "37100363200",
+      "status": "closed",
+      "timestamp": "2026-10-03T05:37:49Z",
+      "workflow": "Internal: Issue-PR Status Sync"
+    }
+  ],
+  "schema_version": "task_lineage.v1",
+  "state": "closed",
+  "updated_at": "2026-10-03T05:37:49Z"
+}
