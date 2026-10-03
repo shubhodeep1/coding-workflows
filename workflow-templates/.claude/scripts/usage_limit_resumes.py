@@ -59,8 +59,9 @@ A candidate is skipped (listed under `skipped`) when it is the pickup
 (`too_old`: the pickup lists 3 days of sessions, but the last page it reads
 can reach further back, and those older sessions stay with the manual
 fallback; an unreadable `created_at` is not skipped; an old session waiting
-on a human answer is listed as `needs_input` instead, so the manual fallback
-never resumes it past the question), not IDLE (`not_idle:<status>`), waiting
+on a human answer is listed as `needs_input` instead, and one on a permission
+prompt as `permission_prompt`, so the manual fallback never resumes it past
+the question), not IDLE (`not_idle:<status>`), waiting
 on a permission prompt (`permission_prompt`), waiting on a human answer
 (`needs_input`, below), still limited by its own
 `rate_limit_info` (`not_reset`), or bound to an enabled trigger that will
@@ -614,16 +615,21 @@ def _skip_reason(
 	needs_input = has_unanswered_request(session) or (
 		signal == "rate_limit_info" and _text(summary.get("status_category")) == "need_input"
 	)
+	permission_prompt = bool(
+		PERMISSION_PROMPT_PATTERN.search(_text(summary.get("needs_action")))
+		or PERMISSION_PROMPT_PATTERN.search(_text(summary.get("status_detail")))
+	)
 	created_at = _parse_time(session.get("created_at"))
 	if created_at is not None and created_at < now - dt.timedelta(hours=SESSION_WINDOW_HOURS):
-		# PR #6112 review round 1: the manual fallback resumes too_old sessions, so an old one waiting on a human says so.
+		# PR #6112 review round 1: the manual fallback resumes too_old sessions, so an old one waiting on a human says so,
+		# with the same precedence as a recent one (review round 5): a permission prompt before an unanswered request.
+		if permission_prompt:
+			return "permission_prompt"
 		return "needs_input" if needs_input else "too_old"
 	if status != IDLE_STATUS:
 		short = status[len(SESSION_STATUS_PREFIX):] if status.startswith(SESSION_STATUS_PREFIX) else status
 		return f"not_idle:{short.lower() or 'unknown'}"
-	if PERMISSION_PROMPT_PATTERN.search(_text(summary.get("needs_action"))) or PERMISSION_PROMPT_PATTERN.search(
-		_text(summary.get("status_detail"))
-	):
+	if permission_prompt:
 		return "permission_prompt"
 	if needs_input:
 		return "needs_input"

@@ -1299,7 +1299,7 @@ mode).
    - It lists sessions (3 days back) and enabled triggers, and runs `.claude/scripts/usage_limit_resumes.py` with its own `get_session` result first (the pickup runs for weeks, so its own entry is rarely on that listing, and the account-wide hold-off reads it).
    - The script selects `IDLE` sessions whose last summary carries the usage-limit error, plus checkers whose `rate_limit_info` shows a `rejected` limit that has since reset and that have no trigger at all.
    - It skips a session that is:
-     - archived, running, or on a permission prompt;
+     - archived, running, or on a permission prompt (an old session on a permission prompt is listed as `permission_prompt`, not `too_old`);
      - waiting on a human answer: its summary's `needs_action` asks for something other than waiting for the limit to reset, uses any word outside the limit-wait vocabulary, or holds a sentence outside the closed limit-wait forms (the error or status text, the reset, a wait, or a retry tied to the reset in the same sentence, such as `Retry after the reset`), so a retry deferred only by another sentence, a `retry until`, a negated wait, or a retry or wait at a bare time (`Retry after 5pm`; a time counts only as the reset's) is a request (#6102). An old session in this state is listed as `needs_input`, not `too_old`;
      - the pickup itself;
      - created more than 72 hours ago (the last page listed can reach further back; those stay with the manual fallback);

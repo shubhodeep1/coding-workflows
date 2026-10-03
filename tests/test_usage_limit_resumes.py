@@ -439,6 +439,20 @@ def test_an_old_session_waiting_on_a_human_is_needs_input_not_too_old(tmp_path, 
 	assert result["resume"] == [] and _skips(result) == {"session_a": "needs_input"}
 
 
+@pytest.mark.parametrize(
+	"needs_action, detail",
+	[
+		("Approve or deny: Bash(git push origin HEAD)", LIMIT_TEXT),
+		(None, "Waiting on permission: Bash · " + LIMIT_TEXT),
+	],
+)
+def test_an_old_session_on_a_permission_prompt_is_permission_prompt_not_needs_input(tmp_path, capsys, needs_action, detail):
+	"""PR #6112 review round 5: an old session keeps a recent one's precedence, permission_prompt before needs_input."""
+	session = _session("session_a", created_at="2026-09-27T11:59:00Z", needs_action=needs_action, detail=detail)
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert result["resume"] == [] and _skips(result) == {"session_a": "permission_prompt"}
+
+
 def test_has_unanswered_request_reads_both_copies():
 	assert resumes.has_unanswered_request({}) is False
 	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": None}}) is False

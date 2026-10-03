@@ -325,7 +325,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     - **Skip reasons:** `pickup`, `archived`, `too_old` (`created_at` more
       than 72 hours ago; the last page listed can reach further back, and an
       unreadable `created_at` is not skipped; an old session waiting on a
-      human answer is listed as `needs_input` instead), `not_idle:<status>`,
+      human answer is listed as `needs_input` instead, and one on a
+      permission prompt as `permission_prompt`), `not_idle:<status>`,
       `permission_prompt`, `needs_input` (on both signals, #6102: a
       non-empty `needs_action` in either summary copy that is not only a
       wait for the limit; a limit wait is made only of limit-wait words
