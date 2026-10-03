@@ -289,6 +289,22 @@ def git_tree_unchanged(file_name: str, head: Any) -> bool:
 	return completed.returncode == 0
 
 
+def _cached_tree_check() -> Any:
+	"""git_tree_unchanged memoized per ruled head, so several findings matching rulings from one
+	head cost one `git diff` (PR #6069 review round 2). The answer does not depend on the file."""
+	results: dict[Any, bool] = {}
+
+	def check(file_name: str, head: Any) -> bool:
+		if not file_name:
+			return False
+		key = head if isinstance(head, str) else repr(head)
+		if key not in results:
+			results[key] = git_tree_unchanged(file_name, head)
+		return results[key]
+
+	return check
+
+
 def sticky(ledger_text: str, rulings: list[dict[str, Any]], file_unchanged: Any = None) -> tuple[str, int]:
 	"""Demote findings an earlier judge run ruled invalid.
 
@@ -384,7 +400,10 @@ def prior_rulings(
 			match = JUDGE_MARKER_RE.match(line.rstrip("\r"))
 			if match:
 				markers.append((comment_id, match.group("run"), match.group("head")))
-	markers.sort(reverse=True)
+	# Newest judge run first, by run id rather than comment id: a collaborator reposting an older
+	# run's marker in a new comment must not put that run's ruling ahead of a newer one (PR #6069
+	# review round 2). The comment id only breaks ties between copies of one run's marker.
+	markers.sort(key=lambda marker: (int(marker[1]), marker[0]), reverse=True)
 	seen: set[str] = set()
 	rulings: list[dict[str, Any]] = []
 	runs: list[dict[str, Any]] = []
@@ -465,7 +484,7 @@ def _cmd_sticky(args: argparse.Namespace) -> int:
 	loaded = _load_json(args.rulings)
 	rulings = loaded.get("rulings") if isinstance(loaded, dict) else loaded
 	ledger = Path(args.ledger)
-	text, moved = sticky(ledger.read_text(encoding="utf-8"), rulings if isinstance(rulings, list) else [], file_unchanged=git_tree_unchanged)
+	text, moved = sticky(ledger.read_text(encoding="utf-8"), rulings if isinstance(rulings, list) else [], file_unchanged=_cached_tree_check())
 	if moved:
 		ledger.write_text(text, encoding="utf-8")
 	print(moved)

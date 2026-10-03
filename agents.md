@@ -117,20 +117,22 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `claude_fixer_no_rulings`), a missing rejection
    (`claude_fixer_rejection_missing`: no rejection comment for that head and
    round from a collaborator posting as the PR author or the workflow's
-   GH_PAT account, so a bare dispatch never runs the judge, #6061), and
+   GH_PAT account, newer than the newest hand-off comment carrying that
+   head, round and ledger digest, so a bare dispatch never runs the judge
+   and a rejection of an earlier ledger never judges a later one, #6061), and
    a hand-off ledger with no finding
    (`claude_fixer_no_findings`: usually a round below the #5964 reviewer
    panel floor, which the hand-off comment names, or a clean ledger beside a
    failing check; only a new review run or a fix can clear it, so the judge
    never merges it as "nothing upheld"). A `[judge-fix]` commit drops
-   `.github/workflows` edits unless `ALLOW_WORKFLOW_EDITS` is `true` and
-   runs `write_guard_check review_editor` before anything is committed, as
+   `.github/workflows` edits (new, untracked files included) unless
+   `ALLOW_WORKFLOW_EDITS` is `true` and runs `write_guard_check review_editor` before anything is committed, as
    the review editor does (#6063). One verdict
    comment ending `<!-- ai:claude-fixer-judge:v1 head=<sha> round=<r>
    run=<id> decision=<d> -->` is posted. The rulings ride in that run's
    evidence artifact (uploaded by "Upload Claude-fixer judge evidence"); the
-   hand-off step reads the newest 3 judge runs that collaborators' comments
-   name (OWNER, MEMBER, or COLLABORATOR), verifies each, and moves findings
+   hand-off step reads the newest 3 judge runs (by run id, not comment
+   order) that collaborators' comments name (OWNER, MEMBER, or COLLABORATOR), verifies each, and moves findings
    within 3 lines of an `invalid` ruling in the same file that make the same
    claim (case- and whitespace-insensitive; security follow-up #6051), when
    nothing changed since the head that ruling judged (the whole change set,

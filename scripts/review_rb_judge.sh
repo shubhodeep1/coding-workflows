@@ -2393,6 +2393,8 @@ __EDIT_DISCIPLINE__
           if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -q '^\.github/workflows/'; then
             echo "::warning::Workflow edits are not allowed (ALLOW_WORKFLOW_EDITS=false); dropping .github/workflows changes from the Claude-fixer judge fix."
             git restore --source=HEAD --staged --worktree -- .github/workflows || true
+            # New, untracked workflow files survive the restore; remove them too (PR #6069 review round 2).
+            git clean -f -d -- .github/workflows || true
             STAGED_FILES="$(git diff --cached --name-only || true)"
           fi
           _rb_judge_guard_list="$(mktemp "${TMPDIR:-/tmp}/rb-judge-write-guard.XXXXXX")"

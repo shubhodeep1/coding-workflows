@@ -271,6 +271,8 @@ def test_rb_judge_claude_mode_fix_obeys_workflow_edit_policy_and_write_guard():
 	block = text[guard:commit]
 	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]' in block
 	assert "git restore --source=HEAD --staged --worktree -- .github/workflows" in block
+	# PR #6069 review round 2: new, untracked workflow files are removed as well.
+	assert "git clean -f -d -- .github/workflows" in block
 	assert 'write_guard_check review_editor "${_rb_judge_guard_list}"' in block
 	assert block.count("exit 1") >= 2
 
@@ -311,6 +313,34 @@ def test_prior_rulings_verify_each_run_and_keep_the_newest_three():
 	assert all(c["require_judge"] is True and c["pr"] == 42 and c["head_sha"] == HEAD for c in calls)
 	assert [r["run"] for r in result["rulings"]] == ["15", "14"]
 	assert [r["verified"] for r in result["runs"]] == [True, True, False]
+
+
+def test_prior_rulings_order_by_run_not_by_comment():
+	"""PR #6069 review round 2: a newer comment reposting an older run's marker must not put that
+	run's ruling ahead of a newer run's."""
+	calls: list[str] = []
+
+	def verify(**kwargs):
+		calls.append(kwargs["run_id"])
+		return {"verified": True, "reason": "ok", "evidence": {"judge": {"rulings": [{"file": "scripts/a.sh", "line": 10, "ruling": "invalid"}]}}}
+
+	comments = [_judge_comment(5, "200"), _judge_comment(9, "100"), _judge_comment(3, "100")]
+	result = judge.prior_rulings(comments, repo="o/r", pr=42, default_branch="main", max_runs=3, verify=verify)
+	assert calls == ["200", "100"]
+	assert [r["run"] for r in result["rulings"]] == ["200", "100"]
+
+
+def test_cached_tree_check_diffs_each_ruled_head_once(monkeypatch):
+	"""PR #6069 review round 2: several findings matching rulings from one head cost one diff."""
+	calls: list[tuple[str, object]] = []
+	monkeypatch.setattr(judge, "git_tree_unchanged", lambda f, h: calls.append((f, h)) or h == "a" * 40)
+	check = judge._cached_tree_check()
+	assert check("scripts/a.sh", "a" * 40) is True
+	assert check("scripts/b.sh", "a" * 40) is True
+	assert check("scripts/a.sh", "b" * 40) is False
+	assert check("scripts/c.sh", "b" * 40) is False
+	assert check("", "a" * 40) is False
+	assert calls == [("scripts/a.sh", "a" * 40), ("scripts/a.sh", "b" * 40)]
 
 
 def test_prior_rulings_ignore_markers_from_non_collaborators():
