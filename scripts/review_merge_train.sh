@@ -31,6 +31,7 @@
 #   MERGE_TRAIN_ALLOW_WORKFLOW_EDITS       default true; forwarded on dispatch
 # Env (gate):
 #   PR_NUMBER, BASE_BRANCH, TARGET_BRANCH  required (TARGET_BRANCH = PR head ref)
+#   IS_SMOKE_TEST                         only literal true bypasses overlap checks
 #   PR_DIFF_FILE                           optional; parsed for this PR's paths
 #   GITHUB_ENV                             receives AUTOFIX_MERGE_QUEUED=true and
 #                                          AUTOFIX_STALE_BASE_SKIP=true when queued
@@ -312,21 +313,25 @@ _mt_gate() {
 		return 0
 	fi
 	local own_files="" prs_json blockers=""
-	if ! _mt_own_files_into own_files "${pr}"; then
-		_mt_warn "merge-train gate: could not list changed files for PR #${pr}; fail-open (not queued)."
-		return 0
-	fi
-	if [ -z "${own_files}" ]; then
-		_mt_log "MERGE_TRAIN_GATE pr=${pr} result=no_changed_files action=continue"
-		return 0
+	if [ "${IS_SMOKE_TEST:-}" != "true" ]; then
+		if ! _mt_own_files_into own_files "${pr}"; then
+			_mt_warn "merge-train gate: could not list changed files for PR #${pr}; fail-open (not queued)."
+			return 0
+		fi
+		if [ -z "${own_files}" ]; then
+			_mt_log "MERGE_TRAIN_GATE pr=${pr} result=no_changed_files action=continue"
+			return 0
+		fi
 	fi
 	if ! prs_json="$(_mt_list_open_prs "${base}")"; then
 		_mt_warn "merge-train gate: could not list open PRs on ${base}; fail-open (not queued)."
 		return 0
 	fi
-	if ! _mt_blockers_for_into blockers "${pr}" "${base}" "${own_files}" "${prs_json}"; then
-		_mt_warn "merge-train gate: could not list files of an older PR; fail-open (not queued)."
-		return 0
+	if [ "${IS_SMOKE_TEST:-}" != "true" ]; then
+		if ! _mt_blockers_for_into blockers "${pr}" "${base}" "${own_files}" "${prs_json}"; then
+			_mt_warn "merge-train gate: could not list files of an older PR; fail-open (not queued)."
+			return 0
+		fi
 	fi
 	local own_labels queued_comment_id queue_label_persisted
 	own_labels="$(printf '%s\n' "${prs_json}" | jq -r --argjson n "${pr}" 'select(.number == $n) | .labels | join(",")' 2>/dev/null | head -n 1 || true)"
