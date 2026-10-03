@@ -291,6 +291,7 @@ jobs:
       force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
       head_sha: ${{ steps.evaluate.outputs.head_sha }}
+      review_checkout_sha: ${{ steps.evaluate.outputs.review_checkout_sha }}
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
       post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}
@@ -492,6 +493,8 @@ jobs:
           pr_mergeable=""
           pr_mergeable_state=""
           pr_head_sha_gate=""
+          pr_head_repo_gate=""
+          review_checkout_sha=""
           pr_title_cached="${PR_TITLE:-}"
           pr_body_cached="${PR_BODY:-}"
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -519,12 +522,13 @@ jobs:
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), head_repo: (.head.repo.full_name // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
               pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
               pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
+              pr_head_repo_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_repo // ""' 2>/dev/null || echo "")"
               pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
               pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
               pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
@@ -556,6 +560,20 @@ jobs:
           elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
             SHOULD_RUN="false"
             SKIP_REASON="skip_ai_marker"
+          fi
+
+          # A PR checkout must never fall back to the dispatching commit. The
+          # authenticated PR response is also the only source of the SHA for
+          # workflow_dispatch / workflow_call; fork heads are not safe to run
+          # beside review-job credentials, including in deterministic skip.
+          if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ "${pr_state}" = "open" ]; then
+            if [ "${pr_head_repo_gate}" = "${REPOSITORY}" ] && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]]; then
+              review_checkout_sha="${pr_head_sha_gate}"
+            else
+              SHOULD_RUN="false"
+              SKIP_REASON="review_checkout_unverified"
+              echo "::warning::PR #${PR_NUMBER} head repo or SHA is unverified; skipping review and deterministic merge."
+            fi
           fi
 
           # post-merge-validate-dispatch runs in a separate job and cannot
@@ -1556,6 +1574,7 @@ jobs:
           # exact head evaluated by this gate. Consumers fail closed when the
           # authenticated PR metadata did not provide a head SHA.
           echo "head_sha=${pr_head_sha_gate}" >> "${GITHUB_OUTPUT}"
+          echo "review_checkout_sha=${review_checkout_sha}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
           echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
@@ -2357,6 +2376,7 @@ jobs:
       # failure comment records it so the gate's identical-failure cap can
       # match markers to the current head.
       AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      REVIEW_CHECKOUT_SHA: ${{ needs.gate.outputs.review_checkout_sha }}
       WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
       # Review-pipeline knobs: mirror the landed script defaults so repo-var
       # overrides are honored without changing current branch behaviour.
@@ -2486,7 +2506,7 @@ jobs:
           # the merge ref may not exist, causing checkout to fail and
           # preventing the entire workflow — including conflict resolution
           # — from running.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || needs.gate.outputs.review_checkout_sha || github.sha }}
           # Shallow clone to bound disk/memory cost on history-heavy
           # consumer repos.  fetch-depth: 0 (full clone with all branches +
           # tags) was the dominant cause of "runner died mid-step" on
@@ -2510,6 +2530,19 @@ jobs:
           # checkout itself, so reviewers see the working tree as usual.
           filter: blob:none
           token: ${{ secrets.GH_PAT }}
+
+      - name: Reject project OpenCode configuration before agent setup
+        # OpenCode discovers project configuration and plugins even when a
+        # separate OPENCODE_CONFIG is set. Do not launch it with PR-controlled
+        # config in the credential-bearing host checkout.
+        run: |
+          set -euo pipefail
+          for path in .opencode opencode.json opencode.jsonc .opencode.json .opencode.jsonc; do
+            if [ -e "${GITHUB_WORKSPACE}/${path}" ] || [ -L "${GITHUB_WORKSPACE}/${path}" ]; then
+              echo "::error::Review checkout contains project OpenCode configuration; refusing to start agents."
+              exit 1
+            fi
+          done
 
       - name: Show disk usage (post checkout)
         run: df -h /
@@ -3548,6 +3581,30 @@ jobs:
           INITIAL_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
           echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"
 
+          # GIT_DIR points at the source checkout, but GIT_WORK_TREE points at
+          # the split workspace. Check both the actual source tree commit and
+          # the metadata used for the reviewer diff before any early exit.
+          if [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+            review_source_sha="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)"
+            review_workspace_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+            review_metadata_sha="$(jq -r '.head.sha // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || true)"
+            if ! [[ "${review_source_sha}" =~ ^[0-9a-f]{40}$ ]] \
+              || [ "${review_source_sha}" != "${review_workspace_sha}" ] \
+              || [ "${review_source_sha}" != "${review_metadata_sha}" ] \
+              || [ "${review_source_sha}" != "${REVIEW_CHECKOUT_SHA}" ]; then
+              echo "::warning::Review source, workspace, and PR metadata heads differ; skipping this review."
+              echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          fi
+
+          for path in .opencode opencode.json opencode.jsonc .opencode.json .opencode.jsonc; do
+            if [ -e "${WORKSPACE_PATH}/${path}" ] || [ -L "${WORKSPACE_PATH}/${path}" ]; then
+              echo "::error::Review workspace contains project OpenCode configuration; refusing to start agents."
+              exit 1
+            fi
+          done
+
           if [ -z "${HEAD_REF}" ] || [ "${HEAD_REF}" = "null" ]; then
             echo "Unable to determine PR head branch"
             exit 1
@@ -3620,6 +3677,12 @@ jobs:
             # to discard — landing cleanly on origin/${HEAD_REF} is exactly
             # the intent.
             git checkout -f -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}"
+          fi
+
+          if [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ "$(git rev-parse HEAD 2>/dev/null || true)" != "${review_source_sha}" ]; then
+            echo "::warning::PR head moved after source checkout; skipping review of the older file tree."
+            echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+            exit 0
           fi
 
           echo "CAN_PUSH=true" >> "$GITHUB_ENV"
@@ -4397,7 +4460,7 @@ jobs:
         # resolver tail BEFORE the reviewer/editor spend when
         # PRE_REVIEW_CONFLICT_RESOLVE_ENABLED=true (default); otherwise they
         # continue to the reviewers and the late resolver path as before.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_MERGE_QUEUED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_MERGE_QUEUED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}

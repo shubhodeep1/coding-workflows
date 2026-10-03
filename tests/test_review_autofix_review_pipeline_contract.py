@@ -4729,10 +4729,10 @@ def test_gate_protects_executable_configuration_from_both_skip_routes() -> None:
 	# Run the real gate body with the existing mocked /pulls/{n}/files
 	# harness. The doc-only branch needs a large change under docs/; the
 	# small-diff branch also accepts root and nested paths outside docs/.
-	from test_workflow_failure_heal import SHA_A, _run_gate
+	from test_workflow_failure_heal import SELF_REPO, SHA_A, _run_gate
 
 	base_pr = {
-		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A},
+		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A, "repo": {"full_name": SELF_REPO}},
 		"labels": [], "additions": 1, "deletions": 1, "changed_files": 1,
 		"mergeable": True, "mergeable_state": "clean", "title": "test", "body": "",
 	}
