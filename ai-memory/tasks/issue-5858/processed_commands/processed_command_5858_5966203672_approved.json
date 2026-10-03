@@ -5,13 +5,24 @@
   "entry_id": "processed_command_5858_5966203672_approved",
   "issue_number": 5858,
   "metadata": {
+    "branch": "ai/issue-5858",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/test-and-mark-stable.yml",
+      "tests/test_test_and_mark_stable_review_blocked_budget.py"
+    ],
+    "issue_number": 5858,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/5858",
+    "pr_number": 6131,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6131",
+    "run_attempt": "1",
+    "run_id": "37101900357",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37101900357"
   },
   "run_attempt": 1,
   "run_id": "37101900357",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-03T06:07:55Z",
+  "status": "completed",
+  "timestamp": "2026-10-03T06:24:04Z",
   "workflow": "implement"
 }
