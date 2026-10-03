@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Pair workflow and review-script behavior changes with focused contract tests.",
   "timestamps": {
     "created_at": "2026-10-03T07:25:40Z",
