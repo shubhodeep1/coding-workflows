@@ -29,6 +29,13 @@ Input:
                     prompt names (required, never empty).
   --limit N         per-wake cap; default CLAUDE_USAGE_LIMIT_RESUME_LIMIT
                     (20), clamped to 1..40.
+  --self-repo       the pickup's own `<owner>/<repo>`; default
+                    `shubhodeep1/coding-workflows`.
+  --registry FILE   the consumer-repo registry (a JSON array of
+                    `<owner>/<repo>`); default `.github/ai/consumer_repos.json`,
+                    relative to the working directory (the repository root,
+                    where the pickup runs). Unreadable or not an array → only
+                    `--self-repo` is authorized, and `errors` says so.
 
 Output: one JSON object on stdout, e.g.
 
@@ -54,8 +61,27 @@ A session is a candidate when either signal holds:
     still show a healthy summary. Stage sessions are left out: a turn that
     completed on overage also records `rejected`.
 
+Authorization (issue #6101): `list_sessions` with `mine: true` is
+account-wide, so a candidate is resumed only when server-set fields place it
+in one of the pickup's registered workflows. All three must hold, or it is
+skipped with the first reason that applies:
+
+  * repository: it has at least one GitHub source
+    (`session_context.sources[].git_repository.url`), else `no_repo`, and
+    every one is `--self-repo` or a `--registry` repository (compared
+    case-insensitively), else `foreign_repo`;
+  * origin: its `origin` is `claude_code_mcp_seed` (started by another
+    session with `create_session`), else `unknown_origin`. A session a person
+    opened in the app (`desktop_app`, …) is never resumed;
+  * lineage: it carries a `parent_session_id` of the form `session_<x>` or
+    `cse_<x>`, else `no_lineage`.
+
+Anything the script cannot read fails closed. The parent chain is not required
+to reach the pickup: chains are often rooted at an operator's session or at a
+pickup since restarted, and ancestors older than the listing are not on it.
+
 A candidate is skipped (listed under `skipped`) when it is the pickup
-(`pickup`), archived (`archived`), created more than 72 hours ago
+(`pickup`), not authorized (the reasons above), archived (`archived`), created more than 72 hours ago
 (`too_old`: the pickup lists 3 days of sessions, but the last page it reads
 can reach further back, and those older sessions stay with the manual
 fallback; an unreadable `created_at` is not skipped; an old session waiting
@@ -155,6 +181,15 @@ IDLE_STATUS = "SESSION_STATUS_IDLE"
 ARCHIVED_STATUS = "SESSION_STATUS_ARCHIVED"
 CHECKER_TITLE_MARKERS = ("— checker", "status check-in")
 MAX_JSON_START_CANDIDATES = 50
+# Server-set `origin` of a session another session started with create_session
+# (issue #6101): the only origin the pickup's workflows produce.
+AUTHORIZED_ORIGINS = frozenset({"claude_code_mcp_seed"})
+DEFAULT_SELF_REPO = "shubhodeep1/coding-workflows"
+DEFAULT_REGISTRY_PATH = ".github/ai/consumer_repos.json"
+_REPO_SLUG = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+# The URL shape claude_session_janitor.py's SOURCE_URL_PATTERN accepts.
+SOURCE_URL_PATTERN = re.compile(rf"^https://github\.com/(?P<repo>{_REPO_SLUG}?)(?:\.git)?/?$")
+REPO_SLUG_PATTERN = re.compile(rf"^{_REPO_SLUG}$")
 
 LIMIT_TEXT_PATTERNS = (
 	re.compile(r"\byou(?:'|’)ve hit your\b[^.\n]{0,40}?\blimit\b", re.IGNORECASE),
@@ -398,6 +433,67 @@ def session_key(session_id: str) -> str:
 	return f"session_{match.group('suffix')}" if match else session_id.strip()
 
 
+def load_allowed_repos(registry_path: str, self_repo: str, errors: list) -> frozenset:
+	"""The lowercased `<owner>/<repo>` slugs a resumed session may work in: the registry plus `self_repo`.
+
+	An unreadable registry, or one that is not a JSON array, authorizes `self_repo` alone and adds one
+	line to `errors`; entries that are not slugs are skipped. The set only ever narrows on failure.
+	"""
+	allowed = {self_repo.lower()}
+	try:
+		with open(registry_path, encoding="utf-8") as handle:
+			data = json.load(handle)
+	except (OSError, ValueError) as exc:
+		errors.append(f"registry {registry_path}: unreadable ({exc}); only {self_repo} is authorized")
+		return frozenset(allowed)
+	if not isinstance(data, list):
+		errors.append(f"registry {registry_path}: not a JSON array; only {self_repo} is authorized")
+		return frozenset(allowed)
+	allowed.update(slug.strip().lower() for slug in data if isinstance(slug, str) and REPO_SLUG_PATTERN.fullmatch(slug.strip()))
+	return frozenset(allowed)
+
+
+def session_repos(session: dict) -> list[str] | None:
+	"""Lowercased `<owner>/<repo>` of each GitHub source in `session_context.sources`.
+
+	None when a source is not an object, or a `git_repository` source is null or has a URL that is not a
+	GitHub repository URL, so an unreadable source fails closed instead of being ignored. A source of
+	another kind (an object with no `git_repository` key) is not a repository and is skipped.
+	"""
+	context = session.get("session_context")
+	sources = context.get("sources") if isinstance(context, dict) else None
+	repos: list[str] = []
+	for source in sources if isinstance(sources, list) else []:
+		if not isinstance(source, dict):
+			return None
+		if "git_repository" not in source:
+			continue
+		repository = source["git_repository"]
+		url = repository.get("url") if isinstance(repository, dict) else None
+		match = SOURCE_URL_PATTERN.match(url.strip()) if isinstance(url, str) else None
+		if not match:
+			return None
+		repos.append(match.group("repo").lower())
+	return repos
+
+
+def _unauthorized_reason(session: dict, allowed_repos: frozenset | None) -> str | None:
+	"""Why the session is outside the pickup's registered workflows (issue #6101), or None when it is inside.
+
+	`allowed_repos` None authorizes nothing, so a caller that omits it fails closed.
+	"""
+	repos = session_repos(session)
+	if not repos:
+		return "no_repo" if repos == [] else "foreign_repo"
+	if allowed_repos is None or any(repo not in allowed_repos for repo in repos):
+		return "foreign_repo"
+	if _text(session.get("origin")).strip() not in AUTHORIZED_ORIGINS:
+		return "unknown_origin"
+	if not RESUME_SESSION_ID_PATTERN.match(_text(session.get("parent_session_id")).strip()):
+		return "no_lineage"
+	return None
+
+
 def _rate_limit_info(session: dict) -> dict:
 	metadata = session.get("external_metadata")
 	info = metadata.get("rate_limit_info") if isinstance(metadata, dict) else None
@@ -603,13 +699,21 @@ def _skip_reason(
 	now: dt.datetime,
 	*,
 	pickup_key: str | None = None,
+	allowed_repos: frozenset | None = None,
 ) -> str | None:
-	"""Why a signalled session is not resumed, or None. `select` passes `pickup_key` (the pickup's `session_key`, computed once per run)."""
+	"""Why a signalled session is not resumed, or None.
+
+	`select` passes `pickup_key` (the pickup's `session_key`, computed once per run) and `allowed_repos`
+	(`load_allowed_repos`); without `allowed_repos` no session is authorized.
+	"""
 	summary = _summary(session)
 	status = _text(session.get("session_status"))
 	own_key = pickup_key if pickup_key is not None else session_key(pickup_session)
 	if session_key(_text(session.get("id"))) == own_key:
 		return "pickup"
+	unauthorized = _unauthorized_reason(session, allowed_repos)
+	if unauthorized:
+		return unauthorized
 	if status == ARCHIVED_STATUS:
 		return "archived"
 	needs_input = has_unanswered_request(session) or (
@@ -640,9 +744,23 @@ def _skip_reason(
 	return None
 
 
-def select(sessions: list, triggers: list, pickup_session: str, login: str, limit: int, now: dt.datetime) -> dict:
-	"""Pick the sessions to resume this wake; see the module docstring for the rules."""
-	errors: list[str] = []
+def select(
+	sessions: list,
+	triggers: list,
+	pickup_session: str,
+	login: str,
+	limit: int,
+	now: dt.datetime,
+	*,
+	allowed_repos: frozenset | None = None,
+	errors: list | None = None,
+) -> dict:
+	"""Pick the sessions to resume this wake; see the module docstring for the rules.
+
+	`allowed_repos` is the `load_allowed_repos` set; None authorizes no session (fail closed).
+	`errors` seeds the output's `errors` (the registry line from `load_allowed_repos`).
+	"""
+	errors = list(errors or [])
 	wakes = _bound_wakes(triggers, errors)
 	seen: set[str] = set()
 	selected: list[tuple] = []
@@ -670,7 +788,9 @@ def select(sessions: list, triggers: list, pickup_session: str, login: str, limi
 		signal = _signal(session, kind, next_runs, now)
 		if signal is None:
 			continue
-		reason = _skip_reason(session, kind, signal, pickup_session, next_runs, now, pickup_key=pickup_key)
+		reason = _skip_reason(
+			session, kind, signal, pickup_session, next_runs, now, pickup_key=pickup_key, allowed_repos=allowed_repos
+		)
 		if reason:
 			skipped.append({"session_id": session_id, "signal": signal, "reason": reason})
 			continue
@@ -713,6 +833,8 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--pickup-session", required=True, help="the pickup's own session id")
 	parser.add_argument("--handoff-author-login", required=True, help="CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN for the resume prompts")
 	parser.add_argument("--limit", type=int, default=None, help=f"per-wake cap (default {RESUME_LIMIT_ENV} or {DEFAULT_RESUME_LIMIT}, clamped to {RESUME_LIMIT_MIN}..{RESUME_LIMIT_MAX})")
+	parser.add_argument("--self-repo", default=DEFAULT_SELF_REPO, help=f"the pickup's own <owner>/<repo> (default {DEFAULT_SELF_REPO})")
+	parser.add_argument("--registry", default=DEFAULT_REGISTRY_PATH, help=f"consumer-repo registry JSON array (default {DEFAULT_REGISTRY_PATH})")
 	return parser
 
 
@@ -726,14 +848,20 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None, environ:
 		pickup_session = args.pickup_session.strip()
 		if not pickup_session:
 			raise InputError("--pickup-session must not be empty")
+		self_repo = args.self_repo.strip()
+		if not REPO_SLUG_PATTERN.fullmatch(self_repo):
+			raise InputError("--self-repo must be <owner>/<repo>")
 		sessions = [entry for path in args.sessions for entry in _load_entries(path)]
 		triggers = [entry for path in args.triggers for entry in _load_entries(path)]
 	except InputError as exc:
 		print(json.dumps({"resume": [], "error": str(exc)}))
 		return 2
+	registry_errors: list[str] = []
+	allowed_repos = load_allowed_repos(args.registry, self_repo, registry_errors)
 	limit = resolve_resume_limit(args.limit, environ.get(RESUME_LIMIT_ENV))
 	now = now or dt.datetime.now(dt.timezone.utc)
-	print(json.dumps(select(sessions, triggers, pickup_session, login, limit, now), ensure_ascii=False))
+	result = select(sessions, triggers, pickup_session, login, limit, now, allowed_repos=allowed_repos, errors=registry_errors)
+	print(json.dumps(result, ensure_ascii=False))
 	return 0
 
 
