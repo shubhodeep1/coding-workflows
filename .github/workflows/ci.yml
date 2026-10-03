@@ -525,6 +525,16 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_issue_route.py tests/test_implement_issue_claude_command.py tests/test_security_pass_skip.py
 
+      - name: Escalation ledger tests (CLAUDE.md §28.G)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_escalation_ledger.py
+
+      - name: /escalation-judge command contract tests (CLAUDE.md §28.G)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_escalation_judge_command.py
+
       - name: CLAUDE.md section numbering guard (§6 identifiers)
         run: |
           set -euo pipefail

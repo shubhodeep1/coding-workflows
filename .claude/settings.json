@@ -51,6 +51,8 @@
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/claude_fix_claim.py *)",
       "Bash(python3 .claude/scripts/security_pass_skip.py *)",
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/security_pass_skip.py *)",
+      "Bash(python3 .claude/scripts/escalation_ledger.py *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/escalation_ledger.py *)",
       "Bash(python3 scripts/claude_issue_route.py queue-pending *)",
       "Bash(PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_issue_route.py queue-pending *)",
       "Bash(python3 scripts/claude_issue_route.py arm-check-in-request *)",

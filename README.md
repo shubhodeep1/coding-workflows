@@ -1343,11 +1343,21 @@ command, `/claude-issue-pickup start — restart`, to run from a new cloud
 session opened in the app, in Auto mode. A session without the
 claude-code-remote tools never implements an issue itself:
 `/implement-issue-claude` and the dispatcher stop with
-`ai:claude-blocked` instead (CLAUDE.md §28.C). A Claude session that must stop (CLAUDE.md §28.C: an
-exhausted cap, a failed security or validation run, an ask-first operation,
-a missing base branch) comments once on the issue, labels it
-`ai:claude-blocked`, and sends a push notification; answer there and comment
-`/reclarify` to resume. If `claude_issue_route.py`
+`ai:claude-blocked` instead (CLAUDE.md §28.C). A failure escalation
+(CLAUDE.md §28.C: an exhausted cap, a security or validation run that did
+not succeed, a terminal validation class, a security follow-up closed
+unmerged or blocked, a FIX-DEFECTIVE fix check) does not wait for you: the
+session comments once on the issue with an
+`<!-- ai:claude-blocked:v1 kind=escalation stop=<stop id> -->` blocker,
+labels it `ai:claude-blocked`, sends no push notification, and the project
+checker starts the escalation judge (CLAUDE.md §28.G), which grants one
+more round, de-scopes the failing part, or closes the project as not
+planned. Only the judge's `close`, or a judge that ends blocked without a
+choice, sends a push notification. Any other stop (an ask-first operation,
+a missing base branch, a session with no claude-code-remote tools, a
+depth-limit refusal, or an escalation whose judge wait cannot be armed)
+comments once on the issue, labels it `ai:claude-blocked`, and sends a push
+notification; answer there and comment `/reclarify` to resume. If `claude_issue_route.py`
 itself errors, clarify falls back to the Codex pipeline with a warning, so no
 issue is dropped.
 

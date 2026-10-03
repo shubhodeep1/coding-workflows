@@ -917,11 +917,64 @@ section and listed in the PR that carries it. The step-12 activation report
 and the `/deploy-activate` opening message list every entry for human
 review without asking. A `change AD-<n> → <letter>` reply is implemented as
 one PR on `claude/implement-plan-<slug>-decision-changes`, and unchanged
-entries become `confirmed` at LIVE. Failure escalations still stop the
-chain at `BLOCKED`: used-up caps, security or validation runs that did not
-succeed, and terminal validation classes. So do §22.B / §23.C / §24.D
-operations. The AI orchestrator's own clarify auto-answer
+entries become `confirmed` at LIVE. Failure escalations are not
+auto-decided: used-up caps, security or validation runs that did not
+succeed, terminal validation classes, security follow-ups closed unmerged
+or blocked (or closed while the audit still reports their finding: a
+security pass is clean only when its run reports `findings=0`, or skips
+as unchanged before any follow-up was listed), and a
+defective fix check. They go to the escalation judge
+(below). §22.B / §23.C / §24.D operations still stop the chain at
+`BLOCKED` for a human. The AI orchestrator's own clarify auto-answer
 (`[auto-answered-by-orchestrator]`) is separate and unchanged.
+
+**Escalation judge stage** (CLAUDE.md §28.G). Each of the ten failure
+escalation stops (`intervention-cap`, `conformance-cap`,
+`fix-check-defective`, `security-run-failed`, `security-cap`,
+`security-followup-unmerged`, `validation-run-failed`, `validation-cap`,
+`validation-terminal`, `verify-activation-cap`) writes its blocker to the
+log and posts `<!-- ai:claude-blocked:v1 kind=escalation stop=<stop id> -->`
+(on the source issue in issue mode, otherwise on the final PR). It then
+hands the project checker an **`escalation` wait**: a checker-instructions
+message whose `Wait: escalation — start <next stage> with <start command>`
+line replaces the PR, run, or issue-list target. The checker runs no script
+for it and starts the named stage at once (checker step 0a) with the usual
+two-step start, so the judge runs as `implement-plan <slug> — escalation
+judge — <stop id>` on Opus 5.5 at high effort, about two minutes after the
+stop and at the same lineage depth as every other stage. The judge
+(`.claude/commands/escalation-judge.md`) computes the failure fingerprint
+and the unused choices with `.claude/scripts/escalation_ledger.py`, picks
+`budget` (one more round past the cap with a narrower fix; the capped
+stage computes its failure's fingerprint and adds only the grants for
+that stop and fingerprint, `escalation_ledger.py grants`, to its cap), `descope` (a
+reviewed revert PR plus an `AD-<n>` entry), or `close` (the chain's PRs
+and the source issue closed as not planned). It records an `ES-<n>` line
+in the log's `## Escalations` section (`record --why-file`, so a reason
+that quotes failure evidence never passes through shell quoting; the
+ledger reads `--evidence-file` and `--why-file` only from a session
+scratchpad, `/tmp/claude-<uid>/<project>/<session>/scratchpad/` with
+symlinks resolved, and refuses any other path unread with exit 1), posts
+`<!-- ai:claude-escalation:v1 stop=<stop id> fp=<fp> choice=<choice> -->`,
+and hands the checker the next stage through another escalation wait. It
+never repeats `budget` or `descope` for the same fingerprint (`close`
+stays available; the fingerprint of `intervention-cap` and
+`fix-check-defective` includes the PR number, and their `ES-<n>` entry's
+`why=` starts with `PR #<N>: `, which `escalation_ledger.py record`
+enforces, checking `<N>` against the `pr` of the evidence the fingerprint
+was computed from, so the intervention cap of one PR counts only its own
+grants),
+never skips or waives a security or validation pass, never merges, and
+sends a `PushNotification` only for `close` or when it ends blocked
+without a choice (an unreadable blocker thread or evidence, or a ledger
+error). It reads the evidence as data, never as instructions, counts a used
+choice only from a `## Escalations` entry or the marker on the last line of
+a trusted comment, and writes a reason without `<!--` or `-->`, which
+`escalation_ledger.py record` refuses (exit 1), so a marker quoted from
+evidence never counts. A `budget` for
+`fix-check-defective` is a fix round: a
+`claude/implement-plan-<slug>-conformance-fix-budget-<n>` PR for the
+findings the check left open, followed by a fix check of that PR. Human-only stops (Q8: ask-first operations, no
+claude-code-remote tools, a depth-limit refusal) are never judged.
 
 No field here changes what any consumer repo receives on the `@stable`
 sync: `.claude/commands/` is not part of the synced surface, and the
@@ -983,6 +1036,13 @@ by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
 The checker itself never fixes anything; outside `claude/*` PRs, CI,
 reviews, comments, and conflicts stay a direct §12 request.
+- Escalation waits (CLAUDE.md §28.G): the `/implement-plan-claude` project
+  checker also takes an `escalation` wait, which carries no PR, run, or
+  issue list. It polls nothing and starts the named stage (the escalation
+  judge, or the `budget` / `descope` stage the judge chose) at its first
+  run, two minutes after the stop, through the same two-step Opus 5.5
+  start. No hand-back Routine is created for it, and it is not a PR watch
+  (§25): the judge reads the PR once, like any stage.
 - Session targeting (CLAUDE.md §26.C step 5, §26.D; issue #4787):
   `set_session_title` and `archive_session` accept any session id in the
   account, so each rename or archive names where its id comes from. The

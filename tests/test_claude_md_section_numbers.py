@@ -36,6 +36,24 @@ def test_template_claude_md_is_the_same_file():
 	assert (ROOT / "workflow-templates" / "CLAUDE.md").resolve() == CLAUDE_MD.resolve()
 
 
+SUBSECTION_RE = re.compile(r"^### (?P<letter>[A-Z])\)\s", re.MULTILINE)
+
+
+def _subsection_letters(text: str, number: int) -> list[str]:
+	start = re.search(rf"^## §{number}\.\s", text, re.MULTILINE)
+	assert start, f"no §{number} in CLAUDE.md"
+	rest = text[start.end():]
+	end = re.search(r"^## ", rest, re.MULTILINE)
+	return [m.group("letter") for m in SUBSECTION_RE.finditer(rest[: end.start() if end else len(rest)])]
+
+
+def test_claude_md_section_28_subsections_run_a_to_g():
+	# §28.G (escalation judge, plan retire-master-session) is appended after
+	# §28.F; no existing letter moves (§6).
+	letters = _subsection_letters(CLAUDE_MD.read_text(encoding="utf-8"), 28)
+	assert letters == ["A", "B", "C", "D", "E", "F", "G"], letters
+
+
 def test_detector_catches_a_duplicate():
 	text = "## §27. A\n\n## §28. B\n\n## §28. C\n"
 	numbers = _section_numbers(text)
