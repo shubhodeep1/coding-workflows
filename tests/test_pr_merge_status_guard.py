@@ -731,6 +731,154 @@ def test_e2e_guards_push_as_well_as_commit(merged_branch_repo) -> None:
 	assert proc.returncode == 2, proc.stdout + proc.stderr
 
 
+def _worktree_pr_stub(stub_bin: Path, merged_sha: str) -> None:
+	"""Answer one open branch and one merged branch from the same REST listing."""
+	merged = _merged_pr_payload(merged_sha)
+	open_pr = json.dumps([{
+		"number": 42, "state": "open", "html_url": "https://github.com/o/r/pull/42",
+		"title": "open worktree", "merged_at": None, "head": {"sha": merged_sha},
+	}])
+	stub = stub_bin / "gh"
+	stub.write_text(
+		f"#!/bin/sh\ncase \"$*\" in\n  *feature/open*) printf '%s\\n' '{open_pr}' ;;\n"
+		f"  *) printf '%s\\n' '{merged}' ;;\nesac\n", encoding="utf-8"
+	)
+	stub.chmod(0o755)
+
+
+def test_worktree_push_to_open_branch_from_merged_checkout(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "detached"
+	_git(repo, "worktree", "add", "--detach", str(worktree), "feature/x")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	proc = _run_hook(repo, stub_bin, f"cd {worktree} && git push origin HEAD:feature/open")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "skipped" not in proc.stdout
+
+
+@pytest.mark.parametrize("prefix", ["cd {worktree} && git", "git -C {worktree}",
+	"GIT_DIR={worktree}/.git GIT_WORK_TREE={worktree} git"])
+def test_worktree_push_to_merged_branch_from_other_checkout(merged_branch_repo, prefix: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "feature/x")
+	_git(repo, "checkout", "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	command = f"{prefix.format(worktree=worktree)} push origin HEAD:feature/x"
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+def test_git_dash_c_allows_detached_worktree_open_destination(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "detached"
+	_git(repo, "worktree", "add", "--detach", str(worktree), "feature/x")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	proc = _run_hook(repo, stub_bin, f"git -C {worktree} push origin HEAD:feature/open")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_commit_in_merged_worktree_is_not_judged_from_main_checkout(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "main")
+	worktree = repo.parent / "merged"
+	_git(repo, "worktree", "add", str(worktree), "feature/x")
+	proc = _run_hook(repo, stub_bin, f"git -C {worktree} commit -m next")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD:feature/open")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+	assert "could not resolve git command directory" in proc.stdout
+
+
+def test_explicit_source_tip_and_multiple_destinations(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	# Neither HEAD nor the current branch carries the merged work. The source
+	# feature/x does, so it must determine ancestry for both destinations.
+	proc = _run_hook(repo, stub_bin,
+		"git push origin feature/x:feature/open feature/x:feature/x")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+def test_repeated_destination_uses_one_pr_listing(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	calls: list[tuple[str, str]] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		calls.append((slug, branch))
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, _ = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x HEAD:feature/x"}})
+	assert code == 2
+	assert calls == [("o/r", "feature/x")]
+
+
+def test_same_destination_different_sources_checks_each_tip(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	calls: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		calls.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin main:feature/x feature/x:feature/x"}})
+	assert code == 2
+	assert "Branch `feature/x`" in message
+	assert calls == ["feature/x"]
+
+
+def test_cached_merged_pr_is_rechecked_once_for_repeated_targets(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	calls: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: [dict(MERGED_PR, headRefOid=merged_sha)])
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		calls.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha), OPEN_PR]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, _ = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x HEAD:feature/x"}})
+	assert code == 0
+	assert calls == ["feature/x"]
+
+
+@pytest.mark.parametrize("options", ["--delete --no-delete", "--tags --no-tags", "-uo ci.skip"])
+def test_negated_options_and_value_options_do_not_hide_a_push(merged_branch_repo, options: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, f"git push {options} origin HEAD:feature/x")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "main")
+	proc = _run_hook(repo, stub_bin,
+		f"false && cd {worktree}; git push origin HEAD:feature/open")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "could not resolve git command directory" in proc.stdout
+
+
 # ──────────────────────────────────────────────────────────────────
 # Wiring — the parts that only exist as config / instruction text
 # ──────────────────────────────────────────────────────────────────
