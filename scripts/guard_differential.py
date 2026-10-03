@@ -22,7 +22,9 @@ the base and the head:
      one is given, and at the base ref, so deleting a shape does not hide a
      loosening), builds the hook's scenario (a scratch git repository and
      a stub `gh` on PATH, see SCENARIOS) and runs each shape through the base
-     hook and the head hook, each with a cold cache directory.
+     hook and the head hook, each with a cold cache directory. Every base
+     run, in every tree, finishes before the first head run, so a head hook
+     (PR code) cannot rewrite a base copy before it runs (issue #5327).
   3. Records each decision (`block`, `deny`, `ask`, `none`, `allow`, `error`)
      and whether the hook emitted a warning (`systemMessage`).
   4. Fails on every shape whose head decision is less strict than its base
@@ -93,16 +95,26 @@ is inherited.
 
 Output: one `GUARD_DIFFERENTIAL` line per regression, per missing corpus, per
 wiring regression (`wiring_regression`), and a summary line. `--json` also
-prints every shape's and wiring's result. Exit 0 when clean or when no hook
-or settings file changed, 1 on a regression, a missing corpus, or a wiring
-regression, 2 on a usage or setup error (bad ref, unreadable corpus,
-malformed policy or `--head-sha`, or unreadable settings).
+prints every shape's and wiring's result. A change to this script or to a
+`Guard differential …` step of `.github/workflows/ci.yml` prints a
+`verifier_change` warning, whether or not a hook or settings file changed.
+Exit 0 when clean or when no hook or settings file changed, 1 on a
+regression, a missing corpus, or a wiring regression, 2 on a usage or setup
+error (bad ref, unreadable corpus, malformed policy or `--head-sha`, or
+unreadable settings). A `verifier_change` never changes the exit code.
 
 Wired as the `Guard differential check (issue #5174)` step of the
 `tests-hooks-and-orchestrator` job in `.github/workflows/ci.yml` (reported
 through the `CI / lint` aggregate), which runs on every pull request into
 `main` and `stable`, so a #4785 twin-sync PR is gated by it too. It runs
-when a hook `*.py` file or either settings file changed.
+when a hook `*.py` file or either settings file changed. The step runs the
+base branch's copy of this script, not the PR's (issue #5327), so a PR
+cannot weaken a guard and edit the verifier to pass in the same change.
+Only a base that does not carry the script yet runs the PR's copy, with a
+warning. The step may pass only flags the base copy already accepts. It
+runs right after the job's dependency install, before any step that runs
+code from the checkout, which could otherwise plant a `.pth` file in the
+Python install this script runs under.
 """
 
 from __future__ import annotations
@@ -126,6 +138,9 @@ LOG_KEY = "GUARD_DIFFERENTIAL"
 HOOK_TREES = (".claude/hooks", "workflow-templates/.claude/hooks")
 DEFAULT_CORPUS_DIR = "tests/guard_corpus"
 LOOSENING_POLICY_PATH = ".github/guard_differential/intended_loosening.json"
+VERIFIER_SCRIPT_PATH = "scripts/guard_differential.py"
+CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+GUARD_STEP_NAME_PREFIX = "Guard differential"
 HOOK_TIMEOUT_SECONDS = 120
 _STRIPPED_ENV_KEYS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST")
 # Each hooks tree and the settings file that wires it. Both files name
@@ -168,6 +183,7 @@ LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
 COMMIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 HOOK_STEM_RE = re.compile(r"^[A-Za-z0-9_]+$")
+STEP_START_RE = re.compile(r"^(?P<indent>\s*)- name:\s*(?P<name>.*?)\s*$")
 
 
 @dataclass(frozen=True)
@@ -257,6 +273,7 @@ class Report:
 	trees: list[str] = field(default_factory=list)
 	# The head commit policy entries must name ("" when unknown).
 	head_sha: str = ""
+	verifier_changes: list[str] = field(default_factory=list)
 	settings: list[str] = field(default_factory=list)
 	wiring: list[WiringResult] = field(default_factory=list)
 
@@ -731,6 +748,78 @@ def ref_corpora(repo_root: Path, ref: str, corpus_dir: str) -> dict[str, list[Sh
 	return corpora
 
 
+def _side_text(repo_root: Path, ref: str | None, path: str) -> str | None:
+	"""The text of `path` at `ref` (the working tree when `ref` is None), or
+	None when the file is absent there."""
+	if ref is None:
+		try:
+			return (repo_root / path).read_text(encoding="utf-8")
+		except OSError:
+			return None
+	blob = _repo_git(repo_root, "cat-file", "-p", f"{ref}:{path}", check=False)
+	return blob.stdout if blob.returncode == 0 else None
+
+
+def _is_outer_comment(line: str, indent: int) -> bool:
+	"""True for a YAML comment line at or left of a step's `indent`."""
+	return line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= indent
+
+
+def guard_differential_steps(workflow_text: str | None) -> list[str]:
+	"""The text of every workflow step whose name starts with
+	GUARD_STEP_NAME_PREFIX: from its `- name:` line up to the next step at
+	the same indentation, or the first non-blank line indented less.
+
+	A comment line at or left of the step's indentation is a YAML comment
+	(block scalar content is always indented deeper), so it neither ends
+	the step nor, when it trails the step, belongs to it: ending there
+	would drop the step's later keys from the comparison."""
+	if not workflow_text:
+		return []
+	lines = workflow_text.splitlines()
+	steps: list[str] = []
+	index = 0
+	while index < len(lines):
+		start = STEP_START_RE.match(lines[index])
+		if not start or not start.group("name").strip("\"'").startswith(GUARD_STEP_NAME_PREFIX):
+			index += 1
+			continue
+		indent = len(start.group("indent"))
+		end = index + 1
+		while end < len(lines):
+			line = lines[end]
+			if line.strip() and not _is_outer_comment(line, indent):
+				line_indent = len(line) - len(line.lstrip())
+				if line_indent < indent or (line_indent == indent and line.lstrip().startswith("- ")):
+					break
+			end += 1
+		last = end
+		while last > index + 1 and (not lines[last - 1].strip() or _is_outer_comment(lines[last - 1], indent)):
+			last -= 1
+		steps.append("\n".join(lines[index:last]).rstrip())
+		index = end
+	return steps
+
+
+def verifier_changes(repo_root: Path, base_ref: str, head_ref: str | None) -> list[str]:
+	"""Paths of the check's own machinery that differ between base and head.
+
+	Issue #5327: CI runs the base branch's copy of this script, so a PR's
+	change to it takes effect only after it merges; the change is still
+	reported, as is any change to a `Guard differential …` step of the CI
+	workflow, so reviewers read them as security-boundary changes. Other
+	edits to the workflow are not reported.
+	"""
+	changes: list[str] = []
+	if _side_text(repo_root, base_ref, VERIFIER_SCRIPT_PATH) != _side_text(repo_root, head_ref, VERIFIER_SCRIPT_PATH):
+		changes.append(VERIFIER_SCRIPT_PATH)
+	base_steps = guard_differential_steps(_side_text(repo_root, base_ref, CI_WORKFLOW_PATH))
+	head_steps = guard_differential_steps(_side_text(repo_root, head_ref, CI_WORKFLOW_PATH))
+	if base_steps != head_steps:
+		changes.append(CI_WORKFLOW_PATH)
+	return changes
+
+
 # ──────────────────────────────────────────────────────────────────
 # Settings guard wiring (issue #5328)
 # ──────────────────────────────────────────────────────────────────
@@ -946,13 +1035,33 @@ def compare_hook_dirs(
 	tree: str = "",
 	approvals: list[LooseningApproval] | None = None,
 ) -> list[ShapeResult]:
-	"""Run every corpus whose hook exists on either side through both sides.
+	"""Run every corpus whose hook exists on either side through both sides,
+	every base run before the first head run (see `_run_side`).
 
 	`approvals` are the base-ref policy entries already filtered to the head
 	commit; only they make a loosening intended. `listed` (the PR body) only
 	marks a loosened shape `pr_body_listed`.
 	"""
-	results: list[ShapeResult] = []
+	runs = _hook_runs(base_dir, head_dir, corpora)
+	base_outcomes = _run_side(runs, scratch, "base")
+	head_outcomes = _run_side(runs, scratch, "head")
+	return _shape_results(runs, base_outcomes, head_outcomes, listed, tree, approvals)
+
+
+@dataclass(frozen=True)
+class ShapeRun:
+	"""One corpus shape and the hook file each side runs it through."""
+
+	hook: str
+	index: int
+	shape: Shape
+	base_file: Path | None
+	head_file: Path | None
+
+
+def _hook_runs(base_dir: Path, head_dir: Path, corpora: dict[str, list[Shape]]) -> list[ShapeRun]:
+	"""Every (hook, shape) pair whose hook exists on either side."""
+	runs: list[ShapeRun] = []
 	for hook, shapes in sorted(corpora.items()):
 		base_hook = base_dir / f"{hook}.py"
 		head_hook = head_dir / f"{hook}.py"
@@ -960,36 +1069,65 @@ def compare_hook_dirs(
 		head_file = head_hook if head_hook.is_file() else None
 		if base_file is None and head_file is None:
 			continue
-		for index, shape in enumerate(shapes):
-			outcomes: list[Outcome] = []
-			for side, hook_file in (("base", base_file), ("head", head_file)):
-				root = scratch / f"{hook}-{index}-{side}"
-				scenario = SCENARIOS.get(hook, default_scenario)(root)
-				home = root / "home"
-				cache = root / "cache"
-				home.mkdir()
-				cache.mkdir()
-				env = hook_env(scenario.env, scenario.stub_bin, home, cache)
-				stdin = build_stdin(shape, scenario.cwd, scenario.substitutions)
-				outcomes.append(run_hook(hook_file, stdin, scenario.cwd, env))
-			base, head = outcomes
-			# A warning is a diagnostic, never an excuse: a changed guard can
-			# print any `systemMessage` (issue #5325).
-			loosened = STRICTNESS[head.decision] < STRICTNESS[base.decision]
-			approval = approval_for(shape, approvals or []) if loosened else None
-			results.append(
-				ShapeResult(
-					shape=shape,
-					tree=tree,
-					base=base,
-					head=head,
-					loosened=loosened,
-					intended=approval is not None,
-					pr_body_listed=loosened and is_intended(shape, listed),
-					approved_by=approval.approved_by if approval else "",
-					approval_reason=approval.reason if approval else "",
-				)
+		runs += [ShapeRun(hook, index, shape, base_file, head_file) for index, shape in enumerate(shapes)]
+	return runs
+
+
+def _run_side(runs: list[ShapeRun], scratch: Path, side: str) -> list[Outcome]:
+	"""Run every shape through one side's hooks, in a fresh scenario each.
+
+	A head hook is PR code running as the same user as this script, so it
+	can rewrite any file it can reach, including the base hook copies next
+	to its own (issue #5327 conformance run 2). Callers therefore finish
+	every base run, in every hook tree, before the first head run: a head
+	hook that rewrites a base copy then changes no base decision. Every
+	other read of the head side (changed paths, hook copies, corpora,
+	settings) also happens before the first head run. Head runs are not
+	isolated from each other: a head hook that rewrites its own copy or a
+	sibling's only changes head decisions, which head code already decides
+	(it can tell it runs here from its own path)."""
+	outcomes: list[Outcome] = []
+	for run in runs:
+		hook_file = run.base_file if side == "base" else run.head_file
+		root = scratch / f"{run.hook}-{run.index}-{side}"
+		scenario = SCENARIOS.get(run.hook, default_scenario)(root)
+		home = root / "home"
+		cache = root / "cache"
+		home.mkdir()
+		cache.mkdir()
+		env = hook_env(scenario.env, scenario.stub_bin, home, cache)
+		stdin = build_stdin(run.shape, scenario.cwd, scenario.substitutions)
+		outcomes.append(run_hook(hook_file, stdin, scenario.cwd, env))
+	return outcomes
+
+
+def _shape_results(
+	runs: list[ShapeRun],
+	base_outcomes: list[Outcome],
+	head_outcomes: list[Outcome],
+	listed: list[tuple[str, str]],
+	tree: str,
+	approvals: list[LooseningApproval] | None = None,
+) -> list[ShapeResult]:
+	results: list[ShapeResult] = []
+	for run, base, head in zip(runs, base_outcomes, head_outcomes, strict=True):
+		# A warning is a diagnostic, never an excuse: a changed guard can
+		# print any `systemMessage` (issue #5325).
+		loosened = STRICTNESS[head.decision] < STRICTNESS[base.decision]
+		approval = approval_for(run.shape, approvals or []) if loosened else None
+		results.append(
+			ShapeResult(
+				shape=run.shape,
+				tree=tree,
+				base=base,
+				head=head,
+				loosened=loosened,
+				intended=approval is not None,
+				pr_body_listed=loosened and is_intended(run.shape, listed),
+				approved_by=approval.approved_by if approval else "",
+				approval_reason=approval.reason if approval else "",
 			)
+		)
 	return results
 
 
@@ -1035,20 +1173,31 @@ def run_check(
 	corpora = merge_corpora(load_corpora(corpus_dir), *committed)
 	listed = intended_loosening(pr_body)
 	changed = changed_paths(repo_root, base_ref, head_ref)
-	report = Report(head_sha=head_revision)
+	report = Report(head_sha=head_revision, verifier_changes=verifier_changes(repo_root, base_ref, head_ref))
 	approvals: list[LooseningApproval] | None = None
-	for tree in HOOK_TREES:
-		tree_changes = [path for path in changed if path.startswith(f"{tree}/") and path.endswith(".py")]
-		if not tree_changes and not all_trees:
+	# Settings wiring is read before any hook runs: without `--head-ref` the
+	# head side is the working tree, which a head hook can rewrite (for
+	# example back to the base settings) before a later read.
+	for tree, settings_path in SETTINGS_FILES.items():
+		if settings_path not in changed and not all_trees:
 			continue
-		if approvals is None:
-			# Loaded only once a tree is compared, so a malformed policy never
-			# fails a PR that changes no hook.
-			policy = load_loosening_policy(repo_root, base_ref)
-			approvals = [entry for entry in policy if head_revision and entry.head_sha == head_revision]
-		report.trees.append(tree)
-		with tempfile.TemporaryDirectory(prefix="guard-differential-") as tmp:
-			scratch = Path(tmp)
+		report.settings.append(settings_path)
+		report.wiring += compare_settings_wiring(repo_root, base_ref, head_ref, settings_path, tree, listed)
+	with tempfile.TemporaryDirectory(prefix="guard-differential-") as tmp:
+		# (tree, its hook runs, its scratch directory), collected for every
+		# tree before any hook runs, so every base run finishes before the
+		# first head run in any tree (see `_run_side`).
+		tree_runs: list[tuple[str, list[ShapeRun], Path]] = []
+		for tree_index, tree in enumerate(HOOK_TREES):
+			tree_changes = [path for path in changed if path.startswith(f"{tree}/") and path.endswith(".py")]
+			if not tree_changes and not all_trees:
+				continue
+			if approvals is None:
+				# A malformed policy is an error only when a hook tree is compared.
+				policy = load_loosening_policy(repo_root, base_ref)
+				approvals = [entry for entry in policy if head_revision and entry.head_sha == head_revision]
+			report.trees.append(tree)
+			scratch = Path(tmp) / str(tree_index)
 			base_dir = scratch / "base-hooks"
 			head_dir = scratch / "head-hooks"
 			materialize(repo_root, base_ref, tree, base_dir)
@@ -1064,14 +1213,13 @@ def run_check(
 					and ((base_dir / f"{stem}.py").is_file() or (head_dir / f"{stem}.py").is_file())
 				):
 					report.missing_corpus.append(path)
+			tree_runs.append((tree, _hook_runs(base_dir, head_dir, corpora), scratch / "runs"))
+		base_outcomes = [_run_side(runs, runs_scratch, "base") for _, runs, runs_scratch in tree_runs]
+		head_outcomes = [_run_side(runs, runs_scratch, "head") for _, runs, runs_scratch in tree_runs]
+		for (tree, runs, _), tree_base, tree_head in zip(tree_runs, base_outcomes, head_outcomes, strict=True):
 			# Each tree compares its own hook files (the twin is a separate
 			# file), so rows for the same shape in two trees are not duplicates.
-			report.results += compare_hook_dirs(base_dir, head_dir, corpora, scratch / "runs", listed, tree, approvals)
-	for tree, settings_path in SETTINGS_FILES.items():
-		if settings_path not in changed and not all_trees:
-			continue
-		report.settings.append(settings_path)
-		report.wiring += compare_settings_wiring(repo_root, base_ref, head_ref, settings_path, tree, listed)
+			report.results += _shape_results(runs, tree_base, tree_head, listed, tree, approvals)
 	return report
 
 
@@ -1086,10 +1234,19 @@ def _describe(outcome: Outcome) -> str:
 
 
 def print_report(report: Report, as_json: bool) -> None:
+	for path in report.verifier_changes:
+		print(
+			f"::warning::{LOG_KEY} verifier_change path={path}: this PR changes the guard differential "
+			"check itself. CI runs the base branch's copy of the verifier, so a change to it applies "
+			"only once it has merged. Review it as a change to a security boundary."
+		)
 	if not report.trees and not report.settings:
 		# `reason=no-hook-change` stays as it was (CLAUDE.md §6); `checked=`
 		# names both gates, since a settings-file change also runs the check.
-		print(f"{LOG_KEY} status=skipped reason=no-hook-change checked=hooks,settings")
+		print(
+			f"{LOG_KEY} status=skipped reason=no-hook-change checked=hooks,settings "
+			f"verifier_changes={len(report.verifier_changes)}"
+		)
 		return
 	for wiring in report.wiring:
 		fields = (
@@ -1157,8 +1314,8 @@ def print_report(report: Report, as_json: bool) -> None:
 	print(
 		f"{LOG_KEY} status={status} trees={','.join(report.trees)} shapes={len(report.results)} "
 		f"regressions={len(report.regressions)} intended_loosening={intended} "
-		f"missing_corpus={len(report.missing_corpus)} settings={','.join(report.settings)} "
-		f"wiring_regressions={len(report.wiring_regressions)}"
+		f"missing_corpus={len(report.missing_corpus)} verifier_changes={len(report.verifier_changes)} "
+		f"settings={','.join(report.settings)} wiring_regressions={len(report.wiring_regressions)}"
 	)
 	if report.wiring_regressions:
 		print(

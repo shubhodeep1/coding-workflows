@@ -1236,7 +1236,17 @@ side so that class cannot land unnoticed.
   (new, edited, or deleted) with no corpus, or with a corpus that holds no
   shape (comments and blank lines only), fails too, so a new guard ships
   with its corpus. A local run without `--head-ref` counts untracked hook
-  files as changed.
+  files as changed. Every base-side run, in every tree, finishes before the
+  first head-side run (issue #5327): a head hook is PR code running as the
+  same user, and it could otherwise rewrite the base copies next to its own
+  so that later shapes compare the loosened hook with itself. The settings
+  wiring comparison below also runs before the first hook, so a head hook
+  cannot restore the working-tree settings files before they are read.
+  Head runs are not isolated from each other: a head hook that rewrites its
+  own copy only changes head decisions, which the PR's code decides anyway
+  (it can tell from its path that it runs under the verifier). A head hook
+  that escalates (for example with the hosted runner's `sudo`) can still
+  reach the verifier process; that is inherent to executing PR hook code.
 - **Intended loosening (base-branch policy, issue #5326).** A loosening
   passes only when `.github/guard_differential/intended_loosening.json`
   **at the base ref** approves it: `{"version": 1, "exceptions": [...]}`
@@ -1260,7 +1270,7 @@ side so that class cannot land unnoticed.
   line `Intended loosening:`, one list item per shape, optionally prefixed
   with the hook and a colon, the shape in backticks, ending at the next
   markdown heading) still fails without a policy entry; its regression
-   line carries `pr_body_listed=true` so reviewers see the claim.
+  line carries `pr_body_listed=true` so reviewers see the claim.
 - **Settings wiring (issue #5328).** A guard only runs when a settings file
   wires it, so the check also runs when `.claude/settings.json` or
   `workflow-templates/.claude/settings.json` changes. It extracts every hook
@@ -1308,16 +1318,74 @@ side so that class cannot land unnoticed.
    waits for the operator. CI reads the body from the event payload of the
    push, so a body edited later needs another push to count.
 - **Wiring.** `ci.yml`'s `tests-hooks-and-orchestrator` job (reported
-  through the `CI / lint` aggregate) runs `Guard differential tests (issue
-  #5174)` and, on pull requests only, `Guard differential check (issue
-  #5174)`: it fetches the base branch with git and runs `--base-ref
+  through the `CI / lint` aggregate) runs, on pull requests only, `Guard
+  differential check (issue #5174)` right after its dependency install,
+  and `Guard differential tests (issue #5174)` later with the other test
+  steps. The check fetches the base branch with git and runs `--base-ref
   FETCH_HEAD --head-sha <github.event.pull_request.head.sha> --pr-body-file
-  <body from GITHUB_EVENT_PATH>` against the checked-out merge commit. `ci.yml` runs on pull requests into `main` and
+  <body from GITHUB_EVENT_PATH>` against the
+  checked-out merge commit, using the base branch's copy of the verifier
+  (next bullet). `ci.yml` runs on pull requests into `main` and
   `stable`, so it gates a project's final PR and every #4785 twin-sync PR,
   whose auto-merge waits for green checks. Phase PRs into a project branch
   do not run `ci.yml`. Run it by hand with `python3
   scripts/guard_differential.py --base-ref origin/main [--head-ref <ref>]
   [--head-sha <sha>] [--pr-body-file <file>] [--all] [--json]`.
+- **Pinned verifier (issue #5327).** The step does not run the PR's
+  `scripts/guard_differential.py`. It copies that file out of the fetched
+  base commit (`git show FETCH_HEAD:scripts/guard_differential.py`) into
+  `$RUNNER_TEMP/guard-differential-verifier/` and runs the copy. A PR can
+  therefore not weaken a guard and edit the verifier to pass in the same
+  change. The PR's hooks, corpora, and body are the data the copy reads from
+  the workspace and the event payload. It logs `GUARD_DIFFERENTIAL
+  verifier=base source=<sha>:scripts/guard_differential.py`. A base that
+  does not carry the script yet (`main` and `stable` before #5174's final
+  PR and release) runs the PR's copy instead and prints
+  `::warning::GUARD_DIFFERENTIAL verifier=head
+  reason=base-has-no-verifier`. The base is fetched when the step runs, so
+  on a base that carries the verifier a change to it applies only once it
+  has merged, and then to every run that starts afterwards, including new
+  runs on PRs that were already open; on a base that does not carry it
+  yet, each PR's own copy runs, as above. **The step may pass only flags the
+  base copy already accepts**: land a new flag in the script first and use
+  it in the step in a later PR, or the step fails with exit 2. The verifier
+  also reports every change to itself or to a `ci.yml` step whose name
+  starts with `Guard differential` (below). **The check runs before any
+  code from the checkout** (only the checkout, the Python setup, and the
+  fixed `pip install` of package names come first): PR code in an earlier
+  step (a test, a shell script) runs as the same user and could plant a
+  `.pth` file in the Python install the verifier runs under and decide its
+  exit code, with no change to the script or the step. Keep it there;
+  `tests/test_guard_differential.py` fails when a step is added before it,
+  when the install step runs anything but one `python3 -P -m pip install`
+  of the package list pinned in the test (`CI_INSTALL_PACKAGES`: no other
+  package, flag, path, archive, URL, or second command), when workflow or
+  job `env` carries a key beyond the test's allow-list (today only
+  `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` at workflow level) or the check step
+   one beyond `GUARD_DIFFERENTIAL_BASE_REF` and `GUARD_DIFFERENTIAL_HEAD_SHA`
+   (so no `BASH_ENV`, `LD_PRELOAD`,
+  `PATH`, `PIP_*`, `PYTHON*`, ...), when workflow or job `defaults`, a job
+  `container` or `services`, or a job `continue-on-error` is set, when the
+  check step's `run:` body differs from the copy pinned in the test
+  (`CI_CHECK_STEP_RUN`: an allowed command still runs anything, such as
+  `python3 -P -c '<code>'` or `git -c alias.x='!sh' x`, so a step edit
+  updates that copy in the same diff), when the check step
+  carries a key beyond `name`, `if`, `env`, and `run` (no `shell`,
+  `working-directory`, or `continue-on-error`) or an `if` other than
+  `github.event_name == 'pull_request'`, when its `run:` body assigns a
+  variable or runs a command outside the test's allow-lists
+  (`_CHECK_STEP_ASSIGNMENTS`, `_CHECK_STEP_COMMANDS`; `$(...)` and
+  process-substitution bodies included, so no `export`, `env`, `source`,
+  or `PYTHONPATH=`), or when it runs `python3 -c` / `-m` without `-P`.
+  `-P` keeps the checkout (the working directory) off
+  `sys.path`: without it a PR's `pip/` package or `json.py` runs before the
+  verifier. A new dependency or `env` key is added to the test's list in
+  the same PR, and only when it runs no code.
+  A PR that rewrites `ci.yml` (the step, or a step before it) still
+  controls what that run executes, which is inherent to `pull_request`
+  workflows: the edit is visible in the diff the reviewer panel reads, and
+  once it is on the base the next PR's verifier reports any further change
+  to the step.
 - **Output.** `GUARD_DIFFERENTIAL regression tree=… hook=… line=… base=…
   head=… shape=…[ pr_body_listed=true]` per failing shape (as `::error::`),
   `GUARD_DIFFERENTIAL intended_loosening … approved_by=…` per
@@ -1325,17 +1393,22 @@ side so that class cannot land unnoticed.
   `GUARD_DIFFERENTIAL wiring_regression settings=… event=…
   matcher=… hook=… reason=<removed|command|matcher|timeout|keys|disableAllHooks|env|unparseable|base-unparseable>
   shape=…` per wiring failure (as `::error::`; `reason` joins several with
-  commas), `GUARD_DIFFERENTIAL intended_wiring_change …` per listed one, and a
-  `GUARD_DIFFERENTIAL status=<pass|fail|skipped|error> …` summary ending in
-  `settings=… wiring_regressions=<n>`, or `GUARD_DIFFERENTIAL status=skipped
-  reason=no-hook-change checked=hooks,settings` when no hook `*.py` file and
-  no settings file changed. `--json` shape rows carry `intended`
-  (policy-approved), `pr_body_listed`, and the approving entry's `approved_by`
-  and `approval_reason` (both `""` when not approved); wiring rows include
-  their identity and `intended` status. Exit 0 when clean or when neither
-  hooks nor settings changed, 1 on a failure, 2 on a bad ref, unreadable
-  corpus, unreadable settings file or PR body, malformed policy or
-  `--head-sha`, or a git call that fails, times out, or cannot start.
+  commas), `GUARD_DIFFERENTIAL intended_wiring_change …` per listed one,
+  `GUARD_DIFFERENTIAL verifier_change path=<scripts/guard_differential.py
+  | .github/workflows/ci.yml>: …` (as `::warning::`, printed even when no
+  hook or settings file changed, never failing), and a `GUARD_DIFFERENTIAL
+  status=<pass|fail|skipped> … verifier_changes=<n> …` summary ending in
+  `settings=… wiring_regressions=<n>`, or `GUARD_DIFFERENTIAL
+  status=skipped reason=no-hook-change checked=hooks,settings
+  verifier_changes=<n>` when no hook `*.py` file and no settings file
+  changed. A `status=error` line, printed when the check could not run,
+  carries no count. `--json` shape rows carry `intended` (policy-approved),
+  `pr_body_listed`, and the approving entry's `approved_by` and
+  `approval_reason` (both `""` when not approved); wiring rows include their
+  identity and `intended` status. Exit 0 when clean or when no hook or
+  settings file changed, 1 on a failure, 2 on a bad ref, unreadable corpus,
+  unreadable settings file or PR body, malformed policy or `--head-sha`, or a
+  git call that fails, times out, or cannot start.
 
 ---
 
