@@ -678,6 +678,70 @@ def test_scope_snapshot_restore_and_index_fail_closed() -> None:
 		assert _scope_action(repo, env, "restore").returncode == 2
 
 
+def test_scope_allows_git_index_metadata_refresh() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		index = repo / ".git/index"
+		before = index.read_bytes()
+		tracked = repo / "outside.txt"
+		info = tracked.stat()
+		os.utime(tracked, ns=(info.st_atime_ns, info.st_mtime_ns + 3_000_000_000))
+		subprocess.run(["git", "status", "--short"], cwd=repo, check=True, capture_output=True)
+		assert index.read_bytes() != before, "fixture must refresh the index without staging"
+		assert _scope_action(repo, env, "check").returncode == 0
+		assert _scope_action(repo, env, "verify").returncode == 0
+
+
+def test_scope_accepts_worktree_only_resolution() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "conflict.txt").write_text("resolved in worktree\n", encoding="utf-8")
+		assert _scope_action(repo, env, "check").returncode == 0
+
+
+def test_scope_rejects_staging_and_index_flags() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		subprocess.run(["git", "add", "--", "conflict.txt"], cwd=repo, check=True)
+		result = _scope_action(repo, env, "check")
+		assert result.returncode == 2
+		assert "::error::Resolver scope check failed closed (ValueError)." in result.stderr
+		assert "Resolver scope failure reason: staged_entries_changed" in result.stderr
+		assert "conflict.txt" not in result.stderr
+		assert _scope_action(repo, env, "restore").returncode == 2
+
+	for flag in ("--assume-unchanged", "--skip-worktree"):
+		with tempfile.TemporaryDirectory() as directory:
+			repo, env = _scope_fixture(Path(directory))
+			assert _scope_action(repo, env, "capture").returncode == 0
+			subprocess.run(["git", "update-index", flag, "outside.txt"], cwd=repo, check=True)
+			result = _scope_action(repo, env, "check")
+			assert result.returncode == 2, (flag, result.stderr)
+			assert "Resolver scope failure reason: staged_entries_changed" in result.stderr
+
+
+def test_scope_rejects_merge_head_change() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		merge_head = repo / ".git/MERGE_HEAD"
+		merge_head.write_text("a" * 40 + "\n", encoding="ascii")
+		assert _scope_action(repo, env, "capture").returncode == 0
+		merge_head.write_text("b" * 40 + "\n", encoding="ascii")
+		result = _scope_action(repo, env, "check")
+		assert result.returncode == 2
+		assert "Resolver scope failure reason: merge_head_changed" in result.stderr
+		assert _scope_action(repo, env, "restore").returncode == 2
+
+
+def test_generic_resolver_prompt_forbids_staging() -> None:
+	text = (PROMPTS_DIR / "conflict-resolver.txt").read_text(encoding="utf-8")
+	assert "Do not stage files or change the Git index or merge state" in text
+	assert "MERGE_HEAD" in text
+
+
 def test_scope_symlink_restore_preserves_preexisting_target() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		repo, env = _scope_fixture(Path(directory))

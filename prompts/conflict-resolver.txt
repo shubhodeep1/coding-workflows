@@ -33,6 +33,7 @@ Rules:
 - Ensure the final code compiles logically.
 - You may read repository files as needed.
 - You may modify repository files directly.
+- Do not stage files or change the Git index or merge state (including MERGE_HEAD); the runner verifies and stages resolved files after your edits.
 - Do not generate patches.
 - Do not generate scripts.
 - Do not modify GitHub workflow files except when resolving merge conflicts.
