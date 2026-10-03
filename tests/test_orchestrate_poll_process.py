@@ -13392,12 +13392,95 @@ def test_validation_run_fallback_completes_when_label_missing():
 			"status": "completed",
 			"conclusion": "success",
 			"created_at": "2026-01-01T00:00:00Z",
+			# The validate wrappers' run-name carries the tracking issue.
+			"display_title": "Internal: AI Validate [tracking:192]",
 		}],
 	)
 	assert result["latest_state"]["status"] == "complete"
 	assert "ai:validated" in result["tracking_labels"]
 	# No new validation dispatch should have been made
 	assert len(result["validation_dispatches"]) == 0
+
+
+def _validating_state_with_dispatch() -> dict:
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_ts"] = 0
+	state["validation_last_dispatch_cycle"] = 1
+	return state
+
+
+def test_validation_run_fallback_ignores_success_marked_for_another_tracking_issue():
+	"""Project #3965 was marked validated by a standalone run (tracking 0)
+	that finished after its dispatch. A success counts only from a run marked
+	for this project's tracking issue."""
+	for foreign_title in ("Internal: AI Validate [tracking:0]", "AI Validate [tracking:4139]"):
+		result = _run_poller(
+			state=_validating_state_with_dispatch(),
+			enable_validation="true",
+			max_validate_cycles="3",
+			tracking_labels=["ai:validating"],
+			validation_workflow_runs=[{
+				"id": 501,
+				"status": "completed",
+				"conclusion": "success",
+				"created_at": "2026-01-01T00:00:00Z",
+				"display_title": foreign_title,
+			}],
+		)
+		assert result["latest_state"]["status"] != "complete", foreign_title
+		assert "ai:validated" not in result["tracking_labels"], foreign_title
+		combined = result["stdout"] + result["stderr"]
+		assert "Validation completion detected via workflow run fallback" not in combined
+		assert "VALIDATION_RUN_ATTRIBUTION tracking=192 candidates=1 eligible=0 skipped_foreign=1" in combined
+
+
+def test_validation_run_fallback_ignores_unmarked_success():
+	"""A run without the [tracking:N] marker (a consumer wrapper that is not
+	synced yet) cannot prove which project it validated."""
+	result = _run_poller(
+		state=_validating_state_with_dispatch(),
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating"],
+		validation_workflow_runs=[{
+			"status": "completed",
+			"conclusion": "success",
+			"created_at": "2026-01-01T00:00:00Z",
+			"display_title": "AI Validate",
+		}],
+	)
+	assert result["latest_state"]["status"] != "complete"
+	assert "ai:validated" not in result["tracking_labels"]
+	assert "skipped_unmarked_success=1" in result["stdout"] + result["stderr"]
+
+
+def test_validation_run_attribution_prefers_own_failure_over_newer_foreign_success():
+	result = _run_poller(
+		state=_validating_state_with_dispatch(),
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating"],
+		validation_workflow_runs=[
+			{
+				"id": 601,
+				"status": "completed",
+				"conclusion": "failure",
+				"created_at": "2026-01-01T00:00:00Z",
+				"display_title": "Internal: AI Validate [tracking:192]",
+			},
+			{
+				"id": 602,
+				"status": "completed",
+				"conclusion": "success",
+				"created_at": "2026-01-01T01:00:00Z",
+				"display_title": "Internal: AI Validate [tracking:0]",
+			},
+		],
+	)
+	assert result["latest_state"]["status"] != "complete"
+	assert "ai:validated" not in result["tracking_labels"]
+	assert "selected_run=601" in result["stdout"] + result["stderr"]
 
 
 def test_validation_run_fallback_does_not_trigger_on_failure():

@@ -144,6 +144,12 @@ def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
 
+def test_validation_run_attribution_log_prefix_is_registered() -> None:
+	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	assert "- `VALIDATION_RUN_ATTRIBUTION`" in agents_text
+	assert "LOG_PREFIX.name=VALIDATION_RUN_ATTRIBUTION" in agents_text
+
+
 def test_staged_support_latch_sweep_runs_without_tracking_issues() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")

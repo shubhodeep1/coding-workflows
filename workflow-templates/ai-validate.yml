@@ -2,6 +2,9 @@
 # automatically when upstream templates change. To opt out of auto-updates,
 # set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 name: AI Validate
+# The [tracking:N] marker lets the orchestrator poller attribute a run to its
+# project (scripts/orchestrate_poll_process.sh get_last_validation_run_info).
+run-name: "${{ format('AI Validate [tracking:{0}]', inputs.tracking_issue || '0') }}"
 on:
   workflow_dispatch:
     inputs:
