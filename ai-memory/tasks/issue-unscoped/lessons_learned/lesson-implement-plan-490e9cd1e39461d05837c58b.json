@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:13:35Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A whole Actions job log carries reviewer stderr thousands of lines before its end, so a log classifier must read far more than a 64 KB tail and must drop the echoed step script lines first.",
+  "phase": "implement_plan",
+  "pr_number": 5871,
+  "record_id": "lesson-implement-plan-490e9cd1e39461d05837c58b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:issue-5773-provider-outage-wait-and-resume",
+    "file:scripts/workflow_failure_heal.py"
+  ]
+}
