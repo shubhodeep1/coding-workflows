@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `754fb8f8cf02bbda574c065c9adbea4ebaf598d5`. No Integration branch was specified, so there is no known ref mismatch.\n\nClarification Q1 \u2192 **A**: keep the hook change twin-first and deliver the root copy in a separate `[claude-twin-sync]` commit.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `gh_api_write_guard.py::evaluate`  \nScope-mode justification: Limit the change to exact-argument help calls; preserve parsing, hidden-call checks, and the safe-helper list. This is the complete requested behavior, not a shortcut. Under unattended instructions \u00a76, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed; the narrow exception preserves those priorities.\n\n## Automation and delivery\n\n- Extend an existing hook; introduce no script, database operation, or supervisor. The existing `.github/workflows/ci.yml` runs on pull requests and pushes to `main` and `stable`, including its guard-test step.\n- Commit the template hook change first. Deliver the byte-identical root hook in a **separate** `[claude-twin-sync]` commit before treating the PR as complete. Do not leave the existing twin-parity test failing.\n\n## Files likely to change\n\n- `workflow-templates/.claude/hooks/gh_api_write_guard.py` \u2014 twin-first logic change.\n- `.claude/hooks/gh_api_write_guard.py` \u2014 separate sync commit only.\n- `tests/test_gh_api_write_guard.py` \u2014 behavioral and boundary tests.\n- `CLAUDE.md`, `workflow-templates/CLAUDE.md`, `agents.md`, `README.md` \u2014 matching guard notes.\n- `changelog.d/5405-gh-api-guard-help-read.md` \u2014 `changed` fragment.\n\n## Functions and data structures\n\nIn `evaluate`, after the existing hidden-call check and before `parse_gh_api_args`, classify an invocation as the existing read kind **only** if its complete argument list is `[\"--help\"]` or `[\"-h\"]`. Leave every other argument list on the existing parser path. Do not add help to the parser\u2019s general boolean flags or change the `(decision, reason)` interface, permission settings, or safe-helper list.\n\n## API/interface changes\n\nThe hook no longer forces a prompt for bare `gh api --help` or `gh api -h`. There is no new GitHub API call or external interface.\n\n## Decisions\n\n### D1 \u2014 Exact help exception\n- **Chosen:** Match the complete argument list in `evaluate` before parsing.\n- **Alternatives considered:** Accept help as a general parser flag.\n- **Why:** A general flag would also exempt combinations containing an endpoint or write arguments.\n\n### D2 \u2014 Twin-first delivery\n- **Chosen:** Change the template first; synchronize the root hook in a distinct `[claude-twin-sync]` commit before final verification.\n- **Alternatives considered:** Edit both hooks together or ship only the template.\n- **Why:** Q1 selects the separate-sync path, while CI requires byte-identical twins.\n\n## Security considerations\n\nThe trust boundary is the Bash `PreToolUse` permission decision. Hidden calls, shell-rewrite hazards, unreadable arguments, and combined write arguments must retain their existing outcomes. Test an endpoint with help; `-X DELETE`, `-f`, and `--input` with help; multiple help flags; and `--` with help. In particular, a write combined with help must still ask. No authorization rule or credential handling changes.\n\n## Risks and edge cases\n\n`gh api --help | grep x` must yield **no decision**, not allow: `grep` remains outside the safe-helper list. A template-only intermediate commit will fail the existing twin-parity assertion until the sync commit lands. The clarification describes missing root files, but all named root files exist on this planning ref. `scripts/guard_differential.py` from #5174 does **not** exist here; if its intended-loosening check lands before implementation, declare this exception in the format that check actually requires, without inventing a configuration file now.\n\n## Testing and pre-execution self-check\n\nAdd tests that load the **template** hook during the twin-first stage: assert bare `--help` and `-h` are allowed reads, combined forms ask, and the `grep` pipeline has no decision. Retain hidden-call regression coverage. After the separate sync commit, run the pinned repository checks in order: applicable type/syntax check, lint, `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_gh_api_write_guard.py`, then any applicable build/smoke checks. Confirm twin parity and the final diff.\n\nPLAN_SELF_CHECK: WARNING: #5174\u2019s differential-check file is absent on this ref; inspect its contract if it lands before implementation.  \nPLAN_SELF_CHECK: WARNING: the cited master session is described as retired; the separate protected-path sync commit remains a delivery requirement, not permission to fold it into the twin-first edit.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3811f470c3e4729eebbd17af11ee3b6fc23a27ce13337c00f13650228030d9e5",
+  "lineage": {
+    "issue_number": 5405,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37105330877",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37105330877",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5405"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003071450_6293f4b203",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5405,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37105330877"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #5405",
+  "timestamps": {
+    "created_at": "2026-10-03T07:14:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
