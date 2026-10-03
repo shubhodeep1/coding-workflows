@@ -485,7 +485,7 @@ jobs:
               echo "::warning::claude_issue_route.py failed for issue #${ISSUE_NUMBER}; falling back to the Codex pipeline"
             fi
             if [ "${ISSUE_IMPLEMENTER_REASON}" = "invalid_repo_var_default" ]; then
-              echo "::warning::AI_ISSUE_IMPLEMENTER='${AI_ISSUE_IMPLEMENTER}' is not 'claude' or 'codex'; using the default (claude)"
+              echo "::warning::AI_ISSUE_IMPLEMENTER='${AI_ISSUE_IMPLEMENTER}' is not 'claude' or 'codex'; using the default (codex)"
             fi
             if [ "${ISSUE_IMPLEMENTER}" = "claude" ]; then
               SKIP_CODEX="true"

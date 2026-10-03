@@ -1,6 +1,6 @@
 """Claude issue implementer: routing, handoff, intake, and the no-clash gates.
 
-Standalone issues default to Claude (AI_ISSUE_IMPLEMENTER, default `claude`);
+Standalone issues default to Codex (AI_ISSUE_IMPLEMENTER, default `codex`);
 orchestrator-managed issues and release-gate fixtures always stay on Codex.
 """
 
@@ -44,10 +44,10 @@ def _issue(labels=(), body="", title="Fix the thing", number=7):
 @pytest.mark.parametrize(
 	("labels", "body", "title", "var", "expected", "reason"),
 	[
-		((), "", "Fix", "", "claude", "default"),
+		((), "", "Fix", "", "codex", "default"),
 		((), "", "Fix", "claude", "claude", "repo_var"),
 		((), "", "Fix", " CODEX ", "codex", "repo_var"),
-		((), "", "Fix", "gpt", "claude", "invalid_repo_var_default"),
+		((), "", "Fix", "gpt", "codex", "invalid_repo_var_default"),
 		(("ai:orchestrator-managed",), "", "Fix", "claude", "codex", "orchestrator_managed"),
 		((), "- Managed by: AI Orchestrator\n", "Fix", "claude", "codex", "orchestrator_managed"),
 		(("ai:orchestrator-tracking",), "", "Fix", "claude", "codex", "codex_only_issue_type"),
@@ -68,17 +68,17 @@ def test_route_issue(labels, body, title, var, expected, reason):
 
 
 def test_mid_title_e2e_mention_is_not_a_fixture():
-	assert route.route_issue(_issue(title="Fix [E2E Smoke Test] alerts"), "")["implementer"] == "claude"
+	assert route.route_issue(_issue(title="Fix [E2E Smoke Test] alerts"), "claude")["implementer"] == "claude"
 
 
 def test_body_marker_must_be_a_line_not_prose():
 	body = "The orchestrator writes `Managed by: AI Orchestrator` into its issues."
-	assert route.route_issue(_issue(body=body), "")["implementer"] == "claude"
+	assert route.route_issue(_issue(body=body), "claude")["implementer"] == "claude"
 
 
 @pytest.mark.parametrize("label", ["ai:security", "ai:check-triage", "ai:workflow-heal"])
 def test_automation_issues_route_to_claude_and_skip_security_pass(label):
-	result = route.route_issue(_issue([label]), "")
+	result = route.route_issue(_issue([label]), "claude")
 	assert result["implementer"] == "claude"
 	assert result["skip_security_pass"] is True
 
@@ -212,7 +212,7 @@ def test_cli_route_and_validate(tmp_path):
 	issue_file.write_text(json.dumps(_issue(["ai:check-triage"])))
 	out = _cli("route", "--issue-json", str(issue_file), "--implementer-var", "")
 	assert out.returncode == 0
-	assert json.loads(out.stdout) == {"implementer": "claude", "reason": "default", "skip_security_pass": True}
+	assert json.loads(out.stdout) == {"implementer": "codex", "reason": "default", "skip_security_pass": True}
 
 	payload_file = tmp_path / "payload.json"
 	payload_file.write_text(json.dumps({"client_payload": _payload(repo="shubhodeep1/coding-workflows")}))
@@ -1354,7 +1354,7 @@ def test_clarify_routes_before_codex_and_stages_scripts():
 	assert "claude_issue_route.py claude_issue_handoff.sh; do" in text
 	# Unset must reach the router as "" so the routed comment says `default`.
 	assert "AI_ISSUE_IMPLEMENTER: ${{ vars.AI_ISSUE_IMPLEMENTER || '' }}" in text
-	assert route.route_issue(_issue(), "") == {"implementer": "claude", "reason": "default", "skip_security_pass": False}
+	assert route.route_issue(_issue(), "") == {"implementer": "codex", "reason": "default", "skip_security_pass": False}
 	assert "reason=claude_routed outcome=handoff" in text
 	steps = yaml.safe_load(text)["jobs"]["clarify"]["steps"]
 	names = [step["name"] for step in steps]

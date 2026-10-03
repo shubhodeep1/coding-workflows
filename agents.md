@@ -242,13 +242,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `.claude/commands/implement-issue-claude.md`,
     `claude-issue-queue-watchdog.yml`,
     `scripts/claude_issue_queue_watchdog.sh`) — standalone issues are
-    implemented by Claude Code by default. On issue open / `/reclarify`,
+    implemented by the Codex pipeline by default. On issue open / `/reclarify`,
     clarify's `Decide clarify route` step routes each issue that would
     otherwise run Codex clarify. Orchestrator-managed issues (label or
     `Managed by: AI Orchestrator` body line), tracking / security-audit /
     retro issues and `^[E2E ` fixtures → codex. Otherwise `ai:codex` → codex,
     then `ai:claude` → claude, then repo var `AI_ISSUE_IMPLEMENTER` (default
-    `claude`; `codex` switches the repo). A route error falls back to codex.
+    `codex`; `claude` switches the repo). A route error falls back to codex.
     A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
     sends a `claude-issue` `repository_dispatch` (`claude_issue.v1`, ≤ 10
     top-level keys) to coding-workflows. The intake validates the repo against
