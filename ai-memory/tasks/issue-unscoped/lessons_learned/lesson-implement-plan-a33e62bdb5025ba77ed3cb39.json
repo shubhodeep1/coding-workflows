@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:12:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`gh pr merge` without `--auto` is not a synchronous merge: on a base with a merge queue it enables auto-merge or queues the PR. A merge that must not outlive a gate uses the REST `PUT repos/{repo}/pulls/{n}/merge` with `sha`, which only merges or refuses.",
+  "phase": "implement_plan",
+  "pr_number": 5603,
+  "record_id": "lesson-implement-plan-a33e62bdb5025ba77ed3cb39",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5565-claude-sync-merge-cancel-auto-merge",
+    "file:scripts/review_enable_auto_merge.sh",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}

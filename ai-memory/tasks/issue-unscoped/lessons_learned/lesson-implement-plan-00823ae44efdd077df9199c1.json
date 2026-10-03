@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:12:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A best-effort GitHub mutation in a workflow step (warn and continue on failure) should retry with backoff, re-read the state after each failure so a lost response is not reported as a failure, and put gh's first stderr line in the warning; `>/dev/null 2>&1` hides the cause.",
+  "phase": "implement_plan",
+  "pr_number": 5603,
+  "record_id": "lesson-implement-plan-00823ae44efdd077df9199c1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5565-claude-sync-merge-cancel-auto-merge",
+    "file:.github/workflows/review_autofix.yml"
+  ]
+}
