@@ -1187,6 +1187,8 @@ When the review-blocked judge closes a PR with `reissue_mode: spot-fix`, `script
 
 What this means for operators: a spot-fix reissue that has to add files no longer stops at `ai:scope-blocked`. The guard itself is unchanged. A declared path is dropped when it fails the path validator, is not printable ASCII or has a leading or trailing space, contains a glob character or trailing `/`, has a `.git` segment at any depth, already exists at the closed PR head, cannot be looked up there, or has no file extension in its last segment, so this cannot exempt an existing file or directory, or a new extensionless directory path. Extensionless new files (`Dockerfile`, `.gitignore`) are dropped too and still need the human-gated procedure, and a new directory whose name carries a dot (`conf.d`) is the one accepted residual: one brand-new subtree the judge named. The new `REISSUE_FILES_TOUCHED_NEW_OUTPUTS` log line shows how many paths the judge declared, added, and skipped, and each skip is logged with its reason. #4664 still has to be released through the existing human-gated procedure.
 
+- **Release smoke PRs now reach review even when they overlap an older PR.** The merge-train gate no longer queues a PR marked `IS_SMOKE_TEST=true`; it also clears a prior queue label after retiring its marker. Ordinary overlapping PRs remain queued.
+
 ### For contributors
 
 The new source runs after the `REISSUE_FILES_TOUCHED_UNION` step and only on the spot-fix path. A rejected entry is skipped and never forces `redo`, which matches the closed-PR union. A judge that omits the field produces a byte-identical issue body. Change `prompts/_templates/mode-judge-review-blocked.txt` together with the runtime prompt.
