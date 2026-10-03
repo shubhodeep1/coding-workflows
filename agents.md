@@ -322,7 +322,22 @@ Phases of the unattended pipeline (each is a separate workflow file under
       - checkers (title contains `— checker` or `status check-in`) whose
         `rate_limit_info` is `rejected` with a passed `resetsAt`, not
         `need_input`, and with no enabled trigger at all.
-    - **Skip reasons:** `pickup`, `archived`, `too_old` (`created_at` more
+    - **Authorization (#6101):** `list_sessions` with `mine: true` is
+      account-wide, so a session is resumed only when server-set fields place
+      it in the pickup's workflows: every GitHub source in
+      `session_context.sources` is `--self-repo` (default
+      `shubhodeep1/coding-workflows`) or a `--registry` repository (default
+      `.github/ai/consumer_repos.json`), case-insensitive, else `no_repo` /
+      `foreign_repo`; `origin` is `claude_code_mcp_seed` (started by
+      another session with `create_session`), else `unknown_origin`; and a
+      `parent_session_id` (`session_<x>` / `cse_<x>`) is present, else
+      `no_lineage`. Checked right after `pickup`, on both signals; anything
+      unreadable fails closed. An unreadable registry authorizes the self
+      repo only and adds one `errors` line. The pickup's command line passes
+      neither flag. The parent chain need not reach the pickup: chains are
+      often rooted at an operator's session or a restarted pickup.
+    - **Skip reasons:** `pickup`, `no_repo`, `foreign_repo`,
+      `unknown_origin`, `no_lineage`, `archived`, `too_old` (`created_at` more
       than 72 hours ago; the last page listed can reach further back, and an
       unreadable `created_at` is not skipped), `not_idle:<status>`,
       `permission_prompt`, `needs_input`, `not_reset` (its own limit still
