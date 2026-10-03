@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4909,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4909\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6123\",\"pr_number\":6123,\"branch\":\"ai/issue-4909\",\"run_id\":\"37101363452\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37101363452\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".claude/hooks/gh_api_write_guard.py\",\"agents.md\",\"changelog.d/4909-guard-echo-read-substitutions.md\",\"tests/test_gh_api_write_guard.py\",\"workflow-templates/.claude/hooks/gh_api_write_guard.py\"]}",
+  "fingerprint": "b8da2e679c3b377193be332524ba504228b08ec3d26a52b35268b4c37407df73",
+  "lineage": {
+    "issue_number": 4909,
+    "parent_ids": [],
+    "pr_number": 6123,
+    "run_id": "37101363452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37101363452",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6123"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261003061259_54edef7a8b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4909,
+    "level": "run",
+    "pr_number": 6123,
+    "run_id": "37101363452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4909: https://github.com/shubhodeep1/coding-workflows/pull/6123",
+  "timestamps": {
+    "created_at": "2026-10-03T06:12:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
