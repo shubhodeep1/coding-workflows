@@ -120,9 +120,12 @@ jobs:
             | jq -s '(add // []) | map(select(.draft == false) | {
               number,
               head_ref: .head.ref,
+              head_sha: .head.sha,
               title: (.title // ""),
               body: (.body // "")
             })')"
+
+          printf '%s\n' "${prs_json}" > "${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"
 
           total="$(printf '%s' "${prs_json}" | jq 'length')"
           echo "AUTOFIX_SWEEP_START repo=${REPOSITORY} candidates=${total} head_ref_filter=${HEAD_REF_FILTER:-<none>} dry_run=${DRY_RUN}"
@@ -344,6 +347,25 @@ jobs:
           done
 
           echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+
+      # The sweep itself needs no checkout. Fetch only the default-branch
+      # helper: a PR head must never supply code for an Actions write.
+      - name: Check out trusted CI recovery helper
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .ci-rerun-support
+          persist-credentials: false
+
+      - name: Re-run cancelled CI failed jobs once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CI_CANCELLED_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
+        run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py
 
   # CLAUDE.md §26.H catch-all. Every PR-backed claude/* head runs in
   # Claude-fixer mode, so its conflicts, failed checks, review hand-offs and
