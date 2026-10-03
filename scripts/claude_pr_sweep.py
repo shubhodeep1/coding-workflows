@@ -26,11 +26,13 @@ Batching contract (CLAUDE.md §15):
   input   the registry file plus this repository;
   calls   one read of this repo's open queue per run; per repo, one open-PR
           list call per 100 PRs; per `claude/*` candidate, the
-          check_in_status.py hand-back reads (1 PR read, 1 per 100 comments,
+          check_in_status.py hand-back reads (reuse listed PR, 1 per 100 comments,
           check-run pages, at most 1 commit read, 1 hand-off run read,
           1 compare read when that run was triggered by an older push than
-          the head it reviewed, and 3 active-run reads); per queued fixer,
-          1 queue-issue POST and the claim (1 PR read + 1 comment POST);
+          the head it reviewed, and 3 active-run reads); queued PRs take no
+          verdict reads, and held/live-claimed PRs may use the bounded cache;
+          per queued fixer, 1 live PR read, 1 queue-issue POST and the claim
+          (1 further PR read + 1 comment POST);
           the queue binding is a local file write (no call);
   output  one `CLAUDE_PR_SWEEP` log line per decision plus a summary line;
   failure fail open per PR and per repo: a read error is logged and the
@@ -125,8 +127,25 @@ def list_candidates(repo: str) -> list[dict]:
 			log(f"skip repo={repo} pr=#{pr.get('number')} reason=skip_ai_marker")
 			continue
 		if isinstance(pr.get("number"), int):
-			candidates.append({"number": pr["number"], "head_ref": ref})
+			candidates.append({"number": pr["number"], "head_ref": ref, "pr_snapshot": pr})
 	return candidates
+
+
+def negative_cache_expiry(verdict: dict, now: dt.datetime) -> dt.datetime | None:
+	"""Only held/live claims are safely negative across ticks, for at most 30m."""
+	if verdict.get("state") not in ("held", "claimed") or verdict.get("done"):
+		return None
+	expiry = now + dt.timedelta(minutes=30)
+	if verdict["state"] == "claimed":
+		try:
+			claim_at = dt.datetime.fromisoformat(verdict["claim"]["at"].replace("Z", "+00:00"))
+			lease = check_in_status._env_positive_float("CLAUDE_FIX_CLAIM_LEASE_HOURS", check_in_status.DEFAULT_FIX_CLAIM_LEASE_HOURS)
+			if claim_at.tzinfo is None:
+				return None
+			expiry = min(expiry, claim_at + dt.timedelta(hours=lease))
+		except (KeyError, AttributeError, TypeError, ValueError):
+			return None
+	return expiry if expiry > now else None
 
 
 def _gh_as(token: str, args: list[str]) -> str:
@@ -196,13 +215,22 @@ def bind_pr_fix(binding_file: str, self_repo: str, run_id: str, queue_number: in
 
 def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: bool, self_repo: str, queue_token: str,
 	run_id: str, run_url: str = "", allowed: list[str] | None = None, queue=queue_pr_fix, queued=queued_pr_fixes,
-	binding_file: str = "") -> dict:
+	binding_file: str = "", state_file: str = "") -> dict:
 	"""Decide and act for every candidate PR; returns the summary counters."""
 	claimant = f"sweep-run-{run_id}" if re.fullmatch(r"[0-9]{1,20}", run_id or "") else "sweep-run-local"
 	summary = {"repos": 0, "candidates": 0, "due": 0, "queued": 0, "already_queued": 0, "reported": 0, "skipped": 0, "errors": 0}
 	allowed = allowed if allowed is not None else repos
 	configured = bool(queue_token) and bool(REPO_RE.fullmatch(self_repo or ""))
 	already: set[tuple[str, int]] = set()
+	negative_cache = {}
+	if state_file:
+		try:
+			negative_cache = json.loads(Path(state_file).read_text(encoding="utf-8"))
+		except (OSError, ValueError):
+			pass
+	if not isinstance(negative_cache, dict):
+		negative_cache = {}
+	updated_cache: dict = {}
 	if configured and not dry_run:
 		try:
 			already = queued(self_repo, queue_token, allowed)
@@ -221,14 +249,38 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 		for candidate in candidates:
 			number = candidate["number"]
 			summary["candidates"] += 1
+			if configured and not dry_run and (repo.lower(), number) in already:
+				summary["already_queued"] += 1
+				log(f"already_queued repo={repo} pr=#{number}")
+				continue
+			pr_snapshot = candidate.get("pr_snapshot") or {}
+			pr_head = (pr_snapshot.get("head") or {}).get("sha")
+			pr_updated = pr_snapshot.get("updated_at")
+			cache_key = f"{repo.lower()}#{number}"
+			previous = negative_cache.get(cache_key)
+			if (isinstance(previous, dict) and previous.get("state") in ("held", "claimed") and
+				isinstance(pr_head, str) and re.fullmatch(r"[0-9a-f]{40}", pr_head) and
+				isinstance(pr_updated, str) and pr_updated and previous.get("head") == pr_head and previous.get("updated_at") == pr_updated):
+				try:
+					valid_until = dt.datetime.fromisoformat(previous["expires"].replace("Z", "+00:00"))
+				except (KeyError, AttributeError, ValueError):
+					valid_until = now
+				if valid_until.tzinfo is not None and now < valid_until <= now + dt.timedelta(minutes=30):
+					summary["skipped"] += 1
+					updated_cache[cache_key] = previous
+					continue
 			try:
-				verdict = check_in_status.check_pr_hand_back(repo, number, check_in_status.DEFAULT_STUCK_HOURS, min_age_hours, now)
+				verdict = check_in_status.check_pr_hand_back(repo, number, check_in_status.DEFAULT_STUCK_HOURS, min_age_hours, now,
+					pr_snapshot=candidate.get("pr_snapshot"))
 			except (check_in_status.ReadError, KeyError, TypeError, ValueError) as exc:
 				summary["errors"] += 1
 				print(f"::warning::CLAUDE_PR_SWEEP read_failed repo={repo} pr=#{number} error={exc}")
 				continue
 			state = verdict.get("state")
 			if not verdict.get("done") or state not in DUE_STATES:
+				expiry = negative_cache_expiry(verdict, now)
+				if expiry and isinstance(pr_head, str) and re.fullmatch(r"[0-9a-f]{40}", pr_head) and isinstance(pr_updated, str) and pr_updated:
+					updated_cache[cache_key] = {"state": state, "head": pr_head, "updated_at": pr_updated, "expires": expiry.isoformat()}
 				summary["skipped"] += 1
 				log(f"skip repo={repo} pr=#{number} state={state} reason={json.dumps(verdict.get('reason', ''))}")
 				continue
@@ -248,6 +300,17 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 				summary["already_queued"] += 1
 				log(f"already_queued repo={repo} pr=#{number} kind={kind}")
 				continue
+			# Only a due fix leads to a write; re-read its current head before
+			# opening a queue item based on the open-PR snapshot.
+			if candidate.get("pr_snapshot"):
+				try:
+					current_pr = check_in_status.gh_api(f"repos/{repo}/pulls/{number}")
+				except check_in_status.ReadError:
+					summary["errors"] += 1
+					continue
+				if current_pr.get("state") != "open" or current_pr.get("draft") or (current_pr.get("head") or {}).get("sha") != head:
+					summary["skipped"] += 1
+					continue
 			try:
 				queue_number = queue(self_repo, queue_token, repo, number, head, kind, claimant, run_url)
 			except (QueueError, ValueError) as exc:
@@ -263,6 +326,15 @@ def sweep(repos: list[str], now: dt.datetime, *, min_age_hours: float, dry_run: 
 				log(f"claim repo={repo} pr=#{number} posted={result.get('posted')} reason={json.dumps(result.get('reason', ''))}")
 			except (check_in_status.ReadError, KeyError, TypeError, ValueError) as exc:
 				print(f"::warning::CLAUDE_PR_SWEEP claim_failed repo={repo} pr=#{number} error={exc} (the fixer session claims the head itself)")
+	if state_file:
+		try:
+			cache_path = Path(state_file)
+			cache_path.parent.mkdir(parents=True, exist_ok=True)
+			temporary = cache_path.with_name(cache_path.name + ".tmp")
+			temporary.write_text(json.dumps(updated_cache), encoding="utf-8")
+			temporary.replace(cache_path)
+		except OSError:
+			log("negative_cache_write_failed")
 	return summary
 
 
@@ -290,6 +362,7 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None) -> int:
 		binding_file=os.environ.get("CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE", "") or str(
 			Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / "claude-issue-queue-binding" / claude_issue_route.QUEUE_BINDING_FILENAME
 		),
+		state_file=os.environ.get("CLAUDE_PR_SWEEP_STATE_FILE", ""),
 	)
 	log("end " + " ".join(f"{key}={value}" for key, value in summary.items()))
 	return 0

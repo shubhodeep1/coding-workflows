@@ -97,10 +97,30 @@ jobs:
   sweep:
     if: github.event.schedule != '17 * * * *'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read
     steps:
+      - name: Check out budget helper
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record GH_PAT budget at sweep start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
+        run: |
+          source scripts/gh_helpers.sh
+          gh_pat_budget start review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
+
       - name: Enumerate open PRs and dispatch internal-review.yml
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          READ_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
@@ -115,11 +135,12 @@ jobs:
           # `jq -s 'add // []'` to merge them into one snapshot before
           # filtering. Mirrors the established repo pattern (e.g.
           # implement.yml:786, gh_helpers.sh:916).
-          prs_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/pulls" \
+          prs_json="$(GH_TOKEN="${READ_TOKEN}" gh api --paginate -X GET "repos/${REPOSITORY}/pulls" \
             -f state=open -f per_page=100 \
             | jq -s '(add // []) | map(select(.draft == false) | {
               number,
               head_ref: .head.ref,
+              head_sha: .head.sha,
               title: (.title // ""),
               body: (.body // "")
             })')"
@@ -176,7 +197,7 @@ jobs:
             # as stale — it is bounded by its running peer's job timeout.
             if snapshot_json="$(
               for status in queued in_progress pending; do
-                gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+                GH_TOKEN="${READ_TOKEN}" gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
                   -f status="${status}" \
                   -f per_page=100 \
                   2>/dev/null || true
@@ -258,6 +279,55 @@ jobs:
             snapshot_active_review_runs "${wf}"
           done
 
+          # One GraphQL query per bounded set of eligible Claude PRs. The
+          # comments connection is only evidence when complete; uncertain
+          # identity, pagination or partial GraphQL data dispatches normally.
+          declare -A handoff_proven=()
+          mapfile -t claude_rows < <(printf '%s' "${prs_json}" | jq -c '.[] | select(.head_ref | startswith("claude/"))')
+          # Neither the PR list nor the Actions-runs snapshot identifies
+          # the account that posted the hand-off; read it only when needed.
+          handoff_author=""
+          if [ "${#claude_rows[@]}" -gt 0 ]; then
+            handoff_author="$(gh api user --jq .login 2>/dev/null || true)"
+          fi
+          if [[ "${handoff_author}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            for ((offset=0; offset<${#claude_rows[@]}; offset+=30)); do
+              aliases=""
+              for ((i=offset; i<offset+30 && i<${#claude_rows[@]}; i++)); do
+                n="$(printf '%s' "${claude_rows[i]}" | jq -r '.number')"
+                [[ "${n}" =~ ^[1-9][0-9]*$ ]] || continue
+                aliases+="p${n}: pullRequest(number: ${n}) { number headRefOid isDraft mergeStateStatus title labels(first: 100) { pageInfo { hasNextPage } nodes { name } } comments(last: 100) { pageInfo { hasPreviousPage } nodes { author { login } body } } } "
+              done
+              [ -n "${aliases}" ] || continue
+              owner="${REPOSITORY%%/*}"; repo_name="${REPOSITORY#*/}"
+              [[ "${owner}" =~ ^[A-Za-z0-9_.-]+$ && "${repo_name}" =~ ^[A-Za-z0-9_.-]+$ ]] || continue
+              query="query { repository(owner: \"${owner}\", name: \"${repo_name}\") { ${aliases} } }"
+              if result="$(GH_TOKEN="${READ_TOKEN}" gh api graphql -f query="${query}" 2>/dev/null)" && \
+                printf '%s' "${result}" | jq -e '(.errors? // []) | length == 0' >/dev/null 2>&1; then
+                while IFS= read -r n; do
+                  [[ "${n}" =~ ^[1-9][0-9]*$ ]] || continue
+                  handoff_proven["${n}"]="$(printf '%s' "${result}" | jq -r --arg key "p${n}" --arg author "${handoff_author}" '
+                    .data.repository[$key] as $pr |
+                    if ($pr.number == ($key | ltrimstr("p") | tonumber)) and
+                       ($pr.headRefOid | type == "string") and
+                       ($pr.mergeStateStatus != null and $pr.mergeStateStatus != "UNKNOWN" and $pr.mergeStateStatus != "DIRTY") and
+                       ($pr.isDraft == false) and
+                       ($pr.title | type == "string") and
+                       ($pr.labels.pageInfo.hasNextPage == false) and
+                       ($pr.labels.nodes | type == "array") and
+                       ($pr.comments.pageInfo.hasPreviousPage == false) and
+                       ($pr.comments.nodes | type == "array") and
+                       (($pr.title | contains("[force-review]")) | not) and
+                       ([$pr.labels.nodes[]?.name] | index("force-review") == null) and
+                       any($pr.comments.nodes[]?; .author.login == $author and
+                         (.body | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n")) and
+                         (.body | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $pr.headRefOid + " round=[0-9]+ -->$"))))
+                    then $pr.headRefOid else "" end' 2>/dev/null || true)"
+                done < <(printf '%s' "${result}" | jq -r '.data.repository | keys[] | select(test("^p[1-9][0-9]*$")) | ltrimstr("p")' 2>/dev/null)
+              fi
+            done
+          fi
+
           # Read into an array so counters survive the loop (no subshell pipe).
           mapfile -t rows < <(printf '%s' "${prs_json}" | jq -c '.[]')
 
@@ -266,6 +336,7 @@ jobs:
             head_ref="$(printf '%s' "${row}" | jq -r '.head_ref')"
             pr_title="$(printf '%s' "${row}" | jq -r '.title')"
             pr_body="$(printf '%s' "${row}" | jq -r '.body')"
+            pr_head_sha="$(printf '%s' "${row}" | jq -r '.head_sha // ""')"
 
             # The PR number is the only PR data the dispatch carries
             # (issue #4618), so accept nothing but a positive integer.
@@ -310,6 +381,11 @@ jobs:
               continue
             fi
 
+            if [[ "${pr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [ "${handoff_proven["${pr_number}"]:-}" = "${pr_head_sha}" ]; then
+              echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=claude_fixer_awaiting_session"
+              continue
+            fi
+
             if [ "${DRY_RUN}" = "true" ]; then
               echo "AUTOFIX_SWEEP_DRY_RUN pr=#${pr_number} head_ref=${head_ref}"
               continue
@@ -345,6 +421,19 @@ jobs:
 
           echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
 
+      - name: Record GH_PAT budget at sweep end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
+        run: |
+          if [ -f scripts/gh_helpers.sh ]; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+
   # CLAUDE.md §26.H catch-all. Every PR-backed claude/* head runs in
   # Claude-fixer mode, so its conflicts, failed checks, review hand-offs and
   # blocks wait for a Claude session. The §26 checker hands them to the
@@ -369,6 +458,21 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Record GH_PAT budget at catch-all start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_claude-pr-catch-all
+        run: |
+          source scripts/gh_helpers.sh
+          gh_pat_budget start review_autofix_sweep claude-pr-catch-all "${GH_PAT_BUDGET_FILE}"
+
+      - name: Restore bounded catch-all negative cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/claude-pr-sweep-negative.json
+          key: claude-pr-sweep-negative-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: claude-pr-sweep-negative-${{ github.repository_id }}-
+
       - name: Start Claude fixers for unhandled claude/* PRs
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -380,6 +484,7 @@ jobs:
           CLAUDE_FIX_CLAIM_LEASE_HOURS: ${{ vars.CLAUDE_FIX_CLAIM_LEASE_HOURS || '3' }}
           CLAUDE_FIX_HAND_BACK_CAP: ${{ vars.CLAUDE_FIX_HAND_BACK_CAP || '3' }}
           CLAUDE_PR_SWEEP_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          CLAUDE_PR_SWEEP_STATE_FILE: ${{ runner.temp }}/claude-pr-sweep-negative.json
           # Every queue item this run opens is recorded here and uploaded
           # below; the pickup starts nothing the artifact does not list (#4621).
           CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
@@ -394,6 +499,14 @@ jobs:
           echo "CLAUDE_PR_SWEEP handoff_author=${CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN:-<unset: hand-offs ignored>}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_pr_sweep.py
 
+      - name: Save bounded catch-all negative cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/claude-pr-sweep-negative.json
+          key: claude-pr-sweep-negative-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+
       # Runs even when the sweep step failed, so a queue item it opened is
       # never left without its binding (issue #4621).
       - name: Upload the queue binding for the Claude issue pickup
@@ -404,3 +517,16 @@ jobs:
           path: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Record GH_PAT budget at catch-all end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_claude-pr-catch-all
+        run: |
+          if [ -f scripts/gh_helpers.sh ]; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end review_autofix_sweep claude-pr-catch-all "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=claude-pr-catch-all remaining=unknown reset=unknown used_in_job=unknown'
+          fi

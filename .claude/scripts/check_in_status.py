@@ -577,7 +577,7 @@ def _hours_since(value: str | None, now: dt.datetime) -> float | None:
 
 
 def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours: float, now: dt.datetime,
-	ignore_claim_by: tuple[str, ...] = ()) -> dict:
+	ignore_claim_by: tuple[str, ...] = (), pr_snapshot: dict | None = None) -> dict:
 	"""The CLAUDE.md §26 hand-back verdict for one PR (see the module docstring).
 
 	`done` is true for a terminal PR or for a Claude fix that is due now; the
@@ -587,7 +587,7 @@ def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours
 	the branch is not done. `ignore_claim_by` lets a fixer look past its own
 	claim and the sweep reservation made for it.
 	"""
-	pr = gh_api(f"repos/{repo}/pulls/{number}")
+	pr = pr_snapshot if pr_snapshot is not None else gh_api(f"repos/{repo}/pulls/{number}")
 	if pr.get("merged"):
 		return {"done": True, "state": "merged", "reason": f"PR #{number} merged at {pr.get('merged_at')}", "merge_commit_sha": pr.get("merge_commit_sha")}
 	if pr.get("state") == "closed":

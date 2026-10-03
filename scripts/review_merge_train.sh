@@ -432,6 +432,15 @@ _mt_release() {
 		_mt_warn "merge-train release: could not list open PRs; fail-open (nothing released)."
 		return 0
 	fi
+	# The open-PR snapshot already includes labels; idle polls need no
+	# Actions-runs lookup when there is nothing queued to release.
+	if printf '%s\n' "${prs_json}" | jq -es --arg label "${MT_LABEL}" \
+		'any(.[]; any(.labels[]?; . == $label))' >/dev/null 2>&1; then
+		:
+	elif printf '%s\n' "${prs_json}" | jq -es 'type == "array" and all(.[]; (.labels | type) == "array")' >/dev/null 2>&1; then
+		_mt_log "MERGE_TRAIN_RELEASE_SUMMARY examined=0 released=0 base_filter=${base_filter:-*}"
+		return 0
+	fi
 	if ! inflight_review_branches="$(_mt_inflight_review_branches)"; then
 		_mt_warn "merge-train release: could not list active review runs; continuing without the dispatch-dedup guard."
 		inflight_review_branches=""

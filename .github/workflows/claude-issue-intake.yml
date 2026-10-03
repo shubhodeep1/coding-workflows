@@ -81,6 +81,13 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Record GH_PAT budget at intake start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_intake
+        run: |
+          source scripts/gh_helpers.sh
+          gh_pat_budget start claude-issue-intake intake "${GH_PAT_BUDGET_FILE}"
+
       - name: Materialize the intake payload
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -137,3 +144,15 @@ jobs:
           path: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Record GH_PAT budget at intake end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_intake
+        run: |
+          if [ -f scripts/gh_helpers.sh ]; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end claude-issue-intake intake "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=claude-issue-intake job=intake remaining=unknown reset=unknown used_in_job=unknown'
+          fi

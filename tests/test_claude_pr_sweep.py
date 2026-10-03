@@ -39,13 +39,16 @@ def test_load_repos_puts_this_repo_first_and_dedupes(tmp_path):
 def test_candidates_are_open_same_repo_claude_prs(monkeypatch):
 	prs = [_pr(1), _pr(2, ref="ai/issue-2"), _pr(3, draft=True), _pr(4, repo="fork/r"), _pr(5, title="x [skip ai]"), _pr(6, ref="claude/y")]
 	monkeypatch.setattr(sweeper.check_in_status, "gh_api_list", lambda path: prs if path == "repos/o/r/pulls?state=open" else pytest.fail(path))
-	assert sweeper.list_candidates("o/r") == [{"number": 1, "head_ref": "claude/x"}, {"number": 6, "head_ref": "claude/y"}]
+	assert sweeper.list_candidates("o/r") == [
+		{"number": 1, "head_ref": "claude/x", "pr_snapshot": prs[0]},
+		{"number": 6, "head_ref": "claude/y", "pr_snapshot": prs[5]},
+	]
 
 
 def _setup(monkeypatch, verdicts, candidates=None):
 	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: candidates if candidates is not None else [{"number": n, "head_ref": "claude/x"} for n in verdicts])
 
-	def fake_verdict(repo, number, stuck, min_age, now):
+	def fake_verdict(repo, number, stuck, min_age, now, pr_snapshot=None):
 		assert min_age == 2 and stuck == sweeper.check_in_status.DEFAULT_STUCK_HOURS
 		verdict = verdicts[number]
 		if isinstance(verdict, Exception):
@@ -72,7 +75,7 @@ def _run(queue=None, queued=None, **overrides):
 		run_url="https://github.com/o/self/actions/runs/123", allowed=["o/r", "o/self"],
 		queue=queue or (lambda *a: pytest.fail("must not queue")), queued=queued or (lambda *a: set()))
 	kwargs.update(overrides)
-	return sweeper.sweep(kwargs.pop("repos", ["o/r"]), NOW, **kwargs)
+	return sweeper.sweep(kwargs.pop("repos", ["o/r"]), kwargs.pop("now", NOW), **kwargs)
 
 
 def test_due_pr_is_queued_once_and_its_head_claimed(monkeypatch, capsys):
@@ -92,8 +95,33 @@ def test_due_pr_is_queued_once_and_its_head_claimed(monkeypatch, capsys):
 
 def test_an_open_queue_item_for_the_pr_is_not_duplicated(monkeypatch):
 	posted = _setup(monkeypatch, {7: _due()})
+	monkeypatch.setattr(sweeper.check_in_status, "check_pr_hand_back", lambda *a, **kw: pytest.fail("queued PR must not read verdict"))
 	summary = _run(queued=lambda *a: {("o/r", 7)})
 	assert summary["already_queued"] == 1 and summary["queued"] == 0 and posted == []
+
+
+def test_negative_claim_cache_expires_before_lease_and_invalidates_on_update(monkeypatch, tmp_path):
+	snapshot = _pr(7)
+	snapshot["head"]["sha"] = HEAD
+	snapshot["updated_at"] = "2026-09-26T11:00:00Z"
+	candidate = {"number": 7, "head_ref": "claude/x", "pr_snapshot": snapshot}
+	calls = []
+	monkeypatch.setattr(sweeper, "list_candidates", lambda repo: [candidate])
+	claim = {"done": False, "state": "claimed", "claim": {"at": "2026-09-26T11:00:00Z"}, "reason": "live"}
+	def verdict(*args, **kwargs):
+		calls.append("read")
+		return claim
+	monkeypatch.setattr(sweeper.check_in_status, "check_pr_hand_back", verdict)
+	cache = str(tmp_path / "state.json")
+	_run(state_file=cache)
+	assert len(calls) == 1
+	_run(state_file=cache, now=NOW + dt.timedelta(minutes=10))
+	assert len(calls) == 1
+	_run(state_file=cache, now=NOW + dt.timedelta(minutes=31))
+	assert len(calls) == 2
+	snapshot["updated_at"] = "2026-09-26T12:32:00Z"
+	_run(state_file=cache, now=NOW + dt.timedelta(minutes=32))
+	assert len(calls) == 3
 
 
 def test_not_due_claimed_or_held_prs_are_skipped(monkeypatch):
@@ -237,7 +265,7 @@ def test_workflow_runs_the_catch_all_hourly_with_the_queue_token():
 def test_workflow_uploads_the_queue_binding_even_after_a_failure():
 	job = yaml.safe_load(SWEEP_WF.read_text())["jobs"]["claude-pr-catch-all"]
 	step = next(step for step in job["steps"] if "python3 scripts/claude_pr_sweep.py" in step.get("run", ""))
-	upload = job["steps"][-1]
+	upload = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/upload-artifact@"))
 	binding_file = step["env"]["CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE"]
 	assert binding_file == "${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json"
 	assert upload["uses"].startswith("actions/upload-artifact@") and upload["if"] == "always()"

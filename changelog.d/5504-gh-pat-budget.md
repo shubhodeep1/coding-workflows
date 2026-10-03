@@ -1,0 +1,2 @@
+<!-- changelog: changed -->
+- **Reduced shared GitHub PAT traffic and made failed clarification routing recover automatically.** High-volume jobs report start/end PAT quota snapshots (shared-budget deltas are estimates), the review sweep avoids dispatching verified same-head Claude hand-offs, and the poller batches clean-PR reads and skips draft Claude PRs. Catch-all claims, review watchdogs, merge-train release, and comment pagination avoid redundant requests. A trusted failed `/reclarify` is requeued by the existing poller only after the PAT budget recovers.
