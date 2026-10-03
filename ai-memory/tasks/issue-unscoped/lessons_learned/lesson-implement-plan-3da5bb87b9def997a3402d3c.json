@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:14:39Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A conformance CONCERN tagged HYPOTHESIS but cheap to fix (a read order) should be fixed in the conformance stage: the whole-project review raised it again as a finding and cost a review round.",
+  "phase": "implement_plan",
+  "pr_number": 5453,
+  "record_id": "lesson-implement-plan-3da5bb87b9def997a3402d3c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5442-page-checker-review-dispatch-runs",
+    "file:.claude/scripts/check_in_status.py"
+  ]
+}
