@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should be improved?\nChoices:\nA. A specific workflow or behavior\u2014name it and describe the problem. (RECOMMENDED)\nB. Documentation\u2014name the page and what is missing or unclear.\nC. Something else\u2014name the component and describe the problem.\nQ2: What result would count as an improvement?\nChoices:\nA. Describe the expected behavior or a concrete acceptance criterion. (RECOMMENDED)\nB. Describe a failing example and what should happen instead.",
+  "fingerprint": "d228787a6e25980c7ec0db263372b953b3f27dba7ff946989424a097fad1025c",
+  "lineage": {
+    "issue_number": 6139,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37104867712",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37104867712",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261003070431_c86abf37e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6139,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37104867712"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6139 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-03T07:04:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
