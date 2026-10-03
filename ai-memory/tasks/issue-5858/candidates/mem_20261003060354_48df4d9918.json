@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan \u2014 issue #5858\n\nPlanning ref: `main` at `66707437b53aa54446d661c8f409795577d13ead`. This matches the issue\u2019s target branch.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `gh_api_with_retry` and `scripts/gh_helpers.sh` rate-limit detection  \nScope-mode justification: Keep the change inside Phase 4b and its existing test module. Distinguishing rate limits, waiting within the existing deadlines, and rechecking PR state is a small completeness step compared with merely raising the four-failure threshold. It adds no dependency or external interface and follows the \u00a76 priority order: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and lifecycle\n\n- **Existing operation:** Extend the Phase 4b step in `.github/workflows/test-and-mark-stable.yml`; introduce no script or supervisor.\n- **Entry point:** The existing release gate, including dispatches from `.github/workflows/promote-main-to-stable.yml`\u2019s daily cycle. No new trigger or wiring is needed.\n- **Database gate and future-removal registry:** Not applicable.\n\n## Files likely to change\n\n1. `.github/workflows/test-and-mark-stable.yml` \u2014 Phase 4b API retry and adopted-run polling.\n2. `tests/test_test_and_mark_stable_review_blocked_budget.py` \u2014 contract and behavioral regression coverage.\n\n## Functions and data structures\n\n- Extend `gh_api_with_retry` to classify a **known rate limit** separately from ordinary API failure, without emitting a failed response body as successful stdout. Retain its three-attempt behavior for ordinary transient failures. Reuse the shared helper\u2019s rate-limit detection rather than adding a competing detector; its existing wait routine cannot be used unchanged because it does not honor Phase 4b\u2019s deadline.\n- Have `fetch_pr_state` return distinct `open`, `closed`, `unknown`, and `rate_limited` outcomes. Preserve `PR_STATE_FAILURES` and its limit of four for consecutive **ordinary** unresolved reads.\n- On `rate_limited`, wait only as long as the applicable remaining deadline allows, then **read PR state again before polling or accepting the adopted run**. A closed PR still fails immediately; an unknown read never establishes that a completed run is safe to accept. Preserve `retry_timeout` at the 25-minute deadline and `retry_dispatch_failed` at the existing 90-second post-dispatch registration deadline.\n\n## API/interface changes\n\nNo new workflow input, output status, endpoint, credential, or external interface. Use a step-local failure classification, such as a distinct helper exit code, without renaming existing functions or status values.\n\nThe existing authenticated `GET /repos/{owner}/{repo}/pulls/{pull_number}` supplies PR `state`; the pinned run is read through `GET /repos/{owner}/{repo}/actions/runs/{run_id}`. For a known limit, prefer the failed request\u2019s `Retry-After` or `X-RateLimit-Reset` headers. If those are unavailable, a **single conditional** `GET /rate_limit` may supply `resources.core` reset information; do not probe it on every poll. GitHub says the original response headers take precedence over that endpoint, which can itself count toward a secondary limit. A secondary limit without usable reset information requires at least a one-minute pause, bounded by the gate deadline. ([cli.github.com](https://cli.github.com/manual/gh_api?utm_source=openai))\n\n## Decisions\n\n### D1 \u2014 Preserve bounded, fail-closed polling\n- **Chosen:** Separate rate limits from `unknown`, pause according to available reset information, and retry PR-state verification within the existing deadlines.\n- **Alternatives considered:** Raise the four-failure threshold; treat all 403 responses as rate limits; replace the step wrapper wholesale with `gh_retry`.\n- **Why:** The first two options misclassify outages or authorization failures. The shared `gh_retry` has useful detection but its retry waits do not enforce this step\u2019s 25-minute and 90-second bounds.\n\n## Security considerations\n\nThe trust boundary is authenticated GitHub responses and CLI stderr entering privileged release-gate decisions. Keep the existing `GH_TOKEN` authorization; add no endpoint that mutates repository state. Classify only recognizable rate-limit responses, validate reset values as numeric times, clamp every wait, and treat malformed PR state, 403 authorization failures, and unreadable run payloads as failures\u2014not evidence of success. Never log credentials or accept a completed review run without a fresh, successful `open` PR-state read. GitHub warns that repeatedly requesting while rate-limited can further restrict an integration. ([docs.github.com](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api?utm_source=chatgpt.com))\n\n## Risks and edge cases\n\n- A reset beyond either deadline must terminate with the existing timeout status, not sleep past the gate budget. Repeated secondary limits must remain bounded.\n- A PR may close during a rate-limit wait; the immediate post-wait PR read must catch it.\n- Preserve behavior for pre-dispatch discovery failures, ordinary four-read outages, and failed or incomplete pinned review runs. Do not claim the editor restored the canary: the supplied logs do not show that run\u2019s final result.\n- **Reference mismatch:** The issue\u2019s Phase 4b line numbers describe an older revision. On the planning ref, `gh_api_with_retry` begins near line 2316 and the PR-state breaker near line 2602; plan against the checked-out symbols, not the cited numbers.\n\n## Testing considerations\n\nExtend the existing Phase 4b test module using its workflow-step extraction pattern. Run the extracted shell with stubbed `gh`, time, and sleep: consecutive 403 rate limits followed by `open` must reach the adopted-run verification and attempt 2, without incrementing the ordinary-failure breaker. Also cover a close during the wait, an unknown read, a reset beyond the deadline, malformed reset information, and four ordinary failures. Preserve the existing status and run-pinning assertions. Run the module through its existing `.github/workflows/ci.yml` step, plus the repository\u2019s workflow syntax and shell checks on the pinned toolchain.\n\n## Pre-execution self-check\n\nThe branch matches; the relevant workflow, shared helper, test module, and CI entry point exist. No credential, new scheduler, or unknown scalar is required to implement the fix.\n\nPLAN_SELF_CHECK: WARNING: The adopted review run\u2019s final result is unavailable in the supplied evidence; this plan addresses the release-gate failure, not an unverified editor outcome.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a16b392fbe1bf5f2ca35e4311192983c51c774fc4f8178aa720dff4a7ab54475",
+  "lineage": {
+    "issue_number": 5858,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37101432812",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37101432812",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5858"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003060354_48df4d9918",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5858,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37101432812"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #5858",
+  "timestamps": {
+    "created_at": "2026-10-03T06:03:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
