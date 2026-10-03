@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:01:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A CLI deny rule on Edit/Write paths does not stop a program the agent runs from writing there, and a read-only directory would break git checkout and merge; enforce a protected path at the commit boundary instead (a `pre-commit` hook via `core.hooksPath` that lets a merge take a parent's or git's clean merge of the file).",
+  "phase": "implement_plan",
+  "pr_number": 6100,
+  "record_id": "lesson-implement-plan-072b3e7991609847add1ebb5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-actions-worker-pool",
+    "file:scripts/claude_pool.py",
+    "file:.github/workflows/claude-pool-worker.yml"
+  ]
+}

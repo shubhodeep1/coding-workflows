@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:01:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A step after an auto-mode Claude step inherits whatever the agent appended to `$GITHUB_ENV` / `$GITHUB_PATH` (`BASH_ENV`, `PATH`, `LD_PRELOAD`) and any process it left running; run the CLI without the file-command variables, then kill its leftover processes and empty the step's file-command files before the step ends.",
+  "phase": "implement_plan",
+  "pr_number": 6100,
+  "record_id": "lesson-implement-plan-41c000b36697443737e830c3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-actions-worker-pool",
+    "file:.github/workflows/claude-pool-worker.yml"
+  ]
+}

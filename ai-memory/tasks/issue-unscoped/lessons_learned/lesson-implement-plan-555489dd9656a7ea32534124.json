@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:01:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A new `.github/workflows/*.yml` file changes the auto-generated repo tree in agents.md; run `make generate` in the same PR, or the CI `make generate-check` drift step fails.",
+  "phase": "implement_plan",
+  "pr_number": 6100,
+  "record_id": "lesson-implement-plan-555489dd9656a7ea32534124",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:claude-actions-worker-pool",
+    "file:agents.md",
+    "file:tools/repo_tree/update_repo_tree.py"
+  ]
+}

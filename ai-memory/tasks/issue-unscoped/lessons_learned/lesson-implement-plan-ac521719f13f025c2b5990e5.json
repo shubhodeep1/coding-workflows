@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:01:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A step that runs after an auto-mode Claude job must not execute code from a checkout that job could write; check the helper out again at a SHA recorded before the job ran, and gate any artifact upload on that step's success.",
+  "phase": "implement_plan",
+  "pr_number": 6100,
+  "record_id": "lesson-implement-plan-ac521719f13f025c2b5990e5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-actions-worker-pool",
+    "file:.github/workflows/claude-pool-worker.yml"
+  ]
+}

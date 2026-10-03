@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:01:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "In a multi-job workflow that reads scripts from a mutable ref, resolve the ref once in the first job, export its SHA as a job output, and check that SHA out in every later job (falling back to the ref only where the first job may not have run).",
+  "phase": "implement_plan",
+  "pr_number": 6100,
+  "record_id": "lesson-implement-plan-980fb2818da007e17843bb0e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-actions-worker-pool",
+    "file:.github/workflows/claude-pool-worker.yml"
+  ]
+}

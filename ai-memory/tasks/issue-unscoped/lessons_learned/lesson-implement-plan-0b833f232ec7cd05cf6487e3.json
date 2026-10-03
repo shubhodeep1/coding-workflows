@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:01:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "CLAUDE.md \u00a718.F wants a `docs/scripts-pending-removal.md` entry even for permanent scripts and workflows (`Removal trigger: permanent \u2014 review annually`); a plan line saying \"no new entry; the scripts are permanent\" does not exempt them.",
+  "phase": "implement_plan",
+  "pr_number": 6100,
+  "record_id": "lesson-implement-plan-0b833f232ec7cd05cf6487e3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:plan-deviation",
+    "plan:claude-actions-worker-pool",
+    "file:docs/scripts-pending-removal.md"
+  ]
+}

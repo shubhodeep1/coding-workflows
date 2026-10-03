@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:01:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Secret redaction must match each value with line breaks allowed inside it (raw CR/LF and the JSON-escaped `\\n` / `\\r\\n` of a transcript): GNU `base64` wraps every 76 columns, so a literal `str.replace` misses a printed `base64(secret)`.",
+  "phase": "implement_plan",
+  "pr_number": 6100,
+  "record_id": "lesson-implement-plan-1eaf75852ce88be686c7ac59",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-actions-worker-pool",
+    "file:scripts/claude_pool.py"
+  ]
+}

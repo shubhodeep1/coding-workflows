@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:01:08Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "`ci.yml` does not run on PRs into a `claude/implement-plan-*` project branch, so a new workflow or script missing from `docs/INVENTORY.md` only fails at the final PR; run `tests/inventory_parity.py` locally before opening a phase PR that adds files.",
+  "phase": "implement_plan",
+  "pr_number": 6100,
+  "record_id": "lesson-implement-plan-5ea1396729e497413dc60eff",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:claude-actions-worker-pool",
+    "file:docs/INVENTORY.md",
+    "file:tests/inventory_parity.py"
+  ]
+}
