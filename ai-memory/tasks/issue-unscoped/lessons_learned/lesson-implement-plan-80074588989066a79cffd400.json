@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T01:06:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Every parser of the same command text (the credential scan and the shape) must split commands at the same boundaries: a redirection is part of a simple command, not a separator, and a scan that splits where the shape does not leaks what the shape hides.",
+  "phase": "implement_plan",
+  "pr_number": 5401,
+  "record_id": "lesson-implement-plan-80074588989066a79cffd400",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5124-mask-credentials-in-prompt-reports",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T01:06:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A credential rule keyed on a segment's command word must look past wrapper commands (`sudo`, `env`, `timeout`, `xargs`) or `sudo <tool> -p<secret>` bypasses it, in both the posted text and any derived shape.",
+  "phase": "implement_plan",
+  "pr_number": 5401,
+  "record_id": "lesson-implement-plan-1a599aabe5a80b42562ab610",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:conformance",
+    "plan:issue-5124-mask-credentials-in-prompt-reports",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}

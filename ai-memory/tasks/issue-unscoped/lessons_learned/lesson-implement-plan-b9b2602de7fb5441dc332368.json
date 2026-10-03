@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T01:06:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A credential rule must parse the command lines that shells, `su`, `runuser`, and remote exec run (attached `-c'\u2026'` and clustered `-lc` included), and every command substitution (backticks, quoted `$(\u2026)`), not only the outer words.",
+  "phase": "implement_plan",
+  "pr_number": 5401,
+  "record_id": "lesson-implement-plan-b9b2602de7fb5441dc332368",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5124-mask-credentials-in-prompt-reports",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}

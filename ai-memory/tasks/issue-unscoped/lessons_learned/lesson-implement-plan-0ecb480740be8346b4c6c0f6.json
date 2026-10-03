@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T01:06:05Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a credential rule has to guess which word is the command that runs (behind `sudo -u <user>`, after global options such as `docker --config d`), take the union of every candidate's rules: over-masking is safe, a wrong single guess leaks.",
+  "phase": "implement_plan",
+  "pr_number": 5401,
+  "record_id": "lesson-implement-plan-0ecb480740be8346b4c6c0f6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5124-mask-credentials-in-prompt-reports",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
