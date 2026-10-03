@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary.txt`\nScope-mode justification: The request is fully specified and confined to one existing file. No broader implementation improves correctness; the \u00a76 priority order (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed) favors preserving its remaining content.\n\n## Automation and execution\n- Change type: existing file only; no script or supervisor.\n- Entry point: the existing `implement.yml` approved-plan trigger. No new scheduler wiring or database gate is needed.\n\n## Planning ref\n`754fb8f8cf02bbda574c065c9adbea4ebaf598d5` on `orchestrator/project-6141`; this matches the issue\u2019s integration branch.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` only. Its current first line is `status: ok`; its second is `run_id: 26151428977`. Preserve the subsequent `updated-by: ai-pipeline` line and any other subsequent lines.\n\n## Functions, data structures, and API/interface changes\nNone. Replace only line 2 with `decompose-run: 37104788528`; leave line 1 exactly `status: ok`.\n\n## Decisions\n### D1 \u2014 Preserve the file tail\n- **Chosen:** Edit line 2 only and verify lines 1\u20132 afterward.\n- **Alternatives considered:** Rewrite the entire file.\n- **Why:** A whole-file rewrite risks removing subsequent lines and violates the requested narrow scope.\n\n## Security considerations\nNo endpoint, authorization surface, money operation, or new trust boundary is introduced. Treat the issue-supplied run number as file content only; do not execute it or use it as a command.\n\n## Risks and edge cases\nThe existing second line uses `run_id:` rather than the requested `decompose-run:`; this is the intended change, not a branch mismatch. Do not apply the separate release-smoke workflow\u2019s three-line replacement instructions to this issue.\n\n## Testing considerations\nAfter the edit, compare the first two lines byte-for-byte with the requested strings, confirm subsequent lines are unchanged, and verify the diff names only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\nThe target exists, the requested values are unambiguous, and the planning ref matches the integration branch.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b87f7d3d2145ba7fd00dea0ad1b1c03fd07c765ba97e872c898103f4b8b4deb1",
+  "lineage": {
+    "issue_number": 6142,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37105150205",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37105150205",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6142"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003071029_9f008d89e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6142,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37105150205"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6142",
+  "timestamps": {
+    "created_at": "2026-10-03T07:10:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
