@@ -111,6 +111,9 @@ class SweepDispatchRefContract(unittest.TestCase):
 		self.assertIn('(.event // "") == "workflow_dispatch"', self.text)
 		self.assertIn("^Internal: AI Review & Autofix \\\\[pr:([1-9][0-9]*)\\\\]$", self.text)
 		self.assertIn("| dedupe_key) as $head_ref", self.text)
+		self.assertIn('((.path // "" | split("@")[0]) == ".github/workflows/internal-review.yml")', self.text)
+		self.assertIn('select((is_pr_named | not) or dispatch_pr != "")', self.text)
+		self.assertIn('review_default_branch="$(gh api "repos/${REPOSITORY}"', self.text)
 
 
 class InternalReviewDispatchRunNameContract(unittest.TestCase):

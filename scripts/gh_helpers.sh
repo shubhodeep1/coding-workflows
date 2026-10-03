@@ -1242,6 +1242,15 @@ gh_issue_timeline_with_cross_refs()
 #   replaces the wasted dispatch on the collision path, so net API
 #   cost is negative when a peer is found and neutral otherwise.
 # ---------------------------------------------------------------
+_autofix_review_event_default_branch()
+{
+	# The workflow event payload is runner-provided repository metadata;
+	# never infer a default from the branch-scoped runs response.
+	[ -f "${GITHUB_EVENT_PATH:-}" ] || return 0
+	jq -r '.repository.default_branch | if type == "string" and length > 0 then . else empty end' \
+		"${GITHUB_EVENT_PATH}" 2>/dev/null || true
+}
+
 autofix_retrigger_has_inflight_peer()
 {
 	local pr_number="${1:-}"
@@ -1282,12 +1291,22 @@ autofix_retrigger_has_inflight_peer()
 	# workflow file path so renamed jobs in consumer repos still count
 	# as peers. The first matched run in API order is surfaced in logs.
 	local peer_info
-	if ! peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" '
+	local review_default_branch
+	review_default_branch="$(_autofix_review_event_default_branch)"
+	if [ -z "${review_default_branch}" ]; then
+		echo "::warning::REVIEW_RUN_PROVENANCE: default branch unavailable; PR-named peer runs will not match" >&2
+	fi
+	if ! peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" --arg default_branch "${review_default_branch}" '
+		def named: (.display_title // "" | test("^Internal: AI Review & Autofix \\[pr:[0-9]+\\]$"));
+		def verified_named:
+			.event == "workflow_dispatch" and .head_branch == $default_branch and $default_branch != ""
+			and ((.path // "" | split("@")[0]) == ".github/workflows/internal-review.yml");
 		[
 			.workflow_runs[]?
 			| select(.status == "queued" or .status == "in_progress")
 			| select((.id | tostring) != $current)
-			| select(.path | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+			| select((.path // "" | split("@")[0]) | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+			| select((named | not) or verified_named)
 		]
 		| {count: length, first_id: (.[0].id // "-"), first_path: (.[0].path // "-")}
 		| "\(.count) \(.first_id) \(.first_path)"
@@ -1402,16 +1421,26 @@ autofix_changes_lost_head_retry_consumed()
 	# cancelled pull_request twin of a dispatch run and never executed
 	# the editor, so it does not consume the budget.
 	local prior_completed
+	local review_default_branch
+	review_default_branch="$(_autofix_review_event_default_branch)"
+	if [ -z "${review_default_branch}" ]; then
+		echo "::warning::REVIEW_RUN_PROVENANCE: default branch unavailable; PR-named completed runs will not match" >&2
+	fi
 	if ! prior_completed=$(printf '%s' "${response}" | jq -r \
 		--arg current "${current_run_id}" \
-		--arg head "${head_sha}" '
+		--arg head "${head_sha}" --arg default_branch "${review_default_branch}" '
+		def named: (.display_title // "" | test("^Internal: AI Review & Autofix \\[pr:[0-9]+\\]$"));
+		def verified_named:
+			.event == "workflow_dispatch" and .head_branch == $default_branch and $default_branch != ""
+			and ((.path // "" | split("@")[0]) == ".github/workflows/internal-review.yml");
 		[
 			.workflow_runs[]?
 			| select(.status == "completed")
 			| select((.conclusion // "") != "cancelled")
 			| select((.id | tostring) != $current)
 			| select((.head_sha // "") == $head)
-			| select(.path | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+			| select((.path // "" | split("@")[0]) | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+			| select((named | not) or verified_named)
 		]
 		| length
 	' 2>/dev/null); then

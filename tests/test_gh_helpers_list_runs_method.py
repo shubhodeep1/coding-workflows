@@ -133,18 +133,22 @@ gh() {
 	cat "${RUNS_FIXTURE}"
 }
 
+eval "$(awk '/^_autofix_review_event_default_branch\(\)/,/^\}/' "__HELPERS__")"
 eval "$(extract_fn)"
 __FN__ "$@"
 """
 
 
-def _run_probe(fn: str, runs_json: str, *args: str) -> subprocess.CompletedProcess:
+def _run_probe(fn: str, runs_json: str, *args: str, default_branch: str | None = "main") -> subprocess.CompletedProcess:
 	with tempfile.TemporaryDirectory() as tmp:
 		fixture = Path(tmp) / "runs.json"
 		fixture.write_text(runs_json, encoding="utf-8")
+		event_file = Path(tmp) / "event.json"
+		event_file.write_text(json.dumps({"repository": {"default_branch": default_branch}}), encoding="utf-8")
 		env = dict(os.environ)
 		env["GITHUB_REPOSITORY"] = "owner/repo"
 		env["RUNS_FIXTURE"] = str(fixture)
+		env["GITHUB_EVENT_PATH"] = str(event_file)
 		script = _RUNNER.replace("__HELPERS__", str(GH_HELPERS)).replace("__FN__", fn)
 		return subprocess.run(
 			["bash", "-c", script, "bash", *args],
@@ -224,3 +228,26 @@ def test_peer_probe_reaches_the_api_and_detects_an_inflight_peer() -> None:
 	assert "reason=api_error" not in proc.stderr, proc.stderr
 	assert "peer_count=1" in proc.stdout, proc.stdout
 	assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+
+
+def test_named_run_requires_verified_provenance_for_peer_and_budget() -> None:
+	base = {"id": 32799999999, "head_sha": HEAD, "head_branch": "main",
+		"path": ".github/workflows/internal-review.yml@main", "event": "workflow_dispatch",
+		"display_title": "Internal: AI Review & Autofix [pr:3764]"}
+	for fn, state, args, result in (
+		("autofix_retrigger_has_inflight_peer", {"status": "in_progress"}, ("3764", BRANCH, CURRENT_RUN), "peer_count="),
+		("autofix_changes_lost_head_retry_consumed", {"status": "completed", "conclusion": "success"},
+			("3764", BRANCH, CURRENT_RUN, HEAD), "prior_completed="),
+	):
+		for change, default, expected in (
+			({}, "main", "1"),
+			({"head_branch": "feature/spoof"}, "main", "0"),
+			({"head_branch": None}, "main", "0"),
+			({"path": ".github/workflows/ai-review.yml"}, "main", "0"),
+			({"event": "pull_request"}, "main", "0"),
+			({}, None, "0"),
+		):
+			proc = _run_probe(fn, _runs({**base, **state, **change}), *args, default_branch=default)
+			assert f"{result}{expected}" in proc.stdout, (fn, change, proc.stdout, proc.stderr)
+			if default is None:
+				assert "REVIEW_RUN_PROVENANCE" in proc.stderr

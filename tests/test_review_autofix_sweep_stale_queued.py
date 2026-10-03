@@ -34,7 +34,7 @@ SWEEP_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
 # The jq program is embedded in the workflow as a single-quoted argument to
 # `jq -c -s --argjson cutoff "${stale_cutoff_epoch}"`. Grab it verbatim.
 JQ_BLOCK = re.compile(
-	r"jq -c -s --argjson cutoff \"\$\{stale_cutoff_epoch\}\" '(?P<prog>.*?)'\s*2>/dev/null",
+	r"jq -c -s --argjson cutoff \"\$\{stale_cutoff_epoch\}\" --arg default_branch \"\$\{review_default_branch\}\" --arg workflow \"\$\{workflow\}\" '(?P<prog>.*?)'\s*2>/dev/null",
 	re.DOTALL,
 )
 
@@ -57,10 +57,10 @@ def cutoff_epoch(minutes_ago: int) -> int:
 	return int((datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).timestamp())
 
 
-def run_sweep_reduce(runs: list[dict], cutoff: int) -> dict:
+def run_sweep_reduce(runs: list[dict], cutoff: int, default_branch: str = "main", workflow: str = "internal-review.yml") -> dict:
 	payload = json.dumps({"workflow_runs": runs})
 	result = subprocess.run(
-		["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), extract_jq_program()],
+		["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), "--arg", "default_branch", default_branch, "--arg", "workflow", workflow, extract_jq_program()],
 		input=payload,
 		capture_output=True,
 		text=True,
@@ -163,6 +163,7 @@ class SweepPrKeyedDispatchTest(unittest.TestCase):
 			"id": run_id,
 			"head_branch": "main",
 			"event": "workflow_dispatch",
+			"path": ".github/workflows/internal-review.yml@main",
 			"display_title": f"Internal: AI Review & Autofix [pr:{pr}]",
 			"status": "in_progress",
 			"created_at": iso(-5),
@@ -183,13 +184,13 @@ class SweepPrKeyedDispatchTest(unittest.TestCase):
 		self.assertEqual(out["active"], {"pr:10": 1, "pr:11": 1})
 		self.assertNotIn("main", out["active"])
 
-	def test_marker_on_a_pull_request_run_stays_branch_keyed(self) -> None:
-		"""A PR titled like the marker cannot claim another PR's key."""
+	def test_marker_on_a_pull_request_run_cannot_fall_back_to_branch_key(self) -> None:
+		"""A PR titled like the marker cannot claim any active key."""
 		out = self.run_reduce(
 			[self.dispatch_run(3, "7", event="pull_request", head_branch="feature/x")],
 			cutoff_epoch(120),
 		)
-		self.assertEqual(out["active"], {"feature/x": 1})
+		self.assertEqual(out["active"], {})
 
 	def test_unnamed_or_malformed_dispatch_run_stays_branch_keyed(self) -> None:
 		out = self.run_reduce(
@@ -201,7 +202,15 @@ class SweepPrKeyedDispatchTest(unittest.TestCase):
 			],
 			cutoff_epoch(120),
 		)
-		self.assertEqual(out["active"], {"claude/y": 1, "claude/z": 1, "claude/w": 1, "claude/v": 1})
+		self.assertEqual(out["active"], {"claude/y": 1, "claude/w": 1, "claude/v": 1})
+
+	def test_spoofed_named_runs_are_never_branch_keyed(self) -> None:
+		for change in ({"head_branch": "feature/x"}, {"head_branch": ""},
+			{"path": ".github/workflows/review_autofix.yml"}, {"event": "pull_request"}):
+			out = self.run_reduce([self.dispatch_run(12, "7", **change)], cutoff_epoch(120))
+			self.assertEqual(out["active"], {}, change)
+		self.assertEqual(run_sweep_reduce([self.dispatch_run(12, "7")], cutoff_epoch(120), "", )["active"], {})
+		self.assertEqual(run_sweep_reduce([self.dispatch_run(12, "7")], cutoff_epoch(120), "main", "review_autofix.yml")["active"], {})
 
 	def test_wedged_named_dispatch_run_is_logged_under_its_pr(self) -> None:
 		out = self.run_reduce(

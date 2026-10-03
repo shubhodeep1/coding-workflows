@@ -550,8 +550,8 @@ def test_sweep_dispatch_that_does_not_bind_to_the_pr_fails_closed(monkeypatch, c
 
 @pytest.mark.parametrize("status", ["queued", "in_progress", "pending"])
 def test_active_sweep_dispatch_for_the_pr_keeps_the_handoff_waiting(monkeypatch, capsys, status):
-	active = [{"status": status, "display_title": DISPATCH_TITLE}]
-	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=active)}
+	active = [{**_dispatched_run()[f"repos/o/r/actions/runs/{RUN_ID}"], "status": status}]
+	responses = {"repos/o/r/pulls/7": _pr(base=DEFAULT_BASE), **_review_run(), **_runs(dispatched=active)}
 	_stub(monkeypatch, responses, [_handoff()])
 	_, out = _run(capsys)
 	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
@@ -592,6 +592,23 @@ def test_branch_active_run_skips_the_dispatch_listing(monkeypatch):
 	monkeypatch.setattr(checker, "gh_api", fake)
 	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 3
 	assert not any("internal-review.yml" in call for call in calls)
+
+
+@pytest.mark.parametrize("change, default_branch", [
+	({}, "main"),
+	({"head_branch": "claude/spoof"}, "main"),
+	({"head_branch": None}, "main"),
+	({"path": ".github/workflows/ai-review.yml"}, "main"),
+	({"event": "pull_request"}, "main"),
+	({}, None),
+])
+def test_active_dispatched_run_requires_provenance(monkeypatch, capsys, change, default_branch):
+	active_run = {**_dispatched_run()[f"repos/o/r/actions/runs/{RUN_ID}"], "status": "in_progress", **change}
+	_stub(monkeypatch, _runs(dispatched=[active_run]))
+	count = checker._active_run_count(REPO, REF, include_pending=True, pr_number=7, default_branch=default_branch)
+	assert count == (1 if not change and default_branch == "main" else 0)
+	if default_branch is None:
+		assert "REVIEW_RUN_PROVENANCE" in capsys.readouterr().err
 
 
 # --- Routing: `action` for the CLAUDE.md §26 checker ---------------------------

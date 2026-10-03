@@ -138,6 +138,13 @@ jobs:
             exit 0
           fi
 
+          # Neither the existing pulls nor workflow-runs listings carries
+          # repository.default_branch; read it once, not once per PR/run.
+          review_default_branch="$(gh api "repos/${REPOSITORY}" --jq '.default_branch | if type == "string" and length > 0 then . else empty end' 2>/dev/null || true)"
+          if [ -z "${review_default_branch}" ]; then
+            echo "::warning::REVIEW_RUN_PROVENANCE: default branch unavailable; PR-named sweep runs will not match."
+          fi
+
           # Snapshot active review-family runs once per workflow, then do
           # per-PR lookups locally so the sweep avoids N×2 workflow-run API
           # fanout while preserving the existing active-run skip semantics.
@@ -180,7 +187,7 @@ jobs:
                   -f status="${status}" \
                   -f per_page=100 \
                   2>/dev/null || true
-              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" '
+              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" --arg default_branch "${review_default_branch}" --arg workflow "${workflow}" '
                   def created_epoch:
                     (.created_at // "")
                     | if . == "" then null
@@ -198,12 +205,17 @@ jobs:
                   # (internal-review.yml run-name, issue #4618): the sweep
                   # dispatches from the default branch, so head_branch would
                   # name the default branch, not the PR. Only
-                  # workflow_dispatch runs qualify, so a PR titled like the
-                  # marker cannot claim another PR key. Git refs cannot
-                  # contain ":", so a "pr:<N>" key never collides with a
-                  # branch key. Everything else stays keyed by head branch.
+                  # workflow_dispatch runs on the repository default branch
+                  # with the exact wrapper path qualify. A rejected named
+                  # run is dropped, never re-keyed to its head branch. Git
+                  # refs cannot contain ":", so PR and branch keys differ.
+                  def is_pr_named:
+                    (.display_title // "" | test("^Internal: AI Review & Autofix \\[pr:[0-9]+\\]$"));
                   def dispatch_pr:
-                    if (.event // "") == "workflow_dispatch" then
+                    if $workflow == "internal-review.yml" and $default_branch != ""
+                      and (.head_branch // "") == $default_branch
+                      and (.event // "") == "workflow_dispatch"
+                      and ((.path // "" | split("@")[0]) == ".github/workflows/internal-review.yml") then
                       ((.display_title // "")
                         | [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string]
                         | first // "")
@@ -215,6 +227,7 @@ jobs:
                     .[]
                     | .workflow_runs[]?
                     | select((.head_branch // "") != "")
+                    | select((is_pr_named | not) or dispatch_pr != "")
                   ]
                   # A run can transition between the sequential status fetches;
                   # retain its in_progress snapshot so it is never discounted.

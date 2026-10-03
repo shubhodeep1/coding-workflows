@@ -119,6 +119,7 @@ gh() {
 	cat "${RUNS_FIXTURE}"
 }
 
+eval "$(awk '/^_autofix_review_event_default_branch\(\)/,/^\}/' "__HELPERS__")"
 eval "$(extract_fn)"
 autofix_changes_lost_head_retry_consumed "$@"
 """
@@ -128,9 +129,12 @@ def _run_helper(runs_json: str, *args: str, api_fail: bool = False) -> subproces
 	with tempfile.TemporaryDirectory() as tmp:
 		fixture = Path(tmp) / "runs.json"
 		fixture.write_text(runs_json, encoding="utf-8")
+		event_file = Path(tmp) / "event.json"
+		event_file.write_text('{"repository":{"default_branch":"main"}}', encoding="utf-8")
 		env = dict(os.environ)
 		env["GITHUB_REPOSITORY"] = "owner/repo"
 		env["RUNS_FIXTURE"] = str(fixture)
+		env["GITHUB_EVENT_PATH"] = str(event_file)
 		if api_fail:
 			env["GH_API_FAIL"] = "1"
 		script = _RUNNER.replace("__HELPERS__", str(GH_HELPERS))

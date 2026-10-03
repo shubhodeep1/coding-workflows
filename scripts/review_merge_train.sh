@@ -408,8 +408,26 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # lookup covers every queued PR and avoids a per-PR API call inside the loop.
 _mt_inflight_review_branches()
 {
+	local review_default_branch=""
+	# The existing pulls and actions/runs listings do not carry the repo's
+	# default_branch; one repository read per release, never a guessed `main`.
+	review_default_branch="$(gh_retry gh api "repos/${MT_REPO}" --jq '.default_branch | if type == "string" and length > 0 then . else empty end' 2>/dev/null || true)"
+	if [ -z "${review_default_branch}" ]; then
+		printf '::warning::REVIEW_RUN_PROVENANCE: default branch unavailable; PR-named merge-train runs will not match.\n' >&2
+	fi
 	gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?per_page=100" \
-		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | .head_branch // empty' 2>/dev/null | sort -u
+		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "" | split("@")[0]) | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | {head_branch, event, display_title, path}' 2>/dev/null \
+		| jq -r --arg default_branch "${review_default_branch}" '
+			def named: (.display_title // "" | test("^Internal: AI Review & Autofix \\[pr:[0-9]+\\]$"));
+			if named then
+				if $default_branch != "" and .event == "workflow_dispatch"
+					and .head_branch == $default_branch
+					and ((.path // "" | split("@")[0]) == ".github/workflows/internal-review.yml")
+					and (.display_title | test("^Internal: AI Review & Autofix \\[pr:[1-9][0-9]*\\]$"))
+				then "pr:\(.display_title | capture("\\[pr:(?<number>[1-9][0-9]*)\\]$").number)"
+				else empty end
+			else .head_branch // empty end
+		' | sort -u
 }
 
 _mt_dispatch_review() {
@@ -448,7 +466,7 @@ _mt_release() {
 			continue
 		fi
 		examined=$((examined + 1))
-		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -- "${head}"; then
+		if [ -n "${inflight_review_branches}" ] && { printf '%s\n' "${inflight_review_branches}" | grep -Fxq -- "${head}" || printf '%s\n' "${inflight_review_branches}" | grep -Fxq -- "pr:${num}"; }; then
 			_mt_log "MERGE_TRAIN_RELEASE_ACTIVE pr=${num} head=${head} action=leave_queued"
 			continue
 		fi

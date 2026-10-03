@@ -144,9 +144,11 @@ def test_old_head_with_active_sweep_dispatch_for_the_pr_waits(monkeypatch, capsy
 	# The sweep dispatches internal-review.yml from the default branch
 	# (issue #4618), so its run is not on the head branch; check_pr's stuck
 	# path must still count it by its `[pr:<N>]` title.
-	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
+	responses = _stuck_responses(_pr(mergeable_state="dirty", base={"repo": {"default_branch": "main"}}), OLD)
 	responses[DISPATCH_RUNS] = {"workflow_runs": [
-		{"status": status, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		{"status": status, "display_title": "Internal: AI Review & Autofix [pr:7]",
+		 "head_branch": "main", "event": "workflow_dispatch",
+		 "path": ".github/workflows/internal-review.yml@main"},
 	]}
 	_stub(monkeypatch, responses)
 	_, out = _run(["--pr", "7"], capsys)

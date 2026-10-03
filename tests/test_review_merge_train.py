@@ -57,6 +57,7 @@ case "${method}" in
   GET)
     if [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
     case "${path}" in
+      repos/acme/consumer) fixture="${FAKE_GH_DIR}/repo.json" ;;
       repos/*/pulls) fixture="${FAKE_GH_DIR}/pulls.json" ;;
       repos/*/pulls/*/files) n="${path#*/pulls/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/files_${n}.json" ;;
       repos/*/issues/*/comments) n="${path#*/issues/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/comments_${n}.json" ;;
@@ -69,6 +70,7 @@ case "${method}" in
     fi
     if [ ! -f "${fixture}" ]; then
       case "${path}" in
+        repos/acme/consumer) echo '{"default_branch":"main"}' | jq -r "${jqf:-.}" ;;
         repos/*/actions/runs) echo '{"workflow_runs":[]}' ;;
         *) echo '[]' ;;
       esac
@@ -526,6 +528,40 @@ def test_release_leaves_active_review_queued_without_dispatch(tmp_path: Path) ->
 	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
 	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_only_counts_verified_named_dispatches(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	base = {"status": "in_progress", "head_branch": "main", "event": "workflow_dispatch",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]",
+		"path": ".github/workflows/internal-review.yml@main"}
+	for change, default, blocked in (
+		({}, "main", True),
+		({"head_branch": "ai/issue-4064"}, "main", False),
+		({"head_branch": None}, "main", False),
+		({"path": ".github/workflows/review_autofix.yml"}, "main", False),
+		({"event": "pull_request"}, "main", False),
+		({}, "", False),
+	):
+		(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [{**base, **change}]}), encoding="utf-8")
+		(fixtures / "repo.json").write_text(json.dumps({"default_branch": default}), encoding="utf-8")
+		log.write_text("", encoding="utf-8")
+		result, log_text, _ = _run("release", tmp_path, bin_dir, fixtures, log)
+		assert result.returncode == 0, result.stderr
+		assert ("MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout) == blocked, (change, result.stdout)
+		if not default:
+			assert "REVIEW_RUN_PROVENANCE" in result.stderr
+		assert log_text.count("gh api repos/acme/consumer --jq") == 1
+	# Ordinary head-branch runs remain active even without a default branch.
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
+		{"status": "pending", "head_branch": "ai/issue-4064", "path": ".github/workflows/ai-review.yml"},
+	]}), encoding="utf-8")
+	result, _, _ = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
 
 
 def test_release_dispatch_claim_prevents_concurrent_release(tmp_path: Path) -> None:
