@@ -1879,6 +1879,21 @@ def _exhausted_marker(blocker, reason="environment-tools-missing"):
 	return f"<!-- ai:claude-env-requeue-exhausted:v1 blocker={blocker} reason={reason} -->\n⚠️ stopped"
 
 
+# The account the watchdog posts its markers with (`gh api user` on its GH_PAT):
+# only its re-queue and exhausted markers are watchdog state (issue #5135).
+ENV_WATCHDOG_LOGIN = "shubhodeep1"
+
+
+def _decide(*args, **kwargs):
+	kwargs.setdefault("watchdog_login", ENV_WATCHDOG_LOGIN)
+	return route.env_requeue_decision(*args, **kwargs)
+
+
+def _plan(*args, **kwargs):
+	kwargs.setdefault("watchdog_login", ENV_WATCHDOG_LOGIN)
+	return route.env_requeue_plan(*args, **kwargs)
+
+
 @pytest.mark.parametrize(
 	("body", "expected"),
 	[
@@ -1903,7 +1918,7 @@ def test_plain_marker_readers_still_match_the_reason_form():
 
 
 def test_env_decision_requeues_an_environment_blocker():
-	decision = route.env_requeue_decision([_env_comment(1, ENV_BLOCKER, 1)], ENV_BLOCKED_LABELS, ENV_NOW)
+	decision = _decide([_env_comment(1, ENV_BLOCKER, 1)], ENV_BLOCKED_LABELS, ENV_NOW)
 	assert decision["action"] == "requeue"
 	assert decision["reason"] == "environment_blocker"
 	assert decision["blocker_id"] == 1 and decision["blocker_reason"] == "environment-tools-missing"
@@ -1927,7 +1942,7 @@ def test_env_decision_requeues_an_environment_blocker():
 	],
 )
 def test_env_decision_skips(comments, labels, reason):
-	decision = route.env_requeue_decision(comments, labels, ENV_NOW)
+	decision = _decide(comments, labels, ENV_NOW)
 	assert decision["action"] == "skip"
 	assert decision["reason"] == reason
 
@@ -1935,7 +1950,7 @@ def test_env_decision_skips(comments, labels, reason):
 def test_env_decision_requeues_again_when_the_fresh_session_died_silently():
 	# The label is still on the issue 4h after the re-queue: the session never claimed it.
 	comments = [_env_comment(1, ENV_BLOCKER, 5), _env_comment(2, _requeue_marker(1), 4)]
-	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW, stale_hours=3)
+	decision = _decide(comments, ENV_BLOCKED_LABELS, ENV_NOW, stale_hours=3)
 	assert decision["action"] == "requeue"
 	assert decision["reason"] == "stale_requeue" and decision["stale_retry"] is True
 	assert decision["retry"] == 2
@@ -1949,12 +1964,12 @@ def test_env_decision_alerts_once_after_two_retries_in_24h():
 		_env_comment(4, _requeue_marker(3), 5),
 		_env_comment(5, "<!-- ai:claude-blocked:v1 reason=environment-checkout-missing -->", 1),
 	]
-	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	decision = _decide(comments, ENV_BLOCKED_LABELS, ENV_NOW)
 	assert decision["action"] == "alert"
 	assert decision["reason"] == "retries_exhausted"
 	assert decision["blocker_id"] == 5 and decision["retries_in_window"] == 2
 	alerted = [*comments, _env_comment(6, _exhausted_marker(5, "environment-checkout-missing"), 0.5)]
-	assert route.env_requeue_decision(alerted, ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "exhausted_alerted"
+	assert _decide(alerted, ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "exhausted_alerted"
 
 
 def test_env_decision_alerts_once_per_issue_even_when_a_new_blocker_follows():
@@ -1969,12 +1984,12 @@ def test_env_decision_alerts_once_per_issue_even_when_a_new_blocker_follows():
 		_env_comment(6, _exhausted_marker(5), 2.5),
 		_env_comment(7, "<!-- ai:claude-blocked:v1 reason=environment-checkout-missing -->", 1),
 	]
-	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	decision = _decide(comments, ENV_BLOCKED_LABELS, ENV_NOW)
 	assert decision["action"] == "skip"
 	assert decision["reason"] == "exhausted_alerted" and decision["blocker_id"] == 7
 	# An untrusted exhausted marker cannot suppress the alert.
 	forged = [*comments[:5], _env_comment(6, _exhausted_marker(5), 2.5, assoc="NONE"), comments[6]]
-	assert route.env_requeue_decision(forged, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
+	assert _decide(forged, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
 
 
 def test_env_decision_stays_stopped_after_the_alert_once_the_window_has_passed():
@@ -1990,7 +2005,7 @@ def test_env_decision_stays_stopped_after_the_alert_once_the_window_has_passed()
 		_env_comment(6, _exhausted_marker(5), 29.5),
 		_env_comment(7, ENV_BLOCKER, 1),
 	]
-	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	decision = _decide(comments, ENV_BLOCKED_LABELS, ENV_NOW)
 	assert decision["action"] == "skip" and decision["reason"] == "exhausted_alerted"
 	assert decision["blocker_id"] == 7 and decision["retries_in_window"] == 0
 
@@ -2006,7 +2021,7 @@ def test_env_decision_a_trusted_reclarify_restarts_the_count():
 	]
 	# A fresh blocker after the operator's /reclarify is re-queued as retry 1.
 	restarted = [*stopped, _env_comment(7, "/reclarify", 10), _env_comment(8, ENV_BLOCKER, 6)]
-	decision = route.env_requeue_decision(restarted, ENV_BLOCKED_LABELS, ENV_NOW)
+	decision = _decide(restarted, ENV_BLOCKED_LABELS, ENV_NOW)
 	assert decision["action"] == "requeue" and decision["retry"] == 1 and decision["reason"] == "environment_blocker"
 	# Its budget is the full cap again: two more re-queues, then one alert.
 	exhausted = [
@@ -2016,24 +2031,24 @@ def test_env_decision_a_trusted_reclarify_restarts_the_count():
 		_env_comment(11, _requeue_marker(10), 3.5),
 		_env_comment(12, ENV_BLOCKER, 1),
 	]
-	assert route.env_requeue_decision(exhausted, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
+	assert _decide(exhausted, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
 	# A /reclarify from an outsider, or a comment quoting it, restarts nothing.
 	for forged in (
 		_env_comment(7, "/reclarify", 10, assoc="NONE", login="stranger"),
 		_env_comment(7, "please /reclarify", 10),
 	):
 		ignored = [*stopped, forged, _env_comment(8, ENV_BLOCKER, 6)]
-		assert route.env_requeue_decision(ignored, ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "exhausted_alerted"
+		assert _decide(ignored, ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "exhausted_alerted"
 
 
 def test_env_decision_waits_on_a_reclarify_newer_than_the_blocker():
 	# The /reclarify handoff sends its own dispatch, so the watchdog waits the
 	# stale window before it adds a second one, then counts a silent death.
 	comments = [_env_comment(1, ENV_BLOCKER, 5), _env_comment(2, "/reclarify", 1)]
-	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	decision = _decide(comments, ENV_BLOCKED_LABELS, ENV_NOW)
 	assert decision["action"] == "skip" and decision["reason"] == "requeued_waiting"
 	older = [_env_comment(1, ENV_BLOCKER, 8), _env_comment(2, "/reclarify", 4)]
-	decision = route.env_requeue_decision(older, ENV_BLOCKED_LABELS, ENV_NOW)
+	decision = _decide(older, ENV_BLOCKED_LABELS, ENV_NOW)
 	assert decision["action"] == "requeue" and decision["stale_retry"] is True and decision["retry"] == 1
 
 
@@ -2047,11 +2062,60 @@ def test_env_decision_counts_only_the_rolling_window_and_trusted_markers():
 		# A forged re-queue marker from an outsider does not count toward the cap.
 		_env_comment(6, _requeue_marker(5), 1, assoc="NONE"),
 	]
-	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)
+	decision = _decide(comments, ENV_BLOCKED_LABELS, ENV_NOW)
 	assert decision["action"] == "requeue"
 	assert decision["retries_in_window"] == 0 and decision["retry"] == 1
 	# A tighter cap is honoured.
-	assert route.env_requeue_decision(comments[:5], ENV_BLOCKED_LABELS, ENV_NOW, max_retries=2, window_hours=48)["action"] == "alert"
+	assert _decide(comments[:5], ENV_BLOCKED_LABELS, ENV_NOW, max_retries=2, window_hours=48)["action"] == "alert"
+
+
+def test_env_decision_ignores_a_collaborators_forged_exhausted_marker():
+	# Issue #5135: a collaborator is a trusted author, but only the watchdog's
+	# own account writes watchdog state. A forged exhausted marker neither stops
+	# the alert nor the re-queue.
+	retried = [
+		_env_comment(1, ENV_BLOCKER, 10),
+		_env_comment(2, _requeue_marker(1), 9),
+		_env_comment(3, ENV_BLOCKER, 6),
+		_env_comment(4, _requeue_marker(3), 5),
+		_env_comment(5, ENV_BLOCKER, 3),
+	]
+	forged = _env_comment(6, _exhausted_marker(5), 2, assoc="COLLABORATOR", login="mallory")
+	decision = _decide([*retried, forged], ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "alert" and decision["reason"] == "retries_exhausted"
+	# Before the cap it does not stop the first re-queue either.
+	decision = _decide([_env_comment(1, ENV_BLOCKER, 3), forged], ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "requeue" and decision["retry"] == 1
+	# The watchdog's own exhausted marker still stops it, whatever the login's case.
+	own = _env_comment(6, _exhausted_marker(5), 2, login="ShubhoDeep1")
+	assert _decide([*retried, own], ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "exhausted_alerted"
+	# A Bot other than github-actions[bot] is not trusted, whatever its login says.
+	bot = _env_comment(6, _exhausted_marker(5), 2, user_type="Bot", login="shubhodeep1")
+	assert _decide([*retried, bot], ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "alert"
+
+
+def test_env_decision_ignores_a_collaborators_forged_requeue_marker():
+	# A forged re-queue marker would hold the issue in `requeued_waiting` or
+	# spend the cap early (issue #5135).
+	blocker = _env_comment(1, ENV_BLOCKER, 2)
+	forged = _env_comment(2, _requeue_marker(1), 1, assoc="MEMBER", login="mallory")
+	decision = _decide([blocker, forged], ENV_BLOCKED_LABELS, ENV_NOW)
+	assert decision["action"] == "requeue" and decision["reason"] == "environment_blocker"
+	assert decision["retries_in_window"] == 0 and decision["retry"] == 1
+	flood = [blocker, *(_env_comment(10 + i, _requeue_marker(1), 1.5, assoc="COLLABORATOR", login="mallory") for i in range(3))]
+	assert _decide(flood, ENV_BLOCKED_LABELS, ENV_NOW)["action"] == "requeue"
+	# The same marker from the watchdog's account is its state.
+	own = _env_comment(2, _requeue_marker(1), 1)
+	assert _decide([blocker, own], ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "requeued_waiting"
+
+
+@pytest.mark.parametrize("login", ["", "   ", None])
+def test_env_decision_fails_closed_without_the_watchdog_login(login):
+	comments = [_env_comment(1, ENV_BLOCKER, 1)]
+	decision = route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW, watchdog_login=login)
+	assert decision["action"] == "skip" and decision["reason"] == "watchdog_login_unknown"
+	# The default (a caller that predates the parameter) fails closed too.
+	assert route.env_requeue_decision(comments, ENV_BLOCKED_LABELS, ENV_NOW)["reason"] == "watchdog_login_unknown"
 
 
 def test_env_search_queries_cover_every_repo_within_the_length_limit():
@@ -2105,7 +2169,7 @@ def test_env_plan_reads_search_then_comments_and_fails_open():
 			return [_env_comment(1, ENV_BLOCKER, 1)]
 		raise RuntimeError("HTTP 500")
 
-	plan = route.env_requeue_plan(REGISTRY_ALLOWED, ENV_NOW, read)
+	plan = _plan(REGISTRY_ALLOWED, ENV_NOW, read)
 	assert plan["searches"] == 1
 	assert [(a["issue_number"], a["action"]) for a in plan["actions"]] == [(3, "requeue")]
 	assert plan["actions"][0]["issue_url"] == "https://github.com/shubhodeep1/digital_pa/issues/3"
@@ -2117,7 +2181,7 @@ def test_env_plan_reads_search_then_comments_and_fails_open():
 	def failing(path):
 		raise RuntimeError("HTTP 403")
 
-	plan = route.env_requeue_plan(REGISTRY_ALLOWED, ENV_NOW, failing)
+	plan = _plan(REGISTRY_ALLOWED, ENV_NOW, failing)
 	assert plan["actions"] == [] and plan["errors"] == ["search: HTTP 403"]
 
 
@@ -2129,7 +2193,7 @@ def test_env_plan_paginates_comments():
 			return {"items": [_search_item("shubhodeep1/digital_pa", 3)]}
 		return pages[int(path.rsplit("page=", 1)[1])]
 
-	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	plan = _plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
 	assert plan["actions"][0]["blocker_id"] == 500 and plan["actions"][0]["action"] == "requeue"
 
 
@@ -2144,7 +2208,7 @@ def test_env_plan_skips_an_issue_whose_comments_pass_the_read_cap():
 			return {"items": [_search_item("shubhodeep1/digital_pa", 3)]}
 		return [_env_comment(1, ENV_BLOCKER, 50)] + [_env_comment(i, "chatter", 40) for i in range(2, 101)]
 
-	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	plan = _plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
 	assert plan["actions"] == []
 	assert plan["errors"] == ["comments shubhodeep1/digital_pa#3: shubhodeep1/digital_pa#3 has more than 1000 comments; the latest blocker is past the read cap"]
 	assert len(calls) == 1 + route.ENV_REQUEUE_COMMENT_PAGES_MAX
@@ -2163,14 +2227,14 @@ def test_env_plan_pages_search_results_and_reports_truncation():
 			return {"total_count": total["value"], "incomplete_results": False, "items": [_search_item("shubhodeep1/digital_pa", start + i + 1) for i in range(count)]}
 		return []
 
-	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	plan = _plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
 	searches = [path for path in calls if path.startswith("search/issues?")]
 	assert len(searches) == 2 and searches[1].endswith("&page=2") and "&page=" not in searches[0]
 	assert len(plan["actions"]) == 150 and plan["errors"] == []
 
 	calls.clear()
 	total["value"] = 1500
-	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
+	plan = _plan(["shubhodeep1/digital_pa"], ENV_NOW, read)
 	assert len([path for path in calls if path.startswith("search/issues?")]) == route.ENV_REQUEUE_SEARCH_PAGES_MAX
 	assert plan["errors"] == ["search: 1000 of 1500 results read; the rest are past the search API cap"]
 
@@ -2179,9 +2243,24 @@ def test_env_plan_pages_search_results_and_reports_truncation():
 			return {"total_count": 3, "incomplete_results": True, "items": [_search_item("shubhodeep1/digital_pa", 3)]}
 		return [_env_comment(1, ENV_BLOCKER, 1)]
 
-	plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, incomplete)
+	plan = _plan(["shubhodeep1/digital_pa"], ENV_NOW, incomplete)
 	assert [a["issue_number"] for a in plan["actions"]] == [3]
 	assert plan["errors"] == ["search: incomplete results (1 of 3 read)"]
+
+
+def test_env_plan_without_the_watchdog_login_reads_and_decides_nothing():
+	calls = []
+
+	def read(path):
+		calls.append(path)
+		return {"items": []}
+
+	for login in ("", "  "):
+		plan = route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read, watchdog_login=login)
+		assert plan["actions"] == [] and plan["searches"] == 0
+		assert plan["errors"] == ["watchdog login unknown: no re-queue marker can be verified, so nothing is decided this run"]
+	assert route.env_requeue_plan(["shubhodeep1/digital_pa"], ENV_NOW, read)["actions"] == []
+	assert calls == []
 
 
 # --- closed targets (issue #4912) -------------------------------------------------------
@@ -2256,6 +2335,15 @@ def test_cli_queue_pending_refuses_closed_targets_and_lists_them(tmp_path):
 	states_file.write_text("[]")
 	assert _cli("queue-closed-targets", "--issues-json", str(issues_file), "--registry", str(registry), "--target-states-json", str(states_file)).returncode == 2
 	assert _cli("env-requeue-plan", "--registry", str(registry), "--now", "yesterday").returncode == 2
+	# Without --watchdog-login the plan decides nothing and issues no reads (issue #5135).
+	out = _cli("env-requeue-plan", "--registry", str(registry))
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout) == {
+		"actions": [],
+		"skipped": [],
+		"errors": ["watchdog login unknown: no re-queue marker can be verified, so nothing is decided this run"],
+		"searches": 0,
+	}
 
 
 # --- watchdog env-requeue mode ------------------------------------------------------------
@@ -2270,6 +2358,9 @@ def env_stubs(tmp_path):
 		bin_dir / "gh",
 		f"""printf '%s|%s\\n' "${{GH_TOKEN:-}}" "$*" >> "{log}"
 case "$*" in
+  "api user --jq "*)
+    [ -z "${{GH_STUB_FAIL_USER:-}}" ] || {{ echo "HTTP 401: Bad credentials" >&2; exit 1; }}
+    printf '%s\n' "${{GH_STUB_USER_LOGIN-shubhodeep1}}" ;;
   "api search/issues?"*)
     [ -z "${{GH_STUB_FAIL_SEARCH:-}}" ] || {{ echo "HTTP 403" >&2; exit 1; }}
     printf '%s' "${{GH_STUB_SEARCH_JSON:-[]}}" ;;
@@ -2433,6 +2524,53 @@ def test_watchdog_env_requeue_fails_open(env_stubs):
 	assert "warn env_requeue_dispatch_failed repo=shubhodeep1/digital_pa issue=3" in result.stdout
 	# No marker without a dispatch, so the next run retries.
 	assert "ai:claude-env-requeue:v1" not in env_stubs["log"].read_text()
+
+
+def test_watchdog_env_requeue_passes_its_own_login_to_the_plan(env_stubs):
+	# Issue #5135: the plan trusts only markers from the account GH_TOKEN
+	# belongs to, so a collaborator's forged exhausted marker cannot stop the alert.
+	comments = [
+		_env_comment(1, ENV_BLOCKER, 10),
+		_env_comment(2, _requeue_marker(1), 9),
+		_env_comment(3, ENV_BLOCKER, 6),
+		_env_comment(4, _requeue_marker(3), 5),
+		_env_comment(5, ENV_BLOCKER, 1),
+		_env_comment(6, _exhausted_marker(5), 0.5, assoc="COLLABORATOR", login="mallory"),
+	]
+	env = {**env_stubs["env"], "GH_STUB_ENV_COMMENTS_JSON": _env_comments(comments)}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	calls = env_stubs["log"].read_text()
+	assert "pat-token|api user --jq .login // \"\"" in calls
+	assert "comments -f body=<!-- ai:claude-env-requeue-exhausted:v1 blocker=5 reason=environment-tools-missing -->" in calls
+	assert "env_requeue exhausted repo=shubhodeep1/digital_pa issue=3" in result.stdout
+
+
+@pytest.mark.parametrize(
+	"stub",
+	[
+		{"GH_STUB_FAIL_USER": "1"},
+		{"GH_STUB_USER_LOGIN": ""},
+		{"GH_STUB_USER_LOGIN": "bad login"},
+		{"GH_STUB_USER_LOGIN": "-dash-first"},
+	],
+)
+def test_watchdog_env_requeue_fails_closed_without_its_login(env_stubs, stub):
+	env = {
+		**env_stubs["env"],
+		**stub,
+		"GH_STUB_ENV_COMMENTS_JSON": _env_comments([_env_comment(501, ENV_BLOCKER, 1)]),
+		"GH_STUB_QUEUE_JSON": json.dumps([_queue_item(10)]),
+		"GH_STUB_TARGET_STATE": "closed",
+	}
+	result = _run("claude_issue_queue_watchdog.sh", env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn env_requeue_skipped reason=watchdog_login_unknown" in result.stdout
+	calls = env_stubs["log"].read_text()
+	# No search, dispatch, or marker without the login...
+	assert "search/issues" not in calls and "dispatches" not in calls and "comments -f body=" not in calls
+	# ...but the closed-target cleanup in step 1 still ran.
+	assert "closed_target queue_issue=10 target=shubhodeep1/digital_pa#9" in result.stdout
 
 
 def test_watchdog_workflow_runs_env_requeue_before_the_stale_check():

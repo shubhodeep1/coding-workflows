@@ -316,7 +316,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `/reclarify` dispatch (`claude_issue_route.py env-requeue-plan`, at most
     2 per issue per 24h, then one Telegram ERROR and no more re-queues until a
     trusted `/reclarify`, which restarts the count). Plain blockers are never
-    re-queued. The same step closes queue items for closed target issues, and
+    re-queued. Its re-queue and exhausted markers count only when its own
+    `GH_PAT` account posted them (`--watchdog-login` from `gh api user`; issue
+    #5135); without that login the run decides nothing
+    (`env_requeue_skipped reason=watchdog_login_unknown`). The same step closes queue items for closed target issues, and
     `queue-pending` refuses them (`issue_closed`).
     Stable log prefixes: `CLAUDE_ISSUE_HANDOFF`, `CLAUDE_ISSUE_INTAKE`.
 

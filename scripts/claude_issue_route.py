@@ -1094,32 +1094,38 @@ def env_requeue_decision(
 	max_retries: int = ENV_REQUEUE_MAX_RETRIES_DEFAULT,
 	window_hours: float = ENV_REQUEUE_WINDOW_HOURS_DEFAULT,
 	stale_hours: float = QUEUE_STALE_HOURS_DEFAULT,
+	watchdog_login: str = "",
 ) -> dict[str, Any]:
 	"""Decide what the watchdog does for one open ``ai:claude-blocked`` issue.
 
-	Input: the issue's comments (REST objects), its label names, and ``now``.
-	Only comments by trusted authors count (``is_trusted_issue_author``), so
-	nobody else can forge a blocker or a re-queue marker. Output:
+	Input: the issue's comments (REST objects), its label names, ``now``, and
+	``watchdog_login``, the login of the account the watchdog posts its
+	markers with. Only comments by trusted authors count
+	(``is_trusted_issue_author``), so nobody else can forge a blocker. The
+	watchdog's own control markers (re-queue and exhausted) count only when
+	that trusted author is ``watchdog_login`` (case-insensitive); another
+	collaborator's copy is data (issue #5135). An empty ``watchdog_login``
+	fails closed: ``skip`` with reason ``watchdog_login_unknown``. Output:
 	``{"action": "requeue" | "alert" | "skip", "reason", "blocker_id",
 	"blocker_reason", "retries_in_window", "retry", "stale_retry"}``.
 
 	* The latest trusted comment that starts with a blocker marker decides.
-	  A plain marker or a reason outside ``environment-*`` → ``skip``.
+		A plain marker or a reason outside ``environment-*`` → ``skip``.
 	* The watchdog already re-queued that blocker and its marker is younger
-	  than ``stale_hours`` → ``skip`` (the fresh session is on its way). Older,
-	  with the label still on the issue, means that session died before it
-	  claimed the issue, so it is re-queued again (``stale_retry``).
+		than ``stale_hours`` → ``skip`` (the fresh session is on its way). Older,
+		with the label still on the issue, means that session died before it
+		claimed the issue, so it is re-queued again (``stale_retry``).
 	* ``max_retries`` re-queues within the last ``window_hours`` → ``alert``
-	  once, then ``skip`` for good: the issue's acceptance criterion is "after
-	  2 failed retries it alerts once and stops". Retries and alerts are both
-	  counted per issue, not per blocker: every failed re-queued session posts
-	  a new blocker, so a per-blocker count would never reach the cap. An
-	  exhausted marker of any blocker therefore stops the re-queue, however
-	  old it is, so one issue sends one Telegram ERROR.
+		once, then ``skip`` for good: the issue's acceptance criterion is "after
+		2 failed retries it alerts once and stops". Retries and alerts are both
+		counted per issue, not per blocker: every failed re-queued session posts
+		a new blocker, so a per-blocker count would never reach the cap. An
+		exhausted marker of any blocker therefore stops the re-queue, however
+		old it is, so one issue sends one Telegram ERROR.
 	* A trusted ``/reclarify`` (the way back the alert names) restarts the
-	  count: only markers after the latest one count. It also sends its own
-	  dispatch, so a ``/reclarify`` newer than the blocker counts as that
-	  blocker's latest re-queue for the ``stale_hours`` wait.
+		count: only markers after the latest one count. It also sends its own
+		dispatch, so a ``/reclarify`` newer than the blocker counts as that
+		blocker's latest re-queue for the ``stale_hours`` wait.
 
 	Pure: no API calls.
 	"""
@@ -1132,6 +1138,10 @@ def env_requeue_decision(
 		"retry": 0,
 		"stale_retry": False,
 	}
+	watchdog_key = watchdog_login.strip().casefold() if isinstance(watchdog_login, str) else ""
+	if not watchdog_key:
+		result["reason"] = "watchdog_login_unknown"
+		return result
 	trusted = [
 		comment
 		for comment in comments or []
@@ -1176,6 +1186,9 @@ def env_requeue_decision(
 		if reclarify_at is not None and created <= reclarify_at:
 			continue
 		requeued = ENV_REQUEUE_MARKER_RE.match(body)
+		if (requeued or ENV_REQUEUE_EXHAUSTED_MARKER_RE.match(body)) and _user_field(comment, "login").casefold() != watchdog_key:
+			# A control marker someone else posted is data, not watchdog state (issue #5135).
+			continue
 		if requeued:
 			if created >= window_start:
 				recent += 1
@@ -1306,25 +1319,38 @@ def env_requeue_plan(
 	max_retries: int = ENV_REQUEUE_MAX_RETRIES_DEFAULT,
 	window_hours: float = ENV_REQUEUE_WINDOW_HOURS_DEFAULT,
 	stale_hours: float = QUEUE_STALE_HOURS_DEFAULT,
+	watchdog_login: str = "",
 ) -> dict[str, Any]:
 	"""Read the blocked Claude issues and decide what to do with each (issue #4938).
 
 	Batching contract (CLAUDE.md §15):
-	  input   the registered repositories (``load_allowed_repos``);
-	  calls   one search per ``env_requeue_search_queries`` chunk and per 100
-	          results (at most ``ENV_REQUEUE_SEARCH_PAGES_MAX`` pages; one
-	          call per chunk while fewer than 100 issues are blocked), then
-	          one comment read per 100 comments of each candidate only;
-	  output  ``{"actions": [candidate fields + env_requeue_decision fields],
-	          "skipped": [...], "errors": [...], "searches": <n>}``;
-	  failure fail open: a failed search or comment read is listed under
-	          ``errors`` and that chunk or issue waits for the next hourly run;
-	          a search the API reports as incomplete, or with more results
-	          than were read, is listed under ``errors`` too.
+		input   the registered repositories (``load_allowed_repos``) and
+			``watchdog_login``, the account that posts the watchdog's
+			markers (``env_requeue_decision``; issue #5135);
+		calls   one search per ``env_requeue_search_queries`` chunk and per 100
+			results (at most ``ENV_REQUEUE_SEARCH_PAGES_MAX`` pages; one
+			call per chunk while fewer than 100 issues are blocked), then
+			one comment read per 100 comments of each candidate only;
+		output  ``{"actions": [candidate fields + env_requeue_decision fields],
+			"skipped": [...], "errors": [...], "searches": <n>}``;
+		failure fail open: a failed search or comment read is listed under
+			``errors`` and that chunk or issue waits for the next hourly run;
+			a search the API reports as incomplete, or with more results
+			than were read, is listed under ``errors`` too. An empty
+			``watchdog_login`` fails closed: no reads, no actions, one
+			``errors`` entry, because without it no marker can be
+			verified and the re-queue cap could not hold.
 
 	``read`` is a ``path -> parsed JSON`` callable (``_gh_api_read`` by
 	default) that raises RuntimeError on failure.
 	"""
+	if not (isinstance(watchdog_login, str) and watchdog_login.strip()):
+		return {
+			"actions": [],
+			"skipped": [],
+			"errors": ["watchdog login unknown: no re-queue marker can be verified, so nothing is decided this run"],
+			"searches": 0,
+		}
 	read = read or _gh_api_read
 	errors: list[str] = []
 	items: list[Any] = []
@@ -1363,7 +1389,7 @@ def env_requeue_plan(
 		except RuntimeError as exc:
 			errors.append(f"comments {candidate['repo']}#{candidate['issue_number']}: {exc}")
 			continue
-		decision = env_requeue_decision(comments, candidate["labels"], now, max_retries, window_hours, stale_hours)
+		decision = env_requeue_decision(comments, candidate["labels"], now, max_retries, window_hours, stale_hours, watchdog_login)
 		entry = {key: value for key, value in candidate.items() if key != "labels"}
 		entry.update(decision)
 		actions.append(entry)
@@ -1878,7 +1904,7 @@ def _cmd_env_requeue_plan(args: argparse.Namespace) -> int:
 		print(f"invalid --now: {args.now!r}", file=sys.stderr)
 		return 2
 	allowed = load_allowed_repos(Path(args.registry), args.self_repo)
-	plan = env_requeue_plan(allowed, now, None, args.max_retries, args.window_hours, args.stale_hours)
+	plan = env_requeue_plan(allowed, now, None, args.max_retries, args.window_hours, args.stale_hours, args.watchdog_login)
 	print(json.dumps(plan))
 	return 0
 
@@ -1993,6 +2019,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_env.add_argument("--max-retries", type=int, default=ENV_REQUEUE_MAX_RETRIES_DEFAULT)
 	p_env.add_argument("--window-hours", type=float, default=ENV_REQUEUE_WINDOW_HOURS_DEFAULT)
 	p_env.add_argument("--stale-hours", type=float, default=QUEUE_STALE_HOURS_DEFAULT)
+	p_env.add_argument("--watchdog-login", default="", help="login of the account that posts the watchdog's markers (issue #5135); empty decides nothing")
 	p_env.set_defaults(func=_cmd_env_requeue_plan)
 
 	p_bind = sub.add_parser("add-queue-binding", help="record a queue issue in this run's binding file (issue #4621)")
