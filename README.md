@@ -1257,7 +1257,7 @@ mode).
    Auto-mode session woken hourly by a trigger bound to itself, reads the queue
    (`claude_issue_route.py queue-pending`) and, following
    `.claude/commands/claude-issue-dispatch.md` step 2, starts an Opus session
-   in the target repo running `/implement-issue-claude <url>` for each item,
+   in the target repo running `/implement-issue-claude <url> — dispatched` for each item,
    then closes the queue issue. It starts at most 20 items per wake
    (`QUEUE_PICKUP_LIMIT`; set `CLAUDE_ISSUE_PICKUP_LIMIT` in the pickup
    session's environment to change it, clamped to 1..30), and `/reclarify`
@@ -1272,7 +1272,19 @@ mode).
    routine run gets no claude-code-remote tools (`create_session`,
    `send_later`), so it can start neither the implementation session nor any
    later stage (issue #4525). The pickup starts only items whose binding
-   checks out (below). That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
+   checks out (below). Before it starts one, it re-reads the target issue
+   (one REST read per item started, #6057). If the issue was closed, lost
+   its `ai:claude` claim, or gained `ai:codex` since it was queued, the
+   pickup starts nothing for it and closes the queue item as not planned,
+   with a `Refused: <reason>` line in its body. If that read fails (a
+   consumer repository the pickup session cannot reach), the item is started
+   as before; the intake already checked the claim when it queued it. The
+   session reads the issue once more when it starts: the pickup's start
+   prompt checks the labels first, and `/implement-issue-claude` with the
+   `— dispatched` marker checks again; either stops with `issue parked` when
+   `ai:claude` is gone, instead of adding the label back (the prompt check
+   also covers a consumer repo whose installed command is older), so a label removed after the
+   pickup's read still parks the issue; a hand run still claims it. That session writes `docs/plans/issue-<N>-<topic>-plan.md` and continues
    as `/implement-plan-claude` in issue mode. The project is built on the
    branch the issue names in an `Integration branch:` / `Target branch:` line:
    a security follow-up on its project's branch, a heal issue on `stable` or
@@ -1325,17 +1337,25 @@ three REST reads.
 | Move one issue to Codex | Add `ai:codex`, then comment `/reclarify` (the `ai:claude` claim is released) |
 | Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
 | Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
+| Park a queued issue before its session starts | Remove `ai:claude`; the pickup refuses it and closes its queue item (#6057) |
+| Un-park it | Add `ai:claude` back, then comment `/reclarify` (adding the label alone queues nothing) |
 
-**Failure modes.** A failed dispatch from the handoff, or a failed queue read
+**Failure modes.** A handoff that cannot add the `ai:claude` claim sends no
+dispatch: `ai:claude` is the live claim, so its absence must always mean
+"parked". That case, a failed dispatch from the handoff, or a failed queue read
 or write in the intake, labels the issue `ai:claude-handoff-failed`, comments
 how to retry or switch, and sends a Telegram ERROR. An invalid payload
 (`invalid_payload`, an unregistered repo included) or a dispatch that fails
 authorization (reasons `dispatcher_unknown`, `dispatcher_not_authorized`,
 `target_not_issue`, `target_repo_mismatch`, `issue_closed`,
+`claude_label_removed` when the issue no longer carries `ai:claude`,
+`codex_label_added` when it carries `ai:codex`,
 `untrusted_issue_author`, or `authorization_read_failed` when a read fails)
 queues nothing and writes nothing to the target issue. It logs
 `CLAUDE_ISSUE_INTAKE rejected reason=…`, fails the intake run, and sends a
-Telegram ERROR; comment `/reclarify` to retry a legitimate issue. A queue item still open after
+Telegram ERROR; comment `/reclarify` to retry a legitimate issue. A manual
+`workflow_dispatch` of the intake therefore needs the issue to carry
+`ai:claude` first. A queue item still open after
 `CLAUDE_ISSUE_QUEUE_STALE_HOURS` (repo variable, default 3) means the pickup
 stopped: `claude-issue-queue-watchdog.yml` labels it
 `ai:claude-issue-queue-stale` and sends a Telegram ERROR with the restart
