@@ -188,6 +188,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PR_MERGED: ${{ github.event.pull_request.merged }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
@@ -198,6 +199,7 @@ jobs:
 
           TRACKING_ISSUES=""
           MANAGED_ISSUES=""
+          LINEAGE_FINALIZE_ISSUE_NUMBERS=""
           ORCHESTRATOR_CLASSIFICATION_COMPLETE="true"
 
           export_orchestrator_issue_classification() {
@@ -209,6 +211,9 @@ jobs:
             echo "EOF" >> "$GITHUB_ENV"
             echo "MANAGED_ISSUES<<EOF" >> "$GITHUB_ENV"
             printf '%s\n' "${MANAGED_ISSUES:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            echo "LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
             echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"
           }
@@ -357,10 +362,9 @@ jobs:
           #      close_merged_issues_sweep paths remain authoritative
           #      backstops; this path is idempotent with them.
           #
-          #   3. Standalone issues — neither tracking nor managed. Keep
-          #      the original `PR_BASE_REF == main` gate to preserve
-          #      the workflow's long-standing safety for non-orchestrator
-          #      flows.
+          #   3. Standalone issues — neither tracking nor managed. A merged
+          #      PR completes them only on the repository's default branch;
+          #      unmerged closes retain the existing ai:closed behavior.
           #
           # Single batched GraphQL call (one API request regardless of
           # N) per CLAUDE.md §15. Fail-open with a per-issue REST
@@ -447,11 +451,20 @@ jobs:
               is_managed_child=true
             fi
 
+            # A non-default merge does not complete a standalone issue, even
+            # when the PR explicitly closes it in its body. Missing default
+            # branch metadata must not authorize a standalone completion.
+            if [ "${PR_MERGED}" = "true" ] && [ "${is_managed_child}" != "true" ] && { [ -z "${PR_DEFAULT_BRANCH}" ] || [ "${PR_BASE_REF}" != "${PR_DEFAULT_BRANCH}" ]; }; then
+              echo "PR #${PR_NUMBER} merged into ${PR_BASE_REF}; issue #${issue_number} remains unchanged."
+              continue
+            fi
+
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
             set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
+            LINEAGE_FINALIZE_ISSUE_NUMBERS="$(merge_issue_number_list "${LINEAGE_FINALIZE_ISSUE_NUMBERS}" "${issue_number}")"
 
-            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then
-              if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "main" ]; then
+            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${PR_DEFAULT_BRANCH}" ] || [ "${is_managed_child}" = "true" ]; then
+              if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${PR_DEFAULT_BRANCH}" ]; then
                 echo "Closing orchestrator-managed child issue #${issue_number} after PR #${PR_NUMBER} merged into ${PR_BASE_REF} (integration branch)."
               else
                 echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
@@ -487,7 +500,7 @@ jobs:
             1|true|yes|on) AI_MEMORY_ENABLED_NORMALIZED=true ;;
           esac
 
-          if [ -z "${LINKED_ISSUE_NUMBERS:-}" ]; then
+          if [ -z "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" ]; then
             echo "No linked issues found; skipping lineage finalization."
             echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"no_linked_issues\",\"source\":\"issue_pr_status.yml\"}"
             exit 0
@@ -532,7 +545,7 @@ jobs:
               --actor "${ACTOR}" \
               --pr-number "${PR_NUMBER}" \
               --pr-url "${PR_URL}"
-          done <<< "${LINKED_ISSUE_NUMBERS}"
+          done <<< "${LINEAGE_FINALIZE_ISSUE_NUMBERS}"
 
       # /implement-plan-claude records reusable lessons in its progress log
       # (docs/implement-plan/<slug>.md, `## Lessons`). When a PR that carries

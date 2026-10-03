@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import re
+import subprocess
+import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -356,11 +361,11 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	assert "is_managed_child=true" in text, "Loop must flip is_managed_child when matched"
 
 	# Close gate must include the managed-child branch — closing the
-	# issue when its PR merges into orchestrator/project-N (base != main).
+	# issue when its PR merges into orchestrator/project-N (base != default).
 	assert (
-		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then'
+		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${PR_DEFAULT_BRANCH}" ] || [ "${is_managed_child}" = "true" ]; then'
 	) in text, (
-		"Close gate must close on PR_MERGED!=true, PR_BASE_REF==main, "
+		"Close gate must close on PR_MERGED!=true, PR_BASE_REF==default, "
 		"OR is_managed_child==true"
 	)
 	assert "Closing orchestrator-managed child issue #${issue_number}" in text, (
@@ -377,6 +382,132 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	assert managed_classify_pos < loop_check_pos < label_call_pos
 
 
+def _extract_refs(text: str) -> list[int]:
+	result = subprocess.run(
+		["bash", "-c", 'source scripts/gh_helpers.sh; extract_repo_scoped_issue_refs_from_text "owner/repo" "$TEXT_INPUT"'],
+		cwd=REPO_ROOT,
+		env={**os.environ, "TEXT_INPUT": text, "PYTHONDONTWRITEBYTECODE": "1"},
+		capture_output=True,
+		text=True,
+		check=True,
+	)
+	return [int(line) for line in result.stdout.splitlines()]
+
+
+def _run_status_steps(body: str, *, base: str, default: str, merged: bool, managed: bool = False, tracking: bool = False) -> tuple[str, str, str]:
+	update = _step_script("Update linked issue labels when PR closes")
+	update = update.replace(
+		"source scripts/gh_helpers.sh 2>/dev/null || true",
+		"source scripts/gh_helpers.sh 2>/dev/null || true\n"
+		"gh_retry() {\n"
+		"  if [ \"${1:-}\" = gh ] && [ \"${2:-}\" = api ]; then\n"
+		"    if [[ \"$*\" == *closingIssuesReferences* ]]; then printf '%s' \"$MOCK_CLOSING\";\n"
+		"    else printf '%s' \"$MOCK_ALIAS\"; fi\n"
+		"  elif [ \"${2:-}\" = issue ] && [ \"${3:-}\" = close ]; then\n"
+		"    printf 'CLOSE %s\\n' \"$4\"\n"
+		"  else return 1; fi\n"
+		"}",
+	)
+	update = update.replace(
+		"source scripts/label_helpers.sh",
+		"ensure_label_exists() { :; }\n"
+		"set_issue_phase_label_resilient() { printf 'LABEL %s %s\\n' \"$1\" \"$2\"; }",
+	)
+	alias_payload = {"data": {"repository": {"i0": {
+		"number": 42,
+		"labels": {"nodes": [{"name": "ai:orchestrator-tracking" if tracking else "ai:orchestrator-managed"}]} if managed or tracking else {"nodes": []},
+		"body": "",
+	}}}}
+	with tempfile.TemporaryDirectory() as directory:
+		env_file = Path(directory) / "github_env"
+		env = {
+		**os.environ,
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"GITHUB_ENV": str(env_file),
+		"REPOSITORY": "owner/repo",
+		"PR_NUMBER": "99",
+		"PR_HEAD_REF": "feature/neutral",
+		"PR_BASE_REF": base,
+		"PR_DEFAULT_BRANCH": default,
+		"PR_MERGED": str(merged).lower(),
+		"FINAL_LABEL": "ai:merged" if merged else "ai:closed",
+		"PR_TITLE": "Phase PR",
+		"PR_BODY": body,
+		"MOCK_CLOSING": json.dumps({"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": []}}}}}),
+		"MOCK_ALIAS": json.dumps(alias_payload),
+	}
+		result = subprocess.run(["bash", "-c", update], cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=True)
+		exports = env_file.read_text(encoding="utf-8")
+		finalize_numbers = re.search(r"LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF\n(.*?)\nEOF", exports, re.S)
+		assert finalize_numbers is not None
+		finalize = _step_script("Finalize linked issue lineage state")
+		finalize = finalize.replace("${{ github.event.pull_request.merged }}", str(merged).lower())
+		finalize = finalize.replace("${{ github.server_url }}", "https://github.com")
+		finalize = finalize.replace(
+			"source scripts/memory_helpers.sh",
+			'memory_ensure_branch() { :; }; memory_finalize_task() { printf "FINALIZE %s\\n" "$*"; }',
+		)
+		env.update({
+			"LINEAGE_FINALIZE_ISSUE_NUMBERS": finalize_numbers.group(1),
+			"LINKED_ISSUE_NUMBERS": "42" if "42" in exports else "",
+			"AI_MEMORY_ENABLED": "true",
+			"MEMORY_HELPERS_READY": "1",
+			"PR_URL": "https://github.com/owner/repo/pull/99",
+			"WORKFLOW_NAME": "status",
+			"RUN_ID": "1", "RUN_ATTEMPT": "1", "ACTOR": "bot",
+		})
+		lineage = subprocess.run(["bash", "-c", finalize], cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=True)
+		return result.stdout, lineage.stdout, exports
+
+
+def test_status_completion_only_on_default_or_managed_merges() -> None:
+	comment = "Refs #42 https://github.com/owner/repo/issues/42#issuecomment-5908534539"
+	labels, lineage, exports = _run_status_steps(comment, base="claude/implement-plan-x", default="main", merged=True)
+	assert "LABEL " not in labels and "CLOSE " not in labels
+	assert "FINALIZE " not in lineage
+	assert "LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF\n\nEOF" in exports
+
+	labels, lineage, _ = _run_status_steps("Fixes #42", base="claude/implement-plan-x", default="main", merged=True)
+	assert "LABEL " not in labels and "FINALIZE " not in lineage
+
+	labels, lineage, _ = _run_status_steps("Fixes #42", base="orchestrator/project-1", default="main", merged=True, managed=True)
+	assert "LABEL 42 ai:merged" in labels and "CLOSE 42" in labels
+	assert "FINALIZE " in lineage and "--final-state merged" in lineage
+
+	labels, lineage, _ = _run_status_steps("Fixes #42", base="trunk", default="trunk", merged=True)
+	assert "LABEL 42 ai:merged" in labels and "CLOSE 42" in labels
+	assert "FINALIZE " in lineage and "--final-state merged" in lineage
+
+	labels, lineage, _ = _run_status_steps("Fixes #42", base="trunk", default="", merged=True)
+	assert "LABEL " not in labels and "FINALIZE " not in lineage
+
+	labels, lineage, _ = _run_status_steps("Fixes #42", base="feature", default="trunk", merged=False)
+	assert "LABEL 42 ai:closed" in labels and "CLOSE 42" in labels
+	assert "FINALIZE " in lineage and "--final-state closed" in lineage
+	labels, lineage, _ = _run_status_steps("Fixes #42", base="trunk", default="trunk", merged=True, tracking=True)
+	assert "LABEL " not in labels and "CLOSE " not in labels and "FINALIZE " not in lineage
+
+
+def test_comment_urls_do_not_create_issue_links() -> None:
+	assert _extract_refs("Refs #42 https://github.com/owner/repo/issues/42#issuecomment-9") == []
+	assert _extract_refs("[one](https://github.com/owner/repo/issues/42?q=(a)#reply)") == []
+	assert _extract_refs("owner/repo/issues/42/extra#reply") == []
+	assert _extract_refs("https://evilgithub.com/owner/repo/issues/42") == []
+	assert _extract_refs("https://example.com/?next=owner/repo/issues/42") == []
+	assert _extract_refs("https://example.com/?next=https://github.com/owner/repo/issues/42") == []
+	assert _extract_refs("ftp://example.com/?next=owner/repo/issues/42") == []
+	assert _extract_refs("https://github.com/owner/repo/issues/42#see-owner/repo/issues/43") == []
+	assert _extract_refs("https://github.com/owner/repo/issues/42?next=owner/repo/issues/43#reply") == []
+	assert _extract_refs(r"[one](https://github.com/owner/repo/issues/42?q=a\)b#reply)") == []
+	assert _extract_refs("[one](https://github.com/owner/repo/issues/42#reply),[two](https://github.com/owner/repo/issues/43)") == [43]
+	assert _extract_refs("[one](https://github.com/owner/repo/issues/42?q=(a)),[two](https://github.com/owner/repo/issues/43)") == [42, 43]
+	assert _extract_refs("https://github.com/owner/repo/issues/42 github.com/owner/repo/issues/43") == [42, 43]
+	assert _extract_refs("Fixes #42 fixes #43 /owner/repo/issues/44 owner/repo/issues/45") == [42, 43, 44, 45]
+	labels, lineage, exports = _run_status_steps("https://github.com/owner/repo/issues/42#reply", base="trunk", default="trunk", merged=True)
+	assert "LABEL " not in labels and "FINALIZE " not in lineage
+	assert "LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF\n\nEOF" in exports
+
+
 if __name__ == "__main__":
 	test_payload_first_fallback_and_shared_helper_usage()
 	test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas()
@@ -387,4 +518,6 @@ if __name__ == "__main__":
 	test_merged_alert_fallback_preserves_managed_label_or_body_detection()
 	test_orchestrator_tracking_issues_are_skipped_in_label_close_loop()
 	test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge()
+	test_status_completion_only_on_default_or_managed_merges()
+	test_comment_urls_do_not_create_issue_links()
 	print("PASS")
