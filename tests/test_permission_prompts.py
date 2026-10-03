@@ -15,7 +15,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -417,20 +417,175 @@ def test_mixed_log_files_only_the_real_pattern(tmp_path, issues):
 	assert len(fake.posts) == 1 and "rm" in fake.posts[0][1]["title"]
 	assert summary["outage_denials"]["count"] == 1
 	state = json.loads((directory / pp.STATE_FILE).read_text())
-	assert list(state) == [summary["filed"][0]["signature"]]
+	assert state["version"] == 2 and list(state["filed"]) == [summary["filed"][0]["signature"]]
+	# Only the real record is recorded as filed; the outage record never is.
+	assert state["filed"][summary["filed"][0]["signature"]] == ["sess-1.jsonl:1"]
+
+
+# ──────────────────────────────────────────────────────────────────
+# Filed state: per-record keys, legacy count migration (issue #5012)
+# ──────────────────────────────────────────────────────────────────
+
+
+REAL_DENIAL_REASON = "blocked by the Auto-mode classifier: destructive"
+
+
+def _git_status_denial(reason):
+	return _payload("git status", event="PermissionDenied", reason=reason)
+
+
+def _git_status_signature():
+	return pp.signature("PermissionDenied", "Bash", pp.command_shape("git status"))
+
+
+def _write_legacy_state(directory, state):
+	(directory / pp.STATE_FILE).write_text(json.dumps(state), encoding="utf-8")
+
+
+def _existing_issue(sig, number=901):
+	return [{"number": number, "state": "open", "body": pp.MARKER_TEMPLATE.format(sig=sig)}]
+
+
+def test_legacy_count_that_included_outages_does_not_hide_a_new_real_denial(tmp_path, issues):
+	# Issue #5012: an older filer grouped the outage record into the pattern and
+	# saved count 2. The outage is now filtered, so the real count is 2 only once
+	# a new real denial arrives, and `count - saved` hid it.
+	sig = _git_status_signature()
+	fake = issues(_existing_issue(sig))
+	directory = _log(tmp_path, [_git_status_denial(OUTAGE_REASON), _git_status_denial(REAL_DENIAL_REASON)])
+	_write_legacy_state(directory, {sig: 2})
+	logger.append_record(logger.build_record(_git_status_denial(REAL_DENIAL_REASON), NOW), directory)
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and summary["errors"] == []
+	assert summary["commented"] == [{"signature": sig, "issue": 901, "occurrences": 1}]
+	assert fake.posts[0][0].endswith("/issues/901/comments")
+	assert "**Occurrences:** 1 " in fake.posts[0][1]["body"]
+	state = json.loads((directory / pp.STATE_FILE).read_text())
+	assert state == {"version": 2, "filed": {sig: ["sess-1.jsonl:1", "sess-1.jsonl:2"]}}
+
+
+def test_legacy_count_with_outages_arriving_after_the_last_filing(tmp_path, issues):
+	# Saved count 1 covered only the first (real) record; the outage came later
+	# and was never counted. The new real denial after it is still filed once.
+	sig = _git_status_signature()
+	fake = issues(_existing_issue(sig))
+	directory = _log(tmp_path, [_git_status_denial(REAL_DENIAL_REASON), _git_status_denial(OUTAGE_REASON)])
+	_write_legacy_state(directory, {sig: 1})
+	logger.append_record(logger.build_record(_git_status_denial(REAL_DENIAL_REASON), NOW), directory)
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and summary["commented"] == [{"signature": sig, "issue": 901, "occurrences": 1}]
+	assert len(fake.posts) == 1
+
+
+def test_legacy_count_already_covering_every_real_record_files_nothing(tmp_path, issues):
+	sig = _git_status_signature()
+	fake = issues(_existing_issue(sig))
+	directory = _log(tmp_path, [_git_status_denial(OUTAGE_REASON), _git_status_denial(REAL_DENIAL_REASON)])
+	_write_legacy_state(directory, {sig: 2})
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and summary["filed"] == [] and summary["commented"] == []
+	assert fake.reads == 0 and fake.posts == []
+	# Nothing was posted, so the legacy file is left as it was.
+	assert json.loads((directory / pp.STATE_FILE).read_text()) == {sig: 2}
+
+
+def test_legacy_migration_takes_its_prefix_in_logging_order_not_file_name_order(tmp_path):
+	# PR #5028 review round 1: a session log created after the last legacy filing
+	# can sort before the older log. Its records were never counted, so the legacy
+	# prefix follows the record `ts`, not the file name. Reads the
+	# workflow-templates/ twin, which carries the fix before the `.claude/` sync.
+	twin = _load("permission_prompts_twin", TEMPLATE_SCRIPT_PATH)
+	sig = _git_status_signature()
+	directory = tmp_path / "log"
+	for _ in range(2):
+		logger.append_record(logger.build_record(dict(_git_status_denial(OUTAGE_REASON), session_id="sess-b"), NOW), directory)
+	for _ in range(2):
+		logger.append_record(logger.build_record(dict(_git_status_denial(REAL_DENIAL_REASON), session_id="sess-a"), NOW + timedelta(hours=1)), directory)
+	keyed_records = twin.load_keyed_records(directory)
+	assert [key for key, _ in keyed_records] == ["sess-a.jsonl:0", "sess-a.jsonl:1", "sess-b.jsonl:0", "sess-b.jsonl:1"]
+	# The legacy count 2 covered sess-b's two outages; sess-a's real denials stay unfiled.
+	assert twin._migrate_legacy_counts({sig: 2}, keyed_records) == {}
+	assert twin._migrate_legacy_counts({sig: 3}, keyed_records) == {sig: {"sess-a.jsonl:0"}}
+
+
+def test_legacy_migration_never_lets_a_same_second_real_denial_take_an_outage_count(tmp_path):
+	# PR #5028 review round (head c501b60): `ts` has whole-second precision, so a
+	# real denial in a log whose name sorts first can tie an older outage in
+	# another log. The cross-file order of a tie is unknown, so the real record
+	# counts as filed only when the count covers it whichever file came first.
+	# Within one log file the line order is exact and still decides. Reads the
+	# workflow-templates/ twin, which carries the fix before the `.claude/` sync.
+	twin = _load("permission_prompts_twin", TEMPLATE_SCRIPT_PATH)
+	sig = _git_status_signature()
+	directory = tmp_path / "log"
+	logger.append_record(logger.build_record(dict(_git_status_denial(OUTAGE_REASON), session_id="sess-b"), NOW), directory)
+	logger.append_record(logger.build_record(dict(_git_status_denial(REAL_DENIAL_REASON), session_id="sess-a"), NOW), directory)
+	keyed_records = twin.load_keyed_records(directory)
+	assert [key for key, _ in keyed_records] == ["sess-a.jsonl:0", "sess-b.jsonl:0"]
+	# Count 1 may have covered only the outage: the real denial stays unfiled.
+	assert twin._migrate_legacy_counts({sig: 1}, keyed_records) == {}
+	# Count 2 covered both records whatever their order.
+	assert twin._migrate_legacy_counts({sig: 2}, keyed_records) == {sig: {"sess-a.jsonl:0"}}
+	# Same second, one file: the line order is the logging order.
+	one_file = tmp_path / "one-file"
+	logger.append_record(logger.build_record(_git_status_denial(REAL_DENIAL_REASON), NOW), one_file)
+	logger.append_record(logger.build_record(_git_status_denial(OUTAGE_REASON), NOW), one_file)
+	one_file_records = twin.load_keyed_records(one_file)
+	assert twin._migrate_legacy_counts({sig: 1}, one_file_records) == {sig: {"sess-1.jsonl:0"}}
+	# A later-second group is reached only after the earlier count is used up.
+	logger.append_record(logger.build_record(_git_status_denial(REAL_DENIAL_REASON), NOW + timedelta(seconds=1)), one_file)
+	assert twin._migrate_legacy_counts({sig: 2}, twin.load_keyed_records(one_file)) == {sig: {"sess-1.jsonl:0"}}
+	assert twin._migrate_legacy_counts({sig: 3}, twin.load_keyed_records(one_file)) == {sig: {"sess-1.jsonl:0", "sess-1.jsonl:2"}}
+
+
+def test_v2_state_files_each_record_once(tmp_path, issues):
+	fake = issues()
+	directory = _log(tmp_path, [_payload("ls"), _payload("ls")])
+	pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	sig = pp.signature("PermissionRequest", "Bash", pp.command_shape("ls"))
+	state = json.loads((directory / pp.STATE_FILE).read_text())
+	assert state == {"version": 2, "filed": {sig: ["sess-1.jsonl:0", "sess-1.jsonl:1"]}}
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and len(fake.posts) == 1 and summary["filed"] == [] and summary["commented"] == []
+	logger.append_record(logger.build_record(_payload("ls"), NOW), directory)
+	fake.existing = [{"number": 901, "state": "open", "body": fake.posts[0][1]["body"]}]
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert summary["commented"] == [{"signature": sig, "issue": 901, "occurrences": 1}]
+
+
+def test_record_keys_skip_invalid_lines_without_shifting(tmp_path):
+	directory = _log(tmp_path, [_payload("ls")])
+	with (directory / "sess-1.jsonl").open("a", encoding="utf-8") as handle:
+		handle.write("not json\n")
+	logger.append_record(logger.build_record(_payload("pwd"), NOW), directory)
+	keyed = pp.load_keyed_records(directory)
+	assert [key for key, _ in keyed] == ["sess-1.jsonl:0", "sess-1.jsonl:2"]
+	assert [record for _, record in keyed] == pp.load_records(directory)
+
+
+@pytest.mark.parametrize(
+	"raw",
+	["not json", "[1, 2]", '{"version": 2, "filed": ["x"]}', '{"version": 2, "filed": {"abc": "x"}}', '{"version": 3, "filed": {}}'],
+)
+def test_unreadable_state_files_everything(tmp_path, issues, raw):
+	fake = issues()
+	directory = _log(tmp_path, [_payload("ls")])
+	(directory / pp.STATE_FILE).write_text(raw, encoding="utf-8")
+	code, summary = pp.file_patterns(directory, "s1", False, slug="shubhodeep1/coding-workflows")
+	assert code == 0 and len(summary["filed"]) == 1 and len(fake.posts) == 1
 
 
 def test_file_patterns_loads_the_log_once(tmp_path, issues, monkeypatch):
 	issues()
 	directory = _log(tmp_path, [_payload("ls"), _payload("ls", event="PermissionDenied", reason=OUTAGE_REASON)])
 	calls = []
-	real = pp.load_records
+	real = pp.load_keyed_records
 
 	def counting(log_dir):
 		calls.append(log_dir)
 		return real(log_dir)
 
-	monkeypatch.setattr(pp, "load_records", counting)
+	monkeypatch.setattr(pp, "load_keyed_records", counting)
 	code, summary = pp.file_patterns(directory, "s1", True, slug="someone/consumer")
 	assert code == 0 and len(calls) == 1
 	assert summary["total"] == 1 and summary["outage_denials"]["count"] == 1

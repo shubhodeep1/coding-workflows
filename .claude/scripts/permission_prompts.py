@@ -29,15 +29,30 @@ nothing. For each pattern with occurrences not filed yet:
     one comment with the new occurrences (a closed issue is not reopened);
   - otherwise → one new issue labelled `ai:permission-prompt` and `ai:claude`,
     so clarify routes it to the Claude issue implementer.
-Filed counts are kept in `filed-state.json` next to the logs, so a later run
-in the same session files only what is new.
+What has been filed is kept in `filed-state.json` next to the logs, as
+`{"version": 2, "filed": {<signature>: [<record key>, ...]}}`, so a later run
+files only records not filed yet. A record key is `<log file name>:<line
+index>` (0-based over every line, so a skipped line never shifts a later key);
+the logger only appends, so a key never moves. A legacy file (a flat
+`{<signature>: <count>}` map, written before version 2) is migrated on read:
+its count covered the first `<count>` records of that signature in logging
+order (each record's `ts`), classifier-outage records included, because
+earlier versions grouped them into the pattern. Logging order, not file-name
+order: a session log created after the last filing can sort before an older
+one, and its records were never counted. `ts` has whole-second precision, so
+records of the same second keep their line order within one log file, and a
+real record among same-second records of several files counts as filed only
+when the count covers it even if the other files' records came first. Only
+the real records in that prefix count as filed, so an outage counted earlier
+never hides a later real denial (issue #5012). A
+state file that is unreadable or of an unknown shape is treated as empty.
 
 A **classifier outage** is not a pattern. A `PermissionDenied` whose reason
 says the Auto-mode classifier gave no verdict or was unavailable
 (CLASSIFIER_OUTAGE_REASON_RE, for example `Classifier unavailable`) says
 nothing about the command, and no repository change can fix it (CLAUDE.md
 §23.J; issue #4750). Such records are left out of `patterns`, `total`,
-`filed-state.json`, and filing, and reported once under `outage_denials`
+the filed record keys, and filing, and reported once under `outage_denials`
 (`label` "classifier outage", `count`, `tools`, `first_ts`, `last_ts`). A log
 holding only outage denials makes no API call.
 
@@ -78,6 +93,7 @@ ROUTE_LABEL = "ai:claude"
 MARKER_TEMPLATE = "<!-- ai:permission-prompt:v1 sig={sig} -->"
 MARKER_RE = re.compile(r"<!-- ai:permission-prompt:v1 sig=([0-9a-f]{12}) -->")
 STATE_FILE = "filed-state.json"
+FILED_STATE_VERSION = 2
 DEFAULT_LOG_DIR = Path.home() / ".claude" / "permission-prompts"
 MAX_COMMAND_CHARS = 2000
 MAX_SHAPE_CHARS = 200
@@ -276,23 +292,28 @@ def record_example(record: dict) -> str:
 	return text
 
 
-def load_records(log_dir: Path) -> list[dict]:
-	records: list[dict] = []
+def load_keyed_records(log_dir: Path) -> list[tuple[str, dict]]:
+	"""`(record key, record)` pairs in load order; the key is `<log file name>:<line index>`."""
+	keyed_records: list[tuple[str, dict]] = []
 	if not log_dir.is_dir():
-		return records
+		return keyed_records
 	for path in sorted(log_dir.glob("*.jsonl")):
 		try:
 			lines = path.read_text(encoding="utf-8").splitlines()
 		except OSError:
 			continue
-		for line in lines:
+		for line_index, line in enumerate(lines):
 			try:
 				record = json.loads(line)
 			except ValueError:
 				continue
 			if isinstance(record, dict) and record.get("event") in ("PermissionRequest", "PermissionDenied"):
-				records.append(record)
-	return records
+				keyed_records.append((f"{path.name}:{line_index}", record))
+	return keyed_records
+
+
+def load_records(log_dir: Path) -> list[dict]:
+	return [record for _, record in load_keyed_records(log_dir)]
 
 
 def group_patterns(records: list[dict]) -> list[dict]:
@@ -356,6 +377,10 @@ def classifier_outage_summary(outages: list[dict]) -> dict:
 		"first_ts": outage_stamps[0] if outage_stamps else None,
 		"last_ts": outage_stamps[-1] if outage_stamps else None,
 	}
+
+
+def record_signature(record: dict) -> str:
+	return signature(str(record.get("event")), str(record.get("tool_name") or ""), record_shape(record))
 
 
 def report(log_dir: Path) -> dict:
@@ -492,6 +517,69 @@ def _save_state(log_dir: Path, state: dict[str, int]) -> None:
 	(log_dir / STATE_FILE).write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
 
 
+def _migrate_legacy_counts(legacy_counts: dict[str, int], keyed_records: list[tuple[str, dict]]) -> dict[str, set[str]]:
+	"""Filed record keys for a pre-version-2 `{signature: count}` state (see the module docstring)."""
+	records_by_signature: dict[str, list[tuple[str, dict]]] = {}
+	for key, record in keyed_records:
+		sig = record_signature(record)
+		if sig in legacy_counts:
+			records_by_signature.setdefault(sig, []).append((key, record))
+	filed: dict[str, set[str]] = {}
+	for sig, signature_records in records_by_signature.items():
+		uncounted = legacy_counts[sig]
+		same_second_groups: dict[str, list[tuple[str, dict]]] = {}
+		for key, record in signature_records:
+			same_second_groups.setdefault(str(record.get("ts") or ""), []).append((key, record))
+		for ts in sorted(same_second_groups):
+			if uncounted <= 0:
+				break
+			group = same_second_groups[ts]
+			group_sizes_by_file: dict[str, int] = {}
+			for key, _ in group:
+				log_file_name = key.rpartition(":")[0]
+				group_sizes_by_file[log_file_name] = group_sizes_by_file.get(log_file_name, 0) + 1
+			# `ts` has whole-second precision: within one log file the line order is
+			# the logging order, across files it is unknown. A real record counts as
+			# filed only when the count covers it even if every same-second record of
+			# the other files was logged first, so a tie can re-report a real denial
+			# but never hide one behind an outage (PR #5028 review).
+			position_in_file: dict[str, int] = {}
+			for key, record in group:
+				log_file_name = key.rpartition(":")[0]
+				position_in_file[log_file_name] = position_in_file.get(log_file_name, 0) + 1
+				latest_position = position_in_file[log_file_name] + len(group) - group_sizes_by_file[log_file_name]
+				if latest_position <= uncounted and not is_classifier_outage(record):
+					filed.setdefault(sig, set()).add(key)
+			uncounted -= len(group)
+	return filed
+
+
+def _load_filed_records(log_dir: Path, keyed_records: list[tuple[str, dict]]) -> dict[str, set[str]]:
+	"""Map signature → filed record keys, migrating a legacy count state; {} when unreadable."""
+	try:
+		raw_state = json.loads((log_dir / STATE_FILE).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return {}
+	if not isinstance(raw_state, dict):
+		return {}
+	if "version" not in raw_state:
+		return _migrate_legacy_counts(_load_state(log_dir), keyed_records)
+	filed_map = raw_state.get("filed")
+	if raw_state.get("version") != FILED_STATE_VERSION or not isinstance(filed_map, dict):
+		return {}
+	return {
+		sig: {key for key in keys if isinstance(key, str)}
+		for sig, keys in filed_map.items()
+		if isinstance(sig, str) and isinstance(keys, list)
+	}
+
+
+def _save_filed_records(log_dir: Path, filed: dict[str, set[str]]) -> None:
+	log_dir.mkdir(parents=True, exist_ok=True)
+	document = {"version": FILED_STATE_VERSION, "filed": {sig: sorted(keys) for sig, keys in filed.items()}}
+	(log_dir / STATE_FILE).write_text(json.dumps(document, indent=1, sort_keys=True), encoding="utf-8")
+
+
 def existing_issues(slug: str) -> dict[str, dict]:
 	"""Map signature → {number, state} for every `ai:permission-prompt` issue (1 REST read per 100)."""
 	found: dict[str, dict] = {}
@@ -507,14 +595,19 @@ def existing_issues(slug: str) -> dict[str, dict]:
 def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | None = None) -> tuple[int, dict]:
 	"""File new patterns as issues or comments; see the module docstring."""
 	slug = local_repo_slug() if slug is None else slug
-	records, outages = split_classifier_outages(load_records(log_dir))
+	keyed_records = load_keyed_records(log_dir)
+	records, outages = split_classifier_outages([record for _, record in keyed_records])
 	patterns = group_patterns(records)
 	summary = summarize_permission_records(patterns, outages)
 	if slug.lower() != FILING_REPO:
 		summary.update({"filed": [], "commented": [], "errors": [], "skipped": f"filing is limited to {FILING_REPO}; this checkout is {slug or 'unknown'}"})
 		return 0, summary
-	state = _load_state(log_dir)
-	pending = [(pattern, pattern["count"] - state.get(pattern["signature"], 0)) for pattern in patterns]
+	filed = _load_filed_records(log_dir, keyed_records)
+	real_keys: dict[str, list[str]] = {}
+	for key, record in keyed_records:
+		if not is_classifier_outage(record):
+			real_keys.setdefault(record_signature(record), []).append(key)
+	pending = [(pattern, sum(1 for key in real_keys.get(pattern["signature"], []) if key not in filed.get(pattern["signature"], set()))) for pattern in patterns]
 	pending = [(pattern, new_count) for pattern, new_count in pending if new_count > 0]
 	summary.update({"filed": [], "commented": [], "errors": []})
 	if not pending:
@@ -544,8 +637,8 @@ def file_patterns(log_dir: Path, session_label: str, dry_run: bool, slug: str | 
 			summary["errors"].append(str(exc))
 			continue
 		if not dry_run:
-			state[sig] = pattern["count"]
-			_save_state(log_dir, state)
+			filed.setdefault(sig, set()).update(real_keys.get(sig, []))
+			_save_filed_records(log_dir, filed)
 	summary["dry_run"] = dry_run
 	return 0, summary
 

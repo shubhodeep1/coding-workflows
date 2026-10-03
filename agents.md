@@ -1158,8 +1158,18 @@ reviews, comments, and conflicts stay a direct §12 request.
   `ai:permission-prompt` + `ai:claude` (clarify routes it to the Claude issue
   implementer) or comments on the issue carrying its
   `<!-- ai:permission-prompt:v1 sig=… -->` marker, open or closed.
-  `filed-state.json` next to the logs keeps a later run in the same session
-  from filing the same occurrences again. No cap on open issues. Issue text
+  `filed-state.json` next to the logs keeps a later run from filing the same
+  occurrences again. Since issue #5012 it records filed records, not counts:
+  `{"version": 2, "filed": {<signature>: [<log file>:<line>, ...]}}`, real
+  (non-outage) records only. A legacy `{<signature>: <count>}` file is
+  migrated on read: its count covered the first `<count>` records of the
+  signature in logging order (record `ts`, not log file name, since a newer
+  session log can sort first; `ts` is whole seconds, so a same-second real
+  record in another log file counts as filed only when the count covers it
+  whichever file came first), outage denials included, and only the real ones
+  among them count as filed, so an outage counted by an older filer never
+  hides a later real denial (worst case: one extra "Seen again" comment).
+  An unreadable or unknown state is treated as empty. No cap on open issues. Issue text
   masks token-like strings, removes heredoc bodies, and truncates commands to
   2,000 characters. In consumer repos it only reports.
 - Classifier-outage denials (CLAUDE.md §23.J, issue #4750): a
