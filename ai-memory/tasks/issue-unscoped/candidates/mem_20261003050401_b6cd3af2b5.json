@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:~L405\u2013445 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A successful API response with an unexpected but valid JSON shape can produce an empty branch list without triggering the lookup-failure guard, silently disabling in-flight deduplication.\n  WHY: `jq` can succeed with no output for a response such as `{\"workflow_runs\": null}`, so the merge train may dispatch a redundant review for a queued PR.\n- scripts/review_merge_train.sh:(L404\u2013445) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Hard-coded wrapper paths make the PR-named review check silently stop recognizing runs if a wrapper is renamed or customized.\n  WHY: The `pr:<N>` key then stops being emitted, causing the queue to fall back to head-branch-only behavior without a diagnostic.\n- .github/workflows/review_autofix_sweep.yml:197-213 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The sweep trusts a `workflow_dispatch` run\u2019s `display_title` as a `pr:<N>` key without verifying that the run came from the default branch or the wrapper path that sets that title.\n  WHY: A branch run with a forged PR title can be counted as an active run for that PR, causing the sweep to skip dispatching review for that PR at lines 292-310 for as long as the forged run remains active.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_merge_train.sh | severity=low | confidence=3\n  PROBLEM: When `gh api` returns 200 OK with a malformed body (e.g., HTML error page from a proxy, or an unexpected empty `{\"workflow_runs\": null}`), `jq` produces no output without raising a non-zero exit, and `sort -u` then exits 0 on an empty stream.\n  WHY: A proxied or partial response would let the merge train dispatch a redundant review against a queued PR whose active run is in fact still going, defeating the dedup the train exists to provide.\n- scripts/review_merge_train.sh | severity=low | confidence=3\n  PROBLEM: The new wrapper-path / name pairing uses literal `\".github/workflows/internal-review.yml\"` and `\".github/workflows/ai-review.yml\"`. Any future wrapper rename (or a consumer repo that has customised the wrapper path) breaks the check silently.\n  WHY: A consumer rename of one wrapper file would make the merge train ignore legitimate PR-named reviews from that wrapper without surfacing the cause.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix_sweep.yml | severity=high | confidence=4\n  PROBLEM: The sweep trusts a `workflow_dispatch` run\u2019s `display_title` as a `pr:<N>` key without verifying that the run came from the default branch or the wrapper path that sets that title.\n  WHY: A branch run with a forged PR title is counted as an active run for that PR. The sweep then skips dispatching review for that PR at lines 292-310 for as long as the forged run remains active.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "98d4a71c5cb660360de1697ec4a020686c1bb15d72df58cc808532a8f8f9c2e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5854,
+    "run_id": "37097287779",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37097287779",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003050401_b6cd3af2b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5854,
+    "run_id": "37097287779"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-03T05:04:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
