@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_permission_prompts.py:420 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The assertion expects `sess-1.jsonl:1` for the filed `rm` record, although reviewers report that it is at physical line index 2.\n  WHY: If the `rm` record is at index 2, the assertion fails; severity ranged from MAJOR to BLOCKER, and z-ai_glm-5_2 disputed the finding as a false positive based on a possible different fixture layout and reported 97 passing tests.\n- .github/workflows/review_autofix.yml:4416\u20134423 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The required \u201cRun reviewer models\u201d step failed three times with the same fingerprint, and the identical-failure cap blocked another same-head run.\n  WHY: The `review / codex-agent` check remains failed and blocks the PR, but the supplied log tail does not establish the underlying cause.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_permission_prompts.py: test_mixed_log_files_only_the_real_pattern, the added assertion at PR diff line 420 | severity=high | confidence=3\n  PROBLEM: The assertion hardcodes `sess-1.jsonl:1` as the expected filed record key, but reviewers report the `rm` record is at physical line index 2.\n  WHY: If the `rm` record is at line index 2, the assertion fails; the full test body is not visible at this checkout, and if the `rm` record is at line 1 because `_log` creates only two records, the assertion is correct.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_permission_prompts.py: test_mixed_log_files_only_the_real_pattern(), assertion on the filed key | severity=critical | confidence=5\n  PROBLEM: The assertion expects the filed record key to be `sess-1.jsonl:1`, but the fixture\u2019s real `rm` record is at physical line index 2.\n  WHY: Record keys use zero-based physical line indexes, including skipped outage records; the actual key is `sess-1.jsonl:2`, so the assertion fails and the test suite reports an error.\n- .github/workflows/review_autofix.yml: \u201cRun reviewer models\u201d step, lines 4416\u20134423 | severity=high | confidence=5\n  PROBLEM: The provided check-run context reports that this required step failed on the current head three times with the same fingerprint, and the identical-failure cap then blocked another same-head run.\n  WHY: The required `review / codex-agent` check remains failed, leaving the PR blocked; the supplied log tail does not show the underlying reviewer error, so its cause needs investigation.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_permission_prompts.py: test_mixed_log_files_only_the_real_pattern() assertion at line 420 | severity=critical | confidence=5\n  PROBLEM: The test expects the filed key for the `rm` record to be `sess-1.jsonl:1`, but the record is at physical line index 2.\n  WHY: The zero-based physical line index includes the outage record at line 1, so the `rm` record is at line 2 and the assertion fails with an `AssertionError`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b8a08d722b615c54c1e09cb9a006496a844d3485ab4876ce55a038f7400fdc06",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5028,
+    "run_id": "37097307067",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37097307067",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003051138_d9f5b6220b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5028,
+    "run_id": "37097307067"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T05:11:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
