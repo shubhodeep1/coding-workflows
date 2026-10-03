@@ -58,7 +58,8 @@ name: "Internal: AI Review Autofix Sweep"
 # Cost guard:
 #   - 30 min cadence matches the existing orchestrator poll cadence and is
 #     a conscious trade-off (CLAUDE.md §1: Speed is the lowest priority).
-#   - `[skip ai]` in PR title/body is the only opt-out honoured here; per
+#   - `[skip ai]` in the PR title, or alone on a PR body line, is the only
+#     opt-out honoured here (same rule as the review gate); per
 #     Q2=A the sweep otherwise targets every open non-draft PR.
 
 on:
@@ -132,6 +133,12 @@ jobs:
           skipped_filter=0
           skipped_skip_ai=0
           failures=0
+          # Identical to the gate's copy in review_autofix.yml (issue #4985):
+          # only a body line holding nothing but the marker, outside a fenced
+          # block, counts. A fence closes only on a matching fence (same
+          # character, at least as long, up to 3 spaces, issue #5377).
+          # tests/test_skip_ai_marker_rule.py runs both copies.
+          SKIP_AI_BODY_AWK='{ sub(/\r$/, "") } fl > 0 { if ($0 ~ /^ ? ? ?(```+|~~~+)[ \t]*$/) { r = $0; sub(/^ */, "", r); sub(/[ \t]*$/, "", r); if (substr(r, 1, 1) == fc && length(r) >= fl) fl = 0 } next } match($0, /^[ \t]*(```+|~~~+)/) { r = substr($0, RSTART, RLENGTH); sub(/^[ \t]*/, "", r); fc = substr(r, 1, 1); fl = length(r); next } /^ ? ? ?\[skip ai\][ \t]*$/ { found = 1 } END { exit found ? 0 : 1 }'
 
           if [ "${total}" -eq 0 ]; then
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
@@ -281,9 +288,11 @@ jobs:
             fi
 
             # Honour the existing `[skip ai]` opt-out marker (parity with
-            # review_autofix.yml gate behaviour). This is the only PR-author
-            # escape hatch on the sweep path.
-            if printf '%s %s' "${pr_title}" "${pr_body}" | grep -Fq '[skip ai]'; then
+            # review_autofix.yml gate behaviour: the title, or a body line
+            # holding only the marker; a quoted mention does not count). This
+            # is the only PR-author escape hatch on the sweep path.
+            if [[ "${pr_title}" == *"[skip ai]"* ]] \
+              || printf '%s\n' "${pr_body}" | awk "${SKIP_AI_BODY_AWK}"; then
               echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=skip_ai_marker head_ref=${head_ref}"
               skipped_skip_ai=$((skipped_skip_ai + 1))
               continue
@@ -379,6 +388,8 @@ jobs:
           CLAUDE_PR_SWEEP_MIN_AGE_HOURS: ${{ vars.CLAUDE_PR_SWEEP_MIN_AGE_HOURS || '2' }}
           CLAUDE_FIX_CLAIM_LEASE_HOURS: ${{ vars.CLAUDE_FIX_CLAIM_LEASE_HOURS || '3' }}
           CLAUDE_FIX_HAND_BACK_CAP: ${{ vars.CLAUDE_FIX_HAND_BACK_CAP || '3' }}
+          # A claude/* head with no review trace this long is review-stalled (issue #4985).
+          CLAUDE_REVIEW_STALL_HOURS: ${{ vars.CLAUDE_REVIEW_STALL_HOURS || '2' }}
           CLAUDE_PR_SWEEP_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
           # Every queue item this run opens is recorded here and uploaded
           # below; the pickup starts nothing the artifact does not list (#4621).

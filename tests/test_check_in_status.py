@@ -684,6 +684,7 @@ def test_settings_preapprove_the_checker_tools(path):
 	("hand_back", "review-round", {"action": "hand_back_fixer"}),
 	("hand_back", "ci-failed", {"action": "hand_back_fixer"}),
 	("hand_back", "blocked", {"action": "hand_back_fixer"}),
+	("hand_back", "review-stalled", {"action": "hand_back_fixer"}),
 	("hand_back", "merged", {"action": "hand_back_all"}),
 	("hand_back", "closed", {"action": "hand_back_all"}),
 ])
@@ -706,7 +707,7 @@ def test_route_table_matches_the_documented_rows():
 		"pr": sorted(["merged", "review-round", "conflict", "blocked", "closed", "stuck"]),
 		"run": sorted(["completed", "failed"]),
 		"issues": sorted(["resolved", "blocked"]),
-		"hand_back": sorted(["conflict", "review-round", "ci-failed", "blocked", "merged", "closed"]),
+		"hand_back": sorted(["conflict", "review-round", "ci-failed", "blocked", "review-stalled", "merged", "closed"]),
 	}
 
 

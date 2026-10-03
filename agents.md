@@ -983,6 +983,7 @@ by that command's own checker. Without `create_session` the session falls
 back to a `send_later` self check-in with a Sonnet subagent doing the read.
 The checker itself never fixes anything; outside `claude/*` PRs, CI,
 reviews, comments, and conflicts stay a direct §12 request.
+- Skip-AI marker and review-stall contract (issue #4985): `[skip ai]` counts anywhere in the PR title, or alone on a body line (up to three leading spaces) outside a matching backtick/tilde fence. The gate and review sweep use identical `SKIP_AI_BODY_AWK` programs; `scripts/claude_pr_sweep.py` calls `check_in_status.has_skip_ai_marker`, and `tests/test_skip_ai_marker_rule.py` exercises all three. Every final gate skip emits `AUTOFIX_GATE_SKIP reason=<skip_reason> pr=<n> head_sha=<sha>`. An open `claude/*` PR intentionally skipped for `skip_ai_marker` or `pr_skip_ai` gets a workflow-authored head-bound `ai:claude-fixer-review-skipped:v1` comment, not the deterministic `ai:review-skipped` label. The hand-back checker uses `CLAUDE_REVIEW_STALL_HOURS` (default 2) and existing comment/check-run/active-run evidence to report `review-stalled` (`kind=review`); an unset `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN` disables detection. The fixer claims the head and dispatches `internal-review.yml` (or consumer `ai-review.yml`) on the default branch; a completed matching redispatch after the head arrived sets `stall_redispatched`, causing a hold instead of a loop. The existing 30-minute review sweep and hourly Claude catch-all are the schedulers.
 - Session targeting (CLAUDE.md §26.C step 5, §26.D; issue #4787):
   `set_session_title` and `archive_session` accept any session id in the
   account, so each rename or archive names where its id comes from. The
@@ -1148,7 +1149,7 @@ reviews, comments, and conflicts stay a direct §12 request.
   are no `gh api` ask rules any more: `.claude/hooks/gh_api_write_guard.py`
   (CLAUDE.md §23.H, a `PreToolUse` hook on `Bash`) forces the prompt for
   every `gh api` write that is not a §23.B routine write to the local
-  repository (routine includes dispatching the six workflows allowed as
+  repository (routine includes dispatching the seven workflows allowed as
   `gh workflow run <file> *`, kept equal by a test) and for every call with
   a file-backed `-F`/`--field` value (`@<file>` or `@-`) or `--input` on any
   method, endpoint, or repository, GraphQL included, because `gh` reads that

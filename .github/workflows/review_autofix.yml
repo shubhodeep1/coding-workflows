@@ -13,12 +13,12 @@ on:
         default: false
         type: boolean
       pr_title:
-        description: "PR title for [skip ai] gating (passed by wrapper workflows)"
+        description: "PR title for [skip ai] gating: the marker anywhere in the title skips the review (passed by wrapper workflows)"
         required: false
         default: ""
         type: string
       pr_body:
-        description: "PR body for [skip ai] gating (passed by wrapper workflows)"
+        description: "PR body for [skip ai] gating: only a line holding nothing but the marker, outside a code fence, skips the review; a quoted or mid-sentence mention does not (passed by wrapper workflows)"
         required: false
         default: ""
         type: string
@@ -275,6 +275,11 @@ env:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    # Serialize notices across pull_request and workflow_dispatch runs for
+    # the same PR; a second gate must see the first gate's marker before POST.
+    concurrency:
+      group: review-gate-notice-${{ github.repository }}-${{ inputs.pr_number || github.event.pull_request.number || github.event.inputs.pr_number || github.run_id }}
+      cancel-in-progress: false
     outputs:
       review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}
       review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}
@@ -477,6 +482,21 @@ jobs:
           SHOULD_RUN="true"
           POST_MERGE_DISPATCH="false"
           SKIP_REASON=""
+          GATE_SKIP_RECORDED="false"
+          # The skip-AI marker counts only when intentional (issue #4985): in
+          # the PR title, or on a body line that holds nothing but the marker
+          # (up to 3 leading spaces) outside a ``` / ~~~ fenced block. A
+          # quoted, backticked or mid-sentence mention is reviewed. A fence
+          # opens on any line starting with 3+ backticks or tildes and closes
+          # only on a line of up to 3 spaces, then a run of the same
+          # character at least as long as the opener, then only blanks, so
+          # a ``` line inside a ```` fence stays inside it (issue #5377); an
+          # unclosed fence runs to the end of the body. Keep this
+          # program identical to review_autofix_sweep.yml's copy and to
+          # has_skip_ai_marker in .claude/scripts/check_in_status.py
+          # (tests/test_skip_ai_marker_rule.py runs all three). It reads its
+          # whole input, so pipefail never sees a SIGPIPE from printf.
+          SKIP_AI_BODY_AWK='{ sub(/\r$/, "") } fl > 0 { if ($0 ~ /^ ? ? ?(```+|~~~+)[ \t]*$/) { r = $0; sub(/^ */, "", r); sub(/[ \t]*$/, "", r); if (substr(r, 1, 1) == fc && length(r) >= fl) fl = 0 } next } match($0, /^[ \t]*(```+|~~~+)/) { r = substr($0, RSTART, RLENGTH); sub(/^[ \t]*/, "", r); fc = substr(r, 1, 1); fl = length(r); next } /^ ? ? ?\[skip ai\][ \t]*$/ { found = 1 } END { exit found ? 0 : 1 }'
           POST_MERGE_PR_TEXT_JSON='{"title":"","body":""}'
           POST_MERGE_LINKED_ISSUES_JSON='[]'
           POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY="false"
@@ -553,7 +573,8 @@ jobs:
           elif [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
             SHOULD_RUN="false"
             SKIP_REASON="draft_or_skip_ai"
-          elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
+          elif [[ "${PR_TITLE}" == *"[skip ai]"* ]] \
+            || printf '%s\n' "${PR_BODY}" | awk "${SKIP_AI_BODY_AWK}"; then
             SHOULD_RUN="false"
             SKIP_REASON="skip_ai_marker"
           fi
@@ -676,6 +697,7 @@ jobs:
                       || [ "${head_committer_login,,}" = "${bot_login,,}" ]; }; then
                     SHOULD_RUN="false"
                     SKIP_REASON="self_triggered_autofix"
+                    GATE_SKIP_RECORDED="true"
                     echo "AUTOFIX_GATE_SKIP reason=self_triggered_autofix pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix] author_login=${head_author_login} committer_login=${head_committer_login} bot_login=${bot_login}"
                   else
                     echo "AUTOFIX_GATE_NO_SKIP_IDENTITY pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix] author_login=${head_author_login} committer_login=${head_committer_login} bot_login=${bot_login}"
@@ -832,6 +854,7 @@ jobs:
             if [ "${gate_marker_fetch_state}" = "ok" ] && gate_claude_handoff_on_head; then
               SHOULD_RUN="false"
               SKIP_REASON="claude_fixer_awaiting_session"
+              GATE_SKIP_RECORDED="true"
               echo "AUTOFIX_GATE_SKIP reason=claude_fixer_awaiting_session pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
             fi
           fi
@@ -1012,6 +1035,7 @@ jobs:
                     if [ "${terminal_same_head}" = "true" ]; then
                       SHOULD_RUN="false"
                       SKIP_REASON="terminal_same_head"
+                      GATE_SKIP_RECORDED="true"
                       echo "AUTOFIX_GATE_SKIP reason=terminal_same_head pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} marker_comment_id=${terminal_marker_comment_id} mergeable=${pr_mergeable}"
                     elif [ "${terminal_matching_markers:-0}" != "0" ] || [ "${terminal_untrusted_markers:-0}" != "0" ]; then
                       echo "AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} matching_markers=${terminal_matching_markers:-0} untrusted_markers=${terminal_untrusted_markers:-0} commit_bot_markers=${terminal_commit_bot_markers:-0} marker_author_login=${terminal_marker_author_login}"
@@ -1533,6 +1557,73 @@ jobs:
             echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_branch_review pr=${PR_NUMBER} prior_det_skip_reason=${DET_SKIP_REASON}"
             DETERMINISTIC_SKIP="false"
             DET_SKIP_REASON=""
+          fi
+
+          # Say why (issue #4985, CLAUDE.md §8): exactly one searchable line
+          # per skip, retaining earlier more detailed lines unchanged.
+          if [ "${SHOULD_RUN}" != "true" ] && [ "${GATE_SKIP_RECORDED}" != "true" ]; then
+            echo "AUTOFIX_GATE_SKIP reason=${SKIP_REASON:-unknown} pr=${PR_NUMBER:-none} head_sha=${pr_head_sha_gate:-${PR_HEAD_SHA:-unknown}}"
+          fi
+          # A PR-backed claude/* head skipped on purpose gets one PR comment
+          # per head, so the §26 checker and the catch-all sweep
+          # (check_in_status.py --hand-back reads the marker) see the skip
+          # instead of waiting for a review that never comes. Only
+          # skip_ai_marker, and draft_or_skip_ai when the PR is not a draft
+          # (pr_skip_ai=true): GitHub already shows a draft, and
+          # ready_for_review starts its review. No label: ai:review-skipped
+          # means the deterministic doc-only / size skip
+          # (.github/ai/label_contract.v1.json). Deduped against the workflow
+          # account's own marker through gate_fetch_marker_comments (shared
+          # with the Claude-fixer checks above, CLAUDE.md §15), plus one POST.
+          # Every failure only warns; the gate outcome never changes.
+          if [ "${SHOULD_RUN}" != "true" ] && [ "${pr_state}" = "open" ] \
+            && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] \
+            && [[ "${pr_head_ref}" == claude/* ]] \
+            && { [ "${SKIP_REASON}" = "skip_ai_marker" ] \
+              || { [ "${SKIP_REASON}" = "draft_or_skip_ai" ] && [ "${PR_IS_DRAFT}" != "true" ]; }; }; then
+            gate_fetch_marker_comments
+            if [ "${gate_marker_fetch_state}" != "ok" ]; then
+              echo "::warning::AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=comments_${gate_marker_fetch_state}"
+            elif jq -e --arg head "${pr_head_sha_gate}" --arg author "${gate_marker_author_login}" '
+                any(.[]; .author_login == $author and
+                  ((.body // "") | split("\n") | map(select(length > 0)) |
+                    (.[-1] // "") as $last |
+                    ($last | test("^<!-- ai:claude-fixer-review-skipped:v1 reason=(skip_ai_marker|draft_or_skip_ai) head=" + $head + " -->$")) and
+                    (.[0] == ("## Review skipped: `" + ($last | sub("^.* reason="; "") | sub(" head=.*$"; "")) + "`"))))
+              ' "${gate_marker_comments_file}" >/dev/null 2>&1; then
+              echo "AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=already_posted"
+            else
+              skip_notice_body_file="${RUNNER_TEMP:-/tmp}/review_gate_skip_notice.md"
+              skip_notice_payload_file="${RUNNER_TEMP:-/tmp}/review_gate_skip_notice.json"
+              {
+                echo "## Review skipped: \`${SKIP_REASON}\`"
+                echo
+                echo "The review gate skipped head \`${pr_head_sha_gate}\`, so the reviewer panel did not run and no hand-off or auto-merge follows for this head ([workflow run](${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}))."
+                echo
+                if [ "${SKIP_REASON}" = "skip_ai_marker" ]; then
+                  echo "Why: the PR title contains the skip-AI marker \`[skip ai]\`, or a line of the description holds only that marker. A mention in backticks, in a code block, or mid-sentence does not count."
+                else
+                  echo "Why: the calling workflow passed \`pr_skip_ai=true\`."
+                fi
+                echo
+                echo "To review this head anyway: remove the marker (or the \`pr_skip_ai\` input) and push a new commit, or dispatch the review workflow for this PR (\`internal-review.yml\` here, \`ai-review.yml\` in a consumer repo, with \`pr_number=${PR_NUMBER}\`). A dispatched run does not read the PR text."
+                echo
+                echo "<!-- ai:claude-fixer-review-skipped:v1 reason=${SKIP_REASON} head=${pr_head_sha_gate} -->"
+              } > "${skip_notice_body_file}"
+              # The earlier PR fetch established this head for the gate, not
+              # for the comment POST: a push may have moved it in between.
+              # This read cannot reuse the earlier snapshot; on failure or
+              # a moved head, do not publish stale review-skip evidence.
+              if ! skip_notice_live_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "open" then .head.sha // "" else "" end' 2>/dev/null)" \
+                || [ "${skip_notice_live_head}" != "${pr_head_sha_gate}" ]; then
+                echo "::warning::AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=head_moved_or_unavailable"
+              elif jq -n --rawfile body "${skip_notice_body_file}" '{body: $body}' > "${skip_notice_payload_file}" 2>/dev/null \
+                && gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" --input "${skip_notice_payload_file}" >/dev/null 2>&1; then
+                echo "AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=true"
+              else
+                echo "::warning::AUTOFIX_GATE_SKIP_NOTICE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=${SKIP_REASON} posted=false detail=post_failed"
+              fi
+            fi
           fi
 
           echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"

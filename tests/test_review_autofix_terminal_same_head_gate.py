@@ -153,8 +153,11 @@ def test_gate_declares_terminal_same_head_env_with_defaults() -> None:
 
 def test_gate_head_sha_rides_on_existing_pulls_fetch() -> None:
 	gate = _gate_block()
-	# §15: no second /pulls call — head_sha is added to the existing jq projection.
-	assert gate.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+	# The terminal skip reuses the initial projection. A second read occurs
+	# only before posting a head-bound intentional-skip notice: that head may
+	# have moved since the original gate fetch (issue #4985).
+	assert gate.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 2
+	assert 'skip_notice_live_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq' in gate
 	assert 'head_sha: (.head.sha // "")' in gate
 	assert """pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")\"""" in gate
 	assert 'pr_head_sha_gate=""' in gate

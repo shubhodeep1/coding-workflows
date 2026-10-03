@@ -16,14 +16,16 @@ SCRIPTS = ROOT / ".claude" / "scripts"
 TEMPLATE_SCRIPTS = ROOT / "workflow-templates" / ".claude" / "scripts"
 
 
-def _load(name):
-	spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
+def _load(name, scripts_dir=SCRIPTS):
+	spec = importlib.util.spec_from_file_location(name, scripts_dir / f"{name}.py")
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return module
 
 
-checker = _load("check_in_status")
+# The twin is the copy edited first (twin-first, CLAUDE.md §28.C);
+# tests/test_check_in_status.py keeps the two copies byte-identical.
+checker = _load("check_in_status", TEMPLATE_SCRIPTS)
 claimer = _load("claude_fix_claim")
 
 REPO = "o/r"
@@ -156,11 +158,12 @@ def test_non_claude_head_only_hands_back_terminal(monkeypatch, capsys):
 
 
 def test_clean_claude_pr_is_open(monkeypatch, capsys):
-	calls = _stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_check_runs()})
+	calls = _stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_check_runs(), **_commit("2026-09-26T11:00:00Z")})
 	_, out = _run(capsys)
 	assert out["done"] is False and out["state"] == "open"
 	assert out["claim"] == {"state": "none"} and out["hand_backs"] == 0 and out["cap"] == 3
-	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments", f"repos/o/r/commits/{HEAD}/check-runs?per_page=100&page=1"]
+	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments", f"repos/o/r/commits/{HEAD}/check-runs?per_page=100&page=1",
+		f"repos/o/r/commits/{HEAD}"]
 
 
 def test_failed_check_with_nothing_running_is_due_without_an_age_window(monkeypatch, capsys):
@@ -268,7 +271,7 @@ def test_run_head_helper_rejects_a_malformed_reviewed_head_without_a_read(monkey
 
 def test_review_handoff_for_a_head_that_is_not_the_pr_head_is_ignored(monkeypatch, capsys):
 	# The hand-off reviewed OTHER_HEAD, but the PR has moved on to HEAD.
-	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_check_runs()}
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(head_sha=OTHER_HEAD), **_check_runs(), **_commit("2026-09-26T11:00:00Z")}
 	calls = _stub(monkeypatch, responses, [_handoff(head=OTHER_HEAD)])
 	_, out = _run(capsys)
 	assert out["done"] is False and out["state"] == "open"
@@ -570,6 +573,8 @@ def test_dispatch_listing_404_counts_zero_and_other_errors_raise(monkeypatch):
 	def missing(path):
 		if "internal-review.yml" in path:
 			raise checker.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
+		if "ai-review.yml" in path:
+			return {"workflow_runs": []}
 		return {"total_count": 0}
 	monkeypatch.setattr(checker, "gh_api", missing)
 	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 0
@@ -644,7 +649,7 @@ def test_conflict_hands_back_to_the_fixer(monkeypatch, capsys):
 	(_pr(labels=[{"name": "ai:review-blocked"}]), (_claim(kind="hold", created_at="2026-09-01T00:00:00Z"),), "held"),
 ])
 def test_open_claimed_and_held_wait(monkeypatch, capsys, pr, comments, state):
-	_stub(monkeypatch, {"repos/o/r/pulls/7": pr, **_check_runs()}, comments)
+	_stub(monkeypatch, {"repos/o/r/pulls/7": pr, **_check_runs(), **_commit("2026-09-26T11:00:00Z")}, comments)
 	_, out = _run(capsys)
 	assert out["done"] is False and out["state"] == state and out["action"] == "wait"
 
@@ -699,6 +704,10 @@ def test_claude_md_26c_routes_on_action():
 		"| `merged`, `closed` | `hand_back_all` | 4 |",
 	):
 		assert row in section, row
+	# The new state is additive; the existing CLAUDE.md table cannot be edited
+	# in this implementation. Pin the route in the command and executable table.
+	assert "`hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`, `review-stalled`)" in _flat_text(
+		ROOT / ".claude" / "commands" / "fix-claude-pr.md")
 	assert "2. **`action` is `wait`**" in section
 	assert "3. **`action` is `retry`**" in section
 	assert "4. **`action` is `hand_back_fixer`**" in section
@@ -713,9 +722,284 @@ def test_fix_claude_pr_routes_on_action():
 		ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md"):
 		text = _flat_text(path)
 		assert "2. **Route on `action`**" in text
-		assert "- `hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`) → continue." in text
+		assert "- `hand_back_fixer` (`conflict`, `review-round`, `ci-failed`, `blocked`, `review-stalled`) → continue." in text
 		assert "- `hand_back_all` (`merged` / `closed`) → nothing to fix." in text
 		assert "- `retry` (exit 2) → the read failed" in text
 		assert "2. **Route on `state`.**" not in text
 	assert ((ROOT / ".claude" / "commands" / "fix-claude-pr.md").read_bytes()
 		== (ROOT / "workflow-templates" / ".claude" / "commands" / "fix-claude-pr.md").read_bytes())
+
+
+# --- review-stalled (issue #4985) -------------------------------------------
+
+OLD_HEAD_TIME = "2026-09-26T09:00:00Z"  # 3h before NOW: past the default 2h window
+SKIP_NOTICE = f"## Review skipped: `skip_ai_marker`\n\n<!-- ai:claude-fixer-review-skipped:v1 reason=skip_ai_marker head={HEAD} -->"
+
+
+def _stalled_responses(pr=None, **run_counts):
+	return {"repos/o/r/pulls/7": pr or _pr(), **_check_runs(), **_commit(OLD_HEAD_TIME), **_runs(**run_counts)}
+
+
+def _skip_notice(login="workflow-bot", head=HEAD):
+	body = SKIP_NOTICE.replace(HEAD, head)
+	return {"body": body, "author_association": "OWNER", "created_at": "2026-09-26T09:05:00Z", "user": {"login": login, "type": "User"}}
+
+
+def test_a_head_never_reviewed_is_review_stalled(monkeypatch, capsys):
+	# PR #4807: the body only quoted the marker, the gate skipped, nothing followed.
+	pr = _pr(title="Phase 1", body="AD-3: `[skip ai]` plus a head-ref skip")
+	calls = _stub(monkeypatch, _stalled_responses(pr))
+	code, out = _run(capsys)
+	assert code == 0 and out["done"] is True and out["state"] == "review-stalled"
+	assert out["action"] == "hand_back_fixer" and out["kind"] == "review"
+	assert out["since"] == OLD_HEAD_TIME and out["stall_redispatched"] is False and out["head_sha"] == HEAD
+	assert calls == [
+		"repos/o/r/pulls/7", "repos/o/r/issues/7/comments", f"repos/o/r/commits/{HEAD}/check-runs?per_page=100&page=1",
+		f"repos/o/r/commits/{HEAD}",
+		f"repos/o/r/actions/runs?branch={REF}&status=queued&per_page=1",
+		f"repos/o/r/actions/runs?branch={REF}&status=in_progress&per_page=1",
+		f"repos/o/r/actions/runs?branch={REF}&status=pending&per_page=1",
+		DISPATCH_RUNS,
+	]
+
+
+@pytest.mark.parametrize("path, payload", [
+	(f"repos/o/r/actions/runs?branch={REF}&status=queued&per_page=1", {}),
+	(DISPATCH_RUNS, {}),
+	(DISPATCH_RUNS, {"workflow_runs": [None]}),
+])
+def test_unreadable_review_run_evidence_retries_instead_of_stalling(monkeypatch, capsys, path, payload):
+	responses = _stalled_responses()
+	responses[path] = payload
+	_stub(monkeypatch, responses)
+	code, out = _run(capsys)
+	assert code == 2 and out["action"] == "retry" and out["done"] is False
+
+
+def test_a_young_unreviewed_head_waits(monkeypatch, capsys):
+	calls = _stub(monkeypatch, {"repos/o/r/pulls/7": _pr(), **_check_runs(), **_commit("2026-09-26T10:30:00Z")})
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and out["action"] == "wait"
+	assert "has no review yet, 1.5h old (< 2h)" in out["reason"]
+	assert not any("/actions/runs" in call for call in calls)
+
+
+def test_the_stall_window_is_configurable(monkeypatch, capsys):
+	_stub(monkeypatch, _stalled_responses())
+	monkeypatch.setenv("CLAUDE_REVIEW_STALL_HOURS", "4")
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "(< 4h)" in out["reason"]
+
+
+@pytest.mark.parametrize("pr, comments, why", [
+	(_pr(draft=True), (), "it is a draft"),
+	(_pr(auto_merge={"merge_method": "merge"}), (), "auto-merge is enabled"),
+	(_pr(labels=[{"name": "ai:merge-queued"}]), (), "its review is deferred (ai:merge-queued)"),
+	(_pr(title="Docs [skip ai]"), (), "it carries the skip-AI marker"),
+	(_pr(body="Intro\n\n[skip ai]\n"), (), "it carries the skip-AI marker"),
+	(_pr(), (_skip_notice(),), "the gate skipped this head on purpose (skip_ai_marker)"),
+])
+def test_a_head_with_a_review_trace_or_an_opt_out_is_not_stalled(monkeypatch, capsys, pr, comments, why):
+	calls = _stub(monkeypatch, _stalled_responses(pr), comments)
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and out["action"] == "wait"
+	assert out["reason"] == f"PR #7 open, no fix due: {why}"
+	assert f"repos/o/r/commits/{HEAD}" not in calls
+
+
+@pytest.mark.parametrize("notice", [_skip_notice(login="someone-else"), _skip_notice(head=OTHER_HEAD)])
+def test_an_untrusted_or_stale_skip_notice_does_not_hide_a_stall(monkeypatch, capsys, notice):
+	_stub(monkeypatch, _stalled_responses(), [notice])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "review-stalled"
+
+
+def test_an_answered_handoff_for_the_head_is_a_review_trace():
+	assert checker._head_has_review_trace([_handoff()], HEAD, "workflow-bot") == "a findings hand-off for this head"
+	assert checker._head_has_review_trace([_handoff(kind="conflict")], HEAD, "workflow-bot") == "a conflict hand-off for this head"
+	assert checker._head_has_review_trace([_handoff(head=OTHER_HEAD)], HEAD, "workflow-bot") is None
+	assert checker._head_has_review_trace([_handoff()], HEAD, "someone-else") is None
+	quoted = _skip_notice()
+	quoted["body"] = "A quoted marker in prose:\n" + quoted["body"]
+	assert checker._head_has_review_trace([quoted], HEAD, "workflow-bot") is None
+
+
+def test_an_active_run_is_not_a_stall(monkeypatch, capsys):
+	_stub(monkeypatch, _stalled_responses(in_progress=1))
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued, running or pending" in out["reason"]
+
+
+def test_a_dispatched_review_run_is_not_a_stall(monkeypatch, capsys):
+	run = {"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:7]"}
+	_stub(monkeypatch, _stalled_responses(dispatched=[run]))
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open"
+
+
+def test_stall_detection_is_off_without_the_workflow_login(monkeypatch, capsys):
+	calls = _stub(monkeypatch, _stalled_responses())
+	monkeypatch.setenv("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "")
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN is unset" in out["reason"]
+	assert f"repos/o/r/commits/{HEAD}" not in calls
+
+
+REDISPATCH_RUN_ID = 555
+
+
+def _redispatch_run(**overrides):
+	# A fixer's re-dispatch: internal-review.yml sent from the default branch
+	# after the head (committed OLD_HEAD_TIME) arrived.
+	run = {"id": REDISPATCH_RUN_ID, "path": ".github/workflows/internal-review.yml", "event": "workflow_dispatch",
+		"head_branch": "main", "head_sha": OTHER_HEAD, "display_title": DISPATCH_TITLE,
+		"status": "completed", "conclusion": "success", "created_at": "2026-09-26T11:05:00Z"}
+	run.update(overrides)
+	return run
+
+
+def test_a_second_stall_on_a_redispatched_head_says_so(monkeypatch, capsys):
+	# The review re-dispatched for this head ran to completion and still left no trace.
+	_stub(monkeypatch, _stalled_responses(_pr(base=DEFAULT_BASE), dispatched=[_redispatch_run()]))
+	_, out = _run(capsys)
+	assert out["state"] == "review-stalled" and out["stall_redispatched"] is True
+	assert out["action"] == "hand_back_fixer"
+	assert f"review run {REDISPATCH_RUN_ID} was dispatched for this head and completed (success)" in out["reason"]
+
+
+def test_a_review_claim_alone_is_not_a_redispatch(monkeypatch, capsys):
+	# Issue #5376: the PR's author posts a `review` claim and dispatches nothing;
+	# once the lease expires, the next fixer must retry, not hold.
+	forged = _claim(kind="review", by="session_01forged", created_at="2026-09-26T08:00:00Z")
+	_stub(monkeypatch, _stalled_responses(_pr(base=DEFAULT_BASE)), [forged])
+	_, out = _run(capsys)
+	assert out["state"] == "review-stalled" and out["stall_redispatched"] is False
+	assert out["claim"]["state"] == "expired"
+	# A claim by the workflow account itself does not count either.
+	sweep = _claim(kind="review", by="sweep-run-77", created_at="2026-09-26T08:00:00Z", login="workflow-bot")
+	_stub(monkeypatch, _stalled_responses(_pr(base=DEFAULT_BASE)), [sweep])
+	_, out = _run(capsys)
+	assert out["state"] == "review-stalled" and out["stall_redispatched"] is False
+
+
+@pytest.mark.parametrize("run_change", [
+	{"conclusion": "cancelled"},
+	{"display_title": "Internal: AI Review & Autofix [pr:8]"},
+	{"head_branch": REF},
+	{"event": "pull_request"},
+	{"path": ".github/workflows/review_autofix.yml"},
+	{"created_at": "2026-09-26T08:59:59Z"},
+	{"created_at": "not a time"},
+	{"created_at": "2026-09-26T11:05:00"},
+])
+def test_a_run_that_does_not_prove_a_redispatch_of_this_head_is_ignored(monkeypatch, capsys, run_change):
+	# A cancelled run reviewed nothing; another PR's run, a run of a PR branch's own
+	# workflow copy, a pull_request run, another workflow, or a run from before the
+	# head arrived is not this head's re-dispatch. Each leaves the fixer to retry.
+	_stub(monkeypatch, _stalled_responses(_pr(base=DEFAULT_BASE), dispatched=[_redispatch_run(**run_change)]))
+	_, out = _run(capsys)
+	assert out["state"] == "review-stalled" and out["stall_redispatched"] is False
+
+
+@pytest.mark.parametrize("conclusion", ["success", "failure", "skipped", "startup_failure"])
+def test_every_completed_conclusion_but_cancelled_counts(monkeypatch, capsys, conclusion):
+	_stub(monkeypatch, _stalled_responses(_pr(base=DEFAULT_BASE), dispatched=[_redispatch_run(conclusion=conclusion)]))
+	_, out = _run(capsys)
+	assert out["stall_redispatched"] is True
+
+
+def test_an_unknown_default_branch_never_counts_a_redispatch(monkeypatch, capsys):
+	_stub(monkeypatch, _stalled_responses(dispatched=[_redispatch_run()]))
+	_, out = _run(capsys)
+	assert out["state"] == "review-stalled" and out["stall_redispatched"] is False
+
+
+def test_a_backdated_head_commit_cannot_pull_an_older_run_in(monkeypatch, capsys):
+	# The author backdates the new head's committer date to before an old review
+	# run; GitHub's check-run start time still dates the push after that run.
+	old_run = _redispatch_run(created_at="2026-09-26T09:30:00Z")
+	responses = _stalled_responses(_pr(base=DEFAULT_BASE), dispatched=[old_run])
+	responses.update(_check_runs({"name": "lint", "status": "completed", "conclusion": "success",
+		"started_at": "2026-09-26T09:45:00Z"}))
+	_stub(monkeypatch, responses)
+	_, out = _run(capsys)
+	assert out["state"] == "review-stalled" and out["stall_redispatched"] is False
+	# The same run created after the push counts.
+	responses[DISPATCH_RUNS] = {"workflow_runs": [_redispatch_run(created_at="2026-09-26T09:50:00Z")]}
+	_stub(monkeypatch, responses)
+	_, out = _run(capsys)
+	assert out["stall_redispatched"] is True
+
+
+def test_head_arrival_is_the_later_of_the_commit_and_the_first_check_run():
+	committed = "2026-09-26T09:00:00Z"
+	assert checker._head_arrival_time(committed, []) == checker._parse_time(committed)
+	runs = [{"started_at": "2026-09-26T10:00:00Z"}, {"started_at": "2026-09-26T09:40:00Z"}, {"started_at": None}, "junk",
+		{"started_at": "2026-09-26T09:10:00"}]  # a timestamp with no timezone is skipped, never a TypeError
+	assert checker._head_arrival_time(committed, runs) == checker._parse_time("2026-09-26T09:40:00Z")
+	# A future-dated commit keeps its own (later) date: a later arrival only makes a retry more likely.
+	assert checker._head_arrival_time("2026-09-26T11:00:00Z", runs) == checker._parse_time("2026-09-26T11:00:00Z")
+
+
+CONSUMER_DISPATCH_RUNS = "repos/o/r/actions/workflows/ai-review.yml/runs?event=workflow_dispatch&per_page=100"
+
+
+def _consumer_stub(monkeypatch, consumer_runs, comments=()):
+	# A consumer repo: internal-review.yml answers 404, ai-review.yml lists the runs.
+	responses = _stalled_responses(_pr(base=DEFAULT_BASE))
+	del responses[DISPATCH_RUNS]
+	responses[CONSUMER_DISPATCH_RUNS] = {"workflow_runs": consumer_runs}
+	calls = _stub(monkeypatch, responses, comments)
+	fake = checker.gh_api
+
+	def consumer(path):
+		if path == DISPATCH_RUNS:
+			calls.append(path)
+			raise checker.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
+		return fake(path)
+
+	monkeypatch.setattr(checker, "gh_api", consumer)
+	return calls
+
+
+def test_a_consumer_redispatch_binds_through_the_ai_review_wrapper(monkeypatch, capsys):
+	run = _redispatch_run(path=".github/workflows/ai-review.yml", display_title="AI Review [pr:7]")
+	calls = _consumer_stub(monkeypatch, [run])
+	_, out = _run(capsys)
+	assert out["state"] == "review-stalled" and out["stall_redispatched"] is True
+	assert calls[-2:] == [DISPATCH_RUNS, CONSUMER_DISPATCH_RUNS]
+	# The internal-review.yml title does not bind a consumer run.
+	_consumer_stub(monkeypatch, [_redispatch_run(path=".github/workflows/ai-review.yml")])
+	_, out = _run(capsys)
+	assert out["stall_redispatched"] is False
+
+
+def test_an_active_consumer_redispatch_is_not_a_stall(monkeypatch, capsys):
+	run = {"status": "in_progress", "display_title": "AI Review [pr:7]"}
+	_consumer_stub(monkeypatch, [run])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued, running or pending" in out["reason"]
+
+
+def test_a_repo_with_neither_review_workflow_counts_nothing(monkeypatch):
+	def missing(path):
+		if "/actions/workflows/" in path:
+			raise checker.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
+		return {"total_count": 0}
+	monkeypatch.setattr(checker, "gh_api", missing)
+	listing = {}
+	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7, dispatched_listing=listing) == 0
+	assert listing == {"workflow": "", "title": "", "runs": []}
+	assert checker._verified_review_redispatch(listing, 7, "main", NOW) is None
+
+
+def test_a_live_claim_on_a_stalled_head_waits(monkeypatch, capsys):
+	_stub(monkeypatch, _stalled_responses(), [_claim(kind="review", created_at="2026-09-26T11:00:00Z")])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "claimed"
+
+
+def test_the_sweep_min_age_counts_from_the_head_commit(monkeypatch, capsys):
+	_stub(monkeypatch, _stalled_responses())
+	_, out = _run(capsys, "--min-age-hours", "2")
+	assert out["done"] is True and out["state"] == "review-stalled"
