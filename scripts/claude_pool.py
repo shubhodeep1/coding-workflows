@@ -32,8 +32,12 @@ Subcommands (all read files or stdin and print to stdout):
     it is told to use) with ``***`` in files before they are uploaded as
     artifacts. Log masking does not cover artifacts, and the worker's shell
     commands inherit the token environment.
+  * ``twin-guard`` — the work job's ``pre-commit`` hook: refuse a commit that
+    changes the checkout's own ``.claude/**`` (a merge may bring it in from a
+    parent). The CLI's deny rule covers the Edit and Write tools; this covers
+    a file any other program wrote, at the point the change would be committed.
 
-The module makes no API calls. ``normalize`` reads a token on stdin and writes
+The module makes no API calls (``twin-guard`` runs local ``git`` only). ``normalize`` reads a token on stdin and writes
 it back only to stdout; ``redact`` reads secret values from the environment
 and never prints them. Log lines go to stderr with the stable prefix
 ``CLAUDE_POOL``.
@@ -49,6 +53,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -780,6 +785,95 @@ def redact_text(text: str, secrets: list[str]) -> tuple[str, int]:
 	return text, count
 
 
+# --- twin-first commit guard -----------------------------------------------
+
+# The checkout's own .claude/**, anchored at the repository root, so
+# workflow-templates/.claude/** (the twins) never matches.
+TWIN_GUARD_PATHSPEC = ":(top).claude/"
+# git's empty tree, the base of a repository's first commit.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+class TwinGuardError(Exception):
+	"""A git command the guard needs failed."""
+
+
+def _git(args: list[str], cwd: str | None = None, ok_codes: tuple[int, ...] = (0,)) -> str:
+	try:
+		proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
+	except OSError as exc:
+		raise TwinGuardError(f"git {args[0]}: {type(exc).__name__}") from exc
+	if proc.returncode not in ok_codes:
+		raise TwinGuardError(f"git {args[0]} exited {proc.returncode}")
+	return proc.stdout
+
+
+def _protected_entries(lines: str, *, index: bool) -> dict[str, tuple[str, str]]:
+	"""``{path: (mode, object id)}`` from ``ls-files -s -z`` or ``ls-tree -r -z`` output."""
+	entries: dict[str, tuple[str, str]] = {}
+	for record in lines.split("\0"):
+		if not record or "\t" not in record:
+			continue
+		meta, path = record.split("\t", 1)
+		fields = meta.split()
+		if index:
+			# <mode> <object> <stage>; only stage 0 is committed.
+			if len(fields) == 3 and fields[2] == "0":
+				entries[path] = (fields[0], fields[1])
+		elif len(fields) == 3:
+			# <mode> <type> <object>
+			entries[path] = (fields[0], fields[2])
+	return entries
+
+
+def twin_guard_violations(cwd: str | None = None) -> list[str]:
+	"""Paths under the checkout's ``.claude/`` that the commit being made authors.
+
+	Run as a ``pre-commit`` hook (git sets the index and the working
+	directory). A plain commit may not change ``.claude/**`` at all: twin-first
+	(CLAUDE.md §28.C) routes those edits through ``workflow-templates/.claude/**``
+	and the ``[claude-twin-sync]`` copy. A merge commit (``MERGE_HEAD`` present)
+	may bring ``.claude/**`` in from a parent: each changed path must match one
+	merge head, or, for a two-parent merge, git's own merge of it (``git
+	merge-tree --write-tree``, so a clean three-way content merge passes and a
+	hand-resolved conflict does not). Raises ``TwinGuardError`` when git fails.
+	"""
+	top = _git(["rev-parse", "--show-toplevel"], cwd=cwd).strip()
+	head = _git(["rev-parse", "--verify", "-q", "HEAD^{commit}"], cwd=top, ok_codes=(0, 1)).strip()
+	changed = [
+		path
+		for path in _git(
+			["diff", "--cached", "--name-only", "-z", "--no-renames", head or EMPTY_TREE, "--", TWIN_GUARD_PATHSPEC],
+			cwd=top,
+		).split("\0")
+		if path
+	]
+	if not changed:
+		return []
+	merge_head_file = _git(["rev-parse", "--git-path", "MERGE_HEAD"], cwd=top).strip()
+	merge_head_path = Path(merge_head_file) if os.path.isabs(merge_head_file) else Path(top) / merge_head_file
+	try:
+		merge_heads = [line.strip() for line in merge_head_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+	except FileNotFoundError:
+		merge_heads = []
+	except OSError as exc:
+		raise TwinGuardError(f"MERGE_HEAD: {type(exc).__name__}") from exc
+	if not merge_heads:
+		return sorted(changed)
+	candidates = list(merge_heads)
+	if len(merge_heads) == 1 and head:
+		# Exit 1 means conflicts; the first line is still the merged tree.
+		merged = _git(["merge-tree", "--write-tree", head, merge_heads[0]], cwd=top, ok_codes=(0, 1)).splitlines()
+		if merged and re.fullmatch(r"[0-9a-f]{40,64}", merged[0].strip()):
+			candidates.append(merged[0].strip())
+	staged = _protected_entries(_git(["ls-files", "-s", "-z", "--", TWIN_GUARD_PATHSPEC], cwd=top), index=True)
+	trees = [
+		_protected_entries(_git(["ls-tree", "-r", "-z", "--full-tree", tree, "--", TWIN_GUARD_PATHSPEC], cwd=top), index=False)
+		for tree in candidates
+	]
+	return sorted(path for path in changed if not any(tree.get(path) == staged.get(path) for tree in trees))
+
+
 # --- CLI -------------------------------------------------------------------
 
 
@@ -954,6 +1048,28 @@ def _cmd_redact(args: argparse.Namespace) -> int:
 	return 1 if failed else 0
 
 
+def _cmd_twin_guard(args: argparse.Namespace) -> int:
+	try:
+		paths = twin_guard_violations()
+	except TwinGuardError as exc:
+		# Fail closed: a commit the guard could not check is refused.
+		log("twin_guard_error", error=str(exc))
+		print(f"twin-first guard could not check this commit ({exc}); commit refused.", file=sys.stderr)
+		return 1
+	if not paths:
+		return 0
+	log("twin_guard", blocked=len(paths))
+	shown = ", ".join(paths[:10]) + (f" (+{len(paths) - 10} more)" if len(paths) > 10 else "")
+	print(
+		"Twin-first (CLAUDE.md §28.C): this commit changes the checkout's own .claude/** "
+		f"({shown}). Make the change in the workflow-templates/.claude/** twin instead, leave "
+		".claude/** to the [claude-twin-sync] copy, and unstage the listed paths "
+		"(`git restore --staged -- <path>`).",
+		file=sys.stderr,
+	)
+	return 1
+
+
 def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -1011,6 +1127,9 @@ def main(argv: list[str] | None = None) -> int:
 	p.add_argument("--env-var", action="append", default=[], help="name of an environment variable holding a secret")
 	p.add_argument("file", nargs="*")
 	p.set_defaults(func=_cmd_redact)
+
+	p = sub.add_parser("twin-guard", help="pre-commit hook: refuse a commit that authors .claude/** changes")
+	p.set_defaults(func=_cmd_twin_guard)
 
 	args = parser.parse_args(argv)
 	return args.func(args)

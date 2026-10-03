@@ -1317,8 +1317,19 @@ Nothing dispatches to it yet; `.github/ai/claude_pool.json` ships with
   JSON-escaped `\n` / `\r\n`) split the value, as wrapped `base64` output
   does. It exits 1 when a file cannot be
   read or written (`redact_failed`), and the transcript is uploaded only when
-  it succeeded. Bash is not denied on `.claude/**`; spike S13 saw a shell
-  redirect there denied, but other shell writes rely on the twin-first rule.
+  it succeeded. Bash is not denied on `.claude/**` (spike S13 saw a shell
+  redirect there denied; git must stay free to update it on checkout and
+  merge), so twin-first is also enforced where a change would land: the
+  prepare step points the global `core.hooksPath` at a `pre-commit` hook that
+  runs `claude_pool.py twin-guard`, which refuses (exit 1, `CLAUDE_POOL
+  twin_guard blocked=<n>`) a commit that changes a checkout's own
+  `.claude/**`, written by any program. A merge commit may change it only to a
+  merge head's version or, for two parents, git's own merge of the file
+  (`git merge-tree --write-tree`); a hand-resolved `.claude/**` conflict is
+  refused. A git error refuses the commit (`twin_guard_error`). The smoke run
+  proves it (`check=commit_guard`, `check=twin_commit`). The hook is a guard
+  against a worker's mistakes, not a sandbox: `git commit --no-verify` or a
+  push through the GitHub MCP tools skips it.
 - **Result (`claude-pool-result` artifact, `claude-pool-result.json`).** Keys:
   `queue_issue`, `attempt`, `item_type`, `account`, `outcome`
   (`success | auth_failed | usage_limit | all_gated | no_accounts | crashed |

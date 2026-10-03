@@ -258,12 +258,24 @@ jobs:
           # Twin-first (CLAUDE.md §28.C, plan Q11): deny the Edit, Write and
           # NotebookEdit tools on the checkout's own .claude/**, anchored to the
           # checkout root so workflow-templates/.claude/** stays writable (spike
-          # S13, which also saw a shell redirect into .claude/ denied). Bash is
-          # not denied, so a program that writes files itself (cp, python) is
-          # not caught here; for those the commands' twin-first rule applies.
+          # S13, which also saw a shell redirect into .claude/ denied).
           jq -n --arg r "/$ws/.claude/**" \
             '{permissions: {deny: [("Edit(" + $r + ")"), ("Write(" + $r + ")"), ("NotebookEdit(" + $r + ")")]}}' \
             > "$RUNNER_TEMP/pool-deny.json"
+          # Bash is not denied, so a program that writes files itself (cp,
+          # python) can still change .claude/**; git must stay free to update it
+          # on checkout and merge. Twin-first therefore also holds where a change
+          # would land: a pre-commit hook, set for every repository through the
+          # global core.hooksPath, refuses a commit that changes a checkout's own
+          # .claude/** (claude_pool.py twin-guard; a merge may still bring it in
+          # from a parent). It replaces .git/hooks, which a fresh checkout leaves
+          # empty.
+          hooks="$RUNNER_TEMP/pool-git-hooks"
+          mkdir -p "$hooks"
+          printf '#!/bin/sh\nexec /usr/bin/python3 -B -E -s "%s" twin-guard\n' "$GITHUB_WORKSPACE/pool/scripts/claude_pool.py" \
+            > "$hooks/pre-commit"
+          chmod 755 "$hooks/pre-commit"
+          git config --global core.hooksPath "$hooks"
           # GitHub MCP named `github`, so the commands' mcp__github__* tool names hold (spike S11, S21).
           jq -n '{mcpServers: {github: {type: "http", url: "https://api.githubcopilot.com/mcp/", headers: {Authorization: "Bearer ${CLAUDE_POOL_MCP_TOKEN}"}}}}' \
             > "$RUNNER_TEMP/pool-mcp.json"
@@ -361,7 +373,28 @@ jobs:
           else
             echo "CLAUDE_POOL smoke check=twin_write result=failed"; fail=1
           fi
-          # 2. GH_PAT reads check runs on a private consumer repo (classic token, spike S20).
+          # 2. A .claude/** file written by another program (here the shell)
+          #    cannot be committed, while a twin change can (the pre-commit hook).
+          guard_head=$(git -C "$ws" rev-parse HEAD)
+          mkdir -p "$ws/.claude" "$ws/workflow-templates/.claude"
+          printf 'probe\n' > "$ws/.claude/pool-smoke-guard.md"
+          printf 'probe\n' > "$ws/workflow-templates/.claude/pool-smoke-guard.md"
+          git -C "$ws" add -f -- .claude/pool-smoke-guard.md
+          if git -C "$ws" commit -q -m "pool smoke: guard probe" > "$out/smoke-guard.txt" 2>&1 \
+            || ! grep -q 'twin_guard blocked=1' "$out/smoke-guard.txt"; then
+            echo "CLAUDE_POOL smoke check=commit_guard result=failed"; fail=1
+          else
+            echo "CLAUDE_POOL smoke check=commit_guard result=ok"
+          fi
+          git -C "$ws" reset -q -- .claude/pool-smoke-guard.md
+          git -C "$ws" add -f -- workflow-templates/.claude/pool-smoke-guard.md
+          if git -C "$ws" commit -q -m "pool smoke: twin probe" >> "$out/smoke-guard.txt" 2>&1; then
+            echo "CLAUDE_POOL smoke check=twin_commit result=ok"
+          else
+            echo "CLAUDE_POOL smoke check=twin_commit result=failed"; fail=1
+          fi
+          git -C "$ws" reset -q --hard "$guard_head"
+          # 3. GH_PAT reads check runs on a private consumer repo (classic token, spike S20).
           consumer=$(jq -r '.[0] // empty' pool/.github/ai/consumer_repos.json)
           branch=$(gh api "repos/$consumer" --jq .default_branch 2>/dev/null)
           total=$(gh api "repos/$consumer/commits/$branch/check-runs?per_page=1" --jq .total_count 2>/dev/null)
@@ -370,7 +403,7 @@ jobs:
           else
             echo "CLAUDE_POOL smoke check=check_runs repo=$consumer result=failed"; fail=1
           fi
-          # 3. The GitHub MCP server reads a private file with GH_PAT (spike S21).
+          # 4. The GitHub MCP server reads a private file with GH_PAT (spike S21).
           expected=$(gh api "repos/$GITHUB_REPOSITORY/readme" --jq .content 2>/dev/null | base64 -d 2>/dev/null | head -n 1)
           owner="${GITHUB_REPOSITORY%%/*}"; repo="${GITHUB_REPOSITORY#*/}"
           dir=$(mktemp -d)

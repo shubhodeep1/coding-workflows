@@ -930,3 +930,205 @@ def test_only_the_worker_workflow_names_pool_tokens():
 def test_worker_test_suite_runs_in_ci():
 	ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 	assert "tests/test_claude_pool.py" in ci
+
+
+# --- twin-first commit guard (review round 3 on head 5329250) ----------------
+
+
+def _git_env(tmp_path, monkeypatch):
+	"""Isolate git from the host's config; returns the env for subprocesses."""
+	monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+	monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for name in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"):
+		monkeypatch.delenv(name, raising=False)
+	(tmp_path / "gitconfig").write_text(
+		"[user]\n\tname = t\n\temail = t@example.com\n[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n",
+		encoding="utf-8",
+	)
+
+
+def _g(repo, *args, check=True):
+	return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=check)
+
+
+def _write(repo, rel, text):
+	path = repo / rel
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(text, encoding="utf-8")
+
+
+LINES = "".join(f"{n}\n" for n in range(1, 10))
+
+
+@pytest.fixture
+def guard_repo(tmp_path, monkeypatch):
+	if not shutil.which("git"):
+		pytest.skip("needs git")
+	_git_env(tmp_path, monkeypatch)
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_g(repo, "init", "-q")
+	_write(repo, ".claude/x.md", LINES)
+	_write(repo, "workflow-templates/.claude/x.md", LINES)
+	_write(repo, "other.txt", "base\n")
+	_g(repo, "add", "-A")
+	_g(repo, "commit", "-q", "-m", "base")
+	return repo
+
+
+def test_twin_guard_refuses_a_plain_claude_change_from_any_program(guard_repo):
+	# A shell or python write, not the Edit/Write tools the deny rule covers.
+	_write(guard_repo, ".claude/x.md", LINES + "10\n")
+	_write(guard_repo, ".claude/new.md", "new\n")
+	_g(guard_repo, "add", "-A")
+	assert pool.twin_guard_violations(str(guard_repo)) == [".claude/new.md", ".claude/x.md"]
+
+
+def test_twin_guard_refuses_a_deletion_and_checks_from_a_subdirectory(guard_repo):
+	_g(guard_repo, "rm", "-q", ".claude/x.md")
+	(guard_repo / "sub").mkdir()
+	assert pool.twin_guard_violations(str(guard_repo / "sub")) == [".claude/x.md"]
+
+
+def test_twin_guard_lets_twin_and_other_changes_through(guard_repo):
+	_write(guard_repo, "workflow-templates/.claude/x.md", LINES + "10\n")
+	_write(guard_repo, "other.txt", "changed\n")
+	_write(guard_repo, "docs/.claude/x.md", "nested\n")
+	_g(guard_repo, "add", "-A")
+	assert pool.twin_guard_violations(str(guard_repo)) == []
+
+
+def test_twin_guard_refuses_a_first_commit_with_claude_files(tmp_path, monkeypatch):
+	_git_env(tmp_path, monkeypatch)
+	repo = tmp_path / "fresh"
+	repo.mkdir()
+	_g(repo, "init", "-q")
+	_write(repo, ".claude/a.md", "a\n")
+	_g(repo, "add", "-A")
+	assert pool.twin_guard_violations(str(repo)) == [".claude/a.md"]
+
+
+def _diverge(repo, main_edit, feature_edit):
+	"""main changes .claude/x.md with ``main_edit``; ``feature`` with ``feature_edit``.
+
+	Both sides also change other.txt, so every merge stops for a conflict
+	there and is completed with ``git commit`` (when pre-commit runs).
+	"""
+	_g(repo, "checkout", "-q", "-b", "feature")
+	if feature_edit:
+		_write(repo, ".claude/x.md", feature_edit(LINES))
+	_write(repo, "other.txt", "feature\n")
+	_g(repo, "commit", "-q", "-a", "-m", "feature", "--no-verify")
+	_g(repo, "checkout", "-q", "main")
+	_write(repo, ".claude/x.md", main_edit(LINES))
+	_write(repo, ".claude/added-on-main.md", "main\n")
+	_write(repo, "other.txt", "main\n")
+	_g(repo, "add", "-A")
+	_g(repo, "commit", "-q", "-m", "main twin-sync", "--no-verify")
+	_g(repo, "checkout", "-q", "feature")
+	_g(repo, "merge", "-q", "main", check=False)
+	_write(repo, "other.txt", "resolved\n")
+	_g(repo, "add", "other.txt")
+
+
+def test_twin_guard_allows_a_merge_that_brings_claude_in_from_a_parent(guard_repo):
+	_diverge(guard_repo, lambda text: text.replace("1\n", "1-main\n", 1), None)
+	assert pool.twin_guard_violations(str(guard_repo)) == []
+
+
+def test_twin_guard_allows_a_clean_three_way_merge_of_a_claude_file(guard_repo):
+	# Both sides changed .claude/x.md in different places: git's merge of the
+	# file matches neither parent but is not hand-written.
+	_diverge(
+		guard_repo,
+		lambda text: text.replace("1\n", "1-main\n", 1),
+		lambda text: text.replace("9\n", "9-feature\n", 1),
+	)
+	assert "1-main" in (guard_repo / ".claude/x.md").read_text(encoding="utf-8")
+	assert "9-feature" in (guard_repo / ".claude/x.md").read_text(encoding="utf-8")
+	assert pool.twin_guard_violations(str(guard_repo)) == []
+
+
+def test_twin_guard_refuses_a_hand_resolved_claude_conflict_but_not_taking_a_side(guard_repo):
+	_diverge(
+		guard_repo,
+		lambda text: text.replace("5\n", "5-main\n", 1),
+		lambda text: text.replace("5\n", "5-feature\n", 1),
+	)
+	_write(guard_repo, ".claude/x.md", LINES.replace("5\n", "5-hand\n", 1))
+	_g(guard_repo, "add", ".claude/x.md")
+	assert pool.twin_guard_violations(str(guard_repo)) == [".claude/x.md"]
+	_g(guard_repo, "checkout", "-q", "main", "--", ".claude/x.md")
+	assert pool.twin_guard_violations(str(guard_repo)) == []
+
+
+def test_twin_guard_refuses_a_new_claude_file_slipped_into_a_merge(guard_repo):
+	_diverge(guard_repo, lambda text: text.replace("1\n", "1-main\n", 1), None)
+	_write(guard_repo, ".claude/slipped.md", "authored\n")
+	_g(guard_repo, "add", ".claude/slipped.md")
+	assert pool.twin_guard_violations(str(guard_repo)) == [".claude/slipped.md"]
+
+
+def test_twin_guard_cli_fails_closed_outside_a_repository(tmp_path, monkeypatch, capsys):
+	_git_env(tmp_path, monkeypatch)
+	monkeypatch.chdir(tmp_path)
+	assert pool.main(["twin-guard"]) == 1
+	assert "commit refused" in capsys.readouterr().err
+
+
+def test_prepare_step_installs_the_commit_guard_for_every_repository(tmp_path, monkeypatch):
+	# Runs the real Prepare step, then commits in the checkout through git:
+	# the hook it installs refuses a shell-written .claude/** change and lets
+	# a twin change through.
+	if not all(shutil.which(tool) for tool in ("git", "jq", "bash")) or not Path("/usr/bin/python3").exists():
+		pytest.skip("needs git, jq, bash and /usr/bin/python3")
+	_git_env(tmp_path, monkeypatch)
+	workspace = tmp_path / "ws"
+	workspace.mkdir()
+	(workspace / "pool").symlink_to(ROOT)
+	target = workspace / "target"
+	target.mkdir()
+	_g(target, "init", "-q")
+	_write(target, ".claude/x.md", LINES)
+	_g(target, "add", "-A")
+	_g(target, "commit", "-q", "-m", "base")
+	temp = tmp_path / "runner_temp"
+	temp.mkdir()
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	run = next(step for step in _workflow()["jobs"]["work"]["steps"] if step.get("name") == "Prepare the worker")["run"]
+	env = {
+		"PATH": "/usr/local/bin:/usr/bin:/bin",
+		"HOME": str(tmp_path),
+		"GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GITHUB_WORKSPACE": str(workspace),
+		"RUNNER_TEMP": str(temp),
+		"GITHUB_ENV": str(github_env),
+		"CLAUDE_POOL_RAW_TOKEN": "sk-test-token",
+		"PYTHONDONTWRITEBYTECODE": "1",
+	}
+	proc = subprocess.run(["bash", "-e", "-c", run], cwd=workspace, env=env, capture_output=True, text=True, timeout=60, check=False)
+	assert proc.returncode == 0, proc.stderr
+	hook = temp / "pool-git-hooks" / "pre-commit"
+	assert hook.stat().st_mode & 0o111
+	assert _g(target, "config", "--global", "core.hooksPath").stdout.strip() == str(temp / "pool-git-hooks")
+	subprocess.run(["bash", "-c", "printf 'x\\n' >> .claude/x.md"], cwd=target, check=True)
+	_g(target, "add", "-A")
+	refused = _g(target, "commit", "-q", "-m", "bad", check=False)
+	assert refused.returncode != 0
+	assert "CLAUDE_POOL twin_guard blocked=1" in refused.stderr
+	assert "Twin-first" in refused.stderr
+	_g(target, "restore", "--staged", "--worktree", "--source=HEAD", "--", ".claude/")
+	_write(target, "workflow-templates/.claude/x.md", "twin\n")
+	_g(target, "add", "-A")
+	assert _g(target, "commit", "-q", "-m", "twin", check=False).returncode == 0
+
+
+def test_smoke_checks_prove_the_commit_guard():
+	smoke = next(step for step in _workflow()["jobs"]["work"]["steps"] if step.get("name", "").startswith("Smoke checks"))["run"]
+	assert "check=commit_guard result=ok" in smoke
+	assert "check=twin_commit result=ok" in smoke
+	assert "twin_guard blocked=1" in smoke
+	# The probe commit never survives the step.
+	assert 'reset -q --hard "$guard_head"' in smoke

@@ -1584,8 +1584,10 @@ one shows up as `auth_failed` for that account.
 **Smoke test.** Every push to a `claude/**` branch of `claude-workers` runs
 the `smoke` job: it probes every account, runs a Haiku no-op through all three
 jobs, checks that the `.claude/**` deny rule holds while a twin write
-succeeds, reads check runs on the first registered consumer with `GH_PAT`, and
-reads the runner repo's README through the GitHub MCP server.
+succeeds, checks that the twin-first commit guard refuses a shell-written
+`.claude/**` change while a twin change commits, reads check runs on the
+first registered consumer with `GH_PAT`, and reads the runner repo's README
+through the GitHub MCP server.
 
 **Failure modes.** A failed probe skips that account. No account under the
 gate ends the run as `all_gated` (with the earliest reset time in the
