@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-6088-negated-delete-skips-branch-push-plan.md
 - Source issue: shubhodeep1/coding-workflows#6088
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5144-merge-guard-effective-repo
-- Project branch: claude/implement-plan-issue-6088-negated-delete-skips-branch-push   Final PR: pending
-- Status: IN_PROGRESS
+- Project branch: claude/implement-plan-issue-6088-negated-delete-skips-branch-push   Final PR: #6111 draft
+- Status: BLOCKED until the `[claude-twin-sync]` commit for the phase 1 PR lands (twin sha256 `8e74ce26…9b59`); IN_PROGRESS from that commit on
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR: twin sync, then its review rounds; next stage `conformance 1/3` once it merges
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-02
-- Last note: project started by /implement-issue-claude (session_01Enho8a3iFnMYBGi77DrFTF); plan and log committed to the project branch.
+- Last note: phase 1/1 (session_01Enho8a3iFnMYBGi77DrFTF): implemented twin-first in `workflow-templates/.claude/hooks/pr_merge_status_guard.py`; `tests/test_pr_merge_status_guard.py` 425 passed, 1 expected failure (`test_template_copies_are_identical`, until the twin sync); resolver checked against git 2.43.0 on 930 option words. Hold claim and twin-sync blocker posted on #6088.
 
 ## Phases
-1. [ ] Phase 1 — read git push options in order, negations included — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [ ] Phase 1 — read git push options in order, negations included   — phase PR open (twin sync pending); review rounds: 0; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Option table and resolver mirroring git 2.43 `parse_long_opt` / `parse_short_opt` (twin)
    - `_push_refspec_targets` decides from the final option state; unreadable option word → `unreadable_reason` → block
    - Helpers re-expressed on the resolver; `GuardTarget.unreadable_reason` added
@@ -43,7 +43,9 @@
 - AD-8 [plan, 2026-10-02] Shell expansions in positional words as undeterminable? — Picked: A — no, out of scope. Alternatives: B — block any push with an expansion before its refspecs. Why: §5; B blocks `git push "$REMOTE" "$BRANCH"`. Applied in: no code change. Status: pending review
 
 ## Lessons
+- [source:security] A guard that mirrors a CLI's option parsing must apply options in order with their `--no-` negations and abbreviations, and decide only from the final state; returning early on the first matching flag lets a later negation undo it unseen. (files: .claude/hooks/pr_merge_status_guard.py)
 
 ## Notes
+- Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)
 - Base is the #5144 project branch (draft final PR #5163 into `main`): steps 12–13 do not run; the final-merge stage closes #6088 and labels it `ai:merged`.
 - Security pass skipped per the plan header (`ai:security: created and labelled by the issue automation`).

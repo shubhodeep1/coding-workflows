@@ -1543,9 +1543,11 @@ def test_pattern_refspecs_keep_the_fallback_and_ask(tmp_path: Path, command: str
 
 
 def test_push_options_that_are_not_bulk_flags_are_not_mistaken_for_them() -> None:
-	for token in ("--atomic", "--a", "--m", "--no-verify", "--force", "-a", "--tags", "--allow"):
+	for token in ("--atomic", "--a", "--no-verify", "--force", "-a", "--tags", "--allow", "--no-all", "--no-m"):
 		assert not twin_guard._is_push_bulk_flag(token), token
-	for token in ("--all", "--al", "--branches", "--br", "--mirror", "--mirr"):
+	# git 2.43 expands `--b` to `--branches` and `--m` to `--mirror` (issue
+	# #6088, AD-5): no other `git push` option starts with those letters.
+	for token in ("--all", "--al", "--branches", "--br", "--b", "--mirror", "--mirr", "--m"):
 		assert twin_guard._is_push_bulk_flag(token), token
 
 
@@ -1561,6 +1563,159 @@ def test_push_short_clusters_and_long_prefixes_are_read_as_git_reads_them() -> N
 		assert twin_guard._push_option_takes_next_word(token), token
 	for token in ("-u", "-oci.skip", "-uoci.skip", "-oo", "--p", "--re", "--rec", "--repo=origin", "--push-option=x", "--prune", "--porcelain"):
 		assert not twin_guard._push_option_takes_next_word(token), token
+
+
+# ──────────────────────────────────────────────────────────────────
+# Push options read in order, negations included (issue #6088)
+#
+# Every expectation below was checked against git 2.43.0 pushing to a local
+# bare remote: git reads options left to right, wherever they stand, and the
+# last of an option and its `--no-` form wins.
+# ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+	("command", "branch"),
+	[
+		# The audit's exploit: `--no-delete` undoes `--delete`, so git pushes.
+		("git push --delete --no-delete origin HEAD:claude/stale", "claude/stale"),
+		("git push -d --no-delete origin HEAD:claude/stale", "claude/stale"),
+		("git push -fd --no-del origin HEAD:claude/stale", "claude/stale"),
+		("git push --de --no-de origin HEAD:claude/stale", "claude/stale"),
+		("git push --delete origin HEAD:claude/stale --no-delete", "claude/stale"),
+		("git push -dv --no-delete origin HEAD:claude/stale", "claude/stale"),
+		# A negated bulk option leaves a plain refspec push.
+		("git push --all --no-all origin HEAD:feature/y", "feature/y"),
+		("git push --all --no-branches origin HEAD:feature/y", "feature/y"),
+		("git push --branches --no-al origin HEAD:feature/y", "feature/y"),
+		("git push --mirror --no-mirror origin HEAD:feature/y", "feature/y"),
+		("git push --m --no-m origin HEAD:feature/y", "feature/y"),
+		# `--recurse-submodules` reads the next word as its value (AD-4).
+		("git push --recurse-submodules check origin HEAD:feature/y", "feature/y"),
+		("git push --recu on-demand origin HEAD:feature/y", "feature/y"),
+		# Options after a positional are still options; `--end-of-options` is `--`.
+		("git push origin HEAD:feature/y -u", "feature/y"),
+		("git push --end-of-options origin HEAD:feature/y", "feature/y"),
+		# `--verify` negates `--no-verify`, and both forms are plain flags.
+		("git push --verify --no-no-verify origin HEAD:feature/y", "feature/y"),
+		("git push --no-repo --no-push-option -4 origin HEAD:feature/y", "feature/y"),
+	],
+)
+def test_negated_push_options_are_judged_like_the_push_git_runs(tmp_path: Path, command: str, branch: str) -> None:
+	assert _targets(command, tmp_path) == [("push", str(tmp_path), branch, "HEAD", True, False)]
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		# `--tags --no-tags` pushes the current branch, as a bare push does.
+		"git push --tags --no-tags origin",
+		"git push --ta --no-ta origin",
+		# `--recurse-submodules <value>` must not shift the remote into the refspecs.
+		"git push --recurse-submodules check origin",
+	],
+)
+def test_negated_tags_and_valued_options_judge_the_current_branch(tmp_path: Path, command: str) -> None:
+	assert _targets(command, tmp_path) == [("push", str(tmp_path), "", "HEAD", True, False)]
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		# The last of `--delete` / `--no-delete` wins, wherever it stands.
+		"git push --no-delete --delete origin feature/x",
+		"git push --delete --no-delete -d origin feature/x",
+		"git push origin feature/x --delete",
+		# Usage words: git prints usage (or a man page) and pushes nothing.
+		"git push -h",
+		"git push -vh origin HEAD:feature/y",
+		"git push --help",
+		"git push origin HEAD:feature/y --help-all",
+		"git push --git-completion-helper",
+	],
+)
+def test_final_deletions_and_usage_words_yield_no_target(tmp_path: Path, command: str) -> None:
+	assert twin_guard.guard_targets(command, str(tmp_path)) == []
+
+
+@pytest.mark.parametrize(
+	("command", "bulk"),
+	[
+		("git push --b origin", True),
+		("git push --m origin", True),
+		("git push --mirror --no-all origin", True),
+		("git push --all --no-mirror origin", True),
+		("git push --no-all --all origin", True),
+		("git push --all --no-all origin", False),
+	],
+)
+def test_bulk_state_after_the_last_option_decides_the_prompt(tmp_path: Path, command: str, bulk: bool) -> None:
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert len(targets) == 1, command
+	assert (targets[0].branch, targets[0].tip) == ("", "HEAD"), command
+	assert bool(targets[0].bulk_reason) is bulk, command
+	assert not targets[0].unreadable_reason, command
+
+
+@pytest.mark.parametrize(
+	("command", "reason_part"),
+	[
+		("git push --no-d origin HEAD:feature/y", "ambiguous"),
+		("git push --no-t origin HEAD:feature/y", "ambiguous"),
+		("git push --no-a origin HEAD:feature/y", "ambiguous"),
+		("git push --n origin HEAD:feature/y", "ambiguous"),
+		("git push --no- origin HEAD:feature/y", "ambiguous"),
+		("git push --d origin HEAD:feature/y", "ambiguous"),
+		("git push --rec origin HEAD:feature/y", "ambiguous"),
+		("git push --delete --no-ver origin HEAD:feature/y", "ambiguous"),
+		("git push --zzz origin HEAD:feature/y", "not a `git push` option"),
+		("git push --no-ipv4 origin HEAD:feature/y", "not a `git push` option"),
+		("git push --no-de=x origin HEAD:feature/y", "not a `git push` option"),
+		("git push --hel origin HEAD:feature/y", "not a `git push` option"),
+		("git push -z origin HEAD:feature/y", "not a `git push` option"),
+		("git push -uvx origin HEAD:feature/y", "not a `git push` option"),
+		("git push -dele origin feature/x", "one dash"),
+		("git push -no-delete origin HEAD:feature/y", "one dash"),
+		("git push -for origin HEAD:feature/y", "one dash"),
+		("git push --force=yes origin HEAD:feature/y", "takes none"),
+		("git push --no-delete=1 origin HEAD:feature/y", "takes none"),
+		("git push origin HEAD:feature/y -o", "no word follows"),
+		("git push --repo", "no word follows"),
+	],
+)
+def test_push_option_words_git_rejects_are_unreadable(tmp_path: Path, command: str, reason_part: str) -> None:
+	"""AD-2: git 2.43 rejects each of these words, so the guard cannot tell
+	what the push writes; the single target carries an `unreadable_reason`."""
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert len(targets) == 1, command
+	assert reason_part in targets[0].unreadable_reason, (command, targets[0].unreadable_reason)
+
+
+def test_unreadable_push_option_in_an_unresolvable_directory_is_still_unreadable(tmp_path: Path) -> None:
+	targets = twin_guard.guard_targets("cd $WORKTREE && git push --no-d origin HEAD:feature/y", str(tmp_path))
+	assert len(targets) == 1
+	assert targets[0].cwd == str(tmp_path)
+	assert "ambiguous" in targets[0].unreadable_reason
+
+
+def test_push_option_reader_follows_git_abbreviation_and_negation_rules() -> None:
+	read = twin_guard._read_push_option_word
+	assert read("--no-del").effects == (("delete", False),)
+	assert read("--no-b").effects == (("all", False),)
+	assert read("--no-ta").effects == (("tags", False),)
+	assert read("--b").effects == (("all", True),)
+	assert read("-fd").effects == (("delete", True),)
+	assert read("--verif").effects == () and not read("--verif").unreadable_reason
+	assert read("--rep=origin").takes_next_word is False
+	assert read("--no-repo").takes_next_word is False
+	assert read("--recurse-submodules").takes_next_word is True
+	assert read("--force-with-lease").takes_next_word is False
+	assert read("-hz").prints_usage is True
+	assert read("-zh").unreadable_reason
+	for token in ("--no-delete", "--no-de", "-n", "--dry-run"):
+		assert not twin_guard._is_push_delete_option(token), token
+	assert twin_guard._push_option_takes_next_word("--recu")
+	assert not twin_guard._push_option_takes_next_word("--no-push-option")
 
 
 def test_every_guarded_call_in_a_command_is_a_target(tmp_path: Path) -> None:
@@ -1725,6 +1880,73 @@ def test_e2e_clustered_or_prefixed_delete_of_a_merged_branch_is_allowed(worktree
 	proc = _run_twin_hook(repo, stub_bin, command)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert _ask_decision(proc) is None
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git push --delete --no-delete origin HEAD:feature/x",
+		"git push -d --no-del origin HEAD:feature/x",
+		"git push --tags --no-tags origin",
+	],
+)
+def test_e2e_negated_delete_or_tags_still_blocks_a_stranded_push(worktree_repo, command: str) -> None:
+	"""Issue #6088: `--no-delete` / `--no-tags` undo the earlier option, so
+	git pushes the merged branch and the push is blocked, not skipped."""
+	repo, _, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+
+
+def test_e2e_delete_given_last_is_still_a_deletion(worktree_repo) -> None:
+	"""AD-4 of #5144 still holds when the final state deletes."""
+	repo, _, stub_bin, _, calls_log = worktree_repo
+	_git(repo, "checkout", "-q", "main")
+	proc = _run_twin_hook(repo, stub_bin, "git push --no-delete --delete origin feature/x")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None
+	assert not calls_log.exists()
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git push --no-d origin HEAD:feature/open",
+		"git push --zzz origin HEAD:feature/open",
+		"git push -dele origin HEAD:feature/open",
+	],
+)
+def test_e2e_unreadable_push_option_is_blocked_without_an_api_call(worktree_repo, command: str) -> None:
+	"""AD-2/AD-3: a push option word the guard cannot read blocks the push,
+	even onto an open PR's branch and on the default branch, and asks GitHub
+	nothing."""
+	repo, _, stub_bin, _, calls_log = worktree_repo
+	_git(repo, "checkout", "-q", "main")
+	proc = _run_twin_hook(repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "cannot tell which branch this `git push` writes" in proc.stderr
+	assert command.split()[2] in proc.stderr
+	assert not calls_log.exists()
+
+
+def test_e2e_unreadable_push_option_is_allowed_with_the_escape_hatch(worktree_repo) -> None:
+	repo, _, stub_bin, _, _ = worktree_repo
+	env = _git_env()
+	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["CLAUDE_PR_MERGE_GUARD"] = "off"
+	proc = subprocess.run(
+		[sys.executable, str(TEMPLATE_GUARD_PATH)],
+		input=json.dumps(
+			{"tool_name": "Bash", "tool_input": {"command": "git push --no-d origin HEAD:x"}, "cwd": str(repo)}
+		),
+		capture_output=True,
+		text=True,
+		env=env,
+		timeout=120,
+	)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 def test_e2e_git_dash_c_behaves_like_cd(worktree_repo) -> None:
