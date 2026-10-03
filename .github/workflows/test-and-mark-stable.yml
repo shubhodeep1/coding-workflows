@@ -1349,6 +1349,10 @@ jobs:
           # itself, per the early checkout at line 316) instead of the
           # repo we just pushed the bait commit to, leaving Phase 4
           # still vulnerable to no_review_triggered.
+          # Exposure: BRANCH is the smoke issue's bait branch in TEST_REPO,
+          # not a protected default branch. Dispatching its workflow copy
+          # with inherited secrets is unsafe if another writer can change
+          # that branch; this E2E path needs its own default-ref migration.
           if gh workflow run "${REVIEW_WORKFLOW_FILE}" \
               --repo "${TEST_REPO}" \
               --ref "${BRANCH}" \
@@ -2390,6 +2394,8 @@ jobs:
             fi
             echo "✓ Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work"
           else
+            # Same exposure as the Bug B fallback above: this retry still
+            # executes TEST_REPO's bait-branch workflow, not its default copy.
             if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
                 --repo "${TEST_REPO}" \
                 --ref "${BRANCH}" \
