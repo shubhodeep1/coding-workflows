@@ -557,7 +557,12 @@ def merge_state():
     state = []
     for name in ("index", "MERGE_HEAD"):
         path = Path(os.fsdecode(git("rev-parse", "--git-path", name).strip()))
-        state.append(hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None)
+        if name == "index" and path.exists():
+            # Git may refresh index stat/cache metadata during a read-only
+            # inspection. Compare staged entries and index flags instead.
+            state.append(hashlib.sha256(git("ls-files", "-s", "-v", "-z")).hexdigest())
+        else:
+            state.append(hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None)
     return state
 
 
@@ -583,8 +588,11 @@ try:
         manifest.write_text(json.dumps({"paths": before, "merge": merge_before}), encoding="utf-8")
     else:
         saved = json.loads(manifest.read_text(encoding="utf-8"))
-        if merge_state() != saved["merge"]:
-            raise ValueError("merge index or MERGE_HEAD changed during resolver attempt")
+        current_merge = merge_state()
+        if current_merge[0] != saved["merge"][0]:
+            raise ValueError("staged entries changed during resolver attempt")
+        if current_merge[1] != saved["merge"][1]:
+            raise ValueError("MERGE_HEAD changed during resolver attempt")
         current = entries()
         old = saved["paths"]
         changed = sorted(path for path in old.keys() | current.keys() if old.get(path) != current.get(path))
@@ -632,6 +640,12 @@ try:
 except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
     # Do not echo paths or untrusted exception text into workflow commands.
     print(f"::error::Resolver scope {action} failed closed ({type(exc).__name__}).", file=sys.stderr)
+    if isinstance(exc, ValueError):
+        reason_codes = {
+            "staged entries changed during resolver attempt": "staged_entries_changed",
+            "MERGE_HEAD changed during resolver attempt": "merge_head_changed",
+        }
+        print(f"Resolver scope failure reason: {reason_codes.get(str(exc), 'unclassified_value_error')}", file=sys.stderr)
     sys.exit(2)
 PY
 }

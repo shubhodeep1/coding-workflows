@@ -10,7 +10,9 @@
 .claude/commands/apply-url.md
 .claude/commands/audit-plans.md
 .claude/commands/claude-issue-dispatch.md
+.claude/commands/claude-issue-pickup.md
 .claude/commands/deploy-activate.md
+.claude/commands/fix-claude-pr.md
 .claude/commands/implement-issue-claude.md
 .claude/commands/implement-plan-ai.md
 .claude/commands/implement-plan-claude.md
@@ -24,6 +26,7 @@
 .claude/hooks/pr_watch_guard.py
 .claude/hooks/session-start.sh
 .claude/scripts/check_in_status.py
+.claude/scripts/claude_fix_claim.py
 .claude/scripts/stale_routines.py
 .claude/settings.json
 .gitattributes
@@ -46,6 +49,7 @@
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
 .github/workflows/claude-issue-intake.yml
+.github/workflows/claude-issue-queue-watchdog.yml
 .github/workflows/comprehensive-test-and-release.yml
 .github/workflows/drift-audit.yml
 .github/workflows/forward-merge-stable-to-main.yml
@@ -145,6 +149,8 @@ analysis/workflow-optimization-2026-09-23.md
 analysis/workflow-optimization-2026-09-24-2.md
 analysis/workflow-optimization-2026-09-24.md
 analysis/workflow-optimization-2026-09-25.md
+analysis/workflow-optimization-2026-09-26-2.md
+analysis/workflow-optimization-2026-09-26-3.md
 analysis/workflow-optimization-2026-09-26.md
 changelog.d/.gitkeep
 changelog.d/3576-security-audit-uncapped-followups.md
@@ -179,11 +185,16 @@ changelog.d/4469-validate-hook-output-boundary.md
 changelog.d/4470-trusted-security-audit-exclusions.md
 changelog.d/4472-resolver-symlink-touched-set.md
 changelog.d/4476-pipeline-failure-guards.md
-changelog.d/4481-validation-renderer-dependency-preflight.md
+changelog.d/4507-wire-overlay-core-test-into-ci.md
+changelog.d/4512-validate-renderer-import-isolation.md
+changelog.d/4525-claude-issue-fail-closed.md
+changelog.d/4548-checker-blocked-issue-wait.md
+changelog.d/claude-fixes-every-claude-pr.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
 changelog.d/implement-plan-failed-run-blocks.md
+changelog.d/implement-plan-one-checker-per-project.md
 changelog.d/noop-sweep-fingerprint-cap-skip.md
 changelog.d/post-push-pr-status-check-in.md
 changelog.d/review-autofix-workflow-size-limit.md
@@ -404,7 +415,9 @@ scripts/clarify_openrouter_broker.py
 scripts/clarify_sandbox/Dockerfile
 scripts/claude_issue_handoff.sh
 scripts/claude_issue_intake.sh
+scripts/claude_issue_queue_watchdog.sh
 scripts/claude_issue_route.py
+scripts/claude_pr_sweep.py
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
 scripts/codex_model_catalog.json
@@ -681,6 +694,7 @@ tests/test_branch_rebuild.py
 tests/test_changelog_fragment_contract.py
 tests/test_check_failure_triage_workflow_security.py
 tests/test_check_in_status.py
+tests/test_check_in_status_hand_back.py
 tests/test_check_integration_pr_readiness.py
 tests/test_ci_inventory_parity_order_contract.py
 tests/test_ci_poll_test_sharding.py
@@ -688,6 +702,7 @@ tests/test_ci_shared_shell_block_guard.py
 tests/test_clarify_informal_detect.py
 tests/test_claude_issue_route.py
 tests/test_claude_md_section_numbers.py
+tests/test_claude_pr_sweep.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py
@@ -925,6 +940,7 @@ workflow-templates/.claude/commands/apply-url.md
 workflow-templates/.claude/commands/audit-plans.md
 workflow-templates/.claude/commands/claude-issue-dispatch.md
 workflow-templates/.claude/commands/deploy-activate.md
+workflow-templates/.claude/commands/fix-claude-pr.md
 workflow-templates/.claude/commands/implement-issue-claude.md
 workflow-templates/.claude/commands/implement-plan-ai.md
 workflow-templates/.claude/commands/implement-plan-claude.md
@@ -938,6 +954,7 @@ workflow-templates/.claude/hooks/pr_merge_status_guard.py
 workflow-templates/.claude/hooks/pr_watch_guard.py
 workflow-templates/.claude/hooks/session-start.sh
 workflow-templates/.claude/scripts/check_in_status.py
+workflow-templates/.claude/scripts/claude_fix_claim.py
 workflow-templates/.claude/scripts/stale_routines.py
 workflow-templates/.claude/settings.json
 workflow-templates/CLAUDE.md
