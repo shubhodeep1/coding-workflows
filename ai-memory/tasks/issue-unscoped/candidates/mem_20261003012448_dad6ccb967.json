@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/usage_limit_resumes.py:614-627 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: In `_skip_reason`, an old IDLE session whose `needs_action` contains a permission prompt can be reported as `needs_input` instead of `permission_prompt`.\n  WHY: The too-old branch returns before the permission-prompt check, so operators may receive an inaccurate triage label; both reasons still prevent auto-resume.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:611-627 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: In `_skip_reason`, an old IDLE session whose `needs_action` contains a permission prompt can be reported as `needs_input` instead of `permission_prompt`.\n  WHY: The too-old branch returns before the permission-prompt check, so operators may receive an inaccurate triage label; both reasons still prevent auto-resume.\n- docs/implement-plan/issue-6102-skip-unanswered-question-resumes.md:7\u201310 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The progress log still says `Status: BLOCKED` after the latest commit records that the fifth twin sync landed.\n  WHY: On resume, `/implement-plan-claude` treats `Status: BLOCKED` as a stop condition and asks before continuing (`.claude/commands/implement-plan-claude.md:302`), so the chain can remain stalled instead of proceeding to the next review round.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: .claude/scripts/usage_limit_resumes.py\n  Line or code reference: _skip_reason, lines 614-627\n  severity=low | confidence=3\n  PROBLEM: When a session is IDLE, older than SESSION_WINDOW_HOURS, and its needs_action contains approval-prompt text (e.g., \"Approve or deny: Bash(git push origin HEAD)\"), line 620 returns \"needs_input\" before the permission_prompt check at line 624 can fire.\n  WHY: An old IDLE session whose summary still carries \"Approve or deny\" text reports \"needs_input\" instead of \"permission_prompt\"; both are skip reasons, so the session is not incorrectly resumed, but the label could mislead an operator scanning skip reasons for permission-gate sessions.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: workflow-templates/.claude/scripts/usage_limit_resumes.py\n  Line or code reference: _skip_reason, lines 611-625 (the ordering of `too_old` vs `permission_prompt` checks)\n  severity=low | confidence=2\n  PROBLEM: An old session (>72h) whose `needs_action` is a request-style string (matches `HUMAN_REQUEST_PATTERN`) AND whose `status_detail` matches `PERMISSION_PROMPT_PATTERN` is reported as `needs_input` rather than `permission_prompt`.\n  WHY: For a session that genuinely awaits both a permission approval and an unanswered request, the selector reports only `needs_input` and the operator loses the \"this is a permission prompt\" signal; the handbook change in the same PR forbids manual resume on `needs_input`, so a label error here can leave the gate un-acted-on while still being read as `needs_input`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: docs/implement-plan/issue-6102-skip-unanswered-question-resumes.md\n  Line or code reference: Lines 7\u201310\n  severity=high | confidence=5\n  PROBLEM: The progress log still says `Status: BLOCKED` while waiting for the fifth twin sync, but the latest commit records that twin sync landing. The log itself says the block ends when that sync lands.\n  WHY: On resume, `/implement-plan-claude` treats `Status: BLOCKED` as a stop condition and asks before continuing (`.claude/commands/implement-plan-claude.md:302`). The chain can remain stalled instead of proceeding to the next review round.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: workflow-templates/.claude/scripts/usage_limit_resumes.py (and byte-identical .claude/scripts/usage_limit_resumes.py)\n  Line or code reference: _skip_reason, lines 614-627\n  severity=low | confidence=3\n  PROBLEM: An old IDLE session (created > 72h ago) that carries a permission prompt pattern in needs_action (e.g. \"Approve or deny: Bash(git push origin HEAD)\") is reported as \"needs_input\" instead of \"permission_prompt\".\n  WHY: An operator relying on the skip reason to triage sees \"needs_input\" when the actual pending gate is a permission prompt; both reasons prevent auto-resume, so there is no security impact, but the triage label is wrong for an old session that carries both signals.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ac869b1f3d7f0deb4647c3a3967911fd9bb60d55e8188c6fd831d28bfc1e51fc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6112,
+    "run_id": "37084594197",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37084594197",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003012448_dad6ccb967",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6112,
+    "run_id": "37084594197"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T01:24:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
