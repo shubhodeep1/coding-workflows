@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Test the GitHub API write guard against shell constructs, not only direct commands.",
   "timestamps": {
     "created_at": "2026-10-03T14:42:31Z",
