@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `stable` at `cc262f6ceaeb7e7a26a503a02d26225397640750`. It matches the issue\u2019s integration-branch metadata. The reported Claude fix is not present in `scripts/review_merge_train.sh` on this ref.\n\nScope-mode: Hold Scope\nReuse-audit: extends `scripts/review_merge_train.sh::_mt_gate`\nScope-mode justification: Keep the fix in the existing gate and its tests. Reusing its unblocked-path queue cleanup also handles smoke PRs queued before the fix, rather than merely preventing new queues. That completes the requested behavior for a small additional change, without a dependency or new interface. Per `unattended_system_instructions.md` \u00a76, correctness and safety take priority over speed.\n\n## Automation integration\n- Extend the existing script; add no script or supervisor. No database work or removal-registry entry is needed.\n- The existing `.github/workflows/internal-review.yml` pull-request and dispatch triggers call `review_autofix.yml`, whose merge-train step runs before reviewers. No new scheduler wiring is needed.\n\n## Files likely to change\n- `scripts/review_merge_train.sh` \u2014 smoke exception in `_mt_gate`.\n- `tests/test_review_merge_train.py` \u2014 behavioral regression cases using its existing fake GitHub client.\n- `README.md` \u2014 document the exception in the merge-train section.\n- `changelog.d/4542-merge-train-smoke-bypass.md` \u2014 user-visible behavior change.\n\n## Functions/modules and data structures\nIn `_mt_gate`, accept only the workflow-exported `IS_SMOKE_TEST=true` signal. For that case, skip changed-file and blocker evaluation, then use the existing unblocked path to retire a prior queue marker and remove a stale `ai:merge-queued` label. Keep ordinary PR evaluation unchanged. Preserve the existing label, comment markers, and `$GITHUB_ENV` flag names; introduce no schema.\n\n## API/interface changes\nNone. Reuse the gate\u2019s existing open-PR lookup and queue-cleanup calls; add no GitHub endpoint.\n\n## Decisions\n### D1 \u2014 Bypass overlap evaluation, not queue reconciliation\n- **Chosen:** Treat a smoke PR as unblocked and reuse the existing cleanup path.\n- **Alternatives considered:** Return immediately on `IS_SMOKE_TEST=true`, leaving any earlier queue label in place.\n- **Why:** A previously queued smoke PR must also proceed *unqueued*. The existing cleanup handles its marker and label without a competing mechanism.\n\n## Security considerations\n`IS_SMOKE_TEST` crosses from workflow detection into the helper\u2019s environment. Match its explicit `true` value; do not classify smoke PRs from arbitrary helper-side PR prose. The exception permits review to run\u2014it does not skip reviewers or editor authorization. Preserve normal queuing for ordinary PRs, including when the signal is absent or malformed. Existing GitHub API failures must remain fail-open to review, without fabricating a queue release.\n\n## Risks and edge cases\n- A previously queued smoke PR needs marker retirement before label removal so automation does not create a false one-shot-bypass marker.\n- If the open-PR lookup fails, review should continue under the gate\u2019s existing fail-open policy; cleanup can be retried.\n- The cited workflow line numbers have shifted on this ref, but the smoke export still precedes the merge-train step. The reported older blocker was not identified in the issue evidence.\n- This repository\u2019s review workflow uses verified support from `main`; a change on `stable` will not affect that runtime until the updated support reaches the trusted ref.\n\n## Testing considerations\nExtend `tests/test_review_merge_train.py` with the same older overlapping PR and canary path for two cases: `IS_SMOKE_TEST=true` proceeds without file-overlap requests, queue writes, or `AUTOFIX_STALE_BASE_SKIP`; an ordinary PR remains queued. Add a previously queued smoke case asserting marker retirement and label removal, plus an absent/malformed-signal control. Run the existing merge-train CI test target and applicable shell checks; do not weaken Phase 4b\u2019s canary assertion.\n\n## Pre-execution self-check\nThe plan is implementable on the matching `stable` ref and uses existing scheduled paths. Unrelated pre-existing worktree changes in `scripts/codex_model_catalog.json` and `scripts/gh_helpers.sh` must be left untouched. The earlier Claude attempt is reported in comments, but its branch/PR status is not established by the checked-out ref.\n\nPLAN_SELF_CHECK: WARNING: Confirm the earlier Claude PR\u2019s status before opening a duplicate implementation PR.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0a4518b20b53b31149b22086c0bef872eb117b59ecdd9d0119bb441832569b2f",
+  "lineage": {
+    "issue_number": 4542,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37100662749",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37100662749",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4542"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003054748_aea8a8d0dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4542,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37100662749"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4542",
+  "timestamps": {
+    "created_at": "2026-10-03T05:47:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
