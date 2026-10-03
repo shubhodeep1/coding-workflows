@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Keep `.ai/.workspace_source_manifest.txt` in sync with workspace-source changes.",
   "timestamps": {
     "created_at": "2026-10-03T07:23:19Z",
