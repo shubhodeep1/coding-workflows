@@ -835,7 +835,10 @@ class ReviewWrapperRunNames(unittest.TestCase):
 		self.assertIn("format('AI Review [pr:{0}]'", AI_REVIEW_TEMPLATE.read_text(encoding="utf-8"))
 		for name in ("Internal: AI Review & Autofix [pr:", "AI Review [pr:"):
 			self.assertIn(f'("{name}" + $pr + "]")', poller)
-		self.assertIn("(Internal: AI Review & Autofix|AI Review) \\\\[pr:", merge_train)
+		self.assertIn("(?<name>Internal: AI Review & Autofix|AI Review) \\\\[pr:", merge_train)
+		# Issue #5840: each name counts only with the path of the wrapper that sets it.
+		self.assertIn('.name == "Internal: AI Review & Autofix" and $path == ".github/workflows/internal-review.yml"', merge_train)
+		self.assertIn('.name == "AI Review" and $path == ".github/workflows/ai-review.yml"', merge_train)
 
 	def test_both_empty_commit_push_guards_match_pr_named_runs(self) -> None:
 		# The managed-path scan is exercised end to end in

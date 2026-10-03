@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5840-merge-train-pr-named-run-provenance-plan.md
 - Source issue: shubhodeep1/coding-workflows#5840 (progress comment 5923126918)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5689-smoke-empty-job-log-retryable
-- Project branch: claude/implement-plan-issue-5840-merge-train-pr-named-run-provenance   Final PR: pending
+- Project branch: claude/implement-plan-issue-5840-merge-train-pr-named-run-provenance   Final PR: #5850 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (the PR carrying this log commit)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-10-01
-- Last note: project branch opened from the issue base; plan and log committed.
+- Last note: phase 1 implemented and verified (tests/test_review_merge_train.py 29 passed, tests/test_review_dispatch_default_branch.py passed, shellcheck clean); phase PR opened.
 
 ## Phases
-1. [ ] Phase 1 — default-branch and wrapper provenance for the merge train's PR-named key (`scripts/review_merge_train.sh`, `tests/test_review_merge_train.py`, `README.md`, `changelog.d/5840-merge-train-pr-named-run-provenance.md`)
+1. [ ] Phase 1 — default-branch and wrapper provenance for the merge train's PR-named key (`scripts/review_merge_train.sh`, `tests/test_review_merge_train.py`, `README.md`, `changelog.d/5840-merge-train-pr-named-run-provenance.md`)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -38,4 +38,5 @@
 ## Notes
 - Issue base `claude/implement-plan-issue-5689-smoke-empty-job-log-retryable` (final PR #5702, draft, into `claude/implement-plan-issue-4898-retrigger-dispatch-default-branch`), not merged as of 2026-10-01 02:00Z.
 - `CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN=shubhodeep1` in every checker instruction (operator instruction recorded on #5689's project).
+- Phase 1 also updated the static name assertion in `tests/test_review_dispatch_default_branch.py` (`ReviewWrapperRunNames.test_lookups_use_the_names_the_wrappers_set`), which pinned the old title-only regex; it now also checks the name/path pairing.
 - Steps 12–13 (activation) do not run: the base is not the default branch (`Activation: n/a` at the end).

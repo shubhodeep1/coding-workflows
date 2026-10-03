@@ -102,11 +102,14 @@ def _install_fake_gh(tmp_path: Path) -> tuple[Path, Path, Path]:
 	return bin_dir, fixtures, log
 
 
-def _pr(number: int, head: str, base: str = "main", labels: list[str] | None = None, draft: bool = False) -> dict:
+def _pr(number: int, head: str, base: str = "main", labels: list[str] | None = None, draft: bool = False, default_branch: str | None = "main") -> dict:
+	base_obj: dict = {"ref": base}
+	if default_branch is not None:
+		base_obj["repo"] = {"default_branch": default_branch}
 	return {
 		"number": number,
 		"head": {"ref": head},
-		"base": {"ref": base},
+		"base": base_obj,
 		"draft": draft,
 		"labels": [{"name": name} for name in (labels or [])],
 	}
@@ -477,6 +480,183 @@ def test_release_leaves_pr_named_dispatch_run_queued_without_dispatch(tmp_path: 
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
 	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_internal_pr_named_dispatch_run_queued(tmp_path: Path) -> None:
+	"""Issue #5840: the internal wrapper's name counts from its own path on the default branch."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [{
+		"status": "in_progress",
+		"head_branch": "main",
+		"event": "workflow_dispatch",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]",
+		"path": ".github/workflows/internal-review.yml",
+	}]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_ignores_pr_named_run_from_non_default_branch(tmp_path: Path) -> None:
+	"""Issue #5840: a branch writer's dispatch named for PR N does not hold PR N back."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
+		{
+			"status": "in_progress",
+			"head_branch": "attacker/hold-4077",
+			"event": "workflow_dispatch",
+			"display_title": "AI Review [pr:4077]",
+			"path": ".github/workflows/ai-review.yml",
+		},
+		{
+			"status": "queued",
+			"head_branch": "attacker/hold-4077",
+			"event": "workflow_dispatch",
+			"display_title": "Internal: AI Review & Autofix [pr:4077]",
+			"path": ".github/workflows/internal-review.yml",
+		},
+	]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "gh workflow run ai-review.yml" in log_text
+
+
+def test_release_ignores_pr_named_run_with_wrong_wrapper_path(tmp_path: Path) -> None:
+	"""Issue #5840: the name counts only with the path of the wrapper that sets it."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
+		{
+			# The other wrapper's path with this wrapper's name.
+			"status": "in_progress",
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": "AI Review [pr:4077]",
+			"path": ".github/workflows/internal-review.yml",
+		},
+		{
+			"status": "in_progress",
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": "Internal: AI Review & Autofix [pr:4077]",
+			"path": ".github/workflows/ai-review.yml",
+		},
+		{
+			# A lookalike path: passes the review-workflow filter, but is not the wrapper.
+			"status": "in_progress",
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": "AI Review [pr:4077]",
+			"path": "evil/.github/workflows/ai-review.yml",
+		},
+		{
+			"status": "in_progress",
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": "AI Review [pr:4077]",
+			"path": ".github/workflows/review_autofix.yml",
+		},
+	]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "gh workflow run ai-review.yml" in log_text
+
+
+def test_release_honours_non_main_default_branch(tmp_path: Path) -> None:
+	"""Issue #5840: the default branch comes from the PR listing, not a hardcoded "main"."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", base="develop", labels=["ai:merge-queued"], default_branch="develop"),
+		_pr(4078, "ai/issue-4065", base="develop", labels=["ai:merge-queued"], default_branch="develop"),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
+		{
+			"status": "in_progress",
+			"head_branch": "develop",
+			"event": "workflow_dispatch",
+			"display_title": "AI Review [pr:4077]",
+			"path": ".github/workflows/ai-review.yml",
+		},
+		{
+			"status": "in_progress",
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": "AI Review [pr:4078]",
+			"path": ".github/workflows/ai-review.yml",
+		},
+	]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	_write_files(fixtures, 4078, ["backend/b.py"])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4078" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4078 source=release" in result.stdout
+	assert "MERGE_TRAIN_PR_NAMED_PROVENANCE" not in result.stdout
+
+
+def test_release_disables_pr_named_key_when_default_branch_unresolved(tmp_path: Path) -> None:
+	"""Issue #5840: without a default branch no PR-named run is trusted; head-branch runs still hold."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"], default_branch=None),
+		_pr(4078, "ai/issue-4065", labels=["ai:merge-queued"], default_branch=None),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
+		{
+			"status": "in_progress",
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": "AI Review [pr:4077]",
+			"path": ".github/workflows/ai-review.yml",
+		},
+		{
+			"status": "in_progress",
+			"head_branch": "ai/issue-4065",
+			"event": "pull_request",
+			"display_title": "AI Review",
+			"path": ".github/workflows/ai-review.yml",
+		},
+	]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	_write_files(fixtures, 4078, ["backend/b.py"])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_PR_NAMED_PROVENANCE repo=acme/consumer outcome=default_branch_unresolved pr_named_matching=disabled" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4078" in result.stdout
+
+
+def test_release_runs_lookup_failure_still_fails_open(tmp_path: Path) -> None:
+	"""A failed runs read keeps the documented fail-open path after the jq pipe change."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text("not json", encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "could not list active review runs" in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "gh workflow run ai-review.yml" in log_text
 
 
 def test_release_ignores_pr_named_runs_of_other_prs_and_other_events(tmp_path: Path) -> None:
