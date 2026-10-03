@@ -14,7 +14,7 @@ Usage:
   dispatch_workflow.py --repo OWNER/REPO --workflow FILE [--ref REF]
                        [--input KEY=VALUE ...] [--timeout-seconds N]
 
-FILE must be one of DISPATCHABLE_WORKFLOWS, the same six files
+FILE must be one of DISPATCHABLE_WORKFLOWS, the same seven files
 `.claude/settings.json` pre-approves as `Bash(gh workflow run <file> *)`
 (CLAUDE.md §23.C command-invoked carve-out); any other file is refused
 without an API call. `--ref` defaults to the repository's default branch.
@@ -66,6 +66,9 @@ DISPATCHABLE_WORKFLOWS = frozenset(
 		"ai-validate.yml",
 		"review_autofix.yml",
 		"ai-review.yml",
+		# /fix-claude-pr re-dispatches a stalled review with it (issue #4985):
+		# only its dispatched runs are bound to their PR by title ([pr:N]).
+		"internal-review.yml",
 	}
 )
 POLL_INTERVAL_SECONDS = 5

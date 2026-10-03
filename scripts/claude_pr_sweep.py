@@ -3,8 +3,9 @@
 
 CLAUDE.md §26.H. Every PR-backed `claude/*` head runs in Claude-fixer mode
 (review_autofix.yml), so the GPT editor and resolver never touch it and a
-Claude session must fix its conflicts, failed checks, review hand-offs, and
-blocks. Normally the §26 checker hands those back to the session that pushed
+Claude session must fix its conflicts, failed checks, review hand-offs,
+blocks, and heads whose review never happened (`review-stalled`, issue
+#4985). Normally the §26 checker hands those back to the session that pushed
 the PR, and `/implement-plan-claude` stages handle their own PRs. This sweep
 is the second line of defence for every open `claude/*` PR in this repo and
 in every registered consumer repo (`.github/ai/consumer_repos.json`): a fix
@@ -80,7 +81,7 @@ check_in_status = _load("check_in_status", _SCRIPTS / "check_in_status.py")
 claude_fix_claim = _load("claude_fix_claim", _SCRIPTS / "claude_fix_claim.py")
 claude_issue_route = _load("claude_issue_route", ROOT / "scripts" / "claude_issue_route.py")
 
-DUE_STATES = ("conflict", "review-round", "ci-failed", "blocked")
+DUE_STATES = ("conflict", "review-round", "ci-failed", "blocked", "review-stalled")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -113,7 +114,7 @@ def load_repos(registry_path: Path, self_repo: str) -> list[str]:
 
 
 def list_candidates(repo: str) -> list[dict]:
-	"""Open, non-draft, same-repository `claude/*` PRs without a `[skip ai]` marker."""
+	"""Open, non-draft, same-repository `claude/*` PRs without an intentional skip-AI marker."""
 	candidates = []
 	for pr in check_in_status.gh_api_list(f"repos/{repo}/pulls?state=open"):
 		head = pr.get("head") or {}
@@ -121,7 +122,7 @@ def list_candidates(repo: str) -> list[dict]:
 		ref = head.get("ref") or ""
 		if pr.get("draft") or head_repo.lower() != repo.lower() or not ref.startswith(check_in_status.CLAUDE_BRANCH_PREFIX):
 			continue
-		if "[skip ai]" in f"{pr.get('title') or ''} {pr.get('body') or ''}":
+		if check_in_status.has_skip_ai_marker(pr.get("title"), pr.get("body")):
 			log(f"skip repo={repo} pr=#{pr.get('number')} reason=skip_ai_marker")
 			continue
 		if isinstance(pr.get("number"), int):
