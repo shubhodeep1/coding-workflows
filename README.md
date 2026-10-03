@@ -1142,7 +1142,7 @@ not delete wrappers that are already present in `.github/workflows/`.
 
 ### 3. Open an issue
 
-Create a new issue describing a feature or bug fix. By default a standalone issue is implemented by **Claude Code** (see [Claude issue implementer](#claude-issue-implementer)); the steps below describe the Codex pipeline, which runs when the repo sets `AI_ISSUE_IMPLEMENTER=codex` or the issue carries `ai:codex`:
+Create a new issue describing a feature or bug fix. By default a standalone issue is implemented by the Codex pipeline described below. It goes to **Claude Code** instead (see [Claude issue implementer](#claude-issue-implementer)) when the repo sets `AI_ISSUE_IMPLEMENTER=claude` or the issue carries `ai:claude`:
 
 1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions. If required input is external and non-synthesizable (for example branch/SHA/credential/external URL), it emits a `BLOCKED: <reason>` handoff that labels the issue `ai:blocked` and pauses auto-answer loops until a human supplies the missing input.
 2. Once the issue is clear, comment `/answer` to trigger **Plan** generation. A plan whose pre-execution self-check reports `PLAN_SELF_CHECK: BLOCKER:` with `STATUS: NOT_CLEAR` and no Q-ID clarification block takes the same `ai:blocked` handoff as a `BLOCKED:` line — the issue is labeled `ai:blocked`, a "Planning blocked: human input required" comment names the first blocker line, and auto-answer/stall-recovery loops pause until a human resolves the blocker and replies `/answer`. Plans that pose Q-ID questions (or carry a `NEEDS_CLARIFICATION` status) alongside blockers reopen clarification as before.
@@ -1233,7 +1233,7 @@ mode).
    tracking / security-audit / retro issues, and `[E2E …]` release-gate
    fixtures always go to Codex. Otherwise an `ai:codex` label means Codex, an
    `ai:claude` label means Claude, and failing both the repo variable
-   `AI_ISSUE_IMPLEMENTER` decides (default `claude`).
+   `AI_ISSUE_IMPLEMENTER` decides (default `codex`).
 2. A Claude route skips Codex clarify, claims the issue with `ai:claude`, and
    `scripts/claude_issue_handoff.sh` sends a `claude-issue`
    `repository_dispatch` to coding-workflows with `GH_PAT`.
@@ -1321,7 +1321,8 @@ three REST reads.
 
 | To … | Do |
 | --- | --- |
-| Send every new issue in a repo to Codex | Set repo variable `AI_ISSUE_IMPLEMENTER=codex` |
+| Send every new issue in a repo to Claude | Set repo variable `AI_ISSUE_IMPLEMENTER=claude` |
+| Send every new issue in a repo to Codex (the default) | Leave `AI_ISSUE_IMPLEMENTER` unset, or set it to `codex` |
 | Move one issue to Codex | Add `ai:codex`, then comment `/reclarify` (the `ai:claude` claim is released) |
 | Send one issue to Claude in a `codex` repo | Add `ai:claude`, then comment `/reclarify` |
 | Retry a failed handoff or resume a blocked issue | Comment `/reclarify` |
@@ -2073,7 +2074,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-6-sol`) | coding-workflows only. Diagnosis model for the workflow failure heal intake. |
 | `THINKING_LEVEL_WORKFLOW_HEAL` | `high` | coding-workflows only. Reasoning effort for the heal diagnosis call. |
 | `VERBOSITY_WORKFLOW_HEAL` | `low` | coding-workflows only. Codex verbosity for the heal diagnosis call. |
-| `AI_ISSUE_IMPLEMENTER` | `claude` | clarify (every repo). Who implements standalone (non-orchestrator) issues: `claude` hands them to the Claude issue implementer, `codex` keeps the clarify → plan → implement pipeline. Any other value warns and uses `claude`. Per-issue `ai:codex` / `ai:claude` labels win; orchestrator issues and `[E2E …]` fixtures always stay on Codex. See "Claude issue implementer". |
+| `AI_ISSUE_IMPLEMENTER` | `codex` | clarify (every repo). Who implements standalone (non-orchestrator) issues: `claude` hands them to the Claude issue implementer, `codex` keeps the clarify → plan → implement pipeline. Any other value warns and uses `codex`. Per-issue `ai:codex` / `ai:claude` labels win; orchestrator issues and `[E2E …]` fixtures always stay on Codex. See "Claude issue implementer". |
 | `CLAUDE_ISSUE_UPSTREAM_REPO` | `shubhodeep1/coding-workflows` | clarify (every repo). Repository that receives the `claude-issue` `repository_dispatch`. |
 | `CLAUDE_ISSUE_ROUTINE_ID` | — | Deprecated (#4525), coding-workflows only. The intake no longer fires the "Claude issue dispatcher" routine; when set it only logs `routine_deprecated`. Can be deleted. |
 | `CLAUDE_ISSUE_ROUTINE_BETA` | `experimental-cc-routine-2026-04-01` | Deprecated (#4525), unused: the intake no longer calls the routine `/fire` endpoint. |
@@ -2363,6 +2364,13 @@ before the topology gate, only for heads matching `ai/issue-*` and only when
 | --- | --- | --- |
 | `gate` | `review_autofix.yml` (before reviewers) | Lists open PRs on the PR's base (1 REST call, oldest first); for each **older** `ai/issue-*` PR (lower number, not draft, not `ai:review-blocked` / `ai:closed` / `ai:merged`, at most `MERGE_TRAIN_MAX_OLDER_PRS`) fetches its file list and intersects it with this PR's paths (normally taken from the diff `review_collect_pr_metadata.sh` already fetched; Git-quoted headers fall back to the canonical PR-files API). Any overlap → label `ai:merge-queued`, one upserted `<!-- merge-train:queued -->` comment naming the blockers and files, `AUTOFIX_MERGE_QUEUED=true` + `AUTOFIX_STALE_BASE_SKIP=true` in `$GITHUB_ENV` so the rest of the run soft-exits. A label-add failure still soft-exits but does not write the queued marker, so the next run retries instead of mistaking automation failure for a bypass. No overlap → retire the queued marker before dropping a stale `ai:merge-queued` label. Only a marker left by a human label removal can therefore authorize the documented one-shot bypass. |
 | `release` | `cancel_on_pr_close.yml` (every closed PR, `BASE_BRANCH` = the closed PR's base) and `orchestrate_poll.yml` (every tick, before the tracking-issue gate so it also runs in repos with no active project) | Lists open PRs and recent active review runs; for each `ai:merge-queued` PR without an active review, recomputes its blockers with the same rule (file lists cached per run). When none remain, it retires the queued marker, atomically claims release by removing the label, re-dispatches the review workflow (`ai-review.yml` → `internal-review.yml` → `review_autofix.yml`, first that accepts) with `pr_number`, and best-effort upserts a `<!-- merge-train:released -->` comment. A failed dispatch restores the label for the next event or tick; a concurrent release that loses the label-removal claim does not dispatch. Cosmetic released-comment failures never stop evaluation of the remaining queue. |
+
+When the review workflow exports `IS_SMOKE_TEST=true`, the `gate` skips file
+overlap evaluation so release smoke PRs reach the reviewer/editor canary check.
+It still looks up the open PR to retire any existing queued marker before
+removing a stale `ai:merge-queued` label. Missing or other values of
+`IS_SMOKE_TEST` retain the ordinary merge-train rule; failed lookups leave
+queue cleanup for a later run without skipping review.
 
 Policy is *lowest PR number first*: the oldest PR never waits, the second
 waits for the first, and so on, so a burst of N overlapping PRs costs at most N

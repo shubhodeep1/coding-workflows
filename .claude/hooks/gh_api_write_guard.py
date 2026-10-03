@@ -74,6 +74,12 @@ Decision for the whole Bash call (a hook decides once per tool call):
     the Auto-mode classifier decides as for any other command. An allow here
     would also approve the code the guard has not read.
 
+  - exception: one complete `for VAR in TOKEN…; do BODY; done` over unquoted
+    literal IDs is allowed when every body item is a classified `gh api`
+    read, a vetted `gh run view/list` or `gh pr view` read, or a literal /
+    counter `echo`, with only safe pipe filters and `2>&1`. Writes still ask;
+    unvetted loops still receive no decision.
+
 Unlike the other hooks in this directory this one fails CLOSED: an unreadable,
 invalid, or non-object payload, or an internal error, asks instead of allowing,
 because it is the only thing standing where the ask rules were. Empty or
@@ -240,6 +246,11 @@ _ROUTINE_ENDPOINTS += (
 # to ones that open no file (`sort -o` is excluded).
 _STANDALONE_HELPERS = frozenset({"cd", "sleep", "echo", "true"})
 _SORT_KEY_RE = re.compile(r"^[0-9][0-9,.a-zA-Z]*$")
+
+# A loop counter must not change how Bash finds commands or how gh selects
+# credentials, repository, proxy, configuration, or locale on each iteration.
+_LOOP_ENV_NAMES = frozenset({"PATH", "IFS", "HOME", "ENV", "SHELL", "CDPATH", "TMPDIR", "LANG", "GLOBIGNORE"})
+_LOOP_ENV_PREFIXES = ("BASH_", "GH_", "GIT_", "XDG_", "LC_", "LD_", "PYTHON", "HTTP_", "HTTPS_", "ALL_", "NO_")
 
 
 def _is_safe_filter(words: list[str]) -> bool:
@@ -858,18 +869,17 @@ def _is_approvable_command(command: str, allow_echo_only: bool = False) -> bool:
 # A `for` loop over literal IDs whose body only reads (CLAUDE.md §23.H, issue
 # #4786). `_READ_LOOP_RE` is the fast-path test for a loop with no `gh api`
 # text; `_LOOP_HEADER_RE` is the exact frame `for VAR in TOKEN...; do ...`.
-# The loop variable is lowercase, so it can never be `PATH`, `IFS`, `GH_HOST`,
-# `GH_TOKEN`, or another variable that changes how `gh` runs, and it never
-# names a proxy (`https_proxy`, `no_proxy`, ...), because assigning to an
-# already exported lowercase proxy variable re-routes `gh`. Tokens are
+# The loop counter cannot name `PATH`, `IFS`, `GH_HOST`, `GH_TOKEN`, or
+# a proxy (`https_proxy`, `no_proxy`, ...), since assigning an exported
+# variable could change how `gh` runs. Tokens are
 # literal and never start with `-`, so `$VAR` cannot word-split, glob, carry
 # `/` or `?`, or become a flag.
 _READ_LOOP_RE = re.compile(
 	r"^\s*for\s[^\n]*;\s*do\s[^\n]*\bgh\s+(?:run\s+(?:view|list)|pr\s+view)\b[^\n]*;\s*done\s*$"
 )
-_LOOP_VAR_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+_LOOP_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _LOOP_TOKEN_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
-_LOOP_HEADER_RE = re.compile(r"^\s*for\s+([a-z_][a-z0-9_]*)\s+in((?:\s+[A-Za-z0-9._][A-Za-z0-9._-]*)+)\s*;\s*do\s")
+_LOOP_HEADER_RE = re.compile(r"^\s*for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in((?:\s+[A-Za-z0-9._][A-Za-z0-9._-]*)+)\s*;\s*do\s")
 _LOOP_VAR_PLACEHOLDER = "__GH_API_GUARD_LOOP_VAR__"
 
 # Flags `gh run view`, `gh run list`, and `gh pr view` may carry in an
@@ -968,6 +978,8 @@ def _is_loop_gh_read_subcommand(words: list[str]) -> bool:
 		word = words[index]
 		index += 1
 		if not word.startswith("-"):
+			if _LOOP_VAR_PLACEHOLDER in word and word != _LOOP_VAR_PLACEHOLDER:
+				return False
 			positionals += 1
 			continue
 		flag, value = word, None
@@ -990,8 +1002,8 @@ def _is_loop_gh_read_subcommand(words: list[str]) -> bool:
 def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bool:
 	"""True for exactly `for VAR in TOKEN...; do BODY; done` whose body only reads.
 
-	CLAUDE.md §23.H, issue #4786. VAR is a lowercase shell name that does not
-	contain `proxy`; each TOKEN is
+	CLAUDE.md §23.H, issue #4786. VAR is a shell name that cannot override
+	gh settings or a proxy; each TOKEN is
 	a literal `[A-Za-z0-9._-]+` that does not start with `-`. BODY is one or
 	more items joined by `;` or `&&`, each one of:
 	  - a `gh api` call that `classify` marks `read` (every entry of `results`
@@ -1015,7 +1027,12 @@ def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bo
 	if not header or _LOOP_VAR_PLACEHOLDER in reduced:
 		return False
 	var, loop_tokens = header.group(1), header.group(2).split()
-	if not _LOOP_VAR_RE.match(var) or "proxy" in var:
+	upper_var = var.upper()
+	if (
+		not _LOOP_VAR_RE.match(var) or "proxy" in var.lower()
+		or upper_var in _LOOP_ENV_NAMES or upper_var.endswith("_PROXY")
+		or upper_var.startswith(_LOOP_ENV_PREFIXES)
+	):
 		return False
 	if not all(_LOOP_TOKEN_RE.match(token) for token in loop_tokens):
 		return False
@@ -1066,7 +1083,10 @@ def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bo
 			return False
 		head = pipeline[0]
 		if head[0] == "echo":
-			if len(pipeline) != 1:
+			if len(pipeline) != 1 or any(
+				_LOOP_VAR_PLACEHOLDER in word and word != _LOOP_VAR_PLACEHOLDER
+				and _ECHO_READ_PLACEHOLDER not in word for word in head[1:]
+			):
 				return False
 			continue
 		if head[0] != "gh" or len(head) < 2:
@@ -1272,7 +1292,8 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	if not _RAW_GH_API_RE.search(command):
 		if _READ_LOOP_RE.match(command) and _is_approvable_read_loop(command, []):
 			return DECISION_ALLOW, "gh api guard (CLAUDE.md §23.H): for loop over literal IDs whose body only reads."
-		return None, ""
+		if not command.lstrip().startswith("for "):
+			return None, ""
 
 	stripped_command, heredocs = strip_heredoc_bodies(command)
 	if not heredocs:
