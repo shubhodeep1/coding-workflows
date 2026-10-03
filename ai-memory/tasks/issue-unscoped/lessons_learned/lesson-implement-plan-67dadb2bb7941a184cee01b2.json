@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A findings hand-off on a head that a later log-only or re-arm commit supersedes is still owed a fix: read the superseded rounds' consensus findings and fix the ones still present in the code, because the next review need not raise them again.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-67dadb2bb7941a184cee01b2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:docs/implement-plan/retire-master-session.md"
+  ]
+}

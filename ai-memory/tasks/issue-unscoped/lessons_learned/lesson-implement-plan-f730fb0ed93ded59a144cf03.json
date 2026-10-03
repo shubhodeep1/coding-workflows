@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A command step that posts \"on the blocker's thread\" or \"next to the blocker\" must say what happens in a mode where the blocker has no GitHub thread (legacy mode keeps it in the report only), or the step has no valid target.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-f730fb0ed93ded59a144cf03",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/commands/escalation-judge.md",
+    "file:CLAUDE.md"
+  ]
+}

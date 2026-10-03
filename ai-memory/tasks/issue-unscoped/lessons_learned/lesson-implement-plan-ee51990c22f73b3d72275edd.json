@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A command template that puts model-written free text into a shell argument must pass it through a file, not quotes: the text can quote untrusted evidence, and a `$(...)` in a double-quoted argument runs under a wildcard allow rule without a prompt.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-ee51990c22f73b3d72275edd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/commands/escalation-judge.md",
+    "file:.claude/scripts/escalation_ledger.py"
+  ]
+}

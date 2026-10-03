@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A state marker read back from comments must be read from a fixed position (the comment's last line) that only the writer controls, and free text in the same comment must be kept free of the marker's delimiters: otherwise text quoted from untrusted evidence becomes a trusted marker.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-01c25fb8d5401997476b071f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/commands/escalation-judge.md",
+    "file:.claude/scripts/escalation_ledger.py"
+  ]
+}

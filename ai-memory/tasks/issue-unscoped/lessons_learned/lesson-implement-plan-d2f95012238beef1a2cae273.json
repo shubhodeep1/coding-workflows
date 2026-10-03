@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A \"run once more\" grant only helps a stage that can change code: for a stage that only checks (a fix check), the extra round must be a fix PR followed by the check, or the same failure recurs unchanged.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-d2f95012238beef1a2cae273",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:.claude/commands/escalation-judge.md"
+  ]
+}

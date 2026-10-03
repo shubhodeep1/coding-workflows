@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a later section supersedes an older rule, rewrite the older text so it scopes itself to what remains (here the human ask after a wait that cannot be armed); an appended pointer leaves both instructions live.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-6126edb213996555e5d285d3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:CLAUDE.md"
+  ]
+}

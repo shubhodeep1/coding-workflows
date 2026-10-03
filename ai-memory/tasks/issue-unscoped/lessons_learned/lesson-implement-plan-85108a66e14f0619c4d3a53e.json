@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An ownership allowlist for refs must use the same exact-kind form in every branch of the rule, and list every kind the chain creates for that base in every mode; one prefix branch, or one mode's list missing a kind, reopens the gap the others closed.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-85108a66e14f0619c4d3a53e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:workflow-templates/.claude/commands/escalation-judge.md"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A command that reads state back from PR or issue comment markers must name whose markers count (author and `author_association`, as fix claims do), or any commenter can forge the state it reads.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-5557e9785290b889f637c9d4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/commands/escalation-judge.md"
+  ]
+}

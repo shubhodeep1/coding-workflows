@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A destructive action whose target comes from an editable file (a plan header, a log) must check that target against an identifier the session cannot rewrite, such as the branch name it already trusts, before acting.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-5157408e0c15880c84dfe68b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/commands/escalation-judge.md",
+    "file:CLAUDE.md"
+  ]
+}

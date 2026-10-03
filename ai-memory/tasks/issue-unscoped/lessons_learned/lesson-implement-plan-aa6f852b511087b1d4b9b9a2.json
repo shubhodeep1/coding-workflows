@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a rule matches ledger entries by free text (`why=` names the PR), make the writer emit a fixed prefix and have the script refuse entries without it; prose alone leaves the rule unenforced.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-aa6f852b511087b1d4b9b9a2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/scripts/escalation_ledger.py",
+    "file:.claude/commands/escalation-judge.md"
+  ]
+}

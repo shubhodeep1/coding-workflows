@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A gate that reads \"no new follow-up opened\" as clean must also check the follow-ups it already opened: an audit that deduplicates against existing issues reports nothing new while an earlier follow-up is still blocked.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-5a66200d0eced1c29d23c49a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/commands/implement-plan-claude.md",
+    "file:scripts/security_audit.sh"
+  ]
+}

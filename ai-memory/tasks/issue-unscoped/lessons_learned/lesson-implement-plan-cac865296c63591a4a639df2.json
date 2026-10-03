@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A \"never touch anything you did not create\" rule next to an instruction to close a pre-existing object (a source issue) must name that object as the exception, or the two read as a contradiction.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-cac865296c63591a4a639df2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/commands/escalation-judge.md",
+    "file:CLAUDE.md"
+  ]
+}

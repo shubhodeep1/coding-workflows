@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a recorder checks that free text names the same object as a hash, a format check is not enough: the hash cannot be reversed, so the recorder must take the hash's input, recompute it, and compare the named value with it.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-ec6ef02eb809b956a04c7312",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:.claude/scripts/escalation_ledger.py",
+    "file:.claude/commands/escalation-judge.md"
+  ]
+}

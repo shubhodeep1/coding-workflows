@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Before rejecting a reviewer finding with an auto-decision, re-read the plan text it cites: an auto-decision settles only what the plan leaves open, and one that contradicts the plan is a defect, not a design choice.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-9d849e2a17f08893a2247a50",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:docs/plans/retire-master-session-plan.md",
+    "file:.claude/commands/implement-plan-claude.md"
+  ]
+}

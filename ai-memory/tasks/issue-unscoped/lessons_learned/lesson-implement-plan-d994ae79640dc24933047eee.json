@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-03T05:09:07Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A check that a PR belongs to the automation before it acts on it (closing, merging) must include the PR's author, not only its refs: anyone with push access can reproduce a branch name exactly.",
+  "phase": "implement_plan",
+  "pr_number": 5164,
+  "record_id": "lesson-implement-plan-d994ae79640dc24933047eee",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:retire-master-session",
+    "file:workflow-templates/.claude/commands/escalation-judge.md",
+    "file:CLAUDE.md"
+  ]
+}
