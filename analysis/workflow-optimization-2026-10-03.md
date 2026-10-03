@@ -199,3 +199,45 @@ No `TODO`, `FIXME`, or `HACK` marker was found in the scoped workflow and script
 | Code modularization | 3 workflows, 2 shared modules, and staging/tests | Large |
 | Expression size reduction | `implement.yml`, 1 new script, staging/tests | Medium |
 | Medium/Low fixes | 4 existing files plus focused tests; overlaps rows above | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-03)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for implementation; `NEEDS_VERIFICATION` requires the specified checks first; `RISKY_SKIP` must not be auto-implemented because a stated safety trigger applies.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `RISKY_SKIP`** · `scripts/orchestrate_poll_process.sh:10441-10442`, in `finalize_integration_merge_if_needed`. **Current → proposed:** 2 → 1 GET when the recorded PR is absent from the snapshot. **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{final_pr}`. **Evidence:** Adjacent calls fetch `.state` and `.merged_at != null` from the same PR; both values are consumed at line 10444. **Proposed fix:** If manually approved, fetch one PR object and derive both fields from it, retaining the existing `final_pr_json_snapshot` path. **Safety rationale:** `RISKY_SKIP` is mandatory because this orchestrator path explicitly rechecks whether a final PR merged while integration may have advanced; the two currently independent failed reads also have distinct empty-value outcomes. **Downstream signal:** Do not auto-implement; manually review snapshot freshness and each API-failure outcome against the final-merge race before changing the calls.
+
+- **MERGE-002 — `RISKY_SKIP`** · `scripts/gh_helpers.sh:1264-1273,1384-1393`; shared caller `.github/workflows/review_autofix.yml:6613-6639`. **Current → proposed:** 2 → 1 GET on the editor-changes-lost path when both probes run. **Endpoint:** `GET /repos/{owner}/{repo}/actions/runs?branch={head_branch}&per_page=30`. **Evidence:** `autofix_retrigger_has_inflight_peer` and `autofix_changes_lost_head_retry_consumed` request the same branch-scoped snapshot, then inspect different statuses. The peer probe fails open; the retry-budget probe fails closed. **Proposed fix:** Only after manual approval, let both helpers evaluate a shared snapshot while preserving their separate failure decisions and `AUTOFIX_PEER_CHECK` / `AUTOFIX_CHANGES_LOST_BUDGET` logs. **Safety rationale:** `RISKY_SKIP` is mandatory because these are dispatch-race guards: a run can change status between reads, and sharing a failed read must not turn the retry-budget guard into fail-open behavior. **Downstream signal:** Do not auto-implement; manually review status-transition races, partial/API failures, and log-key parity.
+
+- **MERGE-003 — `RISKY_SKIP`** · `.github/workflows/clarify.yml:587,590-606`, step “Fetch issue comments.” **Current → proposed:** 2 → 1 GET for a successful, single-page semantic-cache fetch; retain the prompt-read fallback on failure. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue}/comments`, ascending by creation time. **Evidence:** The required prompt read obtains the first 50 comments; when semantic caching is enabled, a paginated read fetches the full history, including those comments. **Proposed fix:** In the cache-enabled branch, derive `ISSUE_COMMENTS_FILE`’s first 50 entries and `THREAD_HISTORY_FILE` from one successful full-history response; preserve the existing required prompt read if that response fails. **Safety rationale:** `RISKY_SKIP` is mandatory because the second call implements pagination, uses a different page size, and has an optional failure path whereas the first read is required. **Downstream signal:** Do not auto-implement; manually verify first-50 ordering across page boundaries and that cache failure still leaves prompt context available while bypassing the cache.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — the comments-list call is paginated; the fourth-argument caller at `scripts/review_merge_train.sh:359-392` also needs its ID-and-body handoff reviewed.
+- BATCH-001: `RISKY_SKIP` — the existing PR-files reads are paginated; verify page completeness and preservation of `_MT_FILES_CACHE` fallback behavior before replacing them.
+- BATCH-002: `NEEDS_VERIFICATION` — the paginated thread read can remain intact, but aliased mutations need per-thread result, reply-order, and partial-error verification.
+
+### Summary Counts
+
+Counts cover **net-new findings only**; Deep Audit cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 3 | MERGE-001, MERGE-002, MERGE-003 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
