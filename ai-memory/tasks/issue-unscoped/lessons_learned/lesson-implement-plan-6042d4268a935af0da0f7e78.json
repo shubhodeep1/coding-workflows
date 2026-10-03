@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:03:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A dedup read that treats any comment containing a hidden marker as \"already posted\" lets anyone who can comment suppress the post; require a trusted `author_association` and a body that starts with the marker.",
+  "phase": "implement_plan",
+  "pr_number": 5104,
+  "record_id": "lesson-implement-plan-6042d4268a935af0da0f7e78",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5083-guard-cap-source-issue-blocker",
+    "file:workflow-templates/.claude/hooks/unattended_question_guard.py"
+  ]
+}
