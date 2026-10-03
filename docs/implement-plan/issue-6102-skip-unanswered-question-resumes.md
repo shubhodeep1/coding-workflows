@@ -4,10 +4,10 @@
 - Source issue: shubhodeep1/coding-workflows#6102 (progress comment 5956408433)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-5660-resume-usage-limit-stops
 - Project branch: claude/implement-plan-issue-6102-skip-unanswered-question-resumes   Final PR: #6105 draft
-- Status: BLOCKED
-- Stage: phase 1/1 — review round 6
+- Status: IN_PROGRESS
+- Stage: phase 1/1 — review round 7
 - Activation: not started
-- Waiting on: PR #6112: twin sync (seventh; review round 6 fixed twin-first)
+- Waiting on: PR #6112 (review of the seventh twin sync)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01HKnvTyY9wdNoZoKqLisFzv (idle, reused on resume)   safety net none   hand-back none
 - Last updated: 2026-10-03
