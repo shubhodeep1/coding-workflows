@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan \u2014 issue #4552\n\n**Planning ref:** `claude/quirky-wozniak-e9t88m` at `1713cb60d74d871e39a2336e204b149453c25077`. It matches the supplied integration-branch metadata.\n\n**Clarification mapping:** The clarifier auto-answered because the defect was clear. The later **Q1: C** answer requires validation against the project branch after retargeting its final PR to `main`, with #4546 merged first. That is a delivery-order constraint, not a reason to skip validation.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/review_conflict_resolve.sh::_resolver_scope_state`  \nScope-mode justification: Fix both reported causes within the existing resolver: distinguish a harmless index-file refresh from a changed staged entry, and tell the model not to stage. A raw-index-only workaround would leave the reported model behavior unaddressed. The additional prompt rule and diagnostic require no dependency or external interface. This follows \u00a76 Core Priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and wiring\n\n- **Existing code only:** extend the resolver, its prompt, and its contract tests; introduce no script.\n- **Entry point:** `.github/workflows/internal-review.yml` on PR events or `workflow_dispatch` invokes `.github/workflows/review_autofix.yml`; its existing **\u201cRun Codex resolver, validate, stage, commit\u201d** step runs the resolver. No new scheduler wiring, supervisor, database operation, or removal-registry entry is needed.\n\n## Files likely to change\n\n- `scripts/review_conflict_resolve.sh` \u2014 change `_resolver_scope_state`\u2019s index comparison and improve its fail-closed diagnostic without changing the existing error line or exit behavior.\n- `prompts/conflict-resolver.txt` \u2014 explicitly prohibit model changes to the Git index or merge state; leave the integration-sync prompt unchanged.\n- `tests/test_review_conflict_resolve_retry_prelude_render.py` \u2014 extend the existing resolver-scope fixtures and assertions.\n\n## Functions or modules to implement\n\nIn `_resolver_scope_state`, compare the NUL-delimited `git ls-files -s -v -z` staged-entry representation instead of hashing `.git/index` bytes. Continue independently verifying `MERGE_HEAD`, and reject actual staging or index-flag changes before retry or commit. Keep the existing restore and final touched-set gates. On an unsafe scope result, provide a fixed, non-path-bearing reason while retaining the current `::error::` diagnostic.\n\n## Data structures affected\n\nThe attempt-local snapshot manifest\u2019s `merge` field remains the existing two-element comparison record. Its index element represents staged entries rather than raw index-file bytes; the `MERGE_HEAD` element remains independently checked. No persisted cross-run format changes.\n\n## API/interface changes\n\nNone: preserve identifiers, environment variables, log prefixes, return codes, workflow steps, and GitHub API usage.\n\n## Decisions\n\n### D1 \u2014 Compare logical staged state\n\n- **Chosen:** Compare staged entries, including index flags, while retaining the `MERGE_HEAD` check.\n- **Alternatives considered:** Keep the raw index hash; omit index checking.\n- **Why:** Raw bytes can change without a staged-entry change; omitting the check would admit model staging.\n\n### D2 \u2014 Prevent and diagnose staging\n\n- **Chosen:** Add a no-staging prompt rule and a sanitized reason for fail-closed scope errors.\n- **Alternatives considered:** Treat the failure as transient or silently retry it.\n- **Why:** The issue comment reports model `git add` commands in both failed runs. That evidence warrants prevention, but an actual staged change must still stop the run.\n\n## Security considerations\n\nThe resolver model is an untrusted writer; the runner\u2019s Git index and merge state are privileged commit inputs. The prompt is guidance, **not authorization**: the runner-side check must still reject `git add`, altered index flags, changed `MERGE_HEAD`, and out-of-scope edits. Git output and paths must not be interpreted as commands or echoed through unsanitized workflow-error text. No new endpoint or authorization surface is introduced.\n\n## Risks and edge cases\n\n- Preserve NUL-safe handling for unusual filenames and unmerged multi-stage entries.\n- Permit worktree-only conflict resolution and benign index metadata refreshes, but fail closed when staged entries or merge state actually change.\n- **Context conflict:** Comments describe a completed fix on a separate project branch and a later `main` base; the supplied planning checkout still has the raw-index comparison and lacks the prompt rule. Implement against the checked-out ref, then reconcile both fixes when the stated #4546 merge-order constraint applies. The comments\u2019 account of the full model transcript has not been independently verified here.\n\n## Testing considerations\n\nExtend the existing scratch-repository tests to prove: index bytes may refresh while staged entries stay equal and `check` succeeds; worktree-only resolution succeeds; `git add` and index-flag changes fail closed; changed `MERGE_HEAD` fails closed; restore and final touched-set checks remain enforced. Assert the prompt rule and sanitized diagnostic. Run `bash -n` on the resolver and the focused contract test before broader CI. The focused test currently passes on the planning ref, so it does not yet cover this regression.\n\n## Pre-execution self-check result\n\nThe requested files, existing helper, test entry point, and workflow wiring were inspected. No repository files were changed. Three unrelated pre-existing worktree modifications were left untouched. Live PR merge status was not verified; check it during delivery rather than assuming #4546 remains open.\n\nPLAN_SELF_CHECK: WARNING: The #4546 merge-order and final-PR retargeting constraints come from issue comments; verify current PR state before delivery.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6094235fc24721b9a781969baec29ac7663b5e4e0ecbe75925b242c6bd47a232",
+  "lineage": {
+    "issue_number": 4552,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37100688467",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37100688467",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4552"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003055101_975962ed13",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4552,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37100688467"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4552",
+  "timestamps": {
+    "created_at": "2026-10-03T05:51:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
