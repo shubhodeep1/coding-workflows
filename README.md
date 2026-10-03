@@ -2276,6 +2276,13 @@ before the topology gate, only for heads matching `ai/issue-*` and only when
 | `gate` | `review_autofix.yml` (before reviewers) | Lists open PRs on the PR's base (1 REST call, oldest first); for each **older** `ai/issue-*` PR (lower number, not draft, not `ai:review-blocked` / `ai:closed` / `ai:merged`, at most `MERGE_TRAIN_MAX_OLDER_PRS`) fetches its file list and intersects it with this PR's paths (normally taken from the diff `review_collect_pr_metadata.sh` already fetched; Git-quoted headers fall back to the canonical PR-files API). Any overlap → label `ai:merge-queued`, one upserted `<!-- merge-train:queued -->` comment naming the blockers and files, `AUTOFIX_MERGE_QUEUED=true` + `AUTOFIX_STALE_BASE_SKIP=true` in `$GITHUB_ENV` so the rest of the run soft-exits. A label-add failure still soft-exits but does not write the queued marker, so the next run retries instead of mistaking automation failure for a bypass. No overlap → retire the queued marker before dropping a stale `ai:merge-queued` label. Only a marker left by a human label removal can therefore authorize the documented one-shot bypass. |
 | `release` | `cancel_on_pr_close.yml` (every closed PR, `BASE_BRANCH` = the closed PR's base) and `orchestrate_poll.yml` (every tick, before the tracking-issue gate so it also runs in repos with no active project) | Lists open PRs and recent active review runs; for each `ai:merge-queued` PR without an active review, recomputes its blockers with the same rule (file lists cached per run). When none remain, it retires the queued marker, atomically claims release by removing the label, re-dispatches the review workflow (`ai-review.yml` → `internal-review.yml` → `review_autofix.yml`, first that accepts) with `pr_number`, and best-effort upserts a `<!-- merge-train:released -->` comment. A failed dispatch restores the label for the next event or tick; a concurrent release that loses the label-removal claim does not dispatch. Cosmetic released-comment failures never stop evaluation of the remaining queue. |
 
+When the review workflow exports `IS_SMOKE_TEST=true`, the `gate` skips file
+overlap evaluation so release smoke PRs reach the reviewer/editor canary check.
+It still looks up the open PR to retire any existing queued marker before
+removing a stale `ai:merge-queued` label. Missing or other values of
+`IS_SMOKE_TEST` retain the ordinary merge-train rule; failed lookups leave
+queue cleanup for a later run without skipping review.
+
 Policy is *lowest PR number first*: the oldest PR never waits, the second
 waits for the first, and so on, so a burst of N overlapping PRs costs at most N
 resolver rounds (each PR resolves once, pre-review, when its turn comes)
