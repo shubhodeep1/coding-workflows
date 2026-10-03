@@ -5,13 +5,27 @@
   "entry_id": "processed_command_4786_5966102206_approved",
   "issue_number": 4786,
   "metadata": {
+    "branch": "ai/issue-4786",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".claude/hooks/gh_api_write_guard.py",
+      "CLAUDE.md",
+      "changelog.d/4786-guard-read-loops.md",
+      "tests/test_gh_api_write_guard.py",
+      "workflow-templates/.claude/hooks/gh_api_write_guard.py"
+    ],
+    "issue_number": 4786,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/4786",
+    "pr_number": 6122,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6122",
+    "run_attempt": "1",
+    "run_id": "37101144603",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37101144603"
   },
   "run_attempt": 1,
   "run_id": "37101144603",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-03T05:53:44Z",
+  "status": "completed",
+  "timestamp": "2026-10-03T06:12:08Z",
   "workflow": "implement"
 }
