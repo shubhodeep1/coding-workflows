@@ -107,7 +107,7 @@ def test_judge_close_path(judge):
 	# The source issue predates the chain, so the ownership rule must not read
 	# as forbidding its close (review round 1 on c5d9082).
 	assert "Never delete a branch and never close a PR the chain did not open." in close
-	assert "The source issue is the one thing you close that the chain did not open: in issue mode, close it as above (the issue the plan header's `Source issue:` line names, and no other issue)." in close
+	assert "The source issue is the one thing you close that the chain did not open: in issue mode, close it as above (the issue the plan header's `Source issue:` line names, and no other issue), and only when that line proves it is this project's issue." in close
 	assert "never close anything the chain did not open" not in close
 	assert "Archive the project checker after the checker archive check" in close
 	assert "send **one** `PushNotification`" in close
@@ -231,7 +231,7 @@ def test_judge_close_checks_the_head_ref_before_closing(judge):
 	section = claude.split("### G) Escalation Judge", 1)[1].split("## FINAL REMINDER", 1)[0]
 	assert "it closes a PR from the log only when its author is the account the chain opens its PRs with (the `mcp__github__get_me` login), its head is in this repository, and its head and base refs prove it is this project's" in section
 	assert "so a project whose slug starts with this one's is never matched, a PR another account opened from a branch named like the chain's is never closed, and it lists any other PR in its report instead" in section
-	assert "never closes a PR the chain did not open (the one thing it closes that the chain did not open is the source issue the plan header names, in issue mode)" in section
+	assert "never closes a PR the chain did not open (the one thing it closes that the chain did not open is the source issue the plan header names, in issue mode, and only when the header names this repository and the issue number of the slug's `issue-<N>-` prefix)" in section
 	assert "never closes anything the chain did not open" not in section
 	assert "(with the `get_me` login it compared the author with), as it does a PR or issue whose state read fails twice, which it never closes" in section
 
@@ -317,8 +317,19 @@ def test_judge_close_notification_names_prs_left_open(judge):
 	# After a failed `get_me` read the count is still only the PRs left open,
 	# and an unclosed source issue is named too (review round 2 on afb2964).
 	assert "every PR the state reads above showed still open, and every PR whose state read failed, never one already merged or closed" in close
-	assert "counting only the PRs the report lists; and, in issue mode, adding `; source issue #<N> left open, see the report` when its state read or its close failed" in close
+	assert "counting only the PRs the report lists; and, in issue mode, adding `; source issue #<N> left open, see the report` when its state read, its identity check against the slug, or its close failed" in close
 	assert close.count("`PushNotification`") == 1
+
+
+def test_judge_close_checks_the_source_issue_against_the_slug(judge):
+	# The plan header is editable, so a tampered or mistyped `Source issue:`
+	# line must never close an unrelated issue (review round 2 on b2554cc).
+	close = judge[judge.index("**`close`** → close the project yourself"):judge.index("9. **Report**")]
+	assert "and only when that line proves it is this project's issue" in close
+	assert "`/implement-issue-claude` names every issue-mode slug `issue-<N>-<topic>`" in close
+	assert "the line's `<owner>/<repo>` must be this repository, its `#<N>` must equal the `<N>` of the slug's `issue-<N>-` prefix, and the issue's own state read must return that number" in close
+	assert "When any of these does not hold, do not close the issue: list the header line, the slug, and the check that failed in the report so a human can decide." in close
+	assert close.index("and only when that line proves it is this project's issue") < close.index("Write the report")
 
 
 def test_security_clean_pass_checks_earlier_followups(plan):
@@ -492,6 +503,20 @@ def test_every_cap_defers_to_the_escalations_counting_rule(plan):
 		assert cap in procedure, cap
 	hand_back = plan[plan.index("### Hand-back"):plan.index("### Fallbacks")]
 	assert "3 interventions per PR plus any rounds the escalation judge granted" in hand_back
+
+
+def test_rules_summary_caps_match_the_procedure(plan):
+	# The Rules summary must not send a capped stage to a human or drop the
+	# judge's granted rounds (review round 1 on d6473bd).
+	rules = plan[plan.index("## Rules"):]
+	assert "At most 3 interventions per PR before asking." not in rules
+	assert "At most 3 interventions per PR, plus any rounds the [escalation judge](#escalations) granted for that failure; the next blocked stage is escalation stop `intervention-cap`, never a human ask." in rules
+	assert "At most 3 conformance runs per project, plus any the [escalation judge](#escalations) granted;" in rules
+	assert "(cap 5 cycles, plus any the [escalation judge](#escalations) granted)" in rules
+	assert "(cap 3 cycles, plus any the [escalation judge](#escalations) granted)" in rules
+	# `close` stays available for a failure that already had one.
+	assert "never repeats a choice for the same failure" not in rules
+	assert "never picks `budget` or `descope` twice for the same failure (`close` always stays available)" in rules
 
 
 def test_resume_template_carries_the_stop_id(plan):

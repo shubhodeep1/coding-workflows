@@ -2419,7 +2419,9 @@ repo that receives this file via the `@stable` sync.
     advance (Q4: A), so they are not a §23.C ask here. The judge never
     deletes a branch and never closes a PR the chain did not open (the
     one thing it closes that the chain did not open is the source issue
-    the plan header names, in issue mode): it
+    the plan header names, in issue mode, and only when the header names
+    this repository and the issue number of the slug's `issue-<N>-`
+    prefix): it
     closes a PR from the log only when its author is the account the chain
     opens its PRs with (the `mcp__github__get_me` login), its head is in
     this repository, and its head and base refs prove it is this project's
