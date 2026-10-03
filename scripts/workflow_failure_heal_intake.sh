@@ -263,6 +263,57 @@ if [ -z "${FIRST_WORKFLOW_NAME}" ]; then
 	FIRST_WORKFLOW_NAME="label:${LABEL:-unknown}"
 fi
 
+# Provider failures are environmental, not code defects. Verify the bounded
+# reporting evidence (or every failed release job) before the ordinary heal
+# budget/model path. The intake workflow serializes issue creation; comments
+# form the durable recovery ledger for the scheduled probe.
+OUTAGE_STATUS=""
+if [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${FAILURE_REASON}" = "provider_unavailable" ] && [ -s "${FAILURE_EVIDENCE_FILE}" ]; then
+	OUTAGE_STATUS="$(python3 "${HEAL_PY}" outage-classify --failed-step 'Run reviewer models' --evidence-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || true)"
+elif [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${SUMMARY_COUNT}" -gt 0 ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
+	OUTAGE_ARGS=()
+	for f in "${LOG_FILES[@]}"; do OUTAGE_ARGS+=(--evidence-file "${f}"); done
+	# A partial failed-job sample cannot establish "sole cause".
+	RELEASE_FAILED_JOB_COUNT="$(jq '[.jobs[] | select((.conclusion // "") | IN("failure", "timed_out", "cancelled"))] | length' "${LOG_DIR}/run-$(jq -r '.run_refs[0].run_id' "${PAYLOAD_FILE}")-jobs.json" 2>/dev/null || echo 0)"
+	if [ "${RELEASE_FAILED_JOB_COUNT}" -eq "${SUMMARY_COUNT}" ] 2>/dev/null; then
+		OUTAGE_STATUS="$(python3 "${HEAL_PY}" outage-classify --require-each --failed-step "${FIRST_FAILING_STEP}" "${OUTAGE_ARGS[@]}" 2>/dev/null || true)"
+	fi
+fi
+if [[ "${OUTAGE_STATUS}" =~ ^(401|402|429|5[0-9][0-9])$ ]] && [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] \
+	&& { [ "${SOURCE_KIND}" = "workflow_run" ] || [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; }; then
+	if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+		# A manually supplied payload is not a reporter attestation. Only the
+		# account that holds GH_PAT may dispatch a provider-outage report.
+		# API audit: the existing jobs/log and heal-issue list reads do not
+		# return the account authenticated by GH_PAT; /user is needed here.
+		OUTAGE_REPORT_AUTHOR="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+		OUTAGE_EVENT_SENDER="${WORKFLOW_HEAL_EVENT_SENDER_LOGIN:-}"
+		if [ "${WORKFLOW_HEAL_EVENT_NAME:-}" != "repository_dispatch" ] || [ -z "${OUTAGE_REPORT_AUTHOR}" ] || [ "${OUTAGE_EVENT_SENDER,,}" != "${OUTAGE_REPORT_AUTHOR,,}" ]; then
+			log "skip reason=untrusted_provider_report source=${SOURCE_LABEL}"
+			exit 0
+		fi
+	fi
+	OUTAGE_PR="${ISSUE_NUMBER:-0}"
+	if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+		# run_refs may lead with older failures; the reporter URL binds this
+		# entry to the run that actually supplied the provider evidence.
+		OUTAGE_RUN="$(jq -r '.reporter_run_url // ""' "${PAYLOAD_FILE}" | sed -nE 's@^https://github.com/[^/]+/[^/]+/actions/runs/([0-9]+)$@\1@p')"
+	else
+		OUTAGE_RUN="$(jq -r '.run_refs[0].run_id // ""' "${PAYLOAD_FILE}")"
+	fi
+	if [[ "${OUTAGE_RUN}" =~ ^[0-9]+$ ]]; then
+		if ! OUTAGE_RESULT="$(python3 "${HEAL_PY}" outage-record --owner "${SELF_REPO}" --repo "${SOURCE_REPO}" --pr "${OUTAGE_PR}" --head "${HEAD_SHA}" --run "${OUTAGE_RUN}" --status "${OUTAGE_STATUS}" 2>/dev/null)"; then
+			log "error outage_record_failed source=${SOURCE_LABEL}"
+			exit 1
+		fi
+		log "provider_unavailable source=${SOURCE_LABEL} status=${OUTAGE_STATUS} $(printf '%s' "${OUTAGE_RESULT}" | tr '\n' ' ')"
+		if printf '%s\n' "${OUTAGE_RESULT}" | grep -qx 'created=1'; then
+			tg_send_msg "OpenRouter provider unavailable (HTTP ${OUTAGE_STATUS}); credential OPENROUTER_API_KEY. Reviews paused; automated probe will resume them." "ERROR" >/dev/null 2>&1 || true
+		fi
+		exit 0
+	fi
+fi
+
 # A failed promote / auto-release run whose only failure is "the smoke gate
 # failed" duplicates the gate run's own report; the gate run carries the logs.
 if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then

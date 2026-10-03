@@ -65,6 +65,7 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 		(
 			"github.event_name == 'issues'",
 			"github.event.action == 'opened'",
+			"github.event.issue.title != 'AI Provider Outage: OpenRouter'",
 			"'ai:orchestrator-tracking'",
 			"'ai:security-audit'",
 			"'ai:retro'",

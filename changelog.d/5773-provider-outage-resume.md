@@ -1,0 +1,2 @@
+<!-- changelog: changed -->
+- **Reviewer model-provider outages pause reviews instead of blocking PRs, then resume when the repository's key works again.** A single marked outage issue records affected PR heads. Scheduled, key-local probes retry only those still paused on the same head, without disabling the fingerprint cap for real failures. Release reruns remain opt-in (`PROVIDER_OUTAGE_RELEASE_RERUN=true`).

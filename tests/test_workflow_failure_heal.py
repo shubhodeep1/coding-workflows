@@ -65,6 +65,231 @@ def _load_lib():
 heal = _load_lib()
 
 
+def test_provider_failure_classification_is_bound_to_model_calls() -> None:
+	assert heal.provider_failure_status("LLM keyword extraction failed on attempt 1/3: HTTP Error 402: Payment Required", failed_step="Run reviewer models") == "402"
+	assert heal.provider_failure_status("OpenRouter reviewer: Insufficient credits", failed_step="Run reviewer models") == "402"
+	assert heal.provider_failure_status("OpenRouter provider key: HTTP Error 401", failed_step="Run reviewer models") == "401"
+	assert heal.provider_failure_status("OpenRouter reviewer failed on attempt 3/3: status 429", failed_step="Run reviewer models") == "429"
+	assert heal.provider_failure_status("OpenRouter reviewer failed on attempt 2/2: code 503", failed_step="Run reviewer models") == "503"
+	assert heal.provider_failure_status('{"provider":"OpenRouter","error":{"code":402,"message":"insufficient_credits"}}', failed_step="Run reviewer models") == "402"
+	assert not heal.provider_failure_status("OpenRouter reviewer failed on attempt 1/3: status 429", failed_step="Run reviewer models")
+	assert not heal.provider_failure_status("gh api https://api.github.com/repos/acme/repo: HTTP Error 402", failed_step="Run reviewer models")
+	assert not heal.provider_failure_status("OpenRouter reviewer: HTTP Error 402", failed_step="Collect PR metadata")
+	assert heal.provider_failure_status("OpenRouter editor: HTTP Error 402", failed_step="Run editor", reviewers_successful=1) == "402"
+	assert not heal.provider_failure_status("OpenRouter reviewer failed on attempt 3/3: status 429", failed_step="Run reviewer models", reviewers_successful=1)
+	assert not heal.provider_failure_status("KeyError: broken reviewer\nOpenRouter reviewer: HTTP Error 402", failed_step="Run reviewer models")
+
+
+def test_provider_pause_breaks_cap_and_heal_streak() -> None:
+	head = SHA_A
+	marker = heal.render_failure_marker(head, "workflow_failure", FP_HEX, False, "5324")
+	outage = heal.render_failure_marker(head, "provider_unavailable", FP_HEX, False, "5178")
+	comments = [
+		{"user": {"login": "bot"}, "body": f"**AI review/autofix failed**\n{marker}"},
+		{"user": {"login": "bot"}, "body": f"<!-- ai:provider-paused:v1 head={head} run=5178 -->\n{outage}"},
+	]
+	assert heal.count_identical_failures(comments, head_sha=head, author_login="bot")["count"] == 0
+	assert heal.count_autofix_failure_streak(comments) == 0
+	assert heal.count_identical_failures(comments, head_sha=head, author_login="intruder")["count"] == 0
+	legacy = [
+		{"user": {"login": "bot"}, "body": "**AI review/autofix failed**\n**First error:** `LLM keyword extraction failed on attempt 1/3: HTTP Error 402: Payment Required`\n" + heal.render_failure_marker(head, "workflow_failure", FP_HEX, False, str(run))}
+		for run in (5324, 5178, 5215)
+	]
+	assert heal.count_identical_failures(legacy, head_sha=head, author_login="bot")["count"] == 0
+
+
+def test_outage_ledger_only_accepts_authenticated_exact_comments() -> None:
+	item = f"<!-- ai:provider-outage-item:v1 repo={SELF_REPO} pr=5324 head={SHA_A} run=111 status=402 -->"
+	done = f"<!-- ai:provider-outage-done:v1 repo={SELF_REPO} pr=5324 head={SHA_A} run=111 -->"
+	rows, completed = heal.outage_records([
+		{"user": {"login": "intruder"}, "body": done},
+		{"user": {"login": "bot"}, "body": item},
+		{"user": {"login": "bot"}, "body": done + " untrusted suffix"},
+	], "bot")
+	assert rows == {(SELF_REPO, "5324", SHA_A, "111"): "402"}
+	assert not completed
+	assert heal.outage_records([{"user": {"login": "bot"}, "body": item}, {"user": {"login": "bot"}, "body": done}], "bot")[1] == set(rows)
+
+
+def test_outage_recover_dispatches_only_current_paused_head(monkeypatch, capsys) -> None:
+	import argparse
+	key = (SELF_REPO, "5324", SHA_A, "111")
+	other = (SELF_REPO, "5178", SHA_B, "112")
+	third = (SELF_REPO, "5215", SHA_A, "113")
+	items = {key: "402", other: "402", third: "402"}
+	completed: set[tuple[str, str, str, str]] = set()
+	requests = []
+	monkeypatch.setattr(heal, "_outage_identity", lambda: "bot")
+	monkeypatch.setattr(heal, "_outage_issue", lambda owner, identity: {"number": 77})
+	monkeypatch.setattr(heal, "_outage_comments", lambda owner, number: [
+		{"user": {"login": "bot"}, "body": f"<!-- ai:provider-paused:v1 head={SHA_A} run={111 if number == 5324 else 113} -->"}
+	] if number in (5324, 5215) else [])
+	monkeypatch.setattr(heal, "outage_records", lambda comments, author: (items, completed))
+	monkeypatch.setattr(heal, "_outage_probe", lambda model: True)
+	monkeypatch.setattr(heal, "_outage_active_reviews", lambda repo, workflow: [])
+	def fake_gh(*args, **kwargs):
+		requests.append(args)
+		if "/pulls/" in args[0]:
+			return {"state": "open", "draft": False, "head": {"sha": SHA_A}}
+		if len(args) > 2 and args[2].endswith("/runs"):
+			return {"workflow_runs": []}
+		return {}
+	def fake_comment(owner, number, body):
+		completed.add(key if "pr=5324" in body else third if "pr=5215" in body else other)
+	monkeypatch.setattr(heal, "_outage_gh", fake_gh)
+	monkeypatch.setattr(heal, "_outage_comment", fake_comment)
+	args = argparse.Namespace(owner=SELF_REPO, repo=SELF_REPO, workflow="internal-review.yml", default_branch="main", model="openai/gpt-6-luna", release_rerun="false")
+	assert heal._cmd_outage_recover(args) == 0
+	assert any("inputs[pr_number]=5324" in req for req in requests)
+	assert any("inputs[pr_number]=5215" in req for req in requests)
+	assert not any("inputs[pr_number]=5178" in req for req in requests)
+	assert completed == set(items)
+	assert not any("/labels" in str(arg) for request in requests for arg in request)
+
+
+def test_outage_issue_record_is_single_and_release_rerun_defaults_off(monkeypatch, capsys) -> None:
+	import argparse
+	issue = {}
+	comments = []
+	calls = []
+	monkeypatch.setattr(heal, "_outage_identity", lambda: "bot")
+	monkeypatch.setattr(heal, "_outage_issue", lambda owner, login: issue or None)
+	monkeypatch.setattr(heal, "_outage_comments", lambda owner, number: comments)
+	monkeypatch.setattr(heal, "_outage_probe", lambda model: True)
+	def gh(*args, **kwargs):
+		calls.append(args)
+		if args[0] == "-X" and args[1] == "POST" and args[2].endswith("/issues"):
+			issue.update(number=77, body=next(part[5:] for part in args if part.startswith("body=")), user={"login": "bot"})
+			return issue
+		return {}
+	def post(owner, number, body):
+		comments.append({"user": {"login": "bot"}, "body": body})
+	monkeypatch.setattr(heal, "_outage_gh", gh)
+	monkeypatch.setattr(heal, "_outage_comment", post)
+	args = argparse.Namespace(owner=SELF_REPO, repo=SELF_REPO, pr="0", head=SHA_A, run="111", status="402")
+	assert heal._cmd_outage_record(args) == 0
+	assert heal._cmd_outage_record(args) == 0
+	assert sum("title=AI Provider Outage: OpenRouter" in call for request in calls for call in request) == 1
+	assert len(comments) == 0
+	assert "ai:provider-outage-item:v1" in issue["body"]
+	cap = capsys.readouterr().out
+	assert "created=1" in cap and "created=0" in cap
+	assert heal._cmd_outage_recover(argparse.Namespace(owner=SELF_REPO, repo=SELF_REPO, model="openai/gpt-6-luna", default_branch="main", workflow="internal-review.yml", release_rerun="false")) == 0
+	assert "outage_release=not_rerun_disabled" in capsys.readouterr().out
+	assert not any("/rerun" in str(arg) or "/labels" in str(arg) for request in calls for arg in request)
+
+
+def test_release_rerun_opt_in_needs_fresh_head_and_no_newer_run(monkeypatch) -> None:
+	import argparse
+	key = (SELF_REPO, "0", SHA_A, "111")
+	completed: set[tuple[str, str, str, str]] = set()
+	requests = []
+	newer = [False]
+	monkeypatch.setattr(heal, "_outage_identity", lambda: "bot")
+	monkeypatch.setattr(heal, "_outage_issue", lambda owner, identity: {"number": 77})
+	monkeypatch.setattr(heal, "_outage_comments", lambda owner, number: [])
+	monkeypatch.setattr(heal, "outage_records", lambda comments, author: ({key: "402"}, completed))
+	monkeypatch.setattr(heal, "_outage_probe", lambda model: True)
+	monkeypatch.setattr(heal, "_outage_comment", lambda owner, number, body: completed.add(key))
+	def gh(*args):
+		requests.append(args)
+		path = args[0] if len(args) == 1 else args[2]
+		if path.endswith("/runs/111"):
+			return {"workflow_id": 44, "head_branch": "main", "name": "Mark Stable Release", "head_sha": SHA_A, "conclusion": "failure"}
+		if path.endswith("/runs"):
+			return {"workflow_runs": [{"id": 112 if newer[0] else 111}]}
+		if path.endswith("/branches/main"):
+			return {"commit": {"sha": SHA_A}}
+		return {}
+	monkeypatch.setattr(heal, "_outage_gh", gh)
+	args = argparse.Namespace(owner=SELF_REPO, repo=SELF_REPO, workflow="internal-review.yml", default_branch="main", model="openai/gpt-6-luna", release_rerun="true")
+	newer[0] = True
+	assert heal._cmd_outage_recover(args) == 0
+	assert not any("/rerun" in str(arg) for req in requests for arg in req)
+	completed.clear()
+	requests.clear()
+	newer[0] = False
+	assert heal._cmd_outage_recover(args) == 0
+	assert any("/rerun" in str(arg) for req in requests for arg in req)
+
+
+def test_consumer_outage_requires_its_own_successful_probe(monkeypatch, capsys) -> None:
+	import argparse
+	items = {(SELF_REPO, "5324", SHA_A, "111"): "402", (CONSUMER_REPO, "5215", SHA_B, "112"): "402"}
+	completed: set[tuple[str, str, str, str]] = set()
+	requests = []
+	probes = {SELF_REPO: True, CONSUMER_REPO: False}
+	monkeypatch.setattr(heal, "_outage_identity", lambda: "bot")
+	monkeypatch.setattr(heal, "_outage_issue", lambda owner, identity: {"number": 77})
+	monkeypatch.setattr(heal, "outage_records", lambda comments, author: (items, completed))
+	monkeypatch.setattr(heal, "_outage_comments", lambda owner, number: [
+		{"user": {"login": "bot"}, "body": f"<!-- ai:provider-paused:v1 head={SHA_A if owner == SELF_REPO else SHA_B} run={111 if owner == SELF_REPO else 112} -->"}
+	] if number != 77 else [])
+	monkeypatch.setattr(heal, "_outage_active_reviews", lambda repo, workflow: [])
+	monkeypatch.setattr(heal, "_outage_gh", lambda *args, **kwargs: requests.append(args) or ({"state": "open", "draft": False, "head": {"sha": SHA_A if "/pulls/5324" in str(args) else SHA_B}} if "/pulls/" in str(args) else {}))
+	monkeypatch.setattr(heal, "_outage_comment", lambda owner, number, body: completed.add(next(key for key in items if f"repo={key[0]} pr={key[1]} " in body)))
+	monkeypatch.setattr(heal, "_outage_probe", lambda model: probes[current_repo[0]])
+	current_repo = [SELF_REPO]
+	args = argparse.Namespace(owner=SELF_REPO, repo=SELF_REPO, workflow="internal-review.yml", default_branch="main", model="openai/gpt-6-luna", release_rerun="false")
+	assert heal._cmd_outage_recover(args) == 0
+	assert len(completed) == 1
+	assert not any("state=closed" in str(request) for request in requests)
+	current_repo[0] = CONSUMER_REPO
+	args.repo, args.workflow = CONSUMER_REPO, "ai-review.yml"
+	assert heal._cmd_outage_recover(args) == 0
+	assert len(completed) == 1
+	probes[CONSUMER_REPO] = True
+	assert heal._cmd_outage_recover(args) == 0
+	assert len(completed) == 2
+	assert not any("state=closed" in str(request) for request in requests)
+	args.repo, args.workflow = SELF_REPO, "internal-review.yml"
+	assert heal._cmd_outage_recover(args) == 0
+	assert any("state=closed" in str(request) for request in requests)
+
+
+def test_outage_probe_is_scheduled_with_local_key_and_pauses_review() -> None:
+	source_sweep = (REPO_ROOT / ".github/workflows/review_autofix_sweep.yml").read_text()
+	consumer = (REPO_ROOT / "workflow-templates/ai-review.yml").read_text()
+	review = REVIEW_AUTOFIX_WORKFLOW.read_text()
+	assert "cron: '*/30 * * * *'" in source_sweep and "cron: '*/30 * * * *'" in consumer
+	assert "outage-recover" in source_sweep and "outage-status" in source_sweep
+	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in source_sweep
+	assert "github.event_name != 'schedule'" in consumer
+	assert "probe_only: true" in consumer
+	assert "if: inputs.probe_only != true" in review
+	assert "if: inputs.probe_only == true" in review
+	assert "reason=provider_unavailable" in review
+	assert "env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'" in review
+	assert "AUTOFIX_PROVIDER_PAUSE_COMMENT_POSTED" in review
+	intake = INTAKE_WORKFLOW.read_text()
+	assert "WORKFLOW_HEAL_EVENT_SENDER_LOGIN: ${{ github.event.sender.login }}" in intake
+	assert "WORKFLOW_HEAL_EVENT_NAME: ${{ github.event_name }}" in intake
+
+
+def test_outage_probe_requires_completion_not_just_http_200(monkeypatch) -> None:
+	monkeypatch.setenv("OPENROUTER_API_KEY", "fixture-key-not-real")
+	requests = []
+	class Response:
+		def __init__(self, payload):
+			self.payload = payload
+		def __enter__(self):
+			return self
+		def __exit__(self, *args):
+			return False
+		def read(self, limit):
+			assert limit <= 65537
+			return json.dumps(self.payload).encode()
+	def open_response(request, timeout):
+		requests.append((request, timeout))
+		return Response({"choices": []} if len(requests) == 1 else {"choices": [{"message": {"content": "OK"}}]})
+	monkeypatch.setattr(heal.urllib.request, "urlopen", open_response)
+	assert not heal._outage_probe("openai/gpt-6-luna")
+	assert heal._outage_probe("openai/gpt-6-luna")
+	assert len(requests) == 2 and all(timeout <= 25 for _, timeout in requests)
+	assert all(request.full_url == "https://openrouter.ai/api/v1/chat/completions" for request, _ in requests)
+	assert not heal._outage_probe("../../injected")
+
+
 def _yaml(path: Path) -> dict:
 	return yaml.safe_load(path.read_text(encoding="utf-8"))
 

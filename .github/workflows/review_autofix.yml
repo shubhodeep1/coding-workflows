@@ -72,6 +72,11 @@ on:
         required: false
         default: ""
         type: string
+      probe_only:
+        description: "Scheduled consumer-key provider outage probe; never review a PR"
+        required: false
+        default: false
+        type: boolean
     secrets:
       GH_PAT:
         required: true
@@ -273,7 +278,54 @@ env:
     workflow_failure_heal.py workflow_failure_heal_autofix_report.sh
 
 jobs:
+  provider-outage-probe:
+    if: inputs.probe_only == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve verified stable support
+        id: support
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          tag="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+          kind="$(jq -r '.object.type // ""' <<< "${tag}")"
+          sha="$(jq -r '.object.sha // ""' <<< "${tag}")"
+          if [ "${kind}" = tag ] && [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            tag="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${sha}")"
+            kind="$(jq -r '.object.type // ""' <<< "${tag}")"
+            sha="$(jq -r '.object.sha // ""' <<< "${tag}")"
+          fi
+          [ "${kind}" = commit ] && [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+      - name: Checkout verified support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ steps.support.outputs.sha }}
+          token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+          sparse-checkout: scripts/workflow_failure_heal.py
+          sparse-checkout-cone-mode: false
+      - name: Probe consumer key and resume local reviews
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
+        run: |
+          set -euo pipefail
+          state="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal.py outage-status --repo "${REPOSITORY}" 2>/dev/null)" || exit 0
+          if printf '%s\n' "${state}" | grep -qx 'open=1'; then
+            result="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal.py outage-recover \
+              --repo "${REPOSITORY}" --model "${OUTAGE_PROBE_MODEL}" --workflow ai-review.yml \
+              --default-branch "${DEFAULT_BRANCH}" 2>/dev/null)" || true
+            echo "PROVIDER_OUTAGE_PROBE ${result:-resume_incomplete}"
+          fi
   gate:
+    if: inputs.probe_only != true
     runs-on: ubuntu-latest
     outputs:
       review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}
@@ -372,7 +424,6 @@ jobs:
       # autofix-identical-failure-count subcommand.
       - name: Checkout fingerprint cap helper
         id: checkout_fingerprint_cap
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -385,7 +436,6 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Verify fingerprint cap support identity
-        if: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED != 'false' }}
         env:
           WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
           WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}
@@ -1018,6 +1068,22 @@ jobs:
                     fi
                   fi
                 fi
+              fi
+            fi
+          fi
+
+          # A trusted provider-outage marker pauses *all* review paths before
+          # model spend, including event-triggered runs and deterministic merge.
+          if [ "${SHOULD_RUN}" = "true" ] && [ "${FINGERPRINT_CAP_SUPPORT_VERIFIED:-false}" = "true" ]; then
+            # Reuse the gate's /user identity and PR comments read (the cap
+            # below needs them too); don't spend another /user lookup.
+            gate_fetch_marker_comments
+            if [ "${gate_marker_fetch_state}" = "ok" ]; then
+              outage_state="$(PYTHONDONTWRITEBYTECODE=1 python3 .codex-workflow-src/scripts/workflow_failure_heal.py outage-status --repo "${REPOSITORY}" --author-login "${gate_marker_author_login}" 2>/dev/null || true)"
+              if printf '%s\n' "${outage_state}" | grep -qx 'open=1'; then
+                SHOULD_RUN="false"
+                SKIP_REASON="provider_unavailable"
+                echo "AUTOFIX_GATE_SKIP reason=provider_unavailable repo=${REPOSITORY}"
               fi
             fi
           fi
@@ -4440,7 +4506,8 @@ jobs:
             export AUTOFIX_RESUME_RESTORED=false AUTOFIX_RESUME_SHOULD_CONTINUE=false REVIEW_REVIEWER_ITERATION_SCOPING=0
           fi
           reviewers_rc=0
-          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" || reviewers_rc=$?
+          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" \
+            2> >(tee "${RUNTIME_DIR}/reviewers_stage_stderr.txt" >&2) || reviewers_rc=$?
 
           if [ -n "${materiality_pid}" ]; then
             materiality_rc=0
@@ -5081,6 +5148,25 @@ jobs:
                 done
                 PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" reviewer-failure-evidence "${reviewers_failure_log_args[@]}" \
                   > "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || : > "${RUNTIME_DIR}/reviewers_failure_evidence.txt"
+                provider_log_args=()
+                for provider_log in "${RUNTIME_DIR}"/reviewers_stage_stderr.txt "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/*.log "${RUNTIME_DIR}"/summariser_*.log; do
+                  [ -s "${provider_log}" ] && provider_log_args+=(--evidence-file "${provider_log}")
+                done
+                reviewer_success_status=false
+                for reviewer_status_file in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/status_pass1_*.txt "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/status_review_*.txt; do
+                  if [ -f "${reviewer_status_file}" ] && grep -qx success "${reviewer_status_file}"; then
+                    reviewer_success_status=true
+                    break
+                  fi
+                done
+                if [ "${#provider_log_args[@]}" -gt 0 ] && [ "${REVIEWERS_SUCCESSFUL:-0}" = "0" ] && [ "${reviewer_success_status}" = false ]; then
+                  provider_status="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" outage-classify --failed-step 'Run reviewer models' "${provider_log_args[@]}" 2>/dev/null || true)"
+                  if [ -n "${provider_status}" ]; then
+                    autofix_empty_failure_reason="provider_unavailable"
+                    echo "AUTOFIX_FAILURE_REASON=provider_unavailable" >> "$GITHUB_ENV"
+                    echo "AUTOFIX_PROVIDER_STATUS=${provider_status}" >> "$GITHUB_ENV"
+                  fi
+                fi
                 echo "AUTOFIX_REVIEWERS_FAILED reason=reviewers_failed $(grep -m1 '^dominant_rc=' "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null || echo dominant_rc=unknown)"
               fi
             fi
@@ -5112,7 +5198,14 @@ jobs:
           EOF
           )"
             NOOP_BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${NOOP_BODY}" >/dev/null 2>&1 || true
+            if [ "${autofix_empty_failure_reason}" = "provider_unavailable" ] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+              NOOP_BODY="**AI review/autofix paused: OpenRouter unavailable**"$'\n\n'"The scheduled provider probe will resume this review automatically. No PR fix or review-blocked label is needed."$'\n\n'"<!-- ai:provider-paused:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} run=${GITHUB_RUN_ID} -->"$'\n'"${AUTOFIX_FAILURE_MARKER_SUFFIX}"
+            fi
+            if gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${NOOP_BODY}" >/dev/null 2>&1; then
+              if [ "${autofix_empty_failure_reason}" = "provider_unavailable" ]; then
+                echo "AUTOFIX_PROVIDER_PAUSE_COMMENT_POSTED=true" >> "$GITHUB_ENV"
+              fi
+            fi
             echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"
             exit 1
           fi
@@ -7040,6 +7133,7 @@ jobs:
           echo "AUTOFIX_FAILED_STEP=${failed_step}" >> "$GITHUB_ENV"
           if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
             first_error="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" failure-headline \
+              --evidence-file "${RUNTIME_DIR:-}/reviewers_stage_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
@@ -7056,9 +7150,23 @@ jobs:
           if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
             evidence_out="${RUNTIME_DIR}/failure_evidence_tail.txt"
           fi
+          reviewer_success_arg=()
+          if [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ] 2>/dev/null; then
+            reviewer_success_arg=(--reviewers-successful)
+          else
+            for reviewer_status_file in "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/status_pass1_*.txt "${PREVIOUS_REVIEWS_DIR:-/nonexistent}"/status_review_*.txt; do
+              if [ -f "${reviewer_status_file}" ] && grep -qx success "${reviewer_status_file}"; then
+                reviewer_success_arg=(--reviewers-successful)
+                break
+              fi
+            done
+          fi
           fingerprint_out="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
             --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
+            --failed-step "${failed_step}" \
+            "${reviewer_success_arg[@]}" \
             --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
+            --evidence-file "${RUNTIME_DIR:-}/reviewers_stage_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
             --evidence-file "${RUNTIME_DIR:-}/resolver_stage_stderr.txt" \
@@ -7079,11 +7187,29 @@ jobs:
             echo "AUTOFIX_FAILURE_FP=${failure_fp}"
             echo "AUTOFIX_FAILURE_REASON=${failure_reason}"
             echo "AUTOFIX_FAILURE_MARKER=${failure_marker}"
+            if [ "${failure_reason}" = "provider_unavailable" ]; then
+              provider_status="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^provider_status=//p' | head -1)"
+              echo "AUTOFIX_PROVIDER_STATUS=${provider_status:-${AUTOFIX_PROVIDER_STATUS:-}}"
+            fi
           } >> "$GITHUB_ENV"
           echo "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} reason=${failure_reason} fp=${failure_fp} degraded=${failure_degraded:-1}"
 
+      - name: Record provider pause on PR
+        if: always() && env.AUTOFIX_FAILURE_REASON == 'provider_unavailable' && env.AUTOFIX_PROVIDER_PAUSE_COMMENT_POSTED != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] && [[ "${AUTOFIX_FAILURE_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || exit 0
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          body="**AI review/autofix paused: OpenRouter unavailable**"$'\n\n'"The scheduled provider probe will resume this review automatically. No PR fix is needed."$'\n\n'"<!-- ai:provider-paused:v1 head=${AUTOFIX_FAILURE_HEAD_SHA} run=${GITHUB_RUN_ID} -->"$'\n'"${AUTOFIX_FAILURE_MARKER:-}"
+          gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null
+
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -7153,7 +7279,7 @@ jobs:
         # reported as the step that failed the job — the job's red status
         # already reflects the original failure that triggered this path.
         continue-on-error: true
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -7178,7 +7304,7 @@ jobs:
             --run-id "${{ github.run_id }}"
 
       - name: Post review-blocked comment on PR (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -7236,7 +7362,7 @@ jobs:
           gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram failure
-        if: failure() && env.PR_CLOSED != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_FAILURE_REASON != 'provider_unavailable'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

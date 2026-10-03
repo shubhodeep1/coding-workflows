@@ -3,6 +3,8 @@
 # set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 name: AI Review
 on:
+  schedule:
+    - cron: '*/30 * * * *'
   # ready_for_review is included so that converting a draft PR to a
   # non-draft re-fires the review gate. This is the unlock path for
   # automated validation-prompt self-heal PRs (see README.md section
@@ -30,9 +32,10 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  actions: write
 jobs:
   review:
-    if: ${{ github.event.action != 'closed' || github.event.pull_request.merged == true }}
+    if: ${{ github.event_name != 'schedule' && (github.event.action != 'closed' || github.event.pull_request.merged == true) }}
     # Review workspace reuse is controlled centrally by the called workflow via
     # vars.WORKSPACE_REUSE_ENABLED from the caller repository; the wrapper
     # interface stays unchanged because no extra workflow_call input is needed.
@@ -44,4 +47,10 @@ jobs:
       pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
       claude_fixer_converged_head: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.claude_fixer_converged_head || '' }}
+    secrets: inherit
+  provider-outage-probe:
+    if: github.event_name == 'schedule'
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
+    with:
+      probe_only: true
     secrets: inherit

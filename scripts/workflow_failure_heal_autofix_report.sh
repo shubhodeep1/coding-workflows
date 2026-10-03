@@ -173,8 +173,12 @@ if [ "${FAILURE_REASON}" = "identical_failure_cap" ] && [ "${PRIOR_FAILURES}" -g
 	STREAK="${PRIOR_FAILURES}"
 fi
 if [ "${STREAK}" -lt "${STREAK_THRESHOLD}" ]; then
+	if [ "${FAILURE_REASON}" = "provider_unavailable" ]; then
+		: # The first outage must reach the serialized intake for one alert.
+	else
 	log "skip reason=below_streak pr=${PR} reason=${FAILURE_REASON} streak=${STREAK} threshold=${STREAK_THRESHOLD}"
 	exit 0
+	fi
 fi
 
 # --- Evidence ----------------------------------------------------------------
@@ -205,6 +209,13 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/reviewers_failure_evidence.txt" ]; then
 		echo "--- reviewers_failure_evidence.txt ---"
 		head -n 40 "${RUNTIME_DIR}/reviewers_failure_evidence.txt" 2>/dev/null | cut -c1-400
+	fi
+	# Preserve bounded provider-call evidence for intake verification; never
+	# include raw model output or authorization headers in the report.
+	if [ "${FAILURE_REASON}" = "provider_unavailable" ]; then
+		if [[ "${AUTOFIX_PROVIDER_STATUS:-}" =~ ^(401|402|429|5[0-9][0-9])$ ]]; then
+			printf 'OpenRouter reviewer failed: HTTP Error %s (all attempts failed)\n' "${AUTOFIX_PROVIDER_STATUS}"
+		fi
 	fi
 	if [ -s "${SUMMARY_LINE_FILE}" ]; then
 		head -c 6000 "${SUMMARY_LINE_FILE}"

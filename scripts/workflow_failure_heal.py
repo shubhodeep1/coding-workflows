@@ -26,7 +26,11 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -121,6 +125,8 @@ AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 # the trailing markers for the current head that share the newest fingerprint
 # and stops the run once REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL is reached.
 FAILURE_MARKER_TAG = "review-autofix-failure:v1"
+PROVIDER_OUTAGE_MARKER = "<!-- ai:provider-outage:v1 -->"
+PROVIDER_PAUSE_TAG = "ai:provider-paused:v1"
 FAILURE_CAP_MARKER_TAG = "review-autofix-failure-cap:v1"
 FAILURE_FINGERPRINT_WORKFLOW = "review_autofix"
 FAILURE_EVIDENCE_TAIL_BYTES = 65_536
@@ -500,6 +506,8 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
 		if not isinstance(comment, dict):
 			continue
 		body = sanitize_text(comment.get("body"))
+		if PROVIDER_PAUSE_TAG in body or "reason=provider_unavailable" in body and FAILURE_MARKER_TAG in body:
+			break
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
 			streak += 1
 			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
@@ -1130,6 +1138,34 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 	return "workflow_failure"
 
 
+_PROVIDER_STATUS_RE = re.compile(r"(?i)(?:HTTP(?: Error)?|status(?: code)?|code)[\"']?[\s:=]+[\"']?(401|402|429|5\d\d)\b|\b(401|402|429|5\d\d)\s+(?:Payment Required|Unauthorized|Too Many Requests|Internal Server Error|Bad Gateway|Service Unavailable)\b")
+_PROVIDER_CREDIT_RE = re.compile(r"(?i)\b(?:insufficient[_ -]credits?|out of credits?|credit balance exhausted)\b")
+_PROVIDER_CONTEXT_RE = re.compile(r"(?i)\b(?:openrouter|model.provider|provider (?:key|api|response)|llm|reviewer|summariser|opencode|codex)\b")
+_GITHUB_CONTEXT_RE = re.compile(r"(?i)\b(?:gh api|github api|api.github.com|repos/[^\s]+/(?:issues|pulls|actions))\b")
+
+
+def provider_failure_status(evidence: str, *, failed_step: str = "", reviewers_successful: int = 0) -> str:
+	"""Classify bounded model-call failures, never GitHub API errors or mixed outcomes."""
+	if failed_step and not re.search(r"(?i)reviewer|editor|summaris|model|codex|opencode", failed_step):
+		return ""
+	if re.search(r"(?im)^(?!.*(?:openrouter|provider|HTTP Error|LLM)).*(?:Traceback|AssertionError|KeyError|PermissionError|FileNotFoundError|syntax error)\b", evidence):
+		return ""  # Mixed provider and code failure: do not suppress the PR failure.
+	for line in sanitize_text(evidence)[-FAILURE_EVIDENCE_TAIL_BYTES:].splitlines():
+		if _GITHUB_CONTEXT_RE.search(line) or not _PROVIDER_CONTEXT_RE.search(line):
+			continue
+		if _PROVIDER_CREDIT_RE.search(line):
+			return "402"
+		match = _PROVIDER_STATUS_RE.search(line)
+		if match:
+			status = match.group(1) or match.group(2)
+			if status == "402" or status == "401" and re.search(r"(?i)key|auth|openrouter", line) or reviewers_successful == 0 and (status == "429" or status.startswith("5")) and (
+				re.search(r"(?i)attempt ([1-9][0-9]*)/\1\b|retr(?:y|ies) exhausted|all .* failed|final attempt", line)
+				or re.search(r"(?i)Reviewer slot .*failed after .*retr|retryable.failure limit|summariser.*all .*attempts failed", evidence)
+			):
+				return status
+	return ""
+
+
 _REVIEWER_SLOT_EXIT_RE = re.compile(r"Reviewer slot (?P<slot>\S+) .*execution failed on attempt [0-9]+ \(exit=(?P<rc>[0-9]{1,3})\)")
 _SUMMARISER_EXIT_RE = re.compile(r"summariser \([^)]*\): (?:attempt [0-9]+ exited rc=(?P<rc>[0-9]{1,3})\.|all [0-9]+ attempts failed \(last rc=(?P<last_rc>[0-9]{1,3})\))")
 # summarize_reviewer_consensus.sh logs an attempt that exited 0 with no final
@@ -1381,6 +1417,10 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 			fields = _marker_fields(match)
 			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 				continue
+			if fields.get("reason") == "provider_unavailable" or PROVIDER_PAUSE_TAG in body or (
+				fields.get("reason") == "workflow_failure" and provider_failure_status(body, failed_step="Run reviewer models")
+			):
+				break
 			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
 			run = fields.get("run", "")
 			if run and run in seen_runs:
@@ -1402,6 +1442,234 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 				continue
 			break
 	return result
+
+
+# Outage records are append-only issue comments. Only the GH_PAT account's
+# comments on its own marker issue have authority; PR-authored text never does.
+_OUTAGE_ITEM_RE = re.compile(r"^<!-- ai:provider-outage-item:v1 repo=([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+) pr=([0-9]+) head=([0-9a-f]{40}) run=([0-9]+) status=(401|402|429|5[0-9]{2}) -->$")
+_OUTAGE_DONE_RE = re.compile(r"^<!-- ai:provider-outage-done:v1 repo=([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+) pr=([0-9]+) head=([0-9a-f]{40}) run=([0-9]+) -->$")
+
+
+def outage_records(comments: Iterable[dict[str, Any]], author: str) -> tuple[dict[tuple[str, str, str, str], str], set[tuple[str, str, str, str]]]:
+	items: dict[tuple[str, str, str, str], str] = {}
+	done: set[tuple[str, str, str, str]] = set()
+	for comment in comments:
+		if not isinstance(comment, dict) or _comment_author(comment) != author.lower():
+			continue
+		for line in str(comment.get("body") or "").splitlines():
+			item = _OUTAGE_ITEM_RE.fullmatch(line.strip())
+			finished = _OUTAGE_DONE_RE.fullmatch(line.strip())
+			if item:
+				items[item.group(1, 2, 3, 4)] = item.group(5)
+			elif finished:
+				done.add(finished.group(1, 2, 3, 4))
+	return items, done
+
+
+def _outage_gh(*args: str) -> Any:
+	cmd = ["gh", "api", *args]
+	result = subprocess.run(cmd, text=True, capture_output=True, timeout=45, check=False)
+	if result.returncode:
+		raise RuntimeError("outage GitHub operation failed")
+	if len(result.stdout) > 8_000_000:
+		raise ValueError("outage GitHub response too large")
+	return json.loads(result.stdout) if result.stdout.strip() else None
+
+
+def _outage_identity() -> str:
+	login = _outage_gh("user").get("login", "")
+	if not isinstance(login, str) or not login:
+		raise ValueError("outage identity unavailable")
+	return login.lower()
+
+
+def _outage_issue(owner: str, identity: str) -> dict[str, Any] | None:
+	# One search for the open issue; no per-PR issue lookup. Search is not
+	# authoritative without the exact marker AND the authenticated author.
+	response = _outage_gh("-X", "GET", "search/issues", "-f", f"q=repo:{owner} is:issue is:open author:{identity} in:title AI Provider Outage", "-f", "per_page=100")
+	if not isinstance(response, dict) or response.get("total_count", 0) > 100:
+		raise ValueError("outage issue search incomplete")
+	issues = [issue for issue in response.get("items", []) if isinstance(issue, dict)
+		and PROVIDER_OUTAGE_MARKER in str(issue.get("body") or "")
+		and (issue.get("user") or {}).get("login", "").lower() == identity
+		and issue.get("state") == "open"]
+	if len(issues) > 1:
+		raise ValueError("multiple open outage markers")
+	return issues[0] if issues else None
+
+
+def _outage_comments(owner: str, number: int) -> list[dict[str, Any]]:
+	pages = _outage_gh("--paginate", "--slurp", "-X", "GET", f"repos/{owner}/issues/{number}/comments", "-f", "per_page=100")
+	if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+		raise ValueError("outage comments incomplete")
+	comments = [entry for page in pages for entry in page]
+	if len(comments) > 2000:
+		raise ValueError("outage comment ledger too large")
+	return comments
+
+
+def _outage_comment(owner: str, number: int, body: str) -> None:
+	_outage_gh("-X", "POST", f"repos/{owner}/issues/{number}/comments", "-f", f"body={body}")
+
+
+def _outage_active_reviews(repo: str, workflow: str) -> list[dict[str, Any]]:
+	"""One paginated snapshot per active status, shared by all pending PRs.
+
+	Input is a validated repo/workflow; output is a list of runs. A partial or
+	failed read raises, leaving the outage open for the next tick. The sweep's
+	ordinary active-run cache is not yet built while the outage probe runs.
+	"""
+	runs: list[dict[str, Any]] = []
+	for status in ("queued", "in_progress", "pending"):
+		pages = _outage_gh("--paginate", "--slurp", "-X", "GET", f"repos/{repo}/actions/workflows/{workflow}/runs", "-f", f"status={status}", "-f", "per_page=100")
+		if not isinstance(pages, list) or not all(isinstance(page, dict) and isinstance(page.get("workflow_runs"), list) for page in pages):
+			raise ValueError("active review snapshot incomplete")
+		runs.extend(run for page in pages for run in page["workflow_runs"] if isinstance(run, dict))
+	return runs
+
+
+def _outage_probe(model: str) -> bool:
+	key = os.environ.get("OPENROUTER_API_KEY", "")
+	if not key or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}/[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}", model):
+		return False
+	request = urllib.request.Request(
+		"https://openrouter.ai/api/v1/chat/completions",
+		data=json.dumps({"model": model, "messages": [{"role": "user", "content": "Reply OK."}], "max_completion_tokens": 16}).encode(),
+		headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, method="POST",
+	)
+	try:
+		with urllib.request.urlopen(request, timeout=25) as response:
+			body = response.read(65537)
+			if len(body) > 65536:
+				return False
+			payload = json.loads(body)
+		return isinstance(payload, dict) and bool((payload.get("choices") or [{}])[0].get("message", {}).get("content"))
+	except (OSError, ValueError, KeyError, IndexError, TypeError):
+		return False
+
+
+def _cmd_outage_status(args: argparse.Namespace) -> int:
+	if not _REPO_SLUG_RE.fullmatch(args.owner) or not _REPO_SLUG_RE.fullmatch(args.repo):
+		raise ValueError("invalid outage repository")
+	# The review gate supplies the login from gate_fetch_marker_comments' /user
+	# read; other callers resolve it here. Never take this from PR metadata.
+	identity = args.author_login.lower() if re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", args.author_login or "") else _outage_identity()
+	issue = _outage_issue(args.owner, identity)
+	if issue:
+		items, done = outage_records([issue, *_outage_comments(args.owner, issue["number"])], identity)
+		pending = [key for key in items if key not in done and key[0] == args.repo]
+		print(f"open={1 if pending else 0}")
+		print(f"issue={issue['number']}")
+	else:
+		print("open=0")
+	return 0
+
+
+def _cmd_outage_record(args: argparse.Namespace) -> int:
+	if not _REPO_SLUG_RE.fullmatch(args.owner) or not _REPO_SLUG_RE.fullmatch(args.repo) or not is_valid_sha(args.head) or not args.pr.isdigit() or not args.run.isdigit() or args.status not in ("401", "402", "429", *[str(n) for n in range(500, 600)]):
+		raise ValueError("invalid outage entry")
+	identity = _outage_identity()
+	issue = _outage_issue(args.owner, identity)
+	created = False
+	item_line = f"<!-- ai:provider-outage-item:v1 repo={args.repo} pr={args.pr} head={args.head} run={args.run} status={args.status} -->"
+	if issue is None:
+		issue = _outage_gh("-X", "POST", f"repos/{args.owner}/issues", "-f", "title=AI Provider Outage: OpenRouter", "-f", f"body={PROVIDER_OUTAGE_MARKER}\n{item_line}\nOpenRouter completion unavailable; key: OPENROUTER_API_KEY. Automated recovery uses repository-local probes.")
+		created = True
+	if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
+		raise TypeError("outage issue creation failed")
+	key = (args.repo, args.pr, args.head, args.run)
+	# The first entry is created atomically with the marker issue. A failed
+	# comment POST cannot strand an open, empty marker or lose the first alert.
+	if created:
+		print("created=1")
+		print(f"issue={issue['number']}")
+		return 0
+	items, _ = outage_records([issue, *_outage_comments(args.owner, issue["number"])], identity)
+	if key not in items:
+		_outage_comment(args.owner, issue["number"], item_line)
+		# The search above precedes the sweep's close. Its result cannot prove
+		# the marker remained open after this comment landed; the comment POST
+		# has no issue state. Reopen a concurrently closed marker for recovery.
+		fresh = _outage_gh(f"repos/{args.owner}/issues/{issue['number']}")
+		if isinstance(fresh, dict) and fresh.get("state") == "closed":
+			_outage_gh("-X", "PATCH", f"repos/{args.owner}/issues/{issue['number']}", "-f", "state=open")
+	print(f"created={1 if created else 0}")
+	print(f"issue={issue['number']}")
+	return 0
+
+
+def _cmd_outage_recover(args: argparse.Namespace) -> int:
+	if not _REPO_SLUG_RE.fullmatch(args.owner) or not _REPO_SLUG_RE.fullmatch(args.repo) or args.workflow not in ("internal-review.yml", "ai-review.yml") or not is_valid_branch(args.default_branch):
+		raise ValueError("invalid outage recovery target")
+	identity = _outage_identity()
+	issue = _outage_issue(args.owner, identity)
+	if not issue:
+		print("outage=none")
+		return 0
+	number = issue["number"]
+	items, done = outage_records([issue, *_outage_comments(args.owner, number)], identity)
+	pending = [key for key in items if key not in done and key[0] == args.repo]
+	if not pending:
+		if args.repo == args.owner and items and all(key in done for key in items):
+			_outage_gh("-X", "PATCH", f"repos/{args.owner}/issues/{number}", "-f", "state=closed")
+			print(f"outage=recovered issue={number}")
+			return 0
+		print("outage=other_repo_or_done")
+		return 0
+	if not _outage_probe(args.model):
+		print("outage=probe_failed")
+		return 0
+	# A successful local key probe never authorizes a different repository's
+	# recovery. Re-read each PR's head AND trusted latest failure before acting.
+	active_runs: list[dict[str, Any]] | None = None
+	for repo, pr, head, run in pending:
+		try:
+			if pr == "0":
+				# Release reruns are opt-in, and require an unchanged run SHA/ref
+				# and no newer release run. Otherwise record explicit ineligibility.
+				if args.release_rerun == "true":
+					run_info = _outage_gh(f"repos/{repo}/actions/runs/{run}")
+					workflow_id = run_info.get("workflow_id")
+					branch = run_info.get("head_branch")
+					if not isinstance(workflow_id, int) or not is_valid_branch(str(branch or "")) or _CYCLE_RUN_NAME_SUFFIX_RE.sub("", str(run_info.get("name") or "")) not in RELEASE_WORKFLOW_NAMES or run_info.get("head_sha") != head or run_info.get("conclusion") != "failure":
+						print("outage_release=not_rerun_ineligible")
+					else:
+						recent = _outage_gh("-X", "GET", f"repos/{repo}/actions/workflows/{workflow_id}/runs", "-f", "per_page=2")
+						current_branch = _outage_gh(f"repos/{repo}/branches/{urllib.parse.quote(branch, safe='')}")
+						if (current_branch.get("commit") or {}).get("sha") == head and (recent.get("workflow_runs") or [{}])[0].get("id") == int(run):
+							_outage_gh("-X", "POST", f"repos/{repo}/actions/runs/{run}/rerun")
+						else:
+							print("outage_release=not_rerun_ineligible")
+				else:
+					print("outage_release=not_rerun_disabled")
+			else:
+				pr_data = _outage_gh(f"repos/{repo}/pulls/{pr}")
+				if pr_data.get("state") == "open" and not pr_data.get("draft") and (pr_data.get("head") or {}).get("sha") == head:
+					comments = _outage_comments(repo, int(pr))
+					trusted = [c for c in comments if _comment_author(c) == identity and (
+						PROVIDER_PAUSE_TAG in str(c.get("body") or "") or FAILURE_MARKER_TAG in str(c.get("body") or "")
+						or any(marker in str(c.get("body") or "") for marker in AUTOFIX_SUCCESS_COMMENT_MARKERS)
+					)]
+					if trusted and f"head={head} run={run}" in str(trusted[-1].get("body") or ""):
+						# Do not dispatch if another run already exists on this head.
+						if active_runs is None:
+							active_runs = _outage_active_reviews(repo, args.workflow)
+						if not any(r.get("head_sha") == head or f"[pr:{pr}]" in str(r.get("display_title") or "") for r in active_runs):
+							_outage_gh("-X", "POST", f"repos/{repo}/actions/workflows/{args.workflow}/dispatches", "-f", f"ref={args.default_branch}", "-f", f"inputs[pr_number]={pr}")
+							active_runs.append({"display_title": f"Internal: AI Review & Autofix [pr:{pr}]"})
+						else:
+							continue  # Retest next tick; don't declare an in-flight run resumed.
+			_outage_comment(args.owner, number, f"<!-- ai:provider-outage-done:v1 repo={repo} pr={pr} head={head} run={run} -->")
+		except (RuntimeError, ValueError, KeyError):
+			print("outage=resume_incomplete")
+			return 1
+	items, done = outage_records([issue, *_outage_comments(args.owner, number)], identity)
+	if args.repo == args.owner and all(key in done for key in items):
+		_outage_gh("-X", "PATCH", f"repos/{args.owner}/issues/{number}", "-f", "state=closed")
+		print(f"outage=recovered issue={number}")
+	else:
+		print("outage=other_repo_pending")
+	return 0
 
 
 # ---------------------------------------------------------------------------
@@ -2066,12 +2334,35 @@ def _cmd_autofix_failure_fingerprint(args: argparse.Namespace) -> int:
 	else:
 		finalize = _finalize_reason_from_summary_line(args.summary_line_file) if args.summary_line_file else ""
 		reason = derive_autofix_failure_reason(dict(os.environ), finalize)
+	if reason != "provider_unavailable" and args.failed_step:
+		status = provider_failure_status(evidence, failed_step=args.failed_step, reviewers_successful=int(args.reviewers_successful))
+		if status:
+			reason = "provider_unavailable"
+			sys.stdout.write(f"provider_status={status}\n")
 	result = autofix_failure_fingerprint(failure_reason=reason, evidence_text=evidence)
 	sys.stdout.write(f"fp={result['fp']}\n")
 	sys.stdout.write(f"degraded={1 if result['degraded'] else 0}\n")
 	sys.stdout.write(f"reason={safe_token(reason)}\n")
 	if args.head_sha:
 		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None) + "\n")
+	return 0
+
+
+def _cmd_outage_classify(args: argparse.Namespace) -> int:
+	texts = [read_failure_evidence([path]) for path in args.evidence_file]
+	statuses = [provider_failure_status(text, failed_step="" if args.require_each else args.failed_step) for text in texts if text.strip()]
+	# A release job with another failure is not a provider-only outage. Review
+	# logs may split the model error between the stage and a slot log.
+	status = provider_failure_status("\n".join(texts), failed_step="" if args.require_each else args.failed_step)
+	if args.require_each:
+		for text in texts:
+			for line in text.splitlines():
+				if ("::error::" in line or "##[error]" in line) and not (
+					(_PROVIDER_CONTEXT_RE.search(line) and (_PROVIDER_STATUS_RE.search(line) or _PROVIDER_CREDIT_RE.search(line)))
+					or re.search(r"(?i)process completed with exit code [1-9]", line)
+				):
+					status = ""
+	print(status if status and (not args.require_each or statuses and all(statuses)) else "")
 	return 0
 
 
@@ -2327,6 +2618,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-out", default="", help="also write the joined evidence tail to this file")
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--run-id", default="")
+	p.add_argument("--failed-step", default="")
+	p.add_argument("--reviewers-successful", action="store_true")
 	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
@@ -2338,6 +2631,30 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
 	p.set_defaults(func=_cmd_autofix_identical_failure_count)
+
+	p = sub.add_parser("outage-classify", help="Classify provider-only failure evidence")
+	p.add_argument("--evidence-file", action="append", required=True)
+	p.add_argument("--failed-step", default="")
+	p.add_argument("--require-each", action="store_true")
+	p.set_defaults(func=_cmd_outage_classify)
+
+	for command, handler in (("outage-status", _cmd_outage_status), ("outage-record", _cmd_outage_record), ("outage-recover", _cmd_outage_recover)):
+		p = sub.add_parser(command)
+		p.add_argument("--owner", default=DEFAULT_UPSTREAM_REPO)
+		p.add_argument("--repo", required=True)
+		p.set_defaults(func=handler)
+		if command == "outage-status":
+			p.add_argument("--author-login", default="")
+		if command == "outage-record":
+			p.add_argument("--pr", required=True)
+			p.add_argument("--head", required=True)
+			p.add_argument("--run", required=True)
+			p.add_argument("--status", required=True)
+		elif command == "outage-recover":
+			p.add_argument("--model", default="openai/gpt-6-luna")
+			p.add_argument("--workflow", default="internal-review.yml")
+			p.add_argument("--default-branch", default="main")
+			p.add_argument("--release-rerun", default="false")
 
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
 	p.add_argument("--repo", required=True)
@@ -2454,7 +2771,7 @@ def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	try:
 		return int(args.func(args))
-	except ValueError as exc:
+	except (ValueError, TypeError) as exc:
 		sys.stderr.write(f"error: {exc}\n")
 		return 2
 

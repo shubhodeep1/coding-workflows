@@ -98,9 +98,19 @@ jobs:
     if: github.event.schedule != '17 * * * *'
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout trusted sweep support
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Enumerate open PRs and dispatch internal-review.yml
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
+          OUTAGE_RELEASE_RERUN: ${{ vars.PROVIDER_OUTAGE_RELEASE_RERUN || 'false' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           REPOSITORY: ${{ github.repository }}
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
@@ -136,6 +146,27 @@ jobs:
           if [ "${total}" -eq 0 ]; then
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
             exit 0
+          fi
+
+          # The marker is authenticated by the support helper. A failed read
+          # pauses dispatch rather than spending reviewer calls during an
+          # unknown outage. Recovery uses the same default-branch workflow.
+          if ! outage_state="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal.py outage-status --repo "${REPOSITORY}" 2>/dev/null)"; then
+            echo "::warning::AUTOFIX_SWEEP_SKIP reason=outage_state_unavailable"
+            exit 0
+          fi
+          if printf '%s\n' "${outage_state}" | grep -q '^issue='; then
+            outage_result="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal.py outage-recover \
+              --repo "${REPOSITORY}" --model "${OUTAGE_PROBE_MODEL}" --workflow internal-review.yml \
+              --default-branch "${DEFAULT_BRANCH}" --release-rerun "${OUTAGE_RELEASE_RERUN}" 2>/dev/null)" || true
+            echo "AUTOFIX_SWEEP_PROVIDER ${outage_result:-resume_incomplete}"
+            if printf '%s\n' "${outage_result}" | grep -q '^outage=recovered '; then
+              source scripts/tg_helpers.sh 2>/dev/null || true
+              type tg_send_msg >/dev/null 2>&1 && tg_send_msg "OpenRouter recovered; recorded review resumes completed (OPENROUTER_API_KEY)." "DEBUG" >/dev/null 2>&1 || true
+            fi
+            if printf '%s\n' "${outage_state}" | grep -qx 'open=1'; then
+              exit 0
+            fi
           fi
 
           # Snapshot active review-family runs once per workflow, then do

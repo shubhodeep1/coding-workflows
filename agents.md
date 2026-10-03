@@ -64,6 +64,26 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   Provider-call 401/402/credits errors and exhausted 429/5xx with no
+   successful reviewer instead produce `provider_unavailable` and a
+   `ai:provider-paused:v1` PR comment: they do not advance the fingerprint
+   cap, block labels or the ordinary heal streak. The serialized heal intake
+   upserts one OpenRouter outage issue in coding-workflows (marker
+   `ai:provider-outage:v1`) and alerts once. The source-repo clarify gate
+   excludes this bookkeeping issue on open, so it does not become a fix PR.
+   Trusted issue comments record
+   each repo/PR/head/run and each completed resume action. The 30-minute
+   `review_autofix_sweep.yml` schedule probes this repo's key, pauses its
+   sweep dispatches and resumes only unchanged paused heads through
+   `internal-review.yml` from the default branch. Consumer `ai-review.yml`
+   runs its own scheduled probe via verified `@stable` support and its own
+   key; one repo's recovery does not attest for another. A failed probe
+   keeps the marker open; the source sweep closes it and alerts once all
+   entries are complete. No older `ai:review-blocked` label is removed
+   without recorded outage-specific provenance; ambiguous historical
+   labels remain for ordinary review-blocked handling. Release-run reruns
+   require `PROVIDER_OUTAGE_RELEASE_RERUN=true` (default false) and a fresh
+   unchanged branch/run.
    The review editor's disposable Docker workspace admits `.cjs`, `.mjs`,
    `.cts`, and `.mts` alongside other source extensions for snapshot and
    validated transfer. Its isolation helpers must already exist in the
