@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py and .claude/hooks/pr_merge_status_guard.py:688-725 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: _cdpath_directory_command unwraps at most one command or builtin wrapper, so chained wrappers around cd or pushd can evade CDPATH-sensitive directory-change detection.\n  WHY: With CDPATH set, Bash can redirect into a different repository while the guard keeps tracking the original checkout; severity disagreement: DeepSeek and Gemini rated this MAJOR, while OpenAI rated it BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py and .claude/hooks/pr_merge_status_guard.py | severity=high | confidence=4\n  PROBLEM: _cdpath_directory_command recognizes at most one wrapper prefix around cd/pushd, so nested wrapper prefixes can evade CDPATH-sensitive directory-change detection.\n  WHY: A CDPATH-redirected directory change can leave the guard tracking the original checkout and cause it to judge a subsequent git push or git commit against the wrong repository.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py | severity=high | confidence=5\n  PROBLEM: _cdpath_directory_command unwraps only a single command or builtin wrapper around cd or pushd, so chained wrappers can evade CDPATH-sensitive directory-change detection.\n  WHY: Bash can redirect the shell via CDPATH while the guard leaves its tracked directory set to the original checkout, causing it to judge a subsequent git push or commit against the wrong repository.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py and .claude/hooks/pr_merge_status_guard.py\nLine or code reference: _cdpath_directory_command, approximately lines 688-725 in the PR diff\n  PROBLEM: The helper unwraps at most one `command` or `builtin` prefix. For example, it does not recognize `command builtin cd wt` or `builtin command cd wt` as a CDPATH-sensitive directory change.\n  WHY: With `export CDPATH=..; command builtin cd wt && git push origin HEAD:feature/x`, Bash can enter the parent\u2019s `wt` via CDPATH, but the guard leaves its directory tracking at the original checkout. It then evaluates the push against that checkout instead of blocking the push from the redirected repository.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0a42456a2f76e50028b7f5140aac4b9e2b18851738523dd6ec1e24ad044c5b50",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6113,
+    "run_id": "37097275859",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37097275859",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003050908_707ab590d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6113,
+    "run_id": "37097275859"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T05:09:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
