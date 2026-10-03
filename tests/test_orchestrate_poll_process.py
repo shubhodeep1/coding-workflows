@@ -5323,24 +5323,15 @@ def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -
 	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
 
 
-def test_standalone_stall_recovery_skips_claude_claimed_issues() -> None:
-	"""Claude-claimed standalone issues (ai:claude, no ai:codex) belong to the
-	Claude issue flow; stall recovery must not re-issue a Codex phase."""
+def test_standalone_stall_recovery_no_longer_skips_claude_labelled_issues() -> None:
+	"""The Claude issue implementer is retired: a leftover ai:claude label no
+	longer exempts a standalone issue from Codex stall recovery."""
 	claimed = _run_latch_release_tick(
 		issue_labels=["ai:awaiting-approval", "ai:claude"],
 		issue_comments=["routine comment"],
 		env_overrides={},
 	)
-	claimed_log = claimed["stdout"] + claimed["stderr"]
-	assert "STALL_SKIP issue=700 reason=claude_routed action=none" in claimed_log
-	assert not any(comment["body"].startswith("/approved") for comment in claimed["issues"]["700"]["comments"])
-
-	switched = _run_latch_release_tick(
-		issue_labels=["ai:awaiting-approval", "ai:claude", "ai:codex"],
-		issue_comments=["routine comment"],
-		env_overrides={},
-	)
-	assert "reason=claude_routed" not in switched["stdout"] + switched["stderr"]
+	assert "reason=claude_routed" not in claimed["stdout"] + claimed["stderr"]
 
 
 def test_standalone_staged_support_guard_reuses_conclusive_comment_cache() -> None:
@@ -11877,9 +11868,9 @@ def test_standalone_conflict_sweep_skips_integration_base_prs():
 	assert result["review_dispatches"] == []
 
 
-def test_standalone_conflict_sweep_skips_draft_claude_prs():
-	# A draft claude/* project integration PR is synced by its own chain;
-	# the sweep neither update-branches it nor dispatches a review for it.
+def test_standalone_conflict_sweep_no_longer_special_cases_draft_claude_prs():
+	# The /implement-plan-claude chain that used to sync draft claude/* PRs
+	# is retired, so the sweep no longer skips them with the chain message.
 	state = _base_state(status="complete")
 	prs = [
 		{
@@ -11900,9 +11891,7 @@ def test_standalone_conflict_sweep_skips_draft_claude_prs():
 		prs=prs,
 		update_branch_fail_for_prs=[415],
 	)
-	assert result["update_branch_calls"] == []
-	assert result["review_dispatches"] == []
-	assert "PR #415 is a draft claude/* PR" in result["stdout"]
+	assert "PR #415 is a draft claude/* PR" not in result["stdout"]
 
 
 def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():

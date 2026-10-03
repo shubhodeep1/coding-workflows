@@ -1035,7 +1035,7 @@ jobs:
           from pathlib import Path
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          assert set(payload) == {"created", "updated", "unchanged", "errors"}
+          assert set(payload) == {"created", "updated", "unchanged", "deleted", "errors"}
           assert isinstance(payload["errors"], list)
           PY
 

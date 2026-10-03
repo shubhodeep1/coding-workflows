@@ -15823,14 +15823,6 @@ run_standalone_stall_recovery() {
       continue
     fi
 
-    # Claude-claimed issues (ai:claude without an ai:codex switch) are driven
-    # by the Claude issue flow's own check-in chain; re-issuing a Codex phase
-    # here would start a competing implementation.
-    if echo "${labels_json}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null 2>&1; then
-      echo "STALL_SKIP issue=${issue_num} reason=claude_routed action=none"
-      continue
-    fi
-
     # Resolve both values through the shared Python predicates in one call so
     # the standalone path cannot drift from managed stall detection.  Safe
     # defaults first: under `set -euo pipefail` an empty read (python
@@ -23298,16 +23290,6 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 	if _linked_pr_is_merge_queued "${S_PR_JSON}"; then
 		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
-		continue
-	fi
-
-	# A draft claude/* PR (an /implement-plan-claude project integration PR)
-	# is synced with its base by its own chain at final merge, and
-	# Claude-fixer mode owns claude/* conflicts (CLAUDE.md §26.H). An
-	# update-branch push or review dispatch here only burns runs and posts a
-	# conflict alert on every tick. Uses the PR object fetched above.
-	if [[ "${S_HEAD_REF}" == claude/* ]] && [ "$(echo "${S_PR_JSON}" | jq -r '.draft // false')" = "true" ]; then
-		echo "  PR #${S_PR} is a draft claude/* PR; its own chain resolves conflicts. Skipping standalone conflict recovery."
 		continue
 	fi
 
