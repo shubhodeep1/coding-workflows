@@ -601,7 +601,7 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 			{"id": i, "user": {"login": c["author_login"], "type": c["author_type"]}, "author_association": c["author_association"], "created_at": "2026-09-25T00:00:00Z", "body": c["body"]}
 			for i, c in enumerate(comments, 1)
 		],
-		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
+		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD, "repo": {"full_name": "o/r"}}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
 		"files": files,
 		"comments_fail": comments_fail,
 	}), encoding="utf-8")
@@ -646,6 +646,44 @@ def test_gate_marks_fixer_prs_and_runs_the_first_round():
 		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[], event_name="pull_request")
 	assert proc.returncode == 0, proc.stderr
 	assert out["claude_fixer"] == "true" and out["should_run"] == "true" and out["claude_fixer_converged"] == "false"
+	assert out["review_checkout_sha"] == HEAD
+
+
+def test_gate_dispatch_checkout_requires_a_same_repo_valid_head():
+	for head in (
+		{"ref": FIXER_REF, "sha": HEAD, "repo": {"full_name": "other/fork"}},
+		{"ref": FIXER_REF, "sha": HEAD},
+		{"ref": FIXER_REF, "sha": "invalid", "repo": {"full_name": "o/r"}},
+		{"ref": FIXER_REF, "sha": "", "repo": {"full_name": "o/r"}},
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[], pr_overrides={"head": head},
+				files=DOCS_FILES, extra_env={"AUTOFIX_SKIP_DOC_ONLY": "true"})
+		assert proc.returncode == 0, proc.stderr
+		assert out["review_checkout_sha"] == ""
+		assert out["should_run"] == "false" and out["deterministic_skip"] == "false"
+		assert out["skip_reason"] == "review_checkout_unverified"
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[], event_name="pull_request",
+			pr_overrides={"head": {"ref": FIXER_REF, "sha": HEAD, "repo": {"full_name": "other/fork"}}})
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "false" and out["deterministic_skip"] == "false"
+	# The gate's existing PR read serves dispatch and pull_request; no-PR
+	# claude/** push reviews keep their pre-existing github.sha checkout.
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[])
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "true" and out["review_checkout_sha"] == HEAD
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[], event_name="pull_request")
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "true" and out["review_checkout_sha"] == HEAD
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[], event_name="push",
+			extra_env={"PR_NUMBER": "", "FORCE_CLAUDE_BRANCH_REVIEW": "true", "HEAD_REF_OVERRIDE": FIXER_REF})
+	assert proc.returncode == 0, proc.stderr
+	assert out["should_run"] == "true" and out["claude_branch_review"] == "true"
+	assert out["review_checkout_sha"] == ""
 
 
 def test_gate_marks_every_claude_head_as_a_fixer_pr():
@@ -754,8 +792,9 @@ def test_gate_claude_pr_skip_fails_closed_when_the_head_sha_is_invalid():
 		proc, out = _run_gate(Path(td), head_ref="claude/sharp-franklin-1hrznc-11", comments=[], event_name="pull_request",
 			files=DOCS_FILES, pr_overrides={"changed_files": 2, "head": {"ref": "claude/sharp-franklin-1hrznc-11", "sha": "not-a-sha"}})
 	assert proc.returncode == 0, proc.stderr
-	assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=claude_fixer_handoff_unverified pr=42" in proc.stdout
-	assert out["deterministic_skip"] == "false" and out["should_run"] == "true"
+	assert out["skip_reason"] == "review_checkout_unverified"
+	assert out["review_checkout_sha"] == ""
+	assert out["deterministic_skip"] == "false" and out["should_run"] == "false"
 
 
 def test_gate_handoff_for_an_older_head_does_not_block_the_skip():

@@ -585,6 +585,17 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- The review gate's existing PR read validates the same-repository head and
+  exports `review_checkout_sha` only for a 40-hex SHA. `Checkout repo` uses
+  that SHA for dispatched PRs, so reviewer and other `GITHUB_WORKSPACE` file
+  reads see the PR head rather than the dispatching branch; the no-PR push
+  route still uses `github.sha`. Fork, missing-repo and invalid-head PRs skip
+  both review and deterministic auto-merge. Before OpenCode setup, the job
+  refuses project OpenCode configuration/plugins in the source checkout; it
+  also checks the split workspace before reviewer launch. A
+  source/workspace/PR-metadata SHA mismatch, or a branch that advances during
+  fetch, sets `AUTOFIX_STALE_BASE_SKIP` so no reviewer, editor or merge acts
+  on stale files.
 - `internal-review.yml` itself must not forward a `with:` input that
   `review_autofix.yml` on `main` does not define yet: GitHub validates the
   call against `main`'s file, so every review run on the PR adding the input

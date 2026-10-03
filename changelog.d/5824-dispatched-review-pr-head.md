@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Dispatched PR reviews now read the PR head instead of the dispatching branch.** The review gate validates the head repository and SHA before checkout. Fork or unknown-head PRs skip review and deterministic auto-merge; mismatched workspaces skip agents, and project OpenCode configuration or plugins are refused before agent setup. No-PR branch reviews remain unchanged.
