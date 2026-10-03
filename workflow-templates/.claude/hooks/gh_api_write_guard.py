@@ -69,6 +69,12 @@ Decision for the whole Bash call (a hook decides once per tool call):
     the Auto-mode classifier decides as for any other command. An allow here
     would also approve the code the guard has not read.
 
+  - exception: one complete `for VAR in TOKEN…; do BODY; done` over unquoted
+    literal IDs is allowed when every body item is a classified `gh api`
+    read, a vetted `gh run view/list` or `gh pr view` read, or a literal /
+    counter `echo`, with only safe pipe filters and `2>&1`. Writes still ask;
+    unvetted loops still receive no decision.
+
 Unlike the other hooks in this directory this one fails CLOSED: an unreadable,
 invalid, or non-object payload, or an internal error, asks instead of allowing,
 because it is the only thing standing where the ask rules were. Empty or
@@ -235,6 +241,21 @@ _ROUTINE_ENDPOINTS += (
 # to ones that open no file (`sort -o` is excluded).
 _STANDALONE_HELPERS = frozenset({"cd", "sleep", "echo", "true"})
 _SORT_KEY_RE = re.compile(r"^[0-9][0-9,.a-zA-Z]*$")
+
+# A loop counter must not change how Bash finds commands or how gh selects
+# credentials, repository, proxy, configuration, or locale on each iteration.
+_LOOP_ENV_NAMES = frozenset({"PATH", "IFS", "HOME", "ENV", "SHELL", "CDPATH", "TMPDIR", "LANG", "GLOBIGNORE"})
+_LOOP_ENV_PREFIXES = ("BASH_", "GH_", "GIT_", "XDG_", "LC_", "LD_", "PYTHON", "HTTP_", "HTTPS_", "ALL_", "NO_")
+_LOOP_HEADER_RE = re.compile(
+	r"\Afor[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+in[ \t]+"
+	r"([A-Za-z0-9._-]+(?:[ \t]+[A-Za-z0-9._-]+)*)[ \t]*;[ \t]*do[ \t]+"
+	r"(.+);[ \t]*done[ \t]*\Z"
+)
+_LOOP_READ_FLAGS = {
+	("run", "view"): (frozenset({"--log", "--log-failed", "--exit-status"}), frozenset({"--json", "--jq", "--template", "--job", "--repo"})),
+	("run", "list"): (frozenset({"--all"}), frozenset({"--json", "--jq", "--template", "--limit", "--workflow", "--branch", "--status", "--event", "--user", "--commit", "--created", "--repo"})),
+	("pr", "view"): (frozenset({"--comments"}), frozenset({"--json", "--jq", "--template", "--repo"})),
+}
 
 
 def _is_safe_filter(words: list[str]) -> bool:
@@ -850,6 +871,116 @@ def _is_approvable_command(command: str) -> bool:
 	return saw_gh_api
 
 
+def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bool:
+	"""Approve only a complete literal-ID loop whose every body item is a vetted read."""
+	if any(character in command for character in "\r\n\0"):
+		return False
+	match = _LOOP_HEADER_RE.fullmatch(command.strip())
+	if not match:
+		return False
+	variable, tokens, body = match.groups()
+	upper_variable = variable.upper()
+	if (
+		upper_variable in _LOOP_ENV_NAMES
+		or upper_variable.endswith("_PROXY")
+		or upper_variable.startswith(_LOOP_ENV_PREFIXES)
+		or any(token.startswith("-") for token in tokens.split())
+	):
+		return False
+	# Replace only this counter's exact expansion. Everything else (including
+	# indirect expansion and a variable in a flag) must fail validation.
+	expansion = re.compile(r"\$\{" + re.escape(variable) + r"\}|\$" + re.escape(variable) + r"(?![A-Za-z0-9_])")
+	safe_body = expansion.sub("LOOP_ID", body)
+	reduced = re.sub(r"(?<!\S)2>&1(?=\s|;|&&|\||$)", "", safe_body)
+	if (
+		"$" in reduced or "\\" in body
+		or _has_unsafe_shell_syntax(reduced)
+		or _shell_rewrite_hazard(reduced)
+	):
+		return False
+	try:
+		lexer = shlex.shlex(body, posix=True, punctuation_chars=";&|<>()")
+		lexer.commenters = ""
+		lexer.whitespace_split = True
+		words = list(lexer)
+	except ValueError:
+		return False
+	# The only redirect is a standalone stderr-to-stdout duplication.
+	filtered: list[str] = []
+	index = 0
+	while index < len(words):
+		if words[index : index + 3] == ["2", ">&", "1"]:
+			index += 3
+			continue
+		filtered.append(words[index])
+		index += 1
+	if any(word != "&&" and (word in ("<", ">", "&", "||", "(", ")", "{", "}") or set(word) <= set("<>&()")) for word in filtered if word):
+		return False
+	items: list[list[list[str]]] = [[[]]]
+	for word in filtered:
+		if word in (";", "&&"):
+			if not items[-1][-1]:
+				return False
+			items.append([[]])
+		elif word == "|":
+			if not items[-1][-1]:
+				return False
+			items[-1].append([])
+		else:
+			items[-1][-1].append(word)
+	if any(not pipeline[0] or any(not part for part in pipeline[1:]) for pipeline in items):
+		return False
+	api_items = 0
+	for pipeline in items:
+		head = pipeline[0]
+		if not all(_is_safe_filter(part) for part in pipeline[1:]):
+			return False
+		if len(head) >= 2 and head[0] == "gh" and head[1] == "api":
+			api_items += 1
+			try:
+				parsed = parse_gh_api_args(head[2:])
+			except Unreadable:
+				return False
+			endpoint = parsed["endpoints"][0]
+			if (
+				parsed["method"] not in _READ_METHODS
+				or expansion.search(endpoint.split("/", 1)[0])
+				or ("?" in endpoint and expansion.search(endpoint.split("?", 1)[1]))
+				or sum(bool(expansion.search(arg)) for arg in head[2:]) != bool(expansion.search(endpoint))
+			):
+				return False
+		elif head[0] == "gh" and tuple(head[1:3]) in _LOOP_READ_FLAGS:
+			boolean_flags, value_flags = _LOOP_READ_FLAGS[tuple(head[1:3])]
+			positionals = 0
+			index = 3
+			while index < len(head):
+				word = head[index]
+				if word in boolean_flags:
+					index += 1
+				elif word in value_flags and index + 1 < len(head) and not head[index + 1].startswith("-"):
+					if expansion.search(head[index + 1]):
+						return False
+					index += 2
+				elif word.startswith("-") or positionals or (head[1:3] == ["run", "list"]):
+					return False
+				else:
+					if expansion.search(word) and word not in (f"${variable}", f"${{{variable}}}"):
+						return False
+					positionals += 1
+					index += 1
+		elif head[:1] == ["echo"] and len(pipeline) == 1 and all(not word.startswith("-") for word in head[1:]):
+			if any(expansion.search(word) and word not in (f"${variable}", f"${{{variable}}}") for word in head[1:]):
+				return False
+			continue
+		else:
+			return False
+	# A quoted `gh 'api'` does not match the raw fast-path regex; never
+	# approve it unless the same call was classified in evaluate().
+	return api_items == len(results) and all(kind == KIND_READ for kind, _ in results) and any(
+		pipeline[0][0] == "gh" for pipeline in items
+	)
+
+
 def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 	"""Return `(kind, description)` for one parsed `gh api` call."""
 	method = parsed["method"]
@@ -927,7 +1058,7 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		return None, ""
 	tool_input = payload.get("tool_input")
 	command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-	if not isinstance(command, str) or not _RAW_GH_API_RE.search(command):
+	if not isinstance(command, str) or not (_RAW_GH_API_RE.search(command) or command.lstrip().startswith("for ")):
 		return None, ""
 
 	stripped_command, heredocs = strip_heredoc_bodies(command)
@@ -988,6 +1119,8 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): not a read or a §23.B routine write: " + "; ".join(writes) + "."
 		)
+	if _is_approvable_read_loop(command, results):
+		return DECISION_ALLOW, "gh api guard (CLAUDE.md §23.H): literal-ID read loop."
 	if invocations and _is_approvable_command(command):
 		summary = "; ".join(f"{kind} call {description}" for kind, description in results)
 		return DECISION_ALLOW, f"gh api guard (CLAUDE.md §23.H): {summary}."

@@ -1204,8 +1204,9 @@ your own judgement.
 4. **Shape `gh api` calls so the §23.H guard can approve them.** Put GET
    parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
-   send a POST). Keep `gh api` calls out of loops, `$(...)`, `$VAR` paths,
-   file redirects, and heredoc scripts, and edit a PR's title or body with
+   send a POST). Except for the literal-ID read loops in §23.H, keep `gh api`
+   calls out of loops, `$(...)`, `$VAR` paths, file redirects, and heredoc
+   scripts, and edit a PR's title or body with
    `mcp__github__update_pull_request`. Post or edit an issue or PR comment
    with `mcp__github__add_issue_comment` / `mcp__github__update_issue_comment`,
    never with `gh api … --input <file>`, `-F body=@<file>`, or a heredoc that
@@ -1316,7 +1317,7 @@ and classifies it:
 
 | Class | What | Outcome |
 |---|---|---|
-| read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion; in both cases with no file-backed `-F` value and no `--input` | not prompted by the hook |
+| read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion; in both cases with no file-backed `-F` value and no `--input`. A complete `for VAR in TOKEN…; do BODY; done` over literal IDs is also approved when every item is a vetted `gh api` read, `gh run view/list` or `gh pr view` read, or literal/`$VAR` echo (§23.H below). | not prompted by the hook |
 | routine | a §23.B write to the local checkout's repository (or `{owner}/{repo}`): create a PR; edit a PR's or issue's `title`/`body`; add or edit an issue or PR comment; reply to a review thread; add or remove one label; request reviewers; dispatch (`ref`, `inputs` only) one of the workflows `.claude/settings.json` already allows as `gh workflow run <file> *` (§23.C command-invoked carve-out) | not prompted by the hook |
 | write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input` or a file-backed `-F`/`--field` value (`@<file>`, or `@-` for stdin, which `gh` reads and sends) on any method, endpoint, or repository, GraphQL included (issue #4619; a `-f`/`--raw-field` value is sent literally and reads no file), an `-F` word the shell could rewrite into one (`$`, a backtick, `~`, or a glob character in it), a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a backtick or double-quoted `$(...)` substitution Bash would run — single-quoted text is data — handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
 | malformed jq | a `-q`/`--jq` value that is one of jq's own command-line options (matches `^--?[A-Za-z]`: `--arg`, `-r`, `--raw-output`, `-c`); `gh api` has no such flags, so the call could never work (#4891) | denied with a reason that says how to fix the command; nothing runs and no human is needed |
@@ -1335,10 +1336,21 @@ holds nothing else but safe helpers (items joined by `;` or `&&`, each a
 `gh api` call, optionally piped into `head`/`tail -n N`, `wc -l`, or
 `sort -n -r -u -k K -t C`, or a standalone `cd <path>`, `sleep <n>`,
 `echo <text>`, or `true`; `2>&1` as the only redirect; no `$`, backticks,
-globs, subshells, or loops); otherwise **no decision**, so the allow list
-or the Auto-mode classifier decides, because an allow would also approve
-code the guard has not read (a loop, a `python3` heredoc, a `$VAR`
-redirect). `gh api` text that is only data (`git commit -m`, `grep`,
+globs, subshells, or loops). One narrow exception: a whole `for VAR in TOKEN
+…; do BODY; done` loop is allowed when its header contains only unquoted
+literal IDs (letters, digits, `.`, `_`, `-`; not starting with `-`) and a
+plain shell-name counter that cannot override command lookup, gh settings,
+or proxy settings. Uppercase ordinary counters such as `ID` are allowed.
+Its body can only contain classified `gh api` reads with `$VAR` / `${VAR}`
+in the endpoint path (not the first segment or query string), allowlisted
+`gh run view/list` or `gh pr view` reads with the counter only as a positional
+argument, and literal/counter `echo` items, joined by `;` or `&&` and
+optionally piped into the same safe filters. No surrounding commands,
+unvetted options, other expansions, nested loops, or file redirects are
+approved. A `gh api` write in the body still asks. Otherwise **no decision**,
+so the allow list or the Auto-mode classifier decides, because an allow would
+also approve code the guard has not read (an arbitrary loop, a `python3`
+heredoc, a `$VAR` redirect). `gh api` text that is only data (`git commit -m`, `grep`,
 `echo`) is ignored.
 
 It fails **closed**, unlike the §21/§25/§26 hooks: an unreadable, invalid,
