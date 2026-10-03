@@ -481,6 +481,24 @@ if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
   opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" 1 config_generation || true
   exit 1
 fi
+# OpenCode's session snapshot stages the merge index before the resolver sees
+# it. Disable snapshots only for this generated resolver configuration.
+if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${RESOLVER_OPENCODE_CONFIG}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+config_path = Path(sys.argv[1])
+config = json.loads(config_path.read_text(encoding="utf-8"))
+if not isinstance(config, dict):
+    sys.exit(1)
+config["snapshot"] = False
+config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+then
+  echo "::error::Resolver snapshot configuration failed closed."
+  exit 1
+fi
 if ! opencode_require_bootstrap review_conflict_resolve writer "${MODEL_EDITOR}" \
   "${RESOLVER_OPENCODE_CONFIG}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
   exit 1
@@ -558,7 +576,9 @@ def merge_state():
     for name in ("index", "MERGE_HEAD"):
         path = Path(os.fsdecode(git("rev-parse", "--git-path", name).strip()))
         state.append(hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None)
-    return state
+    # An alternate index does not contain a model-issued commit: HEAD moves
+    # even if the original index and MERGE_HEAD have not changed.
+    return state + [git("rev-parse", "HEAD").strip().decode("ascii")]
 
 
 try:
@@ -583,8 +603,11 @@ try:
         manifest.write_text(json.dumps({"paths": before, "merge": merge_before}), encoding="utf-8")
     else:
         saved = json.loads(manifest.read_text(encoding="utf-8"))
-        if merge_state() != saved["merge"]:
-            raise ValueError("merge index or MERGE_HEAD changed during resolver attempt")
+        merge_now = merge_state()
+        if merge_now[0] != saved["merge"][0]:
+            raise ValueError("merge index changed during resolver attempt")
+        if merge_now[1:] != saved["merge"][1:]:
+            raise ValueError("MERGE_HEAD or HEAD changed during resolver attempt")
         current = entries()
         old = saved["paths"]
         changed = sorted(path for path in old.keys() | current.keys() if old.get(path) != current.get(path))
@@ -631,9 +654,36 @@ try:
             raise ValueError("unknown resolver scope action")
 except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
     # Do not echo paths or untrusted exception text into workflow commands.
-    print(f"::error::Resolver scope {action} failed closed ({type(exc).__name__}).", file=sys.stderr)
+    if isinstance(exc, ValueError):
+        reason_code = {
+            "merge index changed during resolver attempt": "index_drift",
+            "MERGE_HEAD or HEAD changed during resolver attempt": "git_state_drift",
+            "resolver worktree or index changed during snapshot": "index_drift",
+            "unsafe resolver path in worktree": "unsafe_path",
+            "symlink parent in resolver path": "unsafe_path",
+            "unsupported resolver path type": "unsafe_path",
+            "symlink parent blocks resolver restore": "unsafe_path",
+            "directory blocks resolver restore": "unsafe_path",
+        }.get(str(exc), "snapshot_invalid")
+    else:
+        reason_code = "io_error" if isinstance(exc, (OSError, subprocess.CalledProcessError)) else "snapshot_invalid"
+    print(f"::error::Resolver scope {action} failed closed ({type(exc).__name__}). Reason code: {reason_code}.", file=sys.stderr)
     sys.exit(2)
 PY
+}
+
+# Copy the actual unmerged index for the model alone. The scope capture and
+# trusted validation/staging still use the real index, never this scratch copy.
+_resolver_prepare_scratch_index()
+{
+  local _resolver_index_source _resolver_index_copy
+  _resolver_index_source="$(git rev-parse --git-path index 2>/dev/null)" || return 1
+  [ -f "${_resolver_index_source}" ] && [ -r "${_resolver_index_source}" ] || return 1
+  _resolver_index_copy="$(mktemp "${RUNTIME_DIR}/resolver_model_index.XXXXXX" 2>/dev/null)" || return 1
+  cp -- "${_resolver_index_source}" "${_resolver_index_copy}" 2>/dev/null || return 1
+  cmp -s -- "${_resolver_index_source}" "${_resolver_index_copy}" || return 1
+  GIT_INDEX_FILE="${_resolver_index_copy}" git ls-files --stage -z >/dev/null 2>&1 || return 1
+  printf '%s\n' "${_resolver_index_copy}"
 }
 
 # Snapshot every in-scope file (the resolver's allowlist, which
@@ -2198,6 +2248,14 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     fi
   fi
 
+  _resolver_model_index=""
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+    if ! _resolver_model_index="$(_resolver_prepare_scratch_index)"; then
+      echo "::error::Cannot copy resolver merge index; refusing to invoke model."
+      exit 1
+    fi
+  fi
+
   emit_conflict_resolver_substate "BuildingPrompt" "${attempt}"
 
   tmp_output="$(mktemp)"
@@ -2235,6 +2293,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     "${RESOLVER_OPENCODE_CONFIG}"
     "${RESOLVER_OPENCODE_WORKSPACE}"
   )
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+    # The invocation wrappers and OpenCode inherit this index, but the
+    # parent shell's real-index checks remain outside its environment.
+    resolver_opencode_cmd=(env GIT_INDEX_FILE="${_resolver_model_index}" "${resolver_opencode_cmd[@]}")
+  fi
   _run_codex=true
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then

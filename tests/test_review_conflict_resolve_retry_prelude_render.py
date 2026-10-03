@@ -51,6 +51,7 @@ orchestrator/project-2840 stack, plus run 25629086684 / PR #2865.
 from __future__ import annotations
 
 import os
+import json
 import re
 import os
 import subprocess
@@ -615,6 +616,134 @@ def _scope_action(repo: Path, env: dict[str, str], action: str) -> subprocess.Co
 	)
 
 
+def _scratch_index_action(repo: Path, env: dict[str, str], action: str) -> subprocess.CompletedProcess[str]:
+	src = _resolve_script_text()
+	start = src.index("_resolver_prepare_scratch_index()\n{")
+	end = src.index("\n}\n", start) + 2
+	clean_env = {key: value for key, value in os.environ.items() if key not in (
+		"BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_INDEX_FILE",
+	)}
+	return subprocess.run(
+		["bash", "-e", "-c", src[start:end] + "\n" + action],
+		cwd=repo, env={**clean_env, **env, "RUNTIME_DIR": str(repo.parent)},
+		capture_output=True, text=True, check=False,
+	)
+
+
+def _make_unmerged_conflict(repo: Path) -> None:
+	git_env = {key: value for key, value in os.environ.items() if key not in (
+		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+		"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	)}
+	def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+		return subprocess.run(
+			["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", *args],
+			check=check, env=git_env, capture_output=True, text=True,
+		)
+
+	initial_branch = git("branch", "--show-current").stdout.strip()
+	git("checkout", "-qb", "other")
+	(repo / "conflict.txt").write_text("other\n", encoding="utf-8")
+	git("commit", "-qam", "other")
+	git("checkout", "-q", initial_branch)
+	(repo / "conflict.txt").write_text("head\n", encoding="utf-8")
+	git("commit", "-qam", "head")
+	assert git("merge", "other", check=False).returncode != 0
+	assert git("ls-files", "-u").stdout
+
+
+def test_resolver_model_staging_uses_only_scratch_index() -> None:
+	src = _resolve_script_text()
+	loop = src[src.index('attempt=1\nwhile '):src.index('\ndone\n', src.index('attempt=1\nwhile '))]
+	assert loop.index("_resolver_scope_state capture") < loop.index("_resolver_prepare_scratch_index")
+	assert loop.index("_resolver_prepare_scratch_index") < loop.index('"${resolver_opencode_cmd[@]}"')
+	assert 'resolver_opencode_cmd=(env GIT_INDEX_FILE="${_resolver_model_index}" "${resolver_opencode_cmd[@]}")' in loop
+	assert loop.index('"${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}"') < loop.index("_resolver_scope_state check")
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		_make_unmerged_conflict(repo)
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "conflict.txt").write_text("model resolution\n", encoding="utf-8")
+		# Without isolation, even in-scope staging changes the real index.
+		subprocess.run(["git", "add", "--", "conflict.txt"], cwd=repo, check=True)
+		unisolated = _scope_action(repo, env, "check")
+		assert unisolated.returncode == 2
+		assert "Reason code: index_drift." in unisolated.stderr
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		_make_unmerged_conflict(repo)
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "conflict.txt").write_text("model resolution\n", encoding="utf-8")
+		isolated = _scratch_index_action(repo, env, (
+			'_model_index="$(_resolver_prepare_scratch_index)"\n'
+			'GIT_INDEX_FILE="${_model_index}" git add -- conflict.txt\n'
+			'test -z "$(GIT_INDEX_FILE="${_model_index}" git ls-files -u -- conflict.txt)"\n'
+			'test -n "$(git ls-files -u -- conflict.txt)"\n'
+			'git ls-files --stage -z >/dev/null\n'
+		))
+		assert isolated.returncode == 0, isolated.stderr
+		assert _scope_action(repo, env, "check").returncode == 0
+		(repo / "outside.txt").write_text("unauthorized\n", encoding="utf-8")
+		assert _scope_action(repo, env, "check").returncode == 1
+		assert _scope_action(repo, env, "restore").returncode == 0
+		assert _scope_action(repo, env, "verify").returncode == 0
+		assert (repo / "outside.txt").read_text() == "base\n"
+
+
+def test_resolver_scratch_index_fails_closed_and_commit_moves_head() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		index_path = repo / ".git/index"
+		index_path.unlink()
+		missing = _scratch_index_action(repo, env, "_resolver_prepare_scratch_index")
+		assert missing.returncode != 0
+		index_path.write_bytes(b"not a git index")
+		corrupt = _scratch_index_action(repo, env, "_resolver_prepare_scratch_index")
+		assert corrupt.returncode != 0
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		assert _scope_action(repo, env, "capture").returncode == 0
+		(repo / "conflict.txt").write_text("committed by model\n", encoding="utf-8")
+		attempt = _scratch_index_action(repo, env, (
+			'_model_index="$(_resolver_prepare_scratch_index)"\n'
+			'GIT_INDEX_FILE="${_model_index}" git add -- conflict.txt\n'
+			'GIT_INDEX_FILE="${_model_index}" git -c user.name=test '
+			'-c user.email=test@example.invalid commit -qm model\n'
+		))
+		assert attempt.returncode == 0, attempt.stderr
+		committed = _scope_action(repo, env, "check")
+		assert committed.returncode == 2
+		assert "Reason code: git_state_drift." in committed.stderr
+
+
+def test_resolver_prompts_forbid_staging_and_committing() -> None:
+	for name in ("conflict-resolver.txt", "integration-sync-conflict-resolver.txt"):
+		prompt = (PROMPTS_DIR / name).read_text(encoding="utf-8")
+		assert "Do not stage files (`git add` / `git rm`) or commit (`git commit`)" in prompt
+
+
+def test_resolver_config_disables_only_its_own_snapshots() -> None:
+	src = _resolve_script_text()
+	writer = src.index('if ! bash "${OPENCODE_CONFIG_WRITER_PATH}"')
+	bootstrap = src.index('if ! opencode_require_bootstrap review_conflict_resolve', writer)
+	config_block = src[src.index('if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${RESOLVER_OPENCODE_CONFIG}"', writer):bootstrap]
+	assert 'config["snapshot"] = False' in config_block
+	assert 'config_path = Path(sys.argv[1])' in config_block
+	with tempfile.TemporaryDirectory() as directory:
+		config_path = Path(directory) / "resolver.json"
+		other_path = Path(directory) / "writer.json"
+		config_path.write_text('{"model":"test"}\n', encoding="utf-8")
+		other_path.write_text('{"model":"test"}\n', encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-e", "-c", config_block],
+			env={**os.environ, "RESOLVER_OPENCODE_CONFIG": str(config_path)},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert json.loads(config_path.read_text())["snapshot"] is False
+		assert other_path.read_text() == '{"model":"test"}\n'
+
+
 def test_scope_retry_restores_full_attempt_and_keeps_final_gate() -> None:
 	src = _resolve_script_text()
 	loop = src[src.index('attempt=1\nwhile '):src.index('\ndone\n', src.index('attempt=1\nwhile '))]
@@ -664,7 +793,9 @@ def test_scope_snapshot_restore_and_index_fail_closed() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		repo, env = _scope_fixture(Path(directory))
 		Path(env["CONFLICTED_PATHS_FILE"]).unlink()
-		assert _scope_action(repo, env, "capture").returncode != 0
+		missing = _scope_action(repo, env, "capture")
+		assert missing.returncode != 0
+		assert "Reason code: snapshot_invalid." in missing.stderr
 		Path(env["CONFLICTED_PATHS_FILE"]).write_text("conflict.txt\n")
 		assert _scope_action(repo, env, "capture").returncode == 0
 		(repo / "outside.txt").write_text("unauthorized\n")
@@ -674,8 +805,25 @@ def test_scope_snapshot_restore_and_index_fail_closed() -> None:
 		assert _scope_action(repo, env, "verify").returncode != 0
 		assert _scope_action(repo, env, "capture").returncode == 0
 		subprocess.run(["git", "add", "--", "outside.txt"], cwd=repo, check=True)
-		assert _scope_action(repo, env, "check").returncode == 2
+		assert "Reason code: index_drift." in _scope_action(repo, env, "check").stderr
 		assert _scope_action(repo, env, "restore").returncode == 2
+
+
+def test_scope_reason_codes_do_not_expose_unsafe_paths() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _scope_fixture(Path(directory))
+		unsafe_path = repo / "nested" / "private-file.txt"
+		unsafe_path.parent.mkdir()
+		unsafe_path.write_text("private\n", encoding="utf-8")
+		subprocess.run(["git", "add", "--", "nested/private-file.txt"], cwd=repo, check=True)
+		assert _scope_action(repo, env, "capture").returncode == 0
+		unsafe_path.unlink()
+		unsafe_path.parent.rmdir()
+		unsafe_path.parent.symlink_to(repo)
+		result = _scope_action(repo, env, "check")
+		assert result.returncode == 2
+		assert "Reason code: unsafe_path." in result.stderr
+		assert "private-file.txt" not in result.stderr
 
 
 def test_scope_symlink_restore_preserves_preexisting_target() -> None:
@@ -729,8 +877,13 @@ def main() -> int:
 	test_retry_loop_reads_retry_prompt_outcome_for_log_dispatch()
 	test_reasoning_default_lowered_to_high()
 	test_scope_check_precedes_retry_success_and_preserves_final_guard()
+	test_resolver_model_staging_uses_only_scratch_index()
+	test_resolver_scratch_index_fails_closed_and_commit_moves_head()
+	test_resolver_prompts_forbid_staging_and_committing()
+	test_resolver_config_disables_only_its_own_snapshots()
 	test_scope_retry_restores_full_attempt_and_keeps_final_gate()
 	test_scope_snapshot_restore_and_index_fail_closed()
+	test_scope_reason_codes_do_not_expose_unsafe_paths()
 	test_scope_symlink_restore_preserves_preexisting_target()
 	test_scope_feedback_is_available_for_generic_resolver()
 	print(

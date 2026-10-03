@@ -28,7 +28,7 @@ edit the file so every `must_contain` pattern in INTENT_FINGERPRINTS
 re-matches and every `must_not_contain` pattern stops matching, AND
 every `must_not_exist` path in INTENT_FINGERPRINTS is removed from
 the working tree (the auto-merge may have resurrected a file an
-earlier sub-issue deleted — `git rm <path>` it).  Both kinds of
+earlier sub-issue deleted — delete it from disk).  Both kinds of
 entry are in-scope for edits; anything NOT in the list above is
 out-of-scope and will cause the run to abort.
 
@@ -70,9 +70,8 @@ acceptance criteria for your resolution. Two lists per sub-issue:
   your resolution leaves the file in place (a back-merge from the
   default branch is the most common source of resurrection), the
   verifier rejects with `must_not_exist path '<path>' reappeared
-  after resolver`. The fix is `git rm <path>` (or delete the file
-  on disk) — do NOT attempt to satisfy this contract by emptying
-  the file's contents while leaving the path present.
+  after resolver`. Delete the file on disk — do NOT attempt to
+  satisfy this contract by emptying it while leaving the path present.
 
 Fingerprints (JSON, may be empty for sub-issues merged before
 fingerprinting was enabled):
@@ -122,6 +121,7 @@ unrelated maintenance fixes that you should layer in additively.
 - Ensure the final code compiles logically.
 - You may read repository files as needed.
 - You may modify repository files directly.
+- Do not stage files (`git add` / `git rm`) or commit (`git commit`); the trusted resolver validates and stages your work after you finish.
 - Do not generate patches.
 - Do not generate scripts.
 - Do not modify GitHub workflow files except when they appear in the

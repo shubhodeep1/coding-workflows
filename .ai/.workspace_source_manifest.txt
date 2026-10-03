@@ -145,6 +145,7 @@ analysis/workflow-optimization-2026-09-23.md
 analysis/workflow-optimization-2026-09-24-2.md
 analysis/workflow-optimization-2026-09-24.md
 analysis/workflow-optimization-2026-09-25.md
+analysis/workflow-optimization-2026-09-26-2.md
 analysis/workflow-optimization-2026-09-26.md
 changelog.d/.gitkeep
 changelog.d/3576-security-audit-uncapped-followups.md
@@ -180,10 +181,14 @@ changelog.d/4470-trusted-security-audit-exclusions.md
 changelog.d/4472-resolver-symlink-touched-set.md
 changelog.d/4476-pipeline-failure-guards.md
 changelog.d/4481-validation-renderer-dependency-preflight.md
+changelog.d/4507-wire-overlay-core-test-into-ci.md
+changelog.d/4512-validate-renderer-import-isolation.md
+changelog.d/4548-checker-blocked-issue-wait.md
 changelog.d/heal-autofix-source-pr-dedup.md
 changelog.d/heal-pipeline-file-ownership.md
 changelog.d/implement-plan-e2e-findings.md
 changelog.d/implement-plan-failed-run-blocks.md
+changelog.d/implement-plan-one-checker-per-project.md
 changelog.d/noop-sweep-fingerprint-cap-skip.md
 changelog.d/post-push-pr-status-check-in.md
 changelog.d/review-autofix-workflow-size-limit.md
