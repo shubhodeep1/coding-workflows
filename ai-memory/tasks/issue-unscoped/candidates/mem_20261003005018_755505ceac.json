@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/claude-pool-worker.yml:258-266, 307-311, 350-362 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The `.claude/**` deny rule blocks Edit, Write, and NotebookEdit but allows Bash writes, and the smoke check tests only the direct Write tool, leaving Bash-based writes unblocked.\n  WHY: A worker running in auto mode can use Bash commands such as `cp`, Python, or shell redirects to modify `.claude/**`, bypassing the deny rule and the smoke check; severity was consistently reported as MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/claude-pool-worker.yml:258-266, 350-362 | severity=high | confidence=5\n  PROBLEM: The `.claude/**` deny rule blocks only Edit, Write, and NotebookEdit, while auto mode permits Bash writes; the smoke check tests only the direct Write tool, so Bash-based writes can bypass both.\n  WHY: Bash commands can modify `target/.claude/**` and persist changes that affect future worker runs, while the smoke check verifies only that `pool-smoke-probe.md` does not exist.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/claude-pool-worker.yml:258-266, 307-311 | severity=high | confidence=5\n  PROBLEM: The `.claude/**` deny rule blocks Edit, Write, and NotebookEdit but allows Bash commands to modify the path; the smoke check tests only direct Write-tool access.\n  WHY: Bash writes can bypass the deny rule and smoke check, violating the plan's G6 requirement that workers cannot write `.claude/**` through any tool.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0a102a36ddd9de41605662c8f007d5a41d929a9fbf661da20b545f20c5d7e0aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6100,
+    "run_id": "37082180061",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37082180061",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003005018_755505ceac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6100,
+    "run_id": "37082180061"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T00:50:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
