@@ -1073,9 +1073,33 @@ reviews, comments, and conflicts stay a direct §12 request.
   listing is paged down to the marker's run; when its last page read was
   full, older runs may lie past it, so it is also listed with `status=`
   for each run status but `completed`, and an older queued or running
-  review counts too. The latest newer completed review
+  review counts too. Any newer completed review
   of the PR that did not conclude `success`, or a marker that is no longer
   the live one on a re-read of the comments, returns `review_superseded`.
+  A later `success` does not clear a failed one (issue #5904: gate-skipped
+  dispatches conclude `success`); only a newer marker, whose run is newer
+  than the failure, does. A successful re-run does not clear a failed
+  attempt of the same run either: a re-run keeps the run's id and the
+  listings show only its newest attempt, so a newer bound review with
+  `run_attempt` above 1 has its earlier attempts read
+  (`actions/runs/<id>/attempts/<n>`, only when no newer review failed
+  outright, at most `MAX_EARLIER_REVIEW_RUN_ATTEMPTS` = 5 per run; more
+  counts as failed, as does needing more than
+  `MAX_REVIEW_RUN_ATTEMPT_READS` = 20 attempt reads across the newer runs,
+  decided before any read, and a malformed `run_attempt` or attempt read is a
+  failed read). The marker's own run is checked the same way
+  (`marker_run_attempt_problem`, review round 2): an attempt of it that
+  started after the marker was posted and did not conclude `success`
+  returns `review_superseded`. Its attempts are read, newest first and at
+  most 5, only when its newest attempt started after the marker was
+  posted, and only back to the attempt that posted it; an attempt that
+  failed before the re-run that posted the marker does not count, and a
+  missing `run_started_at` or marker `created_at` is a failed read. The
+  attempt that posted the marker must itself have concluded `success`, and
+  when the run listings show the marker's run on another attempt than the
+  one verified, or not `success` (a re-run between the reads), the result is
+  `review_superseded` until the next hourly check. After a failed review, a push, a base change, or
+  the `force-review` label sends the head through a new review.
   Neither merges; the next hourly run re-checks. It logs `pending_checks` and counts
   `pending_checks_merged` and `pending_checks_waiting` (checks still
   running); a failed read, or a snapshot whose temp directory cannot be

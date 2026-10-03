@@ -41,7 +41,12 @@ Batching contract (CLAUDE.md §15):
           the marker's run (usually 1, at most 10), for a listing whose
           last page read was full 1 status-filtered listing for each of
           the 5 run statuses but `completed` (usually 1 call, at most 10),
-          and 1 per 100 comments
+          when every newer bound review run succeeded, 1 attempt read per
+          earlier attempt of each one that was re-run (usually none, at
+          most 5 per run and 20 in all; issue #5904), when the marker's own run was re-run after
+          the marker was posted 1 attempt read per earlier attempt back to
+          the one that posted it (usually none, at most 5), and 1 per 100
+          comments
           again (issue #5148), 1 variable read and the auto-merge helper's
           calls, then after a successful merge call 1 PR re-read and, only
           when the reviewed head or base moved, 1 auto-merge disable and,

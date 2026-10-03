@@ -1484,8 +1484,24 @@ dispatch titled for the PR, or any `review_autofix.yml` / `ai-review.yml` /
 `review_rb_judge_dispatch.yml` dispatch that has not completed (`review_active`),
 older runs included: a listing that may go on past the pages it read is
 also listed by run status, and it never merges when
-the latest newer completed review of the PR did not succeed or the marker
-changed while it checked (`review_superseded`). A runs listing that holds
+any newer completed review of the PR did not succeed or the marker
+changed while it checked (`review_superseded`). A later run that concluded
+`success` does not clear the failure (issue #5904): a dispatch the review
+gate skipped also concludes `success`. Neither does a successful re-run: a
+re-run keeps its run's id and the runs listings show only its newest
+attempt, so a newer review that was re-run has its earlier attempts read
+(`actions/runs/<id>/attempts/<n>`, none in the usual case, at most 5 per
+run and 20 in all; a run with more earlier attempts than that, or newer
+runs that would need more reads in all, count as failed, with no read). The
+marker's own run keeps its id when re-run, so its attempts that started
+after the marker was posted must have succeeded too (read only when it was
+re-run after the marker, back to the attempt that posted it, at most 5); an
+attempt that failed before the re-run that posted the marker does not
+count, but the attempt that posted it must have succeeded. A re-run of the
+marker's run between the sweep's reads blocks until the next hourly
+check. Only a
+newer marker from a successful full review clears it, so after a failed review a push, a base change, or the
+`force-review` label sends the head through a new review. A runs listing that holds
 1,000 or more runs newer than the marker's run is a failed read
 (`pending_checks_failed`), repeated every hour until a push, a base change,
 or a forced review sends the head through a new review. A check that fails
