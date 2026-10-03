@@ -1617,6 +1617,7 @@ python3 - \
 	"${SECURITY_AUDIT_TARGET_REF}" <<'PY'
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shlex
@@ -1672,6 +1673,7 @@ for page in existing_followups:
 
 marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")
 existing_finding_ids: set[str] = set()
+existing_finding_numbers: dict[str, int] = {}
 now_utc = datetime.now(timezone.utc)
 
 for issue in existing_followup_issues:
@@ -1684,6 +1686,8 @@ for issue in existing_followup_issues:
 	finding_id = match.group(1).strip()
 	if finding_id:
 		existing_finding_ids.add(finding_id)
+		if isinstance(issue.get("number"), int) and issue["number"] > 0:
+			existing_finding_numbers[finding_id] = issue["number"]
 
 # Every surviving finding without a marked follow-up gets its own issue; there
 # is no per-run or per-week cap.
@@ -1740,7 +1744,14 @@ tracker_comment_path.write_text("\n".join(comment_lines) + "\n", encoding="utf-8
 
 followup_body_dir.mkdir(parents=True, exist_ok=True)
 index_lines: list[str] = []
-for idx, finding in enumerate(planned_followups):
+for idx, finding in enumerate(findings):
+	# The index includes existing findings so a retry can continue a chain
+	# after a partially successful earlier run without refiling its predecessor.
+	file_key = hashlib.sha256(str(finding["file"]).encode("utf-8")).hexdigest()
+	finding_id = str(finding["finding_id"])
+	if finding_id in existing_finding_ids:
+		index_lines.append(f"-\t-\t{file_key}\t{existing_finding_numbers.get(finding_id, 0)}\n")
+		continue
 	title = truncate_title(
 		f"[security-audit] {finding['finding_id']}: {finding['severity']} {finding['file']}:{finding['line']}"
 	)
@@ -1769,7 +1780,7 @@ for idx, finding in enumerate(planned_followups):
 		str(finding["recommendation"]),
 	]
 	body_path.write_text("\n".join(body_lines) + "\n", encoding="utf-8")
-	index_lines.append(f"{body_path}\t{title}\n")
+	index_lines.append(f"{body_path}\t{title}\t{file_key}\t0\n")
 
 followup_index_path.write_text("".join(index_lines), encoding="utf-8")
 followup_summary_env_path.write_text(
@@ -1788,13 +1799,40 @@ gh_retry gh issue comment "${TRACKER_NUMBER}" \
 	--repo "${GITHUB_REPOSITORY}" \
 	--body-file "${TRACKER_COMMENT_FILE}"
 
-while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE; do
+declare -A LAST_FOLLOWUP_BY_FILE=()
+while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLLOWUP_EXISTING_NUMBER; do
+	if [ "${FOLLOWUP_EXISTING_NUMBER}" != "0" ]; then
+		[[ "${FOLLOWUP_EXISTING_NUMBER}" =~ ^[1-9][0-9]*$ ]] || {
+			echo "security-audit: existing follow-up has no verified issue number; refusing to break chain" >&2
+			exit 1
+		}
+		LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		continue
+	fi
 	[ -n "${FOLLOWUP_BODY_PATH}" ] || continue
-	gh_retry gh issue create \
+	if [ -n "${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ]; then
+		printf '\n- Depends on: #%s\n' "${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" >> "${FOLLOWUP_BODY_PATH}"
+	fi
+	# An ambiguous create result aborts: the next run reconciles by the
+	# existing finding marker before trying to create another follow-up.
+	# Issue creation is non-idempotent. gh_retry discards a failed attempt's
+	# stdout and retries it, which can create a duplicate when gh has already
+	# printed the URL. Stop here; next audit reconciles by finding marker.
+	FOLLOWUP_URL="$(gh issue create \
 		--repo "${GITHUB_REPOSITORY}" \
 		--title "${FOLLOWUP_TITLE}" \
 		--label "ai:security" \
-		--body-file "${FOLLOWUP_BODY_PATH}" >/dev/null
+		--body-file "${FOLLOWUP_BODY_PATH}")"
+	case "${FOLLOWUP_URL}" in
+		"https://github.com/${GITHUB_REPOSITORY}/issues/"*) ;;
+		*) echo "security-audit: unverified follow-up URL; refusing to break chain" >&2; exit 1 ;;
+	esac
+	FOLLOWUP_NUMBER="${FOLLOWUP_URL##*/}"
+	[[ "${FOLLOWUP_NUMBER}" =~ ^[1-9][0-9]*$ ]] || {
+		echo "security-audit: unverified follow-up number; refusing to break chain" >&2
+		exit 1
+	}
+	LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_NUMBER}"
 done < "${FOLLOWUP_INDEX_FILE}"
 
 if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then

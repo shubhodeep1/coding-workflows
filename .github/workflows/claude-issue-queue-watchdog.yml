@@ -37,6 +37,9 @@ jobs:
     env:
       # GITHUB_TOKEN: label writes on queue issues do not start workflows.
       GH_TOKEN: ${{ github.token }}
+      # Reads of dependent issues may target private consumer repositories;
+      # keep the queue-label writes on the workflow's non-dispatching token.
+      CLAUDE_ISSUE_DEPENDENCY_TOKEN: ${{ secrets.GH_PAT }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       CLAUDE_ISSUE_QUEUE_STALE_HOURS: ${{ vars.CLAUDE_ISSUE_QUEUE_STALE_HOURS || '3' }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
