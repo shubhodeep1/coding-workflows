@@ -1864,9 +1864,11 @@ hand-back trigger id, a session id, and a role. There is at most one
    `action`, and on a `claude/*` head `kind`, `head_sha`, `claim`, and the
    hand-back counts (§26.H). The script decides; the model does not
    interpret the PR. It uses REST only (§15): one PR read, plus on a
-   `claude/*` head the comment and check-run pages and at most six
-   further reads. **Route on `action` only, never on `state`** (the
-   script maps it, `route_verdict`):
+   `claude/*` head the comment and check-run pages, at most six further
+   reads, and, when no run is active on the head branch, one read per
+   review wrapper, active status, and 100-run page (the script's
+   docstring has the budget). **Route on `action` only, never on
+   `state`** (the script maps it, `route_verdict`):
 
    | `state`                                            | `action`          | step |
    |----------------------------------------------------|-------------------|------|

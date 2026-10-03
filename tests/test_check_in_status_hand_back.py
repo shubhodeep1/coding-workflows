@@ -51,11 +51,37 @@ def _pr(ref=REF, **overrides):
 	return pr
 
 
-# One repo-wide workflow_dispatch listing covers both PR-named review wrappers
-# (internal-review.yml, issue #4618; ai-review.yml, issues #4701 and #4926).
+# The PR-named review wrappers (internal-review.yml, issue #4618; ai-review.yml,
+# issues #4701 and #4926) are read one listing per wrapper and active status,
+# page by page (issue #5442). DISPATCH_RUNS, the repo-wide newest-100 page read
+# before #5442, must never be read again.
 DISPATCH_RUNS = "repos/o/r/actions/runs?event=workflow_dispatch&per_page=100"
 INTERNAL_REVIEW_PATH = ".github/workflows/internal-review.yml"
 AI_REVIEW_PATH = ".github/workflows/ai-review.yml"
+REVIEW_WRAPPERS = ("internal-review.yml", "ai-review.yml")
+ACTIVE_STATUSES = ("pending", "queued", "in_progress")
+
+
+def _dispatch_path(workflow, status, page=1):
+	return f"repos/o/r/actions/workflows/{workflow}/runs?event=workflow_dispatch&status={status}&per_page=100&page={page}"
+
+
+def _dispatch_listings(runs=()):
+	"""One complete page per wrapper and active status. Each run lands in the
+	listing of the wrapper its path names (or `in_wrapper`) and of its status
+	(or `in_status`); a run no listing matches is filtered out, as GitHub would."""
+	listings = {_dispatch_path(workflow, status): {"total_count": 0, "workflow_runs": []}
+		for workflow in REVIEW_WRAPPERS for status in ACTIVE_STATUSES}
+	for index, run in enumerate(runs, 1):
+		run = dict(run)
+		workflow = run.pop("in_wrapper", None) or str(run.get("path", "")).split("@", 1)[0].rsplit("/", 1)[-1]
+		status = run.pop("in_status", None) or run.get("status")
+		run.setdefault("id", 1000 + index)
+		listing = listings.get(_dispatch_path(workflow, status))
+		if listing is not None:
+			listing["workflow_runs"].append(run)
+			listing["total_count"] += 1
+	return listings
 
 
 def _runs(ref=REF, queued=0, in_progress=0, pending=0, dispatched=()):
@@ -63,7 +89,7 @@ def _runs(ref=REF, queued=0, in_progress=0, pending=0, dispatched=()):
 		f"repos/o/r/actions/runs?branch={ref}&status=queued&per_page=1": {"total_count": queued},
 		f"repos/o/r/actions/runs?branch={ref}&status=in_progress&per_page=1": {"total_count": in_progress},
 		f"repos/o/r/actions/runs?branch={ref}&status=pending&per_page=1": {"total_count": pending},
-		DISPATCH_RUNS: {"workflow_runs": list(dispatched)},
+		**_dispatch_listings(dispatched),
 	}
 
 
@@ -128,7 +154,10 @@ def _stub(monkeypatch, responses, comments=()):
 		calls.append(path)
 		if path not in responses:
 			raise AssertionError(f"unexpected gh api call: {path}")
-		return responses[path]
+		payload = responses[path]
+		if isinstance(payload, Exception):
+			raise payload
+		return payload
 
 	def fake_list(path):
 		calls.append(path)
@@ -565,29 +594,120 @@ def test_active_sweep_dispatch_for_the_pr_keeps_the_handoff_waiting(monkeypatch,
 
 
 def test_sweep_dispatch_for_another_pr_or_finished_does_not_count(monkeypatch, capsys):
+	# `in_status` / `in_wrapper` serve a run in a listing it does not belong to,
+	# so the checker's own status and (path, title) checks are exercised.
 	other = [{"status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:8]"},
-		{"status": "completed", "path": INTERNAL_REVIEW_PATH, "display_title": DISPATCH_TITLE},
+		{"status": "completed", "path": INTERNAL_REVIEW_PATH, "display_title": DISPATCH_TITLE, "in_status": "in_progress"},
 		{"status": "in_progress", "path": AI_REVIEW_PATH, "display_title": DISPATCH_TITLE},
 		{"status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": CONSUMER_DISPATCH_TITLE},
 		{"status": "in_progress", "path": AI_REVIEW_PATH, "display_title": "AI Review [pr:8]"},
-		{"status": "in_progress", "display_title": DISPATCH_TITLE}]
+		{"status": "in_progress", "display_title": DISPATCH_TITLE, "in_wrapper": "internal-review.yml"}]
 	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=other)}
 	_stub(monkeypatch, responses, [_handoff()])
 	_, out = _run(capsys)
 	assert out["done"] is True and out["state"] == "review-round"
 
 
-def test_dispatch_listing_failure_raises(monkeypatch):
-	# The repo-wide listing has no per-workflow 404 case (issue #4926, AD-3):
-	# any failed read is a ReadError, which the checker reports as `retry`.
-	for error in ("gh: Not Found (HTTP 404)", "HTTP 502"):
-		def broken(path, error=error):
-			if path == DISPATCH_RUNS:
-				raise checker.ReadError(f"gh api {path} failed: {error}")
-			return {"total_count": 0}
-		monkeypatch.setattr(checker, "gh_api", broken)
-		with pytest.raises(checker.ReadError):
-			checker._active_run_count(REPO, REF, include_pending=True, pr_number=7)
+def _not_found(path):
+	return checker.ReadError(f"gh api {path} failed: gh: Not Found (HTTP 404)")
+
+
+def test_active_dispatch_on_a_later_page_keeps_the_handoff_waiting(monkeypatch, capsys):
+	# Issue #5442: after 100 newer dispatches a live review fell off the one
+	# page read, and the checker handed the PR to a fixer mid-review.
+	others = [{"id": index, "status": "in_progress", "path": INTERNAL_REVIEW_PATH,
+		"display_title": f"Internal: AI Review & Autofix [pr:{index}]"} for index in range(100, 200)]
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs()}
+	responses[_dispatch_path("internal-review.yml", "in_progress")] = {"total_count": 101, "workflow_runs": others}
+	responses[_dispatch_path("internal-review.yml", "in_progress", page=2)] = {"total_count": 101, "workflow_runs": [
+		{"id": 7, "status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": DISPATCH_TITLE}]}
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
+	assert _dispatch_path("internal-review.yml", "in_progress", page=2) in calls and DISPATCH_RUNS not in calls
+
+
+def test_absent_wrapper_is_read_once_and_the_other_wrapper_still_counts(monkeypatch, capsys):
+	# A consumer repo has ai-review.yml and no internal-review.yml: its first
+	# read answers 404, so the wrapper is absent and its other statuses are
+	# not read (issue #5442, AD-4).
+	active = [{"status": "pending", "path": AI_REVIEW_PATH, "display_title": CONSUMER_DISPATCH_TITLE}]
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs(dispatched=active)}
+	responses[_dispatch_path("internal-review.yml", "pending")] = _not_found(_dispatch_path("internal-review.yml", "pending"))
+	calls = _stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is False and "still queued or running" in out["reason"]
+	assert [call for call in calls if "/actions/workflows/" in call] == [
+		_dispatch_path("internal-review.yml", "pending"),
+		*(_dispatch_path("ai-review.yml", status) for status in ACTIVE_STATUSES),
+	]
+
+
+def test_both_wrappers_absent_count_as_no_active_run(monkeypatch, capsys):
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs()}
+	for workflow in REVIEW_WRAPPERS:
+		responses[_dispatch_path(workflow, "pending")] = _not_found(_dispatch_path(workflow, "pending"))
+	_stub(monkeypatch, responses, [_handoff()])
+	_, out = _run(capsys)
+	assert out["done"] is True and out["state"] == "review-round"
+
+
+def _full_page(start):
+	return [{"id": index, "status": "in_progress", "path": INTERNAL_REVIEW_PATH,
+		"display_title": f"Internal: AI Review & Autofix [pr:{index}]"} for index in range(start, start + 100)]
+
+
+@pytest.mark.parametrize("case", [
+	"server-error", "404-after-first-read", "404-on-a-later-page", "not-a-list", "run-without-id",
+	"no-total-count", "short-listing", "listing-shifted", "page-cap",
+])
+def test_incomplete_dispatch_listing_defers_the_hand_back(monkeypatch, capsys, case):
+	# Issue #5442: a listing that was not read in full proves nothing, so the
+	# checker reports `retry` (exit 2) and hands nothing back.
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs()}
+	first = _dispatch_path("internal-review.yml", "pending")
+	if case == "server-error":
+		responses[first] = checker.ReadError(f"gh api {first} failed: HTTP 502")
+	elif case == "404-after-first-read":
+		later = _dispatch_path("internal-review.yml", "in_progress")
+		responses[later] = _not_found(later)
+	elif case == "404-on-a-later-page":
+		responses[first] = {"total_count": 150, "workflow_runs": _full_page(100)}
+		responses[_dispatch_path("internal-review.yml", "pending", page=2)] = _not_found(first)
+	elif case == "not-a-list":
+		responses[first] = {"total_count": 1, "workflow_runs": {"id": 1}}
+	elif case == "run-without-id":
+		responses[first] = {"total_count": 1, "workflow_runs": [{"status": "pending"}]}
+	elif case == "no-total-count":
+		responses[first] = {"workflow_runs": []}
+	elif case == "short-listing":
+		responses[first] = {"total_count": 2, "workflow_runs": [{"id": 1, "status": "pending"}]}
+	elif case == "listing-shifted":
+		# Page 2 comes back short before total_count is reached: runs that
+		# moved up between the reads were never seen.
+		responses[first] = {"total_count": 150, "workflow_runs": _full_page(100)}
+		responses[_dispatch_path("internal-review.yml", "pending", page=2)] = {"total_count": 150, "workflow_runs": _full_page(200)[:40]}
+	elif case == "page-cap":
+		monkeypatch.setattr(checker, "MAX_PAGINATED_API_PAGES", 2)
+		responses[first] = {"total_count": 300, "workflow_runs": _full_page(100)}
+		responses[_dispatch_path("internal-review.yml", "pending", page=2)] = {"total_count": 300, "workflow_runs": _full_page(200)}
+	_stub(monkeypatch, responses, [_handoff()])
+	code, out = _run(capsys)
+	assert code == 2 and out["done"] is False and out["action"] == "retry"
+	assert "internal-review.yml" in out["error"]
+
+
+def test_listing_with_duplicates_across_pages_is_complete(monkeypatch, capsys):
+	# A run inserted at the top between two reads pushes the last run of page 1
+	# onto page 2: it is read twice and counted once, and nothing is missed.
+	responses = {"repos/o/r/pulls/7": _pr(), **_review_run(), **_runs()}
+	first = _dispatch_path("internal-review.yml", "queued")
+	responses[first] = {"total_count": 101, "workflow_runs": _full_page(100)}
+	responses[_dispatch_path("internal-review.yml", "queued", page=2)] = {"total_count": 102, "workflow_runs": [
+		_full_page(100)[-1], {"id": 7, "status": "queued", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:8]"}]}
+	_stub(monkeypatch, responses, [_handoff()])
+	code, out = _run(capsys)
+	assert code == 0 and out["done"] is True and out["state"] == "review-round"
 
 
 def test_branch_active_run_skips_the_dispatch_listing(monkeypatch):
@@ -598,7 +718,36 @@ def test_branch_active_run_skips_the_dispatch_listing(monkeypatch):
 		return {"total_count": 1}
 	monkeypatch.setattr(checker, "gh_api", fake)
 	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 3
-	assert DISPATCH_RUNS not in calls and len(calls) == 3
+	assert len(calls) == 3 and not any("event=workflow_dispatch" in call for call in calls)
+
+
+@pytest.mark.parametrize("scope", ["branch", "dispatch"])
+def test_run_leaving_pending_during_the_reads_is_still_counted(monkeypatch, scope):
+	# PR #5453 review round 1: the statuses were read queued, in_progress,
+	# pending, so a run that left `pending` after the first two reads but
+	# before the `pending` read was seen by none. Here the run moves to
+	# `queued` the moment its `pending` listing is read; read in lifecycle
+	# order, the later `queued` read still sees it.
+	calls = []
+	run_state = {"status": "pending"}
+	run = {"id": 7, "path": INTERNAL_REVIEW_PATH, "display_title": DISPATCH_TITLE}
+
+	def fake(path):
+		calls.append(path)
+		status = path.split("status=", 1)[1].split("&", 1)[0]
+		is_branch = "?branch=" in path
+		watched = is_branch if scope == "branch" else "/workflows/internal-review.yml/" in path
+		if watched and status == "pending":
+			run_state["status"] = "queued"
+		present = watched and run_state["status"] == status
+		if is_branch:
+			return {"total_count": 1 if present else 0}
+		runs = [dict(run, status=status)] if present else []
+		return {"total_count": len(runs), "workflow_runs": runs}
+	monkeypatch.setattr(checker, "gh_api", fake)
+	assert checker._active_run_count(REPO, REF, include_pending=True, pr_number=7) == 1
+	read_statuses = [call.split("status=", 1)[1].split("&", 1)[0] for call in calls]
+	assert read_statuses[:3] == ["pending", "queued", "in_progress"]
 
 
 def _consumer_dispatched_run(**overrides):

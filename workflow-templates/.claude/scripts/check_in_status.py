@@ -82,7 +82,11 @@ most one hand-off run read (plus 1 compare read when the run was triggered
 by an older push than the head it reviewed), and 3 active-run reads when
 needed. Hand-back mode on a `claude/*` head issues 1 call plus one per 100
 PR comments, the check-run pages, at most 1 head-commit read, 1 hand-off run
-read, 1 compare read (same condition) and 3 active-run reads. Run mode
+read, 1 compare read (same condition) and 3 active-run reads. When the
+head-branch active-run reads find nothing and the PR number is known, the
+PR-named review listing adds one call per review wrapper, active status and
+100-run page (issue #5442; a wrapper the repo lacks costs one 404), so 4
+calls with 3 statuses in a repo that has one of the two wrappers. Run mode
 issues 1 call. Issues mode issues one call per issue; the checker lists at
 most the few follow-ups one security cycle opens.
 Every call goes through `gh api`, which in Claude Code on the web is
@@ -143,9 +147,14 @@ PR_NAMED_REVIEW_DISPATCHES = (
 	(DISPATCHED_REVIEW_WORKFLOW, DISPATCHED_REVIEW_TITLE),
 	(".github/workflows/ai-review.yml", "AI Review [pr:{number}]"),
 )
-# One repo-wide listing covers both wrappers, the same listing and newest-100
-# window the poller's _pr_named_review_dispatch_runs reads (issue #4701).
+# The repo-wide newest-100 listing #4926 read. It is no longer read: after 100
+# newer unrelated dispatches a live review fell off that one page (issue
+# #5442). Kept for compatibility (CLAUDE.md §6).
 PR_NAMED_REVIEW_RUNS_PATH = "repos/{repo}/actions/runs?event=workflow_dispatch&per_page=100"
+# One wrapper's workflow_dispatch runs in one active status, read page by page
+# (issue #5442): only that wrapper's own active runs, so other dispatches
+# cannot push a live review out of view.
+PR_NAMED_REVIEW_WORKFLOW_RUNS_PATH = "repos/{repo}/actions/workflows/{workflow}/runs?event=workflow_dispatch&status={status}"
 # --hand-back mode: review_autofix.yml runs every PR-backed claude/* head in
 # Claude-fixer mode (its `claude/*)` gate case).
 CLAUDE_BRANCH_PREFIX = "claude/"
@@ -295,26 +304,102 @@ def _active_run_count(repo: str, head_ref: str, include_pending: bool = False, p
 	"""Count queued / running (and, with `include_pending`, pending) runs for a PR.
 
 	One read per status filtered by the head branch. When those find nothing
-	and `pr_number` is given, one more read (PR_NAMED_REVIEW_RUNS_PATH, the
-	newest 100 workflow_dispatch runs of the repository) counts the active
-	runs whose (path, display_title) is one of PR_NAMED_REVIEW_DISPATCHES for
-	this PR: internal-review.yml runs the sweep dispatches (issue #4618) and
-	ai-review.yml runs the poller and merge train dispatch (issues #4701,
-	#4926). Both start from the default branch, so the head-branch filter
-	never sees them. Any failed read raises `ReadError`.
+	and `pr_number` is given, `_pr_named_active_review_run_count` reads each
+	PR_NAMED_REVIEW_DISPATCHES wrapper's own workflow_dispatch runs in each
+	of those statuses, page by page, and counts the runs whose (path,
+	display_title) pair names this PR: internal-review.yml runs the sweep
+	dispatches (issue #4618) and ai-review.yml runs the poller and merge
+	train dispatch (issues #4701, #4926). Both start from the default
+	branch, so the head-branch filter never sees them. Any failed read, and
+	any incomplete wrapper listing (issue #5442), raises `ReadError`.
+
+	Statuses are read in lifecycle order (pending, queued, in_progress), so
+	a run that moves forward between two reads is seen by the later read; in
+	any other order a run that left `pending` after the `queued` and
+	`in_progress` reads but before the `pending` read is seen by none. A run
+	seen twice only raises the count, which callers use as a yes/no.
 	"""
-	statuses = ("queued", "in_progress", "pending") if include_pending else ("queued", "in_progress")
+	statuses = ("pending", "queued", "in_progress") if include_pending else ("queued", "in_progress")
 	active = 0
 	for status in statuses:
 		listing = gh_api(f"repos/{repo}/actions/runs?branch={head_ref}&status={status}&per_page=1")
 		active += int(listing.get("total_count") or 0)
 	if active or pr_number is None:
 		return active
-	listing = gh_api(PR_NAMED_REVIEW_RUNS_PATH.format(repo=repo))
-	return sum(
-		1 for run in listing.get("workflow_runs") or []
-		if isinstance(run, dict) and run.get("status") in statuses and _is_pr_named_review_pair(run, pr_number)
-	)
+	return _pr_named_active_review_run_count(repo, pr_number, statuses)
+
+
+def _pr_named_active_review_run_count(repo: str, number: int, statuses: tuple[str, ...]) -> int:
+	"""Count PR `number`'s active PR-named review runs from complete listings.
+
+	Input: the repository, the PR number, and the run statuses to count.
+	Output: the number of runs, over every PR_NAMED_REVIEW_DISPATCHES
+	wrapper and every status in `statuses`, whose status is that status and
+	whose (path, display_title) is that wrapper's pair for PR `number`.
+
+	API calls: one per wrapper, status and 100-run page of
+	PR_NAMED_REVIEW_WORKFLOW_RUNS_PATH (at most MAX_PAGINATED_API_PAGES pages
+	per listing). A wrapper whose first read answers HTTP 404 does not exist
+	in the repository: its listing is complete and empty, and its other
+	statuses are not read. A repo with one of the two wrappers and fewer than
+	100 active runs of it per status costs len(statuses) + 1 calls.
+
+	Failure: a count is returned only when every listing was read in full
+	(issue #5442: a single newest-100 page let 100 newer unrelated dispatches
+	hide a live review, and the checker handed the PR to a fixer while it
+	was still being reviewed). A failed or malformed page, a 404 after the
+	wrapper's first read, a missing `total_count`, more runs than the page
+	cap holds, or fewer distinct run ids than `total_count` (the listing
+	shifted between pages) raises `ReadError`: the checker reports `retry`
+	and hands nothing back, and the next check-in reads again.
+	"""
+	active = 0
+	for workflow_path, _title in PR_NAMED_REVIEW_DISPATCHES:
+		workflow = workflow_path.rsplit("/", 1)[-1]
+		for status_index, status in enumerate(statuses):
+			listing_path = PR_NAMED_REVIEW_WORKFLOW_RUNS_PATH.format(repo=repo, workflow=workflow, status=status)
+			runs = _complete_dispatch_run_listing(listing_path, wrapper_may_be_absent=status_index == 0)
+			if runs is None:
+				break
+			active += sum(
+				1 for run in runs
+				if run.get("status") == status and _is_pr_named_review_pair(run, number)
+			)
+	return active
+
+
+def _complete_dispatch_run_listing(listing_path: str, wrapper_may_be_absent: bool) -> list[dict] | None:
+	"""Read every 100-run page of one wrapper listing, or raise `ReadError`.
+
+	Returns the listing's runs, one per distinct run id, or None when
+	`wrapper_may_be_absent` and the first page answers HTTP 404 (the wrapper
+	does not exist). One API call per page, at most MAX_PAGINATED_API_PAGES.
+	"""
+	runs_by_id: dict[int, dict] = {}
+	total_count = 0
+	for page_number in range(1, MAX_PAGINATED_API_PAGES + 1):
+		try:
+			page_payload = gh_api(f"{listing_path}&per_page=100&page={page_number}")
+		except ReadError as exc:
+			if wrapper_may_be_absent and page_number == 1 and "HTTP 404" in str(exc):
+				return None
+			raise
+		page_runs = page_payload.get("workflow_runs")
+		if not isinstance(page_runs, list) or any(not isinstance(run, dict) or not isinstance(run.get("id"), int) for run in page_runs):
+			raise ReadError(f"gh api {listing_path} returned an invalid 'workflow_runs' array")
+		if page_number == 1:
+			total_count = page_payload.get("total_count")
+			if not isinstance(total_count, int) or isinstance(total_count, bool) or total_count < 0:
+				raise ReadError(f"gh api {listing_path} listing incomplete: no total_count")
+		for run in page_runs:
+			runs_by_id[run["id"]] = run
+		if len(page_runs) < 100 or len(runs_by_id) >= total_count:
+			break
+	else:
+		raise ReadError(f"gh api {listing_path} listing incomplete: more than {MAX_PAGINATED_API_PAGES} pages")
+	if len(runs_by_id) < total_count:
+		raise ReadError(f"gh api {listing_path} listing incomplete: read {len(runs_by_id)} of {total_count} runs")
+	return list(runs_by_id.values())
 
 
 def _is_pr_named_review_pair(run: dict, number: int) -> bool:
