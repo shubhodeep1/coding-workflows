@@ -3736,17 +3736,21 @@ validation_fix_issue_has_merged_pr_evidence() {
       echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=pr_fetch_failed" >&2
       continue
     fi
-    if [ -n "${expected_base}" ]; then
-      validation_candidate_base="$(printf '%s' "${validation_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
-      if [ -z "${validation_candidate_base}" ] || [ "${validation_candidate_base}" != "${expected_base}" ]; then
-        echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=base_mismatch" >&2
-        continue
-      fi
+    if ! printf '%s' "${validation_candidate_pr_json}" | jq -e '.merged == true or .merged_at != null' >/dev/null 2>&1; then
+      echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=not_merged" >&2
+      continue
     fi
-    if _pr_json_is_issue_implementation_pr "${issue_num}" "${validation_candidate_pr_json}"; then
-      return 0
+    if ! _pr_json_is_issue_implementation_pr "${issue_num}" "${validation_candidate_pr_json}"; then
+      echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=not_implementation_pr" >&2
+      continue
     fi
-    echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=not_implementation_pr" >&2
+    validation_candidate_base="$(printf '%s' "${validation_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+    if [ -z "${DEFAULT_BRANCH:-}" ] || [ -z "${validation_candidate_base}" ] \
+      || { [ "${validation_candidate_base}" != "${DEFAULT_BRANCH}" ] && [ "${validation_candidate_base}" != "${expected_base}" ]; }; then
+      echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=base_mismatch" >&2
+      continue
+    fi
+    return 0
   done
 
   if [ "${validation_pr_lookup_failed}" = "true" ]; then
@@ -3899,13 +3903,13 @@ close_merged_issues_sweep() {
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:merged" \
-    --json number,labels \
+    --json number,labels,body \
     --limit 200 2>/dev/null || echo "[]")"
   ready_json="$(gh_retry gh issue list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --label "ai:ready-to-merge" \
-    --json number,labels \
+    --json number,labels,body \
     --limit 200 2>/dev/null || echo "[]")"
 
   # Build a single deduplicated list of {number, labels, origin} entries.
@@ -3917,8 +3921,8 @@ close_merged_issues_sweep() {
     --argjson ready "${ready_json:-[]}" '
       def normalize($origin):
         map(
-          select(type == "object" and (.number | type == "number"))
-          | {number: .number, labels: (.labels // []), origin: $origin}
+          select(type == "object" and (.number | type == "number") and has("body") and (.labels | type == "array"))
+          | {number: .number, labels: (.labels // []), body: (.body // ""), origin: $origin}
         );
       ($merged | normalize("merged_label")) as $m
       | ($ready | normalize("ready_label")) as $r
@@ -3937,6 +3941,7 @@ close_merged_issues_sweep() {
   fi
 
   local idx issue_num origin has_tracking_label timeline_json merged_pr_num
+  local sweep_issue_body sweep_issue_labels sweep_pr_base
   local merged_pr_candidates _sweep_candidate_pr _sweep_candidate_pr_json
   local sweep_pr_fetch_failed
   local closed_count=0
@@ -3947,6 +3952,8 @@ close_merged_issues_sweep() {
     issue_num="$(echo "${issues_json}" | jq -r ".[${idx}].number" 2>/dev/null || echo "")"
     [ -n "${issue_num}" ] && [ "${issue_num}" != "null" ] || continue
     origin="$(echo "${issues_json}" | jq -r ".[${idx}].origin" 2>/dev/null || echo "merged_label")"
+    sweep_issue_body="$(printf '%s' "${issues_json}" | jq -r --argjson i "${idx}" '.[$i].body // ""' 2>/dev/null || echo '')"
+    sweep_issue_labels="$(printf '%s' "${issues_json}" | jq -c --argjson i "${idx}" '[.[$i].labels[]?.name]' 2>/dev/null || echo '[]')"
 
     # Skip orchestrator tracking issues — handled by the project completion
     # close path (see set_tracking_phase_label "ai:merged" call sites).
@@ -4000,11 +4007,21 @@ close_merged_issues_sweep() {
         echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=pr_fetch_failed"
         continue
       fi
-      if _pr_json_is_issue_implementation_pr "${issue_num}" "${_sweep_candidate_pr_json}"; then
-        merged_pr_num="${_sweep_candidate_pr}"
-        break
+      if ! _pr_json_is_issue_implementation_pr "${issue_num}" "${_sweep_candidate_pr_json}"; then
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_implementation_pr"
+        continue
       fi
-      echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_implementation_pr"
+      if ! printf '%s' "${_sweep_candidate_pr_json}" | jq -e '.merged == true or .merged_at != null' >/dev/null 2>&1; then
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_merged"
+        continue
+      fi
+      sweep_pr_base="$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo '')"
+      if ! issue_merge_destination_eligible "${sweep_issue_body}" "${sweep_issue_labels}" "${sweep_pr_base}" "${DEFAULT_BRANCH:-}"; then
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=non_target_base"
+        continue
+      fi
+      merged_pr_num="${_sweep_candidate_pr}"
+      break
     done
 
     if [ -z "${merged_pr_num}" ]; then
@@ -14678,6 +14695,7 @@ _fetch_standalone_marker_issues_graphql() {
 # calls.  Returns a JSON object keyed by stringified issue number:
 #   { "123": {"state": "open|closed",
 #             "labels": ["ai:clarification"],
+#             "body": "issue metadata",
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
 #             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
 #                           "merged_at":"ISO8601"|null,"merge_commit_sha":"<oid>"|null,
@@ -14747,6 +14765,7 @@ _fetch_candidate_issue_details_graphql() {
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
           state
+          body
           labels(first: 50) { nodes { name } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -14757,6 +14776,7 @@ _fetch_candidate_issue_details_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    body
                     labels(first: 100) { nodes { name } }
 	                    mergedAt
 	                    headRefName
@@ -14798,6 +14818,7 @@ _fetch_candidate_issue_details_graphql() {
           key: (.value.number | tostring),
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
+            body: (.value.body // ""),
             labels: [(.value.labels.nodes // [])[]?.name],
             comments_available: ((.value.comments.nodes? | type) == "array"),
             comments: [(.value.comments.nodes // [])[]? | {
@@ -14817,6 +14838,7 @@ _fetch_candidate_issue_details_graphql() {
                       number: .number,
                       state: .state,
                       merged: (.merged // false),
+                      body: (.body // ""),
                       labels: [(.labels.nodes // [])[]?.name],
                       merged_at: (.mergedAt // null),
 	                      merge_commit_sha: (.mergeCommit.oid // null),
@@ -14856,7 +14878,9 @@ _fetch_candidate_issue_details_graphql() {
 # Input: JSON array of issue numbers, e.g. "[123, 456]"
 # Output: JSON object keyed by stringified issue number:
 #   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
-#              "labels":[string],"headPushedAt":"ISO8601"|null},
+#              "labels":[string],"body":"issue metadata",
+#              "issue_labels":[string],"head_ref":"branch"|null,
+#              "base_ref":"branch"|null,"headPushedAt":"ISO8601"|null},
 #     "456": null, ... }
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null).  Consumed by
@@ -14897,6 +14921,8 @@ _fetch_linked_pr_status_graphql() {
       [[ "${n}" =~ ^[0-9]+$ ]] || continue
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
+          body
+          labels(first: 50) { nodes { name } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
             nodes {
               ... on CrossReferencedEvent {
@@ -14905,6 +14931,7 @@ _fetch_linked_pr_status_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    body headRefName baseRefName mergedAt
                     labels(first: 100) { nodes { name } }
                     repository { nameWithOwner }
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
@@ -14948,6 +14975,10 @@ _fetch_linked_pr_status_graphql() {
                   number: .number,
                   state: .state,
                   merged: (.merged // false),
+                  body: (.body // ""),
+                  head_ref: (.headRefName // null),
+                  base_ref: (.baseRefName // null),
+                  merged_at: (.mergedAt // null),
                   labels: [(.labels.nodes // [])[]?.name],
                   headPushedAt: (
                     ((.commits.nodes // [])[0].commit.pushedDate)
@@ -14956,7 +14987,9 @@ _fetch_linked_pr_status_graphql() {
                   )
                 }
             ] | last // null
-          )
+          ),
+          body: (.value.body // ""),
+          issue_labels: [(.value.labels.nodes // [])[]?.name]
         }
       ) | from_entries
     ' 2>/dev/null || echo '{}')"
@@ -15213,6 +15246,7 @@ _check_merged_pr_guard() {
   local issue_num="$1"
   local linked_json="$2"
   STALL_MERGED_PR_NUM=""
+  STALL_MERGED_PR_JSON=""
 
   if [ "${ENABLE_STALL_MERGED_PR_GUARD}" != "true" ]; then
     return 1
@@ -15235,6 +15269,7 @@ _check_merged_pr_guard() {
   fi
 
   STALL_MERGED_PR_NUM="${pr_num}"
+  STALL_MERGED_PR_JSON="${linked_json}"
   return 0
 }
 
@@ -15471,6 +15506,47 @@ _reconcile_merged_pr_issue() {
   local phase="$2"
   local action="$3"
   local pr_num="$4"
+
+  # The linked-PR GraphQL batch carries the PR body/head/base alongside its
+  # status. Use it (or the already-resolved full PR); on an older/partial
+  # cache or REST fallback fetch the missing full payload once before mutation.
+  local _reconcile_pr_json _reconcile_base _reconcile_issue_json _reconcile_body _reconcile_labels
+  if [ "${STALL_IMPL_PR_NUM:-}" = "${pr_num}" ] && [ -n "${STALL_IMPL_PR_JSON:-}" ]; then
+    _reconcile_pr_json="${STALL_IMPL_PR_JSON}"
+  elif [ "${STALL_MERGED_PR_NUM:-}" = "${pr_num}" ] && printf '%s' "${STALL_MERGED_PR_JSON:-}" | jq -e '
+    has("body") and (.head_ref | type == "string") and (.base_ref | type == "string")
+  ' >/dev/null 2>&1; then
+    _reconcile_pr_json="$(printf '%s' "${STALL_MERGED_PR_JSON}" | jq -c '{
+      number, body, merged, merged_at, head: {ref: .head_ref}, base: {ref: .base_ref}
+    }')"
+  else
+    _reconcile_pr_json="$(_fetch_pr_json "${pr_num}")"
+  fi
+  if ! _pr_json_is_issue_implementation_pr "${issue_num}" "${_reconcile_pr_json}" \
+    || ! printf '%s' "${_reconcile_pr_json}" | jq -e '.merged == true or .merged_at != null' >/dev/null 2>&1; then
+    echo "STALL_MERGED_PR_REJECTED issue=${issue_num} pr=${pr_num} reason=unverified_implementation_merge"
+    return 0
+  fi
+  _reconcile_base="$(printf '%s' "${_reconcile_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
+  _reconcile_issue_json="$(printf '%s' "${_candidate_details_json:-{}}" | jq -c --arg n "${issue_num}" '.[$n] // empty' 2>/dev/null || true)"
+  if [ -z "${_reconcile_issue_json}" ]; then
+    _reconcile_issue_json="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE:-{}}" | jq -c --arg n "${issue_num}" '.[$n] // empty' 2>/dev/null || true)"
+  fi
+  if [ -z "${_reconcile_issue_json}" ] || ! printf '%s' "${_reconcile_issue_json}" | jq -e 'has("body") and (.body == null or (.body | type == "string"))' >/dev/null 2>&1; then
+    # Only a cache miss needs an issue read; never infer its declared target
+    # from the PR's own (untrusted) body or from an unrelated project state.
+    _reconcile_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" || true)"
+  fi
+  if ! printf '%s' "${_reconcile_issue_json}" | jq -e 'has("body") and (.body == null or (.body | type == "string")) and ((.issue_labels // .labels) | type == "array")' >/dev/null 2>&1; then
+    echo "STALL_MERGED_PR_REJECTED issue=${issue_num} pr=${pr_num} reason=issue_metadata_unavailable"
+    return 0
+  fi
+  _reconcile_body="$(printf '%s' "${_reconcile_issue_json}" | jq -r '.body // ""' 2>/dev/null || true)"
+  _reconcile_labels="$(printf '%s' "${_reconcile_issue_json}" | jq -c 'if .issue_labels then .issue_labels elif (.labels | type) == "array" then [.labels[] | if type == "object" then .name else . end] else [] end' 2>/dev/null || echo '[]')"
+  if ! issue_merge_destination_eligible "${_reconcile_body}" "${_reconcile_labels}" "${_reconcile_base}" "${DEFAULT_BRANCH:-}"; then
+    echo "STALL_MERGED_PR_REJECTED issue=${issue_num} pr=${pr_num} reason=non_target_base"
+    return 0
+  fi
 
   if declare -F ensure_label_exists >/dev/null 2>&1; then
     ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
@@ -17562,6 +17638,9 @@ fi
 # ---------------------------------------------------------------
 TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+# Reuse the repository read formerly performed by the standalone conflict
+# sweep. Resolve it before any path can promote a merged PR to ai:merged.
+DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || true)"
 FEATURE_SWEEP_DONE="false"
 prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
 write_state_snapshot_actions_runs_export || true
@@ -18468,7 +18547,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         # loop missed (fix-up issue closed with the ai:closed label but state
         # cache still says open) while still short-circuiting the evidence
         # walk for issues that are genuinely still open (the common case).
-        if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
+        if validation_fix_issue_has_merged_pr_evidence "${fix_num}" "${INTEGRATION_BRANCH_TRACKING:-}"; then
           FIX_EVIDENCE_STATUS=0
           echo "Validation fix-up issue #${fix_num}: closed with merged PR evidence; backfilling ai:merged."
           # Pass the labels we already fetched at the top of this
@@ -18541,7 +18620,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
           # (not inside a function); see the comment at the proactive-
           # backfill site for the same reason STALL_HEALING_CHANGED
           # cannot be set here.
-          if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
+          if validation_fix_issue_has_merged_pr_evidence "${fix_num}" "${INTEGRATION_BRANCH_TRACKING:-}"; then
             FIX_EVIDENCE_STATUS=0
             echo "Validation fix-up issue #${fix_num}: ai:ready-to-merge with merged PR evidence; proactively backfilling ai:merged."
             if backfill_validation_fix_issue_merged_label "${fix_num}" "${FIX_LABELS}"; then
@@ -19162,7 +19241,11 @@ The poller will resume processing on the next cycle."
             # GitHub's REST API returns .state == "closed" for merged
             # PRs (not "merged") — same convention as the standalone
             # stall-recovery merged-PR guard at line ~6463.
-            if [ "${PW_PR_MERGED}" = "true" ]; then
+            _pw_base="$(_jq_field "${_pw_pr_json}" '.base.ref')"
+            _pw_target="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || true)"
+            if [ "${PW_PR_MERGED}" = "true" ] && _pr_json_is_issue_implementation_pr "${pw_inum}" "${_pw_pr_json}" \
+              && [ -n "${DEFAULT_BRANCH:-}" ] && [ -n "${_pw_base}" ] \
+              && { [ "${_pw_base}" = "${DEFAULT_BRANCH}" ] || [ "${_pw_base}" = "${_pw_target}" ]; }; then
               echo "  [backward-scan] #${pw_inum} ai:ready-to-merge but linked PR #${PW_PR} is already merged — promoting to ai:merged."
               ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
               gh_retry gh issue edit "${pw_inum}" --repo "${GITHUB_REPOSITORY}" \
@@ -19563,6 +19646,19 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       LINKED_PR_NUM="${_linked_pr_candidate}"
       _linked_pr_candidate_state="$(_jq_field "${_linked_pr_candidate_json}" '.state' 'open|closed|merged')"
       _linked_pr_candidate_merged="$(_jq_field "${_linked_pr_candidate_json}" '.merged_at != null' 'true|false')"
+      if [ "${_linked_pr_candidate_merged}" = "true" ]; then
+        if ! printf '%s' "${_current_wave_details_json}" | jq -e --arg key "${inum}" '.[$key].body | type == "string"' >/dev/null 2>&1; then
+          echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} reason=issue_metadata_unavailable" >&2
+          continue
+        fi
+        _linked_issue_body="$(printf '%s' "${_current_wave_details_json}" | jq -r --arg key "${inum}" '.[$key].body // ""' 2>/dev/null || true)"
+        _linked_issue_labels="$(printf '%s' "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []' 2>/dev/null || echo '[]')"
+        _linked_pr_base="$(_jq_field "${_linked_pr_candidate_json}" '.base.ref')"
+        if ! issue_merge_destination_eligible "${_linked_issue_body}" "${_linked_issue_labels}" "${_linked_pr_base}" "${DEFAULT_BRANCH:-}"; then
+          echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} reason=non_target_base" >&2
+          continue
+        fi
+      fi
       PR_STATE="${_linked_pr_candidate_state:-unknown}"
       PR_MERGED="${_linked_pr_candidate_merged:-false}"
       if [ "${PR_MERGED}" = "true" ]; then
@@ -22312,7 +22408,6 @@ ${PR_DIFF}
   unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left
 
   # Fetch CI status on default branch
-  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   CI_STATUS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}/check-runs" \
     --jq '[.check_runs[] | {name: .name, conclusion: .conclusion}]' || echo "[]")"
 
@@ -23254,7 +23349,7 @@ STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 
 CONFLICT_SWEEP_FIXED=0
-DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+# DEFAULT_BRANCH was resolved before the merged-issue sweep above.
 
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"

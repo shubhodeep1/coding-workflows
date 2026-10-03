@@ -19,6 +19,8 @@ import time
 import unittest
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
@@ -694,6 +696,7 @@ def _run_poller(
 	issue_labels: dict[int, list[str]] | None = None,
 	issue_comments: dict[int, list[str | dict]] | None = None,
 	issue_bodies: dict[int, str] | None = None,
+	mock_default_branch: str = "main",
 	issue_events: dict[int, list[dict]] | None = None,
 	issue_events_after_first_get: dict[int, list[dict]] | None = None,
 	gql_mode: str = "full",
@@ -1144,7 +1147,7 @@ def _run_poller(
 			"fail_release_dispatch": fail_release_dispatch,
 			"fail_search_issues": bool(fail_search_issues),
 			"search_issue_items": list(search_issue_items or []),
-			"default_branch": "main",
+			"default_branch": mock_default_branch,
 			"prs": prs,
 			"pr_commits": {str(k): list(v) for k, v in pr_commits.items()},
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
@@ -1835,6 +1838,8 @@ if args[0] == 'api':
 				issue_payload['number'] = issue_num
 			if re.search(r'(?m)^\s*state\s*$', query):
 				issue_payload['state'] = issue_state
+			if re.search(r'(?m)^\s*body\s*$', query):
+				issue_payload['body'] = issue.get('body', '')
 			if 'labels(first:' in query:
 				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
 			if 'comments(last:' in query and issue_num not in set(store.get('graphql_comments_unavailable_for', [])):
@@ -1883,6 +1888,7 @@ if args[0] == 'api':
 							'source': {
 								'__typename': 'PullRequest',
 								'number': int(pr.get('number', linked_pr_num)),
+								'body': pr.get('body', ''),
 								'repository': pr_repository,
 								'state': pr_state,
 								'merged': bool(pr.get('merged', False)),
@@ -12175,12 +12181,32 @@ def test_standalone_stall_recovery_reconciles_merged_pr_with_stale_merge_train_l
 			"merged": True,
 			"merged_at": "2026-09-07T21:30:00Z",
 			"headRefName": "ai/issue-501",
+			"baseRefName": "main",
 			"labels": ["ai:merge-queued"],
 		}],
 	)
 	assert "ai:merged" in result["issues"]["501"]["labels"]
 	assert "linked PR #419 is MERGED" in result["stdout"]
 	assert "reason=merge_train_queued pr=419" not in result["stdout"]
+
+
+def test_standalone_stall_recovery_rejects_wrong_base_merged_pr():
+	state = _base_state(status="complete")
+	comment = "<!-- AI_STANDALONE_STALL_STATE_V1\n" + json.dumps({
+		"schema_version": 1, "last_seen_phase": "ai:done", "status_since_ts": 1,
+		"stall_recovery_count": 2,
+	}) + "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]}, issue_comments={501: [comment]},
+		issue_bodies={501: "Target branch: `main`"}, issue_linked_prs={501: 419},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{"number": 419, "body": "Closes #501", "state": "closed", "merged": True,
+			"merged_at": "2026-09-28T10:40:00Z", "headRefName": "ai/issue-501",
+			"baseRefName": "claude/implement-plan-other"}],
+	)
+	assert "ai:merged" not in result["issues"]["501"]["labels"]
+	assert "STALL_MERGED_PR_REJECTED issue=501 pr=419 reason=non_target_base" in result["stdout"] + result["stderr"], result["stdout"] + result["stderr"]
 
 
 def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
@@ -13013,6 +13039,22 @@ def test_validation_fixing_backfills_ai_merged_from_linked_merged_pr_evidence():
 	assert len(result["validation_dispatches"]) == 1
 	assert "ai:merged" in result["issues"]["501"]["labels"]
 	assert "ai:closed" not in result["issues"]["501"]["labels"]
+
+
+def test_validation_fixing_rejects_wrong_base_merged_pr_evidence():
+	state = _base_state(status="validation-fixing")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_cycle"] = 1
+	state["validation_active_fix_issues"] = [501]
+	result = _run_poller(
+		state=state, enable_validation="true", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:closed"]}, issue_linked_prs={501: 901},
+		prs=[{"number": 901, "state": "closed", "merged": True,
+			"merged_at": "2026-09-28T10:40:00Z", "baseRefName": "claude/implement-plan-other",
+			"headRefName": "ai/issue-501", "body": "Closes #501"}],
+	)
+	assert "ai:merged" not in result["issues"]["501"]["labels"]
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=501 candidate_pr=901 rejected=base_mismatch" in result["stderr"]
 
 
 def test_validation_fixing_rejects_mention_only_merged_pr_evidence():
@@ -14640,11 +14682,8 @@ def test_backward_scan_promotes_ready_to_merge_with_merged_pr_to_merged():
 	the backward-scan only attempted gh pr merge against open PRs and silently
 	left already-merged prior-wave children stranded.
 
-	Integration branch intentionally unset: the fingerprint-capture branch
-	is gated on .integration_branch being non-empty and the test fixture
-	does not provide a real integration branch, so we keep the assertion
-	surface scoped to the label promotion + wave-state mutation that the
-	defensive reconcile is supposed to guarantee.
+	Without an integration branch in this fixture, the default branch is
+	the verified destination for the prior-wave PR.
 	"""
 	state = {
 		"schema_version": "orchestrate_state.v1",
@@ -14681,7 +14720,7 @@ def test_backward_scan_promotes_ready_to_merge_with_merged_pr_to_merged():
 		"state": "closed",
 		"merged": True,
 		"merged_at": "2026-04-27T12:00:00Z",
-		"baseRefName": "orchestrator/project-192",
+		"baseRefName": "main",
 		"headRefName": "ai/issue-35",
 		"headRefFromApi": "ai/issue-35",
 		"mergeable": True,
@@ -14703,7 +14742,7 @@ def test_backward_scan_promotes_ready_to_merge_with_merged_pr_to_merged():
 	# status=merged in wave-1 state. The label edit also strips
 	# ai:ready-to-merge so re-runs are idempotent.
 	final_labels = result["issues"]["35"]["labels"]
-	assert "ai:merged" in final_labels, f"Expected ai:merged on #35; got {final_labels}"
+	assert "ai:merged" in final_labels, f"Expected ai:merged on #35; got {final_labels}; poller log: {result['stdout'][-2500:]}"
 	assert "ai:ready-to-merge" not in final_labels, f"Expected ai:ready-to-merge stripped from #35; got {final_labels}"
 	wave1_issues = {i["id"]: i["status"] for i in result["latest_state"]["waves"][0]["issues"]}
 	assert wave1_issues.get("fixup-1") == "merged", f"Expected fixup-1 status=merged, got {wave1_issues.get('fixup-1')}"
@@ -14766,6 +14805,7 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_bodies={10: "- Tracking issue: #192\n- Integration branch: `orchestrator/project-192`"},
 		issue_linked_prs={10: 901},
 		prs=[merged_pr],
 		mock_gh_issue_list_label_filter=True,
@@ -14889,6 +14929,72 @@ def test_close_merged_issues_sweep_accepts_closing_body_reference_pr():
 	)
 
 
+@pytest.mark.parametrize("origin", ["ai:merged", "ai:ready-to-merge"])
+@pytest.mark.parametrize("base,body,expected_close", [
+	("", "Issue 10", False),
+	("claude/implement-plan-other", "Issue 10", False),
+	("main", "Issue 10", True),
+	("claude/implement-plan-target", "**Target branch:** `claude/implement-plan-target`", True),
+	("claude/implement-plan-other", "**Target branch:** `claude/implement-plan-target`", False),
+])
+def test_close_sweep_requires_issue_merge_destination(origin, base, body, expected_close):
+	pr = {
+		"number": 952, "state": "closed", "merged": True,
+		"merged_at": "2026-09-28T10:40:00Z", "baseRefName": base,
+		"headRefName": "claude/implement-plan-issue-10", "headRefFromApi": "claude/implement-plan-issue-10",
+		"body": "Closes #10", "mergeable": True,
+	}
+	result = _run_poller(
+		state=_sweep_complete_project_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: [origin]}, issue_bodies={10: body},
+		issue_linked_prs={10: 952}, prs=[pr], mock_gh_issue_list_label_filter=True,
+	)
+	assert (10 in result.get("closed_issues", [])) is expected_close
+	if not expected_close:
+		assert "rejected=non_target_base" in result["stdout"]
+		assert "no_merged_pr_found" in result["stdout"] + result["stderr"]
+		assert ("ai:merged" in result["issues"]["10"]["labels"]) is (origin == "ai:merged")
+
+
+def test_close_sweep_rejects_unmerged_pr_and_forged_managed_marker():
+	pr = {"number": 953, "state": "closed", "merged": False, "merged_at": None,
+		"baseRefName": "orchestrator/project-192", "headRefName": "ai/issue-10", "body": "Closes #10"}
+	result = _run_poller(
+		state=_sweep_complete_project_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, issue_bodies={10: "- Tracking issue: #192\nManaged by: AI Orchestrator"},
+		issue_linked_prs={10: 953}, prs=[pr], mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", [])
+	pr["merged"] = True
+	pr["merged_at"] = "2026-09-28T10:40:00Z"
+	result = _run_poller(
+		state=_sweep_complete_project_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, issue_bodies={10: "- Tracking issue: #192\nManaged by: AI Orchestrator"},
+		issue_linked_prs={10: 953}, prs=[pr], mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", [])
+	assert "rejected=non_target_base" in result["stdout"]
+	result = _run_poller(
+		state=_sweep_complete_project_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge", "ai:orchestrator-managed"]},
+		issue_bodies={10: "- Tracking issue: #192"},
+		issue_linked_prs={10: 953}, prs=[pr], mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", [])
+
+
+def test_close_sweep_fails_closed_without_default_branch():
+	pr = {"number": 954, "state": "closed", "merged": True, "merged_at": "2026-09-28T10:40:00Z",
+		"baseRefName": "main", "headRefName": "ai/issue-10"}
+	result = _run_poller(
+		state=_sweep_complete_project_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, issue_linked_prs={10: 954}, prs=[pr],
+		mock_default_branch="", mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", [])
+	assert "rejected=non_target_base" in result["stdout"]
+
+
 def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
 	genuine_pr = {
 		"number": 951,
@@ -14896,6 +15002,7 @@ def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
 		"merged": True,
 		"merged_at": "2026-08-25T15:00:00Z",
 		"headRefName": "ai/issue-10",
+		"baseRefName": "main",
 		"headRefFromApi": "ai/issue-10",
 	}
 	mention_only_pr = {
@@ -14916,6 +15023,18 @@ def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
 		prs=[genuine_pr, mention_only_pr],
 	)
 	assert "ai:merged" in result["issues"]["10"]["labels"]
+
+
+def test_current_wave_reconciliation_does_not_promote_wrong_base_merge():
+	pr = {"number": 955, "state": "closed", "merged": True,
+		"merged_at": "2026-09-28T10:40:00Z", "baseRefName": "claude/implement-plan-other",
+		"headRefName": "ai/issue-10", "body": "Closes #10"}
+	result = _run_poller(
+		state=_base_state(status="in_progress"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:planning"]}, issue_linked_prs={10: 955}, prs=[pr],
+	)
+	assert "ai:merged" not in result["issues"]["10"]["labels"]
+	assert "reason=non_target_base" in result["stdout"] + result["stderr"]
 
 
 def test_linkage_paths_distinguish_pr_fetch_failure_from_rejection():
@@ -16465,6 +16584,7 @@ def test_managed_stall_recovery_reconciles_merged_pr_with_stale_merge_train_labe
 			"merged": True,
 			"merged_at": "2026-09-07T21:30:00Z",
 			"headRefName": "ai/issue-10",
+			"baseRefName": "main",
 			"labels": ["ai:merge-queued"],
 		}],
 	)

@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Issue status now waits for a merge into the issue's intended destination.** PR-close status sync, stall reconciliation, and the merged-issue sweep only mark or close an issue after a verified merge into the repository default branch, its declared integration/target branch, or its verified orchestrator project branch. Merges into unrelated project branches leave the issue open and do not finalize its AI-memory lineage.

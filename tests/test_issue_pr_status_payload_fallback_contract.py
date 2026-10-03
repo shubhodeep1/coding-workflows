@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import subprocess
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +65,8 @@ def test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> 
 
 def test_lineage_finalization_noop_paths_emit_ai_memory_telemetry_before_exit() -> None:
 	finalize_step = _step_script("Finalize linked issue lineage state")
+	assert 'if [ -z "${LINEAGE_ELIGIBLE_ISSUES:-}" ]; then' in finalize_step
+	assert 'done <<< "${LINEAGE_ELIGIBLE_ISSUES}"' in finalize_step
 
 	assert 'AI_MEMORY_ENABLED_NORMALIZED=false' in finalize_step
 	assert '1|true|yes|on) AI_MEMORY_ENABLED_NORMALIZED=true ;;' in finalize_step
@@ -357,12 +364,7 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 
 	# Close gate must include the managed-child branch — closing the
 	# issue when its PR merges into orchestrator/project-N (base != main).
-	assert (
-		'if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then'
-	) in text, (
-		"Close gate must close on PR_MERGED!=true, PR_BASE_REF==main, "
-		"OR is_managed_child==true"
-	)
+	assert 'issue_merge_destination_eligible "${issue_body}" "${issue_labels}" "${PR_BASE_REF}" "${REPOSITORY_DEFAULT_BRANCH}"' in text
 	assert "Closing orchestrator-managed child issue #${issue_number}" in text, (
 		"Managed-child close path must emit a distinguishing log line"
 	)
@@ -375,6 +377,81 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 	assert loop_check_pos != -1
 	assert label_call_pos != -1
 	assert managed_classify_pos < loop_check_pos < label_call_pos
+
+
+@pytest.mark.parametrize("base,body,labels,merged,default,expect_mutation", [
+	("claude/implement-plan-other", "Issue 10", [], True, "main", False),
+	("main", "Issue 10", [], True, "main", True),
+	("trunk", "Issue 10", [], True, "trunk", True),
+	("claude/implement-plan-target", "**Target branch:** `claude/implement-plan-target`", [], True, "main", True),
+	("orchestrator/project-192", "- Tracking issue: #192\nManaged by: AI Orchestrator", [], True, "main", False),
+	("orchestrator/project-192", "- Tracking issue: #192", ["ai:orchestrator-managed"], True, "main", True),
+	("main", "Issue 10", ["ai:orchestrator-tracking"], True, "main", False),
+	("main", "Issue 10", [], True, "", False),
+	("claude/implement-plan-other", "Issue 10", [], False, "main", True),
+])
+def test_pr_close_step_gates_status_and_lineage_on_destination(tmp_path, base, body, labels, merged, default, expect_mutation):
+	"""Run the real workflow step against one batched GraphQL response."""
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "gh_helpers.sh").symlink_to(REPO_ROOT / "scripts" / "gh_helpers.sh")
+	(scripts / "label_helpers.sh").write_text(
+		'ensure_label_exists() { :; }\n'
+		'set_issue_phase_label_resilient() { printf "label:%s\\n" "$1" >> "$CALLS_FILE"; }\n',
+		encoding="utf-8",
+	)
+	graphql = {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": [
+		{"number": 10, "body": body, "labels": {"nodes": [{"name": label} for label in labels]}}
+	]}}}}}
+	env = {**os.environ, "REPOSITORY": "owner/repo", "PR_NUMBER": "951", "PR_HEAD_REF": "claude/fix",
+		"PR_BASE_REF": base, "REPOSITORY_DEFAULT_BRANCH": default, "PR_MERGED": str(merged).lower(),
+		"FINAL_LABEL": "ai:merged" if merged else "ai:closed", "PR_TITLE": "Fix", "PR_BODY": "Closes #10",
+		"GITHUB_ENV": str(tmp_path / "github_env"), "CALLS_FILE": str(tmp_path / "calls"),
+		"ISSUE_GRAPHQL": json.dumps(graphql), "PYTHONDONTWRITEBYTECODE": "1", "GH_RETRY_MAX_ATTEMPTS": "1"}
+	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(key, None)
+	shell = '''gh() {
+	if [ "$1" = api ] && [ "$2" = graphql ]; then printf '%s\\n' "$ISSUE_GRAPHQL"; return 0; fi
+	if [ "$1" = label ]; then return 0; fi
+	if [ "$1" = issue ] && [ "$2" = close ]; then printf 'close:%s\\n' "$3" >> "$CALLS_FILE"; return 0; fi
+	return 1
+}
+'''
+	result = subprocess.run(["bash", "-c", shell + _step_script("Update linked issue labels when PR closes")],
+		cwd=tmp_path, env=env, capture_output=True, text=True, timeout=15)
+	assert result.returncode == 0, result.stderr + result.stdout
+	calls = (tmp_path / "calls").read_text() if (tmp_path / "calls").exists() else ""
+	assert ("label:10" in calls and "close:10" in calls) is expect_mutation
+	exported = (tmp_path / "github_env").read_text()
+	assert ("LINEAGE_ELIGIBLE_ISSUES<<EOF\n10\nEOF" in exported) is expect_mutation
+
+
+def test_issue_branch_parser_matches_canonical_precedence():
+	from scripts.orchestrate_lib import extract_integration_branch
+
+	for body in (
+		"Integration branch: `main`\nTarget branch: `other`",
+		"**Target branch:** `orchestrator/project-192` (integration branch for child)",
+		"- Integration branch: claude/implement-plan-target",
+		"No branch metadata",
+	):
+		env = {**os.environ, "ISSUE_BODY": body, "PYTHONDONTWRITEBYTECODE": "1"}
+		for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+			env.pop(key, None)
+		result = subprocess.run(["bash", "-c", 'source scripts/gh_helpers.sh; issue_body_integration_branch "$ISSUE_BODY"'],
+			cwd=REPO_ROOT, env=env,
+			capture_output=True, text=True, timeout=5)
+		assert result.returncode == 0
+		assert result.stdout.strip() == extract_integration_branch(body)
+
+	for invalid_body in ("Target branch: `-evil`", "Integration branch: `main; echo injected`"):
+		env = {**os.environ, "ISSUE_BODY": invalid_body, "PYTHONDONTWRITEBYTECODE": "1"}
+		for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+			env.pop(key, None)
+		result = subprocess.run(["bash", "-c", 'source scripts/gh_helpers.sh; issue_body_integration_branch "$ISSUE_BODY"'],
+			cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=5)
+		assert result.returncode == 1
+		assert result.stdout == ""
 
 
 if __name__ == "__main__":

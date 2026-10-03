@@ -188,6 +188,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REPOSITORY_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
           PR_MERGED: ${{ github.event.pull_request.merged }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
@@ -198,6 +199,8 @@ jobs:
 
           TRACKING_ISSUES=""
           MANAGED_ISSUES=""
+          ISSUE_METADATA_JSON='{}'
+          LINEAGE_ELIGIBLE_ISSUES=""
           ORCHESTRATOR_CLASSIFICATION_COMPLETE="true"
 
           export_orchestrator_issue_classification() {
@@ -211,6 +214,9 @@ jobs:
             printf '%s\n' "${MANAGED_ISSUES:-}" >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
             echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"
+            echo "LINEAGE_ELIGIBLE_ISSUES<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${LINEAGE_ELIGIBLE_ISSUES}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
           }
 
           classify_orchestrator_issues_from_payload() {
@@ -222,6 +228,8 @@ jobs:
               ((.errors // []) | length) == 0
               and (.data.repository? != null)
               and (([.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null)] | length) == $expected)
+              and all(.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null);
+                has("body") and ((.labels.nodes | type) == "array"))
             ' >/dev/null 2>&1 || return 1
 
             TRACKING_ISSUES="$(printf '%s' "${payload}" | jq -r '
@@ -229,6 +237,10 @@ jobs:
               select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) != null) |
               .number
             ' 2>/dev/null || echo '')"
+            ISSUE_METADATA_JSON="$(printf '%s' "${payload}" | jq -c '
+              [.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) |
+                {key:(.number | tostring), value:{body:(.body // ""), labels:[.labels.nodes[]?.name]}}] | from_entries
+            ' 2>/dev/null || echo '{}')"
             MANAGED_ISSUES="$(printf '%s' "${payload}" | jq -r '
               .data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) |
               select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) == null) |
@@ -357,10 +369,8 @@ jobs:
           #      close_merged_issues_sweep paths remain authoritative
           #      backstops; this path is idempotent with them.
           #
-          #   3. Standalone issues — neither tracking nor managed. Keep
-          #      the original `PR_BASE_REF == main` gate to preserve
-          #      the workflow's long-standing safety for non-orchestrator
-          #      flows.
+          #   3. Standalone issues — require a default-branch merge or
+          #      their explicitly declared target before marking merged.
           #
           # Single batched GraphQL call (one API request regardless of
           # N) per CLAUDE.md §15. Fail-open with a per-issue REST
@@ -383,6 +393,8 @@ jobs:
               ((.errors // []) | length) == 0
               and (.data.repository? != null)
               and (([.data.repository | to_entries[] | .value | select(. != null)] | length) == $expected)
+              and all(.data.repository | to_entries[] | .value | select(. != null);
+                has("body") and ((.labels.nodes | type) == "array"))
             ' >/dev/null 2>&1; then
               _tracking_issues="$(printf '%s' "${ORCH_RESP}" | jq -r '
                 .data.repository | to_entries[] | .value | select(. != null) |
@@ -400,6 +412,10 @@ jobs:
               ' 2>/dev/null || echo '')"
               TRACKING_ISSUES="$(merge_issue_number_list "${TRACKING_ISSUES}" "${_tracking_issues}")"
               MANAGED_ISSUES="$(merge_issue_number_list "${MANAGED_ISSUES}" "${_managed_issues}")"
+              ISSUE_METADATA_JSON="$(printf '%s' "${ORCH_RESP}" | jq -c --argjson prior "${ISSUE_METADATA_JSON}" '
+                $prior + ([.data.repository | to_entries[] | .value | select(. != null) |
+                  {key:(.number | tostring), value:{body:(.body // ""), labels:[.labels.nodes[]?.name]}}] | from_entries)
+              ' 2>/dev/null || echo '{}')"
               ORCH_BATCH_FAILED=false
             fi
             if [ "${ORCH_BATCH_FAILED}" = true ]; then
@@ -411,7 +427,7 @@ jobs:
                 [ -n "${_orch_num}" ] || continue
                 [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
                 _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // "")}' 2>/dev/null || echo '')"
-                if [ -z "${_orch_meta}" ]; then
+                if [ -z "${_orch_meta}" ] || ! printf '%s' "${_orch_meta}" | jq -e '(.labels | type) == "array" and (.body | type) == "string"' >/dev/null 2>&1; then
                   # Conservative fail-open: treat as tracking so we skip
                   # the label/close mutation. Mis-classifying a managed
                   # child as tracking only delays its close to the next
@@ -422,6 +438,9 @@ jobs:
                   TRACKING_ISSUES+="${_orch_num}"$'\n'
                   continue
                 fi
+                ISSUE_METADATA_JSON="$(printf '%s' "${_orch_meta}" | jq -c --arg n "${_orch_num}" --argjson prior "${ISSUE_METADATA_JSON}" '
+                  $prior + {($n): {body:(.body // ""), labels:(.labels // [])}}
+                ' 2>/dev/null || echo '{}')"
                 if printf '%s' "${_orch_meta}" | jq -e '((.labels // []) | index("ai:orchestrator-tracking")) != null' >/dev/null 2>&1; then
                   TRACKING_ISSUES+="${_orch_num}"$'\n'
                 elif printf '%s' "${_orch_meta}" | jq -e '
@@ -442,6 +461,23 @@ jobs:
               continue
             fi
 
+            # The issue metadata came from the closing-reference query or
+            # its already-batched/fallback classification lookup. Do not let
+            # an unreadable issue or an unverified destination change state.
+            issue_metadata="$(printf '%s' "${ISSUE_METADATA_JSON}" | jq -c --arg n "${issue_number}" '.[$n] // empty' 2>/dev/null || echo '')"
+            if [ "${PR_MERGED}" = "true" ]; then
+              if [ -z "${issue_metadata}" ] || ! declare -F issue_merge_destination_eligible >/dev/null 2>&1; then
+                echo "Issue #${issue_number}: missing destination metadata; leaving phase unchanged."
+                continue
+              fi
+              issue_body="$(printf '%s' "${issue_metadata}" | jq -r '.body // ""')"
+              issue_labels="$(printf '%s' "${issue_metadata}" | jq -c '.labels // []')"
+              if ! issue_merge_destination_eligible "${issue_body}" "${issue_labels}" "${PR_BASE_REF}" "${REPOSITORY_DEFAULT_BRANCH}"; then
+                echo "Issue #${issue_number}: merged PR #${PR_NUMBER} has non-target base; leaving phase unchanged."
+                continue
+              fi
+            fi
+
             is_managed_child=false
             if [ -n "${MANAGED_ISSUES}" ] && printf '%s\n' "${MANAGED_ISSUES}" | grep -qxF "${issue_number}"; then
               is_managed_child=true
@@ -450,17 +486,14 @@ jobs:
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
             set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
 
-            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then
-              if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "main" ]; then
-                echo "Closing orchestrator-managed child issue #${issue_number} after PR #${PR_NUMBER} merged into ${PR_BASE_REF} (integration branch)."
-              else
-                echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
-              fi
-              if ! gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"; then
-                echo "::warning::Failed to close issue #${issue_number}."
-              fi
+            LINEAGE_ELIGIBLE_ISSUES="$(merge_issue_number_list "${LINEAGE_ELIGIBLE_ISSUES}" "${issue_number}")"
+            if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${REPOSITORY_DEFAULT_BRANCH}" ]; then
+              echo "Closing orchestrator-managed child issue #${issue_number} after PR #${PR_NUMBER} merged into ${PR_BASE_REF} (integration branch)."
             else
-              echo "PR merged into ${PR_BASE_REF}; issue #${issue_number} remains open."
+              echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
+            fi
+            if ! gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"; then
+              echo "::warning::Failed to close issue #${issue_number}."
             fi
           done <<< "${ISSUE_NUMBERS}"
 
@@ -487,7 +520,7 @@ jobs:
             1|true|yes|on) AI_MEMORY_ENABLED_NORMALIZED=true ;;
           esac
 
-          if [ -z "${LINKED_ISSUE_NUMBERS:-}" ]; then
+          if [ -z "${LINEAGE_ELIGIBLE_ISSUES:-}" ]; then
             echo "No linked issues found; skipping lineage finalization."
             echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"no_linked_issues\",\"source\":\"issue_pr_status.yml\"}"
             exit 0
@@ -532,7 +565,7 @@ jobs:
               --actor "${ACTOR}" \
               --pr-number "${PR_NUMBER}" \
               --pr-url "${PR_URL}"
-          done <<< "${LINKED_ISSUE_NUMBERS}"
+          done <<< "${LINEAGE_ELIGIBLE_ISSUES}"
 
       # /implement-plan-claude records reusable lessons in its progress log
       # (docs/implement-plan/<slug>.md, `## Lessons`). When a PR that carries

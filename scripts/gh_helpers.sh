@@ -1701,3 +1701,54 @@ extract_repo_scoped_issue_refs_from_text()
 		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
 		| sort -un || true
 }
+
+# Keep the canonical/alias precedence in sync with orchestrate_lib.extract_integration_branch.
+# Only a complete, valid Git branch name can authorize a non-default merge.
+issue_body_integration_branch()
+{
+	local _issue_body="${1:-}" _issue_branch
+	_issue_branch="$(printf '%s\n' "${_issue_body}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import re
+import sys
+body = sys.stdin.read()
+canonical = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
+alias = re.search(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", body, re.MULTILINE)
+print((canonical.group(1) if canonical else ((alias.group(1) or alias.group(2)) if alias else "")).strip())
+' 2>/dev/null)" || return 1
+	if [ -z "${_issue_branch}" ]; then
+		# A declared but empty/malformed target is not equivalent to no target.
+		if printf '%s\n' "${_issue_body}" | grep -Eq '^[[:space:]]*-?[[:space:]]*(\*\*)?(Integration|Target) branch:'; then
+			return 1
+		fi
+		return 0
+	fi
+	[[ "${_issue_branch}" =~ ^[A-Za-z0-9] ]] \
+		&& git check-ref-format --branch "${_issue_branch}" >/dev/null 2>&1 || return 1
+	printf '%s' "${_issue_branch}"
+}
+
+# issue_merge_destination_eligible <issue body> <labels JSON> <PR base> <default branch>
+# A managed-child exception requires a real managed label AND a matching
+# tracking-issue lineage marker; prose alone must never authorize a branch.
+issue_merge_destination_eligible()
+{
+	local _merge_body="${1:-}" _merge_labels="${2:-}" _merge_base="${3:-}" _merge_default="${4:-}"
+	local _merge_target _merge_tracking
+	[ -n "${_merge_base}" ] && [ -n "${_merge_default}" ] || return 1
+	[[ "${_merge_base}" =~ ^[A-Za-z0-9] ]] && git check-ref-format --branch "${_merge_base}" >/dev/null 2>&1 || return 1
+	[[ "${_merge_default}" =~ ^[A-Za-z0-9] ]] && git check-ref-format --branch "${_merge_default}" >/dev/null 2>&1 || return 1
+	if [ "${_merge_base}" = "${_merge_default}" ]; then
+		return 0
+	fi
+	_merge_target="$(issue_body_integration_branch "${_merge_body}")" || return 1
+	if [ -n "${_merge_target}" ] && [ "${_merge_base}" = "${_merge_target}" ]; then
+		return 0
+	fi
+	# Explicit metadata takes precedence over a managed-child lineage marker.
+	[ -z "${_merge_target}" ] || return 1
+	if printf '%s' "${_merge_labels}" | jq -e 'type == "array" and (index("ai:orchestrator-managed") != null) and (index("ai:orchestrator-tracking") == null)' >/dev/null 2>&1; then
+		_merge_tracking="$(printf '%s\n' "${_merge_body}" | sed -nE 's/^[[:space:]]*-?[[:space:]]*Tracking issue:[[:space:]]*#([0-9]+)[[:space:]]*$/\1/p' | head -n1)"
+		[ -n "${_merge_tracking}" ] && [ "${_merge_base}" = "orchestrator/project-${_merge_tracking}" ] && return 0
+	fi
+	return 1
+}
