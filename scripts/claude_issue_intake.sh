@@ -238,6 +238,18 @@ if [ "$(jq -r '.authorized' "${AUTHORIZE_FILE}")" != "true" ]; then
 fi
 log "authorized repo=${REPO} issue=${ISSUE_NUMBER} reason=${AUTHORIZE_REASON} dispatchers=${DISPATCHER_LOGINS[*]}"
 
+# Reuse the authorized target snapshot: only a generated security finding can
+# add a prerequisite to the fixed-key, producer-bound queue payload.
+DEPENDENCY_INFO="$(python3 "${ROUTE_PY}" security-dependency --issue-json "${TARGET_ISSUE_FILE}" --repo "${REPO}" --issue-number "${ISSUE_NUMBER}" --number-only)"
+if [ "$(printf '%s' "${DEPENDENCY_INFO}" | jq -r '.status')" = "held" ]; then
+	DEPENDENCY_NUMBER="$(printf '%s' "${DEPENDENCY_INFO}" | jq -r '.depends_on // empty')"
+	if ! [[ "${DEPENDENCY_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+		fail "invalid_dependency" "security dependency metadata is invalid"
+	fi
+	jq --argjson depends_on "${DEPENDENCY_NUMBER}" '. + {depends_on: $depends_on}' "${VALIDATED_FILE}" > "${VALIDATED_FILE}.tmp"
+	mv "${VALIDATED_FILE}.tmp" "${VALIDATED_FILE}"
+fi
+
 # --- 2. Queue for the pickup session ----------------------------------------------------
 
 if [ -n "${CLAUDE_ISSUE_ROUTINE_ID:-}" ]; then

@@ -1835,6 +1835,8 @@ if args[0] == 'api':
 				issue_payload['number'] = issue_num
 			if re.search(r'(?m)^\s*state\s*$', query):
 				issue_payload['state'] = issue_state
+			if re.search(r'(?m)^\s*body\s*$', query):
+				issue_payload['body'] = issue.get('body', '')
 			if 'labels(first:' in query:
 				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
 			if 'comments(last:' in query and issue_num not in set(store.get('graphql_comments_unavailable_for', [])):
@@ -2172,7 +2174,9 @@ if args[0] == 'api':
 				sys.exit(p.returncode)
 			print(p.stdout, end='')
 		else:
-			print(json.dumps({'body': issue.get('body', ''), 'state': issue_state}))
+			print(json.dumps({'body': issue.get('body', ''), 'state': issue_state,
+				'number': num, 'repository_url': 'https://api.github.com/repos/owner/repo',
+				'labels': [{'name': label} for label in issue.get('labels', [])]}))
 		save()
 		sys.exit(0)
 
@@ -5341,6 +5345,53 @@ def test_standalone_stall_recovery_skips_claude_claimed_issues() -> None:
 		env_overrides={},
 	)
 	assert "reason=claude_routed" not in switched["stdout"] + switched["stderr"]
+
+
+def test_standalone_security_followup_releases_only_after_prerequisite_merges() -> None:
+	dependent_body = "<!-- ai:security-finding:SEC-TEST -->\n- Depends on: #701\n"
+	for closed, labels, expected in (
+		(False, [], "security_dependency_held"),
+		(True, [], "security_dependency_held"),
+		(True, ["ai:merged"], "security_dependency_released"),
+	):
+		state = _base_state(status="in_progress")
+		state["waves"][0]["issues"][0]["status"] = "merged"
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: labels},
+			issue_bodies={700: dependent_body}, issue_closed={701: closed},
+			issue_comments={700: []}, mock_gh_issue_list_label_filter=True,
+		)
+		assert f"STALL_SKIP issue=700 reason={expected}" in result["stdout"] + result["stderr"]
+		if closed and not labels:
+			assert "detail=closed_without_ai_merged" in result["stdout"] + result["stderr"]
+		releases = [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]
+		assert len(releases) == (1 if closed and labels else 0)
+
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	trusted_marker = {
+		"body": "/reclarify\n<!-- ai:security-dependency-released:700 -->",
+		"author_association": "OWNER", "user": {"login": "owner"},
+	}
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: ["ai:merged"]},
+		issue_bodies={700: dependent_body}, issue_closed={701: True},
+		issue_comments={700: [trusted_marker]}, mock_gh_issue_list_label_filter=True,
+	)
+	assert len([c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]) == 1
+
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: ["ai:merged"]},
+		issue_bodies={700: dependent_body}, issue_closed={701: True},
+		issue_comments={700: [{**trusted_marker, "author_association": "NONE", "user": {"login": "stranger"}}]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert len([c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]) == 2
 
 
 def test_standalone_staged_support_guard_reuses_conclusive_comment_cache() -> None:

@@ -85,6 +85,10 @@ if args[:2] == ["issue", "create"]:
 	state["next_issue_number"] = next_issue_number + 1
 	save()
 	print(f"https://github.com/{repo}/issues/{next_issue_number}")
+	if state.get("fail_create_once") and not state.get("failed_create"):
+		state["failed_create"] = True
+		save()
+		sys.exit(1)
 	sys.exit(0)
 
 if args[:2] == ["issue", "comment"]:
@@ -2040,6 +2044,47 @@ def test_security_audit_default_branch_followups_carry_no_integration_branch() -
 	assert followup_bodies and "default-finding" in followup_bodies[-1]
 	# Only a branch audit (SECURITY_AUDIT_TARGET_REF) routes follow-ups elsewhere.
 	assert not any("Integration branch:" in body for body in followup_bodies)
+
+
+def test_security_audit_chains_only_same_file_followups_and_recovers_predecessor() -> None:
+	findings = [
+		_finding_payload("first"),
+		_finding_payload("second"),
+		_finding_payload("third"),
+		_finding_payload("other", file_path="scripts/security_audit_fp_exclusions.json"),
+	]
+	state = _security_audit_tracker_state()
+	state["api_responses"] = [[[]]]
+	state["next_issue_number"] = 9100
+	proc, finished = _run_security_audit(state, codex_output=json.dumps(findings))
+	assert proc.returncode == 0, proc.stderr
+	bodies = finished["issue_create_bodies"]
+	assert len(bodies) == 4
+	assert "Depends on:" not in bodies[0]
+	assert "- Depends on: #9100" in bodies[1]
+	assert "- Depends on: #9101" in bodies[2]
+	assert "Depends on:" not in bodies[3]
+
+	# A retry after a partial create reuses the marker from the existing
+	# paginated listing, rather than starting a new, unchained first issue.
+	retry = _security_audit_tracker_state()
+	retry["api_responses"] = [[[{
+		"number": 9100, "body": "<!-- ai:security-finding:first -->",
+		"state": "open",
+	}]]]
+	retry["next_issue_number"] = 9101
+	proc, finished = _run_security_audit(retry, codex_output=json.dumps(findings[:3]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(finished["issue_create_bodies"]) == 2
+	assert "- Depends on: #9100" in finished["issue_create_bodies"][0]
+	assert "- Depends on: #9101" in finished["issue_create_bodies"][1]
+
+	ambiguous = _security_audit_tracker_state()
+	ambiguous.update({"api_responses": [[[]]], "fail_create_once": True, "next_issue_number": 9100})
+	proc, finished = _run_security_audit(ambiguous, codex_output=json.dumps(findings[:2]))
+	assert proc.returncode != 0
+	assert len(finished["issue_create_bodies"]) == 1
+	assert not finished.get("issue_edit_bodies"), "ambiguous creation must not advance the audited HEAD marker"
 
 
 def test_security_audit_target_ref_routes_followups_and_keeps_tracker_marker() -> None:

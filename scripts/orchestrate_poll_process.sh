@@ -14747,6 +14747,7 @@ _fetch_candidate_issue_details_graphql() {
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
           state
+          body
           labels(first: 50) { nodes { name } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -14798,6 +14799,7 @@ _fetch_candidate_issue_details_graphql() {
           key: (.value.number | tostring),
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
+            body: .value.body,
             labels: [(.value.labels.nodes // [])[]?.name],
             comments_available: ((.value.comments.nodes? | type) == "array"),
             comments: [(.value.comments.nodes // [])[]? | {
@@ -15786,6 +15788,9 @@ run_standalone_stall_recovery() {
   local _standalone_staged_support_latch_rc
   local _standalone_staged_support_cache_available
   local _standalone_staged_support_comments_unavailable
+  local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
+  local _security_dependency_verdict
+  local _security_dependency_status
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
@@ -15829,6 +15834,55 @@ run_standalone_stall_recovery() {
     if echo "${labels_json}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null 2>&1; then
       echo "STALL_SKIP issue=${issue_num} reason=claude_routed action=none"
       continue
+    fi
+
+    # A generated security follow-up waits for the previous same-file fix.
+    # The candidate batch already carries body/labels/comments; only an
+    # uncached target or declared prerequisite requires an issue read.
+    if ! printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" '.[$n].body | type == "string"' >/dev/null 2>&1; then
+      if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${_security_dependency_issue_file}" 2>/dev/null; then
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_target_unavailable action=none"
+        continue
+      fi
+    else
+      printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" --arg repo "${GITHUB_REPOSITORY}" '
+        .[$n] | {number: ($n | tonumber), body, labels,
+          repository_url: ("https://api.github.com/repos/" + $repo)}' > "${_security_dependency_issue_file}"
+    fi
+    _security_dependency_verdict="$(python3 scripts/claude_issue_route.py security-dependency \
+      --issue-json "${_security_dependency_issue_file}" --repo "${GITHUB_REPOSITORY}" \
+      --issue-number "${issue_num}" 2>/dev/null || echo '{"status":"held"}')"
+    _security_dependency_status="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.status // "held"' 2>/dev/null || echo held)"
+    if [ "${_security_dependency_status}" = "held" ]; then
+      case "$(printf '%s' "${_security_dependency_verdict}" | jq -r '.reason // empty' 2>/dev/null)" in
+        'dependency open') _security_dependency_status="open" ;;
+        'dependency closed without ai:merged') _security_dependency_status="closed_without_ai_merged" ;;
+        *) _security_dependency_status="unverified" ;;
+      esac
+      echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=${_security_dependency_status} action=none"
+      continue
+    fi
+    if [ "${_security_dependency_status}" = "ready" ]; then
+      # An unavailable or full comment window cannot prove the release
+      # marker absent. Fetch complete history only on that rare path.
+      if [ "${_standalone_staged_support_cache_available}" != "true" ] || [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -ge 100 ]; then
+        if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_comments_unavailable action=none"
+          continue
+        fi
+      fi
+      if ! printf '%s' "${comments_json}" | jq -e --arg marker "<!-- ai:security-dependency-released:${issue_num} -->" '
+        any(.[]; ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+          and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="/reclarify
+<!-- ai:security-dependency-released:${issue_num} -->" >/dev/null; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_released action=reclarify"
+        else
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed action=none"
+        fi
+        continue
+      fi
     fi
 
     # Resolve both values through the shared Python predicates in one call so

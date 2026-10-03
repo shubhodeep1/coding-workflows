@@ -14,8 +14,9 @@
 # For each stale item not yet flagged it adds `ai:claude-issue-queue-stale`
 # (with GITHUB_TOKEN, so no workflow reacts), then sends one Telegram ERROR
 # naming the items and how to restart the pickup. It exits 0: the alert is the
-# Telegram message and the label, not a red run. One REST read per run, plus
-# one label write per newly stale item (CLAUDE.md §15). Log lines are prefixed
+# Telegram message and the label, not a red run. One queue REST read per run,
+# one conditional issue read per distinct stale dependency (cached per run),
+# plus one label write per newly stale item (CLAUDE.md §15). Log lines are prefixed
 # CLAUDE_ISSUE_QUEUE_WATCHDOG.
 #
 # Required env (set by the workflow):
@@ -24,6 +25,7 @@
 #
 # Optional env (have defaults):
 #   CLAUDE_ISSUE_QUEUE_STALE_HOURS     default 3
+#   CLAUDE_ISSUE_DEPENDENCY_TOKEN      default GH_TOKEN (for same-repo reads)
 #   CLAUDE_ISSUE_ROUTE_PY              default scripts/claude_issue_route.py
 #   RUN_URL, RUNTIME_DIR
 
@@ -44,6 +46,7 @@ type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { return 0; }
 SELF_REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY required}"
 STALE_HOURS="${CLAUDE_ISSUE_QUEUE_STALE_HOURS:-3}"
 ROUTE_PY="${CLAUDE_ISSUE_ROUTE_PY:-scripts/claude_issue_route.py}"
+CLAUDE_ISSUE_DEPENDENCY_TOKEN="${CLAUDE_ISSUE_DEPENDENCY_TOKEN:-${GH_TOKEN:-}}"
 RUN_URL="${RUN_URL:-}"
 RUNTIME_DIR="${RUNTIME_DIR:-$(mktemp -d)}"
 mkdir -p "${RUNTIME_DIR}"
@@ -64,7 +67,7 @@ if ! gh_retry gh api "repos/${SELF_REPO}/issues?labels=${QUEUE_LABEL}&state=open
 fi
 
 STALE_FILE="${RUNTIME_DIR}/stale.json"
-python3 "${ROUTE_PY}" queue-stale --issues-json "${QUEUE_FILE}" --stale-hours "${STALE_HOURS}" > "${STALE_FILE}"
+GH_TOKEN="${CLAUDE_ISSUE_DEPENDENCY_TOKEN}" python3 "${ROUTE_PY}" queue-stale --issues-json "${QUEUE_FILE}" --stale-hours "${STALE_HOURS}" > "${STALE_FILE}"
 OPEN_COUNT="$(jq '[.[]? | select(.pull_request == null)] | length' "${QUEUE_FILE}")"
 STALE_COUNT="$(jq 'length' "${STALE_FILE}")"
 log "checked open=${OPEN_COUNT} newly_stale=${STALE_COUNT} stale_hours=${STALE_HOURS}"
@@ -74,14 +77,14 @@ fi
 
 ensure_label_exists "${STALE_LABEL}" "${SELF_REPO}" || true
 LINES=""
-while IFS=$'\t' read -r number title age; do
+while IFS=$'\t' read -r number title age reason; do
 	[[ "${number}" =~ ^[1-9][0-9]*$ ]] || continue
 	gh_retry gh api -X POST "repos/${SELF_REPO}/issues/${number}/labels" -f "labels[]=${STALE_LABEL}" >/dev/null 2>&1 || \
 		log "warn label_failed queue_issue=${number}"
-	log "stale queue_issue=${number} age_hours=${age} title=${title}"
-	echo "::warning::Claude issue queue item #${number} (${title}) has waited ${age}h without being picked up"
-	LINES+=$'\n'"- #${number} ${title} (${age}h)"
-done < <(jq -r '.[] | [.number, .title, .age_hours] | @tsv' "${STALE_FILE}")
+	log "stale queue_issue=${number} age_hours=${age} reason=${reason} title=${title}"
+	echo "::warning::Claude issue queue item #${number} (${title}) has waited ${age}h: ${reason}"
+	LINES+=$'\n'"- #${number} ${title} (${age}h; ${reason})"
+done < <(jq -r '.[] | [.number, .title, .age_hours, .reason // "pickup_stalled"] | @tsv' "${STALE_FILE}")
 
 tg_send_msg "Claude issue queue: ${STALE_COUNT} item(s) waiting over ${STALE_HOURS}h in ${SELF_REPO}:${LINES}"$'\n'"The pickup has likely stopped. Restart it from a new cloud session opened in the app, in Auto mode: /claude-issue-pickup start — restart"$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
 exit 0

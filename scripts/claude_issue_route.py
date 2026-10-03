@@ -151,6 +151,9 @@ REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 QUEUE_PAYLOAD_BLOCK_RE = re.compile(r"```text\n(.*?)\n```", re.DOTALL)
 RUN_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+$")
 FIRE_TEXT_KEYS: tuple[str, ...] = ("repo", "issue", "url", "trigger", "skip_security_pass")
+SECURITY_DEPENDENCY_RE = re.compile(r"(?m)^- Depends on: #([1-9][0-9]{0,9})$")
+SECURITY_DEPENDENCY_LINE_RE = re.compile(r"(?mi)^\s*-?\s*Depends\s+on\s*:")
+SECURITY_FINDING_MARKER = "<!-- ai:security-finding:"
 
 # Pull-request fix items (CLAUDE.md §26.H): the catch-all sweep
 # (scripts/claude_pr_sweep.py) queues one per claude/* PR whose Claude fix
@@ -198,6 +201,68 @@ def _label_names(issue: dict[str, Any]) -> list[str]:
 		if isinstance(name, str) and name:
 			names.append(name)
 	return names
+
+
+def security_dependency_number(issue: Any) -> int | None:
+	"""Only generated security follow-ups may declare one same-repo dependency.
+
+	Malformed or repeated declarations fail closed rather than being ignored.
+	"""
+	if not isinstance(issue, dict):
+		return None
+	body = issue.get("body")
+	if not isinstance(body, str) or not SECURITY_DEPENDENCY_LINE_RE.search(body):
+		return None
+	if SECURITY_FINDING_MARKER not in body or "ai:security" not in _label_names(issue):
+		raise ValueError("unverified security dependency")
+	lines = SECURITY_DEPENDENCY_LINE_RE.findall(body)
+	if not lines:
+		return None
+	matches = SECURITY_DEPENDENCY_RE.findall(body)
+	if len(lines) != 1 or len(matches) != 1:
+		raise ValueError("invalid or repeated security dependency")
+	dependency_number = int(matches[0])
+	if dependency_number == issue.get("number"):
+		raise ValueError("self-referential security dependency")
+	return dependency_number
+
+
+def security_dependency_verdict(issue: Any, prerequisite: Any) -> dict[str, Any]:
+	"""Return ready/held/none from a live same-repository issue snapshot."""
+	try:
+		dependency_number = security_dependency_number(issue)
+	except ValueError as exc:
+		return {"status": "held", "reason": str(exc)}
+	if dependency_number is None:
+		return {"status": "none", "reason": "no security dependency"}
+	if not isinstance(prerequisite, dict) or prerequisite.get("number") != dependency_number or "pull_request" in prerequisite:
+		return {"status": "held", "reason": "dependency missing or not an issue", "depends_on": dependency_number}
+	if not isinstance(prerequisite.get("repository_url"), str) or prerequisite["repository_url"].lower() != issue.get("repository_url", "").lower() or not prerequisite["repository_url"]:
+		return {"status": "held", "reason": "dependency repository mismatch", "depends_on": dependency_number}
+	if prerequisite.get("state") not in ("open", "closed") or not isinstance(prerequisite.get("labels"), list):
+		return {"status": "held", "reason": "dependency state or labels unreadable", "depends_on": dependency_number}
+	if prerequisite["state"] == "closed" and "ai:merged" in _label_names(prerequisite):
+		return {"status": "ready", "reason": "dependency merged", "depends_on": dependency_number}
+	return {"status": "held", "reason": "dependency open" if prerequisite["state"] == "open" else "dependency closed without ai:merged", "depends_on": dependency_number}
+
+
+def fetch_security_dependency(repo: str, dependency_number: int) -> Any:
+	"""One conditional REST read; callers cache per (repo, number) per wake.
+
+	Intake has only the dependent issue, queue binding reads producer runs, and
+	the poller's candidate batch contains open issues, not a closed predecessor.
+	None of those calls can prove the predecessor's current labels and state.
+	"""
+	try:
+		response = subprocess.run(
+			["gh", "api", f"repos/{repo}/issues/{dependency_number}"],
+			capture_output=True, text=True, check=False,
+		)
+		if response.returncode == 0:
+			return json.loads(response.stdout)
+	except (OSError, ValueError):
+		pass
+	return None
 
 
 def normalize_implementer_var(value: str | None) -> tuple[str, str]:
@@ -401,6 +466,8 @@ def build_fire_text(validated: dict[str, Any]) -> str:
 		f"trigger: {validated['trigger']}",
 		f"skip_security_pass: {'true' if validated['skip_security_pass'] else 'false'}",
 	]
+	if validated.get("depends_on") is not None:
+		lines.append(f"depends_on: {validated['depends_on']}")
 	return "\n".join(lines) + "\n"
 
 
@@ -431,7 +498,7 @@ def parse_fire_text(text: str) -> dict[str, Any]:
 	fields: dict[str, str] = {}
 	for line in lines[1:]:
 		key, sep, value = line.partition(": ")
-		if not sep or key not in FIRE_TEXT_KEYS:
+		if not sep or key not in (*FIRE_TEXT_KEYS, "depends_on"):
 			raise ValueError(f"unexpected line: {line[:80]!r}")
 		if key in fields:
 			raise ValueError(f"duplicate key: {key}")
@@ -452,12 +519,15 @@ def parse_fire_text(text: str) -> dict[str, Any]:
 		raise ValueError(f"invalid trigger: {fields['trigger']!r}")
 	if fields["skip_security_pass"] not in ("true", "false"):
 		raise ValueError("skip_security_pass is not true or false")
+	if "depends_on" in fields and (not re.fullmatch(r"[1-9][0-9]{0,9}", fields["depends_on"]) or int(fields["depends_on"]) == number):
+		raise ValueError("invalid depends_on")
 	return {
 		"repo": repo,
 		"issue_number": number,
 		"issue_url": url,
 		"trigger": fields["trigger"],
 		"skip_security_pass": fields["skip_security_pass"] == "true",
+		**({"depends_on": int(fields["depends_on"])} if "depends_on" in fields else {}),
 	}
 
 
@@ -705,6 +775,7 @@ def queue_pending(
 	limit: int = QUEUE_PICKUP_LIMIT,
 	bindings: dict[str, Any] | None = None,
 	now: datetime | None = None,
+	dependency_lookup: Any = None,
 ) -> dict[str, Any]:
 	"""Turn the open queue issues into the pickup's work list.
 
@@ -745,6 +816,7 @@ def queue_pending(
 	ignored: list[dict[str, Any]] = []
 	deferred = 0
 	waiting_since: list[datetime] = []
+	dependency_cache: dict[tuple[str, int], Any] = {}
 
 	def _waiting(item: dict[str, Any]) -> None:
 		created = _parse_timestamp(item.get("created_at"))
@@ -816,6 +888,17 @@ def queue_pending(
 		if verdict:
 			ignored.append({"queue_issue": number, "reason": verdict})
 			continue
+		if bindings is not None and validated.get("depends_on") is not None:
+			dependency_key = (validated["repo"].lower(), validated["depends_on"])
+			if dependency_key not in dependency_cache:
+				dependency_cache[dependency_key] = (dependency_lookup or fetch_security_dependency)(validated["repo"], validated["depends_on"])
+			prerequisite = dependency_cache[dependency_key]
+			dependency_issue = {"number": validated["issue_number"], "body": SECURITY_FINDING_MARKER, "labels": ["ai:security"], "repository_url": f"https://api.github.com/repos/{validated['repo']}"}
+			dependency_issue["body"] += f"\n- Depends on: #{validated['depends_on']}"
+			dependency_verdict = security_dependency_verdict(dependency_issue, prerequisite)
+			if dependency_verdict["status"] != "ready":
+				ignored.append({"queue_issue": number, "reason": f"held: {dependency_verdict['reason']}"})
+				continue
 		_waiting(issue)
 		key = (validated["repo"].lower(), validated["issue_number"])
 		entry = groups.get(key)
@@ -1011,6 +1094,7 @@ def queue_stale(
 	now: datetime,
 	stale_hours: float = QUEUE_STALE_HOURS_DEFAULT,
 	trusted_author: str = QUEUE_TRUSTED_AUTHOR,
+	dependency_lookup: Any = None,
 ) -> list[dict[str, Any]]:
 	"""Trusted open queue issues older than ``stale_hours`` and not yet flagged.
 
@@ -1020,6 +1104,7 @@ def queue_stale(
 	each stranded item alerts once.
 	"""
 	stale: list[dict[str, Any]] = []
+	dependency_cache: dict[tuple[str, int], Any] = {}
 	for issue in issues:
 		if not _is_queue_issue(issue) or _queue_author(issue) != trusted_author:
 			continue
@@ -1030,7 +1115,31 @@ def queue_stale(
 			continue
 		age = (now - created).total_seconds() / 3600.0
 		if age >= stale_hours:
-			stale.append({"number": issue.get("number"), "title": issue.get("title") or "", "age_hours": round(age, 1)})
+			reason = "pickup_stalled"
+			try:
+				payload = parse_fire_text(queue_payload_text(issue.get("body") or ""))
+				if payload.get("depends_on") is not None:
+					# A stray edit to the queue body must not suppress a stalled
+					# pickup alert by claiming an unrelated open prerequisite.
+					run_id, run_error = queue_run_id(issue.get("body") or "", "issue", DEFAULT_UPSTREAM_REPO)
+					if run_error or issue.get("title") != queue_title(payload["repo"], payload["issue_number"]) or (issue.get("body") or "").rstrip() != build_queue_issue(payload, f"https://github.com/{DEFAULT_UPSTREAM_REPO}/actions/runs/{run_id}")["body"].rstrip():
+						raise ValueError("queue body changed")
+					key = (payload["repo"].lower(), payload["depends_on"])
+					if key not in dependency_cache:
+						dependency_cache[key] = (dependency_lookup or fetch_security_dependency)(payload["repo"], payload["depends_on"])
+					prerequisite = dependency_cache[key]
+					dependency_issue = {"number": payload["issue_number"], "body": f"{SECURITY_FINDING_MARKER}\n- Depends on: #{payload['depends_on']}", "labels": ["ai:security"], "repository_url": f"https://api.github.com/repos/{payload['repo']}"}
+					verdict = security_dependency_verdict(dependency_issue, prerequisite)
+					if verdict["reason"] == "dependency closed without ai:merged":
+						reason = "dependency_closed_without_ai:merged"
+					elif verdict["status"] == "held":
+						continue
+			except (ValueError, AttributeError):
+				pass
+			stale_item = {"number": issue.get("number"), "title": issue.get("title") or "", "age_hours": round(age, 1)}
+			if reason != "pickup_stalled":
+				stale_item["reason"] = reason
+			stale.append(stale_item)
 	stale.sort(key=lambda item: -item["age_hours"])
 	return stale
 
@@ -1142,6 +1251,26 @@ def _cmd_fire_body(args: argparse.Namespace) -> int:
 def _cmd_queue_issue(args: argparse.Namespace) -> int:
 	validated = _read_json(args.validated_json)
 	print(json.dumps(build_queue_issue(validated, args.run_url)))
+	return 0
+
+
+def _cmd_security_dependency(args: argparse.Namespace) -> int:
+	try:
+		issue = _read_json(args.issue_json)
+		if not isinstance(issue, dict) or issue.get("number") != args.issue_number or issue.get("repository_url", "").lower() != f"https://api.github.com/repos/{args.repo}".lower() or "pull_request" in issue:
+			raise ValueError("target issue identity mismatch")
+		dependency_number = security_dependency_number(issue)
+	except (OSError, ValueError, AttributeError):
+		print(json.dumps({"status": "held", "reason": "invalid security dependency or issue metadata"}))
+		return 0
+	if dependency_number is None:
+		print(json.dumps({"status": "none", "reason": "no security dependency"}))
+		return 0
+	if args.number_only:
+		print(json.dumps({"status": "held", "reason": "dependency pending verification", "depends_on": dependency_number}))
+		return 0
+	prerequisite = fetch_security_dependency(args.repo, dependency_number)
+	print(json.dumps(security_dependency_verdict(issue, prerequisite)))
 	return 0
 
 
@@ -1483,6 +1612,13 @@ def main(argv: list[str] | None = None) -> int:
 	p_queue.add_argument("--validated-json", required=True)
 	p_queue.add_argument("--run-url", default="")
 	p_queue.set_defaults(func=_cmd_queue_issue)
+
+	p_dependency = sub.add_parser("security-dependency", help="check a generated security follow-up's prerequisite")
+	p_dependency.add_argument("--issue-json", required=True)
+	p_dependency.add_argument("--repo", required=True)
+	p_dependency.add_argument("--issue-number", required=True, type=int)
+	p_dependency.add_argument("--number-only", action="store_true")
+	p_dependency.set_defaults(func=_cmd_security_dependency)
 
 	p_pr_fix = sub.add_parser("pr-fix-queue-issue", help="build the queue issue for one claude/* PR fix (CLAUDE.md §26.H)")
 	p_pr_fix.add_argument("--repo", required=True)
