@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cFailure escalations under CLAUDE.md \u00a728.C no longer wait for a human.\u201d\n  expected_change_site: README.md, lines 1333-1337 (Claude issue failure modes paragraph)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: README.md, lines 1333-1337; README.md lines 1333-1337; README.md lines 1333\u20131337; README.md lines 1333-1337\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: The plan (docs/plans/retire-master-session-plan.md) lists README.md as a file that phase 1 must change, specifically to update the description of how failure escalations are handled. CLAUDE.md \u00a77 also requires README.md updates on behavior change.\n  Expected change site: README.md, lines 1333-1337, the paragraph beginning \"A Claude session that must stop (CLAUDE.md \u00a728.C: an exhausted cap, a failed security or validation run...\"\n  Evidence of absence: README.md line 1333 reads: \"A Claude session that must stop (CLAUDE.md \u00a728.C: an exhausted cap, a failed security or validation run, an ask-first operation, a missing base branch) comments once on the issue, labels it ai:claude-blocked, and sends a push notification; answer there and comment /reclarify to resume.\" This describes the pre-judge behavior. Failure escalations (exhausted caps, failed security/validation runs) now go to the escalation judge without a PushNotification; only ask-first operations and cases where the wait cannot be armed reach a human. README.md is not in the PR's changed files list, and no diff hunk updates this paragraph.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Failure escalations under CLAUDE.md \u00a728.C no longer wait for a human.\" The PR description states that the stop now posts `<!-- ai:claude-blocked:v1 kind=escalation stop=<stop id> -->` (on the source issue in issue mode, otherwise on the final PR) and hands its project checker an `escalation` wait. The checker starts the judge (Opus 5.5, high effort) about two minutes later. Only the human-only stops (Q8) and the start-up checks wait for a person. A blocked stage sends no `PushNotification` for an escalation stop; the judge sends exactly one for `close`, and exactly one when it ends at `Status: BLOCKED` without a choice.\n  Expected change site: `README.md`, lines 1333-1337 (Claude issue failure modes paragraph).\n  Evidence of absence: The README still says, verbatim: \"A Claude session that must stop (CLAUDE.md \u00a728.C: an exhausted cap, a failed security or validation run, an ask-first operation, a missing base branch) comments once on the issue, labels it `ai:claude-blocked`, and sends a push notification; answer there and comment `/reclarify` to resume.\" Two of those four cases (an exhausted cap, a failed security or validation run) are now escalation stops that go to the judge without a `PushNotification` and without waiting for a human `/reclarify`. The PR diff updates `CLAUDE.md \u00a728.C` (lines 2259-2279) and `CLAUDE.md \u00a728.G` (the new section) to the new contract, and updates `agents.md` (lines 893-957 and 1012-1024) for the same change, but the README's failure-modes paragraph is unchanged. `agents.md` \u00a73 of the contributing rules in `CLAUDE.md` (`\u00a77 (update README.md / agents.md on behavior change)`) names the README as the surface for behavior changes. No diff hunk in `README.md` adjusts the contradiction; the consumers who onboard via the README are told the old, contradicting failure mode.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cFailure escalations under CLAUDE.md \u00a728.C no longer wait for a human.\u201d\n  Expected change site: README.md, Claude Issue Implementer, \u201cFailure modes\u201d section.\n  Evidence of absence: README.md lines 1333\u20131337 still says exhausted caps and failed security or validation runs send a push notification and wait for a human to comment `/reclarify`. The PR changes those stops to hand off to the escalation judge without a notification when the wait is armed, but contains no change to this README passage.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Failure escalations under CLAUDE.md \u00a728.C no longer wait for a human\" (PR description, top of \"What changes\"). The PR changes CLAUDE.md \u00a728.C so that escalation stops (exhausted caps, failed security/validation runs, terminal validation classes, blocked follow-ups, FIX-DEFECTIVE) hand the checker the escalation wait instead of notifying and waiting for /reclarify. Only human-only stops (ask-first operations, no claude-code-remote tools, depth-limit refusal) still notify and wait.\n  Expected change site: README.md, lines 1333-1337 (the \"Claude issue failure modes\" paragraph).\n  Evidence of absence: README.md lines 1333-1337 still say \"A Claude session that must stop (CLAUDE.md \u00a728.C: an exhausted cap, a failed security or validation run, an ask-first operation, a missing base branch) comments once on the issue, labels it ai:claude-blocked, and sends a push notification; answer there and comment /reclarify to resume.\" This lumps together escalation stops (which no longer notify or wait) with human-only stops (which still do). Two of the four cases the README lists \u2014 \"an exhausted cap\" and \"a failed security or validation run\" \u2014 now go to the escalation judge without a push notification. The PR's Files table does not include README.md, and no diff hunk updates this passage. An operator reading the README would believe they must answer every ai:claude-blocked stop by hand, when in fact the judge handles most of them.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a92e33783410603525ce048308c06e5b33d294b5ea2f2e99ca93d26a8b361106",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "37084970145",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37084970145",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003013424_3ad2f52769",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "37084970145"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T01:34:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
