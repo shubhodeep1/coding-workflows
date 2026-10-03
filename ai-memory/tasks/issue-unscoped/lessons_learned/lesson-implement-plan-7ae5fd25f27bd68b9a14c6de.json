@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:03:12Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A verifier that runs untrusted code must read all of its static inputs (changed paths, hook copies, corpora, settings) before the first untrusted run: when the head side is the working tree, the untrusted code can rewrite those files before a later read.",
+  "phase": "implement_plan",
+  "pr_number": 5364,
+  "record_id": "lesson-implement-plan-7ae5fd25f27bd68b9a14c6de",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5327-pin-guard-differential-verifier",
+    "file:scripts/guard_differential.py"
+  ]
+}
