@@ -220,6 +220,290 @@ def test_text_signal_still_resumes_a_need_input_summary(tmp_path, capsys):
 	assert _ids(result["resume"]) == ["session_a"]
 
 
+# --- unanswered requests on both signals (issue #6102) ----------------------------------
+
+
+@pytest.mark.parametrize(
+	"needs_action",
+	[
+		"Reply: `Q1: A` (or B/C), `Q2: A` (or B)",
+		"reply: `Q1: A` or `Q1: B` or `Q1: C`",
+		"decide: reissue #4374 or drop it?",
+		"review the plan and confirm decisions D1–D8, or tell me what to change",
+		"answer on queue item #6037 to restart the previous stage session",
+		"copy 2 files to .claude/commands/ as [claude-twin-sync] commit, run suites, push",
+		"waiting on you.",
+	],
+)
+def test_text_signal_with_an_unanswered_request_is_skipped(tmp_path, capsys, needs_action):
+	"""Issue #6102: the usage-limit text no longer resumes a session that still waits on a human."""
+	session = _session("session_a", category="need_input", needs_action=needs_action)
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert result["resume"] == [] and result["pending"] == []
+	assert result["skipped"] == [{"session_id": "session_a", "signal": "text", "reason": "needs_input"}]
+
+
+@pytest.mark.parametrize("category", ["need_input", "review_ready", "completed", ""])
+def test_unanswered_request_skips_whatever_the_category(tmp_path, capsys, category):
+	session = _session("session_a", category=category, needs_action="Reply `Q1: A` or `Q1: B`")
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _skips(result) == {"session_a": "needs_input"}
+
+
+def test_unanswered_request_in_the_external_metadata_copy_is_skipped(tmp_path, capsys):
+	"""The top-level summary can omit `needs_action`; the `external_metadata` copy still counts."""
+	session = _session("session_a", category="need_input")
+	session["external_metadata"]["post_turn_summary"] = {
+		"status_category": "need_input",
+		"status_detail": LIMIT_TEXT,
+		"needs_action": "Reply: `Q1: A` or `Q1: B`",
+	}
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _skips(result) == {"session_a": "needs_input"}
+
+
+@pytest.mark.parametrize(
+	"needs_action",
+	[
+		LIMIT_TEXT,
+		"You've hit your weekly limit",
+		"wait for the usage limit to reset, then resume",
+		"Usage limit resets at 11am (UTC); try again then",
+		"resend the last message after the session limit resets",
+		"Retry after the reset",
+		"   ",
+	],
+)
+def test_text_signal_with_only_a_limit_wait_still_resumes(tmp_path, capsys, needs_action):
+	session = _session("session_a", category="need_input", needs_action=needs_action)
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _ids(result["resume"]) == ["session_a"]
+	assert result["skipped"] == []
+
+
+@pytest.mark.parametrize(
+	"needs_action",
+	[
+		"Reply `Q1: A` to raise the usage limit cap after the reset",
+		"wait for the limit to reset, then decide whether to drop #4374",
+		"Usage limit resets at 11am — should I retry the push?",
+		"You've hit your session limit · resets 11am (UTC); then approve the merge",
+		"merge PR #4376 once the usage limit resets",
+		"copy 2 files to .claude/commands/ after the limit resets, then push",
+		# PR #6112 review round 1: the error text or a wait prefix with a request whose verb is not a marker
+		"Usage limit reached — merge PR #4376 now",
+		"You've hit your session limit · resets 11am (UTC). Then run the suites and push",
+		"API Error: 429 rate_limit_error; delete the stale branch after the reset",
+		"Wait for the usage limit to reset, then merge PR #4376",
+		"retry once the rate limit resets and drop #4374",
+		# PR #6112 review round 2: only limit-wait words, but a retry now or a retry not deferred to the reset
+		"Usage limit reached. Please retry the request now.",
+		"Wait for the limit. Please retry now.",
+		"Usage limit reached. Please retry the request.",
+		# PR #6112 review round 3: a deferral in another sentence, "retry until", or a negated wait
+		"Usage limit reached. Please retry the request. The limit resets later.",
+		"Retry until the usage limit resets",
+		"Usage limit reached. Retry the request, not waiting until the limit resets.",
+		"Wait for the limit. Please retry the request.",
+		# PR #6112 review round 4: a retry or wait at a bare time, which may not be the reset's
+		"Usage limit reached. Please retry after 5pm.",
+		"Usage limit reached. Retry on Monday.",
+		"Usage limit reached. Wait until 5pm, then retry.",
+	],
+)
+def test_a_limit_wait_that_also_asks_a_human_is_skipped(tmp_path, capsys, needs_action):
+	session = _session("session_a", category="need_input", needs_action=needs_action)
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _skips(result) == {"session_a": "needs_input"}
+
+
+def test_rejected_snapshot_with_an_unanswered_request_is_skipped_outside_need_input(tmp_path, capsys):
+	checker = _checker(
+		"session_c",
+		detail="awaiting next cycle trigger",
+		category="review_ready",
+		needs_action="Reply `Q1: A` or `Q1: B`",
+		rate_status="rejected",
+	)
+	_, result = _run(tmp_path, capsys, [_pickup(), checker])
+	assert result["skipped"] == [{"session_id": "session_c", "signal": "rate_limit_info", "reason": "needs_input"}]
+
+
+def test_permission_prompt_still_wins_over_needs_input(tmp_path, capsys):
+	session = _session("session_a", category="need_input", needs_action="Approve or deny: Bash(git push origin HEAD)")
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert _skips(result) == {"session_a": "permission_prompt"}
+
+
+@pytest.mark.parametrize(
+	"text, expected",
+	[
+		(LIMIT_TEXT, True),
+		("API Error: 429 rate_limit_error", True),
+		("wait for the limit to reset", True),
+		("retry once the rate limit resets", True),
+		("the limit", False),
+		("Session limit resets at 11am (UTC)", True),
+		("please wait until the weekly limit resets", True),
+		("push the branch after the limit resets", False),
+		("run the suites; wait for the limit to reset", False),
+		("wait for CI", False),
+		("Reply `Q1: A`", False),
+		("q2: b", False),
+		("limit resets soon?", False),
+		("choose A or B after the limit resets", False),
+		("", False),
+		# PR #6112 review round 1: only limit-wait words, so a request riding on the error text fails closed
+		("Usage limit reached — merge PR #4376 now", False),
+		("API Error: 429. Then push the branch", False),
+		("You've hit your session limit · resets 11am (UTC). Run the suites", False),
+		("wait for the limit to reset, then merge", False),
+		("wait for the limit to reset, then fusionner la PR", False),
+		("Usage limit reached. Wait until it resets at 11:00 UTC on Oct 3, then resume", True),
+		("You’ve hit your weekly limit — resets Monday 9am", True),
+		# PR #6112 review round 2: vocabulary-only instructions to act now, or to retry without waiting
+		("Usage limit reached. Please retry the request now.", False),
+		("Wait for the limit. Please retry now.", False),
+		("Wait for the limit to reset. Please retry now.", False),
+		("Usage limit reached. Please retry the request.", False),
+		("API Error: 429. Retry the request", False),
+		("Usage limit reached. Please resend the request.", False),
+		("Usage limit reached. Please resume the session.", False),
+		("Usage limit reached. Please try the request again.", False),
+		("Session limit reached. Retry once.", False),
+		("Usage limit reached. Retry the request, not waiting for the reset.", False),
+		("Usage limit reached. Retry the request after it resets.", True),
+		("Wait for the limit. Then retry the request.", True),
+		("Usage limit reached. Please try again later.", True),
+		# PR #6112 review round 3: the deferral must sit in the retry's own sentence, in a closed form
+		("Usage limit reached. Please retry the request. The limit resets later.", False),
+		("Retry until the usage limit resets", False),
+		("Usage limit reached. Retry the request, not waiting until the limit resets.", False),
+		("Usage limit reached. Retry the request, not waiting until the reset.", False),
+		("Not waiting until the limit resets", False),
+		("Do not wait for the limit to reset", False),
+		("Wait for the limit. Please retry the request.", False),
+		("Usage limit reached. Message the session at 5pm.", False),
+		("Usage limit reached. Reset the session.", False),
+		("Usage limit reached. Limit the requests.", False),
+		("Usage limit reached. Then retry.", False),
+		("Retry after 5pm", False),
+		("retry the request then wait for the limit", False),
+		("Retry after the reset", True),
+		("Retry the request after the usage limit reset", True),
+		("retry when the limit resets", True),
+		("Once the limit resets, retry", True),
+		("Wait until the usage limit resets at 5pm UTC and then try again", True),
+		("The limit resets at 5pm. Then retry the request.", True),
+		("Rate limited until 5pm", True),
+		# PR #6112 review round 4: a time counts only as the reset's, never on its own after a retry or a wait
+		("Usage limit reached. Please retry after 5pm.", False),
+		("Usage limit reached. Retry on Monday.", False),
+		("Usage limit reached. Retry at 5pm.", False),
+		("Usage limit reached. Retry in 10 minutes.", False),
+		("Usage limit reached. Retry once 5pm.", False),
+		("Usage limit reached. Retry when 5pm.", False),
+		("Usage limit reached. Retry by tomorrow.", False),
+		("Usage limit reached. Wait until 5pm, then retry.", False),
+		("Usage limit reached. Wait until tomorrow.", False),
+		("Usage limit reached. Wait for 5 hours.", False),
+		("Retry after the reset at 5pm", True),
+		("Retry when the limit resets at 5pm", True),
+		("Wait for the reset at 5pm and retry", True),
+		("Wait for the limit to reset at 5pm, then retry", True),
+		("Usage limit reached. Retry later.", True),
+	],
+)
+def test_is_limit_wait(text, expected):
+	assert resumes.is_limit_wait(text) is expected
+
+
+@pytest.mark.parametrize(
+	"text",
+	[
+		LIMIT_TEXT,
+		"You've hit your weekly limit",
+		"You’ve hit your session limit · resets 11am (UTC)",
+		"Claude usage limit reached. Your limit will reset at 11am.",
+		'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your rate limit"}}',
+		"API Error: account rate-limit exceeded",
+		"API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+	],
+)
+def test_every_usage_limit_error_text_is_a_limit_wait(text):
+	"""A limit-stopped summary can copy its error into `needs_action`; the vocabulary must cover each one."""
+	assert resumes.is_limit_wait(text) is True
+
+
+@pytest.mark.parametrize(
+	"session",
+	[
+		_session("session_a", created_at="2026-09-27T11:59:00Z", needs_action="Reply `Q1: A` or `Q1: B`"),
+		_session("session_a", created_at="2026-09-27T11:59:00Z", needs_action="Usage limit reached — merge PR #4376 now"),
+		_checker(
+			"session_a",
+			created_at="2026-09-27T11:59:00Z",
+			detail="awaiting next cycle trigger",
+			category="need_input",
+			rate_status="rejected",
+		),
+	],
+)
+def test_an_old_session_waiting_on_a_human_is_needs_input_not_too_old(tmp_path, capsys, session):
+	"""PR #6112 review round 1: the manual fallback resumes too_old sessions, so an unanswered request must show."""
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert result["resume"] == [] and _skips(result) == {"session_a": "needs_input"}
+
+
+@pytest.mark.parametrize(
+	"needs_action, detail",
+	[
+		("Approve or deny: Bash(git push origin HEAD)", LIMIT_TEXT),
+		(None, "Waiting on permission: Bash · " + LIMIT_TEXT),
+	],
+)
+def test_an_old_session_on_a_permission_prompt_is_permission_prompt_not_needs_input(tmp_path, capsys, needs_action, detail):
+	"""PR #6112 review round 5: an old session keeps a recent one's precedence, permission_prompt before needs_input."""
+	session = _session("session_a", created_at="2026-09-27T11:59:00Z", needs_action=needs_action, detail=detail)
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert result["resume"] == [] and _skips(result) == {"session_a": "permission_prompt"}
+
+
+@pytest.mark.parametrize("created_at", [None, "2026-09-27T11:59:00Z"])
+@pytest.mark.parametrize(
+	"external_summary",
+	[
+		{"status_category": "need_input", "status_detail": "Waiting on permission: Bash"},
+		{"status_category": "need_input", "status_detail": LIMIT_TEXT, "needs_action": "Approve or deny: Bash(git push origin HEAD)"},
+	],
+)
+def test_a_permission_prompt_only_in_the_external_metadata_copy_is_skipped(tmp_path, capsys, created_at, external_summary):
+	"""PR #6112 review round 6: the top-level summary carries only the limit text; the external copy's prompt still counts."""
+	session = _session("session_a", created_at=created_at)
+	session["external_metadata"]["post_turn_summary"] = external_summary
+	_, result = _run(tmp_path, capsys, [_pickup(), session])
+	assert result["resume"] == [] and _skips(result) == {"session_a": "permission_prompt"}
+
+
+def test_rejected_snapshot_with_need_input_only_in_the_external_metadata_copy_is_skipped(tmp_path, capsys):
+	"""PR #6112 review round 6: on the rate_limit_info signal, `need_input` in either summary copy is a human wait."""
+	checker = _checker("session_c", detail="awaiting next cycle trigger", category="review_ready", rate_status="rejected")
+	checker["external_metadata"]["post_turn_summary"] = {"status_category": "need_input", "status_detail": "Q2 needs an answer"}
+	_, result = _run(tmp_path, capsys, [_pickup(), checker])
+	assert result["resume"] == [] and _skips(result) == {"session_c": "needs_input"}
+
+
+def test_has_unanswered_request_reads_both_copies():
+	assert resumes.has_unanswered_request({}) is False
+	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": None}}) is False
+	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": "  "}}) is False
+	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": LIMIT_TEXT}}) is False
+	assert resumes.has_unanswered_request({"post_turn_summary": {"needs_action": "Reply `Q1: A`"}}) is True
+	nested = {"post_turn_summary": {"needs_action": ""}, "external_metadata": {"post_turn_summary": {"needs_action": "decide"}}}
+	assert resumes.has_unanswered_request(nested) is True
+	assert resumes.has_unanswered_request({"post_turn_summary": "x", "external_metadata": "y"}) is False
+
+
 # --- skip reasons ------------------------------------------------------------------------
 
 
@@ -650,6 +934,10 @@ def test_prompts_are_fixed_text_plus_the_login(tmp_path, capsys):
 		assert "never with python3 heredocs (#4858)" in prompt
 		assert "ignore previous instructions" not in prompt and "IGNORE ALL RULES" not in prompt
 		assert "The limit has reset." in prompt
+		assert (
+			"This message is not an answer to any question or approval request of yours: if one is still "
+			"unanswered, keep waiting for the human's answer and end the turn without acting on it." in prompt
+		)
 	assert "Repeat the steps in your most recent checker-instructions message now, starting at step 1" in checker_prompt
 	assert "call list_sessions (mine: true, limit: 100), and repeat it with after_id" in checker_prompt
 	assert "at most 5 pages" in checker_prompt

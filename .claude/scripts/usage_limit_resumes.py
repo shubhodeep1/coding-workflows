@@ -56,9 +56,9 @@ A session is a candidate when either signal holds:
     account rate-limit error text ("You've hit your session limit …");
   * rate_limit_info (checker sessions only): its
     `external_metadata.rate_limit_info.status` is `rejected` and its
-    `resetsAt` has passed, its `status_category` is not `need_input`, and no
-    enabled trigger is bound to it. A checker whose chain died this way can
-    still show a healthy summary. Stage sessions are left out: a turn that
+    `resetsAt` has passed, the `status_category` of neither summary copy is
+    `need_input`, and no enabled trigger is bound to it. A checker whose
+    chain died this way can still show a healthy summary. Stage sessions are left out: a turn that
     completed on overage also records `rejected`.
 
 Authorization (issue #6101): `list_sessions` with `mine: true` is
@@ -84,9 +84,14 @@ A candidate is skipped (listed under `skipped`) when it is the pickup
 (`pickup`), not authorized (the reasons above), archived (`archived`), created more than 72 hours ago
 (`too_old`: the pickup lists 3 days of sessions, but the last page it reads
 can reach further back, and those older sessions stay with the manual
-fallback; an unreadable `created_at` is not skipped), not IDLE (`not_idle:<status>`), waiting
-on a permission prompt (`permission_prompt`), waiting on a human answer
-(`needs_input`, rate_limit_info signal only), still limited by its own
+fallback; an unreadable `created_at` is not skipped; an old session waiting
+on a human answer is listed as `needs_input` instead, and one on a permission
+prompt as `permission_prompt`, so the manual fallback never resumes it past
+the question), not IDLE (`not_idle:<status>`), waiting
+on a permission prompt (`permission_prompt`: a leading "Approve or deny" or
+"waiting on permission" in the `needs_action` or `status_detail` of either
+summary copy, `post_turn_summary` or `external_metadata.post_turn_summary`),
+waiting on a human answer (`needs_input`, below), still limited by its own
 `rate_limit_info` (`not_reset`), or bound to an enabled trigger that will
 wake it anyway (`wake_pending`: for a checker, any, because its triggers
 are its own check-ins and one means its chain is alive; for another
@@ -97,6 +102,31 @@ is never resumed twice for the same stop. A trigger's time is its
 `next_run_at` when readable, else its `run_once_at`. A resume trigger that has fired is
 disabled and no longer counts: when the resumed turn fails on the limit or
 on a rate limit again, the next wake picks the session again.
+
+`needs_input` (issue #6102) holds on both signals when the summary still
+records a request to a human: a non-empty `needs_action`, in
+`post_turn_summary` or `external_metadata.post_turn_summary`, that is not
+only a wait for the usage limit. A limit wait is made only of limit-wait
+words (`LIMIT_WAIT_VOCABULARY`: the usage-limit error wording, wait words,
+times, and connectives; any other word, such as merge or push, makes it a
+request, and so does "now"), it names the limit or its reset, and every
+sentence in it matches one of a closed set of forms whole: the error or
+status wording ("Usage limit reached", "Rate limited until 5pm"), the reset
+("The limit resets at 11am"), a wait ("Wait until the limit resets, then
+retry"), a retry tied to the reset in the same sentence ("Retry after the
+reset", "Once the limit resets, retry"), or "then retry" right after a wait
+or reset sentence. A wait or a retry takes a time only as the reset's ("Retry
+after the reset at 5pm"), so "Retry after 5pm" and "Wait until Monday" are
+requests. No form holds a negation or a "retry until", so "Usage
+limit reached. Please retry the request. The limit resets later." and
+"Retry the request, not waiting until the reset" are requests; a `needs_action` with a Q-ID (`Q1`), a question mark,
+or the words reply, answer, decide, confirm, choose, or approve is never
+one. Unknown
+wording is a request, so the session stays stopped and is listed. On the
+rate_limit_info signal a `need_input` category holds too. On the text
+signal a `need_input` category with an empty `needs_action` does not: a
+turn that failed on the limit can show it, and the error text decides.
+Every resume prompt also says it is not an answer to a pending question.
 
 Session ids are compared in one form: `cse_<x>` and `session_<x>` name the
 same session (a trigger's `persistent_session_id` can carry either), so a
@@ -171,6 +201,110 @@ LIMIT_TEXT_PATTERNS = (
 	re.compile(r"\bAPI Error\b[^\n]{0,80}?\brate[ _-]?limit", re.IGNORECASE),
 )
 PERMISSION_PROMPT_PATTERN = re.compile(r"^\s*approve or deny\b|\bwaiting on permission\b", re.IGNORECASE)
+# A `needs_action` that only waits for the usage limit (issue #6102): a limit
+# plus a wait word, and nothing that asks a human for an answer.
+LIMIT_WORD_PATTERN = re.compile(r"\blimits?\b", re.IGNORECASE)
+HUMAN_REQUEST_PATTERN = re.compile(
+	r"\bQ\d+\b|\?|\b(?:repl\w*|answer\w*|decid\w*|decision\w*|confirm\w*|choos\w*|choice\w*|approv\w*)\b",
+	re.IGNORECASE,
+)
+# PR #6112 review round 1: a limit wait is made only of these words, so a request
+# riding on the error text ("Usage limit reached — merge PR #N") fails closed.
+# Words are runs of letters (any script, apostrophes kept) and runs of digits;
+# digits always pass (times, dates, error codes), symbols are not words.
+LIMIT_WAIT_TOKEN_PATTERN = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)*|\d+")
+LIMIT_WAIT_VOCABULARY = frozenset(
+	(
+		# the usage-limit and rate-limit error wording (LIMIT_TEXT_PATTERNS and the summaries it matches)
+		"you", "you've", "hit", "your", "claude", "ai", "api", "error", "type", "message", "number", "of",
+		"request", "requests", "tokens", "has", "exceeded", "server", "is", "temporarily", "limiting", "not",
+		"limited", "reached", "usage", "limit", "limits", "limit's", "rate", "session", "account", "weekly",
+		"daily", "hourly", "monthly", "hour", "hours", "opus", "sonnet", "model",
+		# waiting for it ("now" is not one: PR #6112 review round 2, acting now is not waiting)
+		"wait", "waiting", "retry", "retrying", "resume", "resuming", "resumes", "resend", "try", "again",
+		"reset", "resets", "resetting", "please", "later", "soon", "automatically", "last",
+		# connectives
+		"the", "a", "an", "to", "for", "until", "till", "after", "once", "then", "when", "it", "its", "it's",
+		"are", "have", "been", "be", "will", "should", "at", "on", "in", "by", "and", "next", "about",
+		"around", "approximately",
+		# times and dates
+		"am", "pm", "utc", "gmt", "z", "t", "h", "m", "min", "mins", "minute", "minutes", "sec", "secs",
+		"second", "seconds", "time", "local", "window", "today", "tomorrow", "tonight", "noon", "midnight",
+		"january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+		"november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct",
+		"nov", "dec", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon",
+		"tue", "tues", "wed", "thu", "thurs", "fri", "sat", "sun",
+	)
+)
+# PR #6112 review round 3: a word-level search for a deferral word could not tie it to the retry it defers
+# (a deferral in another sentence, "retry until the reset", "not waiting until"). A limit wait is therefore a
+# run of sentences, each of which matches one of the closed forms below whole; any other sentence makes the
+# text a request. Sentences end at . ! ; | · • — – or a line break; inside one, the words are matched as one
+# lowercase string with every time word and number run collapsed to `#`.
+LIMIT_WAIT_SENTENCE_BREAK_PATTERN = re.compile(r"\.(?!\d)|[!;|\n·•—–]|\s-\s")
+LIMIT_WAIT_TIME_WORDS = frozenset(
+	(
+		"am", "pm", "utc", "gmt", "z", "t", "h", "m", "min", "mins", "minute", "minutes", "sec", "secs", "second",
+		"seconds", "hour", "hours", "local", "time", "today", "tomorrow", "tonight", "noon", "midnight",
+		"january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+		"november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct",
+		"nov", "dec", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon",
+		"tue", "tues", "wed", "thu", "thurs", "fri", "sat", "sun",
+	)
+)
+
+
+def _limit_wait_forms() -> tuple:
+	"""Build the closed sentence forms of a limit wait: `(status, reset, wait, retry, then)` full-match patterns."""
+	limit = r"(?:(?:claude|ai|usage|session|weekly|daily|hourly|monthly|account|rate|opus|sonnet|api|model) ){0,3}limits?"
+	the_limit = rf"(?:(?:the|your) )?{limit}"
+	time = r"(?:(?:at|on|in|by|around|about|approximately|next) )*#(?: (?:on|at|in|by|and) #)*"
+	resets = r"(?:resets|will reset|has reset|has been reset|is reset|resetting)"
+	reset_event = rf"(?:(?:{the_limit}|it) {resets}|(?:the|your) (?:{limit} )?reset)(?: {time})?"
+	again = r"(?:it |(?:the|your) request )?again"
+	retry = (
+		rf"(?:(?:retry|resend|resume)(?: (?:it|(?:the|your) (?:last )?(?:request|requests|message|session)))?(?: again)?"
+		rf"|try {again})"
+	)
+	please = r"(?:please )?"
+	hit = rf"(?:you've|you have) hit (?:your|the) {limit}(?: (?:resets|will reset)(?: {time})?)?"
+	reached = rf"{the_limit} (?:has been |is |has )?(?:reached|hit|exceeded)(?: (?:resets|will reset)(?: {time})?)?"
+	server = r"server is temporarily limiting requests(?: not your usage limit)?"
+	status = (
+		hit,
+		reached,
+		server,
+		r"rate limit error",
+		rf"(?:(?:you are|you have been|you've been|it is|it's|(?:the|your) (?:account|session) is) )?(?:rate )?limited"
+		rf"(?: (?:until|till) (?:{reset_event}|{time}))?",
+		rf"api error(?: #)?(?: type error error type rate limit error message)?"
+		rf"(?: (?:{reached}|rate limit error|number of request tokens has exceeded {the_limit}|{server}))?",
+	)
+	reset = (rf"(?:(?:{the_limit}|it) )?{resets}(?: (?:automatically|soon|later))?(?: {time})?",)
+	# PR #6112 review round 4: a wait or a retry names the reset or the limit, never a bare time. The selector
+	# cannot tell "retry after 5pm" or "wait until Monday" from a human's own deadline, and a resume fires two
+	# minutes after the pickup creates it, so a time is accepted only as the reset's ("after the reset at 5pm").
+	wait_for = rf"(?:(?:for|until|till) (?:{the_limit} to reset|{reset_event}|{the_limit})|on {the_limit})"
+	wait = (rf"{please}(?:wait|waiting) {wait_for}(?: {time})?(?: (?:and |then |and then ){retry})?",)
+	retry_forms = (
+		rf"{please}{retry} (?:(?:after|once|when) {reset_event}|later)",
+		rf"{please}(?:after|once|when) {reset_event}(?: then)? {retry}",
+	)
+	# Only after a wait or reset sentence, whose reset the "then" points to.
+	then = (rf"{please}(?:then {retry}|{retry} then)",)
+	return tuple(
+		tuple(re.compile(form) for form in forms) for forms in (status, reset, wait, retry_forms, then)
+	)
+
+
+(
+	LIMIT_WAIT_STATUS_FORMS,
+	LIMIT_WAIT_RESET_FORMS,
+	LIMIT_WAIT_WAIT_FORMS,
+	LIMIT_WAIT_RETRY_FORMS,
+	LIMIT_WAIT_THEN_FORMS,
+) = _limit_wait_forms()
+LIMIT_WAIT_NAMES_LIMIT_PATTERN = re.compile(r"\b(?:reset\w*|limited)\b", re.IGNORECASE)
 # One session has two id forms: `session_<x>` (list_sessions, get_session) and
 # `cse_<x>` (seen as a trigger's `persistent_session_id`, 2026-10-02).
 RESUME_SESSION_ID_PATTERN = re.compile(r"^(?:session|cse)_(?P<suffix>[A-Za-z0-9]+)$")
@@ -183,9 +317,16 @@ SIGNAL_REASONS = {
 	"rate_limit_info": "this session's last turn ran while the account was over its usage limit, and nothing is scheduled to wake it.",
 }
 
+# Issue #6102: a resume is never the answer a stopped session may be waiting for.
+NOT_AN_ANSWER_TEXT = (
+	"This message is not an answer to any question or approval request of yours: if one is still "
+	"unanswered, keep waiting for the human's answer and end the turn without acting on it. "
+)
+
 CHECKER_PROMPT = (
 	"Resume after usage limit (issue #5660): {why} The limit has reset. "
-	"Repeat the steps in your most recent checker-instructions message now, starting at step 1 "
+	+ NOT_AN_ANSWER_TEXT
+	+ "Repeat the steps in your most recent checker-instructions message now, starting at step 1 "
 	"(for a `PR #<n> status check-in` checker: your instructions message together with every later subscriber message). "
 	"Before any step creates a session, call list_sessions (mine: true, limit: 100), and repeat it with after_id = the "
 	"previous page's last_id while has_more is true and that page's oldest session was created after your most recent "
@@ -200,7 +341,8 @@ CHECKER_PROMPT = (
 
 OTHER_PROMPT = (
 	"Resume after usage limit (issue #5660): {why} The limit has reset. "
-	"Continue from your latest instructions. First re-read the current state: `git status -sb` and your branch, "
+	+ NOT_AN_ANSWER_TEXT
+	+ "Continue from your latest instructions. First re-read the current state: `git status -sb` and your branch, "
 	"the pull request or issue you were working on, and the progress log under docs/implement-plan/ when your task has one. "
 	"Do not redo work that already landed, and before you create a session, trigger, pull request, or comment, "
 	"check that it does not exist already. "
@@ -391,6 +533,85 @@ def has_limit_text(detail: str) -> bool:
 	return any(pattern.search(detail) for pattern in LIMIT_TEXT_PATTERNS)
 
 
+def _summary_copies(session: dict) -> list[dict]:
+	"""Both summary copies that are objects: `post_turn_summary`, then `external_metadata.post_turn_summary`."""
+	summaries = [session.get("post_turn_summary")]
+	metadata = session.get("external_metadata")
+	if isinstance(metadata, dict):
+		summaries.append(metadata.get("post_turn_summary"))
+	return [summary for summary in summaries if isinstance(summary, dict)]
+
+
+def _needs_action_texts(session: dict) -> list[str]:
+	"""The stripped, non-empty `needs_action` of both summary copies (top-level and `external_metadata`)."""
+	texts = []
+	for summary in _summary_copies(session):
+		text = _text(summary.get("needs_action")).strip()
+		if text:
+			texts.append(text)
+	return texts
+
+
+def is_limit_wait(needs_action: str) -> bool:
+	"""True when a `needs_action` only waits for the usage limit and asks a human for nothing (issue #6102)."""
+	if HUMAN_REQUEST_PATTERN.search(needs_action):
+		return False
+	normalized = needs_action.lower().replace("’", "'")
+	words = LIMIT_WAIT_TOKEN_PATTERN.findall(normalized)
+	if any(not word.isdigit() and word not in LIMIT_WAIT_VOCABULARY for word in words):
+		return False
+	if not (
+		has_limit_text(needs_action)
+		or LIMIT_WORD_PATTERN.search(needs_action)
+		or LIMIT_WAIT_NAMES_LIMIT_PATTERN.search(needs_action)
+	):
+		return False
+	sentences = [_limit_wait_sentence(part) for part in LIMIT_WAIT_SENTENCE_BREAK_PATTERN.split(normalized)]
+	sentences = [sentence for sentence in sentences if sentence]
+	previous = ""
+	for sentence in sentences:
+		kind = _limit_wait_sentence_kind(sentence, previous)
+		if not kind:
+			return False
+		previous = kind
+	return bool(sentences)
+
+
+def _limit_wait_sentence(text: str) -> str:
+	"""One sentence as lowercase words joined by spaces, each run of numbers and time words collapsed to `#`."""
+	words = []
+	for word in LIMIT_WAIT_TOKEN_PATTERN.findall(text):
+		if word.isdigit() or word in LIMIT_WAIT_TIME_WORDS:
+			if words and words[-1] == "#":
+				continue
+			word = "#"
+		words.append(word)
+	return " ".join(words)
+
+
+def _limit_wait_sentence_kind(sentence: str, previous: str) -> str:
+	"""The closed form a sentence matches whole (`status`, `reset`, `wait`, `retry`, `then`), or "" for none.
+
+	A `then` sentence ("then retry", "try again then") counts only right after a `wait` or `reset` sentence.
+	"""
+	for kind, forms in (
+		("status", LIMIT_WAIT_STATUS_FORMS),
+		("reset", LIMIT_WAIT_RESET_FORMS),
+		("wait", LIMIT_WAIT_WAIT_FORMS),
+		("retry", LIMIT_WAIT_RETRY_FORMS),
+	):
+		if any(form.fullmatch(sentence) for form in forms):
+			return kind
+	if previous in ("wait", "reset") and any(form.fullmatch(sentence) for form in LIMIT_WAIT_THEN_FORMS):
+		return "then"
+	return ""
+
+
+def has_unanswered_request(session: dict) -> bool:
+	"""True when either summary copy records a request to a human that is not only a limit wait."""
+	return any(not is_limit_wait(text) for text in _needs_action_texts(session))
+
+
 def session_kind(title: str) -> str:
 	return "checker" if any(marker in title for marker in CHECKER_TITLE_MARKERS) else "other"
 
@@ -491,7 +712,6 @@ def _skip_reason(
 	`select` passes `pickup_key` (the pickup's `session_key`, computed once per run) and `allowed_repos`
 	(`load_allowed_repos`); without `allowed_repos` no session is authorized.
 	"""
-	summary = _summary(session)
 	status = _text(session.get("session_status"))
 	own_key = pickup_key if pickup_key is not None else session_key(pickup_session)
 	if session_key(_text(session.get("id"))) == own_key:
@@ -501,17 +721,31 @@ def _skip_reason(
 		return unauthorized
 	if status == ARCHIVED_STATUS:
 		return "archived"
+	# PR #6112 review round 6: like `has_unanswered_request`, the permission prompt and `need_input` read both summary
+	# copies, so a marker recorded only in `external_metadata.post_turn_summary` is not missed.
+	summaries = _summary_copies(session)
+	needs_input = has_unanswered_request(session) or (
+		signal == "rate_limit_info"
+		and any(_text(summary_copy.get("status_category")) == "need_input" for summary_copy in summaries)
+	)
+	permission_prompt = any(
+		PERMISSION_PROMPT_PATTERN.search(_text(summary_copy.get("needs_action")))
+		or PERMISSION_PROMPT_PATTERN.search(_text(summary_copy.get("status_detail")))
+		for summary_copy in summaries
+	)
 	created_at = _parse_time(session.get("created_at"))
 	if created_at is not None and created_at < now - dt.timedelta(hours=SESSION_WINDOW_HOURS):
-		return "too_old"
+		# PR #6112 review round 1: the manual fallback resumes too_old sessions, so an old one waiting on a human says so,
+		# with the same precedence as a recent one (review round 5): a permission prompt before an unanswered request.
+		if permission_prompt:
+			return "permission_prompt"
+		return "needs_input" if needs_input else "too_old"
 	if status != IDLE_STATUS:
 		short = status[len(SESSION_STATUS_PREFIX):] if status.startswith(SESSION_STATUS_PREFIX) else status
 		return f"not_idle:{short.lower() or 'unknown'}"
-	if PERMISSION_PROMPT_PATTERN.search(_text(summary.get("needs_action"))) or PERMISSION_PROMPT_PATTERN.search(
-		_text(summary.get("status_detail"))
-	):
+	if permission_prompt:
 		return "permission_prompt"
-	if signal == "rate_limit_info" and _text(summary.get("status_category")) == "need_input":
+	if needs_input:
 		return "needs_input"
 	if limit_holds(_rate_limit_info(session), now):
 		return "not_reset"
