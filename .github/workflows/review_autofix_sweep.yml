@@ -218,10 +218,15 @@ jobs:
                   def dedupe_key:
                     dispatch_pr as $pr
                     | if $pr != "" then "pr:\($pr)" else .head_branch end;
+                  # A run needs a key to count. GitHub can report a null
+                  # head_branch on a workflow_dispatch run (issue #4928), so a
+                  # run named for its PR is kept by its pr:<N> key; dropping
+                  # it let the next tick dispatch that PR again and replace
+                  # the pending review. A run with neither key is dropped.
                   [
                     .[]
                     | .workflow_runs[]?
-                    | select((.head_branch // "") != "")
+                    | select((.head_branch // "") != "" or dispatch_pr != "")
                   ]
                   # A run can transition between the sequential status fetches;
                   # retain its in_progress snapshot so it is never discounted.

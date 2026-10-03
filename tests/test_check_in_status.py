@@ -37,7 +37,42 @@ def _pr(**overrides):
 	return pr
 
 
-DISPATCH_RUNS = "repos/o/r/actions/workflows/internal-review.yml/runs?event=workflow_dispatch&per_page=100"
+# The PR-named review wrappers (internal-review.yml, issue #4618; ai-review.yml,
+# issues #4701 and #4926) are read one listing per wrapper and active status,
+# page by page (issue #5442). DISPATCH_RUNS, the repo-wide newest-100 page read
+# before #5442, must never be read again.
+DISPATCH_RUNS = "repos/o/r/actions/runs?event=workflow_dispatch&per_page=100"
+INTERNAL_REVIEW_PATH = ".github/workflows/internal-review.yml"
+AI_REVIEW_PATH = ".github/workflows/ai-review.yml"
+REVIEW_WRAPPERS = ("internal-review.yml", "ai-review.yml")
+STUCK_STATUSES = ("queued", "in_progress")
+FIXER_STATUSES = ("pending", "queued", "in_progress")
+
+
+def _dispatch_path(workflow, status, page=1):
+	return f"repos/o/r/actions/workflows/{workflow}/runs?event=workflow_dispatch&status={status}&per_page=100&page={page}"
+
+
+def _dispatch_listings(statuses, runs=()):
+	"""One complete page per wrapper and status. Each run lands in the listing
+	of the wrapper its path names (or `in_wrapper`) and of its status (or
+	`in_status`); a run no listing matches is filtered out, as GitHub would."""
+	listings = {_dispatch_path(workflow, status): {"total_count": 0, "workflow_runs": []}
+		for workflow in REVIEW_WRAPPERS for status in statuses}
+	for index, run in enumerate(runs, 1):
+		run = dict(run)
+		workflow = run.pop("in_wrapper", None) or str(run.get("path", "")).split("@", 1)[0].rsplit("/", 1)[-1]
+		status = run.pop("in_status", None) or run.get("status")
+		run.setdefault("id", 1000 + index)
+		listing = listings.get(_dispatch_path(workflow, status))
+		if listing is not None:
+			listing["workflow_runs"].append(run)
+			listing["total_count"] += 1
+	return listings
+
+
+def _dispatch_calls(statuses):
+	return [_dispatch_path(workflow, status) for workflow in REVIEW_WRAPPERS for status in statuses]
 
 
 def _stub(monkeypatch, responses):
@@ -69,7 +104,7 @@ def _stuck_responses(pr, committed_at, queued=0, in_progress=0, check_runs=None)
 		"repos/o/r/commits/abc": {"commit": {"committer": {"date": committed_at}}},
 		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1": {"total_count": queued},
 		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1": {"total_count": in_progress},
-		DISPATCH_RUNS: {"workflow_runs": []},
+		**_dispatch_listings(STUCK_STATUSES),
 	}
 
 
@@ -135,7 +170,7 @@ def test_conflict_on_old_head_without_active_run_is_stuck(monkeypatch, capsys):
 		"repos/o/r/commits/abc",
 		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1",
 		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1",
-		DISPATCH_RUNS,
+		*_dispatch_calls(STUCK_STATUSES),
 	]
 
 
@@ -145,9 +180,9 @@ def test_old_head_with_active_sweep_dispatch_for_the_pr_waits(monkeypatch, capsy
 	# (issue #4618), so its run is not on the head branch; check_pr's stuck
 	# path must still count it by its `[pr:<N>]` title.
 	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
-	responses[DISPATCH_RUNS] = {"workflow_runs": [
-		{"status": status, "display_title": "Internal: AI Review & Autofix [pr:7]"},
-	]}
+	responses.update(_dispatch_listings(STUCK_STATUSES, [
+		{"status": status, "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+	]))
 	_stub(monkeypatch, responses)
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
@@ -155,14 +190,58 @@ def test_old_head_with_active_sweep_dispatch_for_the_pr_waits(monkeypatch, capsy
 
 def test_old_head_with_sweep_dispatch_for_another_pr_or_finished_is_stuck(monkeypatch, capsys):
 	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
-	responses[DISPATCH_RUNS] = {"workflow_runs": [
-		{"status": "in_progress", "display_title": "Internal: AI Review & Autofix [pr:8]"},
-		{"status": "completed", "display_title": "Internal: AI Review & Autofix [pr:7]"},
-		{"status": "pending", "display_title": "Internal: AI Review & Autofix [pr:7]"},
-	]}
+	responses.update(_dispatch_listings(STUCK_STATUSES, [
+		{"status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:8]"},
+		{"status": "completed", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:7]",
+			"in_status": "in_progress"},
+		{"status": "pending", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:7]",
+			"in_status": "queued"},
+		{"status": "in_progress", "path": AI_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+		{"status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": "AI Review [pr:7]"},
+		{"status": "in_progress", "path": AI_REVIEW_PATH, "display_title": "AI Review [pr:8]"},
+	]))
 	_stub(monkeypatch, responses)
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is True and out["state"] == "stuck"
+
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+def test_old_head_with_active_consumer_ai_review_dispatch_for_the_pr_waits(monkeypatch, capsys, status):
+	# Issue #4926: in a consumer repo the poller and merge train dispatch
+	# ai-review.yml from the default branch and name the run `AI Review [pr:<N>]`.
+	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
+	responses.update(_dispatch_listings(STUCK_STATUSES, [
+		{"status": status, "path": AI_REVIEW_PATH + "@main", "display_title": "AI Review [pr:7]"},
+	]))
+	_stub(monkeypatch, responses)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
+
+def test_old_head_with_active_dispatch_on_a_later_page_waits(monkeypatch, capsys):
+	# Issue #5442: 100 newer dispatches of other PRs used to push a live review
+	# off the one page read; every page of the wrapper listing is read now.
+	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
+	others = [{"id": index, "status": "in_progress", "path": INTERNAL_REVIEW_PATH,
+		"display_title": f"Internal: AI Review & Autofix [pr:{index}]"} for index in range(100, 200)]
+	responses[_dispatch_path("internal-review.yml", "in_progress")] = {"total_count": 101, "workflow_runs": others}
+	responses[_dispatch_path("internal-review.yml", "in_progress", page=2)] = {"total_count": 101, "workflow_runs": [
+		{"id": 7, "status": "in_progress", "path": INTERNAL_REVIEW_PATH, "display_title": "Internal: AI Review & Autofix [pr:7]"},
+	]}
+	calls = _stub(monkeypatch, responses)
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and out["state"] == "open" and "still queued or running" in out["reason"]
+	assert _dispatch_path("internal-review.yml", "in_progress", page=2) in calls and DISPATCH_RUNS not in calls
+
+
+def test_old_head_with_incomplete_dispatch_listing_exits_2(monkeypatch, capsys):
+	# Issue #5442: a listing that is not read in full never makes a PR stuck.
+	responses = _stuck_responses(_pr(mergeable_state="dirty"), OLD)
+	responses[_dispatch_path("ai-review.yml", "queued")] = {"total_count": 3, "workflow_runs": []}
+	_stub(monkeypatch, responses)
+	code, out = _run(["--pr", "7"], capsys)
+	assert code == 2 and out["done"] is False and out["action"] == "retry"
+	assert "listing incomplete: read 0 of 3 runs" in out["error"]
 
 
 def test_failed_check_on_old_head_without_active_run_is_stuck(monkeypatch, capsys):
@@ -179,7 +258,7 @@ def test_failed_check_on_old_head_without_active_run_is_stuck(monkeypatch, capsy
 		"repos/o/r/commits/abc",
 		"repos/o/r/actions/runs?branch=claude/x&status=queued&per_page=1",
 		"repos/o/r/actions/runs?branch=claude/x&status=in_progress&per_page=1",
-		DISPATCH_RUNS,
+		*_dispatch_calls(STUCK_STATUSES),
 	]
 
 
@@ -269,7 +348,7 @@ def _fixer_responses(pr=None, **run_overrides):
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1": {"total_count": 0},
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1": {"total_count": 0},
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1": {"total_count": 0},
-		DISPATCH_RUNS: {"workflow_runs": []},
+		**_dispatch_listings(FIXER_STATUSES),
 	}
 
 
@@ -299,16 +378,46 @@ def test_fixer_findings_handoff_for_current_head_is_a_review_round(monkeypatch, 
 	assert out["done"] is True and out["state"] == "review-round" and out["round"] == 2
 	assert calls == ["repos/o/r/pulls/7", "repos/o/r/issues/7/comments",
 		f"repos/o/r/actions/runs/{FIXER_RUN_ID}",
+		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=queued&per_page=1",
 		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=in_progress&per_page=1",
-		f"repos/o/r/actions/runs?branch={FIXER_REF}&status=pending&per_page=1",
-		DISPATCH_RUNS]
+		*_dispatch_calls(FIXER_STATUSES)]
 
 
 def test_fixer_conflict_handoff_is_a_conflict_round(monkeypatch, capsys):
 	_stub_fixer(monkeypatch, _fixer_responses(), [_comment(_handoff(kind="conflict"))])
 	_, out = _run(["--pr", "7"], capsys)
 	assert out["done"] is True and out["state"] == "conflict"
+
+
+# Issue #4926: a consumer repo's poller and merge train dispatch ai-review.yml
+# from the default branch, titled `AI Review [pr:<N>]`; the project checker
+# (--pr mode) must accept that hand-off like an internal-review.yml sweep run.
+CONSUMER_DISPATCH = {"path": AI_REVIEW_PATH, "event": "workflow_dispatch", "head_branch": "main",
+	"head_sha": "d" * 40, "display_title": "AI Review [pr:7]"}
+
+
+@pytest.mark.parametrize("kind, state", [("findings", "review-round"), ("conflict", "conflict")])
+def test_fixer_handoff_from_consumer_ai_review_dispatch_is_due(monkeypatch, capsys, kind, state):
+	pr = _fixer_pr(base={"repo": {"default_branch": "main"}}, **({"mergeable_state": "dirty"} if kind == "conflict" else {}))
+	calls = _stub_fixer(monkeypatch, _fixer_responses(pr=pr, **CONSUMER_DISPATCH), [_comment(_handoff(kind=kind))])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is True and out["state"] == state
+	assert not any("/compare/" in call for call in calls)
+
+
+@pytest.mark.parametrize("run_change", [
+	{"display_title": "Internal: AI Review & Autofix [pr:7]"},
+	{"display_title": "AI Review [pr:8]"},
+	{"event": "pull_request"},
+])
+def test_fixer_handoff_from_unbound_consumer_dispatch_fails_closed(monkeypatch, capsys, run_change):
+	pr = _fixer_pr(base={"repo": {"default_branch": "main"}})
+	responses = _fixer_responses(pr=pr, **{**CONSUMER_DISPATCH, **run_change})
+	responses[f"repos/o/r/compare/{'d' * 40}...{FIXER_HEAD}?per_page=1"] = {"status": "diverged"}
+	_stub_fixer(monkeypatch, responses, [_comment(_handoff())])
+	_, out = _run(["--pr", "7"], capsys)
+	assert out["done"] is False and "waiting for verified completed review run" in out["reason"]
 
 
 @pytest.mark.parametrize("author", ["", "wrong-bot"])
