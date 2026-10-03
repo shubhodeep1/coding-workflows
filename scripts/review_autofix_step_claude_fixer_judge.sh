@@ -24,8 +24,12 @@
 #   * findings.json — the ledger's findings numbered F1..Fn
 #     (scripts/review_claude_fixer_judge.py findings);
 #   * rejection.txt — the newest rejection comment for this head and round by
-#     an OWNER / MEMBER / COLLABORATOR, passed to the model as untrusted
-#     argument only (or a note that there is none);
+#     an OWNER / MEMBER / COLLABORATOR posting as the PR author or this
+#     workflow's GH_PAT account, posted after the newest hand-off comment
+#     for this head, round and ledger digest, passed to the model as untrusted
+#     argument only. Without one the inputs are not ready (reason
+#     rejection_missing, security follow-up #6061): a dispatch alone never
+#     authorizes the judge;
 #   * prior_rulings.json — rulings of earlier judge runs on this PR, from
 #     verified judge evidence (scripts/review_claude_fixer_judge.py
 #     prior-rulings, newest 3 runs).
@@ -102,18 +106,51 @@ if [ ! -s "${claude_fixer_judge_comments}" ]; then
   claude_fixer_judge_comments="${claude_fixer_judge_dir}/no_comments.json"
   printf '[]\n' > "${claude_fixer_judge_comments}"
 fi
-# $marker is a jq variable, not a shell expansion.
-# shellcheck disable=SC2016
-jq -r --arg marker "<!-- ai:claude-fixer-rejection:v1 head=${HEAD_SHA} round=${claude_fixer_judge_round} -->" '
+# The rejection must come from the fixer's identity, not just any collaborator (PR #6069
+# review): the PR author (the session that pushed it) or this workflow's own GH_PAT account
+# (the catch-all fixer), the same identities CLAUDE.md §26.H trusts for claims. An unreadable
+# identity is left out, so the filter fails closed.
+claude_fixer_judge_allowed_logins="$(
+  {
+    jq -r '.user.login // empty' "${PR_PAYLOAD_FILE:-/nonexistent}" 2>/dev/null || true
+    # The gate already resolved the workflow account (PR #6069 review round 2); look it up
+    # only when that output is missing.
+    if [ -n "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN:-}" ]; then
+      printf '%s\n' "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}"
+    else
+      gh api user --jq '.login // empty' 2>/dev/null || true
+    fi
+  } | sed '/^$/d' | tr '[:upper:]' '[:lower:]' | jq -R . | jq -sc .
+)"
+[ -n "${claude_fixer_judge_allowed_logins}" ] || claude_fixer_judge_allowed_logins='[]'
+# The rejection must also answer the hand-off being judged (PR #6069 review round 2): it has to be
+# newer than the newest hand-off comment carrying this head, round and ledger digest, so a rejection
+# of an earlier ledger on the same head and round cannot authorize judging findings it never saw.
+# Without that hand-off comment nothing can be newer, and the filter fails closed.
+claude_fixer_judge_handoff_id="$(jq -r --arg marker "<!-- ai:claude-fixer-handoff:v2 head=${HEAD_SHA} round=${claude_fixer_judge_round} ledger=${CLAUDE_FIXER_JUDGE_LEDGER_SHA256} -->" '
     [.[]? | select(type == "object" and ((.id // null) | type) == "number"
+      and ((.body // "") | split("\n") | map(gsub("\r$"; "")) | index($marker) != null)) | .id]
+    | max // empty
+  ' "${claude_fixer_judge_comments}" 2>/dev/null || true)"
+case "${claude_fixer_judge_handoff_id}" in
+  ''|*[!0-9]*) claude_fixer_judge_handoff_id=9223372036854775807 ;;
+esac
+# $marker, $allowed and $after are jq variables, not shell expansions.
+# shellcheck disable=SC2016
+jq -r --arg marker "<!-- ai:claude-fixer-rejection:v1 head=${HEAD_SHA} round=${claude_fixer_judge_round} -->" --argjson allowed "${claude_fixer_judge_allowed_logins}" --argjson after "${claude_fixer_judge_handoff_id}" '
+    [.[]? | select(type == "object" and ((.id // null) | type) == "number" and .id > $after
       and ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+      and (((.user.login // "") | ascii_downcase) as $login | $login != "" and ($allowed | index($login)) != null)
       and ((.body // "") | split("\n") | map(gsub("\r$"; "")) | index($marker) != null))]
     | max_by(.id) // empty | .body[0:30000]
   ' "${claude_fixer_judge_comments}" > "${claude_fixer_judge_dir}/rejection.txt" 2>/dev/null || : > "${claude_fixer_judge_dir}/rejection.txt"
 claude_fixer_judge_rejection="found"
 if [ ! -s "${claude_fixer_judge_dir}/rejection.txt" ]; then
-  claude_fixer_judge_rejection="missing"
-  echo "(The Claude session posted no rejection comment for this head and round; rule on the findings from the code alone.)" > "${claude_fixer_judge_dir}/rejection.txt"
+  # Security follow-up #6061: a dispatch alone never authorizes the judge. Without the fixer's
+  # rejection comment for this head and round (OWNER / MEMBER / COLLABORATOR, posted as the PR
+  # author or this workflow's account), nothing was rejected, so the judge decides nothing and
+  # the PR is labelled ai:review-blocked.
+  claude_fixer_judge_not_ready "rejection_missing"
 fi
 
 claude_fixer_judge_prior="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/review_claude_fixer_judge.py" prior-rulings \

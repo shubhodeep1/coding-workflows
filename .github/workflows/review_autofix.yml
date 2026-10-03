@@ -6081,6 +6081,7 @@ jobs:
           HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
           HEAD_REF: ${{ env.TARGET_BRANCH }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_fixer_judge.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_fixer_judge.sh"

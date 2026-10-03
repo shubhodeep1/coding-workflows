@@ -37,7 +37,14 @@ everything that decides what happens to the PR lives here so it can be tested:
 	blocks into a ``=== NON-BLOCKING FINDINGS ===`` block, tagged
 	``[sticky judge ruling run=<id>]``, rewriting the ledger in place. A block
 	left empty gets its ``(No ... reported.)`` placeholder back, so a round
-	with only such findings is clean. Prints the number moved.
+	with only such findings is clean. Prints the number moved. Rulings are
+	read newest first (the order ``prior-rulings`` writes) and the newest
+	matching ruling decides, so a later ``upheld`` ruling keeps the finding
+	blocking. An ``invalid`` ruling only demotes when nothing changed between
+	the head it was made on (the ruling's ``head``) and ``HEAD``
+	(``git diff --quiet <head> HEAD``, the whole change set); a ruling without
+	a head, any change, or a failed git call keeps the finding blocking
+	(security follow-up #6062).
 
 ``prior-rulings --comments FILE --repo R --pr N [--default-branch B] [--max 3] --out FILE``
 	Reads ``<!-- ai:claude-fixer-judge:v1 head=<sha> round=<r> run=<id> ... -->``
@@ -63,6 +70,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -260,11 +268,60 @@ def decide(model: Any, findings: list[dict[str, Any]], fix_count: int, cap: int)
 	return result
 
 
-def sticky(ledger_text: str, rulings: list[dict[str, Any]]) -> tuple[str, int]:
-	invalid = [
-		ruling for ruling in rulings
-		if isinstance(ruling, dict) and ruling.get("ruling") == "invalid" and ruling.get("file") and int(ruling.get("line") or 0) > 0
-	]
+def git_tree_unchanged(file_name: str, head: Any) -> bool:
+	"""True only when `git diff --quiet <head> HEAD` succeeds (nothing changed since the ruled head).
+
+	The whole change set counts, not just the cited file: a change in a caller or a shared module
+	can make a finding the judge ruled invalid valid again (PR #6069 review). Any doubt is False.
+	`file_name` is accepted for the sticky callback signature and must be non-empty.
+	"""
+	if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head) or not file_name:
+		return False
+	try:
+		completed = subprocess.run(
+			["git", "diff", "--quiet", head, "HEAD"],
+			capture_output=True,
+			timeout=60,
+			check=False,
+		)
+	except (OSError, ValueError, subprocess.SubprocessError):
+		return False
+	return completed.returncode == 0
+
+
+def _cached_tree_check() -> Any:
+	"""git_tree_unchanged memoized per ruled head, so several findings matching rulings from one
+	head cost one `git diff` (PR #6069 review round 2). The answer does not depend on the file."""
+	results: dict[Any, bool] = {}
+
+	def check(file_name: str, head: Any) -> bool:
+		if not file_name:
+			return False
+		key = head if isinstance(head, str) else repr(head)
+		if key not in results:
+			results[key] = git_tree_unchanged(file_name, head)
+		return results[key]
+
+	return check
+
+
+def sticky(ledger_text: str, rulings: list[dict[str, Any]], file_unchanged: Any = None) -> tuple[str, int]:
+	"""Demote findings an earlier judge run ruled invalid.
+
+	`rulings` are newest first; the newest ruling that matches a finding (same file, start line
+	within STICKY_LINE_WINDOW, same claim) decides. `file_unchanged(file, head)` binds an invalid
+	ruling to unchanged code; the CLI always passes git_tree_unchanged (#6062).
+	"""
+	candidates = []
+	for ruling in rulings:
+		if not isinstance(ruling, dict) or ruling.get("ruling") not in RULINGS or not ruling.get("file"):
+			continue
+		try:
+			if int(ruling.get("line") or 0) <= 0:
+				continue
+		except (TypeError, ValueError):
+			continue
+		candidates.append(ruling)
 	lines = ledger_text.splitlines()
 	spans = _bullets(lines)
 	moved: list[tuple[dict[str, Any], str]] = []
@@ -273,14 +330,17 @@ def sticky(ledger_text: str, rulings: list[dict[str, Any]]) -> tuple[str, int]:
 		if not file_name or line <= 0:
 			continue
 		claim_key = _claim_key(_bullet_claim(lines[span["start"]:span["stop"]]))
-		for ruling in invalid:
+		for ruling in candidates:
 			if (
 				ruling["file"] == file_name
 				and abs(int(ruling["line"]) - line) <= STICKY_LINE_WINDOW
 				and claim_key
 				and _claim_key(ruling.get("claim")) == claim_key
 			):
-				moved.append((span, str(ruling.get("run") or "unknown")))
+				# The newest matching ruling decides: upheld keeps the finding, and an invalid one
+				# demotes it only while the file is unchanged since the ruled head.
+				if ruling["ruling"] == "invalid" and (file_unchanged is None or file_unchanged(file_name, ruling.get("head"))):
+					moved.append((span, str(ruling.get("run") or "unknown")))
 				break
 	if not moved:
 		return ledger_text, 0
@@ -340,7 +400,10 @@ def prior_rulings(
 			match = JUDGE_MARKER_RE.match(line.rstrip("\r"))
 			if match:
 				markers.append((comment_id, match.group("run"), match.group("head")))
-	markers.sort(reverse=True)
+	# Newest judge run first, by run id rather than comment id: a collaborator reposting an older
+	# run's marker in a new comment must not put that run's ruling ahead of a newer one (PR #6069
+	# review round 2). The comment id only breaks ties between copies of one run's marker.
+	markers.sort(key=lambda marker: (int(marker[1]), marker[0]), reverse=True)
 	seen: set[str] = set()
 	rulings: list[dict[str, Any]] = []
 	runs: list[dict[str, Any]] = []
@@ -354,7 +417,7 @@ def prior_rulings(
 			continue
 		for ruling in result["evidence"]["judge"]["rulings"]:
 			if isinstance(ruling, dict):
-				rulings.append({**ruling, "run": run_id})
+				rulings.append({**ruling, "run": run_id, "head": head})
 	return {"rulings": rulings, "runs": runs}
 
 
@@ -421,7 +484,7 @@ def _cmd_sticky(args: argparse.Namespace) -> int:
 	loaded = _load_json(args.rulings)
 	rulings = loaded.get("rulings") if isinstance(loaded, dict) else loaded
 	ledger = Path(args.ledger)
-	text, moved = sticky(ledger.read_text(encoding="utf-8"), rulings if isinstance(rulings, list) else [])
+	text, moved = sticky(ledger.read_text(encoding="utf-8"), rulings if isinstance(rulings, list) else [], file_unchanged=_cached_tree_check())
 	if moved:
 		ledger.write_text(text, encoding="utf-8")
 	print(moved)

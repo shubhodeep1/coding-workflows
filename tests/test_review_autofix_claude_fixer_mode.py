@@ -442,7 +442,7 @@ elif any(a.endswith('/comments') for a in args) and 'GET' in args:
 """
 
 
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, fresh_failed: str = "", fresh_head: str = HEAD, extra_env: dict | None = None, evidence_helper: bool = True, panel_statuses: list[str] | None = None, reviewers_successful: str = "2", active_models: int | None = None):
+def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False, fresh_failed: str = "", fresh_head: str = HEAD, extra_env: dict | None = None, evidence_helper: bool = True, panel_statuses: list[str] | None = None, reviewers_successful: str = "2", active_models: int | None = None, cwd: str | None = None):
 	support = tmp / "support"
 	support.mkdir()
 	calls = tmp / "calls.jsonl"
@@ -508,7 +508,7 @@ def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_
 		"MOCK_GH_LOGIN": "",
 	}
 	env.update(extra_env or {})
-	proc = subprocess.run(["bash", "-c", f'source "{HANDOFF_SCRIPT}"'], env=env, capture_output=True, text=True)
+	proc = subprocess.run(["bash", "-c", f'source "{HANDOFF_SCRIPT}"'], env=env, capture_output=True, text=True, cwd=cwd)
 	gh_calls = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
 	posts = (tmp / "posts.log").read_text() if (tmp / "posts.log").exists() else ""
 	return proc, gh_calls, posts, github_env.read_text()
@@ -1541,17 +1541,38 @@ if __name__ == "__main__":
 """
 
 
-def _run_prepare(tmp: Path, *, verdict: dict, comments: list[dict], ledger: str = LEDGER_WITH_FINDINGS):
+def _handoff_comment(comment_id: int = 2, digest: str = DIGEST, round_number: int = 1) -> dict:
+	return {
+		"id": comment_id,
+		"author_association": "OWNER",
+		"user": {"login": "workflow-bot"},
+		"body": f"## Review round {round_number}: findings handed to the Claude session\n\n<!-- ai:claude-fixer-handoff:v2 head={HEAD} round={round_number} ledger={digest} -->",
+	}
+
+
+def _run_prepare(tmp: Path, *, verdict: dict, comments: list[dict], ledger: str = LEDGER_WITH_FINDINGS, handoff: dict | None = None, gate_login: str | None = None):
+	"""`handoff` is the hand-off comment the rejection must follow; the default is the current
+	ledger's hand-off at id 2, older than every rejection the tests post."""
+	comments = [handoff if handoff is not None else _handoff_comment(), *comments]
 	support = tmp / "support"
 	support.mkdir()
 	(support / "review_claude_fixer_evidence.py").write_text(FAKE_EVIDENCE, encoding="utf-8")
 	(support / "review_claude_fixer_judge.py").write_text(JUDGE_HELPER.read_text(encoding="utf-8"), encoding="utf-8")
 	comments_file = tmp / "comments.json"
 	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	payload_file = tmp / "pr_payload.json"
+	payload_file.write_text(json.dumps({"user": {"login": "PR-Author"}}), encoding="utf-8")
+	# `gh api user` answers with the workflow account; every other call fails.
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text('#!/usr/bin/env bash\nif [ "$1 $2" = "api user" ]; then echo workflow-bot; exit 0; fi\nexit 1\n', encoding="utf-8")
+	(bin_dir / "gh").chmod(0o755)
 	github_env = tmp / "github_env"
 	github_env.write_text("", encoding="utf-8")
 	env = {
 		**os.environ,
+		"PATH": os.pathsep.join((str(bin_dir), os.environ.get("PATH", ""))),
+		"PR_PAYLOAD_FILE": str(payload_file),
 		"PR_NUMBER": "42",
 		"GITHUB_REPOSITORY": "o/r",
 		"HEAD_SHA": HEAD,
@@ -1568,14 +1589,17 @@ def _run_prepare(tmp: Path, *, verdict: dict, comments: list[dict], ledger: str 
 		"MOCK_VERIFY_ARGS": str(tmp / "verify_args.json"),
 		"MOCK_LEDGER": ledger,
 	}
+	env.pop("FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN", None)
+	if gate_login is not None:
+		env["FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN"] = gate_login
 	proc = subprocess.run(["bash", "-c", f'source "{PREPARE_SCRIPT}"'], env=env, capture_output=True, text=True)
 	verify_args = json.loads((tmp / "verify_args.json").read_text()) if (tmp / "verify_args.json").exists() else None
 	inputs = tmp / "claude_fixer_judge"
 	return proc, github_env.read_text(), verify_args, inputs
 
 
-def _rejection(body: str, association: str = "OWNER", comment_id: int = 5) -> dict:
-	return {"id": comment_id, "author_association": association, "user": {"login": "x"}, "body": body}
+def _rejection(body: str, association: str = "OWNER", comment_id: int = 5, login: str = "pr-author") -> dict:
+	return {"id": comment_id, "author_association": association, "user": {"login": login}, "body": body}
 
 
 def test_prepare_step_collects_verified_inputs():
@@ -1628,12 +1652,67 @@ def test_prepare_step_fails_closed_on_unverified_evidence_or_bad_inputs():
 		assert proc.returncode == 0 and "CLAUDE_FIXER_JUDGE_SKIP_REASON=invalid_inputs" in github_env.read_text()
 
 
-def test_prepare_missing_rejection_is_noted_not_fatal():
+def test_prepare_accepts_the_workflow_accounts_rejection():
+	marker = f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=1 -->"
 	with tempfile.TemporaryDirectory() as td:
-		proc, github_env, _args, inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=[])
+		proc, github_env, _args, inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=[_rejection(f"sweep fixer\n{marker}", login="Workflow-Bot")])
+		assert proc.returncode == 0, proc.stderr
 		assert "CLAUDE_FIXER_JUDGE_READY=true" in github_env
-		assert "no rejection comment" in (inputs / "rejection.txt").read_text()
-	assert "rejection=missing" in proc.stdout
+		assert (inputs / "rejection.txt").read_text().startswith("sweep fixer")
+
+
+def test_prepare_refuses_a_dispatch_without_the_fixers_rejection():
+	"""Security follow-up #6061: a dispatch alone never authorizes the judge; without a
+	collaborator's rejection comment for this head and round it decides nothing."""
+	marker = f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=1 -->"
+	for comments in (
+		[],
+		[_rejection(f"forged\n{marker}", association="NONE")],
+		[_rejection(f"other round\n<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=2 -->")],
+		# PR #6069 review: a collaborator who is neither the PR author nor the workflow account.
+		[_rejection(f"another collaborator\n{marker}", association="COLLABORATOR", login="someone-else")],
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, github_env, _args, _inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=comments)
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_JUDGE_READY=false" in github_env and "CLAUDE_FIXER_JUDGE_SKIP_REASON=rejection_missing" in github_env
+		assert "CLAUDE_FIXER_JUDGE_READY=true" not in github_env
+		assert "action=not_ready reason=rejection_missing" in proc.stdout
+
+
+def test_prepare_reuses_the_gates_workflow_login():
+	"""PR #6069 review round 2: the gate's resolved workflow login replaces the second GET /user."""
+	marker = f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=1 -->"
+	with tempfile.TemporaryDirectory() as td:
+		proc, github_env, _args, inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=[_rejection(f"gate account\n{marker}", login="gate-bot")], gate_login="Gate-Bot")
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_JUDGE_READY=true" in github_env
+		assert (inputs / "rejection.txt").read_text().startswith("gate account")
+	# With the gate's login set, `gh api user` (workflow-bot here) is not consulted.
+	with tempfile.TemporaryDirectory() as td:
+		proc, github_env, _args, _inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=[_rejection(f"stub account\n{marker}", login="workflow-bot")], gate_login="gate-bot")
+		assert "CLAUDE_FIXER_JUDGE_SKIP_REASON=rejection_missing" in github_env
+
+
+def test_prepare_binds_the_rejection_to_the_current_ledgers_handoff():
+	"""PR #6069 review round 2: a rejection posted before the hand-off of the ledger being judged
+	(an earlier ledger on the same head and round) does not authorize the judge."""
+	marker = f"<!-- ai:claude-fixer-rejection:v1 head={HEAD} round=1 -->"
+	other_digest = "f" * 64
+	for handoff in (
+		_handoff_comment(comment_id=7),  # the current hand-off is newer than the rejection (id 5)
+		_handoff_comment(comment_id=2, digest=other_digest),  # only an earlier ledger's hand-off exists
+		{"id": 2, "author_association": "OWNER", "body": "no hand-off marker"},
+	):
+		with tempfile.TemporaryDirectory() as td:
+			proc, github_env, _args, _inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=[_rejection(f"F1 rejected\n{marker}")], handoff=handoff)
+		assert proc.returncode == 0, proc.stderr
+		assert "CLAUDE_FIXER_JUDGE_SKIP_REASON=rejection_missing" in github_env, handoff
+		assert "CLAUDE_FIXER_JUDGE_READY=true" not in github_env
+	# A rejection after the current hand-off is accepted even when an earlier ledger's hand-off is newer still.
+	with tempfile.TemporaryDirectory() as td:
+		proc, github_env, _args, _inputs = _run_prepare(Path(td), verdict={"verified": True, "reason": "ok", "evidence": {}}, comments=[_rejection(f"F1 rejected\n{marker}", comment_id=5), _handoff_comment(comment_id=3, digest=other_digest)], handoff=_handoff_comment(comment_id=4))
+		assert "CLAUDE_FIXER_JUDGE_READY=true" in github_env, proc.stdout
 
 
 # ---- sticky rulings in the hand-off step ----
@@ -1650,9 +1729,28 @@ if __name__ == "__main__":
 """
 
 
-def _run_handoff_with_rulings(tmp: Path, rulings: list[dict], *, enabled: str = "true"):
+def _sticky_repo(tmp: Path, *, change_after: bool = False, change_path: str = "scripts/a.sh") -> tuple[str, str]:
+	"""A git checkout holding scripts/a.sh; returns (path, the ruled head)."""
+	repo = tmp / "checkout"
+	(repo / "scripts").mkdir(parents=True)
+	(repo / "scripts" / "a.sh").write_text("echo $x\n", encoding="utf-8")
+	git = ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-C", str(repo)]
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	subprocess.run([*git, "add", "-A"], check=True)
+	subprocess.run([*git, "commit", "-qm", "ruled"], check=True)
+	ruled = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+	if change_after:
+		(repo / change_path).parent.mkdir(parents=True, exist_ok=True)
+		(repo / change_path).write_text("eval $x\n", encoding="utf-8")
+		subprocess.run([*git, "add", "-A"], check=True)
+		subprocess.run([*git, "commit", "-qm", "changed"], check=True)
+	return str(repo), ruled
+
+
+def _run_handoff_with_rulings(tmp: Path, rulings: list[dict], *, enabled: str = "true", change_after: bool = False, change_path: str = "scripts/a.sh"):
+	cwd, ruled_head = _sticky_repo(tmp, change_after=change_after, change_path=change_path)
 	comments = tmp / "pr_comments.json"
-	comments.write_text(json.dumps([{"id": 3, "author_association": "OWNER", "body": f"<!-- ai:claude-fixer-judge:v1 head={HEAD} round=1 run=900 decision=merge -->"}]), encoding="utf-8")
+	comments.write_text(json.dumps([{"id": 3, "author_association": "OWNER", "body": f"<!-- ai:claude-fixer-judge:v1 head={ruled_head} round=1 run=900 decision=merge -->"}]), encoding="utf-8")
 	extra = {
 		"PR_ISSUE_COMMENTS_FILE": str(comments),
 		"MOCK_RULINGS": json.dumps(rulings),
@@ -1672,7 +1770,7 @@ def _run_handoff_with_rulings(tmp: Path, rulings: list[dict], *, enabled: str = 
 
 	Path.write_text = patched
 	try:
-		return _run_handoff(tmp, ledger=LEDGER_WITH_FINDINGS, extra_env=extra)
+		return _run_handoff(tmp, ledger=LEDGER_WITH_FINDINGS, extra_env=extra, cwd=cwd)
 	finally:
 		Path.write_text = orig_write_text
 
@@ -1685,6 +1783,20 @@ def test_handoff_demotes_findings_the_judge_ruled_invalid():
 	assert "action=sticky_demoted findings=2" in proc.stdout
 	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
 	assert calls == []
+
+
+def test_handoff_keeps_findings_when_the_file_changed_since_the_ruled_head():
+	"""Security follow-up #6062: an invalid ruling only demotes while the code it judged is unchanged."""
+	# PR #6069 review: a change in another file (a caller) counts too.
+	for change_path in ("scripts/a.sh", "scripts/caller.sh"):
+		with tempfile.TemporaryDirectory() as td:
+			proc, _calls, _posts, github_env = _run_handoff_with_rulings(
+				Path(td), [{"file": "scripts/a.sh", "line": 12, "ruling": "invalid", "claim": "unquoted expansion"}], change_after=True, change_path=change_path
+			)
+		assert proc.returncode == 0, proc.stderr
+		assert "sticky_demoted" not in proc.stdout, change_path
+	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
+	assert "kind=findings findings=2" in proc.stdout
 
 
 def test_handoff_keeps_findings_outside_the_sticky_window_or_with_the_switch_off():
