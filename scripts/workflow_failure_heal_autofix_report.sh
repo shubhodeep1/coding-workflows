@@ -185,6 +185,15 @@ EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 	echo "finalize_reason=${FINALIZE_REASON:-unknown}"
 	echo "consecutive_failed_runs=${STREAK}"
 	echo "flags: AUTOFIX_REVIEWERS_FAILED=${AUTOFIX_REVIEWERS_FAILED:-} AUTOFIX_EDITOR_EMPTY_NOOP=${AUTOFIX_EDITOR_EMPTY_NOOP:-} EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS:-} EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL:-} EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST:-} HAS_PR_DIFF=${HAS_PR_DIFF:-} PR_DIFF_SOURCE=${PR_DIFF_SOURCE:-}"
+	# The step's first error ("Assemble failure evidence"), as an ::error:: line
+	# so the intake's error signature ranks it first; the tails below often
+	# carry only model output. Written to the evidence file, never to stdout.
+	# A value of only CR/LF/blanks emits nothing: a bare ::error:: line would
+	# become a signature shared by every such report.
+	heal_first_error_line="$(printf '%s' "${AUTOFIX_FAILURE_FIRST_ERROR:-}" | tr -d '\r\n' | cut -c1-400)"
+	if [ -n "${heal_first_error_line//[[:space:]]/}" ]; then
+		printf '::error::%s\n' "${heal_first_error_line}"
+	fi
 	# The bounded stderr tail of the failing stages ("Assemble failure
 	# evidence"): it carries the shell error that names the crash file.
 	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/failure_evidence_tail.txt" ]; then

@@ -41,6 +41,11 @@
 
 set -euo pipefail
 
+# Stages one accepted resolver path into the real merge index, which the
+# [ai-merge-resolve] commit is written from.  Never call it with
+# GIT_INDEX_FILE pointing at the model's private copy
+# (RESOLVER_MODEL_INDEX_FILE, #5627): that copy is discarded, so the real
+# index would keep its unmerged entries and the commit would carry nothing.
 stage_resolver_touched_path_or_fail() {
   local resolver_staging_path="$1"
   local resolver_staging_exit_code=0
@@ -483,7 +488,7 @@ if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
 fi
 
 # Source-repo only: the model attempt runs with GIT_INDEX_FILE pointed at
-# the scratch copy _resolver_prepare_scratch_index seeds, and OpenCode
+# a private copy of the merge index, and OpenCode
 # passes its environment on to the git commands of its own session
 # snapshot (`git --git-dir <snapshot dir> --work-tree <checkout> add ...`,
 # run at the start of every session; verified against OpenCode 1.18.23).
@@ -494,7 +499,7 @@ fi
 # resolver's own config instead. The real index is not involved either way.
 _resolver_disable_opencode_snapshot()
 {
-  python3 - "$1" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$1" <<'PY'
 import json
 import os
 import sys
@@ -519,6 +524,7 @@ try:
         temporary_path = temporary.name
         json.dump(config, temporary, indent=2, sort_keys=True)
         temporary.write("\n")
+        os.fchmod(temporary.fileno(), os.stat(config_path).st_mode & 0o777)
     os.replace(temporary_path, config_path)
     # os.replace consumed the temporary file; nothing is left to remove.
     temporary_path = ""
@@ -558,6 +564,32 @@ RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact
 RESOLVER_SCOPE_SNAPSHOT_DIR="${RUNTIME_DIR}/resolver_scope_snapshot"
 RESOLVER_SCOPE_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_scope_violations.txt"
 RESOLVER_SCRATCH_INDEX="${RUNTIME_DIR}/resolver_scratch_index"
+RESOLVER_MODEL_INDEX_FILE="${RUNTIME_DIR}/resolver_model_index"
+
+# Source-repo only (#5627): the model shares the checkout but gets a private
+# copy of the captured merge index through GIT_INDEX_FILE, so a `git add` of
+# the file it resolved never changes the real index, which both attempt-scope
+# guards require to stay unchanged. The copy is refreshed before every attempt
+# and never read back: the script stages the accepted resolution itself. A
+# model that bypasses the copy still changes the real index and fails closed.
+_resolver_model_index_prepare()
+{
+  local _real_index
+  case "${RESOLVER_MODEL_INDEX_FILE}" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  _real_index="$(git rev-parse --path-format=absolute --git-path index)" || return 1
+  [ -f "${_real_index}" ] || return 1
+  # An inherited GIT_INDEX_FILE makes --git-path index return it; never let
+  # the copy step delete the index the scope guards read.
+  if [ "${_real_index}" = "${RESOLVER_MODEL_INDEX_FILE}" ] || [ "${_real_index}" -ef "${RESOLVER_MODEL_INDEX_FILE}" ]; then
+    return 1
+  fi
+  rm -f -- "${RESOLVER_MODEL_INDEX_FILE}" "${RESOLVER_MODEL_INDEX_FILE}.lock" || return 1
+  cp -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}" || return 1
+  cmp -s -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}"
+}
 
 # Source-repo only: the final touched-set gate compares against the prepare
 # step's pre-resolver tree. Snapshot each attempt as well, since the allowlist
@@ -2354,6 +2386,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     "${RESOLVER_OPENCODE_CONFIG}"
     "${RESOLVER_OPENCODE_WORKSPACE}"
   )
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+    if ! _resolver_model_index_prepare; then
+      echo "::error::Cannot prepare the resolver model's private Git index; refusing to invoke model."
+      exit 1
+    fi
+    resolver_opencode_cmd=(env "GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}" "${resolver_opencode_cmd[@]}")
+  fi
   _run_codex=true
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
@@ -3004,6 +3043,9 @@ if [ -n "$(git status --porcelain)" ]; then
     # replaces the unmerged index entries with the editor's
     # resolved content.  Auto-merged paths the editor did not
     # touch stay in the index as git merged them.
+    # This staging runs on the real index on purpose: the model's
+    # private copy (RESOLVER_MODEL_INDEX_FILE, #5627) is never read
+    # back, so GIT_INDEX_FILE must not be set here.
     git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
     while IFS= read -r touched_path; do
       [ -z "${touched_path}" ] && continue

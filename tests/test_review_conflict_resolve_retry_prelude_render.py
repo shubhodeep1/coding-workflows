@@ -1034,6 +1034,292 @@ def test_scope_feedback_is_available_for_generic_resolver() -> None:
 		assert retry.read_text().endswith(prompt.read_text())
 
 
+_GIT_PINNING_ENV = (
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+	"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "BASH_ENV", "ENV", "WORKSPACE_PATH",
+)
+
+
+def _clean_git_env() -> dict[str, str]:
+	return {key: value for key, value in os.environ.items() if key not in _GIT_PINNING_ENV}
+
+
+def _named_function_source(name: str) -> str:
+	match = re.search(
+		rf"^{re.escape(name)}\(\)\n\{{\n.*?\n\}}\n",
+		_resolve_script_text(),
+		flags=re.DOTALL | re.MULTILINE,
+	)
+	assert match is not None, f"{name} is missing from review_conflict_resolve.sh"
+	return match.group(0)
+
+
+def _scope_state_source() -> str:
+	src = _resolve_script_text()
+	start = src.index("_resolver_scope_state() {")
+	return src[start:src.index("\n}\n", start) + 3]
+
+
+def _model_index_wiring_block() -> str:
+	"""The retry loop's own private-index block, verbatim (#5627)."""
+	src = _resolve_script_text()
+	start = src.index('  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then\n    if ! _resolver_model_index_prepare; then')
+	end = src.index("\n  fi\n", start) + len("\n  fi\n")
+	return src[start:end]
+
+
+def _merge_conflict_fixture(tmp: Path) -> tuple[Path, dict[str, str]]:
+	"""A real in-progress merge: conflict.txt is unmerged, outside.txt is not."""
+	repo = tmp / "repo"
+	repo.mkdir()
+	env = _clean_git_env()
+	git = ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+	subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
+	(repo / "conflict.txt").write_text("base\n", encoding="utf-8")
+	(repo / "outside.txt").write_text("base\n", encoding="utf-8")
+	subprocess.run([*git, "add", "--", "conflict.txt", "outside.txt"], check=True, env=env)
+	subprocess.run([*git, "commit", "-qm", "base"], check=True, env=env)
+	subprocess.run([*git, "checkout", "-qb", "theirs"], check=True, env=env)
+	(repo / "conflict.txt").write_text("theirs\n", encoding="utf-8")
+	subprocess.run([*git, "commit", "-qam", "theirs"], check=True, env=env)
+	subprocess.run([*git, "checkout", "-q", "main"], check=True, env=env)
+	(repo / "conflict.txt").write_text("ours\n", encoding="utf-8")
+	subprocess.run([*git, "commit", "-qam", "ours"], check=True, env=env)
+	merge = subprocess.run([*git, "merge", "-q", "theirs"], env=env, capture_output=True, text=True, check=False)
+	assert merge.returncode != 0, "fixture must leave conflict.txt unmerged"
+	allowed = tmp / "conflicted_paths.txt"
+	allowed.write_text("conflict.txt\n", encoding="utf-8")
+	return repo, {
+		**env,
+		"RESOLVER_SCOPE_SNAPSHOT_DIR": str(tmp / "scope-snapshot"),
+		"RESOLVER_SCOPE_VIOLATIONS_FILE": str(tmp / "violations.txt"),
+		"RESOLVER_ATTEMPT_TREE_DIR": str(tmp / "attempt-tree"),
+		"CONFLICTED_PATHS_FILE": str(allowed),
+		"RESOLVER_MODEL_INDEX_FILE": str(tmp / "runtime" / "resolver_model_index"),
+		"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
+		"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid",
+	}
+
+
+def _run_model_attempt(repo: Path, env: dict[str, str], model_action: str, *, source_repo: bool = True) -> subprocess.CompletedProcess[str]:
+	"""Capture both scope baselines, run a stub model through the loop's own
+	private-index block, then report both scope checks (#5627)."""
+	Path(env["RESOLVER_MODEL_INDEX_FILE"]).parent.mkdir(parents=True, exist_ok=True)
+	program = (
+		"set -euo pipefail\n"
+		f"IS_WORKFLOW_SOURCE_REPO={'true' if source_repo else 'false'}\n"
+		f"{_scope_state_source()}\n"
+		f"{_named_function_source('_resolver_attempt_state')}\n"
+		f"{_named_function_source('_resolver_model_index_prepare')}\n"
+		"_resolver_attempt_state capture\n"
+		"_resolver_scope_state capture\n"
+		'resolver_opencode_cmd=(bash -c "${MODEL_ACTION}")\n'
+		f"{_model_index_wiring_block()}"
+		'"${resolver_opencode_cmd[@]}"\n'
+		"_scope_rc=0\n_resolver_scope_state check || _scope_rc=$?\n"
+		'echo "scope_rc=${_scope_rc}"\n'
+		"_attempt_rc=0\n_resolver_attempt_state check || _attempt_rc=$?\n"
+		'echo "attempt_rc=${_attempt_rc}"\n'
+	)
+	return subprocess.run(
+		["bash", "-c", program], cwd=repo, env={**env, "MODEL_ACTION": model_action},
+		capture_output=True, text=True, check=False,
+	)
+
+
+def _git_out(repo: Path, env: dict[str, str], *args: str) -> str:
+	return subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=True).stdout
+
+
+def _stage_and_commit_resolution(repo: Path, env: dict[str, str]) -> None:
+	"""The script's own post-loop path on the real index: stage the touched
+	conflicted path and create the merge commit."""
+	subprocess.run(["git", "add", "--", "conflict.txt"], cwd=repo, env=env, check=True)
+	assert _git_out(repo, env, "diff", "--name-only", "--diff-filter=U") == ""
+	subprocess.run(["git", "commit", "-qm", "[ai-merge-resolve] resolve merge conflicts"], cwd=repo, env=env, check=True)
+
+
+def test_model_staging_permitted_conflict_passes_scope_checks() -> None:
+	"""Regression for #5627: a model that stages ONLY the permitted conflicted
+	file used to change the live merge index, so `_resolver_scope_state check`
+	failed closed (exit 2) and the run aborted. With the private model index the
+	real index is untouched and both attempt-scope checks pass."""
+	resolve_and_stage = "printf 'resolved\\n' > conflict.txt && git add -- conflict.txt"
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _merge_conflict_fixture(Path(directory))
+		index_before = _git_out(repo, env, "ls-files", "--stage")
+		result = _run_model_attempt(repo, env, resolve_and_stage)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "scope_rc=0" in result.stdout, result.stdout + result.stderr
+		assert "attempt_rc=0" in result.stdout, result.stdout + result.stderr
+		assert _git_out(repo, env, "ls-files", "--stage") == index_before
+		assert _git_out(repo, env, "diff", "--name-only", "--diff-filter=U") == "conflict.txt\n"
+		_stage_and_commit_resolution(repo, env)
+		assert _git_out(repo, env, "show", "HEAD:conflict.txt") == "resolved\n"
+		assert len(_git_out(repo, env, "rev-list", "--parents", "-n", "1", "HEAD").split()) == 3
+	# Control: the same model action on the shared index is the #5627 failure.
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _merge_conflict_fixture(Path(directory))
+		result = _run_model_attempt(repo, env, resolve_and_stage, source_repo=False)
+		assert "scope_rc=2" in result.stdout, result.stdout + result.stderr
+		assert "Resolver scope check failed closed (ValueError)." in result.stderr
+
+
+def test_model_out_of_scope_staging_cannot_reach_commit() -> None:
+	"""A model that edits and stages a file outside the conflicted set changes
+	only its private index: the real index is untouched, the worktree edit is
+	flagged and restored, and the merge commit carries no out-of-scope change.
+	Index-only staging (`git rm --cached`) never reaches the commit either."""
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _merge_conflict_fixture(Path(directory))
+		index_before = _git_out(repo, env, "ls-files", "--stage")
+		result = _run_model_attempt(
+			repo, env,
+			"printf 'resolved\\n' > conflict.txt && printf 'unauthorized\\n' > outside.txt"
+			" && git add -- conflict.txt outside.txt",
+		)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "scope_rc=1" in result.stdout, result.stdout + result.stderr
+		assert "attempt_rc=1" in result.stdout, result.stdout + result.stderr
+		assert Path(env["RESOLVER_SCOPE_VIOLATIONS_FILE"]).read_text(encoding="utf-8") == "outside.txt\n"
+		assert _git_out(repo, env, "ls-files", "--stage") == index_before
+		scope = subprocess.run(
+			["bash", "-c", _scope_state_source() + "\n_resolver_scope_state restore\n_resolver_scope_state verify\n"],
+			cwd=repo, env=env, capture_output=True, text=True, check=False,
+		)
+		assert scope.returncode == 0, scope.stdout + scope.stderr
+		assert (repo / "outside.txt").read_text(encoding="utf-8") == "base\n"
+		(repo / "conflict.txt").write_text("resolved\n", encoding="utf-8")
+		_stage_and_commit_resolution(repo, env)
+		assert _git_out(repo, env, "show", "HEAD:outside.txt") == "base\n"
+		assert "outside.txt" not in _git_out(repo, env, "diff", "--name-only", "HEAD^1", "HEAD")
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _merge_conflict_fixture(Path(directory))
+		result = _run_model_attempt(
+			repo, env,
+			"printf 'resolved\\n' > conflict.txt && git add -- conflict.txt && git rm -q --cached -- outside.txt",
+		)
+		assert "scope_rc=0" in result.stdout and "attempt_rc=0" in result.stdout, result.stdout + result.stderr
+		_stage_and_commit_resolution(repo, env)
+		assert _git_out(repo, env, "show", "HEAD:outside.txt") == "base\n"
+
+
+def test_model_bypassing_private_index_still_fails_closed() -> None:
+	"""The fail-closed guard is not weakened: a model that writes the real index
+	despite GIT_INDEX_FILE still makes the scope check exit 2."""
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _merge_conflict_fixture(Path(directory))
+		result = _run_model_attempt(
+			repo, env,
+			"printf 'resolved\\n' > conflict.txt && env -u GIT_INDEX_FILE git add -- conflict.txt",
+		)
+		assert "scope_rc=2" in result.stdout, result.stdout + result.stderr
+		assert "Resolver scope check failed closed (ValueError)." in result.stderr
+
+
+def test_model_index_is_fresh_per_attempt_and_fails_closed() -> None:
+	"""Each attempt starts from the real merge index, and the helper refuses a
+	relative copy path or a missing Git index."""
+	prepare = _named_function_source("_resolver_model_index_prepare")
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _merge_conflict_fixture(Path(directory))
+		copy = Path(env["RESOLVER_MODEL_INDEX_FILE"])
+		copy.parent.mkdir(parents=True)
+		program = (
+			f"set -euo pipefail\n{prepare}\n"
+			"_resolver_model_index_prepare\n"
+			'GIT_INDEX_FILE="${RESOLVER_MODEL_INDEX_FILE}" git add -- conflict.txt\n'
+			': > "${RESOLVER_MODEL_INDEX_FILE}.lock"\n'
+			'if cmp -s "$(git rev-parse --git-path index)" "${RESOLVER_MODEL_INDEX_FILE}"; then exit 30; fi\n'
+			"_resolver_model_index_prepare\n"
+			'cmp -s "$(git rev-parse --git-path index)" "${RESOLVER_MODEL_INDEX_FILE}"\n'
+			'test ! -e "${RESOLVER_MODEL_INDEX_FILE}.lock"\n'
+		)
+		result = subprocess.run(["bash", "-c", program], cwd=repo, env=env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stdout + result.stderr
+		relative = subprocess.run(
+			["bash", "-c", f"{prepare}\n_resolver_model_index_prepare\n"], cwd=repo,
+			env={**env, "RESOLVER_MODEL_INDEX_FILE": "resolver_model_index"}, capture_output=True, text=True, check=False,
+		)
+		assert relative.returncode != 0
+		assert not (repo / "resolver_model_index").exists()
+		copy_bytes = copy.read_bytes()
+		inherited = subprocess.run(
+			["bash", "-c", f"{prepare}\n_resolver_model_index_prepare\n"], cwd=repo,
+			env={**env, "GIT_INDEX_FILE": str(copy)}, capture_output=True, text=True, check=False,
+		)
+		assert inherited.returncode != 0, "an inherited GIT_INDEX_FILE naming the copy must fail closed"
+		assert copy.read_bytes() == copy_bytes, "the index the guards read must not be deleted"
+	with tempfile.TemporaryDirectory() as directory:
+		not_a_repo = subprocess.run(
+			["bash", "-c", f"{prepare}\n_resolver_model_index_prepare\n"], cwd=directory,
+			env={**_clean_git_env(), "GIT_CEILING_DIRECTORIES": directory,
+			     "RESOLVER_MODEL_INDEX_FILE": str(Path(directory) / "copy")},
+			capture_output=True, text=True, check=False,
+		)
+		assert not_a_repo.returncode != 0
+		assert not (Path(directory) / "copy").exists()
+
+
+def test_resolver_opencode_snapshot_opt_out() -> None:
+	"""OpenCode's snapshot git calls inherit GIT_INDEX_FILE, so the resolver's
+	own config turns snapshots off; every other key is kept, and a malformed
+	config fails without being rewritten."""
+	disable = _named_function_source("_resolver_disable_opencode_snapshot")
+	with tempfile.TemporaryDirectory() as directory:
+		config = Path(directory) / "resolver_opencode.json"
+		original = {"model": "openrouter/x/y", "share": "disabled", "permission": "allow"}
+		config.write_text(json.dumps(original), encoding="utf-8")
+		config.chmod(0o600)
+		result = subprocess.run(
+			["bash", "-c", f"{disable}\n_resolver_disable_opencode_snapshot\n"],
+			env={**_clean_git_env(), "RESOLVER_OPENCODE_CONFIG": str(config)},
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert json.loads(config.read_text(encoding="utf-8")) == {**original, "snapshot": False}
+		assert config.stat().st_mode & 0o777 == 0o600
+		for bad in ("{not json", "[]"):
+			config.write_text(bad, encoding="utf-8")
+			result = subprocess.run(
+				["bash", "-c", f"{disable}\n_resolver_disable_opencode_snapshot\n"],
+				env={**_clean_git_env(), "RESOLVER_OPENCODE_CONFIG": str(config)},
+				capture_output=True, text=True, check=False,
+			)
+			assert result.returncode == 1
+			assert "Cannot disable OpenCode snapshots in the resolver config" in result.stderr
+			assert config.read_text(encoding="utf-8") == bad
+			assert sorted(p.name for p in Path(directory).iterdir()) == ["resolver_opencode.json"]
+
+
+def test_private_model_index_wiring() -> None:
+	"""Source-level wiring (#5627): source-repo only; the snapshot opt-out runs
+	before the bootstrap validates the config; the private index is prepared
+	after the scope baseline and before the model command runs."""
+	src = _resolve_script_text()
+	opt_out = 'if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && ! _resolver_disable_opencode_snapshot; then'
+	assert opt_out in src
+	assert src.index('--config-path "${RESOLVER_OPENCODE_CONFIG}"') < src.index(opt_out)
+	assert src.index(opt_out) < src.index('if ! opencode_require_bootstrap review_conflict_resolve writer "${MODEL_EDITOR}"')
+	loop = src[src.index('attempt=1\nwhile '):src.index('\ndone\n', src.index('attempt=1\nwhile '))]
+	block = _model_index_wiring_block()
+	assert block in loop
+	assert 'resolver_opencode_cmd=(env "GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}" "${resolver_opencode_cmd[@]}")' in block
+	assert "refusing to invoke model." in block and "exit 1" in block
+	assert loop.index("_resolver_scope_state capture") < loop.index(block)
+	assert loop.index("resolver_opencode_cmd=(\n") < loop.index(block)
+	assert loop.index(block) < loop.index('-- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}"')
+	assert 'RESOLVER_MODEL_INDEX_FILE="${RUNTIME_DIR}/resolver_model_index"' in src
+	# The script's own staging stays on the real index: the helper and its
+	# only call site never point GIT_INDEX_FILE at the model's private copy.
+	staging_def = src.index("stage_resolver_touched_path_or_fail() {")
+	staging_fn = src[staging_def:src.index("\n}\n", staging_def)]
+	assert "GIT_INDEX_FILE" not in staging_fn
+	assert "Never call it with\n# GIT_INDEX_FILE pointing at the model's private copy" in src[:staging_def]
+	staging_call = src.index('if ! stage_resolver_touched_path_or_fail "${touched_path}"; then')
+	assert "GIT_INDEX_FILE=" not in src[src.rindex("This staging runs on the real index on purpose", 0, staging_call):staging_call]
+
+
 def main() -> int:
 	test_dependency_fallback_prefers_main_then_script_ref_checkout()
 	test_dependency_fallback_gates_workspace_scripts_and_fails_closed()
@@ -1059,6 +1345,12 @@ def main() -> int:
 	test_resolver_prompts_forbid_staging_and_committing()
 	test_scope_symlink_restore_preserves_preexisting_target()
 	test_scope_feedback_is_available_for_generic_resolver()
+	test_model_staging_permitted_conflict_passes_scope_checks()
+	test_model_out_of_scope_staging_cannot_reach_commit()
+	test_model_bypassing_private_index_still_fails_closed()
+	test_model_index_is_fresh_per_attempt_and_fails_closed()
+	test_resolver_opencode_snapshot_opt_out()
+	test_private_model_index_wiring()
 	print(
 		"OK: review_conflict_resolve outcome-aware retry-prelude "
 		"contract holds (validation + timeout preludes, "

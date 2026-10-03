@@ -1528,6 +1528,42 @@ def test_autofix_payload_validates_and_fingerprints_by_reason() -> None:
 	assert heal.fingerprint("AI Review", "autofix:editor_empty_noop", sig_a) != heal.fingerprint("AI Review", "autofix:editor_changes_lost", sig_a)
 
 
+AUTOFIX_EVIDENCE_HEADER = (
+	"failure_reason=workflow_failure\n"
+	"finalize_reason=conflict_resolver_failed\n"
+	"consecutive_failed_runs=9\n"
+	"flags: AUTOFIX_REVIEWERS_FAILED= AUTOFIX_EDITOR_EMPTY_NOOP= EDITOR_NOOP_SUSPICIOUS= EDITOR_NOOP_REFUSAL= EDITOR_CHANGES_LOST= HAS_PR_DIFF=true PR_DIFF_SOURCE=gh_pr_diff\n"
+)
+
+
+def test_strip_autofix_evidence_header_keeps_reporter_flags_out_of_signature() -> None:
+	# PR #5892: with no ::error:: line in the evidence, the `flags:` line
+	# matched the *_FAILED pattern ahead of the tail's own errors, so two
+	# unrelated failures shared one signature and one lineage.
+	resolver = AUTOFIX_EVIDENCE_HEADER + "--- failure_evidence_tail.txt (tail) ---\nTraceback (most recent call last):\nAssertionError: wait-clarify\n"
+	editor = AUTOFIX_EVIDENCE_HEADER + "--- failure_evidence_tail.txt (tail) ---\nKeyError: 'diff'\n"
+	assert heal.error_signature(resolver) == heal.error_signature(editor)
+	assert heal.error_signature(resolver).startswith("flags: ")
+	stripped_resolver = heal.error_signature(heal.strip_autofix_evidence_header(resolver))
+	assert stripped_resolver == "traceback (most recent call last): | assertionerror: wait-clarify"
+	assert stripped_resolver != heal.error_signature(heal.strip_autofix_evidence_header(editor))
+	# The reporter's first-error line ranks ahead of the tail.
+	with_first_error = AUTOFIX_EVIDENCE_HEADER + "::error::Resolver scope check failed closed (ValueError).\n" + resolver[len(AUTOFIX_EVIDENCE_HEADER):]
+	assert heal.error_signature(heal.strip_autofix_evidence_header(with_first_error)) == "::error::resolver scope check failed closed (valueerror)."
+	# Only the leading header run goes; the same text later in the body stays.
+	assert heal.strip_autofix_evidence_header(AUTOFIX_EVIDENCE_HEADER + "x\nflags: KEPT_FAILED=1") == "x\nflags: KEPT_FAILED=1"
+	assert heal.strip_autofix_evidence_header("no header\n") == "no header\n"
+	assert heal.error_signature(heal.strip_autofix_evidence_header(AUTOFIX_EVIDENCE_HEADER)) == "no-error-lines"
+	with tempfile.TemporaryDirectory(prefix="heal-strip-header-") as tmp_name:
+		evidence = Path(tmp_name) / "evidence.txt"
+		evidence.write_text(resolver, encoding="utf-8")
+		base = [sys.executable, str(LIB_PATH), "error-signature", "--log-file", str(evidence)]
+		plain = subprocess.run(base, capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+		stripped = subprocess.run([*base, "--strip-autofix-header"], capture_output=True, text=True, check=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+		assert plain.stdout.startswith("flags: ")
+		assert stripped.stdout == stripped_resolver + "\n"
+
+
 def test_autofix_payload_prioritizes_recent_diagnostics_and_compacts_state() -> None:
 	state_comment = (
 		f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={'a' * 64} -->\n"
@@ -1623,6 +1659,52 @@ def test_intake_autofix_failure_on_heal_fix_pr_continues_lineage() -> None:
 	assert "WORKFLOW_HEAL escalate reason=lineage_cap gen=4 max=3" in result.stdout
 	assert "issues_created" not in state_after
 	assert ["4173", "--repo", CONSUMER_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+
+
+def test_intake_autofix_fingerprint_ignores_reporter_header_lines() -> None:
+	# PR #5892: a closed generation-3 heal issue of an unrelated, already fixed
+	# failure carried the header-derived fingerprint, so a new failure's first
+	# report escalated at generation 4 instead of opening a heal issue.
+	# An older reporter: no first-error line, only the model's tail.
+	evidence = AUTOFIX_EVIDENCE_HEADER + "--- failure_evidence_tail.txt (tail) ---\nTraceback (most recent call last):\nAssertionError: wait-clarify\n"
+	header_fp = heal.fingerprint("AI Review", "autofix:editor_empty_noop", heal.error_signature(evidence))
+	expected_fp = heal.fingerprint("AI Review", "autofix:editor_empty_noop", "traceback (most recent call last): | assertionerror: wait-clarify")
+	assert header_fp != expected_fp
+	jobs = {"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}
+	job_logs = {"9001": "2026-10-01T07:21:13.000Z ##[error]Process completed with exit code 1.\n"}
+	unrelated = _sourced_heal_issue(4459, state="closed", fp=header_fp, source=f"{SELF_REPO}#4450", gen=3)
+	state = _intake_state(jobs=jobs, job_logs=job_logs, heal_issues_by_repo={SELF_REPO: [unrelated], CONSUMER_REPO: []})
+	result, state_after, _ = _run_intake(_autofix_payload(failure_evidence=evidence), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"fingerprint fp={expected_fp} " in result.stdout
+	assert "reason=lineage_cap" not in result.stdout
+	created = state_after["issues_created"][0]
+	assert f"{heal.MARKER_PREFIX}fp={expected_fp}" in created["body"] and f"{heal.MARKER_PREFIX}gen=1" in created["body"]
+
+
+def test_intake_cap_report_fingerprints_by_its_failure_fingerprint() -> None:
+	# The cap's evidence is gate marker data that matches no signature
+	# pattern, so without failure_fingerprint every cap report would share the
+	# `no-error-lines` signature and one heal lineage.
+	jobs = {"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}
+	job_logs = {"9001": "2026-10-01T07:21:13.000Z ##[error]Process completed with exit code 1.\n"}
+	evidence = AUTOFIX_EVIDENCE_HEADER.replace("workflow_failure", "identical_failure_cap") + "--- fingerprint_cap_log.txt (tail) ---\nidentical_failure_cap: 3 identical review/autofix failures on head abc (max 3)\nrepeated failure_reason=editor_empty_noop\n"
+	assert heal.error_signature(heal.strip_autofix_evidence_header(evidence)) == "no-error-lines"
+	printed = []
+	for cap_fp in ("a" * 64, "b" * 64, None):
+		payload = _autofix_payload(failure_reason="identical_failure_cap", failure_evidence=evidence)
+		if cap_fp is None:
+			payload.pop("failure_fingerprint", None)
+		else:
+			payload["failure_fingerprint"] = cap_fp
+		result, _, _ = _run_intake(payload, _intake_state(jobs=jobs, job_logs=job_logs), diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		match = re.search(r"fingerprint fp=([0-9a-f]{64}) ", result.stdout)
+		assert match, result.stdout
+		printed.append(match.group(1))
+		signature = f"autofix-fp:{cap_fp}" if cap_fp else "no-error-lines"
+		assert match.group(1) == heal.fingerprint("AI Review", "autofix:identical_failure_cap", signature)
+	assert len(set(printed)) == 3
 
 
 def _self_repo_autofix_payload() -> dict:
@@ -2112,6 +2194,38 @@ def test_autofix_report_honours_cap_reason_and_carries_fingerprint() -> None:
 		report = _state(state_file)["dispatches"][0]["body"]["client_payload"]["report"]
 		assert "failure_fingerprint" not in report
 		assert heal.validate_payload(report)["failure_fingerprint"] is None
+
+
+def test_autofix_report_puts_first_error_into_evidence() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-first-error-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(
+			tmp,
+			comments=[{"body": AUTOFIX_FAILED_COMMENT}],
+			flags={"AUTOFIX_FAILURE_REASON": "workflow_failure", "AUTOFIX_FAILURE_FIRST_ERROR": "Resolver scope check failed closed (ValueError).\r\nsecond line"},
+		)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert "dispatched pr=4174 failure=workflow_failure" in result.stdout, result.stdout + result.stderr
+		# Evidence file only: never an annotation on the reporter step's stdout.
+		assert "::error::Resolver" not in result.stdout
+		evidence = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["failure_evidence"]
+		lines = evidence.split("\n")
+		flags_index = next(i for i, line in enumerate(lines) if line.startswith("flags: "))
+		assert lines[flags_index + 1] == "::error::Resolver scope check failed closed (ValueError).second line"
+		assert heal.error_signature(heal.strip_autofix_evidence_header(evidence)).startswith("::error::resolver scope check failed closed (valueerror).")
+	# Unset, or only CR/LF/blanks: no bare ::error:: line.
+	for first_error in (None, "\r\n", " \r\n\t"):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-no-first-error-") as tmp_name:
+			tmp = Path(tmp_name)
+			flags = {"AUTOFIX_FAILURE_REASON": "workflow_failure"}
+			if first_error is not None:
+				flags["AUTOFIX_FAILURE_FIRST_ERROR"] = first_error
+			work, state_file, env = _stage_autofix_report(tmp, comments=[{"body": AUTOFIX_FAILED_COMMENT}], flags=flags)
+			_run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			evidence = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])["failure_evidence"]
+			lines = evidence.split("\n")
+			flags_index = next(i for i, line in enumerate(lines) if line.startswith("flags: "))
+			assert not lines[flags_index + 1].startswith("::error::"), repr(first_error)
 
 
 def test_validate_payload_failure_fingerprint_is_optional_and_strict() -> None:
