@@ -4,8 +4,8 @@
 Covers the pieces that can silently detach the mechanism:
   1. The classification — reads and §23.B routine writes are not prompted,
      every other write (and any call the guard cannot read) is.
-  2. The whole-call decision — allow only for one simple call, no decision
-     for multi-part commands, ask as soon as any call is a write.
+  2. The whole-call decision — allow only vetted calls and literal-ID read
+     loops, leave unvetted commands undecided, ask as soon as any call is a write.
   3. The fail-closed contract for malformed payloads and internal errors.
   4. The settings.json wiring (and the removed `gh api` ask rules), template
      parity, and the prose in CLAUDE.md / seed-repo / ci.yml.
@@ -593,12 +593,81 @@ def test_issue_4891_command_is_denied():
 	assert "Nothing ran" in reason
 
 
-def test_issue_4891_loop_written_correctly_gets_no_decision():
+def test_issue_4891_loop_written_correctly_is_allowed():
 	command = (
 		'for r in 1 2; do gh api "repos/shubhodeep1/coding-workflows/actions/runs/$r/jobs?per_page=50" '
 		"--jq '.jobs[].name'; done"
 	)
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+READ_LOOP_ALLOWED = [
+	"for r in 36242690892 36224773465 36205375333 36078283644 35966436009; do gh run view $r --json startedAt,completedAt; done",
+	"for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done",
+	"for ID in 1 2; do gh api repos/o/r/actions/runs/${ID}/jobs; done",
+	"for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs && gh pr view $r --json title; done",
+	"for r in 1 2; do gh run list --limit 2 | head -n 1; echo $r; done",
+	"for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs 2>&1 | head -n 5; done",
+	"for r in 1 2; do gh run view \"$r\" --log-failed | tail -n 20; done",
+	"for r in 1 2; do gh api search/issues -X GET -f q=issues --jq '.items[] | .title'; done",
+]
+
+
+@pytest.mark.parametrize("command", READ_LOOP_ALLOWED)
+def test_literal_id_read_loop_is_allowed(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+READ_LOOP_UNVETTED = [
+	"for r in $IDS; do gh run view $r; done",
+	"for r in 1 *; do gh run view $r; done",
+	"for r in '1' 2; do gh run view $r; done",
+	"for r in 1; do gh run view $r --json $FIELDS; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs -X GET -f per_page=$r; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs?per_page=$r; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs > result.json; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs; python3 -c 'print(1)'; done",
+	"for r in 1; do for x in 2; do gh run view $x; done; done",
+	"while true; do gh api repos/o/r/issues; done",
+	"echo start; for r in 1; do gh run view $r; done",
+	"for r in 1; do gh run view $r; done; echo end",
+	"for r in 1; do gh run view $r --web; done",
+	"for r in 1; do gh pr view $r --unknown; done",
+	"for r in 1; do gh run view $(echo $r); done",
+	"for r in 1; do gh run view prefix$r; done",
+	"for r in 1; do gh api $r/repos/o/r/issues; done",
+	"for PATH in 1; do gh run view $PATH; done",
+	"for https_proxy in 1; do gh run view $https_proxy; done",
+	"for r in -1; do gh run view $r; done",
+	"for r in 1; do echo prefix$r; gh run view $r; done",
+]
+
+
+@pytest.mark.parametrize("command", READ_LOOP_UNVETTED)
+def test_unvetted_loop_keeps_no_decision(command):
 	assert _decide(command) is None
+
+
+def test_expanded_file_field_in_loop_still_asks():
+	assert _decide("for r in 1; do gh api repos/o/r/actions/runs/$r/jobs -X GET -F page=$r; done") == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	"for r in 1; do gh api -X DELETE repos/o/r/issues/$r; done",
+	"for r in 1; do gh run view $r; gh api -X DELETE repos/o/r/issues/1; done",
+	"for r in 1; do gh run view $r; gh 'api' -X DELETE repos/o/r/issues/1; done",
+	"for r in 1; do gh run view $r; \"gh\" api -X DELETE repos/o/r/issues/1; done",
+	"for r in 1; do gh run view $r; gh ap''i -X DELETE repos/o/r/issues/1; done",
+])
+def test_write_in_read_loop_still_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_hook_process_allows_literal_id_read_loop():
+	command = "for r in 1 2; do gh run view $r --json startedAt,completedAt; done"
+	proc = _run_hook(json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}))
+	assert proc.returncode == 0
+	assert json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == guard.DECISION_ALLOW
 
 
 @pytest.mark.parametrize(
