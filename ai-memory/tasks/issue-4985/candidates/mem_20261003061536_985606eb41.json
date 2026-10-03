@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4985,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4985\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6125\",\"pr_number\":6125,\"branch\":\"ai/issue-4985\",\"run_id\":\"37101233375\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37101233375\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".claude/commands/fix-claude-pr.md\",\".claude/commands/implement-plan-claude.md\",\".claude/hooks/gh_api_write_guard.py\",\".claude/scripts/check_in_status.py\",\".claude/scripts/dispatch_workflow.py\",\".claude/settings.json\",\".github/workflows/ci.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/review_autofix_sweep.yml\",\"README.md\",\"agents.md\",\"changelog.d/4985-skip-marker-review-stall.md\",\"scripts/claude_pr_sweep.py\",\"tests/test_check_in_status.py\",\"tests/test_check_in_status_hand_back.py\",\"tests/test_claude_pr_sweep.py\",\"tests/test_review_autofix_terminal_same_head_gate.py\",\"tests/test_skip_ai_marker_rule.py\",\"workflow-templates/.claude/commands/fix-claude-pr.md\",\"workflow-templates/.claude/commands/implement-plan-claude.md\",\"workflow-templates/.claude/hooks/gh_api_write_guard.py\",\"workflow-templates/.claude/scripts/check_in_status.py\",\"workflow-templates/.claude/scripts/dispatch_workflow.py\",\"workflow-templates/.claude/settings.json\"]}",
+  "fingerprint": "ab3ed9517c8cb5e5a87716f375676256b5aa22846ccc9e447120bc961b1c5c86",
+  "lineage": {
+    "issue_number": 4985,
+    "parent_ids": [],
+    "pr_number": 6125,
+    "run_id": "37101233375",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37101233375",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6125"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261003061536_985606eb41",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4985,
+    "level": "run",
+    "pr_number": 6125,
+    "run_id": "37101233375"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4985: https://github.com/shubhodeep1/coding-workflows/pull/6125",
+  "timestamps": {
+    "created_at": "2026-10-03T06:15:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
