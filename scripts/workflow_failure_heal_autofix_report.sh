@@ -56,7 +56,14 @@
 #                                          runs first) and ahead of the editor flags
 #   AUTOFIX_FAILURE_REASON                 failure_reason chosen by the caller (the
 #                                          identical-failure cap passes identical_failure_cap);
-#                                          wins over the flags when it is a valid reason token
+#                                          wins over the flags when it is a valid reason token;
+#                                          `provider_unavailable` (a model-provider outage,
+#                                          issue #5773) is reported on the first failure,
+#                                          without the streak threshold
+#   AUTOFIX_PROVIDER_OUTAGE                `provider=… status=… kind=… key=…` of a detected
+#                                          model-provider outage ("Assemble failure
+#                                          evidence"); written into the evidence as a
+#                                          `provider_outage …` line the intake reads
 #   AUTOFIX_FAILURE_FP                     fingerprint of the run's review-autofix-failure:v1
 #                                          marker, sent as failure_fingerprint when 64 hex
 #   PR_CHANGED_FILES_FILE                  the PR's changed files (one path per line) the run
@@ -172,7 +179,12 @@ if [ "${FAILURE_REASON}" = "identical_failure_cap" ] && [ "${PRIOR_FAILURES}" -g
 	# comment: the failures are exactly the ones already on the PR.
 	STREAK="${PRIOR_FAILURES}"
 fi
-if [ "${STREAK}" -lt "${STREAK_THRESHOLD}" ]; then
+if [ "${FAILURE_REASON}" = "provider_unavailable" ]; then
+	# A model-provider outage (issue #5773) is reported on its first
+	# occurrence: the intake opens the one outage marker and alert from it and
+	# files no heal issue, so there is no streak to wait for.
+	log "provider_unavailable pr=${PR} outage=${AUTOFIX_PROVIDER_OUTAGE:-unknown}"
+elif [ "${STREAK}" -lt "${STREAK_THRESHOLD}" ]; then
 	log "skip reason=below_streak pr=${PR} reason=${FAILURE_REASON} streak=${STREAK} threshold=${STREAK_THRESHOLD}"
 	exit 0
 fi
@@ -182,6 +194,11 @@ fi
 EVIDENCE_FILE="${REPORT_DIR}/evidence.txt"
 {
 	echo "failure_reason=${FAILURE_REASON}"
+	# The intake recognises a model-provider outage by this line; it stays near
+	# the top so the payload's evidence bound never cuts it.
+	if [ "${FAILURE_REASON}" = "provider_unavailable" ] && [ -n "${AUTOFIX_PROVIDER_OUTAGE:-}" ]; then
+		echo "provider_outage ${AUTOFIX_PROVIDER_OUTAGE}"
+	fi
 	echo "finalize_reason=${FINALIZE_REASON:-unknown}"
 	echo "consecutive_failed_runs=${STREAK}"
 	echo "flags: AUTOFIX_REVIEWERS_FAILED=${AUTOFIX_REVIEWERS_FAILED:-} AUTOFIX_EDITOR_EMPTY_NOOP=${AUTOFIX_EDITOR_EMPTY_NOOP:-} EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS:-} EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL:-} EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST:-} HAS_PR_DIFF=${HAS_PR_DIFF:-} PR_DIFF_SOURCE=${PR_DIFF_SOURCE:-}"

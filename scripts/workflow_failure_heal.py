@@ -126,6 +126,29 @@ FAILURE_FINGERPRINT_WORKFLOW = "review_autofix"
 FAILURE_EVIDENCE_TAIL_BYTES = 65_536
 DEFAULT_FAILURE_FINGERPRINT_MAX_IDENTICAL = 3
 
+# Model-provider outages (issue #5773). A review/autofix run whose model calls
+# failed because the provider account or service is down is named
+# `provider_unavailable`: its failure marker neither counts toward the
+# identical-failure cap nor toward the heal streak, and the workflow applies no
+# ai:review-blocked label for it. 402 (credits) and 401 (key) are account-wide
+# and classify on sight; 429 and 5xx classify only when no reviewer succeeded,
+# so an incidental rate limit next to a real defect never hides the defect.
+PROVIDER_UNAVAILABLE_REASON = "provider_unavailable"
+PROVIDER_OUTAGE_DEFAULT_PROVIDER = "openrouter"
+PROVIDER_OUTAGE_KEY_BY_PROVIDER: dict[str, str] = {"openrouter": "OPENROUTER_API_KEY"}
+PROVIDER_OUTAGE_KINDS: tuple[str, ...] = ("credits", "auth", "rate_limit", "server")
+PROVIDER_OUTAGE_ACCOUNT_KINDS: tuple[str, ...] = ("credits", "auth")
+# A whole job log carries the reviewer stderr in its middle (run 36748847333:
+# the 402 lines sit 6,000 lines before the end), so the per-file bound is
+# generous and a total bound keeps the scan cheap.
+PROVIDER_LOG_TAIL_BYTES = 4_194_304
+PROVIDER_LOG_MAX_TOTAL_BYTES = 33_554_432
+PROVIDER_LOG_MAX_FILES = 200
+PROVIDER_LOG_GLOBS: tuple[str, ...] = ("*.log", "*.err", "*stderr*.txt", "status_*.txt")
+# Reviewer status files hold one word; they are read before any log and
+# outside the log budget, so large logs can never hide a `success`.
+PROVIDER_STATUS_FILE_MAX_BYTES = 4096
+
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
 MAX_RUN_REFS = 3
@@ -217,6 +240,33 @@ _SOFT_LOG_PATTERNS = re.compile(
 	r"::error::|::warning::|\bERROR\b|\bFAIL(?:ED|URE)?\b|\bfatal\b|\bTraceback\b|"
 	r"\b[A-Z][A-Z0-9_]*_(?:FAILED|SKIPPED|ESCALATE|BLOCKED)\b|\bexit code\b|\btimed?[ -]?out\b|\brate.?limit",
 	re.IGNORECASE,
+)
+# Model-provider outage signatures (detect_provider_outage). 402 never comes
+# from GitHub, so a bare 402 counts; every other kind needs a provider context
+# token on the same line (the opencode `AI_APICallError` / `providerID=`
+# fields or the provider's name), so a GitHub API 401 / 429 / 5xx never does.
+_PROVIDER_CONTEXT_RE = re.compile(r"AI_APICallError|providerID=|openrouter", re.IGNORECASE)
+_PROVIDER_CREDITS_RE = re.compile(
+	r"Insufficient credits|HTTP Error 402\b|\b402 Payment Required\b|\"code\"\s*:\s*402\b|statusCode[\"']?\s*[:=]\s*402\b",
+	re.IGNORECASE,
+)
+_PROVIDER_AUTH_RE = re.compile(
+	r"No auth credentials found|HTTP Error 401\b|\b401 Unauthorized\b|\"code\"\s*:\s*401\b|statusCode[\"']?\s*[:=]\s*401\b|AI_APICallError: User not found",
+	re.IGNORECASE,
+)
+_PROVIDER_RATE_LIMIT_RE = re.compile(
+	r"HTTP Error 429\b|\b429 Too Many Requests\b|\"code\"\s*:\s*429\b|statusCode[\"']?\s*[:=]\s*429\b|Rate limit exceeded",
+	re.IGNORECASE,
+)
+_PROVIDER_SERVER_RE = re.compile(
+	r"HTTP Error (?P<a>5[0-9]{2})\b|\"code\"\s*:\s*(?P<b>5[0-9]{2})\b|statusCode[\"']?\s*[:=]\s*(?P<c>5[0-9]{2})\b"
+	r"|AI_APICallError: (?:Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout|Provider returned error)",
+	re.IGNORECASE,
+)
+_ZERO_REVIEWERS_RE = re.compile(r"\b(?:Pass [12]|Review) complete: 0 reviewers successful\b")
+_PROVIDER_OUTAGE_LINE_RE = re.compile(
+	r"provider_outage[ =]provider=(?P<provider>[a-z0-9_.-]{1,40}) status=(?P<status>[0-9]{3}|5xx) "
+	r"kind=(?P<kind>credits|auth|rate_limit|server) key=(?P<key>[A-Z][A-Z0-9_]{0,79})(?:\s|$)"
 )
 
 
@@ -491,6 +541,9 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
 	adds one. An editor summary stops the count unless it belongs to the
 	post-editor failure immediately newer than it. The current run's own failure
 	comment is normally not in the list yet, so the reporter adds one for it.
+	A comment whose failure marker names ``reason=provider_unavailable`` (a
+	model-provider outage, issue #5773) is skipped: it neither counts nor ends
+	the streak.
 	"""
 	streak = 0
 	skip_paired_summary = False
@@ -498,6 +551,8 @@ def count_autofix_failure_streak(comments: Iterable[dict[str, Any]]) -> int:
 		if not isinstance(comment, dict):
 			continue
 		body = sanitize_text(comment.get("body"))
+		if _marker_fields(_FAILURE_MARKER_RE.search(body)).get("reason") == PROVIDER_UNAVAILABLE_REASON:
+			continue
 		if any(marker in body for marker in AUTOFIX_FAILURE_COMMENT_MARKERS):
 			streak += 1
 			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
@@ -1265,6 +1320,139 @@ def autofix_failure_fingerprint(*, failure_reason: str, evidence_text: str) -> d
 	}
 
 
+def _provider_line_kind(line: str) -> tuple[str, str] | None:
+	"""Return ``(kind, status)`` for one provider-outage log line, else None."""
+	if _PROVIDER_CREDITS_RE.search(line):
+		return "credits", "402"
+	if not _PROVIDER_CONTEXT_RE.search(line) and "No auth credentials found" not in line:
+		return None
+	if _PROVIDER_AUTH_RE.search(line):
+		return "auth", "401"
+	if _PROVIDER_RATE_LIMIT_RE.search(line):
+		return "rate_limit", "429"
+	server = _PROVIDER_SERVER_RE.search(line)
+	if server:
+		return "server", server.group("a") or server.group("b") or server.group("c") or "5xx"
+	return None
+
+
+def detect_provider_outage(texts: Iterable[str], *, status_values: Iterable[str] = ()) -> dict[str, Any]:
+	"""Decide whether a failed run's model calls failed because the provider is down.
+
+	Input: the log texts of the failing stages (reviewer slot / summariser /
+	editor logs, or a job log) and the contents of the reviewer
+	``status_*.txt`` files when they are available. Output:
+	``{"outage", "provider", "status", "kind", "key", "evidence",
+	"zero_success"}``; ``evidence`` is the first matching line, redacted and
+	bounded. ``credits`` (402) and ``auth`` (401) are account-wide and decide
+	alone. ``rate_limit`` (429) and ``server`` (5xx) decide only with
+	``zero_success``: no status file reads ``success``, and either a status
+	file exists or a ``… complete: 0 reviewers successful`` line is present.
+	Pure: no I/O.
+	"""
+	statuses = [str(value or "").strip() for value in status_values]
+	matches: dict[str, tuple[str, str]] = {}
+	zero_line = False
+	for text in texts:
+		# A job log echoes every step's script source; a script that merely
+		# names a provider error must not look like one (_drop_step_script_lines).
+		for raw in sanitize_text(_drop_step_script_lines(str(text or ""))).split("\n"):
+			line = raw.strip()
+			if not line:
+				continue
+			if _ZERO_REVIEWERS_RE.search(line):
+				zero_line = True
+			found = _provider_line_kind(line)
+			if found and found[0] not in matches:
+				matches[found[0]] = (found[1], single_line(redact_secrets(line), 300))
+	zero_success = "success" not in statuses and (bool(statuses) or zero_line)
+	provider = PROVIDER_OUTAGE_DEFAULT_PROVIDER
+	result: dict[str, Any] = {
+		"outage": False,
+		"provider": provider,
+		"status": "",
+		"kind": "",
+		"key": PROVIDER_OUTAGE_KEY_BY_PROVIDER.get(provider, ""),
+		"evidence": "",
+		"zero_success": zero_success,
+	}
+	for kind in PROVIDER_OUTAGE_KINDS:
+		if kind not in matches:
+			continue
+		if kind not in PROVIDER_OUTAGE_ACCOUNT_KINDS and not zero_success:
+			continue
+		status, evidence = matches[kind]
+		result.update({"outage": True, "status": status, "kind": kind, "evidence": evidence})
+		break
+	return result
+
+
+def read_provider_logs(dirs: Iterable[str] = (), files: Iterable[str] = ()) -> tuple[list[str], list[str]]:
+	"""Read the bounded log tails and reviewer status values for the outage check.
+
+	``dirs`` are scanned non-recursively for PROVIDER_LOG_GLOBS (reviewer and
+	editor ``*.log`` / ``*.err``, stage ``*stderr*.txt``, reviewer
+	``status_*.txt``); ``files`` are read as given. Status files are read
+	first, each up to its last PROVIDER_STATUS_FILE_MAX_BYTES, and count
+	toward neither cap below, so a reviewer's ``success`` is never missed.
+	Logs follow, at most PROVIDER_LOG_MAX_FILES files in name order; each
+	contributes its last PROVIDER_LOG_TAIL_BYTES, and reading stops once
+	PROVIDER_LOG_MAX_TOTAL_BYTES have been read. Missing paths are skipped.
+	Returns ``(log_texts, status_values)``.
+	"""
+	paths: list[Path] = []
+	for directory in dirs:
+		if not directory:
+			continue
+		base = Path(directory)
+		if not base.is_dir():
+			continue
+		found: set[Path] = set()
+		for pattern in PROVIDER_LOG_GLOBS:
+			found.update(path for path in base.glob(pattern) if path.is_file())
+		paths.extend(sorted(found))
+	paths.extend(Path(path) for path in files if path)
+	status_paths = [path for path in paths if path.name.startswith("status_") and path.suffix == ".txt"]
+	log_paths = [path for path in paths if path not in status_paths]
+	texts: list[str] = []
+	statuses: list[str] = []
+	for path in status_paths:
+		try:
+			data = path.read_bytes()
+		except OSError:
+			continue
+		statuses.append(data[-PROVIDER_STATUS_FILE_MAX_BYTES:].decode("utf-8", errors="replace").strip())
+	total = 0
+	for path in log_paths[:PROVIDER_LOG_MAX_FILES]:
+		if total >= PROVIDER_LOG_MAX_TOTAL_BYTES:
+			break
+		try:
+			data = path.read_bytes()
+		except OSError:
+			continue
+		data = data[-PROVIDER_LOG_TAIL_BYTES:]
+		total += len(data)
+		texts.append(data.decode("utf-8", errors="replace"))
+	return texts, statuses
+
+
+def render_provider_outage_line(result: dict[str, Any]) -> str:
+	"""Render ``provider=… status=… kind=… key=…`` for a detected outage, or ``""``."""
+	if not result.get("outage"):
+		return ""
+	return " ".join(
+		f"{name}={safe_token(result.get(name), 80)}" for name in ("provider", "status", "kind", "key")
+	)
+
+
+def parse_provider_outage_line(text: str) -> dict[str, str] | None:
+	"""Find a ``provider_outage provider=… status=… kind=… key=…`` line in ``text``."""
+	match = _PROVIDER_OUTAGE_LINE_RE.search(sanitize_text(text))
+	if match is None:
+		return None
+	return {name: match.group(name) for name in ("provider", "status", "kind", "key")}
+
+
 def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None) -> str:
 	"""Render the ``review-autofix-failure:v1`` marker appended to a failure comment.
 
@@ -1336,7 +1524,9 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	marker, or an editor summary ends the scan; the summary a post-editor
 	failure of the same run posted first does not (same pairing rule as
 	``count_autofix_failure_streak``). Markers for another head or from another
-	author are skipped. ``cap_applied`` reports whether a trusted
+	author are skipped, and so are trusted ``reason=provider_unavailable``
+	markers (a model-provider outage, issue #5773), which neither count nor
+	end the scan. ``cap_applied`` reports whether a trusted
 	``review-autofix-failure-cap:v1`` marker already exists for the head.
 	"""
 	head = str(head_sha or "").strip().lower()
@@ -1360,6 +1550,10 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 		if match is not None:
 			fields = _marker_fields(match)
 			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+				continue
+			if fields.get("reason") == PROVIDER_UNAVAILABLE_REASON:
+				# A model-provider outage is not this head's failure (#5773):
+				# it neither counts nor ends a run of identical failures.
 				continue
 			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
 			run = fields.get("run", "")
@@ -2046,12 +2240,33 @@ def _cmd_autofix_failure_fingerprint(args: argparse.Namespace) -> int:
 	else:
 		finalize = _finalize_reason_from_summary_line(args.summary_line_file) if args.summary_line_file else ""
 		reason = derive_autofix_failure_reason(dict(os.environ), finalize)
+	# A model-provider outage in the failing stages' logs wins over every
+	# other reason, an explicit one included: a reviewer or editor failure is
+	# only its symptom (#5773).
+	outage: dict[str, Any] = {"outage": False}
+	if args.provider_log_dir or args.provider_log_file:
+		log_texts, status_values = read_provider_logs(args.provider_log_dir, args.provider_log_file)
+		outage = detect_provider_outage(log_texts, status_values=status_values)
+		if outage["outage"]:
+			reason = PROVIDER_UNAVAILABLE_REASON
 	result = autofix_failure_fingerprint(failure_reason=reason, evidence_text=evidence)
 	sys.stdout.write(f"fp={result['fp']}\n")
 	sys.stdout.write(f"degraded={1 if result['degraded'] else 0}\n")
 	sys.stdout.write(f"reason={safe_token(reason)}\n")
+	if outage["outage"]:
+		sys.stdout.write("provider_outage=" + render_provider_outage_line(outage) + "\n")
 	if args.head_sha:
 		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None) + "\n")
+	return 0
+
+
+def _cmd_provider_outage_detect(args: argparse.Namespace) -> int:
+	log_texts, status_values = read_provider_logs(args.log_dir, args.log_file)
+	outage = detect_provider_outage(log_texts, status_values=status_values)
+	sys.stdout.write(f"outage={'true' if outage['outage'] else 'false'}\n")
+	if outage["outage"]:
+		sys.stdout.write("provider_outage=" + render_provider_outage_line(outage) + "\n")
+		sys.stdout.write("provider_evidence=" + outage["evidence"] + "\n")
 	return 0
 
 
@@ -2305,7 +2520,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-out", default="", help="also write the joined evidence tail to this file")
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--run-id", default="")
+	p.add_argument("--provider-log-dir", action="append", default=[], help="directory of reviewer / editor logs checked for a model-provider outage; repeatable, missing dirs are skipped")
+	p.add_argument("--provider-log-file", action="append", default=[], help="log file checked for a model-provider outage; repeatable")
 	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
+
+	p = sub.add_parser("provider-outage-detect", help="Print outage= (and provider_outage= / provider_evidence=) for logs of a failed run")
+	p.add_argument("--log-dir", action="append", default=[], help="directory scanned for *.log / *.err / *stderr*.txt / status_*.txt; repeatable")
+	p.add_argument("--log-file", action="append", default=[], help="log file; repeatable, unreadable files are skipped")
+	p.set_defaults(func=_cmd_provider_outage_detect)
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")

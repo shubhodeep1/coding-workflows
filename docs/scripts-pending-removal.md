@@ -66,6 +66,18 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
+### `scripts/provider_outage.py` + the `provider-outage-probe` job of `.github/workflows/review_autofix_sweep.yml`
+
+- **Introduced in:** #5773 (2026-10-01)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:provider-outage"` returns `[]` (no outage marker is waiting for the probe to resume it).
+  - `rg -n 'provider_outage.py' scripts/workflow_failure_heal_intake.sh .github/workflows/review_autofix_sweep.yml` shows the intake's `record` call and the probe job have been removed first, or a replacement outage path owns them.
+  - `rg -n 'provider_unavailable' scripts/workflow_failure_heal.py .github/workflows/review_autofix.yml` shows the classification is gone too, because paused reviews would otherwise never be re-dispatched.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_provider_outage.py tests/test_provider_outage_replay.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
 ### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
 
 - **Introduced in:** #4134 (2026-09-19)

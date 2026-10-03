@@ -3249,3 +3249,114 @@ def test_review_autofix_failure_comment_names_the_failed_step_and_first_error() 
 	assert 'echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"' in wf
 	assert '"**Failed step:** \\`${AUTOFIX_FAILED_STEP//\\`/\\\'}\\`"' in wf
 	assert '"**First error:** \\`${AUTOFIX_FAILURE_FIRST_ERROR//\\`/\\\'}\\`"' in wf
+
+
+# ---------------------------------------------------------------------------
+# Model-provider outages (issue #5773)
+# ---------------------------------------------------------------------------
+
+PROVIDER_OUTAGE_LINE = "provider=openrouter status=402 kind=credits key=OPENROUTER_API_KEY"
+
+PROVIDER_OUTAGE_STUB = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["STUB_PROVIDER_OUTAGE_LOG"], "a", encoding="utf-8") as handle:
+	handle.write(json.dumps(sys.argv[1:]) + "\n")
+print(os.environ.get("STUB_PROVIDER_OUTAGE_OUT", "{}"))
+'''
+
+
+def test_autofix_report_reports_a_provider_outage_on_the_first_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-autofix-outage-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_autofix_report(
+			tmp,
+			comments=[],
+			flags={"AUTOFIX_FAILURE_REASON": "provider_unavailable", "AUTOFIX_PROVIDER_OUTAGE": PROVIDER_OUTAGE_LINE},
+		)
+		result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL_AUTOFIX_REPORT provider_unavailable pr=4174 outage={PROVIDER_OUTAGE_LINE}" in result.stdout
+		assert "dispatched pr=4174 failure=provider_unavailable streak=1" in result.stdout
+		payload = heal.validate_payload(_state(state_file)["dispatches"][0]["body"]["client_payload"]["report"])
+		assert payload["failure_reason"] == "provider_unavailable"
+		assert payload["failure_evidence"].splitlines()[:2] == ["failure_reason=provider_unavailable", f"provider_outage {PROVIDER_OUTAGE_LINE}"]
+		assert heal.parse_provider_outage_line(payload["failure_evidence"])["status"] == "402"
+
+
+def _provider_outage_hooks(stub_out: dict):
+	def setup(tmp: Path, work: Path) -> None:
+		(work / "scripts" / "provider_outage_stub.py").write_text(PROVIDER_OUTAGE_STUB, encoding="utf-8")
+		(work / "scripts" / "tg_helpers.sh").write_text('tg_send_msg() { printf "%s|%s\\n" "$2" "$1" >> "${STUB_TG_LOG}"; }\n', encoding="utf-8")
+
+	return setup
+
+
+def _run_outage_intake(payload: dict, state: dict, stub_out: dict) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]], str]:
+	with tempfile.TemporaryDirectory(prefix="heal-outage-logs-") as logs_name:
+		logs = Path(logs_name)
+		extra_env = {
+			"WORKFLOW_HEAL_PROVIDER_OUTAGE_PY": "scripts/provider_outage_stub.py",
+			"STUB_PROVIDER_OUTAGE_LOG": str(logs / "calls.jsonl"),
+			"STUB_PROVIDER_OUTAGE_OUT": json.dumps(stub_out),
+			"STUB_TG_LOG": str(logs / "tg.log"),
+		}
+		result, state_after, prompt = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env, setup_git=_provider_outage_hooks(stub_out))
+		calls = [json.loads(line) for line in (logs / "calls.jsonl").read_text(encoding="utf-8").splitlines()] if (logs / "calls.jsonl").exists() else []
+		tg = (logs / "tg.log").read_text(encoding="utf-8") if (logs / "tg.log").exists() else ""
+		return result, state_after, calls, tg + ("\nPROMPT" if prompt else "")
+
+
+def test_intake_opens_the_outage_marker_instead_of_a_heal_issue() -> None:
+	payload = _autofix_payload(failure_reason="provider_unavailable",
+		failure_evidence=f"failure_reason=provider_unavailable\nprovider_outage {PROVIDER_OUTAGE_LINE}\nfinalize_reason=unknown\n")
+	stub_out = {"action": "created", "issue": 5800, "alert": True, "alert_text": "Model provider outage: openrouter HTTP 402 (credits) on key OPENROUTER_API_KEY."}
+	result, state, calls, tg = _run_outage_intake(payload, _intake_state(), stub_out)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL provider_outage action=created issue=5800" in result.stdout
+	assert f"skip reason=provider_unavailable source={CONSUMER_REPO}#4174 marker_action=created" in result.stdout
+	assert len(calls) == 1 and calls[0][:3] == ["record", "--repo", SELF_REPO] and "--evidence-file" in calls[0]
+	assert tg.startswith("ERROR|Model provider outage: openrouter HTTP 402") and "PROMPT" not in tg
+	assert "issues_created" not in state
+	assert not any("/jobs" in " ".join(call) for call in state.get("calls", []))  # decided before any log read
+
+
+def test_intake_files_no_heal_issue_for_an_unconfirmed_outage_report() -> None:
+	payload = _autofix_payload(failure_reason="provider_unavailable", failure_evidence="failure_reason=provider_unavailable\n")
+	result, state, calls, _ = _run_outage_intake(payload, _intake_state(), {"action": "created", "alert": True})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=provider_unavailable_unconfirmed" in result.stdout
+	assert calls == [] and "issues_created" not in state
+
+
+def _release_run_payload() -> dict:
+	return heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 36760421499, "name": "Test & Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "stable",
+			"html_url": f"https://github.com/{SELF_REPO}/actions/runs/36760421499", "display_title": "Test & Mark Stable Release"},
+	)
+
+
+def _release_state(log: str) -> dict:
+	return _intake_state(jobs={"36760421499": [{"id": 9001, "name": "e2e", "workflow_name": "Test & Mark Stable Release", "conclusion": "failure",
+		"steps": [{"name": "Phase 1: Wait for clarify to complete", "conclusion": "failure"}]}]}, job_logs={"9001": log})
+
+
+def test_intake_records_a_release_run_that_failed_on_the_provider() -> None:
+	log = "2026-09-30T18:00:00.000Z LLM keyword extraction failed on attempt 1/3: HTTP Error 402: Payment Required\n2026-09-30T18:00:01.000Z ##[error]Process completed with exit code 1.\n"
+	result, state, calls, _ = _run_outage_intake(_release_run_payload(), _release_state(log), {"action": "exists", "issue": 5800, "alert": False, "release_run": "recorded"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert len(calls) == 1 and "--outage-line" in calls[0] and calls[0][calls[0].index("--outage-line") + 1] == PROVIDER_OUTAGE_LINE
+	assert calls[0][calls[0].index("--release-run-id") + 1] == "36760421499"
+	assert "skip reason=provider_unavailable" in result.stdout and "issues_created" not in state
+
+
+def test_intake_defers_any_release_failure_while_a_marker_is_open_and_diagnoses_otherwise() -> None:
+	log = "2026-09-30T18:00:00.000Z ##[error]Phase 1: clarify did not finish within 60 minutes\n"
+	result, state, calls, _ = _run_outage_intake(_release_run_payload(), _release_state(log), {"action": "exists", "issue": 5800, "alert": False, "release_run": "recorded"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert len(calls) == 1 and "--only-if-open" in calls[0] and "--outage-line" not in calls[0]
+	assert "marker_action=exists" in result.stdout and "issues_created" not in state
+	result, state, calls, _ = _run_outage_intake(_release_run_payload(), _release_state(log), {"action": "none", "alert": False})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "--only-if-open" in calls[0]
+	assert "WORKFLOW_HEAL classification=workflow-defect" in result.stdout and len(state["issues_created"]) == 1

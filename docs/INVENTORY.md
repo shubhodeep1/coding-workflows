@@ -196,6 +196,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
+- `scripts/provider_outage.py` — Keep the one repo-wide model-provider outage marker (`record`, from the heal intake), report it (`status`), and probe the provider and resume paused reviews, labels, and holds on recovery (`tick`, from the `provider-outage-probe` job of `review_autofix_sweep.yml`).
 - `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
 - `scripts/render_prompt.sh` — Shell helper for render prompt.
 - `scripts/render_scenario_trace.py` — Render replayable workflow scenario traces from workflow-log collector excerpts.

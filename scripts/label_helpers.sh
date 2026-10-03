@@ -80,6 +80,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:claude-issue-queue"]="5319e7"
 	["ai:claude-issue-queue-stale"]="b60205"
 	["ai:permission-prompt"]="c5def5"
+	["ai:provider-outage"]="d93f0b"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -142,6 +143,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:claude-issue-queue"]="Queue item for the Claude issue pickup (coding-workflows only; opened by the intake, closed by the pickup)"
 	["ai:claude-issue-queue-stale"]="Claude issue queue item nobody picked up in time; restart the pickup with /claude-issue-pickup start — restart"
 	["ai:permission-prompt"]="A Claude Code session stopped at a permission prompt or Auto-mode denial (coding-workflows only; filed by permission_prompts.py)"
+	["ai:provider-outage"]="Open model-provider outage marker; the review sweep probes the provider and closes it on recovery"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'

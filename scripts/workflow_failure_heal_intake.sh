@@ -198,6 +198,53 @@ fi
 SOURCE_LABEL="${SOURCE_REPO}#${ISSUE_NUMBER:-run}"
 log "received source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} label=${LABEL:-none} workflow=${PAYLOAD_WORKFLOW_NAME:-none}"
 
+# --- Model-provider outage (issue #5773) -------------------------------------
+# A review/autofix run that failed because the model provider is down
+# (`provider_unavailable`, scripts/workflow_failure_heal.py) and a release run
+# that failed during such an outage are not diagnosed: the diagnosis model runs
+# on the same provider, and the failure is not the PR's or the release's. They
+# open or extend the one `ai:provider-outage` marker issue in this repository
+# (scripts/provider_outage.py record), whose first creation sends the one
+# operator alert. The review sweep's probe closes it and resumes on recovery.
+PROVIDER_OUTAGE_PY="${WORKFLOW_HEAL_PROVIDER_OUTAGE_PY:-scripts/provider_outage.py}"
+PROVIDER_OUTAGE_ACTION=""
+provider_outage_record()
+{
+	# $1 = what saw the outage (for the marker body); the rest is passed to
+	# `provider_outage.py record`. Sets PROVIDER_OUTAGE_ACTION. Never fails.
+	local source="$1" record_out=""
+	shift
+	PROVIDER_OUTAGE_ACTION=""
+	if [ ! -f "${PROVIDER_OUTAGE_PY}" ]; then
+		log "warn provider_outage_helper_missing path=${PROVIDER_OUTAGE_PY}"
+		return 0
+	fi
+	if ! record_out="$(python3 "${PROVIDER_OUTAGE_PY}" record --repo "${SELF_REPO}" --source "${source}" "$@")"; then
+		log "warn provider_outage_record_failed detail=$(printf '%s' "${record_out}" | head -c 300 | tr '\n' ' ')"
+		return 0
+	fi
+	PROVIDER_OUTAGE_ACTION="$(printf '%s' "${record_out}" | jq -r '.action // ""' 2>/dev/null || echo "")"
+	log "provider_outage action=${PROVIDER_OUTAGE_ACTION:-unknown} issue=$(printf '%s' "${record_out}" | jq -r '.issue // "none"' 2>/dev/null || echo none) release_run=$(printf '%s' "${record_out}" | jq -r '.release_run // "none"' 2>/dev/null || echo none)"
+	if [ "$(printf '%s' "${record_out}" | jq -r '.alert // false' 2>/dev/null || echo false)" = "true" ]; then
+		tg_send_msg "$(printf '%s' "${record_out}" | jq -r '.alert_text // ""' 2>/dev/null)" "ERROR" >/dev/null 2>&1 || true
+	fi
+	return 0
+}
+
+if [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${FAILURE_REASON}" = "provider_unavailable" ]; then
+	# The reporter writes the `provider_outage provider=… status=… kind=… key=…`
+	# line next to failure_reason; the review job's own log is not readable
+	# yet (the job is still running when its reporter dispatches).
+	if grep -qE '^provider_outage provider=' "${FAILURE_EVIDENCE_FILE}" 2>/dev/null; then
+		provider_outage_record "${SOURCE_REPO}#${ISSUE_NUMBER:-?} (review run $(jq -r '.run_refs[-1].run_id // "?"' "${PAYLOAD_FILE}"))" \
+			--evidence-file "${FAILURE_EVIDENCE_FILE}"
+		log "skip reason=provider_unavailable source=${SOURCE_LABEL} marker_action=${PROVIDER_OUTAGE_ACTION:-none}"
+	else
+		log "skip reason=provider_unavailable_unconfirmed source=${SOURCE_LABEL} (no provider_outage evidence line; no heal issue for a provider outage)"
+	fi
+	exit 0
+fi
+
 # --- Collect failed jobs + logs --------------------------------------------
 
 LOG_DIR="${RUNTIME_DIR}/logs"
@@ -239,6 +286,11 @@ while IFS=$'\t' read -r run_id run_url; do
 		# unavailable)": no error signature, no downstream-gate dedup.
 		if gh_retry gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" > "${RAW_LOG}" 2>/dev/null && [ -s "${RAW_LOG}" ]; then
 			python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}" || : > "${FILTERED_LOG}"
+			# Model-provider outage check on the whole raw log (the filtered tail
+			# can drop the provider lines), release runs only (issue #5773).
+			if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -z "${PROVIDER_OUTAGE_LINE:-}" ]; then
+				PROVIDER_OUTAGE_LINE="$(python3 "${HEAL_PY}" provider-outage-detect --log-file "${RAW_LOG}" 2>/dev/null | sed -n 's/^provider_outage=//p' | head -n 1 || true)"
+			fi
 			rm -f "${RAW_LOG}"
 		else
 			log "warn job_log_fetch_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
@@ -273,6 +325,29 @@ if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
 			fi
 			;;
 	esac
+fi
+
+# A release run that failed on a model-provider outage opens or extends the
+# outage marker; any other failed release run is deferred while a marker is
+# open (its own log often lacks the provider error: #5758's run failed in the
+# steps waiting on child runs). The probe re-runs or reports it on recovery.
+if [ "${SOURCE_KIND}" = "workflow_run" ]; then
+	RELEASE_RUN_ID="$(jq -r '.run_refs[0].run_id // ""' "${PAYLOAD_FILE}")"
+	RELEASE_RUN_URL="$(jq -r '.run_refs[0].url // ""' "${PAYLOAD_FILE}")"
+	if [[ "${RELEASE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+		release_run_args=(--release-run-id "${RELEASE_RUN_ID}" --release-workflow "${PAYLOAD_WORKFLOW_NAME}" --release-run-url "${RELEASE_RUN_URL}")
+		if [ -n "${PROVIDER_OUTAGE_LINE:-}" ]; then
+			provider_outage_record "release run ${RELEASE_RUN_ID} (${PAYLOAD_WORKFLOW_NAME})" --outage-line "${PROVIDER_OUTAGE_LINE}" "${release_run_args[@]}"
+		else
+			provider_outage_record "release run ${RELEASE_RUN_ID} (${PAYLOAD_WORKFLOW_NAME})" --only-if-open "${release_run_args[@]}"
+		fi
+		case "${PROVIDER_OUTAGE_ACTION}" in
+			created|exists|duplicate_closed)
+				log "skip reason=provider_unavailable source=${SOURCE_LABEL} run=${RELEASE_RUN_ID} marker_action=${PROVIDER_OUTAGE_ACTION}"
+				exit 0
+				;;
+		esac
+	fi
 fi
 
 # --- Fingerprint -------------------------------------------------------------

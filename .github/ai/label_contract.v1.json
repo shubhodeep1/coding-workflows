@@ -236,6 +236,10 @@
     "ai:permission-prompt": {
       "color": "c5def5",
       "description": "A Claude Code session stopped at a permission prompt or Auto-mode denial (coding-workflows only; filed by permission_prompts.py)"
+    },
+    "ai:provider-outage": {
+      "color": "d93f0b",
+      "description": "Open model-provider outage marker; the review sweep probes the provider and closes it on recovery"
     }
   },
   "phase_groups": [

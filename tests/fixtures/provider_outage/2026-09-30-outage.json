@@ -1,0 +1,401 @@
+{
+ "source": "shubhodeep1/coding-workflows, 2026-09-30 OpenRouter credits outage (issue #5773); comment bodies trimmed to their first line plus their HTML marker lines",
+ "prs": [
+  {
+   "number": 5324,
+   "title": "Keep automation text from resuming a blocked issue through a later-line /reclarify \u2014 project integration",
+   "body": "Refs #5309\nRefs #5439\nRefs #5485\nRefs #5663",
+   "head": {
+    "ref": "claude/implement-plan-issue-5309-reclarify-fail-closed",
+    "sha": "78b7653b63c9c95a5cd455bfc38075edbbc13aec"
+   },
+   "user": {
+    "login": "shubhodeep1"
+   },
+   "comments": [
+    {
+     "id": 5915963185,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T17:04:44Z",
+     "body": "## Review round 1 (head `7920d71`): Claude fixer verdict"
+    },
+    {
+     "id": 5916744908,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T17:54:51Z",
+     "body": "**AI review/autofix failed \u2014 needs human intervention**\n**Failed step:** `Run reviewer models`\n<!-- review-autofix-failure:v1 head=78b7653b63c9c95a5cd455bfc38075edbbc13aec reason=workflow_failure fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 degraded=0 run=36748847333 -->"
+    },
+    {
+     "id": 5916745420,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T17:54:52Z",
+     "body": "<!-- tg_cleanup:8039,8084,8153 -->"
+    },
+    {
+     "id": 5917612229,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T18:51:01Z",
+     "body": "**AI review/autofix failed \u2014 needs human intervention**\n**Failed step:** `Run reviewer models`\n<!-- review-autofix-failure:v1 head=78b7653b63c9c95a5cd455bfc38075edbbc13aec reason=workflow_failure fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 degraded=0 run=36755560836 -->"
+    },
+    {
+     "id": 5918534460,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T19:51:31Z",
+     "body": "**AI review/autofix failed \u2014 needs human intervention**\n**Failed step:** `Run reviewer models`\n<!-- review-autofix-failure:v1 head=78b7653b63c9c95a5cd455bfc38075edbbc13aec reason=workflow_failure fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 degraded=0 run=36762776531 -->"
+    },
+    {
+     "id": 5918702678,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T20:02:51Z",
+     "body": "**AI review/autofix stopped: identical failure repeated**\n<!-- review-autofix-failure-cap:v1 head=78b7653b63c9c95a5cd455bfc38075edbbc13aec fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 reason=workflow_failure count=3 -->"
+    },
+    {
+     "id": 5919210433,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T20:30:59Z",
+     "body": "**Claude fix claim:** `sweep-run-36773071228` is fixing the failed checks at head `78b7653b63c9`. Other Claude sessions and the catch-all sweep leave this PR alone until the head moves or the 3-hour lease ends (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=78b7653b63c9c95a5cd455bfc38075edbbc13aec kind=ci by=sweep-run-36773071228 -->"
+    },
+    {
+     "id": 5919279120,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T20:35:30Z",
+     "body": "**Claude fix claim:** `session_016KNdE9RCuBTFT1gDb8XDDR` is fixing the failed checks at head `78b7653b63c9`. Other Claude sessions and the catch-all sweep leave this PR alone until the head moves or the 3-hour lease ends (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=78b7653b63c9c95a5cd455bfc38075edbbc13aec kind=ci by=session_016KNdE9RCuBTFT1gDb8XDDR -->"
+    },
+    {
+     "id": 5919296577,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T20:36:42Z",
+     "body": "**Claude fixer: `review / codex-agent` failure is not this PR's. Holding for an operator decision.**"
+    },
+    {
+     "id": 5919297509,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T20:36:46Z",
+     "body": "**Claude fixes on hold:** this PR reached the cap of 3 Claude hand-backs (conflict, CI, or block) at head `78b7653b63c9`. `session_016KNdE9RCuBTFT1gDb8XDDR` has asked a human how to continue. The \u00a726 checker and the catch-all sweep skip this head until someone pushes or that session resumes (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=78b7653b63c9c95a5cd455bfc38075edbbc13aec kind=hold by=session_016KNdE9RCuBTFT1gDb8XDDR -->"
+    }
+   ],
+   "events": [],
+   "failed_check_runs": [
+    {
+     "name": "review / codex-agent",
+     "status": "completed",
+     "conclusion": "failure",
+     "details_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36748847333/job/110002039355"
+    }
+   ]
+  },
+  {
+   "number": 5178,
+   "title": "Pending-checks auto-merge: defer while a newer review of the PR is active \u2014 project integration",
+   "body": "Refs #5148\nRefs #4900\nRefs #5183\nRefs #5209\nRefs #5253\nRefs #5302",
+   "head": {
+    "ref": "claude/implement-plan-issue-5148-pending-checks-newer-review-race",
+    "sha": "a3a68f4b45a640ab6d619448edbadc5d661a0585"
+   },
+   "user": {
+    "login": "shubhodeep1"
+   },
+   "comments": [
+    {
+     "id": 5915307894,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T16:22:53Z",
+     "body": "**Claude fix claim:** `session_01UmMpqCADrRhaF1xemCUbNB` is fixing the review findings at head `95d932b46628`. Other Claude sessions and the catch-all sweep leave this PR alone until the head moves or the 3-hour lease ends (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=95d932b466283567ed6118a97dd94cfac3c06355 kind=review by=session_01UmMpqCADrRhaF1xemCUbNB -->"
+    },
+    {
+     "id": 5915386501,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T16:27:49Z",
+     "body": "**Review round 1 (head `95d932b46628`, ledger `6c1fb925\u2026`): Claude fixer verdict per finding**"
+    },
+    {
+     "id": 5916177421,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T17:18:57Z",
+     "body": "**AI review/autofix failed \u2014 needs human intervention**\n**Failed step:** `Run reviewer models`\n<!-- review-autofix-failure:v1 head=a3a68f4b45a640ab6d619448edbadc5d661a0585 reason=workflow_failure fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 degraded=0 run=36744422505 -->"
+    },
+    {
+     "id": 5916177998,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T17:18:59Z",
+     "body": "<!-- tg_cleanup:8021 -->"
+    },
+    {
+     "id": 5917174848,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T18:22:41Z",
+     "body": "**AI review/autofix failed \u2014 needs human intervention**\n**Failed step:** `Run reviewer models`\n<!-- review-autofix-failure:v1 head=a3a68f4b45a640ab6d619448edbadc5d661a0585 reason=workflow_failure fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 degraded=0 run=36752402765 -->"
+    },
+    {
+     "id": 5917175235,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T18:22:43Z",
+     "body": "<!-- tg_cleanup:8056 -->"
+    },
+    {
+     "id": 5918193669,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T19:28:43Z",
+     "body": "**AI review/autofix failed \u2014 needs human intervention**\n**Failed step:** `Run reviewer models`\n<!-- review-autofix-failure:v1 head=a3a68f4b45a640ab6d619448edbadc5d661a0585 reason=workflow_failure fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 degraded=0 run=36760281806 -->"
+    },
+    {
+     "id": 5918194127,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T19:28:45Z",
+     "body": "<!-- tg_cleanup:8108 -->"
+    },
+    {
+     "id": 5918279127,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T19:34:21Z",
+     "body": "**AI review/autofix stopped: identical failure repeated**\n<!-- review-autofix-failure-cap:v1 head=a3a68f4b45a640ab6d619448edbadc5d661a0585 fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 reason=workflow_failure count=3 -->"
+    },
+    {
+     "id": 5920846097,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T22:30:20Z",
+     "body": "**Claude fix claim:** `sweep-run-36785869528` is fixing the failed checks at head `a3a68f4b45a6`. Other Claude sessions and the catch-all sweep leave this PR alone until the head moves or the 3-hour lease ends (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=a3a68f4b45a640ab6d619448edbadc5d661a0585 kind=ci by=sweep-run-36785869528 -->"
+    },
+    {
+     "id": 5920902702,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T22:35:12Z",
+     "body": "**Claude fix claim:** `session_01R5QbxDyQPbjeZvfRu1bqSg` is fixing the failed checks at head `a3a68f4b45a6`. Other Claude sessions and the catch-all sweep leave this PR alone until the head moves or the 3-hour lease ends (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=a3a68f4b45a640ab6d619448edbadc5d661a0585 kind=ci by=session_01R5QbxDyQPbjeZvfRu1bqSg -->"
+    },
+    {
+     "id": 5920914218,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T22:36:14Z",
+     "body": "**Claude fixer (ci, head `a3a68f4b45a6`): the `review / codex-agent` failure is not this PR's. The OpenRouter account is out of credits.**"
+    },
+    {
+     "id": 5920914737,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T22:36:16Z",
+     "body": "**Claude fixes on hold:** this PR reached the cap of 3 Claude hand-backs (conflict, CI, or block) at head `a3a68f4b45a6`. `session_01R5QbxDyQPbjeZvfRu1bqSg` has asked a human how to continue. The \u00a726 checker and the catch-all sweep skip this head until someone pushes or that session resumes (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=a3a68f4b45a640ab6d619448edbadc5d661a0585 kind=hold by=session_01R5QbxDyQPbjeZvfRu1bqSg -->"
+    }
+   ],
+   "events": [],
+   "failed_check_runs": [
+    {
+     "name": "review / codex-agent",
+     "status": "completed",
+     "conclusion": "failure",
+     "details_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36744422505/job/109986916638"
+    }
+   ]
+  },
+  {
+   "number": 5215,
+   "title": "Claude-fixer PRs converge unattended \u2014 phase 4/4: session janitor",
+   "body": "Refs #4648",
+   "head": {
+    "ref": "claude/implement-plan-claude-fixer-unattended-convergence-phase-4",
+    "sha": "060fcef4f9d787f8d9165589184824bd09bc4969"
+   },
+   "user": {
+    "login": "shubhodeep1"
+   },
+   "comments": [
+    {
+     "id": 5916341193,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T17:29:26Z",
+     "body": "**Claude fix claim:** `sweep-run-36751609408` is fixing the review findings at head `7222ba5c3956`. Other Claude sessions and the catch-all sweep leave this PR alone until the head moves or the 3-hour lease ends (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=7222ba5c39567b6146a7be433b36713a2cae34c8 kind=review by=sweep-run-36751609408 -->"
+    },
+    {
+     "id": 5916613271,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T17:47:07Z",
+     "body": "**Claude fix claim:** `session_01Ca4xW7DTAFCgSs9LRBMRWH` is fixing the review findings at head `7222ba5c3956`. Other Claude sessions and the catch-all sweep leave this PR alone until the head moves or the 3-hour lease ends (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=7222ba5c39567b6146a7be433b36713a2cae34c8 kind=review by=session_01Ca4xW7DTAFCgSs9LRBMRWH -->"
+    },
+    {
+     "id": 5916771186,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T17:56:31Z",
+     "body": "<!-- ai:claude-blocked:v1 -->"
+    },
+    {
+     "id": 5916777734,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T17:56:57Z",
+     "body": "**Claude fixes on hold:** this PR reached the cap of 3 Claude hand-backs (conflict, CI, or block) at head `060fcef4f9d7`. `session_01Ca4xW7DTAFCgSs9LRBMRWH` has asked a human how to continue. The \u00a726 checker and the catch-all sweep skip this head until someone pushes or that session resumes (CLAUDE.md \u00a726.H).\n<!-- ai:claude-fix-claim:v1 head=060fcef4f9d787f8d9165589184824bd09bc4969 kind=hold by=session_01Ca4xW7DTAFCgSs9LRBMRWH -->"
+    },
+    {
+     "id": 5917526190,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T18:45:23Z",
+     "body": "**AI review/autofix failed \u2014 needs human intervention**\n**Failed step:** `Run reviewer models`\n<!-- review-autofix-failure:v1 head=060fcef4f9d787f8d9165589184824bd09bc4969 reason=workflow_failure fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 degraded=0 run=36755033841 -->"
+    },
+    {
+     "id": 5917526681,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T18:45:25Z",
+     "body": "<!-- tg_cleanup:8078 -->"
+    },
+    {
+     "id": 5918527875,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T19:51:05Z",
+     "body": "**AI review/autofix failed \u2014 needs human intervention**\n**Failed step:** `Run reviewer models`\n<!-- review-autofix-failure:v1 head=060fcef4f9d787f8d9165589184824bd09bc4969 reason=workflow_failure fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 degraded=0 run=36762781269 -->"
+    },
+    {
+     "id": 5918528393,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T19:51:07Z",
+     "body": "<!-- tg_cleanup:8152 -->"
+    },
+    {
+     "id": 5919509788,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T20:51:20Z",
+     "body": "**AI review/autofix failed \u2014 needs human intervention**\n**Failed step:** `Run reviewer models`\n<!-- review-autofix-failure:v1 head=060fcef4f9d787f8d9165589184824bd09bc4969 reason=workflow_failure fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 degraded=0 run=36769771440 -->"
+    },
+    {
+     "id": 5919510279,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T20:51:22Z",
+     "body": "<!-- tg_cleanup:8210 -->"
+    },
+    {
+     "id": 5919669674,
+     "user": {
+      "login": "shubhodeep1"
+     },
+     "author_association": "OWNER",
+     "created_at": "2026-09-30T21:02:29Z",
+     "body": "**AI review/autofix stopped: identical failure repeated**\n<!-- review-autofix-failure-cap:v1 head=060fcef4f9d787f8d9165589184824bd09bc4969 fp=29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022 reason=workflow_failure count=3 -->"
+    }
+   ],
+   "events": [
+    {
+     "event": "labeled",
+     "label": {
+      "name": "ai:review-blocked"
+     },
+     "actor": {
+      "login": "shubhodeep1"
+     },
+     "created_at": "2026-09-30T21:02:28Z"
+    },
+    {
+     "event": "unlabeled",
+     "label": {
+      "name": "ai:review-blocked"
+     },
+     "actor": {
+      "login": "shubhodeep1"
+     },
+     "created_at": "2026-09-30T23:39:24Z"
+    }
+   ],
+   "failed_check_runs": [
+    {
+     "name": "review / codex-agent",
+     "status": "completed",
+     "conclusion": "failure",
+     "details_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/36755033841/job/110023078460"
+    }
+   ]
+  }
+ ]
+}

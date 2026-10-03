@@ -66,6 +66,14 @@ run and issue-list modes → `wait` / `next_stage`; --hand-back mode →
     head and kind for conflict / ci / blocked claims; review rounds are
     bounded by the workflow's MAX_AUTOFIX_ITERATIONS instead). Any other
     head only hands back merged / closed.
+  * Model-provider outage (issue #5773), in both PR modes: a failed check
+    whose workflow run (its `details_url`) carries a
+    `review-autofix-failure:v1` marker with `reason=provider_unavailable`,
+    posted for the current head by CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN, is
+    not a failed check. When nothing else failed, the verdict is the
+    not-done `provider-unavailable` (`action: wait`): no fixer starts,
+    nothing counts toward the hand-back cap, and the PR is not `stuck`. The
+    review sweep's probe re-runs the review once the provider recovers.
   * Run: `status` is `completed` (any conclusion). `state` is `completed`
     only for a `success` conclusion and `failed` for any other, so a checker
     routes a failed run to its block stage.
@@ -82,7 +90,10 @@ most one hand-off run read (plus 1 compare read when the run was triggered
 by an older push than the head it reviewed), and 3 active-run reads when
 needed. Hand-back mode on a `claude/*` head issues 1 call plus one per 100
 PR comments, the check-run pages, at most 1 head-commit read, 1 hand-off run
-read, 1 compare read (same condition) and 3 active-run reads. Run mode
+read, 1 compare read (same condition) and 3 active-run reads. Plain PR mode
+adds one call per 100 PR comments when a check failed and
+CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN is set (the provider-outage markers);
+hand-back mode reuses the comments it already read. Run mode
 issues 1 call. Issues mode issues one call per issue; the checker lists at
 most the few follow-ups one security cycle opens.
 Every call goes through `gh api`, which in Claude Code on the web is
@@ -148,6 +159,15 @@ FIX_CLAIM_COUNTED_KINDS = ("conflict", "ci", "blocked")
 DEFAULT_FIX_CLAIM_LEASE_HOURS = 3.0
 DEFAULT_FIX_HAND_BACK_CAP = 3
 HAND_BACK_KIND_BY_STATE = {"conflict": "conflict", "review-round": "review", "ci-failed": "ci", "blocked": "blocked"}
+# A review/autofix run that failed because the model provider is down carries
+# a `review-autofix-failure:v1` marker with `reason=provider_unavailable`
+# (scripts/workflow_failure_heal.py, issue #5773). Its failed check is not a
+# fix for any Claude session: the review sweep's probe re-runs it once the
+# provider recovers, so the verdict is the not-done `provider-unavailable`.
+PROVIDER_UNAVAILABLE_REASON = "provider_unavailable"
+PROVIDER_UNAVAILABLE_STATE = "provider-unavailable"
+REVIEW_FAILURE_MARKER_RE = re.compile(r"<!--\s*review-autofix-failure:v1\s+(?P<fields>[^>]*?)\s*-->")
+CHECK_RUN_WORKFLOW_RUN_RE = re.compile(r"/actions/runs/([1-9][0-9]{0,19})(?:/|$)")
 
 
 class ReadError(Exception):
@@ -233,6 +253,59 @@ def _parse_time(value: str) -> dt.datetime:
 	return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def provider_outage_run_ids(comments: list, head_sha: str) -> set[str]:
+	"""Workflow run ids whose review failed for `provider_unavailable` on `head_sha`.
+
+	Input: the PR's issue comments (REST objects) and its current head. Only
+	`review-autofix-failure:v1` markers posted by
+	CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN (the review workflow's account) count;
+	with that unset the set is empty, so a failed check stays a failed check
+	(fail closed toward a fixer). No API calls.
+	"""
+	author = os.environ.get("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "").strip().casefold()
+	outage_runs: set[str] = set()
+	if not author:
+		return outage_runs
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user")
+		if not isinstance(user, dict) or not isinstance(user.get("login"), str) or user["login"].casefold() != author:
+			continue
+		body = comment.get("body")
+		if not isinstance(body, str):
+			continue
+		match = REVIEW_FAILURE_MARKER_RE.search(body)
+		if match is None:
+			continue
+		fields = dict(part.split("=", 1) for part in match.group("fields").split() if "=" in part)
+		if (fields.get("head") == head_sha and fields.get("reason") == PROVIDER_UNAVAILABLE_REASON
+			and fields.get("run", "").isdigit()):
+			outage_runs.add(fields["run"])
+	return outage_runs
+
+
+def split_provider_outage_checks(failed_runs: list, outage_runs: set[str]) -> tuple[list, list]:
+	"""Split failed check runs into (still failed, failed only by a provider outage).
+
+	A check run belongs to an outage when the workflow run in its
+	`details_url` is one of `outage_runs`. No API calls.
+	"""
+	remaining: list = []
+	outage_failed: list = []
+	for run in failed_runs:
+		match = CHECK_RUN_WORKFLOW_RUN_RE.search(str(run.get("details_url") or ""))
+		(outage_failed if match and match.group(1) in outage_runs else remaining).append(run)
+	return remaining, outage_failed
+
+
+def _provider_unavailable_verdict(number: int, head_sha: str, outage_failed: list) -> dict:
+	names = ", ".join(sorted(run.get("name", "?") for run in outage_failed))
+	return {"done": False, "state": PROVIDER_UNAVAILABLE_STATE, "reason":
+		f"PR #{number} review stopped for provider_unavailable (model-provider outage) on head {str(head_sha)[:12]}: "
+		f"{names}; not a fix for any session, the review sweep re-runs it when the provider recovers"}
+
+
 def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, now: dt.datetime) -> dict:
 	pr = gh_api(f"repos/{repo}/pulls/{number}")
 	if pr.get("merged"):
@@ -258,11 +331,17 @@ def check_pr(repo: str, number: int, terminal_only: bool, stuck_hours: float, no
 	failed_checks: list[str] = []
 	if not conflicted:
 		runs = _gh_api_paginated_object(f"repos/{repo}/commits/{head_sha}/check-runs", "check_runs")
-		failed_checks = sorted(
-			run.get("name", "?")
-			for run in runs.get("check_runs") or []
+		failed_check_runs = [
+			run for run in runs.get("check_runs") or []
 			if run.get("status") == "completed" and run.get("conclusion") in FAILED_CHECK_CONCLUSIONS
-		)
+		]
+		if failed_check_runs and os.environ.get("CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN", "").strip():
+			# A review stopped by a model-provider outage is not stuck (#5773).
+			outage_runs = provider_outage_run_ids(gh_api_list(f"repos/{repo}/issues/{number}/comments"), head_sha)
+			failed_check_runs, outage_failed = split_provider_outage_checks(failed_check_runs, outage_runs)
+			if outage_failed and not failed_check_runs:
+				return _provider_unavailable_verdict(number, head_sha, outage_failed)
+		failed_checks = sorted(run.get("name", "?") for run in failed_check_runs)
 	if not conflicted and not failed_checks:
 		return {"done": False, "state": "open", "reason": f"PR #{number} open, no conflict and no failed check"}
 
@@ -630,6 +709,12 @@ def check_pr_hand_back(repo: str, number: int, stuck_hours: float, min_age_hours
 			run for run in runs.get("check_runs") or []
 			if run.get("status") == "completed" and run.get("conclusion") in FAILED_CHECK_CONCLUSIONS
 		]
+		if failed:
+			# A review stopped by a model-provider outage is not a fix for any
+			# session and counts toward no hand-back cap (#5773).
+			failed, outage_failed = split_provider_outage_checks(failed, provider_outage_run_ids(comments, head_sha))
+			if outage_failed and not failed:
+				return {**_provider_unavailable_verdict(number, head_sha, outage_failed), **base}
 		if not failed:
 			return {"done": False, "state": "open", **base, "reason": f"PR #{number} open, no conflict, hand-off, block or failed check"}
 		names = ", ".join(sorted(run.get("name", "?") for run in failed))
