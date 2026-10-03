@@ -289,6 +289,10 @@ def test_text_signal_with_only_a_limit_wait_still_resumes(tmp_path, capsys, need
 		"Retry until the usage limit resets",
 		"Usage limit reached. Retry the request, not waiting until the limit resets.",
 		"Wait for the limit. Please retry the request.",
+		# PR #6112 review round 4: a retry or wait at a bare time, which may not be the reset's
+		"Usage limit reached. Please retry after 5pm.",
+		"Usage limit reached. Retry on Monday.",
+		"Usage limit reached. Wait until 5pm, then retry.",
 	],
 )
 def test_a_limit_wait_that_also_asks_a_human_is_skipped(tmp_path, capsys, needs_action):
@@ -376,6 +380,22 @@ def test_permission_prompt_still_wins_over_needs_input(tmp_path, capsys):
 		("Wait until the usage limit resets at 5pm UTC and then try again", True),
 		("The limit resets at 5pm. Then retry the request.", True),
 		("Rate limited until 5pm", True),
+		# PR #6112 review round 4: a time counts only as the reset's, never on its own after a retry or a wait
+		("Usage limit reached. Please retry after 5pm.", False),
+		("Usage limit reached. Retry on Monday.", False),
+		("Usage limit reached. Retry at 5pm.", False),
+		("Usage limit reached. Retry in 10 minutes.", False),
+		("Usage limit reached. Retry once 5pm.", False),
+		("Usage limit reached. Retry when 5pm.", False),
+		("Usage limit reached. Retry by tomorrow.", False),
+		("Usage limit reached. Wait until 5pm, then retry.", False),
+		("Usage limit reached. Wait until tomorrow.", False),
+		("Usage limit reached. Wait for 5 hours.", False),
+		("Retry after the reset at 5pm", True),
+		("Retry when the limit resets at 5pm", True),
+		("Wait for the reset at 5pm and retry", True),
+		("Wait for the limit to reset at 5pm, then retry", True),
+		("Usage limit reached. Retry later.", True),
 	],
 )
 def test_is_limit_wait(text, expected):

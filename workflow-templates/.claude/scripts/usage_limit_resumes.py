@@ -86,7 +86,9 @@ status wording ("Usage limit reached", "Rate limited until 5pm"), the reset
 ("The limit resets at 11am"), a wait ("Wait until the limit resets, then
 retry"), a retry tied to the reset in the same sentence ("Retry after the
 reset", "Once the limit resets, retry"), or "then retry" right after a wait
-or reset sentence. No form holds a negation or a "retry until", so "Usage
+or reset sentence. A wait or a retry takes a time only as the reset's ("Retry
+after the reset at 5pm"), so "Retry after 5pm" and "Wait until Monday" are
+requests. No form holds a negation or a "retry until", so "Usage
 limit reached. Please retry the request. The limit resets later." and
 "Retry the request, not waiting until the reset" are requests; a `needs_action` with a Q-ID (`Q1`), a question mark,
 or the words reply, answer, decide, confirm, choose, or approve is never
@@ -241,10 +243,13 @@ def _limit_wait_forms() -> tuple:
 		rf"(?: (?:{reached}|rate limit error|number of request tokens has exceeded {the_limit}|{server}))?",
 	)
 	reset = (rf"(?:(?:{the_limit}|it) )?{resets}(?: (?:automatically|soon|later))?(?: {time})?",)
-	wait_for = rf"(?:(?:for|until|till) (?:{the_limit} to reset|{reset_event}|{the_limit}|{time})|on {the_limit})"
+	# PR #6112 review round 4: a wait or a retry names the reset or the limit, never a bare time. The selector
+	# cannot tell "retry after 5pm" or "wait until Monday" from a human's own deadline, and a resume fires two
+	# minutes after the pickup creates it, so a time is accepted only as the reset's ("after the reset at 5pm").
+	wait_for = rf"(?:(?:for|until|till) (?:{the_limit} to reset|{reset_event}|{the_limit})|on {the_limit})"
 	wait = (rf"{please}(?:wait|waiting) {wait_for}(?: {time})?(?: (?:and |then |and then ){retry})?",)
 	retry_forms = (
-		rf"{please}{retry} (?:(?:after|once|when) (?:{reset_event}|{time})|later|(?:at|after|in|on|by) {time})",
+		rf"{please}{retry} (?:(?:after|once|when) {reset_event}|later)",
 		rf"{please}(?:after|once|when) {reset_event}(?: then)? {retry}",
 	)
 	# Only after a wait or reset sentence, whose reset the "then" points to.

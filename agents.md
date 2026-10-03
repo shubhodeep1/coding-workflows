@@ -334,7 +334,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
       limit-wait forms (the error or status text, the reset, a wait, a retry
       tied to the reset in its own sentence, or "then retry" right after a
       wait or reset sentence), so a deferral in another sentence, a "retry
-      until", or a negated wait makes it a request; a Q-ID, `?`, or reply / answer / decide / confirm
+      until", a negated wait, or a retry or wait at a bare time ("retry
+      after 5pm"; a time counts only as the reset's) makes it a request; a Q-ID, `?`, or reply / answer / decide / confirm
       / choose / approve is never a limit wait; on the `rate_limit_info`
       signal a `need_input` category too), `not_reset` (its own limit still
       in the future), `wake_pending` (a pending `Resume after usage limit`
