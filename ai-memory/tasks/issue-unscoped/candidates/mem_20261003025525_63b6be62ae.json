@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_claude_fixer_judge.sh:130-137 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The hand-off comment selector trusts any author, allowing an outside commenter to spoof the public marker and move the rejection ID threshold past the legitimate fixer rejection.\n  WHY: This causes the legitimate rejection to be excluded, the judge to report rejection_missing, and the PR to be blocked; reviewers disagree on severity (BLOCKER vs MAJOR), so the highest severity is used.\n- scripts/review_rb_judge.sh:2374-2413 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: Untracked workflow files are omitted from STAGED_FILES, so they can bypass workflow cleanup and write-guard validation when no tracked workflow file is modified.\n  WHY: git add -u and git diff --cached --name-only omit untracked files, so the staged-file checks do not run for them; reviewers disagree on severity (MAJOR vs NIT), so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_autofix_step_claude_fixer_judge.sh:130-137 | severity=critical | confidence=5\n  PROBLEM: The hand-off marker selector does not verify author_association or user.login, allowing an outside commenter to forge the marker and cause the legitimate rejection to be excluded.\n  WHY: The judge reports rejection_missing and labels the PR ai:review-blocked.\n- scripts/review_rb_judge.sh:2393-2399 | severity=low | confidence=4\n  PROBLEM: The workflow-edit discard gate checks only tracked staged workflow files, so new untracked workflow files can evade cleanup and write-guard review.\n  WHY: git add -u does not stage untracked files, leaving them in the worktree when the gate is skipped.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_autofix_step_claude_fixer_judge.sh:lines 130-137 | severity=critical | confidence=5\n  PROBLEM: The hand-off ID selector does not verify author_association or user.login, allowing an unprivileged commenter to spoof the marker and exclude the legitimate rejection.\n  WHY: The judge aborts with rejection_missing and labels the PR ai:review-blocked.\n- scripts/review_rb_judge.sh:lines 2393-2399 | severity=high | confidence=5\n  PROBLEM: The workflow-edit discard check uses STAGED_FILES, which omits newly created untracked workflow files.\n  WHY: The condition skips git clean when no tracked workflow path is staged, leaving the untracked files in the worktree.\n- scripts/review_rb_judge.sh:lines 2400-2413 | severity=high | confidence=4\n  PROBLEM: Write-guard validation builds its file list only from STAGED_FILES, omitting untracked files in the working directory.\n  WHY: Newly created untracked files under write-guarded paths evade write_guard_check review_editor validation.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_claude_fixer_judge.sh:lines 130-137 (the jq filter that selects `claude_fixer_judge_handoff_id`) | severity=critical | confidence=4\n  PROBLEM: The hand-off ID selector does not verify the comment author, allowing an outside user to spoof the public marker and exclude the fixer's real rejection.\n  WHY: The judge decides nothing with rejection_missing and the PR is labelled ai:review-blocked.\n- scripts/review_rb_judge.sh:lines 2393-2399 (the `if [ \"${ALLOW_WORKFLOW_EDITS:-false}\" != \"true\" ] && printf '%s\\n' \"${STAGED_FILES}\" | grep -q '^\\.github/workflows/'; then` block, and the `git clean -f -d -- .github/workflows` inside it) | severity=low | confidence=4\n  PROBLEM: The cleanup gate checks STAGED_FILES, so a new untracked workflow file can remain when no existing tracked workflow file is modified.\n  WHY: The untracked file is not pushed in this round but remains in the worktree and could be picked up by a later git add -A.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_claude_fixer_judge.sh:Lines 130-134 | severity=high | confidence=4\n  PROBLEM: The hand-off lookup selects the greatest comment ID containing the expected marker without checking the commenter\u2019s association or login.\n  WHY: An outside commenter can move the threshold past a valid rejection, causing the judge to be marked not ready and the PR to be blocked.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_autofix_step_claude_fixer_judge.sh:130-134 (claude_fixer_judge_handoff_id jq query) | severity=high | confidence=5\n  PROBLEM: The hand-off selector does not verify author_association or user.login, allowing an outside user to post a higher-ID comment with the public marker.\n  WHY: The legitimate fixer rejection is excluded by the ID threshold, triggering rejection_missing and blocking the judge.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_autofix_step_claude_fixer_judge.sh:lines 130-134, the `claude_fixer_judge_handoff_id` jq selector | severity=high | confidence=4\n  PROBLEM: The hand-off selector does not check author_association or user.login, allowing an outside commenter to spoof the public marker and raise the rejection threshold.\n  WHY: The legitimate rejection is excluded, rejection_missing fires, and the PR is labelled ai:review-blocked.\n- scripts/review_rb_judge.sh:lines 2374 and 2393, the `git add -u` followed by the `STAGED_FILES` grep guard | severity=low | confidence=3\n  PROBLEM: A new untracked workflow file is absent from STAGED_FILES, so it bypasses cleanup and write-guard validation when no tracked workflow file is changed.\n  WHY: The untracked file remains in the worktree but is not committed or pushed in this code path.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ec5c10ddced11c9e2954e725b1f2b11f885a9316cd28c6e9fdeac9660cd47edb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6069,
+    "run_id": "37090162260",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37090162260",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003025525_63b6be62ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6069,
+    "run_id": "37090162260"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T02:55:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
