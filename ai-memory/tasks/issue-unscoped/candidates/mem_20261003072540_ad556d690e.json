@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Merged changes to `.github/workflows` and review or orchestration scripts repeatedly include targeted tests that assert workflow or script contracts. When changing these automation paths, add or update tests for the relevant behavior rather than relying only on broad integration coverage.",
+  "fingerprint": "687402e01c86eb6b4c5caff476633f899331259ec3f1055fa4fcab1f0b36ab0c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37106035607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37106035607",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4542",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4552",
+      "https://github.com/shubhodeep1/coding-workflows/issues/5689",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6086",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6087",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6094",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6095",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6120",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6121",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6129"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261003072540_ad556d690e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Pair workflow and review-script behavior changes with focused contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-03T07:25:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
