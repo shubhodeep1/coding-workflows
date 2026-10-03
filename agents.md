@@ -1164,7 +1164,10 @@ reviews, comments, and conflicts stay a direct §12 request.
   `python3`, `$VAR`, file redirects). A call that passes one of jq's own
   command-line options to `--jq` (`--arg`, `-r`, `-c`; `gh api` has none) is
   denied with a reason that says how to fix it, so the session corrects the
-  command instead of waiting at a prompt (#4891). It fails closed (asks) on an unreadable payload or an
+  command instead of waiting at a prompt (#4891). Bare `gh api --help` and
+  `gh api -h` count as reads; help with any other argument still asks, and
+  piping help to `grep` leaves the whole command to the normal permission flow.
+  It fails closed (asks) on an unreadable payload or an
   internal error; `tests/test_gh_api_write_guard.py` has its own `ci.yml`
   step and `workflow-templates/.claude/hooks/` holds a byte-identical copy.
   Do not re-add `gh api` ask rules: an ask rule prompts even when a hook

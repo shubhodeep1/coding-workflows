@@ -35,8 +35,8 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LOCAL_SLUG = "shubhodeep1/coding-workflows"
 
 
-def _load_guard():
-	spec = importlib.util.spec_from_file_location("gh_api_write_guard", GUARD_PATH)
+def _load_guard(path=GUARD_PATH):
+	spec = importlib.util.spec_from_file_location("gh_api_write_guard", path)
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
@@ -44,6 +44,7 @@ def _load_guard():
 
 
 guard = _load_guard()
+template_guard = _load_guard(TEMPLATE_GUARD_PATH)
 
 
 @pytest.fixture(autouse=True)
@@ -180,6 +181,45 @@ ALLOWED_SIMPLE_CALLS = [
 @pytest.mark.parametrize("command", ALLOWED_SIMPLE_CALLS)
 def test_simple_read_or_routine_call_is_allowed(command):
 	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_bare_gh_api_help_is_a_read(flag):
+	decision, reason = template_guard.evaluate({"tool_name": "Bash", "tool_input": {"command": f"gh api {flag}"}})
+	assert decision == template_guard.DECISION_ALLOW
+	assert "read call" in reason
+	assert template_guard.evaluate({"tool_name": "Bash", "tool_input": {"command": f"gh api {flag} | head -n 1"}})[0] == template_guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	"gh api --help repos/a/b",
+	"gh api -h repos/a/b",
+	"gh api -X DELETE repos/a/b --help",
+	"gh api --help -X GET",
+	"gh api --help -f q=x",
+	"gh api --help --input payload.json",
+	"gh api --help --help",
+	"gh api -h --help",
+	"gh api -- --help",
+	"gh api -- -h",
+	"gh api --help --",
+])
+def test_help_with_other_arguments_still_asks(command):
+	assert template_guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})[0] == template_guard.DECISION_ASK
+
+
+def test_help_with_unvetted_pipe_gets_no_decision():
+	command = "gh api --help | grep x"
+	assert template_guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})[0] is None
+
+
+@pytest.mark.parametrize("command", [
+	'echo "$(gh api --help)"',
+	"bash -c 'gh api --help'",
+	"bash <<'EOF'\ngh api --help\nEOF",
+])
+def test_hidden_help_call_still_asks(command):
+	assert template_guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})[0] == template_guard.DECISION_ASK
 
 
 # ──────────────────────────────────────────────────────────────────

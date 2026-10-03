@@ -18,8 +18,8 @@ command it works out the effective HTTP method the way `gh` does (`-X` /
 otherwise) and classifies the call:
 
   read     — GET / HEAD to any REST endpoint, or a GraphQL query that is not a
-             mutation, with no file-backed field and no `--input`. Never
-             prompted by this hook.
+             mutation, with no file-backed field and no `--input`; also bare
+             `gh api --help` / `gh api -h`. Never prompted by this hook.
   routine  — a CLAUDE.md §23.B write to the repository of the local checkout
              (or the `{owner}/{repo}` placeholders): create a PR, edit a PR's
              or issue's title/body, add or edit an issue/PR comment, reply to a
@@ -956,8 +956,18 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	results: list[tuple[str, str]] = []
 	malformed_jq_values: list[str] = []
 	for args in invocations:
+		# Only the entire help invocation is known to be side-effect free.
+		# Combined flags/endpoints remain unreadable and must still ask.
+		if args in (["--help"], ["-h"]):
+			results.append((KIND_READ, "gh api help"))
+			continue
 		try:
-			results.append(classify(parse_gh_api_args(args), command, repo_slug_lookup))
+			parsed = parse_gh_api_args(args)
+			if "--help" in args or "-h" in args:
+				# `-- --help` parses as a GET endpoint; never exempt combined help.
+				results.append((KIND_WRITE, "unreadable call (help combined with other arguments)"))
+			else:
+				results.append(classify(parsed, command, repo_slug_lookup))
 		except MalformedJq as exc:
 			malformed_jq_values.append(exc.value)
 		except Unreadable as exc:
