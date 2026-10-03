@@ -3,18 +3,18 @@
 - Plan: docs/plans/issue-5524-merge-train-verify-pr-named-runs-plan.md
 - Source issue: shubhodeep1/coding-workflows#5524
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Base branch: claude/implement-plan-issue-4898-retrigger-dispatch-default-branch
-- Project branch: claude/implement-plan-issue-5524-merge-train-verify-pr-named-runs   Final PR: (opening)
+- Project branch: claude/implement-plan-issue-5524-merge-train-verify-pr-named-runs   Final PR: #5540 draft
 - Status: IN_PROGRESS
 - Stage: phase 1/1
 - Activation: not started
-- Waiting on: none
+- Waiting on: phase 1 PR (review round or merge)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
 - Last updated: 2026-09-30
-- Last note: project branch opened from the issue base; phase 1 starting.
+- Last note: phase 1 implemented and verified (87 merge-train and dispatch tests pass; 3 new exploit tests fail on the old script); phase PR opened.
 
 ## Phases
-1. [ ] Phase 1 — verify PR-named run provenance in the merge-train release (`scripts/review_merge_train.sh`, tests, docs, changelog fragment)
+1. [ ] Phase 1 — verify PR-named run provenance in the merge-train release (`scripts/review_merge_train.sh`, tests, docs, changelog fragment)   — PR open (waiting); review rounds: 0; interventions: 0
 
 ## Conformance
 
@@ -36,4 +36,5 @@
 ## Lessons
 
 ## Notes
+- Local verification: `tests/test_implement_post_codex_recovery.py::test_review_pipeline_integration_chain_module_runs_clean` fails in this container on the base branch too (`gawk: command not found`); unrelated to this change.
 - Invoked by the Claude issue dispatcher (routine `implement-issue #5524`) in session session_01Wcp5vvyxgd3YizNmY7bQqD, Auto mode.
