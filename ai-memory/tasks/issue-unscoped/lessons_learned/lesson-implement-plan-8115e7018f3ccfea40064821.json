@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:15:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Replay repeated assignment prefixes in the order Bash applies them (`CDPATH=.. CDPATH+= cd x` leaves `..`); keeping only the last prefix per name lets an earlier value slip past a guard.",
+  "phase": "implement_plan",
+  "pr_number": 6113,
+  "record_id": "lesson-implement-plan-8115e7018f3ccfea40064821",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6090-merge-guard-cdpath",
+    "file:workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+  ]
+}

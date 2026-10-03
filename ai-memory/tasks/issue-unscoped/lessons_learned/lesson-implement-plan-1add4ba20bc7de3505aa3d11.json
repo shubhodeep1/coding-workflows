@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:15:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a guard recognises a builtin behind a wrapper (`builtin`, `command`), let each wrapper consume its own `--` end-of-options marker, or the wrapped command slips past.",
+  "phase": "implement_plan",
+  "pr_number": 6113,
+  "record_id": "lesson-implement-plan-1add4ba20bc7de3505aa3d11",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6090-merge-guard-cdpath",
+    "file:workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+  ]
+}

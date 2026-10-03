@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:15:04Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A shell command walker must read Bash assignment words as `NAME=` and `NAME+=` everywhere it skips prefixes, or `X+=1 git push` hides the command; keep one shared assignment regex.",
+  "phase": "implement_plan",
+  "pr_number": 6113,
+  "record_id": "lesson-implement-plan-def9e02acc27c60724b8f410",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6090-merge-guard-cdpath",
+    "file:workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+  ]
+}
