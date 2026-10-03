@@ -593,12 +593,30 @@ def test_issue_4891_command_is_denied():
 	assert "Nothing ran" in reason
 
 
-def test_issue_4891_loop_written_correctly_gets_no_decision():
+def test_issue_4891_loop_written_correctly_is_allowed():
 	command = (
 		'for r in 1 2; do gh api "repos/shubhodeep1/coding-workflows/actions/runs/$r/jobs?per_page=50" '
 		"--jq '.jobs[].name'; done"
 	)
-	assert _decide(command) is None
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	'for r in 1 2; do gh run view $r --json status; done',
+	'for r in 1 2; do echo $r; gh api repos/o/r/actions/runs/${r}/jobs | head -5; done',
+])
+def test_upstream_literal_id_loop_frame_is_preserved(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	'for r in $X 2; do gh run view $r; done',
+	'for PATH in 1 2; do gh run view $PATH; done',
+	'for https_proxy in evil.example; do gh api repos/o/r/issues/1; done',
+	"for r in 1; do gh run view $r; gh 'api' -X DELETE repos/o/r/issues/$r; done",
+])
+def test_upstream_loop_frame_rejects_unsafe_shapes(command):
+	assert _decide(command) != guard.DECISION_ALLOW
 
 
 @pytest.mark.parametrize(
@@ -639,6 +657,68 @@ def test_deny_wins_over_ask_for_another_call():
 def test_hidden_call_still_asks_before_the_deny():
 	command = 'echo "$(gh api repos/a/b --jq -r .name)"'
 	assert _decide(command) == guard.DECISION_ASK
+
+
+# The substitution is a single REST read in an echo argument. Its variable
+# follows the #4786 loop frame and cannot select a flag, field, or query.
+ISSUE_4909_COMMAND = (
+	'for n in 3576 3895 4638 4703 4811 4894; do echo "$n: $(gh api '
+	'repos/shubhodeep1/coding-workflows/issues/$n --jq \'[.labels[].name]|join(",")\' 2>&1)"; done'
+)
+
+
+@pytest.mark.parametrize("command", [
+	ISSUE_4909_COMMAND,
+	'echo "$(gh api repos/o/r/issues/1 --jq .title)"',
+	'for n in 1 2; do echo "$n: $(gh api "repos/o/r/issues/$n?state=open" --jq .title)"; done',
+	'echo "$(gh api repos/o/r/issues/1)"; echo "$(gh api repos/o/r/issues/2)"',
+	'echo before; echo "$(gh api -X HEAD repos/o/r/issues/1)"',
+])
+def test_echo_substitution_of_one_rest_read_is_allowed(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	'echo "$(gh api -X POST repos/o/r/issues/1)"',
+	'echo "$(gh api graphql -f query=\'{viewer{login}}\')"',
+	'echo "$(gh api repos/o/r/issues/1 -H X-HTTP-Method-Override:POST)"',
+	'echo "$(gh api repos/o/r/issues/1 | sh)"',
+	'echo "$(gh api repos/o/r/issues/1; rm x)"',
+	'echo "$(gh api repos/o/r/issues/1 && true)"',
+	'echo "$(gh api repos/o/r/issues/1 > out)"',
+	'echo "$(gh api repos/o/r/issues/1 2>&1 2>&1)"',
+	'echo "$(gh api 2>&1 repos/o/r/issues/1)"',
+	'echo "$(gh api repos/o/r/issues/1 --input f)"',
+	'echo "$(gh api repos/o/r/issues/1 -F data=@file)"',
+	'echo "$(gh api repos/o/r/issues/1 -F data=$FILE)"',
+	'echo "$(gh api repos/o/r/issues/1 --jq .title"',
+	'echo "$(gh api repos/o/r/issues/1 --jq .title)"; echo "$(gh api repos/o/r/issues/2 | sh)"',
+	'for n in 1 2; do echo "$(gh api "repos/o/r/issues/$n?state=$n")"; done',
+	'for n in 1 2; do echo "$(gh api repos/o/r/issues/1 --jq $n)"; done',
+	'for n in 1 2; do echo "$(gh api repos/o/r/issues/1 -f q=$n -X GET)"; done',
+	'for n in 1 2; do echo "$(gh api repos/o/r/issues/$n)"; rm x; done',
+	'printf "%s" "$(gh api repos/o/r/issues/1)"',
+])
+def test_unsafe_echo_substitution_is_not_allowed(command):
+	assert _decide(command) != guard.DECISION_ALLOW
+
+
+def test_nested_and_backtick_substitutions_still_ask():
+	for command in (
+		'echo "$(gh api repos/o/r/issues/$(echo 1))"',
+		'echo "$(gh api repos/o/r/issues/`echo 1`)"',
+	):
+		assert _decide(command) == guard.DECISION_ASK
+
+
+def test_hidden_read_and_loop_write_asks_name_a_safe_rewrite():
+	for command in (
+		'echo "$(gh api repos/o/r/issues/1 | sh)"',
+		'for n in 1 2; do gh api -X DELETE repos/o/r/issues/$n; done',
+	):
+		decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+		assert decision == guard.DECISION_ASK
+		assert 'for n in 1 2; do echo $n; gh api repos/o/r/issues/$n --jq .title; done' in reason
 
 
 def test_hook_process_emits_deny_json_for_a_jq_option():

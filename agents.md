@@ -1160,8 +1160,13 @@ reviews, comments, and conflicts stay a direct §12 request.
   Bash parses unlike the guard. It allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
-  to the allow list or the Auto-mode classifier beside anything else (loops,
-  `python3`, `$VAR`, file redirects). A call that passes one of jq's own
+  to the allow list or the Auto-mode classifier beside anything else. It also
+  approves #4786-framed literal-ID read loops and complete double-quoted
+  `$(gh api …)` REST reads only in `echo` arguments of otherwise approved
+  commands or those loops; the loop variable may occur only in the endpoint
+  path before `?`. Unrecognized substitutions, `python3`, and file redirects
+  do not gain approval. A rejected substitution or loop ask gives a fixed
+  separate-`echo`/plain-`gh api` example. A call that passes one of jq's own
   command-line options to `--jq` (`--arg`, `-r`, `-c`; `gh api` has none) is
   denied with a reason that says how to fix it, so the session corrects the
   command instead of waiting at a prompt (#4891). It fails closed (asks) on an unreadable payload or an
