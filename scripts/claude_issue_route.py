@@ -2,7 +2,9 @@
 """Route standalone issues to the Claude issue implementer or the Codex pipeline.
 
 Standalone issues (anything the AI orchestrator does not manage) are
-implemented by Claude Code by default. The reusable clarify workflow
+implemented by the Codex pipeline by default (since the Claude session
+automation was frozen; set ``AI_ISSUE_IMPLEMENTER=claude`` or label an issue
+``ai:claude`` to route it to Claude). The reusable clarify workflow
 (``.github/workflows/clarify.yml``) calls this module on every issue-open and
 ``/reclarify`` event to pick the implementer, and the Claude handoff / intake
 drivers use it to build and validate the ``repository_dispatch`` payload and
@@ -85,7 +87,7 @@ DEFAULT_UPSTREAM_REPO = "shubhodeep1/coding-workflows"
 
 IMPLEMENTER_CLAUDE = "claude"
 IMPLEMENTER_CODEX = "codex"
-DEFAULT_IMPLEMENTER = IMPLEMENTER_CLAUDE
+DEFAULT_IMPLEMENTER = IMPLEMENTER_CODEX
 
 CLAUDE_LABEL = "ai:claude"
 CODEX_LABEL = "ai:codex"
