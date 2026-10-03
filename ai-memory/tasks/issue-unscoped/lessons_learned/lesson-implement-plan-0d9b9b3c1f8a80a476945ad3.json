@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:11:22Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A check that a text is \"only X\" must hold the whole text to an allow-list of X's words; a substring match plus a deny-list of request words fails open on any wording the list misses.",
+  "phase": "implement_plan",
+  "pr_number": 6112,
+  "record_id": "lesson-implement-plan-0d9b9b3c1f8a80a476945ad3",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6102-skip-unanswered-question-resumes",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}

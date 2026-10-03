@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:11:22Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "To recognise \"only a wait\" in free text, match each sentence whole against a closed set of forms; a word-level search for a deferral word cannot tell which clause it belongs to, its direction (wait until vs retry until), or whether it is negated.",
+  "phase": "implement_plan",
+  "pr_number": 6112,
+  "record_id": "lesson-implement-plan-2fcd48f8a43b8a0ce70757f8",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6102-skip-unanswered-question-resumes",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}

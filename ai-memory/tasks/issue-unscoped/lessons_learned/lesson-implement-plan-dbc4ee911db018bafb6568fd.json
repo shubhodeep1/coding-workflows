@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:11:22Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A closed form that allows a time must bind it to the event it waits for (\"after the reset at 5pm\"); a bare time after a wait or retry word is a deadline the checker cannot tie to that event.",
+  "phase": "implement_plan",
+  "pr_number": 6112,
+  "record_id": "lesson-implement-plan-dbc4ee911db018bafb6568fd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6102-skip-unanswered-question-resumes",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}

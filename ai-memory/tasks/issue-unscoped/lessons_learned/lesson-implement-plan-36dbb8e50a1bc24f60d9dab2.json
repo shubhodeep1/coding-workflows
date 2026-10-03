@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:11:22Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "An allow-list of words is not enough when the allowed words can form an instruction: action verbs in it (retry, resend, resume) must also be tied to the condition they wait on, and words of immediacy (now) left out.",
+  "phase": "implement_plan",
+  "pr_number": 6112,
+  "record_id": "lesson-implement-plan-36dbb8e50a1bc24f60d9dab2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6102-skip-unanswered-question-resumes",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:11:22Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "When a record keeps the same field in more than one copy, every safety check must read all copies; a helper that prefers one copy is fine for a signal but fails open for a skip.",
+  "phase": "implement_plan",
+  "pr_number": 6112,
+  "record_id": "lesson-implement-plan-15a579e2d691fcbb5427f73c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-6102-skip-unanswered-question-resumes",
+    "file:workflow-templates/.claude/scripts/usage_limit_resumes.py"
+  ]
+}
