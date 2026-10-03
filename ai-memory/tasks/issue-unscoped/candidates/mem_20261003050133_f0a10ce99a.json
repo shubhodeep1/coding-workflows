@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_claude_fixer_judge.sh: lines 130-137 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The hand-off comment ID selector accepts comments containing the public marker without verifying author identity, allowing a spoofed higher comment ID to exclude the legitimate fixer rejection.\n  WHY: The rejection selector requires an ID greater than the selected hand-off ID, so a spoofed comment can trigger `rejection_missing` and block judge convergence; reviewers disagreed on severity, ranging from MAJOR to BLOCKER, and the highest severity is used.\n- scripts/review_rb_judge.sh: lines 2393-2413 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The workflow cleanup and write-guard checks rely on `STAGED_FILES`, which omits untracked workflow files, allowing a newly created workflow file to evade cleanup and validation.\n  WHY: If no tracked workflow file is staged, the guard is skipped and the untracked file persists in the worktree; a later staging operation could commit it despite `ALLOW_WORKFLOW_EDITS=false`. Reviewers disagreed on severity, ranging from NIT to MAJOR, and the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_autofix_step_claude_fixer_judge.sh: lines 130-137 (the `claude_fixer_judge_handoff_id` jq selector in the PR diff) | severity=high | confidence=5\n  PROBLEM: The hand-off comment ID selector accepts comments containing the public marker without verifying author identity, allowing a spoofed higher comment ID to exclude the legitimate fixer rejection.\n  WHY: The judge can report `rejection_missing`, label the PR `ai:review-blocked`, and block automated convergence.\n- scripts/review_rb_judge.sh: lines 2393-2413 in the PR diff (the `CLAUDE_FIXER_JUDGE_MODE` guard block, inserted after the consumer-repo artifact check at line 2029 in the current file) | severity=low | confidence=4\n  PROBLEM: The workflow-edit cleanup and write-guard checks rely on `STAGED_FILES`, which omits untracked workflow files.\n  WHY: With no tracked workflow file staged, the guard is skipped and an untracked workflow file persists in the worktree.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_autofix_step_claude_fixer_judge.sh: 130-137 | severity=critical | confidence=5\n  PROBLEM: The hand-off comment selector accepts comments containing the public marker without verifying author identity, allowing a spoofed higher comment ID to exclude the legitimate fixer rejection.\n  WHY: The judge can report `rejection_missing`, mark the PR `ai:review-blocked`, and deny execution of the judge.\n- scripts/review_rb_judge.sh: 2393-2413 | severity=high | confidence=5\n  PROBLEM: The workflow cleanup and write-guard checks inspect only `STAGED_FILES`, omitting newly created untracked workflow files.\n  WHY: With no tracked workflow file modified, the cleanup block is skipped and untracked workflow files evade write-guard review.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_claude_fixer_judge.sh: lines 130-137, the `claude_fixer_judge_handoff_id` jq selector | severity=critical | confidence=5\n  PROBLEM: The hand-off ID selector accepts comments containing the public marker without checking author identity, allowing a spoofed higher comment ID to exclude the legitimate fixer rejection.\n  WHY: The selector can return no rejection, causing the PR to be labelled `ai:review-blocked` with skip reason `rejection_missing`.\n- scripts/review_rb_judge.sh: lines 2393-2413, the `if [ \"${CLAUDE_FIXER_JUDGE_MODE:-false}\" = \"true\" ]; then` block \u2014 specifically the inner `if [ \"${ALLOW_WORKFLOW_EDITS:-false}\" != \"true\" ] && printf '%s\\n' \"${STAGED_FILES}\" | grep -q '^\\.github/workflows/'; then` cleanup gate and the subsequent `_rb_judge_guard_list` write-guard construction | severity=high | confidence=4\n  PROBLEM: The cleanup gate and write-guard list rely on `STAGED_FILES`, which omits a newly created untracked workflow file.\n  WHY: The file persists outside the index and could be staged by a later `git add -A` or `git add .github/workflows/`, bypassing the workflow-edit policy.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_autofix_step_claude_fixer_judge.sh: lines 130-137 (the `claude_fixer_judge_handoff_id` jq selector) | severity=critical | confidence=5\n  PROBLEM: The hand-off comment selector accepts comments containing the public marker without verifying author identity, allowing a spoofed higher comment ID to exclude the legitimate fixer rejection.\n  WHY: The rejection selector excludes the real rejection, triggers `rejection_missing`, and labels the PR `ai:review-blocked`, creating a repeatable denial-of-service against judge convergence.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_autofix_step_claude_fixer_judge.sh: the `claude_fixer_judge_handoff_id` jq query (the selector that computes the hand-off comment ID threshold) | severity=high | confidence=5\n  PROBLEM: The hand-off ID selector accepts comments containing the public marker without checking author identity, allowing a spoofed higher comment ID to exclude the legitimate fixer rejection.\n  WHY: The rejection selector filters by an ID greater than the spoofable hand-off ID, blocking judge convergence and causing the PR to be labelled `ai:review-blocked`.\n- scripts/review_rb_judge.sh: the `if [ \"${ALLOW_WORKFLOW_EDITS:-false}\" != \"true\" ] && printf '%s\\n' \"${STAGED_FILES}\" | grep -q '^\\.github/workflows/'; then` conditional inside the `CLAUDE_FIXER_JUDGE_MODE` block | severity=high | confidence=4\n  PROBLEM: The workflow cleanup and write-guard checks rely on `STAGED_FILES`, which omits newly created untracked workflow files.\n  WHY: When only an untracked workflow file exists, cleanup and validation are skipped and the file persists in the worktree, where a later staging path could commit it despite `ALLOW_WORKFLOW_EDITS=false`.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b1839f29b1804c342d6c97c23e0437599d3761d01821206ddade93f994ff6aa7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6069,
+    "run_id": "37097280913",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37097280913",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003050133_f0a10ce99a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6069,
+    "run_id": "37097280913"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T05:01:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
