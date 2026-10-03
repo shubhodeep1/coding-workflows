@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "When changing files under `.claude/`, check whether the corresponding file under `workflow-templates/.claude/` must receive the same change. Multiple merged runs touched both copies, so updating only the root configuration risks leaving generated or consumer workspaces with different behavior.",
+  "fingerprint": "23ae398eebdb7923f6e1e524edf4e2e7519365a31a5de9b3de2c1e3061fde069",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37130168465",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37130168465",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4545",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4786",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4898",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4909",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4985",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6122",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6123",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6124",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6125",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6153"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261003143824_4150aa521c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep the root Claude configuration and workflow templates synchronized.",
+  "timestamps": {
+    "created_at": "2026-10-03T14:38:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
