@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#6057
 - Repo: shubhodeep1/coding-workflows   Default branch: main
 - Project branch: claude/implement-plan-issue-6057-recheck-claude-label-at-dispatch   Final PR: #6067 draft
-- Status: IN_PROGRESS
+- Status: BLOCKED
 - Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #6081
+- Waiting on: PR #6081: twin sync
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: checker session_01USBFJWeRKFYoN4f41wAyq5 (reused); safety net and hand-back ids in the stage report
 - Last updated: 2026-10-03
-- Last note: twin sync of the round 2-5 fixes landed (`cb54817`, both sha256 match); `/reclarify` by the OWNER at 02:30Z; `ai:review-blocked` (iteration cap on `1e3c467`) removed; waiting on the review of the synced head
+- Last note: review round 1 after the twin sync (head `ae2a79f`): the failure reply now names each failed write; twin-only fix, held for the next `[claude-twin-sync]` of `claude-issue-dispatch.md` (sha256 `155c504b…98ee`)
 
 ## Phases
-1. [ ] Phase 1 — re-check the `ai:claude` claim at dispatch time   — protected paths: .claude/commands/claude-issue-pickup.md (no twin; synced in `9d6cbf9`); PR #6081 open; review rounds: 5; interventions: 1 (2026-10-03: twin sync `cb54817` after the iteration cap; `ai:review-blocked` removed)
+1. [ ] Phase 1 — re-check the `ai:claude` claim at dispatch time   — protected paths: .claude/commands/claude-issue-pickup.md (no twin; synced in `9d6cbf9`); PR #6081 open; review rounds: 6 (5 before the twin sync, 1 after); interventions: 1 (2026-10-03: twin sync `cb54817` after the iteration cap; `ai:review-blocked` removed)
 
 ## Conformance
 
@@ -44,6 +44,7 @@
 - [source:plan-deviation] A gate that must hold "at dispatch time" needs a read at the moment of dispatch: checking only where the payload is first validated (the intake) leaves every later state change of the target invisible to the session starter. (files: scripts/claude_issue_route.py, .claude/commands/claude-issue-pickup.md)
 - [source:intervention] A claim check done by a batch starter is check-then-act: the session it starts must re-check the claim and refuse when it is gone, not restore it, or any change in the gap is undone. Mark dispatched starts so the session can tell them from hand runs. (files: .claude/commands/claude-issue-dispatch.md, .claude/commands/implement-issue-claude.md)
 - [source:intervention] A safeguard that one repo's launch prompt hands to a command installed in another repo holds only once that repo has synced the command; put the check in the launch prompt itself so it works with any installed version. (files: .claude/commands/claude-issue-dispatch.md)
+- [source:intervention] A failure report that covers several independent writes must name each write that failed; one combined suffix misreports the case where only one of them failed. (files: .claude/commands/claude-issue-dispatch.md)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)
@@ -58,3 +59,4 @@
 - Review round 4 (head `a23a441`): one consensus finding (5 reviewers), valid: the launch prompt's label check had no failure branch. Fixed in one `[claude-autofix]` commit: a failed `get_labels` read is retried once, then the session starts nothing, changes no label, posts one `<!-- ai:claude-blocked:v1 -->` comment naming `/reclarify`, and replies `issue not started (label check failed)`. Twin sha256 after round 4: `implement-issue-claude.md` `8c96af2c6ac18284ca2d14f5f0e7b4021548f4d0707b93b38ccc2765c09eb44f` (unchanged), `claude-issue-dispatch.md` `355e0ecd06fff042832fd96511590f0bbb9b4bab48e488fa648c38031adc8794`. Verified on a scratch copy with both twins in `.claude/`: four blocker suites plus the changelog contract, 450 passed.
 - Review round 5 (head `270f9b8`): three consensus findings, all valid, fixed in one `[claude-autofix]` commit: (1) the read-failure branch now comes before the parked check, and only a successful read can mean `issue parked`; (2) a read that fails twice adds only the `ai:claude-blocked` label (removes nothing) with its blocker comment, the §28.C pair; (3) when the label or comment call fails, the reply says `blocker comment not posted`. The consensus task gap (root `.claude/commands/` copies unchanged) is the pending `[claude-twin-sync]`, rejected as already tracked. Twin sha256 after round 5: `implement-issue-claude.md` `8c96af2c6ac18284ca2d14f5f0e7b4021548f4d0707b93b38ccc2765c09eb44f` (unchanged), `claude-issue-dispatch.md` `8cfca25428a5599b4297bf56e5dfec43d38230f0093225c87580606f0bc40e1e`. Verified on a scratch copy with both twins in `.claude/`: four blocker suites plus the changelog contract, 450 passed. This was round 5 of `MAX_AUTOFIX_ITERATIONS` (default 5): a further finding round makes the workflow label the PR `ai:review-blocked`.
 - Twin sync after review round 5, 2026-10-03: `[claude-twin-sync]` commit `cb54817` on the phase branch, by the supervising session (Q1: A, AD-11). `.claude/commands/implement-issue-claude.md` `8c96af2c…eb44f` and `.claude/commands/claude-issue-dispatch.md` `8cfca254…0e1e` match their twins. On the synced head: the four blocker suites plus the changelog contract, 450 passed (parity tests included). The workflow had labelled #6081 `ai:review-blocked` at 21:16Z on `1e3c467` (5 consecutive `[claude-autofix]` commits); the sync commit ends that run, so the label was removed and the wait re-armed. `ai:claude-blocked` removed from #6057 after the OWNER's `/reclarify` (02:30Z); this stage session resumed directly, since the Claude issue pickup is disabled.
+- Review round 1 after the twin sync (head `ae2a79f`, ledger `7b5349e0…`, run 37090235123): the consensus finding (5 reviewers, both copies of `claude-issue-dispatch.md`) and the matching task gap are valid: the label add and the comment post are separate calls, but the reply said `blocker comment not posted` when either failed. Fixed in one `[claude-autofix]` commit: the reply adds `; blocked label not added` when the label call failed and `; blocker comment not posted` when the comment call failed (both, in that order). The test finding (minimax) is fixed in the same commit: the test asserts the new wording and that the combined wording is gone. Twin-first: only `workflow-templates/.claude/commands/claude-issue-dispatch.md` changed, sha256 `155c504bda94421a92702295d11fec543494efa3c323697adad491ea5ae098ee`; `implement-issue-claude.md` unchanged (`8c96af2c…eb44f`). In the checkout the five suites pass except `test_template_parity[claude-issue-dispatch.md]` (red until the sync); on a scratch copy with the twin copied into `.claude/`: the five suites 450 passed, the other 18 `.claude`-reading suites 1119 passed, 1 skipped. PR held (hold claim) and the twin-sync blocker posted on #6057.
