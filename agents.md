@@ -1183,8 +1183,25 @@ reviews, comments, and conflicts stay a direct §12 request.
   `cap_reached` line in `stop-guard.jsonl`.
 - **`AskUserQuestion`:** denied (`permissionDecision: "deny"`) in a marked
   session, with no cap.
+- **Cap blocker (#5083):** at the cap, `publish_cap_blocker` posts one
+  `<!-- ai:claude-blocked:v1 -->` comment (fixed template, with
+  `<!-- ai:unattended-guard-cap:v1 session=<id> -->`) on the marker's issue
+  and adds `ai:claude-blocked`, all through `gh api` (`run_gh_api`, no
+  shell). Idempotent: a paginated comments read skips the post when this
+  session's blocker exists (an `OWNER` / `MEMBER` / `COLLABORATOR` comment
+  starting with `<!-- ai:claude-blocked:v1 -->` that carries this session's
+  cap marker; a comment that only quotes the marker does not count), and
+  `cap_blocker: posted` in `<id>.state.json` stops further calls (no call,
+  no log line). Up to 3 attempts (1 s, 2 s backoff, 6 s per call,
+  24 s budget checked before every call); `cap_blocker: pending` is stored
+  before the first call, so a failure or a hook killed mid-publish is
+  retried at every later `Stop`. An invalid marker repo or issue makes no call
+  (`cap_blocker: invalid`). Log lines: `cap_blocker_posted`,
+  `cap_blocker_exists`, `cap_blocker_failed`, `cap_blocker_invalid`.
 - **Failure and cost:** fails open with a `systemMessage` (bad payload,
-  unreadable marker or state, internal error). No API calls, no escape hatch.
+  unreadable marker or state, internal error, failed publish). API calls only
+  at the cap (one GET per 100 comments, at most one comment POST, one label
+  POST per attempt), no escape hatch.
 - **Tests and twin:** byte-identical twin under `workflow-templates/.claude/`;
   tests in `tests/test_unattended_question_guard.py` (own `ci.yml` step).
 

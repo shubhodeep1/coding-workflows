@@ -3,22 +3,23 @@
 - Plan: docs/plans/issue-5083-guard-cap-source-issue-blocker-plan.md
 - Source issue: shubhodeep1/coding-workflows#5083 (https://github.com/shubhodeep1/coding-workflows/issues/5083)
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-4911-unattended-question-guard
-- Project branch: claude/implement-plan-issue-5083-guard-cap-source-issue-blocker   Final PR: pending (opened right after this commit; see the progress comment)
-- Status: BLOCKED
-- Stage: phase 1/1
+- Project branch: claude/implement-plan-issue-5083-guard-cap-source-issue-blocker   Final PR: #5087 draft
+- Status: IN_PROGRESS
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: none (protected-path approval for phase 1, asked on #5083)
+- Waiting on: PR #5104 (next review round)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
-- Last updated: 2026-09-29
-- Last note: phase 1 must edit `.claude/hooks/unattended_question_guard.py` and has no `Protected-path approval` line; stopped before the phase started and asked on #5083 (CLAUDE.md §28.C).
+- Last updated: 2026-10-01
+- Last note: phase 1/1 — review round 2 on `7c4550a` (ledger `05842d9f…`) flagged only the PR #5104 description as stale (it still asked the operator for the twin sync done in `c658bca`); the description now records the completed sync; waiting on the next review round of PR #5104.
 
 ## Phases
-1. [ ] Phase 1 — cap blocker publish in the unattended question guard — protected paths: `.claude/hooks/unattended_question_guard.py` (twin: `workflow-templates/.claude/hooks/unattended_question_guard.py`)
-   - [ ] Hook (twin first): `CAP_BLOCKER_MARKER`, fixed comment template, `publish_cap_blocker`, injectable `runner` / `sleep`, pending retry at the top of the `Stop` path, state and log fields, docstring
-   - [ ] `tests/test_unattended_question_guard.py`: posted, exists, retry, pending → retried, label failure, `gh` missing, invalid repo, already posted
-   - [ ] CLAUDE.md §28.G (+ `workflow-templates/CLAUDE.md`), agents.md, README.md
-   - [ ] `changelog.d/5083-guard-cap-source-issue-blocker.md`
+1. [ ] Phase 1 — cap blocker publish in the unattended question guard — protected paths: `.claude/hooks/unattended_question_guard.py` (twin: `workflow-templates/.claude/hooks/unattended_question_guard.py`) — PR #5104 open, waiting on the next review round; review rounds: 6 (conflict on `d8619c3`; findings on `f438ca2`, `e8dcd8a`, `ed774a4`, `c658bca`, `7c4550a`); interventions: 0
+   - [x] Hook (twin first): `CAP_BLOCKER_MARKER_PREFIX` / `cap_blocker_marker`, fixed template `cap_blocker_body`, `publish_cap_blocker`, `run_gh_api`, injectable `runner` / `sleep` / `clock` on `evaluate`, pending retry at the top of the `Stop` path, `read_state` / `_write_state` (merging), `cap_blocker_*` log lines, docstring
+   - [x] `tests/test_unattended_question_guard.py`: 14 new cases (posted, exists, other session's marker, already posted, in-hook retry, label-only retry, pending → retried, no double retry, time budget, `gh` missing, invalid repo, state merge, runner timeout, no calls below the cap); `test_hook_makes_no_network_calls` replaced by `test_hook_network_access_is_only_the_gh_api_runner`
+   - [x] CLAUDE.md §28.G (`workflow-templates/CLAUDE.md` is a symlink to it), agents.md, README.md
+   - [x] `changelog.d/5083-guard-cap-source-issue-blocker.md`
+   - [x] `.claude/hooks/unattended_question_guard.py` twin sync (operator, Q40): synced in `d8619c3`, `f438ca2`, `e8dcd8a`, and `c658bca` (after the review round 1 fix `ed774a4`); live hook and twin byte-identical at `c658bca`
    - Done: whole guard test file passes with the twin synced into `.claude/`; docs describe the cap publish
 
 ## Conformance
@@ -41,6 +42,7 @@
 - AD-6 [plan, 2026-09-29] Is the stop still allowed after the publish? — Picked: A — yes, as today. Alternatives: B — keep blocking until a publish succeeds. Why: an unbounded block loops the session; the blocker on the issue is the signal. Applied in: phase 1 PR. Status: pending review
 
 ## Lessons
+- [source:intervention] A dedup read that treats any comment containing a hidden marker as "already posted" lets anyone who can comment suppress the post; require a trusted `author_association` and a body that starts with the marker. (files: workflow-templates/.claude/hooks/unattended_question_guard.py)
 
 ## Notes
 - Issue mode (CLAUDE.md §28.A): started by the Claude issue dispatcher routine (`trig_01EaRfriPigj1QtV6UR5y1Wm`) in session `session_011pj7ZGZg7yssSWeVqHH6d8`; permission mode auto.
@@ -48,4 +50,11 @@
 - Session tooling: the repo was attached mid-session, so the SessionStart hook had not run and `gh` was missing; the session ran `.claude/hooks/session-start.sh` to install it. No `mcp__github__*` tools in this session: GitHub writes use REST through the agent proxy.
 - Stale Routine sweep: 11 listed, 8 deleted; the Auto-mode classifier denied deleting `trig_01L96Luucx4ov6s9hiGEq7Ws`, `trig_017T43aSdHGCBcZtt3cdHBoZ`, `trig_012KUCYgapyhs2iKBEnHhBjR` (left for a later sweep).
 - Progress comment: #5083 comment 5885854190.
-- Protected-path approval: not recorded yet. The #4948 automatic twin-first default has not landed, so phase 1 stops to ask (master-session Q40 is offered as option D).
+- Protected-path approval: phase 1 — twin-first per Q40 (2026-09-29) (#5083 comment 5886503268, OWNER, answered by the master session under standing decision Q40: A; option D of the #5083 blocked comment 5885866605). The phase edits only the `workflow-templates/.claude/hooks/` twin, pushes the phase PR, posts a `hold` claim, and stops BLOCKED with the twin-sync request.
+- 2026-09-29 08:36Z: resumed by the master's routine `trig_01H6YF1vdFH3cuiPuJXnhjga` (replaces `/reclarify`); `ai:claude-blocked` removed; project branch synced with its base (`7a2fb7f`, clean merge; hook unchanged, sha256 `db5f32ba…`).
+- Plan deviation (naming only): the plan's `CAP_BLOCKER_MARKER` shipped as `CAP_BLOCKER_MARKER_PREFIX` plus `cap_blocker_marker(session)`, because the marker carries the session id.
+- 2026-09-30: resume stage (`session_015pKokfz1CHmpSNQtszyYha`) removed `ai:claude-blocked` after the operator's `[claude-twin-sync]` `d8619c3` and `/reclarify` (#5083 comment 5904021371); project branch synced with its base (`efb0b7c`, merges #5088, which also rewrote `unattended_question_guard.py`); checker `session_01NP7tQbFBJ5V1jmMCjx6W1o` armed on PR #5104.
+- 2026-09-30: the checker saw PR #5104 conflicted on head `d8619c3` and started the phase 1/1 review-round stage (`session_01DFDLhjE51LeRtp2NL1KhyL`). It merged the project branch into the phase branch and resolved the conflicts keeping both sides: the twin hook keeps #5082's verified-blocker check (`blocked_comment_posted(turn, marker)`, `shlex`) and #5083's cap publish (`subprocess`, `retry_message`); README.md and the guard test's source check combine both. `.claude/hooks/unattended_question_guard.py` was resolved to the project branch's version (edits stay in the twin, Q40), so the phase PR needs a second `[claude-twin-sync]`. The round-1 findings hand-off for head `3b5c607` went stale when the twin sync moved the head; the next review round re-reviews the merged head.
+- 2026-09-30: resumed by the dispatcher routine `trig_01KZGur9mXoL2aXmPgmiehoy` in `session_01YCHkQBXLdPkViHUvkApdu2` after the operator's `[claude-twin-sync]` `f438ca2` and `/reclarify` (#5083 comment 5906603170); `ai:claude-blocked` removed; project branch already in sync with its base. The review workflow had handed off round 1 findings on `f438ca2` (24 ledger entries), so this session ran the review round (claim comment 5907317180). Fixed: the idempotency read now parses `{author_association, body}` per comment and counts only a trusted comment starting with the blocked marker (`_cap_blocker_on_issue`, `CAP_BLOCKER_TRUSTED_ASSOCIATIONS`, `CAP_BLOCKER_COMMENTS_JQ`); CLAUDE.md §28.G gains the 6 s per-call cap and exact log wording. Rejected: `retried or publish_cap_blocker` (the pending retry is this stop's publish; a second one repeats failed calls past the 30 s hook timeout), the early `GuardStateError` return (unreadable state makes the cap path unreachable, and every path already fails open), and the retry-summary nit. Twin edited only (Q40).
+- 2026-09-30/10-01: review round 1 on `e8dcd8a` (ledger `c4590e4e…`) was fixed by a `/fix-claude-pr` session (`session_01A92fTMBbyLSds2KiqdhsvM`) in `ed774a4`: each cap-blocker `gh api` call now starts only when it fits the 24 s budget, and `cap_blocker: pending` is stored before the first call (twin only, Q40; PR reply comment 5918493668, blocker #5083 comment 5918503052). The operator answered Q1: A and synced it as `[claude-twin-sync]` `c658bca` (#5083 comment 5922691443), which also settled the review round 2 consensus findings on `ed774a4` (the live hook lacked the twin's per-call budget check and early `pending` write; the third was the failed `Run reviewer models` step on that head). Review round 1 on `c658bca` (ledger `5ea0e236…`) flagged only this log as stale.
+- 2026-10-01: review round 2 on `7c4550a` (ledger `05842d9f…`, 6 entries; one consensus task gap from 5 reviewers) was fixed by a `/fix-claude-pr` session (`session_01PBwTHMs7tcjPRsUdsXry49`): the PR #5104 description's twin-first section still asked the operator to sync the twin and named a stale sha256; it now records that both hook copies are byte-identical since `c658bca` (sha256 `b8fbf0d8…`) and that `tests/test_unattended_question_guard.py` passes (176, template parity included). Docs and PR text only; no hook change.

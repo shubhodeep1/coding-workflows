@@ -1092,7 +1092,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 >   target and the comment URL in its result, so an `echo` of the marker or
 >   a comment on another issue does not count (issue #5082). At most 2
 >   blocks per session, then the stop is allowed with a `cap reached` system
->   message.
+>   message, and the hook posts the `ai:claude-blocked` comment and label on
+>   the issue itself: once per session, retried when GitHub is unreachable
+>   (#5083).
 > - `AskUserQuestion` is denied in a marked session.
 > - Interactive sessions are never marked, so the hook never affects them.
 
