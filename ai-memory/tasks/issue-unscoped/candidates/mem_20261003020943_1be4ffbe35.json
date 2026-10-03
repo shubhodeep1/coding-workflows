@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/claude-pool-worker.yml:263-278 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The pre-commit hook runs `claude_pool.py` from the worker-writable `pool/` checkout, so the worker can replace the guard with a no-op before committing `.claude/**` changes.\n  WHY: The worker has Bash access to the shared workspace and can modify the helper the hook invokes, bypassing the twin-first guard without needing `sudo`.\n- tests/test_claude_pool.py:977-1018 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The commit-guard test does not simulate the worker overwriting the helper after hook installation, so it cannot catch the writable-helper bypass.\n  WHY: The test only exercises the original helper, so it can pass even when replacing that helper would let a `.claude/**` commit through.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Phase 1 done condition: \"Done: unit tests pass; the runner-repo smoke run succeeds on the wrapper PR's branch; nothing dispatches.\"\n  expected_change_site: a green runner-repo smoke run against the current head or a post-review-round-1 head, using the wrapper's `pool_ref`/`uses:` temporary-branch mechanism\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: `docs/implement-plan/claude-actions-worker-pool.md` phase-1 checklist, line 26; run 37015227644 predates review round 1 (head 5c32058); seven subsequent rounds rewrote `.github/workflows/claude-pool-worker.yml`; the current head is eb3dde7, and its smoke checks have not executed on a real runner.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/claude-pool-worker.yml:Prepare the worker step\n  PROBLEM: The pre-commit hook runs `claude_pool.py` from the mutable `pool/` checkout, allowing the worker to replace the guard with a no-op before committing `.claude/**` changes.\n  WHY: The worker can write to `pool/` before a commit, though the review notes that the guard is documented as protection against mistakes rather than a sandbox and identifies other bypass paths.\n  severity=high | confidence=[3]\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/claude-pool-worker.yml:prepare step, lines 263-274\n  PROBLEM: The pre-commit hook invokes its helper from the worker-writable `pool/` checkout, allowing the worker to replace it with a no-op and bypass the twin-first guard.\n  WHY: The worker can overwrite the helper before committing in `target/`, while the redaction helper uses a fresh checkout to defend against the same threat.\n  severity=high | confidence=[5]\n- tests/test_claude_pool.py:`test_prepare_step_installs_the_commit_guard_for_every_repository` (around lines 977-1018; added in last run)\n  PROBLEM: The test does not simulate the worker overwriting the helper after the hook is installed.\n  WHY: It only tests the original helper, so it cannot detect that a replacement helper can allow a `.claude/**` commit.\n  severity=low | confidence=[5]\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/claude-pool-worker.yml:273-278, 286-323, 422-427\n  PROBLEM: The pre-commit hook executes `claude_pool.py` from the writable `pool/` checkout, which the worker can replace before committing.\n  WHY: The hook then runs the replacement, which can return success without checking `.claude/**`, allowing the protected-path change through.\n  severity=high | confidence=[5]\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/claude-pool-worker.yml:275-278, 422-427\n  PROBLEM: The pre-commit hook executes `claude_pool.py` from the writable `pool/` checkout, which the worker can replace before committing `.claude/**` changes.\n  WHY: The smoke checks only prove the guard works with the unmodified helper, not when the worker has compromised it.\n  severity=high | confidence=[5]\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/claude-pool-worker.yml:275-278, 422-423\n  PROBLEM: The twin-first commit guard runs its helper from the worker-writable `pool/` checkout, so the worker can replace it with a no-op and commit `.claude/**` changes.\n  WHY: The worker has unrestricted Bash access to the shared workspace, so it can replace the helper or hook without `sudo`, bypassing the guard despite the stronger documented claim.\n  severity=high | confidence=[4]\n- TASK_GAP\n  Requirement: Phase 1 done condition (docs/implement-plan/claude-actions-worker-pool.md phase-1 checklist, line 26): \"Done: unit tests pass; the runner-repo smoke run succeeds on the wrapper PR's branch; nothing dispatches.\"\n  Expected change site: a green runner-repo smoke run against the current head (eb3dde7) or any post-review-round-1 head, exercised via the wrapper's `pool_ref`/`uses:` temporary-branch mechanism described in AD-6.\n  Evidence of absence: Run 37015227644 predates review round 1 (head 5c32058). Seven subsequent rounds rewrote `.github/workflows/claude-pool-worker.yml`, including the round-7 addition of the `commit_guard` and `twin_commit` smoke checks (smoke step lines ~390-404) and the global `core.hooksPath` pre-commit hook (prepare step lines 273-278) \u2014 none of which have ever executed on a real runner. The wrapper is now pinned to `@main` (AD-6 second commit), so the current head's smoke checks are unverified live; only local contract tests (which stub `claude`, `git`, and the GitHub API) cover them. The done-condition evidence presented is stale for the shipped workflow.\n  severity=low | confidence=[4]\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5b98519480847e9d1d2a0fc575790e967e470f88ae0625aa86082bf38bf66eb3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6100,
+    "run_id": "37087198714",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37087198714",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003020943_1be4ffbe35",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6100,
+    "run_id": "37087198714"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T02:09:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
