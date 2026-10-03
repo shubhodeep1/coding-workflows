@@ -6,7 +6,7 @@ Before this change, five paths in `scripts/orchestrate_poll_process.sh` accepted
 | The numbers that matter | Value |
 | --- | --- |
 | Paths gated | 5 (reconcile loop, validation-dispatch gate, stall-recovery tag, backward-scan promotion, validation fix-up backfill) |
-| New log keys and values | `MERGED_STATE_HEALED`; `MERGED_STATE_STALE … action=alert \| retry`; `MERGED_STATE_WAVE_HOLD`; `STALL_MERGED_LABEL_REJECTED … stall_action=run \| skip`; `STALL_SKIP … reason=merged_link_rejected`; `LINKED_PR_CROSS_REF_REJECTED … reason=non_target_base \| unverified_identity \| foreign_base_repo` |
+| New log keys and values | `MERGED_STATE_HEALED`; `MERGED_STATE_STALE … action=alert \| retry` (alert `why=issue_closed \| already_healed \| heal_disabled \| no_state_entry`; retry `why=issue_state_unread \| timeline_read_failed \| pr_fetch_failed \| merge_unverified \| state_write_failed \| label_edit_failed \| marker_write_failed \| alert_marker_write_failed`); `MERGED_STATE_WAVE_HOLD`; `STALL_MERGED_LABEL_REJECTED … stall_action=run \| skip`; `STALL_SKIP … reason=merged_link_rejected`; `LINKED_PR_CROSS_REF_REJECTED … reason=non_target_base \| unverified_identity \| foreign_base_repo` |
 | Extra API calls | none on the reconcile loop, backward scan, wave gate, or validation fix-up backfill; per merged-PR hit in stall recovery, 1 REST read on the managed path and 2 on the standalone path |
 | New repository variable | `ENABLE_MERGED_STATE_HEAL` (default `true`) |
 | Source issue | #5618 (security cycle 3 of the #4813 project) |

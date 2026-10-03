@@ -15871,6 +15871,10 @@ _heal_rejected_merged_state() {
   local _mhs_edit_args=(--add-label "${_mhs_target_label}")
   [ "${_mhs_has_label}" = "true" ] && _mhs_edit_args+=(--remove-label "ai:merged")
   if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${_mhs_edit_args[@]}" >/dev/null 2>&1; then
+    # GitHub still carries `ai:merged`, and the review-blocked recheck reloads
+    # labels from GitHub, so hold the wave for the whole cycle (PR #5633
+    # review round 15), not only for the first wave check.
+    MERGED_HEAL_WAVE_HOLD="true"
     echo "MERGED_STATE_STALE issue=${issue_num} pr=${rejected_pr} reason=${reason} label_merged=${_mhs_has_label} stored_status=${_mhs_stored:-none} action=retry why=label_edit_failed wave_hold=true" >&2
     # Hold the wave this cycle (PR #5633 review round 4): the stored status
     # is already in_progress, so drop `ai:merged` from the labels this cycle
@@ -20201,6 +20205,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # implementation PR (an automation head in this repository).
     _rcl_rejected_merged_pr=""
     _rcl_rejected_merged_reason=""
+    # Covers the timeline read too (any read that leaves the linked PRs
+    # unknown); `_rcl_hold_why` below tests `_rcl_timeline_failed` first to
+    # tell the two apart (PR #5633 review round 15).
     _rcl_candidate_fetch_failed="${_rcl_timeline_failed}"
     # A merged candidate the rule could not judge (no base ref, malformed
     # payload): not evidence for a heal, but no verified merge either.

@@ -15665,6 +15665,27 @@ def test_heal_state_write_failure_holds_the_wave():
 	branch_start = body.rindex("else", 0, failed)
 	assert branch_start < body.index('MERGED_HEAL_WAVE_HOLD="true"', branch_start) < failed < body.index("return 0", failed)
 
+def test_heal_label_edit_failure_holds_the_wave():
+	"""PR #5633 review round 15: GitHub still carries `ai:merged` after a failed label edit, and the review-blocked
+	recheck reloads labels from GitHub, so the heal sets MERGED_HEAL_WAVE_HOLD for the whole cycle before returning."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = script.split("_heal_rejected_merged_state() {", 1)[1].split("\n}\n", 1)[0]
+	failed = body.index("why=label_edit_failed wave_hold=true")
+	branch_start = body.index('if ! gh_retry gh issue edit "${issue_num}"')
+	assert branch_start < body.index('MERGED_HEAL_WAVE_HOLD="true"', branch_start) < failed < body.index("return 0", failed)
+
+def test_review_blocked_recheck_keeps_the_wave_hold():
+	"""PR #5633 review round 15: the review-blocked recheck re-reads labels from GitHub and recomputes only
+	WAVE_COMPLETE (PROJECT_COMPLETE is not recomputed, and the first wave check already cleared it under a hold),
+	so the hold guard must follow the recheck's check-wave-status call."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	recheck = script.index('echo "Re-checking wave status after review-blocked handling..."')
+	end = script.index('echo "Updated wave status after review-blocked handling:', recheck)
+	block = script[recheck:end]
+	assert "PROJECT_COMPLETE=" not in block
+	call = block.index("check-wave-status")
+	assert call < block.index('if [ "${MERGED_HEAL_WAVE_HOLD:-false}" = "true" ] && [ "${WAVE_COMPLETE}" = "true" ]; then') < block.index('WAVE_COMPLETE="false"')
+
 def test_alert_only_branch_records_its_marker_before_alerting():
 	"""PR #5633 review round 8: the alert-only branch stores `.merged_state_heal.alerted` first and sends the
 	Telegram alert and healing note only after that write succeeded, so a failed write never repeats them."""
