@@ -128,6 +128,8 @@ state.setdefault("codex_calls", []).append(sys.argv[1:])
 state.setdefault("codex_stdin", []).append(sys.stdin.read())
 state_path.write_text(json.dumps(state), encoding="utf-8")
 sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", "[]"))
+if os.environ.get("MOCK_CODEX_ECHO_PROMPT") == "1":
+	sys.stderr.write(state["codex_stdin"][-1])
 sys.stderr.write(os.environ.get("MOCK_CODEX_STDERR", ""))
 sys.exit(int(os.environ.get("MOCK_CODEX_EXIT_CODE", "0")))
 '''
@@ -970,9 +972,12 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 		extra_env={
 			"MOCK_CODEX_EXIT_CODE": "29",
 			"MOCK_CODEX_STDERR": (
-				"test-openrouter-key Chief Security Officer\n"
+				"test-openrouter-key sk-example-secret-value ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 "
+				"Bearer fake-bearer-secret personal-access-secret " + "a" * 64 + "\n"
 				"Error: No such file or directory (os error 2)\n"
+				"HTTP Error 402: Payment Required\n"
 			),
+			"GH_PAT": "personal-access-secret",
 		},
 	)
 	_assert_security_audit_failure_context(
@@ -983,8 +988,99 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 	assert proc.returncode == 29
 	assert "captured_path_error=" in proc.stderr
 	assert "os\\ error\\ 2" in proc.stderr
+	assert "codex-stderr-tail begin" in proc.stderr
+	assert "codex-stderr-tail end" in proc.stderr
+	assert "provider=402" in proc.stderr
+	assert "Payment\\ Required" in proc.stderr
+	for secret in ("test-openrouter-key", "sk-example-secret-value", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890", "fake-bearer-secret", "personal-access-secret", "a" * 64):
+		assert secret not in proc.stderr
 	assert len(final_state.get("codex_calls", [])) == 1
 	assert final_state.get("issue_comment_args", []) == []
+
+
+def test_security_audit_codex_tail_classes_and_status_context() -> None:
+	for diagnostic, provider in (
+		("HTTP Error 401: Unauthorized", "401"),
+		("HTTP 429 Too Many Requests", "429"),
+		("rate limit exceeded", "429"),
+		("status=503: unavailable", "5xx"),
+		("encode402 ValueError 500", "unknown"),
+		("", "unknown"),
+		("HTTP 401\nInsufficient credits", "402"),
+		("Payment Required\nstatus=429", "429"),
+	):
+		proc, state = _run_security_audit(
+			_security_audit_tracker_state(),
+			extra_env={"MOCK_CODEX_EXIT_CODE": "29", "MOCK_CODEX_STDERR": diagnostic},
+		)
+		assert proc.returncode == 29
+		assert f"provider={provider}" in proc.stderr
+		assert "codex-stderr-tail begin" in proc.stderr
+		assert "codex-stderr-tail end" in proc.stderr
+		assert not state.get("issue_comment_args")
+
+
+def test_security_audit_codex_tail_is_bounded_and_drops_prompt_echoes() -> None:
+	secret_value = "private-short-secret"
+	large_stderr = "\n".join(f"status=503 line {idx} " + "noise " * 35 for idx in range(200))
+	proc, state = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "29",
+			"MOCK_CODEX_STDERR": large_stderr + "\n" + secret_value + " HTTP Error 402: Payment Required\n",
+			"AUDIT_TEST_SECRET": secret_value,
+		},
+	)
+	assert proc.returncode == 29
+	tail = proc.stderr.split("security-audit: codex-stderr-tail begin\n", 1)[1].split(
+		"security-audit: codex-stderr-tail end", 1
+	)[0]
+	assert len(tail.encode("utf-8")) <= 4096
+	assert 3000 < len(tail.encode("utf-8"))
+	assert len(tail.splitlines()) < 40
+	assert secret_value not in proc.stderr
+	assert "provider=402" in proc.stderr
+	assert not state.get("issue_comment_args")
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "29",
+			"MOCK_CODEX_STDERR": "\n".join(f"diagnostic {idx}" for idx in range(70)),
+		},
+	)
+	tail = proc.stderr.split("security-audit: codex-stderr-tail begin\n", 1)[1].split(
+		"security-audit: codex-stderr-tail end", 1
+	)[0]
+	assert len(tail.splitlines()) == 40
+	assert "diagnostic\\ 30" in tail and "diagnostic\\ 29" not in tail
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "29",
+			"MOCK_CODEX_STDERR": "oversized " + "small " * 1200 + "\nHTTP 429\n",
+		},
+	)
+	tail = proc.stderr.split("security-audit: codex-stderr-tail begin\n", 1)[1].split(
+		"security-audit: codex-stderr-tail end", 1
+	)[0]
+	assert "oversized" not in tail
+	assert "HTTP\\ 429" in tail and "provider=429" in proc.stderr
+
+	# The fake Codex can echo its entire input; no rendered prompt or config
+	# lines may enter the public diagnostic even when they carry status text.
+	proc, state = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "29",
+			"MOCK_CODEX_ECHO_PROMPT": "1",
+			"MOCK_CODEX_STDERR": "model_verbosity = high\nHTTP Error 402: Payment Required\n",
+		},
+	)
+	assert proc.returncode == 29
+	assert "model_verbosity" not in proc.stderr
+	assert "Current UTC date:" not in proc.stderr
+	assert "provider=402" in proc.stderr
+	assert not state.get("issue_comment_args")
 
 
 def test_security_audit_missing_codex_reports_sanitized_context() -> None:
@@ -1030,6 +1126,7 @@ def test_security_audit_success_path_retains_codex_and_tracker_behavior() -> Non
 
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stderr == ""
+	assert "codex-stderr-tail" not in proc.stdout
 	assert "tracker=#9000 findings=0 followups_created=0" in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
 	assert "Audit scope: repository checkout at default-branch HEAD." in final_state["codex_stdin"][0]

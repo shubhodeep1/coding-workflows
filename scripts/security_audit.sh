@@ -41,23 +41,145 @@ security_audit_emit_failure() {
 	local failure_phase="${1:?failure phase required}"
 	local failure_path="${2:?failure path required}"
 	local failure_reason="${3:?failure reason required}"
+	local failure_provider="${4:-}"
 	local failure_cwd
 	failure_cwd="$(pwd -P 2>/dev/null || printf '%s' '.')"
-	printf 'security-audit: phase=%s cwd=%s path=%s error=%s\n' \
+	printf 'security-audit: phase=%s cwd=%s path=%s error=%s%s\n' \
 		"$(security_audit_sanitize_log_value "${failure_phase}")" \
 		"$(security_audit_sanitize_log_value "${failure_cwd}")" \
 		"$(security_audit_sanitize_log_value "${failure_path}")" \
-		"$(security_audit_sanitize_log_value "${failure_reason}")" >&2
+		"$(security_audit_sanitize_log_value "${failure_reason}")" \
+		"${failure_provider:+ provider=${failure_provider}}" >&2
 }
 
 security_audit_emit_path_diagnostic() {
 	local diagnostic_file="${1:?diagnostic file required}"
 	local path_diagnostic
+	if [ "${2:-}" = "sanitized-tail" ]; then
+		# The Codex path receives only already-redacted, published lines.
+		path_diagnostic="$(LC_ALL=C grep -E '(No\\ such\\ file\\ or\\ directory|os\\ error\\ 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
+		if [ -n "${path_diagnostic}" ]; then
+			printf 'security-audit: captured_path_error=%s\n' "${path_diagnostic}" >&2
+		fi
+		return 0
+	fi
 	path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
 	if [ -n "${path_diagnostic}" ]; then
 		printf 'security-audit: captured_path_error=%s\n' \
 			"$(security_audit_sanitize_log_value "${path_diagnostic}")" >&2
 	fi
+}
+
+security_audit_emit_codex_stderr_tail() {
+	local stderr_path="${1:?stderr path required}"
+	local prompt_path="${2:?prompt path required}"
+	local tail_path="${3:?tail path required}"
+	local masked_path="${tail_path}.masked"
+	local rendered_path="${tail_path}.rendered"
+	local stderr_line rendered_line
+	: > "${tail_path}"
+	# Read only the final 64 KiB plus one byte; discard a cut first line rather
+	# than publishing a fragment of a prompt or credential. Filter prompt/config
+	# echoes and mask secrets before calling the shared log sanitizer.
+	if ! python3 - "${stderr_path}" "${prompt_path}" > "${masked_path}" 2>/dev/null <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+stderr_path = Path(sys.argv[1])
+prompt_path = Path(sys.argv[2])
+with stderr_path.open("rb") as stderr_file:
+	stderr_file.seek(0, 2)
+	length = stderr_file.tell()
+	stderr_file.seek(max(0, length - 65537))
+	content = stderr_file.read()
+if length > 65537:
+	content = content.partition(b"\n")[2]
+
+prompt_lines = set()
+with prompt_path.open(encoding="utf-8", errors="replace") as prompt_file:
+	for prompt_line in prompt_file:
+		if prompt_line.strip():
+			prompt_lines.add(prompt_line.strip())
+
+secret_values = []
+for name, value in os.environ.items():
+	if value and re.search(r"(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|(?:^|_)PAT(?:_|$))", name, re.I):
+		secret_values.extend(part for part in value.splitlines() if part)
+
+lines = []
+for raw_line in content.decode("utf-8", errors="replace").splitlines():
+	line = raw_line.strip()
+	if not line or line in prompt_lines or any(
+		len(prompt_line) >= 24 and prompt_line in line for prompt_line in prompt_lines
+	):
+		continue
+	if re.search(r"config\.toml|model_verbosity|OPENROUTER_API_KEY|=== (?:BEGIN|END) UNTRUSTED|(?:^|\s)(?:model|api_?key|base_url|model_provider)\s*=", line, re.I):
+		continue
+	line = re.sub(r"(?i)(?:sk-[a-z0-9_-]{3,}|(?:gh[pousr]_|github_pat_)[a-z0-9_]+)", "[redacted]", line)
+	line = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [redacted]", line)
+	line = re.sub(r"\b[0-9a-fA-F]{32,}\b|\b[A-Za-z0-9_+/=-]{40,}\b", "[redacted]", line)
+	for value in sorted(set(secret_values), key=len, reverse=True):
+		if len(value) >= 8:
+			line = line.replace(value, "[redacted]")
+		else:
+			line = re.sub(r"(?<![\w])" + re.escape(value) + r"(?![\w])", "[redacted]", line)
+	if line.strip():
+		lines.append(line)
+
+for line in lines[-40:]:
+	print(line)
+PY
+	then
+		: > "${masked_path}"
+	fi
+	: > "${rendered_path}"
+	while IFS= read -r stderr_line; do
+		rendered_line="$(security_audit_sanitize_log_value "${stderr_line}")"
+		# Prefix untrusted text so it cannot become an Actions workflow command.
+		printf 'security-audit: codex-stderr: %s\n' "${rendered_line}" >> "${rendered_path}"
+	done < "${masked_path}"
+	# Cap *rendered* bytes without cutting a line through a redacted token.
+	local provider_class="unknown"
+	provider_class="$(python3 - "${rendered_path}" "${tail_path}" 2>/dev/null <<'PY'
+import re
+import sys
+from pathlib import Path
+
+lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+kept = []
+total = 0
+for line in reversed(lines[-40:]):
+	size = len((line + "\n").encode("utf-8"))
+	if total + size > 4096:
+		break
+	kept.append(line)
+	total += size
+kept.reverse()
+Path(sys.argv[2]).write_text("".join(line + "\n" for line in kept), encoding="utf-8")
+
+provider = "unknown"
+status = re.compile(r"\b(?:http(?:/\d+(?:\.\d+)?)?|status|statuscode|code|error|errorcode)\s*[:=/-]?\s*(?:error\s+)?(402|401|429|5\d\d)\b", re.I)
+for line in kept:
+	visible = line.replace("\\ ", " ")
+	if re.search(r"payment required|insufficient credits", visible, re.I):
+		provider = "402"
+	elif re.search(r"rate limit", visible, re.I):
+		provider = "429"
+	else:
+		match = status.search(visible)
+		if match:
+			provider = "5xx" if match.group(1).startswith("5") else match.group(1)
+print(provider)
+PY
+	)" || provider_class="unknown"
+	printf 'security-audit: codex-stderr-tail begin\n' >&2
+	if [ -s "${tail_path}" ]; then
+		cat "${tail_path}" >&2
+	fi
+	printf 'security-audit: codex-stderr-tail end\n' >&2
+	printf '%s' "${provider_class}"
 }
 
 security_audit_require_file() {
@@ -1168,8 +1290,10 @@ if codex --ask-for-approval never \
 	:
 else
 	CODEX_EXECUTION_STATUS=$?
-	security_audit_emit_path_diagnostic "${CODEX_ERROR_FILE}"
-	security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero"
+	CODEX_TAIL_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-stderr-tail.txt"
+	CODEX_PROVIDER_CLASS="$(security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}" "${RENDERED_PROMPT_FILE}" "${CODEX_TAIL_FILE}")" || CODEX_PROVIDER_CLASS="unknown"
+	security_audit_emit_path_diagnostic "${CODEX_TAIL_FILE}" "sanitized-tail"
+	security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero" "${CODEX_PROVIDER_CLASS}"
 	exit "${CODEX_EXECUTION_STATUS}"
 fi
 
