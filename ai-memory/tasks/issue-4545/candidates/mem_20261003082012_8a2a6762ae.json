@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan \u2014 resolver index isolation\n\n**Planning ref:** `ai/issue-4512` at `27eaaaf16d2d8fbd7b5c07db9e018e26c73aa213`. It matches the issue\u2019s integration-branch metadata. The auto-answer confirms that no issue clarification was needed; the earlier Q1 answers concern the retired Claude implementation, not this plan.\n\nScope-mode: Selective Expansion  \nReuse-audit: extends `scripts/review_conflict_resolve.sh`  \nScope-mode justification: Isolate the model attempt as requested, and cover the integration-sync prompt and OpenCode\u2019s resolver-local snapshot setting as part of the same boundary. These additions are estimated at \u226430 LOC and \u226410 minutes beyond index isolation alone, with no dependency or new external interface. Prefer the complete path under `unattended_system_instructions.md` \u00a76: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and wiring\n\n- **Existing code only:** extend the resolver already invoked by `.github/workflows/review_autofix.yml`; add no standalone script.\n- **Entry point:** `.github/workflows/internal-review.yml` invokes that reusable workflow on PR events and `workflow_dispatch`. No scheduler change or long-running supervisor is needed.\n- **Database gate / future-removal registry:** not applicable.\n\n## Files likely to change\n\n- `scripts/review_conflict_resolve.sh` \u2014 attempt-scoped index isolation, resolver-local config, and bounded scope-error diagnosis.\n- `prompts/conflict-resolver.txt` and `prompts/integration-sync-conflict-resolver.txt` \u2014 reserve staging and committing for the trusted resolver.\n- `tests/test_review_conflict_resolve_retry_prelude_render.py` \u2014 behavioral and contract regressions, extending its existing snapshot fixtures.\n- `changelog.d/4545-resolver-index-isolation.md` \u2014 one fragment for the observable security/failure-mode fix.\n\n## Functions and data structures\n\nExtend the existing source-repo attempt loop and `_resolver_scope_state`; leave `stage_resolver_touched_path_or_fail` and the final commit gate in control of staging. Immediately before each model invocation, copy the current merge index to a fresh, run-local scratch file and pass its path as `GIT_INDEX_FILE` **only to the model command and its wrappers**. Git defines this variable as selecting an alternate index. Fail closed if the source index cannot be identified or copied; never substitute an empty index for an unmerged one. Keep the real-index and `MERGE_HEAD` comparisons outside that invocation environment. ([git-scm.com](https://git-scm.com/docs/git.html?utm_source=openai))\n\nSet `\"snapshot\": false` in the **generated resolver config only**, after the shared writer runs and before bootstrap; do not change the shared writer\u2019s other roles. This is the documented OpenCode V1 key; V2 calls it `snapshots`, so test against the repository\u2019s pinned runtime rather than silently switching keys. ([opencode.ai](https://opencode.ai/docs/config/))\n\nKeep the existing scope-error prefix and exception type, appending only a fixed, enumerated reason code\u2014for example, `index_drift`, `unsafe_path`, `snapshot_invalid`, or `io_error`. Do not include exception text or paths in that diagnostic.\n\n## API/interface changes\n\nNo new GitHub call, endpoint, workflow input, or environment variable. `GIT_INDEX_FILE` is invocation-local. The resolver\u2019s generated OpenCode JSON gains `snapshot: false`; its scope-error annotation gains a reason code without renaming the existing prefix.\n\n## Decisions\n\n### D1 \u2014 Isolate the index at the model boundary\n\n- **Chosen:** Fresh scratch copy per source-repo attempt; trusted capture, checks, validation, and staging continue against the real index.\n- **Alternatives considered:** Permit model staging; reset the real index after each attempt.\n- **Why:** Either alternative weakens the existing fail-closed guard or risks losing the in-progress merge state.\n\n### D2 \u2014 Keep snapshot configuration resolver-local\n\n- **Chosen:** Disable OpenCode snapshots in this resolver\u2019s generated config and prohibit staging/committing in both resolver prompts.\n- **Alternatives considered:** Change the shared config writer\u2019s defaults; rely on prompt wording alone.\n- **Why:** The shared change affects unrelated agents, while wording alone does not isolate an untrusted process.\n\n## Security considerations\n\nThe model process and its shell commands are the trust boundary; only the trusted resolver may stage validated paths or create the merge commit. Preserve out-of-scope worktree detection, real-index drift detection, restore verification, and the final touched-path gate. Validate that the scratch source and destination are usable and fail closed on copy/config errors. An agent can still attempt other Git-state mutations, including a commit: an alternate **index is not a Git sandbox**. Do not describe it as containing `HEAD` changes; keep `MERGE_HEAD` checks and prompt prohibitions, and test the fail-closed behavior. No secrets or untrusted path text belong in new diagnostics. ([git-scm.com](https://git-scm.com/docs/git.html?utm_source=openai))\n\n## Risks and edge cases\n\n- OpenCode or a model-issued `git add` must not alter the real merge index; an unrelated worktree edit must still be rejected and restored only when verification succeeds.\n- A missing/corrupt scratch index, altered real index, or unsafe path must stop before retry or commit.\n- **Evidence limitation:** the supplied failure tail shows `ValueError`, not the underlying exception or a `git add` from that run. Index mutation remains a strong hypothesis, not a confirmed fact.\n- **Ref context:** the comments describe work on a retired Claude branch; the checked-out planning ref does not contain this fix. Three unrelated files are already modified in the worktree and must be left untouched.\n\n## Testing and verification\n\nExtend the existing test module with a simulated attempt that stages an in-scope resolution: demonstrate real-index drift without isolation, then real-index preservation with isolation. Assert that an out-of-scope edit still fails, direct real-index drift still fails closed, both prompts prohibit staging/committing, and only the resolver config disables snapshots. Run `bash -n scripts/review_conflict_resolve.sh`, `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py`, and the existing relevant resolver/config contract checks. No validator result is claimed in this planning phase.\n\nPLAN_SELF_CHECK: WARNING: The reported run does not expose the specific ValueError cause; preserve diagnostics that can distinguish it on recurrence.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a2a5684478a3663236f7be5670bc44aa6787d8924a42473f450db9ec960eb7c7",
+  "lineage": {
+    "issue_number": 4545,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37109024385",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37109024385",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4545"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003082012_8a2a6762ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4545,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37109024385"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4545",
+  "timestamps": {
+    "created_at": "2026-10-03T08:20:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
