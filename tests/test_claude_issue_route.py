@@ -241,7 +241,11 @@ def stubs(tmp_path):
 	log = tmp_path / "gh.log"
 	_write_stub(
 		bin_dir / "gh",
-		f"""printf '%s\\n' "$*" >> "{log}"
+		f"""if [ "${{1:-}}" = api ] && [ "${{2:-}}" = -i ]; then
+  shift 2
+  set -- api "$@"
+fi
+printf '%s\\n' "$*" >> "{log}"
 printf '%s|%s\\n' "${{GH_TOKEN:-}}" "$*" >> "{tmp_path}/gh_tokens.log"
 if [ -n "${{GH_STUB_FAIL_DISPATCH:-}}" ] && [[ "$*" == *dispatches* ]]; then
   echo "HTTP 404: Not Found" >&2

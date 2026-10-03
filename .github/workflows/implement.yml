@@ -124,7 +124,33 @@ jobs:
           # Codex / install cost. Without the state gate, implement runs on
           # the closed issue, posts a misleading "implementation-failed"
           # diagnostics comment, and burns budget.
-          ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+          # Before checkout only the event-scoped issue GET is permitted.
+          ISSUE_PAYLOAD=""
+          for precheck_attempt in 1 2 3; do
+            if ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>&1)"; then
+              break
+            fi
+            if [[ "${ISSUE_PAYLOAD}" =~ (HTTP\ 404|HTTP\ 422|Resource\ not\ accessible) ]]; then
+              echo "::error::Issue metadata is unavailable (permanent error)."
+              exit 1
+            fi
+            [ "${precheck_attempt}" -lt 3 ] || { echo "::error::Issue metadata unavailable; defer implementation."; exit 75; }
+            if [[ "${ISSUE_PAYLOAD}" =~ (rate\ limit|HTTP\ 429) ]]; then
+              # No verified helper is staged yet. This fixed issue GET uses
+              # the core bucket; /rate_limit's own header is not its reset.
+              precheck_limits="$(gh api /rate_limit 2>/dev/null)" || precheck_limits=''
+              precheck_reset="$(jq -r '.resources.core.reset // empty' <<< "${precheck_limits}" 2>/dev/null || true)"
+              precheck_wait=60
+              if [[ "${precheck_reset}" =~ ^[0-9]{1,12}$ ]]; then
+                precheck_wait=$(( precheck_reset - $(date +%s) + 1 ))
+                [ "${precheck_wait}" -ge 1 ] || precheck_wait=1
+              fi
+              [ "${precheck_wait}" -le 3900 ] || exit 75
+              sleep "${precheck_wait}"
+            else
+              sleep $((precheck_attempt * 2))
+            fi
+          done
           printf '%s\n' "${ISSUE_PAYLOAD}" > "${ISSUE_META_FILE}"
           ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"

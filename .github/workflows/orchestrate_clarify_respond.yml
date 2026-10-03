@@ -74,7 +74,14 @@ jobs:
             echo "ISSUE_PAYLOAD_FILE=${ISSUE_PAYLOAD_FILE}"
             echo "TRACKING_PAYLOAD_FILE=${TRACKING_PAYLOAD_FILE}"
           } >> "$GITHUB_ENV"
-          ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+          ISSUE_PAYLOAD=""
+          for context_attempt in 1 2 3; do
+            if ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null)"; then
+              break
+            fi
+            [ "${context_attempt}" -lt 3 ] || { echo "::error::Issue metadata unavailable; defer clarification response."; exit 75; }
+            sleep 60
+          done
           printf '%s' "${ISSUE_PAYLOAD}" > "${ISSUE_PAYLOAD_FILE}"
           ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
           ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"

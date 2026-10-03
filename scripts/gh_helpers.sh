@@ -10,14 +10,10 @@
 #   gh_api_json_to_file  — like gh_retry_to_file but also validates JSON output
 #   curl_gh_api          — run a curl command against GitHub API with retry
 #
-# Rate limit detection: on 403/429 "rate limit" responses the helper
-# queries GitHub's GET /rate_limit endpoint (not itself rate-limited)
-# to read X-RateLimit-Reset, then sleeps until reset+1 s (capped at
-# 600 s, floored at 1 s, fallback 30 s).  Other transient failures
-# use exponential backoff (1 s, 2 s, 4 s, …).  curl_gh_api reads the
-# 403/429 response headers directly instead: a numeric Retry-After
-# (secondary rate limit) takes precedence over X-RateLimit-Reset —
-# see _parse_reset_header.
+# Rate limits: honor the failed response's Retry-After or matching bucket
+# reset; fall back to the /rate_limit JSON body when headers are absent.
+# A wait past the bounded job budget returns 75 for scheduled recovery.
+# Only safe reads and explicitly idempotent mutations are retried.
 
 # Guard against double-sourcing
 if [ "${_GH_HELPERS_LOADED:-}" = "1" ]; then
@@ -167,10 +163,140 @@ _parse_reset_header()
 _gh_rate_limit_wait()
 {
 	local _reset_ts
-	_reset_ts=$(gh api -i /rate_limit 2>/dev/null \
-		| grep -i '^x-ratelimit-reset:' | head -1 \
-		| awk '{print $2}' | tr -d '\r') || true
+	# The /rate_limit response header describes the probe, not the failed
+	# request. Read the exhausted resource's reset from the response body.
+	local _resource="${1:-core}"
+	_reset_ts=$(gh api /rate_limit 2>/dev/null \
+		| jq -r --arg resource "${_resource}" '.resources[$resource].reset // empty' 2>/dev/null) || true
 	_sleep_until_reset "${_reset_ts}"
+}
+
+# Retry budget helpers. Exit 75 means a rate limit could not be waited out
+# within the attempt/job budget; callers must defer rather than substitute
+# default API data. Only explicit --idempotent permits mutation retries.
+_gh_retry_read_only()
+{
+	local _method="" _fields=0 _api=0 _verb="" _arg
+	[ "${1:-}" = "gh" ] || return 1
+	shift
+	_verb="${1:-}"; shift || true
+	if [ "${_verb}" = "api" ]; then
+		_api=1
+		for _arg in "$@"; do
+			case "${_arg}" in
+			-X|--method) _method=next ;;
+			-f|-F|--field|--raw-field|--input) _fields=1 ;;
+			*) if [ "${_method}" = next ]; then _method="${_arg}"; fi ;;
+			esac
+		done
+		# Inline -XPOST and -fkey=value are supported by gh.
+		for _arg in "$@"; do
+			case "${_arg}" in
+			-XPOST|-XPUT|-XPATCH|-XDELETE) _method="${_arg#-X}" ;;
+			--method=*) _method="${_arg#--method=}" ;;
+			-f?*|-F?*|--field=*|--raw-field=*|--input=*) _fields=1 ;;
+			esac
+		done
+		case "${_method}" in
+		GET|get) return 0 ;;
+		'' ) [ "${_fields}" -eq 0 ] && [ "${1:-}" != graphql ] ; return $? ;;
+		esac
+		return 1
+	fi
+	if [ "${_verb}" = "_safe_gh_jq" ]; then return 0; fi
+	case "${_verb} ${1:-}" in
+	'issue view'|'issue list'|'pr view'|'pr list'|'run list') return 0 ;;
+	esac
+	return 1
+}
+
+# gh api --include prepends HTTP headers to its output. Extract only header
+# blocks at response boundaries; preserve filtered, slurped, and raw bodies
+# byte-for-byte (including a body without a trailing newline).
+_gh_retry_split_headers()
+{
+	PYTHONDONTWRITEBYTECODE=1 python3 - "$1" "$2" "$3" <<'PY'
+from pathlib import Path
+import sys
+
+data = Path(sys.argv[1]).read_bytes()
+headers = []
+body = bytearray()
+while data:
+    if not data.startswith(b"HTTP/"):
+        body.extend(data)
+        break
+    sep = b"\r\n\r\n" if b"\r\n\r\n" in data else b"\n\n"
+    end = data.find(sep)
+    if end < 0:
+        body.extend(data)
+        break
+    headers.append(data[:end])
+    data = data[end + len(sep):]
+    # Paginated gh responses can contain another HTTP block between pages.
+    if data.startswith(b"HTTP/"):
+        continue
+    next_header = data.find(b"\nHTTP/")
+    if next_header < 0:
+        body.extend(data)
+        break
+    body.extend(data[:next_header + 1])
+    data = data[next_header + 1:]
+Path(sys.argv[2]).write_bytes(b"\n".join(headers))
+Path(sys.argv[3]).write_bytes(body)
+PY
+}
+
+_gh_retry_header()
+{
+	local _value
+	_value="$(grep -i "^${2}:" "$1" 2>/dev/null | tail -1 | cut -d: -f2- | tr -d '\r[:space:]' || true)"
+	printf '%s' "${_value}"
+}
+
+_gh_retry_wait()
+{
+	local _kind="$1" _attempt="$2" _stderr="$3" _reset="${4:-}" _resource="${5:-core}" _retry_after="${6:-}" _call_deadline="${7:-}"
+	local _wait _now
+	_now="$(date +%s)"
+	if [ "${_kind}" = rate_limit ]; then
+		# An oversized numeric Retry-After is not permission to retry early.
+		if [[ "${_retry_after}" =~ ^[0-9]+$ ]] && [ "${#_retry_after}" -gt 10 ]; then return 1; fi
+		if [[ "${_retry_after}" =~ ^[0-9]{1,10}$ ]]; then
+			_wait=$(( 10#${_retry_after} ))
+		elif [[ "${_reset}" =~ ^[0-9]{1,12}$ ]]; then
+			_wait=$(( 10#${_reset} - _now + 1 ))
+		elif printf '%s' "${_stderr}" | grep -qiE 'secondary rate|abuse detection'; then
+			_wait=60
+		else
+			# Probe the matching bucket once only when the failed response
+			# supplied no reset. Never use the probe's own reset header.
+			local _bucket_reset
+			_bucket_reset="$(gh api /rate_limit 2>/dev/null | jq -r --arg resource "${_resource}" '.resources[$resource].reset // empty' 2>/dev/null)" || true
+			if [[ "${_bucket_reset}" =~ ^[0-9]{1,12}$ ]]; then
+				_wait=$(( 10#${_bucket_reset} - _now + 1 ))
+			else
+				_wait=60
+			fi
+		fi
+	else
+		if [ "${_attempt}" -ge 8 ]; then
+			_wait=120
+		else
+			_wait=$(( 2 ** (_attempt - 1) + RANDOM % 2 ))
+		fi
+	fi
+	[ "${_wait}" -ge 1 ] 2>/dev/null || _wait=1
+	# A reset beyond the bounded wait must be retried by the scheduler,
+	# not by a job that wakes too early and spends the same exhausted bucket.
+	local _cap="${GH_RETRY_MAX_WAIT_SECONDS:-600}"
+	[[ "${_cap}" =~ ^[0-9]+$ ]] || _cap=600
+	if [ "${_wait}" -gt "${_cap}" ] ||
+		{ [[ "${_call_deadline}" =~ ^[0-9]+$ ]] && [ "$(( _now + _wait ))" -ge "${_call_deadline}" ]; } ||
+		{ [[ "${GH_RETRY_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && [ "$(( _now + _wait ))" -ge "${GH_RETRY_DEADLINE_EPOCH}" ]; }; then
+		return 1
+	fi
+	sleep "${_wait}"
 }
 
 # ---------------------------------------------------------------
@@ -185,10 +311,10 @@ _gh_rate_limit_wait()
 # been removed — the flag is still written for other scripts that
 # want per-job back-pressure.)
 #
-# The file path defaults to /tmp/.gh_rate_limit_circuit_breaker
-# and can be overridden via GH_RATE_LIMIT_BREAKER_FILE env var.
+# The default file is scoped to the run (or the shell PID outside Actions)
+# under RUNNER_TEMP; GH_RATE_LIMIT_BREAKER_FILE overrides its location.
 # ---------------------------------------------------------------
-_GH_RATE_LIMIT_BREAKER_FILE="${GH_RATE_LIMIT_BREAKER_FILE:-/tmp/.gh_rate_limit_circuit_breaker}"
+_GH_RATE_LIMIT_BREAKER_FILE="${GH_RATE_LIMIT_BREAKER_FILE:-${RUNNER_TEMP:-/tmp}/.gh_rate_limit_circuit_breaker.${GITHUB_RUN_ID:-$$}}"
 
 _gh_rate_limit_trip_breaker()
 {
@@ -429,8 +555,10 @@ _gh_ratelimit_tg_alert()
 # ---------------------------------------------------------------
 # gh_retry — Execute a gh CLI command with automatic retry.
 #
-# Rate-limit errors  → wait until X-RateLimit-Reset, retry (up to max_attempts).
-# Other failures     → exponential backoff 1 s, 2 s, 4 s, …
+# Rate-limit errors → response reset/Retry-After, then matching resource
+#                     from /rate_limit if unavailable; exit 75 when exhausted.
+# 5xx/network errors → bounded exponential backoff with jitter.
+# Mutations          → one attempt unless explicitly --idempotent.
 #
 # Stdout contract: each attempt's stdout is buffered in a temp file
 # and only the attempt that succeeds is copied to the caller's stdout.
@@ -449,26 +577,60 @@ _gh_ratelimit_tg_alert()
 #   gh_retry gh api repos/owner/repo/issues
 #   gh_retry gh issue edit 42 --add-label bug
 # ---------------------------------------------------------------
-gh_retry()
+_gh_retry_command()
 {
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	local attempt=1
-	local stderr_file stdout_file
+	local _total_wait_cap="${GH_RETRY_MAX_TOTAL_WAIT_SECONDS:-600}" _call_deadline
+	[[ "${_total_wait_cap}" =~ ^[0-9]+$ ]] || _total_wait_cap=600
+	_call_deadline=$(( $(date +%s) + _total_wait_cap ))
+	local _idempotent=0 _read_only=0 _current_rate_limit=0
+	if [ "${1:-}" = "--idempotent" ]; then _idempotent=1; shift; fi
+	if _gh_retry_read_only "$@"; then _read_only=1; fi
+	local stderr_file stdout_file _headers_file _response_file
 	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_retry: failed to create stderr temp file (mktemp failed); aborting without running" >&2
 		return 1
 	fi
 	if ! stdout_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running" >&2
 		rm -f "${stderr_file}"
+		return 1
+	fi
+	if ! _headers_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_headers.XXXXXX" 2>/dev/null); then
+		rm -f "${stderr_file}" "${stdout_file}"
+		echo "::error::gh_retry: failed to create private headers temp file" >&2
+		return 1
+	fi
+	if ! _response_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_response.XXXXXX" 2>/dev/null); then
+		rm -f "${stderr_file}" "${stdout_file}" "${_headers_file}"
+		echo "::error::gh_retry: failed to create private response temp file" >&2
 		return 1
 	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
-		if "$@" >"${stdout_file}" 2>"${stderr_file}"; then
+		local _command_rc=0
+		_current_rate_limit=0
+		if [ "${1:-}" = gh ] && [ "${2:-}" = api ]; then
+			# GET with explicit fields stays GET because -i is an option,
+			# not a method override. Only fixed trusted helper code runs here.
+			gh api -i "${@:3}" >"${_response_file}" 2>"${stderr_file}" || _command_rc=$?
+			_gh_retry_split_headers "${_response_file}" "${_headers_file}" "${stdout_file}" || _command_rc=1
+		else
+			"$@" >"${stdout_file}" 2>"${stderr_file}" || _command_rc=$?
+			: > "${_headers_file}"
+		fi
+		if [ "${_command_rc}" -eq 0 ]; then
+			local _success_remaining _low_watermark
+			_success_remaining="$(_gh_retry_header "${_headers_file}" x-ratelimit-remaining)"
+			_low_watermark="${GH_RATE_LIMIT_LOW_WATERMARK:-50}"
+			if [[ "${_success_remaining}" =~ ^[0-9]+$ ]] && [[ "${_low_watermark}" =~ ^[0-9]+$ ]] &&
+				[ "${_success_remaining}" -le "${_low_watermark}" ]; then
+				_gh_rate_limit_trip_breaker
+			fi
 			local _gh_retry_replay_rc=0
 			cat "${stdout_file}" || _gh_retry_replay_rc=$?
-			rm -f "${stderr_file}" "${stdout_file}"
+			rm -f "${stderr_file}" "${stdout_file}" "${_headers_file}" "${_response_file}"
 			return "${_gh_retry_replay_rc}"
 		fi
 
@@ -481,49 +643,83 @@ gh_retry()
 		local stderr_content
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
 
-		if _is_gh_permanent_failure "${stderr_content}"; then
-			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
-			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
-			fi
-			rm -f "${stderr_file}" "${stdout_file}"
+		local _http_status _remaining _reset _resource _retry_after
+		_http_status="$(grep '^HTTP/' "${_headers_file}" 2>/dev/null | tail -1 | cut -d' ' -f2 || true)"
+		_remaining="$(_gh_retry_header "${_headers_file}" x-ratelimit-remaining)"
+		_reset="$(_gh_retry_header "${_headers_file}" x-ratelimit-reset)"
+		_resource="$(_gh_retry_header "${_headers_file}" x-ratelimit-resource)"
+		_retry_after="$(_gh_retry_header "${_headers_file}" retry-after)"
+		if _is_gh_permanent_failure "${stderr_content}" || [[ "${_http_status}" =~ ^(404|422)$ ]]; then
+			local _safe_status="${_http_status}"
+			if [ -z "${_safe_status}" ] && printf '%s' "${stderr_content}" | grep -qiE 'HTTP 404|404 Not Found|gh: Not Found'; then _safe_status=404; fi
+			if [ -z "${_safe_status}" ] && printf '%s' "${stderr_content}" | grep -qi 'HTTP 422'; then _safe_status=422; fi
+			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying (HTTP ${_safe_status:-unknown})" >&2
+			rm -f "${stderr_file}" "${stdout_file}" "${_headers_file}" "${_response_file}"
 			return 1
 		fi
-
-		if _is_gh_rate_limit "${stderr_content}"; then
-			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+		if _is_gh_rate_limit "${stderr_content}" || { [[ "${_http_status}" =~ ^(403|429)$ ]] && [ "${_remaining}" = 0 ]; }; then
+			_current_rate_limit=1
 			_gh_ratelimit_tg_alert
 			_gh_rate_limit_trip_breaker
-			if [ "${attempt}" -lt "${max_attempts}" ]; then
-				_gh_rate_limit_wait
+		fi
+		if [ "${_read_only}" -eq 0 ] && [ "${_idempotent}" -eq 0 ]; then
+			echo "::warning::gh_retry: mutation result uncertain; not retrying" >&2
+			rm -f "${stderr_file}" "${stdout_file}" "${_headers_file}" "${_response_file}"
+			if [ "${_current_rate_limit}" -eq 1 ]; then return 75; fi
+			return 1
+		fi
+		# Authorization and validation failures are not transient. Retry only
+		# network errors and 5xx, never an arbitrary rejected 4xx request.
+		if [ "${_current_rate_limit}" -eq 0 ] &&
+			! [[ "${_http_status}" =~ ^5[0-9][0-9]$ ]] &&
+			! printf '%s' "${stderr_content}" | grep -qiE 'HTTP 5[0-9][0-9]|status code 5[0-9][0-9]|timeout|timed out|connection|temporarily unavailable|bad gateway'; then
+			echo "::warning::gh_retry: non-retryable read failure; caller must handle unavailable data" >&2
+			rm -f "${stderr_file}" "${stdout_file}" "${_headers_file}" "${_response_file}"
+			return 1
+		fi
+		if [ "${attempt}" -ge "${max_attempts}" ]; then
+			if [ "${_current_rate_limit}" -eq 1 ]; then
+				echo "::warning::GitHub API rate limit exhausted (attempt ${attempt}/${max_attempts}); deferring to a scheduled retry" >&2
 			fi
+			break
+		fi
+
+		if [ "${_current_rate_limit}" -eq 1 ]; then
+			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+			if ! _gh_retry_wait rate_limit "${attempt}" "${stderr_content}" "${_reset}" "${_resource:-core}" "${_retry_after}" "${_call_deadline}"; then break; fi
 		else
-			local wait_secs=$(( 2 ** (attempt - 1) ))
-			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
-			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
-			fi
-			if [ "${attempt}" -lt "${max_attempts}" ]; then
-				sleep "${wait_secs}"
-			fi
+			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying…" >&2
+			# Avoid printing API error bodies, request fields, or auth headers.
+			_gh_retry_wait transient "${attempt}" "${stderr_content}" "" "" "" "${_call_deadline}" || break
 		fi
 
 		attempt=$(( attempt + 1 ))
 	done
 
-	echo "::error::gh command failed after ${max_attempts} attempts: $*" >&2
-	if [ -s "${stderr_file}" ]; then
-		cat "${stderr_file}" >&2
+	local _final_http_status="${_http_status:-}"
+	if [[ ! "${_final_http_status}" =~ ^[0-9]{3}$ ]] && [[ "${stderr_content:-}" =~ HTTP[[:space:]]+(5[0-9][0-9]) ]]; then
+		_final_http_status="${BASH_REMATCH[1]}"
 	fi
-	rm -f "${stderr_file}" "${stdout_file}"
+	if [[ "${_final_http_status}" =~ ^[0-9]{3}$ ]]; then
+		echo "::error::gh command failed after ${max_attempts} attempts: HTTP ${_final_http_status}" >&2
+	else
+		echo "::error::gh command failed after ${max_attempts} attempts" >&2
+	fi
+	rm -f "${stderr_file}" "${stdout_file}" "${_headers_file}" "${_response_file}"
+	if [ "${_current_rate_limit}" -eq 1 ]; then return 75; fi
 	return 1
+}
+
+gh_retry()
+{
+	_gh_retry_command "$@"
 }
 
 # ---------------------------------------------------------------
 # gh_retry_to_file — Like gh_retry but captures stdout to a file.
 #
-# Each retry truncates the file so only the last attempt's output
-# remains.  Useful for paginated / raw-content downloads.
+# Failed attempts never leak their bodies into the output file. Useful
+# for paginated and raw-content downloads.
 #
 # Usage:
 #   gh_retry_to_file /tmp/result.json gh api repos/owner/repo/pulls/1
@@ -531,59 +727,8 @@ gh_retry()
 gh_retry_to_file()
 {
 	local outfile="$1"; shift
-	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
-	local attempt=1
-	local stderr_file
-	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
-		return 1
-	fi
-
-	while [ "${attempt}" -le "${max_attempts}" ]; do
-		if "$@" > "${outfile}" 2>"${stderr_file}"; then
-			rm -f "${stderr_file}"
-			return 0
-		fi
-
-		local stderr_content
-		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
-
-		if _is_gh_permanent_failure "${stderr_content}"; then
-			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
-			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
-			fi
-			rm -f "${stderr_file}"
-			return 1
-		fi
-
-		if _is_gh_rate_limit "${stderr_content}"; then
-			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
-			_gh_ratelimit_tg_alert
-			_gh_rate_limit_trip_breaker
-			if [ "${attempt}" -lt "${max_attempts}" ]; then
-				_gh_rate_limit_wait
-			fi
-		else
-			local wait_secs=$(( 2 ** (attempt - 1) ))
-			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
-			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
-			fi
-			if [ "${attempt}" -lt "${max_attempts}" ]; then
-				sleep "${wait_secs}"
-			fi
-		fi
-
-		attempt=$(( attempt + 1 ))
-	done
-
-	echo "::error::gh command failed after ${max_attempts} attempts: $*" >&2
-	if [ -s "${stderr_file}" ]; then
-		cat "${stderr_file}" >&2
-	fi
-	rm -f "${stderr_file}"
-	return 1
+	# gh_retry already buffers failed stdout and delivers only success.
+	_gh_retry_command "$@" > "${outfile}"
 }
 
 # ---------------------------------------------------------------
@@ -607,7 +752,7 @@ _safe_gh_jq()
 {
 	local _tmpf
 	if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then
-		echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running" >&2
 		return 1
 	fi
 	if gh api "$@" > "${_tmpf}"; then
@@ -640,49 +785,34 @@ gh_api_json_to_file()
 	local attempt=1
 	local stderr_file
 	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_api_json_stderr.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_api_json_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_api_json_to_file: failed to create stderr temp file (mktemp failed); aborting without running" >&2
 		return 1
 	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		: > "${outfile}"
-		if "$@" > "${outfile}" 2>"${stderr_file}"; then
+		local _call_rc=0
+		gh_retry "$@" > "${outfile}" 2>"${stderr_file}" || _call_rc=$?
+		if [ "${_call_rc}" -eq 0 ]; then
 			if [ -s "${outfile}" ] && jq empty "${outfile}" >/dev/null 2>&1; then
 				rm -f "${stderr_file}"
 				return 0
 			fi
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh api returned invalid JSON (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
-			echo "::group::Raw response (first 50 lines)" >&2
-			head -50 "${outfile}" >&2
-			echo "::endgroup::" >&2
-			sleep "${wait_secs}"
+			# Never print an untrusted response body (it may contain secrets).
+			echo "::warning::  invalid JSON response bytes=$(wc -c < "${outfile}" 2>/dev/null || echo unknown)" >&2
+			if [ "${attempt}" -lt "${max_attempts}" ]; then sleep "${wait_secs}"; fi
 		else
-			local stderr_content
-			stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
-
-			if _is_gh_rate_limit "${stderr_content}"; then
-				echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
-				_gh_ratelimit_tg_alert
-				_gh_rate_limit_trip_breaker
-				_gh_rate_limit_wait
-			else
-				local wait_secs=$(( 2 ** (attempt - 1) ))
-				echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
-				if [ -n "${stderr_content}" ]; then
-					echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
-				fi
-				sleep "${wait_secs}"
-			fi
+			rm -f "${stderr_file}"
+			: > "${outfile}"
+			return "${_call_rc}"
 		fi
 
 		attempt=$(( attempt + 1 ))
 	done
 
-	echo "::error::gh api failed to return valid JSON after ${max_attempts} attempts: $*" >&2
-	if [ -s "${stderr_file}" ]; then
-		cat "${stderr_file}" >&2
-	fi
+	echo "::error::gh api failed to return valid JSON after ${max_attempts} attempts" >&2
 	rm -f "${stderr_file}"
 	: > "${outfile}"
 	return 1
@@ -691,8 +821,10 @@ gh_api_json_to_file()
 # ---------------------------------------------------------------
 # curl_gh_api — curl wrapper with rate-limit retry for GitHub API.
 #
-# Captures HTTP status code.  On 429 or 403-with-rate-limit body,
-# sleeps 30 s and retries.  Other errors use exponential backoff.
+# Captures HTTP status and response headers. On 429 or rate-limited 403,
+# waits for Retry-After/reset (or the matching bucket); other transient
+# errors use bounded exponential backoff. Uncertain mutations are not
+# retried without --idempotent.
 # Outputs the response body on success (HTTP 2xx).
 #
 # Usage:
@@ -705,6 +837,22 @@ curl_gh_api()
 {
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	local attempt=1
+	local _total_wait_cap="${GH_RETRY_MAX_TOTAL_WAIT_SECONDS:-600}" _call_deadline
+	[[ "${_total_wait_cap}" =~ ^[0-9]+$ ]] || _total_wait_cap=600
+	_call_deadline=$(( $(date +%s) + _total_wait_cap ))
+	local _idempotent=0 _mutation=0 _curl_arg _curl_method=""
+	if [ "${1:-}" = "--idempotent" ]; then _idempotent=1; shift; fi
+	for _curl_arg in "$@"; do
+		case "${_curl_arg}" in
+		-X|--request) _curl_method=next ;;
+		-XPOST|-XPUT|-XPATCH|-XDELETE) _curl_method="${_curl_arg#-X}" ;;
+		--request=*) _curl_method="${_curl_arg#--request=}" ;;
+		-d|--data|--data-raw|--data-binary|--data-urlencode|-F|--form|--json) _mutation=1 ;;
+		-d?*|-F?*|--data=*|--data-raw=*|--data-binary=*|--data-urlencode=*|--form=*|--json=*) _mutation=1 ;;
+		*) if [ "${_curl_method}" = next ]; then _curl_method="${_curl_arg}"; fi ;;
+		esac
+	done
+	if [ -n "${_curl_method}" ] && [ "${_curl_method}" != GET ] && [ "${_curl_method}" != get ]; then _mutation=1; fi
 	local body_file header_file
 	if ! body_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_body.XXXXXX" 2>/dev/null); then
 		echo "::error::curl_gh_api: failed to create body temp file (mktemp failed); aborting without calling curl" >&2
@@ -724,8 +872,15 @@ curl_gh_api()
 
 		if [ "${http_code}" -ge 200 ] 2>/dev/null && [ "${http_code}" -lt 300 ] 2>/dev/null; then
 			cat "${body_file}"
-			rm -f "${body_file}" "${header_file}"
+		rm -f "${body_file}" "${header_file}"
 			return 0
+		fi
+		if [ "${_mutation}" -eq 1 ] && [ "${_idempotent}" -eq 0 ]; then
+			local _mutation_limited=0
+			if [ "${http_code}" = 429 ] || { [ "${http_code}" = 403 ] && _is_gh_rate_limit "$(cat "${body_file}" 2>/dev/null || true)"; }; then _mutation_limited=1; fi
+			rm -f "${body_file}" "${header_file}"
+			if [ "${_mutation_limited}" -eq 1 ]; then return 75; fi
+			return 1
 		fi
 
 		local body_content
@@ -735,13 +890,28 @@ curl_gh_api()
 			echo "::warning::GitHub API rate limit (HTTP ${http_code}, attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
 			_gh_rate_limit_trip_breaker
+			if [ "${attempt}" -ge "${max_attempts}" ]; then
+				rm -f "${body_file}" "${header_file}"
+				return 75
+			fi
 			local _reset_ts
 			_reset_ts=$(_parse_reset_header "${header_file}")
-			_sleep_until_reset "${_reset_ts}"
+			local _resource
+			_resource="$(grep -i '^x-ratelimit-resource:' "${header_file}" 2>/dev/null | head -1 | cut -d: -f2 | tr -d '\r[:space:]' || true)"
+			if ! _gh_retry_wait rate_limit "${attempt}" "${body_content}" "${_reset_ts}" "${_resource:-core}" "" "${_call_deadline}"; then
+				rm -f "${body_file}" "${header_file}"
+				return 75
+			fi
 		else
+			if [ "${http_code}" = 404 ] || [ "${http_code}" = 422 ]; then
+				rm -f "${body_file}" "${header_file}"
+				return 1
+			fi
 			local wait_secs=$(( 2 ** (attempt - 1) ))
-			echo "::warning::GitHub API curl failed HTTP ${http_code} (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
-			sleep "${wait_secs}"
+			echo "::warning::GitHub API curl failed HTTP ${http_code} (attempt ${attempt}/${max_attempts}), retrying…" >&2
+			if [ "${attempt}" -lt "${max_attempts}" ]; then
+				_gh_retry_wait transient "${attempt}" "${body_content}" "" "" "" "${_call_deadline}" || break
+			fi
 		fi
 
 		attempt=$(( attempt + 1 ))
@@ -883,7 +1053,7 @@ gh_pr_with_all_comments()
 		}
 	}'
 
-		if ! gh_api_json_to_file "${_gql_file}" \
+		if ! gh_api_json_to_file "${_gql_file}" --idempotent \
 			gh api graphql \
 			-f query="${gql_query}" \
 			-F owner="${owner}" \
@@ -1099,7 +1269,7 @@ gh_issue_timeline_with_cross_refs()
   }
 }'
 
-	if ! graphql_json="$(gh_retry gh api graphql -f query="${graphql_query}" -f owner="${owner}" -f repo="${repo}" -F issue_number="${issue_number}" 2>/dev/null)"; then
+	if ! graphql_json="$(gh_retry --idempotent gh api graphql -f query="${graphql_query}" -f owner="${owner}" -f repo="${repo}" -F issue_number="${issue_number}" 2>/dev/null)"; then
 		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_failed owner=${owner} repo=${repo} issue=${issue_number}" >&2
 		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
 		return $?

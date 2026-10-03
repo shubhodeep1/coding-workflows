@@ -2977,7 +2977,7 @@ set_tracking_phase_label() {
 
 get_issue_labels_json() {
   local issue_num="$1"
-  gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]' || echo '[]'
+  gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]'
 }
 
 write_label_names_file_from_json() {
@@ -3225,7 +3225,7 @@ _fetch_issue_labels_batch_graphql() {
   }
 }"
 
-    if ! batch_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+    if ! batch_resp="$(gh_retry --idempotent gh api graphql -f query="${query}" 2>/dev/null)"; then
       start="${end}"
       continue
     fi
@@ -11931,7 +11931,7 @@ mark_validation_complete() {
   local validation_history_conclusion="${LAST_VAL_CONCLUSION:-}"
 
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-  default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::warning::Default branch unavailable; deferring tracking body reconciliation." >&2; return 75; }
   project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
   _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
   if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [[ "${_final_pr}" =~ ^[0-9]+$ ]]; then
@@ -14644,7 +14644,7 @@ _fetch_standalone_marker_issues_graphql() {
   }
 }'
   local resp
-  if ! resp="$(gh_retry gh api graphql \
+  if ! resp="$(gh_retry --idempotent gh api graphql \
       -F q_state="${q_state}" \
       -F q_clarify="${q_clarify}" \
       -f query="${query}" 2>/dev/null)"; then
@@ -14784,7 +14784,7 @@ _fetch_candidate_issue_details_graphql() {
   }
 }"
 
-    if ! batch_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+    if ! batch_resp="$(gh_retry --idempotent gh api graphql -f query="${query}" 2>/dev/null)"; then
       # Leave this batch's issues out of the cache; the loop-level
       # fallbacks (empty labels/comments → issue skipped naturally)
       # keep the cycle moving without crashing.
@@ -14926,7 +14926,7 @@ _fetch_linked_pr_status_graphql() {
   }
 }"
 
-    if ! batch_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+    if ! batch_resp="$(gh_retry --idempotent gh api graphql -f query="${query}" 2>/dev/null)"; then
       # Fail open: leave this batch's issues out of the cache so the
       # caller treats them as "no merged PR known" and proceeds.
       start="${end}"
@@ -17749,7 +17749,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 		TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 	fi
 	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
-		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::warning::Default branch unavailable; deferring security pass." >&2; continue; }
 	fi
 
   # ---------------------------------------------------------------
@@ -17909,7 +17909,7 @@ ${SECURITY_PASS_WAIVE_LINES}
 The bounded security-pass fix loop was reset. Re-running the mandatory current-head audit."
           tg_notify "/security-pass-waive: project #${TRACKING_NUM} waived $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length') finding(s) (by ${SECURITY_PASS_WAIVE_AUTHOR}); security-pass state reset and re-running the audit." "WARNING"
           if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::warning::Default branch unavailable; deferring security pass." >&2; continue; }
           fi
           ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
           continue
@@ -18200,7 +18200,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
             continue
           fi
           if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::warning::Default branch unavailable; deferring finalization." >&2; continue; }
           fi
           if ! ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "${_orch_extfin_pr_json}"; then
             continue
@@ -18244,7 +18244,7 @@ The orchestrator detected that the integration PR was squash-merged outside the 
   # can own externally merged/deleted final-PR completion without the
   # integration-branch missing/conflict path preempting it.
   if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-    DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+    DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::warning::Default branch unavailable; deferring tracking issue." >&2; continue; }
   fi
   # Retry advisory creation on every later merged-state tick. The transition
   # arms attempt filing immediately, but a transient create failure leaves the
@@ -18289,7 +18289,7 @@ The orchestrator detected that the integration PR was squash-merged outside the 
 
   if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
     FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-    FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+    FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::warning::Default branch unavailable; deferring merge conflict." >&2; continue; }
     FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
     FINAL_PR_FOR_TRACKING_BODY="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
 
@@ -18689,7 +18689,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
 The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-running the mandatory current-head audit."
       tg_notify "/re-security-pass: project #${TRACKING_NUM} security-pass state reset; re-running the audit." "WARNING"
       if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::warning::Default branch unavailable; deferring security pass reset." >&2; continue; }
       fi
       ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
       continue
@@ -18759,7 +18759,7 @@ The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-runnin
 The security pass that parked this project ran on workflow engine \`${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}\`; this poll runs on \`${SP_AUTO_RESET_ENGINE_SHA}\`. The bounded fix loop is reset once for the new engine and the mandatory current-head audit re-runs. Comment \`/re-security-pass\` to reset it again by hand, or set \`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE=false\` to keep exhausted projects parked."
       tg_notify "Project #${TRACKING_NUM} security pass reset automatically: workflow engine ${SP_AUTO_RESET_ENGINE_SHA} replaced ${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}; re-running the audit." "WARNING"
       if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::warning::Default branch unavailable; deferring engine security pass reset." >&2; continue; }
       fi
       ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
       continue
@@ -19514,7 +19514,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     if echo "${LABELS_JSON}" | jq -e --arg key "${inum}" 'has($key)' >/dev/null 2>&1; then
       continue
     fi
-    LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
+    LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]')" || { echo "::error::Issue labels unavailable; deferring wave decisions." >&2; exit 75; }
     [ -n "${LABELS}" ] || LABELS='[]'
     LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
   done
@@ -21362,7 +21362,7 @@ ${RB_FIX_DESC}
           continue
         fi
         # Re-read labels since we may have changed them
-        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
+        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]')" || { echo "::error::Issue labels unavailable; deferring wave decisions." >&2; exit 75; }
         if [ "${first}" = true ]; then
           first=false
         else
@@ -21379,7 +21379,7 @@ ${RB_FIX_DESC}
         if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then
           continue
         fi
-        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
+        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]')" || { echo "::error::Replacement issue labels unavailable; deferring wave decisions." >&2; exit 75; }
         [ -z "${LABELS}" ] && LABELS='[]'
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
       done
@@ -21763,7 +21763,7 @@ if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
   for rnum in ${REISSUED_NUMS}; do
     if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
     if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then continue; fi
-    LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
+    LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]')" || { echo "::error::Replacement issue labels unavailable; deferring wave decisions." >&2; exit 75; }
     [ -z "${LABELS}" ] && LABELS='[]'
     LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
   done
@@ -22312,7 +22312,7 @@ ${PR_DIFF}
   unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left
 
   # Fetch CI status on default branch
-  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::error::Default branch unavailable; deferring completion decision." >&2; return 75; }
   CI_STATUS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}/check-runs" \
     --jq '[.check_runs[] | {name: .name, conclusion: .conclusion}]' || echo "[]")"
 
@@ -22631,7 +22631,10 @@ PRs to revert: ${REVERT_COUNT}"
   case "${JUDGE_STATUS}" in
     complete)
       FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-      FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
+      FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-}"
+      if [ -z "${FINAL_DEFAULT_BRANCH}" ]; then
+        FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::warning::Default branch unavailable; deferring project completion." >&2; continue; }
+      fi
       if ! ensure_security_pass_before_completion "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}"; then
         continue
       fi
@@ -23241,6 +23244,14 @@ echo "========================================"
 echo "Standalone PR conflict sweep"
 echo "========================================"
 
+# This discretionary scan runs again on the next scheduled poll tick. An
+# exhausted budget in this job should not spend more calls here; essential
+# authorization and wave-label reads above still fail closed independently.
+if type gh_rate_limit_breaker_tripped >/dev/null 2>&1 && gh_rate_limit_breaker_tripped; then
+  echo "BACKPRESSURE_TRIGGERED optional=standalone_pr_conflict_sweep reason=rate_limit"
+  exit 0
+fi
+
 # Collect open PR candidates with their refs.
 # gh pr list does not expose mergeable, so we fetch the full list and
 # then query each candidate via the REST API.
@@ -23254,7 +23265,7 @@ STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 
 CONFLICT_SWEEP_FIXED=0
-DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || { echo "::error::Default branch unavailable; deferring conflict sweep." >&2; exit 75; }
 
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"

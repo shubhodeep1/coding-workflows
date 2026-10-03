@@ -21,6 +21,39 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import ai_labels
 
 
+def test_shared_retry_policy_distinguishes_limits_and_mutations() -> None:
+	from github_api_retry import gh_failure_delay, retry_delay
+
+	assert retry_delay(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "123"}, "rate limit", 0, now=100) == 24
+	assert retry_delay(403, {}, "secondary rate limit", 0) == 60
+	assert retry_delay(403, {"Retry-After": "61"}, "Forbidden", 0) == 61
+	assert retry_delay(429, {"Retry-After": "12"}, "rate limit", 0) == 12
+	assert retry_delay(429, {"Retry-After": "999999999"}, "rate limit", 0) is None
+	assert retry_delay(403, {}, "Forbidden", 0) is None
+	assert retry_delay(404, {}, "Not Found", 0) is None
+	assert retry_delay(500, {}, "Server error", 0, method="POST") is None
+	assert gh_failure_delay("", "gh: HTTP 403: secondary rate limit", 0) == 60
+
+
+def test_cli_rate_limit_probe_uses_matching_body_bucket() -> None:
+	from github_api_retry import gh_failure_delay
+	import time
+
+	reset = int(time.time()) + 8
+	payload = json.dumps({"resources": {"core": {"reset": reset + 3600}, "search": {"reset": reset}}})
+	lookups: list[str] = []
+	def probe() -> str:
+		lookups.append("search")
+		return payload
+
+	delay = gh_failure_delay("", "gh: HTTP 403: API rate limit exceeded", 0,
+		rate_limit_probe=probe, endpoint="search/issues")
+	assert delay is not None and 1 <= delay <= 10
+	assert lookups == ["search"]
+	assert gh_failure_delay("", "gh: HTTP 403: API rate limit exceeded", 0,
+		rate_limit_probe=lambda: "{}", endpoint="search/issues") is None
+
+
 CONTRACT_PATH = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
 HELPER_PATH = REPO_ROOT / "scripts" / "label_helpers.sh"
 

@@ -1,50 +1,33 @@
 #!/usr/bin/env bash
 
+# Release polling uses the same bounded GitHub retry policy as other jobs.
+# This file is sourced only from the checked-out workflow support tree.
+_COMPREHENSIVE_GH_API_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${_COMPREHENSIVE_GH_API_DIR}/gh_helpers.sh"
+unset _COMPREHENSIVE_GH_API_DIR
+
 gh_api_safe()
 {
 	local output=""
-	local err_file
 	local quiet_stderr="${GH_API_SAFE_QUIET_STDERR:-0}"
-	local attempt=1
-	local max_attempts=4
 	GH_API_SAFE_OUTPUT=""
 	if [ -z "${RATE_LIMIT_BACKOFF+x}" ] || [[ ! "${RATE_LIMIT_BACKOFF}" =~ ^[0-9]+$ ]]; then
 		RATE_LIMIT_BACKOFF=0
 	fi
-	err_file="$(mktemp)"
-	while true; do
-		if output="$(gh api "$@" 2>"${err_file}")"; then
-			RATE_LIMIT_BACKOFF=0
-			GH_API_SAFE_OUTPUT="${output}"
-			rm -f "${err_file}"
-			return 0
-		fi
-
-		if grep -qi "rate limit" "${err_file}" 2>/dev/null; then
-			if [ "${attempt}" -ge "${max_attempts}" ]; then
-				rm -f "${err_file}"
-				return 1
-			fi
-			if [ "${RATE_LIMIT_BACKOFF}" -eq 0 ]; then
-				RATE_LIMIT_BACKOFF=30
-			elif [ "${RATE_LIMIT_BACKOFF}" -lt 120 ]; then
-				RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF * 2))
-			fi
-			: > "${err_file}"
-			sleep "${RATE_LIMIT_BACKOFF}"
-			attempt=$((attempt + 1))
-			continue
-		fi
-
-		if [ -s "${err_file}" ]; then
-			if [ "${quiet_stderr}" != "1" ]; then
-				echo "::error::gh api call failed: $*"
-				cat "${err_file}" >&2
-			fi
-		fi
-		rm -f "${err_file}"
-		return 1
-	done
+	local _retry_rc=0
+	if [ "${quiet_stderr}" = 1 ]; then
+		output="$(GH_RETRY_MAX_ATTEMPTS=4 gh_retry gh api "$@" 2>/dev/null)" || _retry_rc=$?
+	else
+		output="$(GH_RETRY_MAX_ATTEMPTS=4 gh_retry gh api "$@")" || _retry_rc=$?
+	fi
+	if [ "${_retry_rc}" -ne 0 ]; then
+		if [ "${quiet_stderr}" != 1 ]; then echo "::error::gh api call failed"; fi
+		return "${_retry_rc}"
+	fi
+	RATE_LIMIT_BACKOFF=0
+	GH_API_SAFE_OUTPUT="${output}"
+	return 0
 }
 
 gh_api_safe_print()

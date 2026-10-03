@@ -311,6 +311,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          # Bootstrap before support is verified: only these fixed GETs may
+          # retry; never execute code from the PR or an unverified checkout.
+          bootstrap_support_read() {
+            local attempt result reset_body reset_epoch reset_wait
+            for attempt in 1 2 3; do
+              if result="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "${result}"
+                return 0
+              fi
+              if [[ "${result}" =~ (HTTP\ 404|HTTP\ 422|Resource\ not\ accessible) ]]; then return 1; fi
+              [ "${attempt}" -lt 3 ] || break
+              if [[ "${result}" =~ (rate\ limit|HTTP\ 429) ]]; then
+                # These support-ref reads use core; the probe's header is
+                # not the reset of the request that failed.
+                reset_body="$(gh api /rate_limit 2>/dev/null)" || reset_body=''
+                reset_epoch="$(jq -r '.resources.core.reset // empty' <<< "${reset_body}" 2>/dev/null || true)"
+                reset_wait=60
+                if [[ "${reset_epoch}" =~ ^[0-9]{1,12}$ ]]; then
+                  reset_wait=$(( reset_epoch - $(date +%s) + 1 ))
+                  [ "${reset_wait}" -ge 1 ] || reset_wait=1
+                fi
+                [ "${reset_wait}" -le 3900 ] || return 75
+                sleep "${reset_wait}"
+              else
+                sleep $((attempt * 2))
+              fi
+            done
+            echo "::error::Trusted support metadata unavailable after bounded retries." >&2
+            return 1
+          }
           support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
           support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
           support_event_sha="$(jq -r '.workflow_sha // ""' <<< "${WORKFLOW_JOB_JSON}")"
@@ -333,11 +363,11 @@ jobs:
           elif [[ "${support_workflow_ref}" =~ ${trusted_stable_ref} ]]; then
             # No existing gate lookup resolves the release tag. /commits/stable
             # selects the branch when both a branch and tag have that name.
-            support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
+            support_tag_json="$(bootstrap_support_read repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"
             support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
             support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
             if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-              support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
+              support_tag_json="$(bootstrap_support_read "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"
               support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
               support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
             fi
@@ -349,7 +379,7 @@ jobs:
           else
             # The job workflow SHA follows a same-repo PR head. Read protected main independently.
             # Gate PR metadata lookups do not include source-repository branch protection or SHA.
-            support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)"
+            support_main_json="$(bootstrap_support_read repos/shubhodeep1/coding-workflows/branches/main)"
             support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
             if ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
               echo "::error::Review support main branch is not confirmed protected."
@@ -474,6 +504,34 @@ jobs:
         run: |
           set -euo pipefail
 
+          # This gate precedes verified support staging; retry only the PR GET.
+          gate_pr_read() {
+            local attempt result reset_body reset_epoch reset_wait
+            for attempt in 1 2 3; do
+              if result="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "${result}"
+                return 0
+              fi
+              if [[ "${result}" =~ (HTTP\ 404|HTTP\ 422|Resource\ not\ accessible) ]]; then return 1; fi
+              [ "${attempt}" -lt 3 ] || break
+              if [[ "${result}" =~ (rate\ limit|HTTP\ 429) ]]; then
+                reset_body="$(gh api /rate_limit 2>/dev/null)" || reset_body=''
+                reset_epoch="$(jq -r '.resources.core.reset // empty' <<< "${reset_body}" 2>/dev/null || true)"
+                reset_wait=60
+                if [[ "${reset_epoch}" =~ ^[0-9]{1,12}$ ]]; then
+                  reset_wait=$(( reset_epoch - $(date +%s) + 1 ))
+                  [ "${reset_wait}" -ge 1 ] || reset_wait=1
+                fi
+                [ "${reset_wait}" -le 3900 ] || return 75
+                sleep "${reset_wait}"
+              else
+                sleep $((attempt * 2))
+              fi
+            done
+            echo "::error::Review PR metadata unavailable after bounded retries." >&2
+            return 1
+          }
+
           SHOULD_RUN="true"
           POST_MERGE_DISPATCH="false"
           SKIP_REASON=""
@@ -518,7 +576,7 @@ jobs:
             # mergeable/mergeable_state (deterministic-skip conflict
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
-            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+            if _pr_gate="$(gate_pr_read "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
               --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), head_sha: (.head.sha // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
@@ -541,9 +599,8 @@ jobs:
           fi
 
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
-            SHOULD_RUN="false"
-            SKIP_REASON="pr_state_unknown"
-            echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
+            echo "::error::Review PR state is unknown; preserving the head for scheduled recovery."
+            exit 1
           elif [ "${pr_state}" = "closed" ]; then
             SHOULD_RUN="false"
             SKIP_REASON="pr_closed"
@@ -1611,39 +1668,7 @@ jobs:
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
           set -euo pipefail
-
-          if [ -f ".codex-workflow-src/scripts/gh_helpers.sh" ]; then
-            source ".codex-workflow-src/scripts/gh_helpers.sh" 2>/dev/null || true
-          fi
-          if ! type gh_retry >/dev/null 2>&1; then
-            # Buffers each attempt's stdout and prints only the successful
-            # attempt's, like scripts/gh_helpers.sh: gh api prints a failed
-            # response body to stdout, which would otherwise land in front
-            # of the real response in a $(gh_retry ...) capture (#5495).
-            gh_retry() {
-              local n=0 max=4 delay=2
-              local _gh_retry_inline_out _gh_retry_inline_bytes _gh_retry_inline_rc=0
-              if ! _gh_retry_inline_out="$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null)"; then
-                echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
-                return 1
-              fi
-              while :; do
-                if "$@" >"${_gh_retry_inline_out}"; then
-                  cat "${_gh_retry_inline_out}" || _gh_retry_inline_rc=$?
-                  rm -f "${_gh_retry_inline_out}"
-                  return "${_gh_retry_inline_rc}"
-                fi
-                n=$((n+1))
-                if [ -s "${_gh_retry_inline_out}" ]; then
-                  _gh_retry_inline_bytes="$(wc -c <"${_gh_retry_inline_out}" 2>/dev/null | tr -d '[:space:]' || true)"
-                  echo "::warning::  gh_retry: dropped ${_gh_retry_inline_bytes:-?} bytes of stdout from failed attempt ${n}/${max}" >&2
-                fi
-                if [ "${n}" -ge "${max}" ]; then rm -f "${_gh_retry_inline_out}"; return 1; fi
-                sleep "${delay}"
-                delay=$((delay*2))
-              done
-            }
-          fi
+          source ".codex-workflow-src/scripts/gh_helpers.sh"
 
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             echo "::warning::Skipping post-merge validate dispatch: invalid PR number '${PR_NUMBER}'."
@@ -1660,7 +1685,7 @@ jobs:
           post_merge_pr_text_fallback_helper_unavailable="false"
 
           if [ "${issue_nodes_json}" = "[]" ]; then
-            if issue_nodes_json_live="$(gh_retry gh api graphql \
+            if issue_nodes_json_live="$(gh_retry --idempotent gh api graphql \
               -f owner="${REPOSITORY%/*}" \
               -f name="${REPOSITORY#*/}" \
               -F number="${PR_NUMBER}" \
@@ -1837,45 +1862,32 @@ jobs:
       # merge-capable path below is bound to it and refuses an empty value.
       PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
     steps:
+      - name: Checkout verified retry support for deterministic skip
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ needs.gate.outputs.review_support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          sparse-checkout: scripts/gh_helpers.sh
+          sparse-checkout-cone-mode: false
+
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
         run: |
           set -euo pipefail
+
+          if [[ ! "${{ needs.gate.outputs.review_support_sha }}" =~ ^[0-9a-f]{40}$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${{ needs.gate.outputs.review_support_sha }}" ]; then
+            echo "::error::Deterministic skip retry support is unverified."
+            exit 1
+          fi
+          source ".codex-workflow-src/scripts/gh_helpers.sh"
 
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             echo "::warning::Skipping deterministic-skip-merge: invalid PR number '${PR_NUMBER}'."
             exit 0
           fi
-
-          # Inline retry wrapper (mirrors gh_retry pattern from
-          # SUPPORT_SCRIPTS_DIR/gh_helpers.sh; we avoid loading the full
-          # support source here to keep this job lightweight). Each attempt's
-          # stdout is buffered and only the successful attempt's is printed:
-          # gh api prints a failed response body to stdout, which would
-          # otherwise land in front of the real response in a
-          # $(gh_retry ...) capture (#5495).
-          gh_retry() {
-            local n=0 max=4 delay=2
-            local _gh_retry_inline_out _gh_retry_inline_bytes _gh_retry_inline_rc=0
-            if ! _gh_retry_inline_out="$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null)"; then
-              echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
-              return 1
-            fi
-            while :; do
-              if "$@" >"${_gh_retry_inline_out}"; then
-                cat "${_gh_retry_inline_out}" || _gh_retry_inline_rc=$?
-                rm -f "${_gh_retry_inline_out}"
-                return "${_gh_retry_inline_rc}"
-              fi
-              n=$((n+1))
-              if [ -s "${_gh_retry_inline_out}" ]; then
-                _gh_retry_inline_bytes="$(wc -c <"${_gh_retry_inline_out}" 2>/dev/null | tr -d '[:space:]' || true)"
-                echo "::warning::  gh_retry: dropped ${_gh_retry_inline_bytes:-?} bytes of stdout from failed attempt ${n}/${max}" >&2
-              fi
-              if [ "${n}" -ge "${max}" ]; then rm -f "${_gh_retry_inline_out}"; return 1; fi
-              sleep "${delay}"
-              delay=$((delay*2))
-            done
-          }
 
           ensure_label_exists() {
             local label="$1" repo="$2" color="$3" desc="$4"
@@ -2007,7 +2019,7 @@ jobs:
           # path — they still pass through PR labeling + auto-merge,
           # and the orchestrator stall cron picks up any lag.
           linked_issue_query_failed="false"
-          if issue_numbers="$(gh_retry gh api graphql \
+          if issue_numbers="$(gh_retry --idempotent gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
             -F number="${PR_NUMBER}" \
@@ -5632,7 +5644,7 @@ jobs:
               source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
             fi
             type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-            if LINKED_ISSUES_JSON="$(gh_retry gh api graphql \
+            if LINKED_ISSUES_JSON="$(gh_retry --idempotent gh api graphql \
               -f owner="${REPOSITORY%/*}" \
               -f name="${REPOSITORY#*/}" \
               -F number="${PR_NUMBER}" \

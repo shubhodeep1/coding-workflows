@@ -2305,37 +2305,11 @@ jobs:
             exit 1
           fi
 
-          # gh api wrapper with a small retry budget so a transient
-          # 429/5xx doesn't bypass the editor-flake retry budget. Used
-          # by every gh api call in this step (fetch helpers + poll
-          # loop) so any single API blip gets up to 3 attempts with
-          # 2s/4s backoff before being treated as terminal. On final
-          # failure ALL attempts' stderr is surfaced (not just the
-          # last) so triage can spot patterns like "first 2 were
-          # rate-limited then 3rd was 5xx".
+          # Reuse the checked-out support helper; keep this step's existing
+          # call signature and three-attempt budget for its read-only polls.
+          source scripts/gh_helpers.sh
           gh_api_with_retry() {
-            local out
-            local rc=0
-            local err_file
-            err_file="$(mktemp)"
-            for try in 1 2 3; do
-              # Tag each attempt's stderr so they're distinguishable
-              # in the final warning and append (>>) — overwriting
-              # would lose earlier diagnostics.
-              echo "--- attempt ${try} stderr ---" >> "${err_file}"
-              out=$(gh api "$@" 2>>"${err_file}") && {
-                rm -f "${err_file}"
-                printf '%s' "${out}"
-                return 0
-              }
-              rc=$?
-              [ "${try}" -lt 3 ] && sleep $((try * 2))
-            done
-            if [ -s "${err_file}" ]; then
-              echo "::warning::gh api failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "${err_file}" | head -c 1000)" >&2
-            fi
-            rm -f "${err_file}"
-            return "${rc}"
+            GH_RETRY_MAX_ATTEMPTS=3 gh_retry gh api "$@"
           }
 
           fetch_canary_to_tmp() {

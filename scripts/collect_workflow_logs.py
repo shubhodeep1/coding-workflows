@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
+from github_api_retry import gh_failure_delay
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -417,6 +418,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _collector_rate_limit_probe(base_env: dict[str, str]) -> str:
+    # The existing run/log reads do not include reset headers. Consult the
+    # matching /rate_limit body only after a failed rate-limited read.
+    try:
+        probe_result = subprocess.run(
+            ["gh", "api", "/rate_limit"], capture_output=True, text=True, env=base_env, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("rate-limit probe unavailable") from exc
+    if probe_result.returncode != 0:
+        raise ValueError("rate-limit probe unavailable")
+    return probe_result.stdout
+
+
 def gh_api_json(
     endpoint: str,
     *,
@@ -452,7 +467,7 @@ def gh_api_json(
             proc = subprocess.run(cmd, capture_output=True, text=True, env=base_env, timeout=60)
         except subprocess.TimeoutExpired as exc:
             if attempt < retries:
-                time.sleep(backoff_seconds * attempt)
+                time.sleep(min(120.0, backoff_seconds * attempt))
                 continue
             raise RuntimeError(f"gh api timed out for {endpoint} after {exc.timeout}s") from exc
 
@@ -478,10 +493,10 @@ def gh_api_json(
             raise RuntimeError(f"Expected JSON object from gh api ({endpoint})")
 
         stderr_text = (proc.stderr or "").strip()
-        stderr_lower = stderr_text.lower()
-        retryable = any(marker in stderr_lower for marker in RETRY_MARKERS)
-        if retryable and attempt < retries:
-            time.sleep(backoff_seconds * attempt)
+        delay = gh_failure_delay(proc.stdout or "", stderr_text, attempt - 1,
+                                 endpoint=endpoint, rate_limit_probe=lambda: _collector_rate_limit_probe(base_env))
+        if delay is not None and attempt < retries:
+            time.sleep(delay)
             continue
         raise RuntimeError(
             f"gh api failed for {endpoint} (exit={proc.returncode}): {stderr_text or proc.stdout.strip()}"
@@ -516,7 +531,7 @@ def gh_api_bytes(
             proc = subprocess.run(cmd, capture_output=True, env=base_env, timeout=300)
         except subprocess.TimeoutExpired as exc:
             if attempt < retries:
-                time.sleep(backoff_seconds * attempt)
+                time.sleep(min(120.0, backoff_seconds * attempt))
                 continue
             raise RuntimeError(f"gh api timed out for {endpoint} after {exc.timeout}s") from exc
 
@@ -524,12 +539,12 @@ def gh_api_bytes(
             return proc.stdout
 
         stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-        stderr_lower = stderr_text.lower()
-        retryable = any(marker in stderr_lower for marker in RETRY_MARKERS)
-        if retryable and attempt < retries:
-            time.sleep(backoff_seconds * attempt)
-            continue
         stdout_text = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+        delay = gh_failure_delay(stdout_text, stderr_text, attempt - 1,
+                                 endpoint=endpoint, rate_limit_probe=lambda: _collector_rate_limit_probe(base_env))
+        if delay is not None and attempt < retries:
+            time.sleep(delay)
+            continue
         raise RuntimeError(
             f"gh api failed for {endpoint} (exit={proc.returncode}): {stderr_text or stdout_text}"
         )

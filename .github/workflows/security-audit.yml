@@ -58,6 +58,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
+          # Before support checkout: retry only fixed, read-only support refs.
+          audit_support_read() {
+            local attempt response
+            for attempt in 1 2 3; do
+              if response="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "${response}"
+                return 0
+              fi
+              if [[ "${response}" =~ (HTTP\ 404|HTTP\ 422|Resource\ not\ accessible) ]]; then return 1; fi
+              [ "${attempt}" -lt 3 ] || break
+              if [[ "${response}" =~ (rate\ limit|HTTP\ 429) ]]; then sleep 60; else sleep $((attempt * 2)); fi
+            done
+            return 75
+          }
           support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
           support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
           source_ref='^shubhodeep1/coding-workflows/\.github/workflows/security-audit\.yml@refs/heads/[^[:space:]]+$'
@@ -73,7 +87,7 @@ jobs:
           if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
             # The event/workflow SHA can follow a dispatched source branch.
             # No earlier step has read the protected main branch in this job.
-            if ! support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)" ||
+            if ! support_main_json="$(audit_support_read repos/shubhodeep1/coding-workflows/branches/main)" ||
                ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
               echo "::error::Security audit support main branch is not confirmed protected."
               exit 1
@@ -84,14 +98,14 @@ jobs:
           else
             # No existing lookup in this job resolves the release tag. A
             # commits/stable read is ambiguous when a branch shares its name.
-            if ! support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"; then
+            if ! support_tag_json="$(audit_support_read repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"; then
               echo "::error::Security audit support stable tag is unavailable."
               exit 1
             fi
             support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
             support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
             if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-              if ! support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"; then
+              if ! support_tag_json="$(audit_support_read "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"; then
                 echo "::error::Security audit support annotated tag is unavailable."
                 exit 1
               fi
@@ -158,7 +172,8 @@ jobs:
             # No other read supplies this head. Require a heads/ ref, never a
             # tag or prefix match; URL-encode even valid slash-bearing names.
             encoded_branch="$(jq -nr --arg ref "${audit_branch}" '$ref | @uri')"
-            if ! audit_ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${encoded_branch}")"; then
+            source scripts/gh_helpers.sh
+            if ! audit_ref_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${encoded_branch}")"; then
               echo "::error::Security audit branch head is unavailable."
               exit 1
             fi

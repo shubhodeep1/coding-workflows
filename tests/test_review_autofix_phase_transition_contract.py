@@ -80,12 +80,12 @@ def test_target_steps_use_shared_helper_and_remove_inline_phase_array() -> None:
 	assert BROAD_ISSUE_MENTION not in validate_block
 	assert BROAD_ISSUES_PATH not in validate_block
 	assert COLON_FALLBACK not in validate_block
-	assert 'gh_retry gh api graphql' in validate_block
+	assert 'gh_retry --idempotent gh api graphql' in validate_block
 	assert 'gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"' in validate_block
 	assert "gh_retry gh issue view \"${issue_number}\" --repo \"${REPOSITORY}\" --json labels --jq '.labels[].name'" in validate_block
 	assert POST_MERGE_GH_RETRY_NOOP not in validate_block
-	assert 'if ! type gh_retry >/dev/null 2>&1; then' in validate_block
-	assert 'local n=0 max=4 delay=2' in validate_block
+	assert 'source ".codex-workflow-src/scripts/gh_helpers.sh"' in validate_block
+	assert 'gh_retry() {' not in validate_block
 	assert "--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true" not in validate_block
 	assert "gh api \"repos/${REPOSITORY}/pulls/${PR_NUMBER}\" --jq '.title + \" \" + (.body // \"\")' 2>/dev/null || echo \"\"" not in validate_block
 	assert "gh issue view \"${issue_number}\" --repo \"${REPOSITORY}\" --json labels --jq '.labels[].name' 2>/dev/null || true" not in validate_block

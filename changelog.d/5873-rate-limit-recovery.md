@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **GitHub API reads now retain successful responses and defer unsafe decisions during rate limits.** Shared retry helpers use the failed request's reset or `Retry-After`, avoid sleeping after the last attempt, and refuse to repeat uncertain mutations. Review gates, explicit validation authorization, the review sweep, and orchestrator label decisions no longer interpret unavailable API data as empty or authorized state.

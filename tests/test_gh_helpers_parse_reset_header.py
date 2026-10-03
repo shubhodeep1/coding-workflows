@@ -141,3 +141,34 @@ def test_sleep_until_reset_log_uses_source_neutral_epoch_label() -> None:
 	)
 	assert f"computed reset epoch: {PRIMARY_RESET_EPOCH}" in result.stderr
 	assert "X-RateLimit-Reset:" not in result.stderr
+
+
+def test_rate_limit_probe_uses_requested_resource_body_reset() -> None:
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	script = (
+		"set -euo pipefail\n"
+		f"source '{GH_HELPERS}'\n"
+		"gh() { printf '%s\\n' '{\"resources\":{\"core\":{\"reset\":11},\"search\":{\"reset\":22},\"graphql\":{\"reset\":33}}}'; }\n"
+		"_sleep_until_reset() { printf '%s\\n' \"$1\"; }\n"
+		"_gh_rate_limit_wait search\n_gh_rate_limit_wait graphql\n"
+	)
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == "22\n33\n"
+
+
+def test_curl_final_rate_limit_attempt_never_sleeps(tmp_path: Path) -> None:
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", GH_RETRY_MAX_ATTEMPTS="1",
+		GH_RATE_LIMIT_BREAKER_FILE=str(tmp_path / "breaker"))
+	env.pop("TG_BOT_SECRET", None)
+	script = (
+		"set -euo pipefail\n"
+		f"source '{GH_HELPERS}'\n"
+		"curl() { local body='' headers=''; while [ $# -gt 0 ]; do case \"$1\" in -o) body=$2; shift 2;; -D) headers=$2; shift 2;; *) shift;; esac; done; "
+		"printf 'secondary rate limit' > \"$body\"; printf 'HTTP/2 429\\r\\nretry-after: 90\\r\\n' > \"$headers\"; printf 429; }\n"
+		"sleep() { echo unexpected_sleep >&2; }\n"
+		"curl_gh_api -s https://api.github.com/repos/o/r/issues\n"
+	)
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 75
+	assert "unexpected_sleep" not in result.stderr

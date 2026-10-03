@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from workflow_wrapper_refs import pin_reusable_workflow_refs
+from github_api_retry import gh_failure_delay
 
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -408,14 +409,30 @@ class ConsumerDriftAuditor:
 	def _run_gh_api(self, endpoint: str, *, raw: bool = False) -> subprocess.CompletedProcess[str]:
 		accept = "application/vnd.github.raw+json" if raw else "application/vnd.github+json"
 		command = ["gh", "api", "-H", f"Accept: {accept}", endpoint]
+		def _probe_gh_reset() -> str:
+			# No existing audit read has bucket resets; probe only after a
+			# rate-limited response and never use this probe's own headers.
+			probe_result = self.executor.run(["gh", "api", "/rate_limit"], check=False)
+			if probe_result.returncode != 0:
+				raise ValueError("rate-limit probe unavailable")
+			return probe_result.stdout
+
 		proc = self.executor.run(command, check=False)
 		for attempt in range(1, self.gh_api_max_attempts):
-			if not _is_transient_fetch_failure(proc.stdout, proc.stderr, proc.returncode):
+			shared_delay = gh_failure_delay(proc.stdout, proc.stderr, attempt - 1,
+				endpoint=endpoint, rate_limit_probe=_probe_gh_reset)
+			if shared_delay is None and "unicorn" in proc.stdout.lower():
+				# GitHub's HTML error page has no HTTP status in gh stderr.
+				shared_delay = self.gh_api_retry_base_seconds
+			if shared_delay is None or not _is_transient_fetch_failure(proc.stdout, proc.stderr, proc.returncode):
 				return proc
-			delay = min(
-				MAX_GH_API_RETRY_DELAY_SECONDS,
-				self.gh_api_retry_base_seconds * (2 ** (attempt - 1)),
-			)
+			if "rate limit" in f"{proc.stdout} {proc.stderr}".lower():
+				delay = shared_delay
+			else:
+				delay = min(
+					MAX_GH_API_RETRY_DELAY_SECONDS,
+					self.gh_api_retry_base_seconds * (2 ** (attempt - 1)),
+				)
 			print(
 				"DRIFT_SCAN_RETRY "
 				f"endpoint={endpoint} attempt={attempt}/{self.gh_api_max_attempts - 1} "

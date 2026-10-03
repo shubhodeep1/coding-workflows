@@ -261,9 +261,9 @@ def test_comprehensive_release_helper_retries_rate_limit_once_and_returns_retry_
 
 	assert result.returncode == 0
 	assert result.stdout == "status=0\noutput=success payload\nbackoff=0\n"
-	assert result.stderr == ""
+	assert "GitHub API rate limit hit" in result.stderr
 	assert gh_count == "2"
-	assert sleep_log == "30\n"
+	assert sleep_log == "60\n"
 
 
 def test_comprehensive_release_helper_stops_after_max_attempts_on_rate_limit() -> None:
@@ -291,11 +291,11 @@ def test_comprehensive_release_helper_stops_after_max_attempts_on_rate_limit() -
 		),
 	)
 
-	assert result.returncode == 1
-	assert result.stdout == "status=1\noutput=\nbackoff=120\n"
-	assert result.stderr == ""
+	assert result.returncode == 75
+	assert result.stdout == "::error::gh api call failed\nstatus=75\noutput=\nbackoff=0\n"
+	assert "GitHub API rate limit hit" in result.stderr
 	assert gh_count == "4"
-	assert sleep_log == "30\n60\n120\n"
+	assert sleep_log == "60\n60\n60\n"
 
 
 def test_comprehensive_release_helper_quiet_mode_retries_rate_limit_once_without_reporting() -> None:
@@ -330,7 +330,7 @@ def test_comprehensive_release_helper_quiet_mode_retries_rate_limit_once_without
 	assert result.stdout == "status=0\noutput=success payload\nbackoff=0\n"
 	assert result.stderr == ""
 	assert gh_count == "2"
-	assert sleep_log == "30\n"
+	assert sleep_log == "60\n"
 
 
 def test_comprehensive_release_helper_non_rate_limit_failure_keeps_existing_reporting() -> None:
@@ -350,8 +350,8 @@ def test_comprehensive_release_helper_non_rate_limit_failure_keeps_existing_repo
 	)
 
 	assert result.returncode == 1
-	assert result.stdout == "::error::gh api call failed: repos/example/repo\n"
-	assert result.stderr == "boom failure\n"
+	assert result.stdout == "::error::gh api call failed\n"
+	assert "gh_retry: non-retryable read failure" in result.stderr
 	assert gh_count == "1"
 	assert sleep_log == ""
 

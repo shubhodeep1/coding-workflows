@@ -286,7 +286,16 @@ else
 		-f body="${QUEUE_BODY}" \
 		-f "labels[]=${QUEUE_LABEL}" \
 		--jq '.number' 2> "${RUNTIME_DIR}/queue_create_error.txt")" || ! [[ "${QUEUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
-		fail "queue_failed" "could not open the queue issue: $(head -c 200 "${RUNTIME_DIR}/queue_create_error.txt" | tr '\n' ' ')"
+		# A lost POST response does not prove that the create failed. Re-read
+		# the same queue listing once by its durable title before giving up;
+		# never blindly replay a create with an uncertain result.
+		if GH_TOKEN="${QUEUE_TOKEN}" gh_retry gh api "repos/${SELF_REPO}/issues?labels=${QUEUE_LABEL}&state=open&per_page=100" \
+			> "${OPEN_QUEUE_FILE}" 2> "${RUNTIME_DIR}/queue_reconcile_error.txt"; then
+			QUEUE_NUMBER="$(jq -r --arg t "${QUEUE_TITLE}" '[.[]? | select(.title == $t and (.user.login // "") == "github-actions[bot]") | .number] | first // empty' "${OPEN_QUEUE_FILE}" 2>/dev/null || true)"
+		fi
+		if ! [[ "${QUEUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+			fail "queue_failed" "could not confirm queue issue after an uncertain create"
+		fi
 	fi
 	log "queued repo=${REPO} issue=${ISSUE_NUMBER} trigger=${TRIGGER} queue_issue=${QUEUE_NUMBER}"
 fi

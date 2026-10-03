@@ -70,8 +70,11 @@ def _gh_stub(bin_dir: Path) -> None:
 	gh.write_text(
 		"#!/usr/bin/env bash\n"
 		"printf '%s\\n' \"$*\" >> \"${GH_CALLS}\"\n"
+		"[ \"$*\" != 'api /rate_limit' ] || { printf '{\"resources\":{\"core\":{\"reset\":1}}}'; exit 0; }\n"
 		"[ \"${FAIL_API:-}\" != yes ] || exit 1\n"
 		"calls=\"$(wc -l < \"${GH_CALLS}\")\"\n"
+		"[ \"${FAIL_FIRST_RATE_LIMIT:-}\" != yes ] || [ \"${calls}\" -ne 1 ] || { echo 'API rate limit exceeded (HTTP 403)' >&2; exit 1; }\n"
+		"[ \"${FAIL_FIRST:-}\" != yes ] || [ \"${calls}\" -ne 1 ] || { echo 'HTTP 503' >&2; exit 1; }\n"
 		"[ \"${FAIL_SECOND:-}\" != yes ] || [ \"${calls}\" -le 1 ] || exit 1\n"
 		"[ \"${FAIL_THIRD:-}\" != yes ] || [ \"${calls}\" -le 2 ] || exit 1\n"
 		"case \" $* \" in\n"
@@ -100,7 +103,7 @@ def _make_invoke(tmp_path: Path):
 	bin_dir = tmp_path / "bin"
 	_gh_stub(bin_dir)
 
-	def invoke(pulls, target="claude/implement-plan-example", api_failure=False, parent=None, issue=None, second_failure=False, events=None, third_failure=False, event_pages=None):
+	def invoke(pulls, target="claude/implement-plan-example", api_failure=False, parent=None, issue=None, second_failure=False, events=None, third_failure=False, event_pages=None, transient_first=False, transient_rate_limit_first=False):
 		output = tmp_path / "output"
 		output.write_text("", encoding="utf-8")
 		calls = tmp_path / "calls"
@@ -116,8 +119,10 @@ def _make_invoke(tmp_path: Path):
 			"FAIL_SECOND": "yes" if second_failure else "no",
 			"EVENTS_JSON": json.dumps(event_pages if event_pages is not None else [events if events is not None else []]),
 			"FAIL_THIRD": "yes" if third_failure else "no",
+			"FAIL_FIRST": "yes" if transient_first else "no",
+			"FAIL_FIRST_RATE_LIMIT": "yes" if transient_rate_limit_first else "no",
 		})
-		result = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
+		result = subprocess.run(["bash", "-c", "sleep() { :; }\n" + step["run"]], env=env, capture_output=True, text=True)
 		invoke.calls = [line for line in calls.read_text(encoding="utf-8").splitlines() if line]
 		invoke.stdout = result.stdout
 		return result.returncode, output.read_text(encoding="utf-8")
@@ -157,6 +162,23 @@ def test_target_listing_has_no_base_filter(tmp_path: Path):
 	assert "head=owner:claude/implement-plan-example" in invoke.calls[0]
 	assert "base=" not in invoke.calls[0]
 	assert "-f base=" not in _authorize_step()["run"]
+
+
+def test_transient_target_lookup_retries_the_same_authorization(tmp_path: Path):
+	invoke = _make_invoke(tmp_path)
+	sha = "a" * 40
+	assert invoke([_pr("claude/implement-plan-example", "main", sha)], transient_first=True) == (0, f"sha={sha}\n")
+	assert len(invoke.calls) == 2
+	assert invoke.calls[0] == invoke.calls[1]
+
+
+def test_rate_limited_target_lookup_waits_for_core_reset(tmp_path: Path):
+	invoke = _make_invoke(tmp_path)
+	sha = "a" * 40
+	assert invoke([_pr("claude/implement-plan-example", "main", sha)], transient_rate_limit_first=True) == (0, f"sha={sha}\n")
+	assert len(invoke.calls) == 3
+	assert invoke.calls[1] == "api /rate_limit"
+	assert invoke.calls[0] == invoke.calls[2]
 
 
 def test_project_branch_base_requires_one_parent_pr_into_default(tmp_path: Path):

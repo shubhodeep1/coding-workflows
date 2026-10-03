@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -30,9 +29,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 
-# The two steps of review_autofix.yml that define their own retry loop
-# instead of sourcing scripts/gh_helpers.sh (the first only as a fallback
-# when the source fails). Both capture gh_retry output with $(...).
+# Both review paths source the verified shared retry helper and capture its
+# output with $(...). Keep coverage for their wiring and output isolation.
 INLINE_GH_RETRY_STEPS = (
 	"Dispatch standalone validate for orchestrator short-circuit issues",
 	"Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge",
@@ -54,8 +52,8 @@ BAD_GATEWAY_STDERR = "gh: HTTP 502: Bad Gateway\n"
 # $FAKE_GH_PLAN/N.{stdout,stderr,rc}, falling back to the highest-numbered
 # attempt when the plan runs out.
 FAKE_GH = r"""#!/usr/bin/env bash
-if [ "$1" = "api" ] && [ "$2" = "-i" ] && [ "$3" = "/rate_limit" ]; then
-	printf 'HTTP/2 200\r\nx-ratelimit-reset: 0\r\n\r\n{}'
+if [ "$1" = "api" ] && { [ "$2" = "/rate_limit" ] || { [ "$2" = "-i" ] && [ "$3" = "/rate_limit" ]; }; }; then
+	printf '{"resources":{"core":{"reset":1},"search":{"reset":2}}}'
 	exit 0
 fi
 count_file="${FAKE_GH_PLAN}/calls"
@@ -210,6 +208,109 @@ def test_first_try_success_passes_stdout_through_unchanged(tmp_path: Path) -> No
 	assert _leftover_temp_files(tmp_path) == []
 
 
+def test_failed_implicit_post_create_is_not_retried(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1), (ISSUE_BODY, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r/issues -f title=created")
+	assert result.returncode == 1
+	assert result.stdout == ""
+	assert _calls(tmp_path) == 1
+	assert "mutation result uncertain" in result.stderr
+
+
+def test_explicit_get_with_fields_is_retried(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1), (ISSUE_BODY, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api --method GET repos/o/r/issues -f per_page=100")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ISSUE_BODY
+	assert _calls(tmp_path) == 2
+
+
+def test_final_rate_limit_attempt_does_not_sleep(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(RATE_LIMIT_BODY, RATE_LIMIT_STDERR, 1)])
+	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
+	result = _run(tmp_path, env, 'sleep() { echo "slept=$1" >&2; }; gh_retry gh api repos/o/r')
+	assert result.returncode == 75
+	assert "slept=" not in result.stderr
+	assert _calls(tmp_path) == 1
+
+
+def test_invalid_json_final_attempt_does_not_sleep(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [("not-json", "", 0)])
+	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
+	out_file = tmp_path / "response.json"
+	result = _run(tmp_path, env,
+		f'sleep() {{ echo unexpected_sleep >&2; }}; gh_api_json_to_file "{out_file}" gh api repos/o/r/issues/1')
+	assert result.returncode == 1
+	assert "unexpected_sleep" not in result.stderr
+	assert out_file.read_text(encoding="utf-8") == ""
+	assert _calls(tmp_path) == 1
+
+
+def test_rate_limit_bucket_reset_comes_from_body_not_probe_header(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(RATE_LIMIT_BODY, RATE_LIMIT_STDERR, 1), (ISSUE_BODY, "", 0)])
+	bin_gh = tmp_path / "bin" / "gh"
+	bin_gh.write_text(FAKE_GH.replace('"search":{"reset":2}', '"search":{"reset":3}'), encoding="utf-8")
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r/issues")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ISSUE_BODY
+	assert _calls(tmp_path) == 2
+
+
+def test_response_headers_choose_primary_wait_without_extra_probe(tmp_path: Path) -> None:
+	import time
+
+	reset = int(time.time()) + 3
+	primary = (f"HTTP/2 403\r\nx-ratelimit-resource: search\r\n"
+		f"x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {reset}\r\n\r\n" + RATE_LIMIT_BODY)
+	success = "HTTP/2 200\r\nx-ratelimit-resource: search\r\n\r\n" + ISSUE_BODY
+	env = _setup(tmp_path, [(primary, RATE_LIMIT_STDERR, 1), (success, "", 0)])
+	result = _run(tmp_path, env, 'sleep() { echo "wait=$1" >&2; }; gh_retry gh api repos/o/r/issues/1')
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ISSUE_BODY
+	assert "wait=" in result.stderr
+	assert _calls(tmp_path) == 2  # the response already supplied the reset
+
+
+def test_secondary_retry_after_and_paginated_filtered_output(tmp_path: Path) -> None:
+	secondary = "HTTP/2 429\r\nretry-after: 9\r\n\r\n" + RATE_LIMIT_BODY
+	success = "HTTP/2 200\r\n\r\n[[{\"number\":1}]]\n"
+	env = _setup(tmp_path, [(secondary, RATE_LIMIT_STDERR, 1), (success, "", 0)])
+	result = _run(
+		tmp_path, env,
+		'sleep() { echo "wait=$1" >&2; }; gh_retry gh api --method GET --paginate --slurp repos/o/r/issues -f per_page=100',
+	)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == '[[{"number":1}]]\n'
+	assert "wait=9" in result.stderr
+	assert _calls(tmp_path) == 2
+
+
+def test_retry_wait_over_job_budget_returns_rate_limit_code(tmp_path: Path) -> None:
+	limited = "HTTP/2 429\r\nretry-after: 60\r\n\r\n" + RATE_LIMIT_BODY
+	env = _setup(tmp_path, [(limited, RATE_LIMIT_STDERR, 1)])
+	env["GH_RETRY_MAX_TOTAL_WAIT_SECONDS"] = "5"
+	result = _run(tmp_path, env, 'sleep() { echo "slept" >&2; }; gh_retry gh api repos/o/r/issues/1')
+	assert result.returncode == 75
+	assert _calls(tmp_path) == 1
+	assert "slept" not in result.stderr
+
+
+def test_lf_only_include_headers_are_not_emitted(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [("HTTP/2.0 200 OK\nx-ratelimit-resource: graphql\n\n" + ISSUE_BODY, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api graphql --method GET")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ISSUE_BODY
+
+
+def test_paginated_response_strips_each_header_without_losing_pages(tmp_path: Path) -> None:
+	payload = ("HTTP/2 200\r\n\r\n[{\"number\":1}]\n"
+		"HTTP/2 200\r\n\r\n[{\"number\":2}]\n")
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api --paginate repos/o/r/issues")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == '[{"number":1}]\n[{"number":2}]\n'
+
+
 def test_stdout_buffer_mktemp_failure_does_not_run_the_command(tmp_path: Path) -> None:
 	env = _setup(tmp_path, [(ISSUE_BODY, "", 0)])
 	result = _run(
@@ -244,19 +345,16 @@ def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> No
 
 
 def _inline_gh_retry(step_name: str) -> str:
-	"""Return the inline ``gh_retry() { ... }`` defined in a review_autofix.yml step."""
+	"""Verify both review jobs load the trusted shared retry implementation."""
 	lines = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8").splitlines()
 	step_idx = next(
 		(i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}"), None,
 	)
 	assert step_idx is not None, f"step not found in review_autofix.yml: {step_name}"
-	start = next(
-		(i for i in range(step_idx + 1, len(lines)) if lines[i].strip() == "gh_retry() {"), None,
-	)
-	assert start is not None, f"no inline gh_retry() in step: {step_name}"
-	indent = lines[start][: len(lines[start]) - len(lines[start].lstrip(" "))]
-	end = next(i for i in range(start + 1, len(lines)) if lines[i] == f"{indent}}}")
-	return textwrap.dedent("\n".join(lines[start : end + 1])) + "\n"
+	step_end = next((i for i in range(step_idx + 1, len(lines)) if lines[i].startswith("      - name:") or lines[i].startswith("  # ")), len(lines))
+	assert 'source ".codex-workflow-src/scripts/gh_helpers.sh"' in "\n".join(lines[step_idx:step_end])
+	assert not any(line.strip() == "gh_retry() {" for line in lines[step_idx:step_end])
+	return f"source '{GH_HELPERS}'\n"
 
 
 def _run_inline(
@@ -265,6 +363,7 @@ def _run_inline(
 	"""Define the step's inline gh_retry with sleep stubbed, then run ``body``."""
 	script = (
 		"set -euo pipefail\n"
+		"GH_RETRY_MAX_ATTEMPTS=4\n"
 		f"{_inline_gh_retry(step_name)}"
 		"sleep() { :; }\n"
 		f"{body}\n"
@@ -346,5 +445,5 @@ def test_inline_wrapper_mktemp_failure_does_not_run_the_command(
 		'if gh_retry gh api repos/o/r/issues/5016; then echo "rc=0"; else echo "rc=$?"; fi',
 	)
 	assert result.stdout == "rc=1\n", result.stderr
-	assert "::error::gh_retry: failed to create stdout temp file" in result.stderr
+	assert "::error::gh_retry: failed to create stderr temp file" in result.stderr
 	assert _calls(tmp_path) == 0

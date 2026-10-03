@@ -4,6 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FIXTURE_DIR="${REPO_ROOT}/tests/fixtures/integration_ref_resolver"
+# Canonical resolver checkouts include this sibling. The fixture runner uses
+# its mock gh directly when the helper is absent.
+if [ -f "${SCRIPT_DIR}/gh_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${SCRIPT_DIR}/gh_helpers.sh"
+fi
+type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 extract_integration_branch() {
 	local body="${1:-}"
@@ -50,7 +57,11 @@ print(match.group(1))
 
 get_issue_body() {
 	local issue_num="$1"
-	gh api "repos/${REPO}/issues/${issue_num}" --jq '.body // ""'
+	# Clarify has a two-hour job budget and /reclarify has no independent
+	# requeue marker. Wait out a primary reset here instead of losing the
+	# initiating comment when the regular 600-second helper cap is short.
+	GH_RETRY_MAX_WAIT_SECONDS=3900 GH_RETRY_MAX_TOTAL_WAIT_SECONDS=4200 \
+		gh_retry gh api "repos/${REPO}/issues/${issue_num}" --jq '.body // ""'
 }
 
 branch_exists() {
@@ -58,7 +69,8 @@ branch_exists() {
 	local encoded_ref
 	local err
 	encoded_ref="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ref_name}")"
-	if err="$(gh api "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>&1)"; then
+	if err="$(GH_RETRY_MAX_WAIT_SECONDS=3900 GH_RETRY_MAX_TOTAL_WAIT_SECONDS=4200 \
+		gh_retry gh api "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>&1)"; then
 		return 0
 	fi
 	if printf '%s' "${err}" | grep -Eq '404|Not Found'; then

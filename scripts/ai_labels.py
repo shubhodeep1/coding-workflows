@@ -15,6 +15,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from github_api_retry import retry_delay
+
 
 class LabelContractError(ValueError):
     """Raised when label contract data is invalid."""
@@ -227,14 +229,16 @@ def _github_api_request(
             with urllib.request.urlopen(request, timeout=120) as response:
                 response_body = response.read()
         except urllib.error.HTTPError as exc:
-            if exc.code not in GITHUB_API_RETRY_STATUSES or attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
+            delay = retry_delay(exc.code, exc.headers, str(exc.reason), attempt_index, method=method_name)
+            if delay is None or attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
                 raise
-            time.sleep(_github_retry_delay_seconds(exc.headers, attempt_index))
+            time.sleep(delay)
             continue
         except (urllib.error.URLError, OSError):
-            if attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
+            delay = retry_delay(None, None, "network failure", attempt_index, method=method_name)
+            if delay is None or attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
                 raise
-            time.sleep(_github_retry_delay_seconds(None, attempt_index))
+            time.sleep(delay)
             continue
 
         if not response_body:

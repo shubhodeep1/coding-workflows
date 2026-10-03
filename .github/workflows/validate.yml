@@ -189,6 +189,36 @@ jobs:
             echo "::error::Invalid explicit validation target."
             exit 1
           fi
+          # Authorization runs before checkout; retry only GETs and preserve
+          # the existing fail-closed binding and provenance checks below.
+          validation_authorization_read() {
+            local attempt response reset_payload reset_epoch wait_seconds
+            for attempt in 1 2 3; do
+              if response="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "${response}"
+                return 0
+              fi
+              if [[ "${response}" =~ (HTTP\ 404|HTTP\ 422|Resource\ not\ accessible) ]]; then return 1; fi
+              [ "${attempt}" -lt 3 ] || break
+              if [[ "${response}" =~ (rate\ limit|HTTP\ 429) ]]; then
+                # No support code is available before authorization. These
+                # are all core GETs; the probe's header is not their reset.
+                reset_payload="$(gh api /rate_limit 2>/dev/null)" || reset_payload=''
+                reset_epoch="$(jq -r '.resources.core.reset // empty' <<< "${reset_payload}" 2>/dev/null || true)"
+                wait_seconds=60
+                if [[ "${reset_epoch}" =~ ^[0-9]{1,12}$ ]]; then
+                  wait_seconds=$(( reset_epoch - $(date +%s) + 1 ))
+                  [ "${wait_seconds}" -ge 1 ] || wait_seconds=1
+                fi
+                if [ "${wait_seconds}" -gt 3900 ]; then return 75; fi
+                sleep "${wait_seconds}"
+              else
+                sleep $((attempt * 2))
+              fi
+            done
+            echo "::error::Explicit validation authorization read unavailable; retry on the same target." >&2
+            return 75
+          }
           # The integration issue lookup has no PR head/repository identity.
           # One paginated pull listing supplies the independent binding. It has
           # no base filter: jq requires exactly one open PR for the head, then
@@ -216,7 +246,7 @@ jobs:
                 [ .[][] ] |
                 if length != 1 then error("\($what) PR binding is missing or ambiguous") else .[0] end
               end;'
-          target_prs="$(gh api --method GET --paginate --slurp \
+          target_prs="$(validation_authorization_read --method GET --paginate --slurp \
             -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:${VALIDATE_TARGET_REF}" \
             -f per_page=100 \
             "repos/${GITHUB_REPOSITORY}/pulls")" || exit 1
@@ -246,7 +276,7 @@ jobs:
               # default branch. The base name is not echoed: it is API data.
               git check-ref-format --branch "${target_detail}" >/dev/null 2>&1 ||
                 { echo "::error::Explicit validation target is not authorized: its PR base is not a valid branch name."; exit 1; }
-              parent_prs="$(gh api --method GET --paginate --slurp \
+              parent_prs="$(validation_authorization_read --method GET --paginate --slurp \
                 -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:${target_detail}" \
                 -f per_page=100 \
                 "repos/${GITHUB_REPOSITORY}/pulls")" || exit 1
@@ -269,7 +299,7 @@ jobs:
               # first time within 120 s of creation. The target PR's author must
               # be the issue's author, so nobody else can open a stable target
               # for it; the head stays pinned to the listing's SHA.
-              heal_issue_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${target_detail}")" || exit 1
+              heal_issue_json="$(validation_authorization_read "repos/${GITHUB_REPOSITORY}/issues/${target_detail}")" || exit 1
               heal_issue_created="$(jq -er --arg author "${target_author}" '
                 def body_lines: (.body // "") | if type == "string" then split("\n") | map(rtrimstr("\r")) else [] end;
                 def first_capture($re): [ .[] | capture($re)? ] | first;
@@ -293,7 +323,7 @@ jobs:
               # verified: one read per 100 events (one for a typical heal issue).
               # --slurp wraps each page in an outer array, [[event, ...], ...],
               # so any other shape (a bare event list included) fails closed.
-              heal_events_json="$(gh api --method GET --paginate --slurp -f per_page=100 \
+              heal_events_json="$(validation_authorization_read --method GET --paginate --slurp -f per_page=100 \
                 "repos/${GITHUB_REPOSITORY}/issues/${target_detail}/events")" || exit 1
               jq -e --arg author "${target_author}" --argjson created "${heal_issue_created}" '
                 type == "array" and all(.[]; type == "array") and

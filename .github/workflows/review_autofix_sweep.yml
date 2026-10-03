@@ -179,8 +179,13 @@ jobs:
                 gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
                   -f status="${status}" \
                   -f per_page=100 \
-                  2>/dev/null || true
+                  2>/dev/null || exit 1
               done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" '
+                  def checked_pages:
+                    if length < 3 or any(.[]; type != "object" or
+                      (.workflow_runs | type) != "array" or
+                      (.total_count | type) != "number")
+                    then error("incomplete active-run snapshot") else . end;
                   def created_epoch:
                     (.created_at // "")
                     | if . == "" then null
@@ -211,7 +216,7 @@ jobs:
                   def dedupe_key:
                     dispatch_pr as $pr
                     | if $pr != "" then "pr:\($pr)" else .head_branch end;
-                  [
+                  checked_pages | [
                     .[]
                     | .workflow_runs[]?
                     | select((.head_branch // "") != "")
@@ -236,7 +241,8 @@ jobs:
             )"; then
               :
             else
-              snapshot_json='{}'
+              echo "::error::Active-run snapshot incomplete for ${workflow}; deferring the entire sweep."
+              return 1
             fi
 
             while IFS=$'\t' read -r cached_head_ref cached_count; do

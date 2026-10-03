@@ -103,6 +103,8 @@ if state_path.exists():
 else:
 	state = {}
 args = sys.argv[1:]
+if args[:2] == ["api", "-i"]:
+	args = ["api", *args[2:]]  # The mock records the original request shape.
 
 
 def save() -> None:
@@ -3343,7 +3345,7 @@ def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
 	assert api_error["returncode"] == 0, api_error
 	assert "collection_status: api_error\n" in api_error["context_text"]
 	assert "Check-run API call failed; treat absence of failures as unknown rather than confirmed-passing.\n" in api_error["context_text"]
-	assert "mock gh: check-runs failure\n" in api_error["stderr"]
+	assert "gh_retry: non-retryable read failure" in api_error["stderr"]
 	assert "Check-run context bytes:" in api_error["stdout"]
 
 
@@ -6699,12 +6701,8 @@ def test_post_merge_validate_dispatch_inlines_retry_wrapper_when_helper_load_fai
 	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' not in script, (
 		"post-merge validate dispatch must not fall back to a no-op gh_retry wrapper"
 	)
-	assert "if ! type gh_retry >/dev/null 2>&1; then" in script, (
-		"post-merge validate dispatch must define an inline retry wrapper when gh_helpers.sh is unavailable"
-	)
-	assert "local n=0 max=4 delay=2" in script, (
-		"post-merge validate dispatch inline retry wrapper must preserve the lightweight retry contract"
-	)
+	assert 'source ".codex-workflow-src/scripts/gh_helpers.sh"' in script
+	assert "gh_retry() {" not in script
 
 
 def test_post_merge_force_poll_is_not_blocked_by_definitely_empty_validate_context() -> None:
@@ -6719,7 +6717,7 @@ def test_post_merge_force_poll_is_not_blocked_by_definitely_empty_validate_conte
 
 def test_deterministic_skip_warns_when_closing_issue_resolution_is_unknown() -> None:
 	block = _step_block("Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")
-	assert 'if issue_numbers="$(gh_retry gh api graphql \\' in block, (
+	assert 'if issue_numbers="$(gh_retry --idempotent gh api graphql \\' in block, (
 		"deterministic-skip-merge must retry closingIssuesReferences lookups"
 	)
 	assert "Unable to resolve closingIssuesReferences for PR #${PR_NUMBER} after retries" in block, (
@@ -7666,8 +7664,8 @@ def test_review_support_identity_is_bound_across_jobs() -> None:
 	assert "review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}" in gate_job
 	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in gate_job
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in _step_block("Resolve trusted review support commit")
-	assert "gh api repos/shubhodeep1/coding-workflows/branches/main" in gate_job
-	assert "gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
+	assert "bootstrap_support_read repos/shubhodeep1/coding-workflows/branches/main" in gate_job
+	assert "bootstrap_support_read repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
 	assert "gh api repos/shubhodeep1/coding-workflows/commits/stable" not in gate_job
 	for job_name in ("gate", "post-merge-validate-dispatch", "post-merge-force-poll", "fingerprint-cap-block", "codex-agent"):
 		job = _job_block(job_name)

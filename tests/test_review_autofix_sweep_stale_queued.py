@@ -31,6 +31,23 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEEP_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
 
+
+def test_snapshot_failure_defers_whole_sweep() -> None:
+	text = SWEEP_WF.read_text(encoding="utf-8")
+	assert '2>/dev/null || exit 1' in text
+	assert "else\n              snapshot_json='{}'" not in text
+	assert 'snapshot_active_review_runs "${wf}"' in text
+	assert 'return 1' in text[text.index('snapshot_active_review_runs() {'):text.index('for wf in internal-review.yml review_autofix.yml; do')]
+
+
+def test_partial_active_run_pages_are_rejected() -> None:
+	result = subprocess.run(
+		["jq", "-c", "-s", "--argjson", "cutoff", "0", extract_jq_program()],
+		input='{"total_count":1,"workflow_runs":[]}\n{"total_count":0,"workflow_runs":[]}\n',
+		capture_output=True, text=True,
+	)
+	assert result.returncode != 0
+
 # The jq program is embedded in the workflow as a single-quoted argument to
 # `jq -c -s --argjson cutoff "${stale_cutoff_epoch}"`. Grab it verbatim.
 JQ_BLOCK = re.compile(
@@ -58,7 +75,11 @@ def cutoff_epoch(minutes_ago: int) -> int:
 
 
 def run_sweep_reduce(runs: list[dict], cutoff: int) -> dict:
-	payload = json.dumps({"workflow_runs": runs})
+	payload = "\n".join(json.dumps(page) for page in (
+		{"total_count": len(runs), "workflow_runs": runs},
+		{"total_count": 0, "workflow_runs": []},
+		{"total_count": 0, "workflow_runs": []},
+	))
 	result = subprocess.run(
 		["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), extract_jq_program()],
 		input=payload,

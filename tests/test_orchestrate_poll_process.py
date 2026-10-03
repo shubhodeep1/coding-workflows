@@ -23,6 +23,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 
+
+def test_wave_label_reads_defer_on_api_failure() -> None:
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	label_helper = text.split("get_issue_labels_json() {", 1)[1].split("\n}", 1)[0]
+	assert "|| echo '[]'" not in label_helper
+	assert text.count('Issue labels unavailable; deferring wave decisions.') >= 2
+	assert text.count('Replacement issue labels unavailable; deferring wave decisions.') >= 2
+	assert 'Default branch unavailable; deferring conflict sweep.' in text
+
 # Upper bound for a single poller invocation under test. The mocked poller
 # should complete in a few seconds; anything longer indicates a hang (e.g. an
 # infinite loop in the script-under-test or a subprocess the mock never

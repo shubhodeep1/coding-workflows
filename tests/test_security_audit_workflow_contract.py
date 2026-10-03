@@ -385,12 +385,18 @@ def _run_audit_workflow_resolution(
 		workspace = Path(td)
 		bin_dir = workspace / "bin"
 		bin_dir.mkdir()
+		if step_name == "Resolve audit target":
+			# The real step runs after verified support checkout.
+			(workspace / "scripts").mkdir()
+			(workspace / "scripts" / "gh_helpers.sh").write_bytes(
+				(REPO_ROOT / "scripts" / "gh_helpers.sh").read_bytes()
+			)
 		_write_exec(
 			bin_dir / "gh",
 			"#!/usr/bin/env python3\n"
 			"import json, os, sys\n"
 			"responses = json.loads(os.environ['MOCK_API_RESPONSES'])\n"
-			"path = sys.argv[2] if sys.argv[1] == 'api' else ''\n"
+			"path = sys.argv[3] if len(sys.argv) > 3 and sys.argv[2] == '-i' else sys.argv[2] if sys.argv[1] == 'api' else ''\n"
 			"if path not in responses:\n\tsys.exit(1)\n"
 			"print(json.dumps(responses[path]))\n",
 		)
@@ -2099,7 +2105,7 @@ def test_security_audit_target_ref_routes_through_the_integration_ref_resolver()
 			bin_dir / "gh",
 			"#!/usr/bin/env python3\n"
 			"import json, sys\n"
-			"path = sys.argv[2] if len(sys.argv) > 2 else ''\n"
+			"path = sys.argv[3] if len(sys.argv) > 3 and sys.argv[2] == '-i' else sys.argv[2] if len(sys.argv) > 2 else ''\n"
 			"if path == 'repos/owner/repo/issues/101':\n"
 			f"\tprint({body!r})\n"
 			"\tsys.exit(0)\n"
