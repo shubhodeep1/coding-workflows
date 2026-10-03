@@ -1157,7 +1157,13 @@ reviews, comments, and conflicts stay a direct §12 request.
   for an `-F` word the shell could rewrite into `@<file>` (`$`, a backtick,
   `~`, or a glob character in it) and for any command that uses ANSI-C
   quoting (`$'...'`), an unquoted `#` comment, or brace expansion, which
-  Bash parses unlike the guard. It allows reads and
+  Bash parses unlike the guard. For #5558 it also asks when a direct
+  `gh api` argument contains an unquoted `$`/backtick expansion that could
+  word-split into a new flag; a double-quoted dynamic endpoint retains its
+  no-decision outcome inside a loop. The heredoc scanner ignores quoted or
+  escaped `<<`, here-strings, comments, and expansion/arithmetic text rather
+  than hiding a subsequent call. Keep this check in any #4786/#4909 loop
+  approval. It allows reads and
   routine calls that stand alone or beside the safe helpers (`cd`, `sleep`,
   `echo`, `2>&1`, pipes into `head`/`tail`/`wc -l`/`sort`), and leaves them
   to the allow list or the Auto-mode classifier beside anything else (loops,

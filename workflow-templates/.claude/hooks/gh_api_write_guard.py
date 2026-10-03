@@ -44,6 +44,9 @@ otherwise) and classifies the call:
              in a heredoc fed to one). Forces the permission prompt, in every
              permission mode. `gh api` text handed to any other command
              (`git commit -m`, `grep`, `echo`) is data and is ignored.
+             An unquoted `$` or backtick in a direct `gh api` argument also
+             prompts: Bash could split it into a new flag. Quoted read paths
+             keep their existing no-decision outcome in compound commands.
 
 Decision for the whole Bash call (a hook decides once per tool call):
   - any call whose `-q` / `--jq` value is one of jq's own command-line
@@ -57,6 +60,8 @@ Decision for the whole Bash call (a hook decides once per tool call):
     unquoted `#` comment, or brace expansion (`{a,b}`, `{a..b}`): Bash
     expands or parses these unlike the tokenizer, so a word could become a
     hidden flag or command → `permissionDecision: ask` (issue #4619);
+  - a direct `gh api` argument contains an unquoted expansion that Bash
+    could word-split into another flag → `permissionDecision: ask` (#5558);
   - any `write` → `permissionDecision: ask`;
   - every call is `read` or `routine` and the command contains nothing else
     but safe helpers: items joined by `;` / `&&`, each a `gh api` call
@@ -304,12 +309,89 @@ def strip_heredoc_bodies(command: str) -> tuple[str, list[tuple[str, bool, str]]
 	output: list[str] = []
 	heredocs: list[tuple[str, bool, str]] = []
 	pending: list[tuple[str, bool, bool, str]] = []
+	# A nested $(...) has its own shell quoting rules, even inside "...".
+	# Parameter expansion and arithmetic are not shell redirection contexts.
+	contexts: list[list] = [["shell", None, 0]]
 	index = 0
 	while index < len(lines):
 		line = lines[index]
 		output.append(line)
-		for match in re.finditer(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", line):
-			pending.append((match.group(3), match.group(1) == "-", bool(match.group(2)), line[: match.start()]))
+		position = 0
+		while position < len(line):
+			character = line[position]
+			mode, quote, depth = contexts[-1]
+			if character == "\\" and quote != "'":
+				position += 2
+				continue
+			if quote == "'":
+				if character == "'":
+					contexts[-1][1] = None
+				position += 1
+				continue
+			if character == quote:
+				contexts[-1][1] = None
+				position += 1
+				continue
+			if line.startswith("$((", position):
+				contexts.append(["arithmetic", None, 2])
+				position += 3
+				continue
+			if line.startswith("$(", position):
+				contexts.append(["shell", None, 0])
+				position += 2
+				continue
+			if line.startswith("${", position):
+				contexts.append(["parameter", None, 1])
+				position += 2
+				continue
+			if mode == "parameter":
+				if character == "{":
+					contexts[-1][2] += 1
+				elif character == "}":
+					contexts[-1][2] -= 1
+					if contexts[-1][2] == 0:
+						contexts.pop()
+				position += 1
+				continue
+			if mode == "arithmetic":
+				if character == "(":
+					contexts[-1][2] += 1
+				elif character == ")":
+					contexts[-1][2] -= 1
+					if contexts[-1][2] == 0:
+						contexts.pop()
+				position += 1
+				continue
+			if character == "'" and quote is None:
+				contexts[-1][1] = "'"
+			elif character == '"':
+				contexts[-1][1] = '"' if quote is None else None
+			elif quote is None:
+				if character == "`":
+					if mode == "backtick":
+						contexts.pop()
+					else:
+						contexts.append(["backtick", None, 0])
+				elif mode == "shell" and len(contexts) > 1 and character == ")":
+					if depth == 0:
+						contexts.pop()
+					else:
+						contexts[-1][2] -= 1
+				elif mode == "shell" and len(contexts) > 1 and character == "(":
+					contexts[-1][2] += 1
+				elif line.startswith("((", position) and (position == 0 or line[position - 1] in " \t;|&("):
+					contexts.append(["arithmetic", None, 2])
+					position += 2
+					continue
+				elif character == "#" and (position == 0 or line[position - 1] in " \t;|&()<>"):
+					break
+				elif line.startswith("<<", position) and not line.startswith("<<<", position) and (position == 0 or line[position - 1] != "<"):
+					match = re.match(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", line[position:])
+					if match:
+						pending.append((match.group(3), match.group(1) == "-", bool(match.group(2)), line[:position]))
+						position += len(match.group())
+						continue
+			position += 1
 		index += 1
 		while pending:
 			delimiter, strip_tabs, quoted, prefix = pending.pop(0)
@@ -790,6 +872,69 @@ def _shell_rewrite_hazard(command: str) -> str:
 	return ""
 
 
+def _unquoted_gh_api_expansion(command: str) -> bool:
+	"""Find words Bash could split into extra gh api arguments after expansion.
+
+	Keep quote state on the raw command: shlex removes it before the gh
+	argument parser runs. Only words belonging to a direct call count; an
+	expansion in a neighbouring echo/loop is not a gh api argument.
+	"""
+	segments: list[list[tuple[str, bool]]] = []
+	words: list[tuple[str, bool]] = []
+	word = ""
+	expands = False
+	in_word = False
+	quote = None
+	redirect_target = False
+	position = 0
+	while position < len(command):
+		character = command[position]
+		if character == "\\" and quote != "'":
+			in_word = True
+			word += command[position + 1 : position + 2]
+			position += 2
+			continue
+		if character == "'" and quote != '"':
+			quote = None if quote == "'" else "'"
+			in_word = True
+		elif character == '"' and quote != "'":
+			quote = None if quote == '"' else '"'
+			in_word = True
+		elif quote is None and character in " \t\r\n;&|<>()":
+			if in_word:
+				if not redirect_target:
+					words.append((word, expands))
+				else:
+					redirect_target = False
+				word, expands, in_word = "", False, False
+			if character in "<>":
+				redirect_target = True
+			if character in "\n;&|()" and words:
+				segments.append(words)
+				words = []
+		else:
+			word += character
+			in_word = True
+			if quote is None and character in "$`":
+				expands = True
+		position += 1
+	if in_word and not redirect_target:
+		words.append((word, expands))
+	if words:
+		segments.append(words)
+	for segment in segments:
+		tokens = [value for value, _ in segment]
+		index = _command_word_index(tokens)
+		if (
+			index + 1 < len(tokens)
+			and _is_gh(tokens[index])
+			and tokens[index + 1] == "api"
+			and any(expansion for _value, expansion in segment[index + 2 :])
+		):
+			return True
+	return False
+
+
 def _is_safe_standalone(words: list[str]) -> bool:
 	name, args = words[0], words[1:]
 	if name == "cd":
@@ -981,6 +1126,11 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			f"gh api guard (CLAUDE.md §23.H): the command uses {hazard}, which Bash expands or parses differently "
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it."
+		)
+	if _unquoted_gh_api_expansion(stripped_command):
+		return DECISION_ASK, (
+			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
+			"a new flag or command. Quote the expanded word or run it with explicit arguments."
 		)
 
 	writes = [description for kind, description in results if kind == KIND_WRITE]

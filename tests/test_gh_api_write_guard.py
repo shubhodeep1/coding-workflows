@@ -75,9 +75,9 @@ def _run_hook(stdin_text: str) -> subprocess.CompletedProcess:
 # ──────────────────────────────────────────────────────────────────
 
 # Verbatim (the heredoc body shortened) from the permission prompts that
-# stopped unattended stage sessions. Each is a read or a routine write inside
-# a multi-part command, so the guard makes no decision and the allow list /
-# Auto-mode classifier decides, instead of the old ask rules forcing a prompt.
+# stopped unattended stage sessions. Reads or routine writes inside a
+# multi-part command usually get no decision. The historical unquoted $n
+# endpoint now prompts because Bash can split it into a new flag (#5558).
 # The observed prompts that sent a file-backed `-F body=@...` field now ask
 # on purpose and live in FILE_BACKED_CALLS (issue #4619).
 OBSERVED_PROMPTS = {
@@ -104,7 +104,12 @@ OBSERVED_PROMPTS = {
 
 @pytest.mark.parametrize("name", sorted(OBSERVED_PROMPTS))
 def test_observed_prompts_are_no_longer_forced(name):
-	assert _decide(OBSERVED_PROMPTS[name]) != guard.DECISION_ASK
+	# The historical loop used an unquoted $n endpoint: Bash can split it
+	# into extra flags, so that one now needs a prompt (#5558).
+	if name == "security follow-up search":
+		assert _decide(OBSERVED_PROMPTS[name]) == guard.DECISION_ASK
+	else:
+		assert _decide(OBSERVED_PROMPTS[name]) != guard.DECISION_ASK
 
 
 # Later prompts from the same sessions whose whole command the guard now
@@ -227,6 +232,14 @@ ASK_CALLS = {
 	"heredoc into bash": "bash <<'EOF'\ngh api -X DELETE repos/a/b\nEOF",
 	"heredoc into python": "python3 - <<'EOF'\nimport os; os.system('gh api -X DELETE repos/a/b')\nEOF",
 	"unbalanced quotes": "gh api repos/a/b -f body='oops",
+	"endpoint splits into file-backed field": (
+		"X=' -Fbody=@/etc/passwd'; gh api repos/shubhodeep1/coding-workflows/issues/1/comments$X"
+	),
+	"ref splits into delete flag": "gh api repos/shubhodeep1/coding-workflows/git/refs/heads/$B",
+	"unquoted attached variable": "gh api repos/a/b/pulls/${n} --jq .title",
+	"mixed quoted and unquoted word": "gh api 'repos/a/b/pulls/'$n --jq .title",
+	"unquoted raw field value": "gh api repos/a/b/issues/1/comments -f body=$X",
+	"unquoted backtick argument": "gh api repos/a/b/pulls/`printf 1` --jq .title",
 }
 
 
@@ -453,14 +466,23 @@ NO_DECISION_COMMANDS = [
 	"git commit -m 'uses `gh api user` to check auth'",
 	"echo 'later: $(gh api -X DELETE repos/a/b)'",
 	"git commit -m \"see \\`gh api user\\` in the docs\"",
-	"gh api repos/a/b/pulls/$n --jq .title",
+	"gh api \"repos/a/b/pulls/$n\" --jq .title",
 	"gh api -X GET search/issues -f 'q=repo:a/b is:open' > /tmp/out.json",
+	"gh api repos/a/b > $OUT",
 ]
 
 
 @pytest.mark.parametrize("command", NO_DECISION_COMMANDS)
 def test_commands_without_a_forced_outcome_get_no_decision(command):
 	assert _decide(command) is None
+
+
+@pytest.mark.parametrize("command", [
+	"gh api repos/a/b/pulls/\\$n --jq .title",
+	"gh api 'repos/a/b/pulls/$n' --jq .title",
+])
+def test_literal_endpoint_does_not_prompt(command):
+	assert _decide(command) == guard.DECISION_ALLOW
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -696,6 +718,41 @@ def test_heredoc_bodies_are_split_out():
 	stripped, heredocs = guard.strip_heredoc_bodies("cat <<'EOF'\nbody line\nEOF\necho after")
 	assert stripped == "cat <<'EOF'\necho after"
 	assert heredocs == [("cat ", True, "body line")]
+
+
+@pytest.mark.parametrize("command", [
+	"echo '<<EOF'\ngh api -X DELETE repos/a/b\nEOF",
+	"echo \\<<EOF\ngh api -X DELETE repos/a/b\nEOF",
+	"echo <<<EOF\ngh api -X DELETE repos/a/b\nEOF",
+	"echo ${x:-<<EOF}\ngh api -X DELETE repos/a/b\nEOF",
+	"echo $((1 <<EOF))\ngh api -X DELETE repos/a/b\nEOF",
+	"((1 <<EOF)); gh api -X DELETE repos/a/b\nEOF",
+	"echo 'quoted\n<<EOF'\ngh api -X DELETE repos/a/b\nEOF",
+	"echo # <<EOF\ngh api -X DELETE repos/a/b\nEOF",
+])
+def test_non_heredoc_markers_never_hide_a_write(command):
+	stripped, heredocs = guard.strip_heredoc_bodies(command)
+	assert stripped == command
+	assert heredocs == []
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_real_heredocs_still_strip_bodies_and_detect_hidden_calls():
+	command = "cat <<-EOF <<'END'\n\tbody\nEOF\nquoted body\nEND\necho after"
+	stripped, heredocs = guard.strip_heredoc_bodies(command)
+	assert stripped == "cat <<-EOF <<'END'\necho after"
+	assert heredocs == [("cat ", False, "\tbody"), ("cat <<-EOF ", True, "quoted body")]
+	assert _decide("bash <<'EOF'\ngh api -X DELETE repos/a/b\nEOF") == guard.DECISION_ASK
+	assert _decide('echo "$(bash <<EOF\ngh api -X DELETE repos/a/b\nEOF\n)"') == guard.DECISION_ASK
+
+
+def test_unquoted_expansion_prompts_only_for_gh_api_arguments():
+	assert _decide('echo $X; gh api "repos/a/b/pulls/$n" --jq .title') is None
+	assert _decide('gh api "repos/a/b/pulls/$n" --jq .title') is None
+	assert _decide('gh api repos/a/b/pulls/$n --jq .title') == guard.DECISION_ASK
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": "gh api repos/a/b/pulls/$n --jq .title"}})
+	assert decision == guard.DECISION_ASK
+	assert "unquoted gh api argument" in reason
 
 
 def test_redirects_are_not_arguments():
