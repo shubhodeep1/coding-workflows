@@ -114,8 +114,8 @@ smoke_review_pr_named_runs()
 #   Calls:   1 REST read of the run's jobs (per_page=100), then at most 1 read
 #            of the codex-agent job's log (the same job-name match Phase 4's
 #            live-log probe uses).
-#   Returns: 0 found; 1 API failure or malformed jobs payload (retryable);
-#            2 the log was read but has no such line; 3 the run has no
+#   Returns: 0 found; 1 API failure, malformed jobs payload, or empty/whitespace-only log (retryable);
+#            2 a non-empty log was read but has no such line; 3 the run has no
 #            codex-agent job; 4 invalid input.
 smoke_review_checked_out_sha()
 {
@@ -162,6 +162,12 @@ smoke_review_checked_out_sha()
 	# even when stdout is a file, and every genuine run read as rc=1 (the
 	# same fix as scripts/workflow_failure_heal_intake.sh).
 	if ! gh api --allow-escape-sequences "repos/${repo}/actions/jobs/${job_id}/logs" > "${log_file}" 2>/dev/null; then
+		rm -f "${log_file}"
+		return 1
+	fi
+	# An empty log may still be uploading; only a non-empty log can prove
+	# the checkout line is absent. Let the caller's deadline bound retries.
+	if ! grep -aq '[^[:space:]]' "${log_file}"; then
 		rm -f "${log_file}"
 		return 1
 	fi

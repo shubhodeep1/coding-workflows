@@ -374,6 +374,8 @@ def test_checked_out_sha_treats_a_skipped_codex_agent_job_as_absent() -> None:
 
 def test_checked_out_sha_return_codes() -> None:
 	cases = [
+		("empty log", JOBS, "", 1),
+		("whitespace-only log", JOBS, " \t\r\n  \n", 1),
 		("missing line", JOBS, _log("2026-09-29T10:00:01Z nothing here"), 2),
 		("no codex-agent job", {"jobs": [{"id": 555, "name": "review / gate"}]}, None, 3),
 		("malformed jobs", {"jobs": "x"}, None, 1),
@@ -392,6 +394,8 @@ def test_checked_out_sha_return_codes() -> None:
 			else:
 				stub.serve(LOG_PATH, log)
 			assert _call_helper(stub, "smoke_review_checked_out_sha", REPO, "100") == (expected, ""), label
+			if label in ("empty log", "whitespace-only log", "missing line"):
+				assert [next(a for a in call if a.startswith("repos/")) for call in stub.calls()] == [JOBS_PATH, LOG_PATH]
 		finally:
 			stub.cleanup()
 
