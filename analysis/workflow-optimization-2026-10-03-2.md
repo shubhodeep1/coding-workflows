@@ -121,3 +121,120 @@ After confirmed mirrored-line correction, Semble has **13 distinct queries/136,5
 | Sweep `37124210897` | 17 candidate dispatches, about 38 s | Actual API attempts/statuses |
 | Merge release `37127631768` | 16 PRs examined, 0 released, about 14 s in step | Distinct API calls, cache-hit count, pagination |
 | Rate-limit events / HTTP retries | Not quantified | Sanitized wrapper counters and backoff duration |
+
+## Deep Audit — Workflows & Scripts (2026-10-03)
+
+### Section 1: Bug & Correctness Sweep
+
+The repository contains 52 `.github/workflows/*.yml` files and 162 `scripts/*.sh` or `scripts/*.py` files. All parsed in a read-only syntax sweep; ShellCheck reported warnings but the shell scripts passed `bash -n`. The inventory, event-mirror, Actionlint, and collector-telemetry regressions already described in the current report are not repeated below. No workflow or script TODO/FIXME/HACK marker was found.
+
+- **ID:** BUG-001 · **File path:** `scripts/label_helpers.sh:209-243` · **Severity:** High · **Category tag:** `bug`  
+  **Description:** `set_issue_phase_label_resilient` reads all issue labels, computes a replacement set, then sends `PUT /labels`. A label added by another job between the GET and PUT is absent from that replacement and can be lost. This is a read–modify–write race on the entire label set.  
+  **Recommended fix:** Serialize phase-label writers per issue or use targeted phase-label removal and addition rather than replacing unrelated labels; preserve the contract-derived phase set used by `scripts/orchestrate_poll_process.sh:2905-2961`.
+
+- **ID:** BUG-002 · **File path:** `scripts/gh_helpers.sh:780-805` · **Severity:** High · **Category tag:** `bug`  
+  **Description:** The REST fallback for `gh_pr_with_all_comments` converts either failed paginated comments read into `[]` and returns successful-looking context. `scripts/review_rb_judge.sh:1100-1103` and `scripts/orchestrate_poll_process.sh:20628-20640` then consume those arrays as judge context. An API failure can therefore be indistinguishable from a PR with no comments.  
+  **Recommended fix:** Check each read’s exit status before constructing context; return an explicit incomplete-context status. Make judge callers defer a decision that requires missing comments, while retaining their intended fail-open behavior for advisory context.
+
+- **ID:** BUG-003 · **File path:** `scripts/tg_helpers.sh:330-374` and `scripts/tg_helpers.sh:399-445` · **Severity:** Medium · **Category tag:** `bug`  
+  **Description:** Both cleanup loops fetch page 1, delete matching comments, then advance to page 2. Deletion shifts the remaining offset-paginated collection: with a full first page, an original comment near the page boundary can be skipped. This is an inference from the fetch–delete–increment sequence.  
+  **Recommended fix:** Collect the matching comment IDs across pages before deleting any, then delete from that fixed snapshot; retain per-comment best-effort cleanup.
+
+- **ID:** BUG-004 · **File path:** `scripts/tg_helpers.sh:189-205` and `scripts/tg_helpers.sh:262-277` · **Severity:** Medium · **Category tag:** `bug`  
+  **Description:** Tracking-comment PATCH and POST calls use `curl -s`, discard responses, and end with `|| true`. HTTP error responses do not establish a successful write, yet the newly sent Telegram message ID is not retried or reported as untracked.  
+  **Recommended fix:** Check HTTP status through a write-aware GitHub API helper, report a failed tracking write, and retain the message ID for a bounded retry. Do not blindly retry a POST without checking whether its comment was created.
+
+- **ID:** SEC-001 · **File path:** `scripts/gh_helpers.sh:647-659` · **Severity:** Medium · **Category tag:** `security`  
+  **Description:** When a successful API command returns invalid JSON, `gh_api_json_to_file` prints the first 50 lines of its raw response to the Actions log. The helper is used for PR comment context at `scripts/gh_helpers.sh:886-891`; a malformed response could expose private response content in logs. Whether such content has actually been logged is unknown. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Log response byte count, endpoint category, and parse failure—not response bytes; retain the response only in the restricted temporary file until it is removed.
+
+- **ID:** SEC-002 · **File path:** `.github/workflows/orchestrate_clarify_respond.yml:486-500` · **Severity:** Medium · **Category tag:** `security`  
+  **Description:** An issue title read from the API is appended to `GITHUB_ENV` using the single-line `ISSUE_TITLE=value` form without newline validation. If an API-supplied title can contain a line break, subsequent text can be interpreted as another environment assignment. Whether GitHub admits such a title needs verification. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Reject CR/LF before the single-line write, or use a collision-resistant multiline environment-file delimiter; the title is already available as step environment input at line 51.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are *logical calls on the stated path*, before pagination or retries. Batching proposals retain per-item fallbacks on missing or invalid cached data.
+
+- **ID:** API-001 · **File path:** `scripts/orchestrate_poll_process.sh:19847-19871` · **Severity:** Medium · **Category tag:** `api-redundancy`  
+  **Description:** The current-wave details batch already requests `labels(first: 50)` at lines 14881-14885, but the same issues receive a second labels-only GraphQL batch. **Current:** `2 × ceil(N/25)` batch calls for N wave issues on a healthy path. **Proposed:** `ceil(N/25)`, plus fallback calls only for absent entries.  
+  **Recommended fix:** Populate `LABELS_JSON` from `_current_wave_details_json`; invoke the existing `_fetch_issue_labels_batch_graphql` for missing entries only, preserving the independently fail-open fallback documented at this callsite.
+
+- **ID:** API-002 · **File path:** `scripts/orchestrate_poll_process.sh:10436-10448` · **Severity:** Low · **Category tag:** `api-redundancy`  
+  **Description:** On a `final_pr_json_snapshot` miss, adjacent reads fetch the same PR once for `.state` and again for `.merged_at`. **Current:** 2 PR GETs per miss. **Proposed:** 1.  
+  **Recommended fix:** Fetch one JSON object and extract both fields with `_jq_field`, following the existing `_fetch_pr_json` pattern at `scripts/orchestrate_poll_process.sh:1479-1495`; no new batching helper is needed.
+
+- **ID:** API-003 · **File path:** `scripts/orchestrate_poll_process.sh:14090-14092`, `scripts/orchestrate_poll_process.sh:16805-16806`, and `scripts/orchestrate_poll_process.sh:22022-22024` · **Severity:** Medium · **Category tag:** `api-redundancy`  
+  **Description:** Three reissue paths independently fetch an issue’s title and body from the same endpoint. **Current:** 2 GETs per reissued issue, or `2N` for N issues taking one path. **Proposed:** 1 GET per issue, or `N`.  
+  **Recommended fix:** Capture one issue JSON response and extract both fields locally. If batching multiple wave reissues proves freshness-safe, extend the 25-item `_fetch_candidate_issue_details_graphql` alias pattern to carry title and body, with per-issue REST fallback. **[NEEDS VERIFICATION]**
+
+- **ID:** API-004 · **File path:** `scripts/orchestrate_poll_process.sh:19895-19923` · **Severity:** Medium · **Category tag:** `api-batching`  
+  **Description:** The current-wave loop calls `_fetch_pr_json` once per cross-referenced PR candidate to verify implementation-PR identity. **Current:** N PR REST GETs for N candidates, in addition to existing discovery calls. **Projected:** `ceil(N/25)` GraphQL alias calls for candidate metadata, plus REST calls on misses. Matching all fields required by `_pr_json_is_issue_implementation_pr` has not been verified. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Collect candidate PR numbers before the loop and extend the aliased batching approach of `_fetch_linked_pr_status_graphql`; normalize its result to the verifier’s existing PR shape and keep `_fetch_pr_json` as the cache-miss path.
+
+- **ID:** API-005 · **File path:** `scripts/gh_helpers.sh:637-680` and `scripts/gh_helpers.sh:704-752` · **Severity:** Medium · **Category tag:** `api-redundancy`  
+  **Description:** Unlike `gh_retry` at lines 481-491, `gh_api_json_to_file` has no permanent-error check; `curl_gh_api` likewise backs off on non-rate-limited HTTP errors without distinguishing permanent 4xx responses. With the default five attempts, a repeatable 404 or 422 can consume **5 calls instead of 1** in either helper. `gh_api_json_to_file` also sleeps after its final failed attempt.  
+  **Recommended fix:** Apply the existing `_is_gh_permanent_failure` classification to the JSON helper, classify curl HTTP statuses before retrying, and sleep only when another attempt remains. No GraphQL batching applies.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID:** DUP-001 · **File path:** `scripts/review_run_reviewers.sh:69-107`, `scripts/review_consolidate.sh:268-307`, `scripts/review_apply_fixes.sh:255-293`, and `scripts/review_rb_judge.sh:251-289` · **Severity:** Medium · **Category tag:** `duplication`  
+  **Description:** Four `emit_context_budget_warn_for_prompt` implementations perform the same Python import, file check, and warning emission. A fix to telemetry behavior must be repeated four times.  
+  **Recommended fix:** Put `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>` in a staged `scripts/context_budget_helpers.sh`; source that verified helper from all four callers and update their support-script inventory.
+
+- **ID:** DUP-002 · **File path:** `scripts/review_autofix_step_changes_lost_redispatch.sh:83-123` and `scripts/review_autofix_step_post_commit_retrigger.sh:148-189` · **Severity:** Low · **Category tag:** `duplication`  
+  **Description:** The two review redispatch tails repeat candidate ordering, caller-workflow validation, and dispatch. Their different pre-dispatch guards are outside the repeated block and should remain separate.  
+  **Recommended fix:** Move only the common tail to a verified `scripts/review_dispatch_helpers.sh` function, `dispatch_review_default_branch <pr_number> <allow_workflow_edits> <caller_workflow_ref>`, and call it from both scripts.
+
+- **ID:** DUP-003 · **File path:** `.github/workflows/review_autofix.yml:5820-5860`, `.github/workflows/review_autofix.yml:6003-6048`, and `.github/workflows/review_autofix.yml:6940-6965` · **Severity:** Medium · **Category tag:** `duplication`  
+  **Description:** Late review steps carry repeated inline `ensure_label_exists` and POST-only `set_issue_phase_label_resilient` fallbacks. The POST-only behavior also differs from the phase-replacing canonical helper at `scripts/label_helpers.sh:193-243`.  
+  **Recommended fix:** Stage a verified copy of `label_helpers.sh` outside commit cleanup for late steps. If an inline-free fallback remains necessary, centralize `review_load_label_helpers <support_dir>` in one verified helper and keep its failure policy explicit; update these callers together.
+
+No pair of the inspected internal wrapper workflows provides evidence of a >70%-identical *workflow body* suitable for merging: they have distinct triggers and reusable-workflow inputs.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Sizes below are YAML-parsed `run:` values **after indentation removal**, before runtime interpolation; repository-variable expansion can change the final size. Measuring raw indented file lines would overstate expression size. Of 776 `run:` entries inspected, 223 contain `${{ }}`; non-interpolated bodies were excluded.
+
+- **ID:** EXPR-001 · **File path:** `.github/workflows/implement.yml:986-1342` · **Severity:** Medium · **Category tag:** `expression-limit`  
+  **Description:** The support-staging `run:` value is approximately **16,985 characters**, with three interpolations. Static headroom is **4,015** to 21,000 characters and **1,015** to the 18,000-character risk threshold. Final expansion depends on repository-variable values. **[NEEDS VERIFICATION]**  
+  **Recommended fix:** Prefer extracting the staging body to a script in the verified support checkout, passing the three expression values through step `env:`; preserve the existing staged-support ledger and required-file checks.
+
+No other interpolated `run:` value reaches 15,000 characters: the next largest is 14,392 at `.github/workflows/implement.yml:3223-3529`. The largest parsed `if:` is approximately 859 characters, so none approaches the stated expression threshold. No workflow exceeds 800 KB; the largest, `.github/workflows/review_autofix.yml`, is **451,837 bytes**. It is nevertheless only **28,163 bytes** below this repository’s stricter 480,000-byte CI split guard documented in `CLAUDE.md:2240-2269`.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID:** DEAD-001 · **File path:** `scripts/review_rb_judge.sh:2135-2144` · **Severity:** Low · **Category tag:** `dead-code`  
+  **Description:** The fresh `PR_HEAD_SHA` assignment is unused (also reported by ShellCheck SC2034). The merge path instead checks `RB_JUDGED_HEAD_SHA` at lines 2204-2207; the adjacent comment incorrectly suggests the assigned value binds the merge.  
+  **Recommended fix:** Remove the unused extraction and correct the comment without weakening the judged-head merge guard.
+
+- **ID:** SHELL-001 · **File path:** `scripts/workspace_init.sh:110-113` · **Severity:** Low · **Category tag:** `shellcheck`  
+  **Description:** ShellCheck reports SC1083 on the unquoted Git revision argument `HEAD^{tree}`. The intended argument is a literal revision expression, not shell brace syntax.  
+  **Recommended fix:** Quote that revision argument literally; leave the surrounding fingerprint fallback unchanged.
+
+- **ID:** DEBT-001 · **File path:** `.github/workflows/ci.yml:363-371` · **Severity:** Low · **Category tag:** `tech-debt`  
+  **Description:** CI runs ShellCheck at `--severity=error`, so its warning-level findings are not gated. The read-only warning sweep surfaced, among others, DEAD-001 and SC1083 above; some other warnings reflect intentional dynamic shell patterns and need triage rather than blanket changes.  
+  **Recommended fix:** Resolve actionable warnings, add narrow documented suppressions for intentional patterns, then raise this gate to `--severity=warning`.
+
+The differing permanent-error retry behavior is covered by API-005 rather than repeated as a consistency finding. The supplied report already covers collector deduplication and current CI contract drift.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, BUG-002 |
+| Medium | 11 | BUG-003, BUG-004, SEC-001, SEC-002, API-001, API-003, API-004, API-005, DUP-001, DUP-003, EXPR-001 |
+| Low | 5 | API-002, DUP-002, DEAD-001, SHELL-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | `scripts/label_helpers.sh`, `scripts/gh_helpers.sh`, judge callers | Medium |
+| API call optimization | `scripts/orchestrate_poll_process.sh`, `scripts/gh_helpers.sh` | Medium |
+| Code modularization | Four reviewer scripts, two redispatch scripts, `review_autofix.yml`, staged helpers | Large |
+| Expression size reduction | `implement.yml`, one staged script, support inventory | Medium |
+| Medium/Low fixes | `scripts/tg_helpers.sh`, `orchestrate_clarify_respond.yml`, `scripts/review_rb_judge.sh`, `scripts/workspace_init.sh`, `ci.yml` | Medium |
