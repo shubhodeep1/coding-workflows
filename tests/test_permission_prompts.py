@@ -314,6 +314,129 @@ def _bash(command):
 		("tool --password --token s3cretvalue", "s3cretvalue", "tool --password *** ***"),
 		# A boolean credential flag has no value, so the next flag stays; the flag after it still masks its value.
 		("tool --password-stdin --token s3cretvalue", "s3cretvalue", "tool --password-stdin --token ***"),
+		# Behind a wrapper (`sudo`, `env`, `timeout`, `xargs`), the wrapped command's credential flags still apply.
+		("sudo mysql -pS3cretPass app", "S3cretPass", "sudo mysql -p*** app"),
+		("sudo -u root mysql -pS3cretPass", "S3cretPass", "sudo -u root mysql -p***"),
+		("timeout 30 mysql -pS3cretPass app", "S3cretPass", "timeout 30 mysql -p*** app"),
+		("env curl -udeploy:mycustompwd https://a.b", "mycustompwd", "env curl -u*** https://a.b"),
+		("xargs -n1 curl -sSu deploy:mycustompwd", "mycustompwd", "xargs -n1 curl -sSu ***"),
+		("sudo docker login -p S3cretPass registry.example.com", "S3cretPass", "sudo docker login -p *** registry.example.com"),
+		# A wrapper option value or a wrapped command's argument that names another credential command hides nothing.
+		("sudo -u http mysql -pS3cretPass app", "S3cretPass", "sudo -u http mysql -p*** app"),
+		("sudo mysql -h curl -pS3cretPass app", "S3cretPass", "sudo mysql -h curl -p*** app"),
+		# Global options before the credential subcommand (`docker --config d login`) do not hide it.
+		("docker --config /d login -p S3cretPass reg", "S3cretPass", "docker --config /d login -p *** reg"),
+		("docker -H tcp://x login -pS3cretPass reg", "S3cretPass", "docker -H tcp://x login -p*** reg"),
+		("sudo docker --config /d login -pS3cretPass reg", "S3cretPass", "sudo docker --config /d login -p*** reg"),
+		# A credential command behind any command that runs another (`runuser`, `docker exec`, `kubectl exec`) keeps its flags.
+		("runuser -u postgres -- mysql -pS3cretPass app", "S3cretPass", "runuser -u postgres -- mysql -p*** app"),
+		("docker exec db mysql -pS3cretPass app", "S3cretPass", "docker exec db mysql -p*** app"),
+		("kubectl exec db-0 -- mysql -pS3cretPass app", "S3cretPass", "kubectl exec db-0 -- mysql -p*** app"),
+		# A shell's (or `su`'s) `-c` command line is parsed like the command itself.
+		("su postgres -c 'mysql -pS3cretPass app'", "S3cretPass", "su postgres -c 'mysql -p*** app'"),
+		("su --command='mysql -pS3cretPass app' postgres", "S3cretPass", "su --command='mysql -p*** app' postgres"),
+		("sudo sh -c 'mysql -pS3cretPass app'", "S3cretPass", "sudo sh -c 'mysql -p*** app'"),
+		("docker exec db bash -lc 'redis-cli -a S3cretPass ping'", "S3cretPass", "docker exec db bash -lc 'redis-cli -a *** ping'"),
+		("bash -c \"su pg -c 'mysql -pS3cretPass'\"", "S3cretPass", "bash -c \"su pg -c 'mysql -p***'\""),
+		# An attached `-c` command line (`su -c'…'`, one word after quote removal) and `c` inside a flag cluster (`bash -ce '…'`).
+		("sh -c'mysql -pS3cretPass app'", "S3cretPass", "sh -c'mysql -p*** app'"),
+		("su postgres -c'mysql -pS3cretPass app'", "S3cretPass", "su postgres -c'mysql -p*** app'"),
+		("sudo bash -lc'curl -udeploy:mycustompwd https://a.b'", "mycustompwd", "sudo bash -lc'curl -u*** https://a.b'"),
+		("bash -ce 'mysql -pS3cretPass app'", "S3cretPass", "bash -ce 'mysql -p*** app'"),
+		# A user name that names a shell before a cluster containing `c` still leaves the credential flag read.
+		("sudo -u bash mysql -pScretPw app", "ScretPw", "sudo -u bash mysql -p*** app"),
+		# Shells beyond the POSIX family, and PowerShell's `-Command`.
+		("fish -c 'mysql -pS3cretPass app'", "S3cretPass", "fish -c 'mysql -p*** app'"),
+		("csh -c 'mysql -pS3cretPass app'", "S3cretPass", "csh -c 'mysql -p*** app'"),
+		("tcsh -c 'mysql -pS3cretPass app'", "S3cretPass", "tcsh -c 'mysql -p*** app'"),
+		("pwsh -Command 'curl -udeploy:mycustompwd https://a.b'", "mycustompwd", "pwsh -Command 'curl -u*** https://a.b'"),
+		# PowerShell's parameter names in any case and abbreviated, and getopt_long's abbreviated long options.
+		("pwsh -C 'mysql -pS3cretPass app'", "S3cretPass", "pwsh -C 'mysql -p*** app'"),
+		("pwsh -COMMAND 'mysql -pS3cretPass app'", "S3cretPass", "pwsh -COMMAND 'mysql -p*** app'"),
+		("pwsh -NoProfile -Com 'mysql -pS3cretPass app'", "S3cretPass", "pwsh -NoProfile -Com 'mysql -p*** app'"),
+		("pwsh --command 'mysql -pS3cretPass app'", "S3cretPass", "pwsh --command 'mysql -p*** app'"),
+		("su pg --comm 'mysql -pS3cretPass app'", "S3cretPass", "su pg --comm 'mysql -p*** app'"),
+		("su pg --session-c 'mysql -pS3cretPass app'", "S3cretPass", "su pg --session-c 'mysql -p*** app'"),
+		# A command line attached to the flag: in one word, or after `=` or `:`, for single-dash flags too.
+		("pwsh -C'mysql -pS3cretPass app'", "S3cretPass", "pwsh -C'mysql -p*** app'"),
+		("pwsh -Command='mysql -pS3cretPass app'", "S3cretPass", "pwsh -Command='mysql -p*** app'"),
+		("pwsh -Command:'mysql -pS3cretPass app'", "S3cretPass", "pwsh -Command:'mysql -p*** app'"),
+		("sh -c='mysql -pS3cretPass app'", "S3cretPass", "sh -c='mysql -p*** app'"),
+		# A credential value that ends in `c` is still a credential value, not a `-c` flag, behind a user named like a shell.
+		("sudo -u bash mysql -pSecretAbc app", "SecretAbc", "sudo -u bash mysql -p*** app"),
+		("sudo -u bash mysql -pSecretABC -h db app", "SecretABC", "sudo -u bash mysql -p*** -h db app"),
+		# An unencoded `@` in the password: userinfo runs to the last `@` before the path.
+		("git clone https://user:pa@ss1234@github.com/o/r.git", "ss1234", "git clone https://***@github.com/o/r.git"),
+		# A `?` in the password is still userinfo, and a query after the host stays.
+		("curl https://user:pa?ss1234@host/path", "ss1234", "curl https://***@host/path"),
+		("curl https://user:p@ss1234@host?x=1", "ss1234", "curl https://***@host?x=1"),
+		# A backtick or `$(…)` command substitution runs a command line of its own, unquoted, inside double quotes,
+		# attached to a flag, nested, or escaped inside a `-c` command line.
+		("echo `mysql -pS3cretPass app`", "S3cretPass", "echo `mysql -p*** app`"),
+		("echo \"`mysql -pS3cretPass app`\"", "S3cretPass", "echo \"`mysql -p*** app`\""),
+		("echo \"$(mysql -pS3cretPass app)\"", "S3cretPass", "echo \"$(mysql -p*** app)\""),
+		("echo \"$(sudo mysql -pS3cretPass)\"", "S3cretPass", "echo \"$(sudo mysql -p***)\""),
+		("tool -o\"$(mysql -pS3cretPass app)\"", "S3cretPass", "tool -o\"$(mysql -p*** app)\""),
+		("echo \"$(echo \"$(mysql -pS3cretPass)\")\"", "S3cretPass", "echo \"$(echo \"$(mysql -p***)\")\""),
+		# A shell's command line is the first word after its options, and a quoted one can start with `-`.
+		("bash -c -- 'mysql -pS3cretPass app'", "S3cretPass", "bash -c -- 'mysql -p*** app'"),
+		("bash -c -x 'mysql -pS3cretPass app'", "S3cretPass", "bash -c -x 'mysql -p*** app'"),
+		("bash -ce -- 'mysql -pS3cretPass app'", "S3cretPass", "bash -ce -- 'mysql -p*** app'"),
+		("sh -c '-x; mysql -pS3cretPass app'", "S3cretPass", "sh -c '-x; mysql -p*** app'"),
+		# A redirection does not end the command: the flag or `-c` before it still owns the word after it.
+		("sh -c 2>/dev/null 'mysql -pS3cretPass app'", "S3cretPass", "sh -c 2>/dev/null 'mysql -p*** app'"),
+		("bash -c >/tmp/out \"mysql -pS3cretPass\"", "S3cretPass", "bash -c >/tmp/out \"mysql -p***\""),
+		("sh -c 2>&1 'curl -u deploy:mycustompwd https://a.b'", "mycustompwd", "sh -c 2>&1 'curl -u *** https://a.b'"),
+		("sh -c 2>/dev/null '-x; mysql -pS3cretPass app'", "S3cretPass", "sh -c 2>/dev/null '-x; mysql -p*** app'"),
+		("mysql >out -pS3cretPass app", "S3cretPass", "mysql >out -p*** app"),
+		("curl -u >out deploy:mycustompwd https://a.b", "mycustompwd", "curl -u >out *** https://a.b"),
+		("echo x > \"$(mysql -pS3cretPass)\"", "S3cretPass", "echo x > \"$(mysql -p***)\""),
+		# A here-string fed to a shell is a command line of its own.
+		("bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "bash <<< 'mysql -p*** app'"),
+		# GNU `env -S` / `--split-string` splits its argument into a command line of its own (PR #5401 review round 3).
+		("env -S 'mysql -uroot -pS3cretPass app'", "S3cretPass", "env -S 'mysql -uroot -p*** app'"),
+		("env -S \"curl -u deploy:mycustompwd https://a.b\"", "mycustompwd", "env -S \"curl -u *** https://a.b\""),
+		("env -iS'mysql -pS3cretPass app'", "S3cretPass", "env -iS'mysql -p*** app'"),
+		("env --split-string='sshpass -p hunter22 ssh host'", "hunter22", "env --split-string='sshpass -p *** ssh host'"),
+		("env --split='mysql -pS3cretPass app'", "S3cretPass", "env --split='mysql -p*** app'"),
+		("sudo env -u HOME -S 'mysql -pS3cretPass ./run.sh'", "S3cretPass", "sudo env -u HOME -S 'mysql -p*** ./run.sh'"),
+		# A redirection between `-S` and its argument does not end the flag, and GNU env's `\_` is a word break
+		# outside quotes (PR #5401 review round 4).
+		("env -S 2>/dev/null 'mysql -pS3cretPass ./run.sh'", "S3cretPass", "env -S 2>/dev/null 'mysql -p*** ./run.sh'"),
+		("env -S 'mysql\\_-pS3cretPass app'", "S3cretPass", "env -S 'mysql\\_-p*** app'"),
+		("env -S \"mysql\\_-pS3cretPass app\"", "S3cretPass", "env -S \"mysql\\_-p*** app\""),
+		("env -iS'mysql\\_-pS3cretPass'", "S3cretPass", "env -iS'mysql\\_-p***'"),
+		# A shell behind any command reading a here-string has its credentials masked, and a flag joined to its
+		# quoted command line is read at every flag length (PR #5401 review round 8).
+		("docker run -i alpine sh <<< 'mysql -pS3cretPass app'", "S3cretPass", "docker run -i alpine sh <<< 'mysql -p*** app'"),
+		("pwsh -Command'mysql -pS3cretPass app'", "S3cretPass", "pwsh -Command'mysql -p*** app'"),
+		("pwsh -comm'mysql -pS3cretPass app'", "S3cretPass", "pwsh -comm'mysql -p*** app'"),
+		# A short-flag cluster holding `c` joined to its quoted command line (`-cemysql -p…` after the shell joins
+		# them) is read past at every cluster length (PR #5401 review round 9).
+		("bash -ce'mysql -pS3cretPass app'", "S3cretPass", "bash -ce'mysql -p*** app'"),
+		("sudo bash -xce'mysql -pS3cretPass app'", "S3cretPass", "sudo bash -xce'mysql -p*** app'"),
+		# A runner named with `.exe`, another case, or a Windows path is still a shell (PR #5401 review round 10).
+		("pwsh.exe -Command 'mysql -pS3cretPass app'", "S3cretPass", "pwsh.exe -Command 'mysql -p*** app'"),
+		("powershell.exe -c 'mysql -pS3cretPass app'", "S3cretPass", "powershell.exe -c 'mysql -p*** app'"),
+		("PWSH -Command 'mysql -pS3cretPass app'", "S3cretPass", "PWSH -Command 'mysql -p*** app'"),
+		("C:\\\\Tools\\\\pwsh.exe -Command 'mysql -pS3cretPass app'", "S3cretPass", "C:\\\\Tools\\\\pwsh.exe -Command 'mysql -p*** app'"),
+		("/bin/BASH -c 'mysql -pS3cretPass app'", "S3cretPass", "/bin/BASH -c 'mysql -p*** app'"),
+		# Bash ANSI-C quoting, and credential commands and `env` named with `.exe` or in another case (PR #5401 review
+		# round 11).
+		("bash -c $'mysql -pS3cretPass app'", "S3cretPass", "bash -c $'mysql -p*** app'"),
+		("mysql $'-pS3cretPass' app", "S3cretPass", "mysql $'-p***' app"),
+		("curl.exe -u deploy:mycustompwd https://a.b", "mycustompwd", "curl.exe -u *** https://a.b"),
+		("MYSQL -pS3cretPass app", "S3cretPass", "MYSQL -p*** app"),
+		("env.exe -S 'mysql -pS3cretPass app'", "S3cretPass", "env.exe -S 'mysql -p*** app'"),
+		("ENV -S 'mysql -pS3cretPass app'", "S3cretPass", "ENV -S 'mysql -p*** app'"),
+		# `eval` runs its arguments as a command line (PR #5401 review round 13).
+		("eval 'mysql -pS3cretPass app'", "S3cretPass", "eval 'mysql -p*** app'"),
+		# `command` / `builtin` run the `eval` named after them (PR #5401 review round 15).
+		("builtin eval 'mysql -pS3cretPass app'", "S3cretPass", "builtin eval 'mysql -p*** app'"),
+		("command -p eval 'mysql -pS3cretPass app'", "S3cretPass", "command -p eval 'mysql -p*** app'"),
+		("sudo -u pg bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "sudo -u pg bash <<< 'mysql -p*** app'"),
+		("2>/dev/null bash <<< 'mysql -pS3cretPass app'", "S3cretPass", "2>/dev/null bash <<< 'mysql -p*** app'"),
+		("false || sh -c 'mysql -pS3cretPass x'", "S3cretPass", "false || sh -c 'mysql -p*** x'"),
 	],
 )
 def test_example_masks_credentials(command, secret, expected):
@@ -334,14 +457,111 @@ def test_example_masks_credentials(command, secret, expected):
 		("TOKEN=abc curl https://a.b", "abc", "TOKEN=* curl *"),
 		# A long credential flag's `-`-prefixed value shorter than MIN_MASKED_VALUE_CHARS.
 		("tool --password -ab run", "-ab", "tool --password *"),
+		# A shell's `-c` command line that cannot be parsed is withheld like the command itself.
+		("su pg -c \"mysql -pS3cretPass 'unterminated\"", "S3cretPass", "su * -c *"),
+		# `-c` command lines nested deeper than MAX_NESTED_COMMAND_DEPTH are withheld.
+		("sh -c \"sh -c 'sh -c \\\"sh -c mysql\\\\ -pS3cretPass\\\"'\"", "S3cretPass", "sh -c *"),
+		# A digit word before a redirection is a file descriptor or a value; read both ways, the value that
+		# follows the redirection (`ssh`) is too short to mask, so the command is withheld.
+		("sshpass -p 123456789 >log ssh host", "123456789", "sshpass -p * > *"),
+		# Text piped into a shell that reads its script from stdin is whatever the earlier stages print, which the
+		# words cannot show, so the command is withheld (PR #5401 review round 6).
+		("printf '%s\\n' 'mysql -pS3cretPass app' | sh", "S3cretPass", "printf * | sh"),
+		("echo 'mysql -pS3cretPass ./run.sh' | bash", "S3cretPass", "echo * | bash"),
+		("echo 'mysql -pS3cretPass app' | sudo bash -s", "S3cretPass", "echo * | sudo * -s"),
+		("echo 'curl -u deploy:mycustompwd https://a.b' |& sh", "mycustompwd", "echo * |& sh"),
+		("printf 'mysql -pS3cretPass' | sed s/x/y/ | bash", "S3cretPass", "printf * | sed * | bash"),
+		("printf '%s %s' 'curl -u' 'deploy:mycustompwd' | sh", "mycustompwd", "printf * | sh"),
+		# The shell is still found behind a file-descriptor redirection, a newline or a subshell after the pipe, a
+		# brace group, or `xargs`, and a shell reading a process substitution is fed text too (PR #5401 review round 7).
+		("printf 'mysql -pS3cretPass' | 2>/dev/null sh", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' |\nsh", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' | ( sh )", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' | { sh; }", "S3cretPass", None),
+		("printf '%s\\n' 'mysql -pS3cretPass app' | xargs -I{} sh -c '{}'", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass' | tee >(sh)", "S3cretPass", None),
+		("bash <(printf 'mysql -pS3cretPass')", "S3cretPass", None),
+		# Any command with a shell among its words may run it on the pipe (`docker run -i … sh`, `ssh host sh`,
+		# `kubectl exec -i … -- sh`); a shell name that is only an argument (`grep sh`) is withheld too, which is the
+		# safe side (PR #5401 review round 8).
+		("printf 'mysql -pS3cretPass app' | docker run -i alpine sh", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' | ssh host sh", "S3cretPass", None),
+		("printf 'mysql -pS3cretPass app' | kubectl exec -i pod -- sh", "S3cretPass", None),
+		("curl -u deploy:mycustompwd https://a.b | grep sh", "mycustompwd", None),
+		# Text piped into a shell is withheld even when it holds no credential, since what the shell runs is unknown
+		# (PR #5401 review round 9: this case had sat in the credential-free list, whose test compared the twin to itself).
+		("curl -sS https://example.com/install.sh | sh", "S3cretPass", "curl -sS https://example.com/install.sh | sh"),
+		# An ANSI-C escape changes the value, so it no longer occurs verbatim; an unterminated `$'` cannot be parsed
+		# (PR #5401 review round 11).
+		("bash -c $'mysql -pS3cret\\x41ss app'", "S3cret", None),
+		("bash -c $'mysql -pS3cretPass app", "S3cretPass", None),
+		# A command substitution builds code a shell runs (`-c` line, here-string, `env -S`, `eval`), or is the command
+		# word itself; what it prints cannot be known from the words, so the command is withheld (PR #5401 review
+		# round 13; the backtick `-c` case was masked in place before).
+		("sh -c \"echo \\`mysql -pS3cretPass\\`\"", "S3cretPass", None),
+		("bash -c \"$(printf %s 'mysql -pS3cretPass app')\"", "S3cretPass", None),
+		("bash <<< \"$(printf %s 'mysql -pS3cretPass')\"", "S3cretPass", None),
+		("env -S \"$(printf %s 'mysql -pS3cretPass')\"", "S3cretPass", None),
+		("eval \"$(printf %s mysql\\\\ -pS3cretPass)\"", "S3cretPass", None),
+		("$(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
+		("\"$(printf %s 'mysql -pS3cretPass')\" app", "S3cretPass", "*"),
+		# A backtick inside a single-quoted shell line or here-string is a substitution too, and `source` / `.` run what
+		# they read (PR #5401 review round 14).
+		("bash -c '`printf %s \"mysql -pS3cretPass\"`'", "S3cretPass", None),
+		("bash <<< '`printf %s \"mysql -pS3cretPass\"`'", "S3cretPass", None),
+		("source <(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
+		(". <(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
+		("printf %s 'mysql -pS3cretPass' | source /dev/stdin", "S3cretPass", None),
+		# `command` / `builtin` run the `source` / `.` named after them (PR #5401 review round 15).
+		("printf %s 'mysql -pS3cretPass' | command source /dev/stdin", "S3cretPass", None),
+		("printf %s 'mysql -pS3cretPass' | builtin . /dev/stdin", "S3cretPass", None),
+		("command -- source <(printf %s 'mysql -pS3cretPass')", "S3cretPass", None),
+		# Hex and octal escapes Bash decodes (`\x2d` and `\055` are `-`) are not reproduced, so the command is withheld
+		# (PR #5401 review round 12).
+		("bash -c $'mysql \\x2dpS3cretPass app'", "S3cretPass", "unparseable: bash"),
+		("bash -c $'mysql \\055pS3cretPass app'", "S3cretPass", "unparseable: bash"),
 	],
 )
 def test_example_is_withheld_when_masking_cannot_be_exact(command, secret, shape):
 	example = pp_mask_twin.record_example(_bash(command))
 	assert example.startswith("<command withheld:")
 	# The withheld text goes through redact() like any example, which may widen a `NAME=*` in the shape to `NAME=***`.
-	assert example.endswith(f"shape: {pp_mask_twin.redact(shape)}>")
+	if shape is not None:
+		assert example.endswith(f"shape: {pp_mask_twin.redact(shape)}>")
 	assert secret not in example
+
+
+@pytest.mark.parametrize(
+	("command", "runs_a_shell"),
+	[
+		(["sh"], True),
+		(["/bin/bash", "-s"], True),
+		(["FOO=1", "bash"], True),
+		(["sudo", "-u", "pg", "bash", "-s"], True),
+		(["env", "-i", "sh"], True),
+		(["grep", "sh"], True),
+		(["docker", "run", "-i", "alpine", "sh"], True),
+		(["ssh", "host", "/bin/bash"], True),
+		(["grep", "shell"], False),
+		(["PWSH.EXE", "-"], True),
+		(["source", "/dev/stdin"], True),
+		([".", "/dev/stdin"], True),
+		(["command", "source", "/dev/stdin"], True),
+		(["builtin", ".", "/dev/stdin"], True),
+		(["command", "-p", "--", "source", "/dev/stdin"], True),
+		(["command", "-v", "git"], False),
+		(["builtin", "echo", "."], False),
+		(["find", ".", "-name", "x"], False),
+		(["xargs", "-I{}", "sh", "-c", "{}"], True),
+		(["2", "sh"], True),
+		(["{", "sh"], True),
+		(["FOO=1"], False),
+		([], False),
+	],
+)
+def test_segment_runs_a_shell_reads_the_command_word(command, runs_a_shell):
+	"""PR #5401 review rounds 6 and 8: a shell name among the command's words counts, whatever command runs it."""
+	assert pp_mask_twin._segment_runs_a_shell(command) is runs_a_shell
 
 
 def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
@@ -358,19 +578,45 @@ def test_heredoc_bodies_stay_hidden_and_credentials_after_them_are_masked():
 		"git commit -m 'hello world'",
 		"PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/check_in_status.py --repo o/r --pr 5",
 		"python3 - <<'EOF'\nprint(1)\nEOF\necho done",
-		"curl -sS https://example.com/install.sh | sh",
 		# `X` takes a value, so the `U` in `PUT` is not curl's `-U`; `Accept` is not a credential header.
 		"curl -XPUT -H 'Accept: application/json' https://a.b",
 		# `--author` is not `--auth`.
 		"git log --author=bob -n 5",
 		# A boolean credential flag followed by another flag has no value.
 		"docker login --password-stdin -u me registry.example.com",
+		# A wrapper's own short flags (`sudo -u`, `env -u`) are not the wrapped command's credential flags.
+		"sudo apt-get install -y curl",
+		"sudo -u postgres psql -c 'select 1'",
+		"env -u HOME curl https://a.b",
+		"timeout 30 curl -XPUT -H 'Accept: application/json' https://a.b",
+		# A word after the wrapper that only happens to name a credential command changes nothing without its flags.
+		"sudo apt-get install curl -y",
+		# `-p` before the `login` subcommand is not `docker login -p`.
+		"docker run -p 8080:80 nginx",
+		# A `-c` command line without credentials, and `-c` of a command that is not a shell, change nothing.
+		"bash -c 'cd /x && gh api repos/o/r'",
+		"docker exec db sh -c 'ls -la /var/lib/mysql'",
+		"kubectl exec db-0 -- psql -c 'select 1'",
+		# PowerShell's own parameters, and its command flag without credentials.
+		"pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./x.ps1",
+		"pwsh -NoProfile -Command Get-Date",
+		"pwsh -Command='Get-Date'",
+		"su postgres --command='psql -c \"select 1\"'",
+		# A quoted command substitution without credentials changes nothing.
+		"git tag \"v$(date +%Y%m%d)\"",
+		# Redirections and a here-string fed to a command that is not a shell change nothing.
+		"grep -r foo . 2>/dev/null | head",
+		"cat <<< \"it's\"",
 	],
 )
 def test_credential_free_commands_are_unchanged(command):
+	"""Masking leaves a command with no credential as it was. `pp` and `pp_mask_twin` load the same twin, so the example
+	is compared with the command itself (PR #5401 review round 9) and the shape must be a parsed one."""
 	record = _bash(command)
-	assert pp_mask_twin.record_example(record) == pp.record_example(record)
-	assert pp_mask_twin.record_shape(record) == pp.record_shape(record)
+	# Heredoc bodies are always left out of the example, credentials or not.
+	assert pp_mask_twin.record_example(record) == pp_mask_twin.strip_heredocs(command, placeholder="<heredoc body omitted>")
+	shape = pp_mask_twin.record_shape(record)
+	assert shape and not shape.startswith("unparseable") and "withheld" not in shape
 
 
 @pytest.mark.parametrize(
@@ -392,6 +638,62 @@ def test_credential_free_commands_are_unchanged(command):
 		("curl -u -deploy:mycustompwd https://a.b", "curl -u *"),
 		("docker login --password-stdin -u me registry.example.com", "docker login --password-stdin -u *"),
 		("gh auth login --with-token -h github.com", "gh auth * --with-token -h *"),
+		# Behind a wrapper, an attached credential value is cut from the shape too.
+		("sudo mysql -pS3cretPass app", "sudo * -p* *"),
+		("sudo -u root mysql -pS3cretPass", "sudo -u * -p*"),
+		("env curl -udeploy:mycustompwd https://a.b", "env * -u* *"),
+		("timeout 30 curl --user -deploy:mycustompwd https://a.b", "timeout * --user *"),
+		("sudo gh api -H'Authorization: token abcdefgh' user", "sudo * -H* *"),
+		("sudo -u http mysql -pS3cretPass app", "sudo -u * -p* *"),
+		("docker --config /d login -pS3cretPass reg", "docker --config * -p* *"),
+		("podman login -pS3cretPass reg", "podman * -p* *"),
+		("runuser -u postgres -- mysql -pS3cretPass app", "runuser -u * -- * -p* *"),
+		("docker exec db mysql -pS3cretPass app", "docker exec * -p* *"),
+		# A `-c` command line is one value in the shape.
+		("su postgres -c 'mysql -pS3cretPass app'", "su * -c *"),
+		# An attached `-c` command line is cut like an attached credential value; a `c` flag cluster stays.
+		("sh -c'mysql -pS3cretPass app'", "sh -c*"),
+		("su postgres -c'mysql -pS3cretPass app'", "su * -c*"),
+		("sudo bash -lc'curl -udeploy:mycustompwd https://a.b'", "sudo * -lc*"),
+		("bash -ce 'mysql -pS3cretPass app'", "bash -ce *"),
+		# The command line is one value even when it starts with `-`, follows the shell's options, or ends like a script name.
+		("sh -c '-x; mysql -pS3cretPass app'", "sh -c *"),
+		("bash -ce '-x; mysql -pS3cretPass app'", "bash -ce *"),
+		("pwsh -Command '-x; curl -u deploy:mycustompwd https://a.b'", "pwsh -Command *"),
+		("bash -c -- 'mysql -pS3cretPass app'", "bash -c *"),
+		("sh -c 'mysql -pS3cretPass app && ./run.sh'", "sh -c *"),
+		("bash -c 'echo hi' -- arg", "bash -c * -- *"),
+		# PowerShell's command flag in any case, attached in one word or after `=` or `:`.
+		("pwsh -C 'mysql -pS3cretPass app'", "pwsh -C *"),
+		("pwsh -C'mysql -pS3cretPass app'", "pwsh -C*"),
+		("pwsh -Command='mysql -pS3cretPass app'", "pwsh -Command=*"),
+		("pwsh -Command:'mysql -pS3cretPass app'", "pwsh -Command:*"),
+		("sudo -u bash mysql -pSecretAbc app", "sudo -u * -p* *"),
+		# A backtick substitution is split into its commands like `$(…)`; one attached to a flag is a value.
+		("echo `mysql -pS3cretPass app`", "echo * ( mysql -p* * )"),
+		("echo $(mysql -pS3cretPass app)", "echo * ( mysql -p* * )"),
+		("tool -o\"$(mysql -pS3cretPass app)\"", "tool -o*"),
+		("tool -o\"`mysql -pS3cretPass app`\"", "tool -o*"),
+		# Only a one-digit word joins a redirection as its file descriptor; a longer one is a value.
+		("sshpass -p 123456789 >log ssh host", "sshpass -p * > *"),
+		("sh -c 2>/dev/null 'mysql -pS3cretPass app'", "sh -c 2> *"),
+		# A redirection between `-c` and a command line that starts with `-` keeps its operator; the command line stays one value.
+		("sh -c 2>/dev/null '-x; mysql -pS3cretPass app'", "sh -c 2> *"),
+		("bash -c >out '-x; mysql -pS3cretPass app'", "bash -c > *"),
+		("bash -c 2>&1 -- '-x; mysql -pS3cretPass app'", "bash -c 2>& *"),
+		("sh -c </dev/null -x '-y; mysql -pS3cretPass app'", "sh -c < *"),
+		("sh -c 2>/dev/null 'mysql -pS3cretPass app' >log", "sh -c 2> * > *"),
+		("bash <<< 'mysql -pS3cretPass app'", "bash <<< *"),
+		# An `env -S` command line is one value, attached or not, even when it ends like a script name (PR #5401 review round 3).
+		("env -S 'sshpass -p hunter22 ./deploy.sh'", "env -S *"),
+		("env -iS'mysql -pS3cretPass app'", "env -iS*"),
+		("env --split-string='mysql -pS3cretPass app'", "env --split-string=*"),
+		("sudo env -S 'mysql -pS3cretPass ./run.sh'", "sudo * -S *"),
+		("env -S 2>/dev/null 'mysql -pS3cretPass ./run.sh'", "env -S 2> *"),
+		("env -S >out 'sshpass -p hunter22 ./x.sh'", "env -S > *"),
+		# A word with whitespace is a value even when it ends like a script name (PR #5401 review round 5).
+		("echo 'mysql -pS3cretPass ./run.sh' | bash", "echo * | bash"),
+		("bash ./deploy.sh", "bash ./deploy.sh"),
 	],
 )
 def test_shape_never_carries_raw_credentials(command, shape):
@@ -412,6 +714,7 @@ def test_non_bash_input_masks_credential_keys():
 	("text", "secret"),
 	[
 		("see https://deploy:mycustompwd@example.com", "mycustompwd"),
+		("see https://deploy:my@custompwd@example.com/x", "custompwd"),
 		("Authorization: Basic ZGVwbG95Om15Y3VzdG9tcHdk", "ZGVwbG95Om15Y3VzdG9tcHdk"),
 		("Cookie: session=abcdef123; other=1", "abcdef123"),
 		("ran curl -u deploy:mycustompwd", "mycustompwd"),
@@ -426,6 +729,24 @@ def test_redaction_masks_credentials_in_reasons_and_titles(text, secret):
 def test_redaction_keeps_ordinary_text():
 	text = "git push -u origin main; add basic support; gh api repos/o/r/issues/5"
 	assert pp_mask_twin.redact(text) == text
+
+
+@pytest.mark.parametrize(
+	"text",
+	[
+		# An `@` in a query after a URL with no path is not userinfo: the host and the query stay.
+		"curl https://example.com?email=test@example.com",
+		"curl 'https://example.com/?email=test@example.com&x=1'",
+		"open https://example.com#section=a@b",
+	],
+)
+def test_redaction_keeps_url_queries_with_at_signs(text):
+	assert pp_mask_twin.redact(text) == text
+	assert pp_mask_twin.record_example(_bash(text)) == text
+
+
+def test_shape_keeps_the_host_of_an_endpoint_whose_query_holds_an_at_sign():
+	assert pp_mask_twin.command_shape("gh api 'https://api.example.com?email=a@b.com'") == "gh api https://api.example.com?*"
 
 
 def test_the_reported_exploit_reaches_no_posted_text():
@@ -1221,3 +1542,37 @@ def test_ci_runs_the_helper_tests():
 	text = CI_WORKFLOW.read_text(encoding="utf-8")
 	for name in ("tests/test_permission_prompts.py", "tests/test_dispatch_workflow.py", "tests/test_edit_comment.py"):
 		assert name in text
+
+
+@pytest.mark.parametrize(
+	("text", "expected"),
+	[
+		("mysql\\_-pX app", "mysql -pX app"),
+		('printf "a\\_b" c', 'printf "a b" c'),
+		("printf 'a\\_b' c", "printf 'a\\_b' c"),
+		("a\\\\_b", "a\\\\_b"),
+	],
+)
+def test_split_string_reads_gnu_env_word_breaks(text, expected):
+	"""GNU env -S (coreutils 9.4): `\\_` splits words outside quotes, is a space inside double quotes, and stays
+	literal inside single quotes; an escaped backslash before `_` is not a break (PR #5401 review round 4)."""
+	assert pp_mask_twin._split_string_command_line(text) == expected
+
+
+def test_powershell_parameters_are_not_read_as_a_command_cluster():
+	"""PR #5401 review round 9: PowerShell has no short-flag clusters, so `-NonInteractive` (which holds a `c`) does not
+	make the next words a command line; `-File` and the options after it stay in the shape."""
+	assert pp_mask_twin.command_shape("pwsh -NonInteractive -File ./deploy.ps1 -Env prod") == "pwsh -NonInteractive -File * -Env *"
+	assert pp_mask_twin.command_shape("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./x.ps1") == (
+		"powershell -NoProfile -NonInteractive -ExecutionPolicy * -File *"
+	)
+	# A POSIX shell's cluster still takes the next word as its command line.
+	assert pp_mask_twin.command_shape("bash -ce ./x.sh") == "bash -ce *"
+
+
+def test_shape_reads_ansi_c_quoted_flags_like_the_scan():
+	"""PR #5401 review round 12: the shape lexer rewrites `$'…'` as the credential scan does, so an ANSI-C quoted
+	attached credential flag is cut like any other."""
+	assert pp_mask_twin.command_shape("curl $'-udeploy:mycustompwd' https://a.b") == "curl -u* *"
+	assert pp_mask_twin.command_shape("mysql $'-pS3cretPass' app") == "mysql -p* *"
+

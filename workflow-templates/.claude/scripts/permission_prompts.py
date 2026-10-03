@@ -91,10 +91,11 @@ token-like strings masked (REDACTION_PATTERNS), inside a fenced block.
 Before any of that, a Bash command is parsed fail-closed (issue #5124): the
 values of credential-named assignments, credential headers, credential long
 flags (`--user`, `--password`, `--token`, …, even when the value starts with
-`-`), and per-command credential short flags (`curl -u`, `mysql -p`, …)
-become `***`. A command that cannot be parsed, or whose credential does not
-occur verbatim or is shorter than MIN_MASKED_VALUE_CHARS, is withheld and
-only its shape is shown; the shape itself keeps no raw text (an unparseable
+`-`), and per-command credential short flags (`curl -u`, `mysql -p`,
+`docker --config d login -p`, …, also behind a wrapper such as `sudo`,
+`env`, or `timeout`) become `***`. A command that cannot be parsed, or
+whose credential does not occur verbatim or is shorter than
+MIN_MASKED_VALUE_CHARS, is withheld and only its shape is shown; the shape itself keeps no raw text (an unparseable
 command keeps only its command word, an attached credential short flag
 becomes `-u*`). Non-Bash tool input shows `***` for every key that names a
 credential.
@@ -180,7 +181,10 @@ _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 REDACTION_PATTERNS = (
 	# URL userinfo first (issue #5124), so `https://x-access-token:<t>@host/…` keeps its host.
-	(re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@'\"]+@"), r"\1***@"),
+	# Up to the last `@` before the path, so an unencoded `@` in the password is masked too. A `?` or `#`
+	# may be part of the password, but text after one that holds `=` or `&` is a query
+	# (`https://h?email=a@b.c`), so the host survives there.
+	(re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/?#'\"]*(?:[?#][^\s/?#'\"=&]*)*@"), r"\1***@"),
 	(re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh*_***"),
 	(re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "github_pat_***"),
 	(re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"), "sk-***"),
@@ -231,9 +235,49 @@ _CREDENTIAL_SHORT_FLAGS = {
 }
 # Commands whose `-H` takes a header; an attached header value is cut from the shape.
 _HEADER_SHORT_FLAG_TOOLS = frozenset({"curl", "gh", "http", "https"})
+# Every command with credential short flags, `docker` and `podman` included through their `login` keys.
+# Wherever one appears in a segment, its credential flags apply to the words after it: behind a wrapper
+# (`sudo mysql -p…`, `runuser -u pg -- mysql -p…`) or another command's arguments (`docker exec db mysql -p…`)
+# (_segment_flag_letters).
+_CREDENTIAL_COMMANDS = frozenset(key.split(" ", 1)[0] for key in _CREDENTIAL_SHORT_FLAGS) | _HEADER_SHORT_FLAG_TOOLS
+# Commands whose `-c` (or `--command`) argument is a command line of its own (`su pg -c 'mysql -p…'`,
+# `sudo sh -c 'curl -u …'`): it is parsed like the command and its credentials are masked too.
+_SHELL_COMMAND_RUNNERS = frozenset(
+	{"sh", "bash", "rbash", "dash", "zsh", "ksh", "mksh", "pdksh", "ash", "yash", "posh", "fish", "csh", "tcsh", "pwsh", "powershell", "su", "runuser"}
+)
+# The command flag, in any case and abbreviated: a short-flag cluster ending in `c` (`-c`, `-lc`), PowerShell's
+# `-c` … `-Command` (any unambiguous prefix, any case, one or two dashes), and getopt_long's `--comm` and
+# `--session-c…` (`su`, `runuser`). Matching one flag too many only parses a word that is no command line.
+_SHELL_COMMAND_FLAG_NAMES = (
+	r"-[A-Za-z]*c|--?(?:"
+	+ "|".join(re.escape("command"[:length]) for length in range(len("command"), 0, -1))
+	+ r")|--(?:"
+	+ "|".join(re.escape("session-command"[:length]) for length in range(len("session-command"), 1, -1))
+	+ ")"
+)
+_SHELL_COMMAND_FLAG_RE = re.compile(rf"^(?:{_SHELL_COMMAND_FLAG_NAMES})$", re.IGNORECASE)
+# The command flag with its command line attached by `=` or `:` (`--command='mysql -p…'`, `pwsh -Command:'…'`).
+_SHELL_COMMAND_ATTACHED_RE = re.compile(rf"^(?:{_SHELL_COMMAND_FLAG_NAMES})[=:](.*)$", re.IGNORECASE | re.DOTALL)
+# A short-flag cluster with `c` (any case) before its end: `su -c'mysql -p…'` (the rest is the attached command
+# line) or `bash -ce 'mysql -p…'` (the next word is it). Both are parsed when a runner precedes it.
+_SHELL_COMMAND_CLUSTER_RE = re.compile(r"^(-[A-Za-z]*?c)(.+)$", re.IGNORECASE | re.DOTALL)
+# A whole short-flag cluster holding `c` anywhere (`-ce`, `-xce`): a prefix _attached_command_lines reads past.
+_SHELL_COMMAND_CLUSTER_PREFIX_RE = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$", re.IGNORECASE)
+# PowerShell has no short-flag clusters: `-NonInteractive` is one parameter, not `-…c` followed by a command line.
+_POWERSHELL_RUNNERS = frozenset({"pwsh", "powershell", "pwsh.exe", "powershell.exe"})
+# GNU `env -S STRING` / `--split-string=STRING` (any unambiguous prefix, `--s` on) splits STRING into a command
+# line of its own (`env -S 'mysql -p…'`, also as a script's `#!/usr/bin/env -S` line). In a short-flag cluster the
+# argument starts after the `S` when only `env`'s boolean flags (`-i`, `-v`, `-0`) come before it (`env -iS'…'`),
+# and is the next word when nothing follows the `S`. It is parsed like a shell's `-c` command line.
+_SPLIT_STRING_RUNNERS = frozenset({"env"})
+_SPLIT_STRING_LONG_NAMES = "|".join(re.escape("split-string"[:length]) for length in range(len("split-string"), 0, -1))
+_SPLIT_STRING_FLAG_RE = re.compile(rf"^(?:-[iv0]*S|--(?:{_SPLIT_STRING_LONG_NAMES}))$")
+_SPLIT_STRING_ATTACHED_RE = re.compile(rf"^(-[iv0]*S|--(?:{_SPLIT_STRING_LONG_NAMES})=)(.+)$", re.DOTALL)
+# Deeper nesting of `-c` command lines than this withholds the command (fail closed).
+MAX_NESTED_COMMAND_DEPTH = 3
 _HEADER_WORD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(\S.*?)\s*$", re.DOTALL)
 _CREDENTIAL_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$", re.DOTALL)
-_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@")
+_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*(?:[?#][^/?#=&]*)*@")
 
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>()"
 _HEREDOC_RE = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
@@ -282,6 +326,94 @@ def redact(text: str) -> str:
 	return text
 
 
+_ANSI_C_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+
+
+def _ansi_c_quotes_as_single(text: str) -> str:
+	"""`text` with every Bash ANSI-C quoted part (`$'…'`) outside quotes rewritten as a plain single-quoted part.
+
+	The lexer reads `$'mysql -p…'` as the word `$mysql -p…`, so a command line inside it (`bash -c $'…'`) named no
+	credential command and its password was posted (PR #5401 review round 11). The common escapes are decoded and the
+	result is re-quoted (`'` as `'\\''`); a value changed by an escape no longer occurs verbatim in the displayed
+	command, so the caller withholds it. Raises ValueError for an unterminated `$'` and for any other escape (hex,
+	octal, Unicode, control), so the caller withholds the command. The shape lexer reads it the same way (round 12)."""
+	output: list[str] = []
+	single_quoted = double_quoted = False
+	index = 0
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and not single_quoted:
+			output.append(text[index : index + 2])
+			index += 2
+			continue
+		if char == "$" and not single_quoted and not double_quoted and text[index + 1 : index + 2] == "'":
+			decoded: list[str] = []
+			index += 2
+			while index < len(text) and text[index] != "'":
+				if text[index] == "\\" and index + 1 < len(text):
+					if text[index + 1] not in _ANSI_C_ESCAPES:
+						# `\x2d`, `\055`, `\u…`, `\c…` decode to characters this rewrite does not reproduce (a `-` that
+						# makes a credential flag): fail closed, so the command is withheld (PR #5401 review round 12).
+						raise ValueError("ANSI-C escape not decoded")
+					decoded.append(_ANSI_C_ESCAPES[text[index + 1]])
+					index += 2
+					continue
+				decoded.append(text[index])
+				index += 1
+			if index >= len(text):
+				raise ValueError("unterminated $'")
+			index += 1
+			output.append("'" + "".join(decoded).replace("'", "'\\''") + "'")
+			continue
+		if char == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif char == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		output.append(char)
+		index += 1
+	return "".join(output)
+
+
+def _backticks_as_substitutions(text: str) -> str:
+	"""`text` with every backtick outside single quotes replaced by `$(` (opening) or `)` (closing).
+
+	The lexer then splits a `` `mysql -p…` `` substitution into commands of its
+	own, exactly as it splits `$(mysql -p…)` (issue #5124). A backtick inside
+	double quotes is replaced too, so the word carries `$(` and
+	_segment_credentials parses it. An escaped backtick (`\\``) is replaced as
+	well, without its backslash: it is text at this level, but a substitution
+	inside a `-c` command line (`sh -c "echo \\`mysql -p…\\`"`), and the lexer
+	keeps that backslash inside double quotes where Bash drops it. Reading
+	text as a command line too often only masks more.
+	"""
+	output: list[str] = []
+	quote = ""
+	opened = False
+	index = 0
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and quote != "'":
+			if text[index + 1 : index + 2] == "`":
+				index += 1
+				continue
+			output.append(text[index : index + 2])
+			index += 2
+			continue
+		index += 1
+		if quote == "'":
+			quote = "" if char == "'" else quote
+		elif char == "'" and not quote:
+			quote = "'"
+		elif char == '"':
+			quote = "" if quote else '"'
+		elif char == "`":
+			output.append(")" if opened else "$(")
+			opened = not opened
+			continue
+		output.append(char)
+	return "".join(output)
+
+
 def _strip_url_userinfo(text: str) -> str:
 	"""`scheme://***@host…` for a URL with userinfo; any other text unchanged."""
 	return _URL_USERINFO_RE.sub(r"\1***@", text)
@@ -291,6 +423,155 @@ def _attached_value_letters(command: str, subcommand: str) -> str:
 	"""The short-flag letters whose attached value is cut from a shape: credential flags, plus `-H` for header tools."""
 	letters = _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
 	return letters + ("H" if command in _HEADER_SHORT_FLAG_TOOLS else "")
+
+
+def _segment_flag_letters(words: list[str], start: int, position: int, header: bool = False) -> str:
+	"""Short-flag letters that apply to the word at `position` of a segment whose command is at `start`.
+
+	Every word from the command up to `position` that names a command in
+	_CREDENTIAL_COMMANDS adds its credential short flags, plus those of its
+	credential subcommand: the first word between it and `position` that forms
+	a _CREDENTIAL_SHORT_FLAGS key with it, so global options before the
+	subcommand never hide it (`docker --config d login -p…`). No list of
+	wrappers is needed: a credential command behind any command that runs
+	another (`sudo`, `timeout`, `runuser -u pg --`, `docker exec db`, `kubectl
+	exec pod --`) still applies its flags. A wrapper's option value (`sudo -u
+	http mysql -p…`) or a command's own argument (`sudo mysql -h curl -p…`) can
+	name such a command too, and masking one value too many is safe where one
+	too few leaks. Flags before any such word get no letters (`sudo -u root`).
+	With `header`, a header tool also adds `H` (_attached_value_letters).
+	"""
+	if start >= len(words):
+		return ""
+	# Command names are compared like runner names: case-insensitive, without `.exe` or a Windows path (round 11).
+	commands = [later for later in range(start, min(position, len(words))) if _runner_basename(words[later]) in _CREDENTIAL_COMMANDS]
+	letters = ""
+	for command_position in commands:
+		command = _runner_basename(words[command_position])
+		subcommand = next(
+			(words[later] for later in range(command_position + 1, min(position, len(words))) if f"{command} {words[later]}" in _CREDENTIAL_SHORT_FLAGS),
+			"",
+		)
+		if header:
+			letters += _attached_value_letters(command, subcommand)
+		else:
+			letters += _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
+	return letters
+
+
+def _runner_basename(word: str) -> str:
+	"""A command word as a runner name: its last path part (`/` or `\\`), lower-cased, without a `.exe` suffix, so
+	`/bin/BASH`, `pwsh.exe`, and `C:\\…\\powershell.exe` name their shells (PR #5401 review round 10)."""
+	name = re.split(r"[\\/]", word)[-1].lower()
+	return name[: -len(".exe")] if name.endswith(".exe") else name
+
+
+def _shell_runner_before(words: list[str], start: int, position: int) -> bool:
+	"""True when a word from the segment's command at `start` up to (not including) `position` names a _SHELL_COMMAND_RUNNERS command."""
+	return any(_runner_basename(earlier) in _SHELL_COMMAND_RUNNERS for earlier in words[start:position])
+
+
+# Commands that run the command in their later words with the same stdin (`sudo -u pg bash`, `env -i sh`). Since
+# PR #5401 review round 8 _segment_runs_a_shell no longer consults this list (any shell word counts); it is kept for
+# readers of the name.
+_SHELL_RUNNER_WRAPPERS = frozenset({"sudo", "doas", "env", "nice", "nohup", "command", "exec", "time", "timeout", "stdbuf", "ionice", "xargs"})
+
+
+# Builtins that run a file's text as code in the current shell: as the command word they read a pipe
+# (`… | source /dev/stdin`) or a process substitution (`. <(…)`) like a shell does (PR #5401 review round 14).
+# Only the command word counts, so a `.` path argument (`find . | …`) does not.
+_SOURCE_COMMANDS = frozenset({"source", "."})
+
+
+# Bash builtins that run the command named in their later words: `command source /dev/stdin`, `builtin eval '…'`
+# (PR #5401 review round 15).
+_BUILTIN_PREFIX_COMMANDS = frozenset({"command", "builtin"})
+
+
+def _past_builtin_prefixes(words: list[str], start: int) -> int:
+	"""The index of the word that `command` / `builtin` at `start` runs (`command -p -- source f` gives the index of
+	`source`), or `start` when `words[start]` is neither. `command -v` / `-V` only prints, so reading its next word as
+	the command it runs is the safe side."""
+	while start < len(words) and words[start] in _BUILTIN_PREFIX_COMMANDS:
+		start += 1
+		while start < len(words) and words[start].startswith("-"):
+			start += 1
+			if words[start - 1] == "--":
+				break
+	return start
+
+
+def _segment_runs_a_shell(words: list[str]) -> bool:
+	"""True when the simple command `words` may run a _SHELL_COMMAND_RUNNERS shell on its stdin: any of its words,
+	from the command word on, names one. The commands that hand their stdin to a shell named in their arguments are
+	an open set (`sudo`, `env`, `xargs`, `docker run -i … sh`, `ssh host sh`, `kubectl exec -i … -- sh`), so no list
+	of them is safe (PR #5401 review round 8); a shell name that is only an argument (`grep sh`) also counts, which
+	only withholds a command that could have been shown. Leading assignments, a group's `{`, `!`, and a
+	redirection's file-descriptor digit (`2>/dev/null sh`) come before the command word and are passed over."""
+	start = next(
+		(position for position, word in enumerate(words) if not (_ASSIGNMENT_RE.match(word) or word in ("{", "!") or word.isdigit())),
+		len(words),
+	)
+	source_index = _past_builtin_prefixes(words, start)
+	if source_index < len(words) and words[source_index] in _SOURCE_COMMANDS:
+		return True
+	return _shell_runner_before(words, start, len(words))
+
+
+def _attached_command_lines(word: str) -> list[str]:
+	"""The text after every prefix of `word` that is a shell command flag (_SHELL_COMMAND_FLAG_RE) or a short-flag
+	cluster holding `c` (`-ce`, `-xce`), shortest prefix first. The shell joins a flag and its quoted command line into
+	one word (`pwsh -Command'mysql -p…'` becomes `-Commandmysql -p…`, `bash -ce'mysql -p…'` becomes `-cemysql -p…`),
+	and the word does not say where the flag ends, so each reading is parsed and their credentials are all masked
+	(PR #5401 review rounds 8 and 9)."""
+	return [
+		word[length:]
+		for length in range(2, len(word))
+		if _SHELL_COMMAND_FLAG_RE.match(word[:length]) or _SHELL_COMMAND_CLUSTER_PREFIX_RE.match(word[:length])
+	]
+
+
+def _split_string_runner_before(words: list[str], start: int, position: int) -> bool:
+	"""True when a word from the segment's command at `start` up to (not including) `position` names a _SPLIT_STRING_RUNNERS command (`env`, also behind `sudo`)."""
+	return any(_runner_basename(earlier) in _SPLIT_STRING_RUNNERS for earlier in words[start:position])
+
+
+def _split_string_command_line(text: str) -> str:
+	"""An `env -S` argument as the shell lexer should read it: GNU env's `\\_` is a word break outside quotes and a space
+	inside double quotes, so it becomes a space everywhere except inside single quotes, where env keeps it literal."""
+	output: list[str] = []
+	single_quoted = double_quoted = False
+	index = 0
+	while index < len(text):
+		char = text[index]
+		if char == "\\" and not single_quoted:
+			output.append(" " if text[index + 1 : index + 2] == "_" else text[index : index + 2])
+			index += 2
+			continue
+		if char == "'" and not double_quoted:
+			single_quoted = not single_quoted
+		elif char == '"' and not single_quoted:
+			double_quoted = not double_quoted
+		output.append(char)
+		index += 1
+	return "".join(output)
+
+
+def _shell_command_line_words(words: list[str], index: int) -> list[str]:
+	"""The words from `index` that may hold a shell's command line: each one up to and including the first that does not start with `-`.
+
+	A shell reads its command line from the first argument after its options,
+	so options and `--` can come between the command flag and it (`bash -c --
+	'mysql -p…'`, `bash -c -x '…'`), and a quoted command line can itself
+	start with `-` (`sh -c '-x; mysql -p…'`). A redirection does not end the
+	scan either: the `\\x00`-marked operators and targets that command_shape
+	leaves in a segment are passed over too (`sh -c 2>/dev/null '-x; mysql
+	-p…'`), and returned with the words, so the caller decides what to show.
+	"""
+	end = index
+	while end < len(words) and words[end].startswith(("-", "\x00")):
+		end += 1
+	return words[index : end + 1]
 
 
 def _credential_flag_position(token: str, letters: str) -> int | None:
@@ -308,11 +589,15 @@ def _credential_flag_position(token: str, letters: str) -> int | None:
 	return None
 
 
-def _credential_flag_awaits_value(token: str, command: str, subcommand: str) -> bool:
-	"""True for a credential flag whose value, if any, is the next word: a credential long flag without `=` (not a boolean one), or the command's credential short flag with nothing attached."""
+def _credential_flag_awaits_value(token: str, command: str, subcommand: str, letters: str | None = None) -> bool:
+	"""True for a credential flag whose value, if any, is the next word: a credential long flag without `=` (not a boolean one), or the command's credential short flag with nothing attached.
+
+	`letters`, when given, are the credential short-flag letters to use instead of `command`'s and `subcommand`'s (_segment_flag_letters).
+	"""
 	if token.startswith("--"):
 		return "=" not in token and bool(_CREDENTIAL_LONG_FLAG_RE.match(token)) and not _BOOLEAN_CREDENTIAL_LONG_FLAG_RE.match(token)
-	letters = _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
+	if letters is None:
+		letters = _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
 	return _credential_flag_position(token, letters) == len(token) - 1
 
 
@@ -350,10 +635,15 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 	if index >= len(tokens):
 		return shape
 	command = tokens[index].rsplit("/", 1)[-1] if not tokens[index].startswith(".") else tokens[index]
+	if "$(" in command or any(char.isspace() for char in command):
+		# A quoted command word holding a substitution or spaces (`"$(printf %s 'mysql -p…')"`) is arbitrary text, so
+		# it never reaches the shape (PR #5401 review round 13).
+		command = "*"
 	shape.append(command)
 	positionals = 0
 	subcommand = ""
 	seen_flags: set[str] = set()
+	command_position = index
 	index += 1
 	while index < len(tokens):
 		token = tokens[index]
@@ -362,8 +652,26 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			shape.append(token[1:])
 			continue
 		if token.startswith("-") and len(token) > 1:
-			# An attached credential or header value (`-udeploy:pwd`) never reaches the shape.
-			cut = _cut_attached_value(token, _attached_value_letters(command, subcommand))
+			# An attached credential or header value (`-udeploy:pwd`) never reaches the shape, behind a wrapper
+			# (`sudo mysql -pS3cret`) or a global option (`docker --config d login -pS3cret`) too.
+			cut = _cut_attached_value(token, _segment_flag_letters(tokens, command_position, index - 1, header=True))
+			runner_before = cut is None and _shell_runner_before(tokens, command_position, index - 1)
+			attached_flag = _SHELL_COMMAND_ATTACHED_RE.match(token) if runner_before else None
+			attached_command = _SHELL_COMMAND_CLUSTER_RE.match(token) if runner_before and not attached_flag else None
+			if attached_flag:
+				# `--command='…'`, `pwsh -Command:'…'`: the flag stays, its command line is one value.
+				cut = token[: len(token) - len(attached_flag.group(1))] + "*"
+			elif attached_command and not attached_command.group(2).isalpha():
+				# An attached `-c` command line (`su -c'mysql -p…'`) is one value; `-ce` stays a flag cluster.
+				cut = attached_command.group(1) + "*"
+			split_before = cut is None and _split_string_runner_before(tokens, command_position, index - 1)
+			split_attached = _SPLIT_STRING_ATTACHED_RE.match(token) if split_before and not attached_flag and not attached_command else None
+			if split_attached:
+				# `env -S'mysql -p…'`, `env --split-string='…'`: the flag stays, its command line is one value.
+				cut = split_attached.group(1) + "*"
+			if cut is None and "$(" in token.split("=", 1)[0]:
+				# A command substitution attached to a flag (`-o"$(mysql -p…)"`) is a value: it never reaches the shape.
+				cut = token[: token.index("$(")] + "*"
 			flag = cut if cut is not None else token.split("=", 1)[0] + ("=*" if "=" in token else "")
 			if flag in ("-X", "--method") and index < len(tokens):
 				flag = f"{flag} {tokens[index].upper()}"
@@ -371,7 +679,35 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 			if flag not in seen_flags:
 				seen_flags.add(flag)
 				shape.append(flag)
-			if index < len(tokens) and tokens[index].startswith("-") and _credential_flag_awaits_value(token, command, subcommand):
+			# A cluster such as `-ce` makes the next word the command line, but PowerShell has no clusters: its
+			# `-NonInteractive` is a parameter of its own and the words after it stay in the shape (PR #5401 review round 9).
+			cluster_flag = bool(attached_command and attached_command.group(2).isalpha()) and not any(
+				_runner_basename(earlier) in _POWERSHELL_RUNNERS for earlier in tokens[command_position : index - 1]
+			)
+			if runner_before and (_SHELL_COMMAND_FLAG_RE.match(token) or cluster_flag):
+				# A shell's command line is one value: the first word after its options (`bash -c -- '…'`), which can
+				# start with `-` (`sh -c '-x; mysql -p…'`) or end like a script name (`sh -c '… ./run.sh'`). Neither
+				# it nor those options reach the shape; a redirection among them keeps its operator (`sh -c 2> *`).
+				line_words = _shell_command_line_words(tokens, index)
+				index += len(line_words)
+				for line_word in line_words:
+					if line_word.startswith("\x00"):
+						shape.append(line_word[1:])
+					elif shape[-1] != "*":
+						shape.append("*")
+				continue
+			if split_before and _SPLIT_STRING_FLAG_RE.match(token):
+				# `env -S 'mysql -p…'`: the next word is a command line, never part of the shape (not even as a script
+				# name). A redirection before it (`env -S 2>/dev/null '…'`) keeps its operator and does not end the flag.
+				while index < len(tokens) and tokens[index].startswith("\x00"):
+					shape.append(tokens[index][1:])
+					index += 1
+				if index < len(tokens):
+					index += 1
+					if shape[-1] != "*":
+						shape.append("*")
+				continue
+			if index < len(tokens) and tokens[index].startswith("-") and _credential_flag_awaits_value(token, command, subcommand, _segment_flag_letters(tokens, command_position, index - 1)):
 				# A next word that starts with `-` may be this flag's value (`--password -s3cret`): it never reaches the shape.
 				index += 1
 				if shape[-1] != "*":
@@ -380,7 +716,9 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 		positionals += 1
 		if command == "gh" and positionals == 2 and len(shape) >= 2 and shape[1] == "api":
 			shape.append(_normalize_endpoint(token))
-		elif positionals == 1 and ((command in _SUBCOMMAND_TOOLS and _SUBCOMMAND_RE.match(token)) or _SCRIPT_RE.search(token)):
+		elif positionals == 1 and ((command in _SUBCOMMAND_TOOLS and _SUBCOMMAND_RE.match(token)) or (_SCRIPT_RE.search(token) and not any(char.isspace() for char in token))):
+			# A word with whitespace is a value, never a script name, even when it ends like one
+			# (`echo 'mysql -p… ./run.sh' | bash`).
 			if command in _SUBCOMMAND_TOOLS and _SUBCOMMAND_RE.match(token):
 				subcommand = token
 			shape.append(_strip_url_userinfo(token))
@@ -392,11 +730,12 @@ def _segment_shape(tokens: list[str]) -> list[str]:
 def command_shape(command: str) -> str:
 	"""Return the Bash command's shape: structure kept, literal values replaced by `*`."""
 	stripped = strip_heredocs(command, keep_delimiter=False)
-	lexer = shlex.shlex(stripped.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
-	lexer.commenters = ""
-	lexer.whitespace = " \t\r"
-	lexer.whitespace_split = True
 	try:
+		# Split like the credential scan does, `$'…'` included (PR #5401 review round 12).
+		lexer = shlex.shlex(_backticks_as_substitutions(_ansi_c_quotes_as_single(stripped)).replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+		lexer.commenters = ""
+		lexer.whitespace = " \t\r"
+		lexer.whitespace_split = True
 		tokens = list(lexer)
 	except ValueError:
 		# Fail closed: an unparseable line can carry a credential, so only its command word is kept (issue #5124).
@@ -413,7 +752,9 @@ def command_shape(command: str) -> str:
 			continue
 		redirect_target = False
 		if is_punctuation and set(token) <= set("<>&") and set(token) & set("<>"):
-			if segment and segment[-1].isdigit():
+			# Only a one-digit word joins the operator as its file descriptor: a longer one can be a value
+			# (`sshpass -p 123456789 >log`), which never reaches the shape.
+			if segment and segment[-1].isdigit() and len(segment[-1]) == 1:
 				token = segment.pop() + token
 			segment.append("\x00" + token)
 			redirect_target = True
@@ -465,19 +806,73 @@ def _word_credentials(word: str) -> set[str]:
 	return values
 
 
-def _segment_credentials(words: list[str]) -> set[str]:
-	"""Credential values in one simple command: word credentials, credential long flags, and the command's credential short flags."""
+def _shell_line_credentials(line: str, depth: int) -> set[str]:
+	"""Credential values in a command line a shell runs (`sh -c`, `env -S`, a here-string fed to a shell, `eval`).
+
+	Raises ValueError when the line holds a command substitution: whatever it prints becomes code the shell runs
+	(`bash -c "$(printf %s 'mysql -p…')"`), which no scan of the words can know, so the command is withheld (PR #5401
+	review round 13). This also withholds a harmless `bash -c 'echo $(date)'`, which is the safe side.
+	"""
+	if "$(" in line or "`" in line:
+		# A backtick is a substitution too (`bash -c '`printf …`'`); the outer lexer only rewrites backticks outside
+		# single quotes, so the line can still hold one (PR #5401 review round 14).
+		raise ValueError("command line built by a command substitution")
+	return _command_line_credentials(line, depth + 1)
+
+
+def _segment_credentials(words: list[str], depth: int = 0) -> set[str]:
+	"""Credential values in one simple command: word credentials, credential long flags, the credential short flags of its credential commands, and the credentials of a shell's `-c` command line, an `env -S` command line, or a command substitution inside a quoted word.
+
+	Raises ValueError, like _command_line_credentials, when such a command line cannot be parsed.
+	"""
 	values: set[str] = set()
 	start = next((position for position, word in enumerate(words) if not _ASSIGNMENT_RE.match(word)), len(words))
-	command = words[start].rsplit("/", 1)[-1] if start < len(words) else ""
-	subcommand = words[start + 1] if start + 1 < len(words) else ""
-	letters = _CREDENTIAL_SHORT_FLAGS.get(command, "") + _CREDENTIAL_SHORT_FLAGS.get(f"{command} {subcommand}", "")
+	eval_index = _past_builtin_prefixes(words, start)
+	if eval_index + 1 < len(words) and _runner_basename(words[eval_index]) == "eval":
+		# `eval` runs its arguments, joined by spaces, as a command line (PR #5401 review round 13), also behind
+		# `command` / `builtin` (round 15).
+		values.update(_shell_line_credentials(" ".join(words[eval_index + 1 :]), depth))
 	index = 0
 	while index < len(words):
 		word = words[index]
 		index += 1
 		following = words[index] if index < len(words) and not words[index].startswith("-") else None
 		values.update(_word_credentials(word))
+		if "$(" in word:
+			# A command substitution inside a quoted word (`"$(mysql -p…)"`, `` "`mysql -p…`" ``) runs a command line of its own.
+			values.update(_command_line_credentials(word, depth + 1))
+		runner_before = index - 1 > start and _shell_runner_before(words, start, index - 1)
+		attached_flag = _SHELL_COMMAND_ATTACHED_RE.match(word) if runner_before else None
+		attached_command = _SHELL_COMMAND_CLUSTER_RE.match(word) if runner_before and not attached_flag else None
+		if attached_flag:
+			# `su --command='mysql -p…'`, `pwsh -Command:'mysql -p…'`: the attached text is a command line of its own.
+			values.update(_shell_line_credentials(attached_flag.group(1), depth))
+		elif runner_before and _SHELL_COMMAND_FLAG_RE.match(word):
+			# `su pg -c 'mysql -p…'`, `pwsh -C 'curl -u …'`: the next word is a command line of its own, or the
+			# first word after the shell's options (_shell_command_line_words). These words are still read as
+			# words of their own below, since a credential value can end in `c` (`sudo -u bash mysql
+			# -pSecretAbc`, user `bash`) and the next word is then not a command line.
+			for line in _shell_command_line_words(words, index):
+				values.update(_shell_line_credentials(line, depth))
+		elif attached_command:
+			# `su -c'mysql -p…'` carries the command line in the word; `bash -ce 'mysql -p…'` in the next
+			# word (or the first after the shell's options), which is still read as a word of its own below.
+			# The word itself is read as a flag too, since a user name such as `bash` before it (`sudo -u
+			# bash mysql -pScret…`) can match.
+			for line in _attached_command_lines(word):
+				values.update(_shell_line_credentials(line, depth))
+			if attached_command.group(2).isalpha():
+				for line in _shell_command_line_words(words, index):
+					values.update(_shell_line_credentials(line, depth))
+		if index - 1 > start and _split_string_runner_before(words, start, index - 1):
+			split_attached = _SPLIT_STRING_ATTACHED_RE.match(word)
+			if split_attached:
+				# `env -S'mysql -p…'`, `env --split-string='mysql -p…'`: the attached text is a command line of its own.
+				values.update(_shell_line_credentials(_split_string_command_line(split_attached.group(2)), depth))
+			elif _SPLIT_STRING_FLAG_RE.match(word) and index < len(words):
+				# `env -S 'mysql -p…'`: the next word is a command line of its own, even when it starts with `-`; it is
+				# still read as a word of its own below.
+				values.update(_shell_line_credentials(_split_string_command_line(words[index]), depth))
 		if word.startswith("--"):
 			name, has_value, value = word.partition("=")
 			if _CREDENTIAL_LONG_FLAG_RE.match(name):
@@ -491,7 +886,8 @@ def _segment_credentials(words: list[str]) -> set[str]:
 					# another flag: mask it either way, and still read it as a word of its own.
 					values.add(words[index])
 		else:
-			position = _credential_flag_position(word, letters)
+			# The credential short flags of the command that runs, behind a wrapper too; a wrapper's own flags get none (`sudo -u root`).
+			position = _credential_flag_position(word, _segment_flag_letters(words, start, index - 1)) if index - 1 > start else None
 			if position is None:
 				continue
 			if len(word) > position + 1:
@@ -503,6 +899,77 @@ def _segment_credentials(words: list[str]) -> set[str]:
 	return {value for value in values if value}
 
 
+def _command_line_credentials(text: str, depth: int = 0) -> set[str]:
+	"""Credential values in a command line: those of each simple command in it (_segment_credentials).
+
+	`text` is split into shell words with the lexer `command_shape` uses.
+	Raises ValueError when it cannot be tokenized, or when `-c` command lines
+	nest deeper than MAX_NESTED_COMMAND_DEPTH, so the caller fails closed.
+	"""
+	if depth > MAX_NESTED_COMMAND_DEPTH:
+		raise ValueError("nested command lines too deep")
+	lexer = shlex.shlex(_backticks_as_substitutions(_ansi_c_quotes_as_single(text)).replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer.commenters = ""
+	lexer.whitespace = " \t\r"
+	lexer.whitespace_split = True
+	tokens = list(lexer)
+	values: set[str] = set()
+	# A redirection does not end a simple command (`sh -c 2>/dev/null 'mysql -p…'`, `mysql >out -p…`): its
+	# operator and target are left out of the segment, as command_shape leaves them out of the command. A
+	# digit word before the operator is its file descriptor or a value (`sshpass -p 1234 >log`), which the
+	# lexer cannot tell apart, so the segment is read both without it (`segment`) and with it (`with_digits`).
+	segment: list[str] = []
+	with_digits: list[str] = []
+	# True when the simple command being read gets the previous one's output on stdin: it follows a `|` or `|&`
+	# (also across a newline or a subshell's `(` right after it) or a `>(` process substitution.
+	piped_into = False
+	seen_segment = False
+	redirect = ""
+	for token in tokens + [";"]:
+		is_punctuation = bool(token) and set(token) <= set(_SHELL_PUNCTUATION_CHARS)
+		if redirect and not is_punctuation:
+			# A target can run a command substitution (`> "$(mysql -p…)"`), and a here-string fed to a shell
+			# (`bash <<< 'mysql -p…'`) is a command line of its own.
+			values.update(_segment_credentials([token], depth))
+			if redirect == "<<<" and (_segment_runs_a_shell(segment) or _segment_runs_a_shell(with_digits)):
+				values.update(_shell_line_credentials(token, depth))
+			redirect = ""
+			continue
+		redirect = ""
+		if is_punctuation and set(token) <= set("<>&") and set(token) & set("<>"):
+			if segment and segment[-1].isdigit():
+				segment.pop()
+			redirect = token
+		elif is_punctuation:
+			command_word = next((word for word in segment if not _ASSIGNMENT_RE.match(word)), "")
+			# Unquoted, the lexer splits `$(` into `$` and `(`, so a bare `$` before `(` is a substitution too. In a
+			# nested parse of a substitution word (`$(mysql -p…)`), its own leading `$(` is not a command word.
+			bare_substitution = command_word == "$" and segment[-1] == "$" and token.startswith("(")
+			own_wrapper = bare_substitution and depth > 0 and not seen_segment
+			seen_segment = True
+			if ("$(" in command_word or bare_substitution) and not own_wrapper:
+				# A command substitution as the command word runs what it prints (`$(printf %s 'mysql -p…')`), which no
+				# scan of the words can know: withhold the command (PR #5401 review round 13).
+				raise ValueError("command word from a command substitution")
+			values.update(_segment_credentials(segment, depth))
+			if with_digits != segment:
+				values.update(_segment_credentials(with_digits, depth))
+			runs_a_shell = _segment_runs_a_shell(segment) or _segment_runs_a_shell(with_digits)
+			if runs_a_shell and (piped_into or "<(" in token):
+				# A shell reading a pipe runs whatever the earlier stages print (`printf 'mysql -p…' | sh`, `cat f |
+				# sed … | bash`, arguments `printf` joins), and one reading a `<(…)` runs what that command prints,
+				# which no scan of their words can know: withhold the command (PR #5401 review rounds 6 and 7).
+				raise ValueError("text piped into a shell")
+			pipe = ("|" in token and "||" not in token) or ">(" in token
+			piped_into = pipe or (piped_into and not with_digits)
+			segment = []
+			with_digits = []
+		else:
+			segment.append(token)
+			with_digits.append(token)
+	return values
+
+
 def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
 	"""`display` with every credential value masked as `***`, or None when that cannot be done safely.
 
@@ -510,27 +977,22 @@ def _sanitize_bash_command(display: str, parse_text: str) -> str | None:
 	bodies or delimiters) is split into shell words with the lexer
 	`command_shape` uses. Credential values are the values of credential-named
 	assignments, credential header fields, credential long flags, and the
-	`_CREDENTIAL_SHORT_FLAGS` of the segment's command. Returns None when the
-	text cannot be tokenized, or when a value is shorter than
-	MIN_MASKED_VALUE_CHARS or does not occur verbatim in `display` (quoting or
-	escapes changed it), so the caller posts the shape instead.
+	`_CREDENTIAL_SHORT_FLAGS` of every credential command in a segment,
+	including those inside a shell's `-c` command line, an `env -S` /
+	`--split-string` command line, a here-string fed to a shell, and a `$(…)`
+	or backtick command substitution; a redirection between
+	a flag and its value or command line does not separate them. Returns None
+	when the text (or such a command line) cannot be tokenized, when it pipes
+	text into a shell that reads it from stdin (`printf 'mysql -p…' | sh`:
+	what the shell runs cannot be known from the words), or when a
+	value is shorter than MIN_MASKED_VALUE_CHARS or does not occur verbatim in
+	`display` (quoting or escapes changed it), so the caller posts the shape
+	instead.
 	"""
-	lexer = shlex.shlex(parse_text.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
-	lexer.commenters = ""
-	lexer.whitespace = " \t\r"
-	lexer.whitespace_split = True
 	try:
-		tokens = list(lexer)
+		values = _command_line_credentials(parse_text)
 	except ValueError:
 		return None
-	values: set[str] = set()
-	segment: list[str] = []
-	for token in tokens + [";"]:
-		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
-			values.update(_segment_credentials(segment))
-			segment = []
-		else:
-			segment.append(token)
 	ordered = sorted(values, key=len, reverse=True)
 	if any(len(value) < MIN_MASKED_VALUE_CHARS or value not in display for value in ordered):
 		return None

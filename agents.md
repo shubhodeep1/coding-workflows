@@ -1145,10 +1145,20 @@ reviews, comments, and conflicts stay a direct §12 request.
   `Cookie`, …), credential long flags (`--user`, `--password`, `--token`, …,
   also a separate value that starts with `-`), per-command credential short
   flags (`curl -u/-U/-b/-E`, `mysql -p`, `sshpass -p`, `redis-cli -a`,
-  `docker login -p`), URL userinfo, and credential query parameters become
-  `***`. A command that cannot be parsed, or whose credential is shorter
-  than 4 characters or does not occur verbatim, is withheld and only its
-  shape is posted; the shape keeps no raw text
+  `docker login -p`, also behind another command such as `sudo`,
+  `runuser`, or `docker exec`, inside a shell's or `su`'s `-c`
+  command line, an `env -S` command line, or a here-string fed to a
+  shell, inside a `$(…)` or
+  backtick command substitution, and with a redirection between the
+  flag and its value),
+  URL userinfo, and credential query parameters become
+  `***`. A command that cannot be parsed, that pipes text into a command
+  with a shell among its words (`printf 'mysql -p…' | sh`, `… | docker run
+  -i img sh`, `… | ssh host sh`; `… | grep sh` too), that runs code a
+  command substitution builds (`bash -c "$(…)"`, `eval "$(…)"`, a
+  substitution as the command word), or whose credential is
+  shorter than 4 characters or does not occur verbatim, is withheld and
+  only its shape is posted; the shape keeps no raw text
   (`unparseable: <command word>`, `-u*` for an attached value). Other
   tools' input shows `***` for
   credential-named keys. In consumer repos it only reports. Occurrences that
