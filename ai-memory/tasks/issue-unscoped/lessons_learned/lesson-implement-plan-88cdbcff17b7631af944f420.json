@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:15:27Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A guard that mirrors a CLI's option parsing must apply options in order with their `--no-` negations and abbreviations, and decide only from the final state; returning early on the first matching flag lets a later negation undo it unseen.",
+  "phase": "implement_plan",
+  "pr_number": 6114,
+  "record_id": "lesson-implement-plan-88cdbcff17b7631af944f420",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security",
+    "plan:issue-6088-negated-delete-skips-branch-push",
+    "file:.claude/hooks/pr_merge_status_guard.py"
+  ]
+}
