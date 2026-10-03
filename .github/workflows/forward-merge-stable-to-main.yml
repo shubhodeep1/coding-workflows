@@ -253,15 +253,8 @@ jobs:
           }
 
           BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          # Exported for the "Dispatch AI review for the fallback PR" step:
-          # dispatching internal-review.yml on this branch (instead of the
-          # default branch) keys the resolver run to the PR's head branch,
-          # which is how the orchestrator poller's _has_active_autofix_run
-          # and review_autofix_sweep.yml's snapshot detect an active run.
-          # A default-branch-keyed resolver run is invisible to both, so
-          # they duplicate-dispatch against it every cycle (PR #3895
-          # incident: 10 duplicate dispatches and 6+ duplicate Telegram
-          # conflict warnings while the real resolver ran on main's ref).
+          # Exported for the review dispatch step's diagnostics. Dispatch
+          # runs from the default branch are correlated by PR-scoped run name.
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
 
           # The merge-strategy warning is identical on both paths and
@@ -415,20 +408,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Dispatch on the fallback PR's head branch so the resolver run
-          # is keyed to that branch and visible to the poller/sweep
-          # active-run guards (see the branch output note in the fallback
-          # step). The branch always exists here — the fallback step just
-          # pushed it — and internal-review.yml exists on it because the
-          # branch is cut from stable. Fall back to the default branch if
-          # the output is somehow empty, matching the old behaviour.
+          # Even a workflow-created fallback branch can have an older or
+          # subsequently modified workflow. Execute only the default-branch
+          # copy; the PR-scoped run name keeps the run visible to the guards.
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::Invalid fallback PR number; skipping review dispatch. The poller will retry."
+            exit 0
+          fi
           dispatch_args=(-f "pr_number=${PR_NUMBER}"
             -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS}")
-          if [ -n "${HEAD_BRANCH:-}" ]; then
-            dispatch_args+=(--ref "${HEAD_BRANCH}")
-          fi
           if gh workflow run internal-review.yml "${dispatch_args[@]}"; then
-            echo "Dispatched internal-review.yml for PR #${PR_NUMBER} (ref=${HEAD_BRANCH:-<default branch>})"
+            echo "Dispatched internal-review.yml for PR #${PR_NUMBER} from default branch (head=${HEAD_BRANCH:-<unknown>})"
           else
             echo "::warning::Failed to dispatch internal-review.yml for PR #${PR_NUMBER}; the orchestrator poller will pick the PR up on its next cycle."
           fi

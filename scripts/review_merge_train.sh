@@ -401,19 +401,25 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # ---------------------------------------------------------------------------
 # The open-PR list cannot report active workflow runs. One cycle-local Actions
 # lookup covers every queued PR and avoids a per-PR API call inside the loop.
+# Dispatches on the default branch are keyed by their exact PR run name;
+# legacy review runs retain their head-branch key.
 _mt_inflight_review_branches()
 {
 	gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?per_page=100" \
-		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | .head_branch // empty' 2>/dev/null | sort -u
+		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml(@.*)?$")) | if .event == "workflow_dispatch" and ((.path // "") | test("(^|/)internal-review\\.ya?ml(@.*)?$")) and ((.display_title // "") | test("^Internal: AI Review & Autofix \\[pr:[1-9][0-9]*\\]$")) then "pr:" + (.display_title | capture("\\[pr:(?<n>[1-9][0-9]*)\\]$").n) elif .event == "workflow_dispatch" and ((.path // "") | test("(^|/)ai-review\\.ya?ml(@.*)?$")) and ((.display_title // "") | test("^AI Review \\[pr:[1-9][0-9]*\\]$")) then "pr:" + (.display_title | capture("\\[pr:(?<n>[1-9][0-9]*)\\]$").n) else .head_branch // empty end' 2>/dev/null | sort -u
 }
 
 _mt_dispatch_review() {
 	local pr="$1" head="$2" wf
 	local allow_edits="${MERGE_TRAIN_ALLOW_WORKFLOW_EDITS:-true}"
+	if ! [[ "${pr}" =~ ^[1-9][0-9]*$ ]]; then
+		_mt_warn "merge-train release: invalid PR number; skipping review dispatch."
+		return 1
+	fi
 	for wf in ${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}; do
-		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" --ref "${head}" \
+		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" \
 			-f pr_number="${pr}" -f allow_workflow_edits="${allow_edits}" >/dev/null 2>&1; then
-			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=${head}"
+			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=default head=${head}"
 			return 0
 		fi
 	done
@@ -437,13 +443,13 @@ _mt_release() {
 		head="$(printf '%s' "${line}" | jq -r '.head')"
 		base="$(printf '%s' "${line}" | jq -r '.base')"
 		labels="$(printf '%s' "${line}" | jq -r '.labels | join(",")')"
-		[[ "${num}" =~ ^[0-9]+$ ]] || continue
+		[[ "${num}" =~ ^[1-9][0-9]*$ ]] || continue
 		_mt_has_label "${labels}" || continue
 		if [ -n "${base_filter}" ] && [ "${base}" != "${base_filter}" ]; then
 			continue
 		fi
 		examined=$((examined + 1))
-		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -- "${head}"; then
+		if [ -n "${inflight_review_branches}" ] && { printf '%s\n' "${inflight_review_branches}" | grep -Fxq -- "${head}" || printf '%s\n' "${inflight_review_branches}" | grep -Fxq -- "pr:${num}"; }; then
 			_mt_log "MERGE_TRAIN_RELEASE_ACTIVE pr=${num} head=${head} action=leave_queued"
 			continue
 		fi

@@ -2,6 +2,9 @@
 # automatically when upstream templates change. To opt out of auto-updates,
 # set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 name: AI Review
+# Dispatched runs use a PR-scoped name so default-branch runs remain visible
+# to the poller's active-run guards without executing a PR head's workflow.
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('AI Review [pr:{0}]', inputs.pr_number) || '' }}"
 on:
   # ready_for_review is included so that converting a draft PR to a
   # non-draft re-fires the review gate. This is the unlock path for

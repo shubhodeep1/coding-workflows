@@ -23,11 +23,11 @@ head-ref dispatch ran the unmerged branch's copy of internal-review.yml with
 the sweep's secrets. The sweep now always dispatches from the default
 branch, and closes the ref blind spot a different way: internal-review.yml
 names every dispatched run ``Internal: AI Review & Autofix [pr:<N>]``, and
-both guards match that name by PR. The forward-merge fallback keeps its
-head-ref dispatch (its branch is cut from ``stable`` by the workflow itself).
+both guards match that name by PR. The forward-merge fallback also runs the
+default-branch workflow (its branch can differ from the protected copy).
 
 These are text contracts on the shipped files, so a refactor cannot
-silently reintroduce either blind spot, or the head-ref dispatch, while the
+silently reintroduce either blind spot, or a head-ref dispatch, while the
 tests keep passing.
 """
 
@@ -132,23 +132,20 @@ class PollerPrNamedRunContract(unittest.TestCase):
 		self.body = text[start:text.index("\n}\n", start)]
 
 	def test_guard_looks_up_pr_named_dispatch_runs(self) -> None:
-		self.assertIn("--workflow internal-review.yml", self.body)
-		self.assertIn("--event workflow_dispatch", self.body)
-		self.assertIn("--json status,displayTitle", self.body)
-		self.assertIn(
-			'select(.displayTitle == \\"Internal: AI Review & Autofix [pr:${pr_number}]\\")',
-			self.body,
-		)
+		self.assertIn('_pr_named_review_dispatch_runs "${pr_number}"', self.body)
+		helper = POLL_SCRIPT.read_text(encoding="utf-8")
+		self.assertIn("--event workflow_dispatch --limit 100", helper)
+		self.assertIn('"AI Review [pr:" + $pr + "]"', helper)
 
 	def test_pr_named_lookup_follows_the_head_branch_lookups(self) -> None:
-		self.assertLess(self.body.index('--branch "${head_ref}"'), self.body.index("--event workflow_dispatch"))
+		self.assertLess(self.body.index('--branch "${head_ref}"'), self.body.index('_pr_named_review_dispatch_runs "${pr_number}"'))
 
 	def test_pr_named_lookup_validates_the_pr_number(self) -> None:
 		self.assertIn('if [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then', self.body)
 
 	def test_run_name_prefix_matches_internal_review(self) -> None:
 		self.assertIn(DISPATCH_RUN_NAME, INTERNAL_REVIEW_WF.read_text(encoding="utf-8"))
-		self.assertIn(DISPATCH_RUN_NAME, self.body)
+		self.assertIn(DISPATCH_RUN_NAME, POLL_SCRIPT.read_text(encoding="utf-8"))
 
 
 class ForwardMergeDispatchRefContract(unittest.TestCase):
@@ -158,9 +155,34 @@ class ForwardMergeDispatchRefContract(unittest.TestCase):
 	def test_fallback_step_exports_branch_output(self) -> None:
 		self.assertIn('echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"', self.text)
 
-	def test_review_dispatch_targets_fallback_branch_ref(self) -> None:
+	def test_review_dispatch_uses_default_branch_and_validates_pr(self) -> None:
 		self.assertIn("HEAD_BRANCH: ${{ steps.fallback.outputs.branch }}", self.text)
-		self.assertIn('dispatch_args+=(--ref "${HEAD_BRANCH}")', self.text)
+		step = self.text[self.text.index("      - name: Dispatch AI review for the fallback PR"):]
+		self.assertNotIn('dispatch_args+=(--ref', step)
+		self.assertIn('[[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]', step)
+
+
+class RemainingDispatchSiteContract(unittest.TestCase):
+	def test_poller_dispatch_never_selects_pr_head_workflow(self) -> None:
+		text = POLL_SCRIPT.read_text(encoding="utf-8")
+		start = text.index("_dispatch_review_for_conflicts()\n{")
+		body = text[start:text.index("\n}\n", start)]
+		self.assertIn('[[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]', body)
+		self.assertNotIn('--ref "${head_ref}"', body)
+
+	def test_consumer_run_name_is_pr_scoped(self) -> None:
+		text = (REPO_ROOT / "workflow-templates" / "ai-review.yml").read_text(encoding="utf-8")
+		self.assertIn("format('AI Review [pr:{0}]', inputs.pr_number)", text)
+
+	def test_both_empty_commit_guards_and_stall_judge_use_pr_identity(self) -> None:
+		text = POLL_SCRIPT.read_text(encoding="utf-8")
+		for scope, end in (
+			("_direct_inflight_review_run_on_branch()\n{", "# Build a set of issue numbers"),
+			("invoke_stall_judge() {", "# Judge decision cache"),
+		):
+			self.assertIn('pr', text[text.index(scope):text.index(end, text.index(scope))])
+		self.assertIn('_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}"', text)
+		self.assertEqual(text.count('(.display_title == ("AI Review [pr:" + $pr + "]")'), 3)
 
 
 if __name__ == "__main__":

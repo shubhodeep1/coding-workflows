@@ -12570,11 +12570,14 @@ prime_phase_concurrency_snapshot() {
 # cannot observe an in_progress/queued run.  This therefore issues a single
 # branch-scoped `gh run list` (server-side --branch filter, so it is NOT subject
 # to the global 50-item listing cap the cached blob is) rather than the 3-call
-# per-workflow loop, keeping the added cost to one REST request on the rare
-# recovery-push path.
+# per-workflow loop. The PR-named lookup adds at most one further bounded
+# request when a valid PR number is supplied and this branch lookup misses.
 #
-# Args: $1 = head branch.  Echoes the databaseId of the freshest matching
-# in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
+# Args: $1 = head branch, $2 = optional PR number. Echoes the databaseId of
+# the freshest matching branch run or PR-named dispatch run; an unavailable
+# listing with a PR number returns "listing-incomplete" to defer the push.
+# Without a PR number the original branch-only, fail-open behavior remains.
+# Matches in_progress/queued/pending review runs younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
 # else nothing.  Freshness mirrors build_active_issue_set's review-run window
 # so a review still legitimately editing past STALL_THRESHOLD_MINUTES is not
 # clobbered, while a genuinely hung run older than the review budget does not
@@ -12590,10 +12593,13 @@ prime_phase_concurrency_snapshot() {
 # proceeds) — no worse than the pre-fix behaviour, and the cached scan's own
 # path-based match still covers that case whenever the cache itself hits (in
 # which case this fallback is never reached).  Fails open (echoes nothing) on any
-# gh/jq/date error so a transient API failure never blocks recovery.
+# gh/jq/date error on the branch listing. A PR-named listing error is
+# reported as "listing-incomplete" so an uncertain result cannot authorize
+# the destructive push; the next poll cycle retries.
 _direct_inflight_review_run_on_branch()
 {
 	local _di_branch="$1"
+	local _di_pr="${2:-}"
 	local _di_now_epoch _di_stall_secs _di_runs_json
 	[ -n "${_di_branch}" ] || return 0
 	_di_now_epoch="$(date +%s 2>/dev/null || echo "")"
@@ -12605,12 +12611,14 @@ _direct_inflight_review_run_on_branch()
 	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
 	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
 	# Diagnostics (CLAUDE.md §8): this helper is the last guard before the
-	# destructive empty-commit push and fails open on any error.  Poller
-	# run 35230465327 (tele-funtoken-msg-scoring#4367) pushed onto a
+	# destructive empty-commit push. The branch-only lookup fails open;
+	# a PR-scoped lookup failure defers the push. Poller run 35230465327
+	# (tele-funtoken-msg-scoring#4367) pushed onto a
 	# branch whose review run 35226455269 was live, with no trace of why
 	# both the cached scan and this listing came back empty.  Report the
 	# listing outcome on stderr (stdout is the return value) so the next
-	# miss is attributable; the fail-open contract itself is unchanged.
+	# miss is attributable without silently treating an unavailable PR
+	# listing as confirmed absence.
 	local _di_rc=0 _di_runs_total="invalid" _di_runs_live="invalid" _di_match=""
 	_di_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 		--branch "${_di_branch}" \
@@ -12620,6 +12628,9 @@ _direct_inflight_review_run_on_branch()
 	if [ "${_di_rc}" -ne 0 ] || [ -z "${_di_runs_json}" ] \
 		|| ! printf '%s' "${_di_runs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
 		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=listing_unavailable" >&2
+		if [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
+			printf '%s\n' "listing-incomplete"
+		fi
 		return 0
 	fi
 	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
@@ -12643,6 +12654,20 @@ _direct_inflight_review_run_on_branch()
 			| select(($now - $start_epoch) < $threshold)
 		  ] | (.[0].databaseId // empty)
 	' 2>/dev/null || echo "")"
+	if [ -z "${_di_match}" ] && [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
+		local _di_named_json
+		if ! _di_named_json="$(_pr_named_review_dispatch_runs "${_di_pr}")"; then
+			echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} pr=${_di_pr} outcome=pr_named_listing_unavailable" >&2
+			printf '%s\n' "listing-incomplete"
+			return 0
+		fi
+		_di_match="$(printf '%s' "${_di_named_json}" | jq -r \
+			--argjson now "${_di_now_epoch}" --argjson threshold "${_di_stall_secs}" '
+			[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")
+			 | ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
+			 | (if $ts != "" then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now) else $now end) as $start
+			 | select(($now - $start) < $threshold)] | .[0].databaseId // empty' 2>/dev/null || echo "")"
+	fi
 	if [ -z "${_di_match}" ]; then
 		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=no_fresh_review_run" >&2
 		return 0
@@ -13748,23 +13773,55 @@ STALL_EOF
           # already-dispatched/active (rc=2) as success.
           local _rtr_failed_conclusion=""
           local _rtr_failed_wf=""
+          local _rtr_newest_at=""
           for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
-            local _rtr_wf_conclusion
-            _rtr_wf_conclusion="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+            local _rtr_wf_row _rtr_wf_status _rtr_wf_conclusion _rtr_wf_at
+            _rtr_wf_row="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
               --workflow "${wf_candidate}" \
               --branch "${head_ref}" \
               --limit 1 \
-              --json status,conclusion \
-              --jq '[.[] | select(.status == "completed")] | .[0].conclusion // empty' \
+              --json status,conclusion,createdAt \
+              --jq '[.[] | select(.status == "completed")][0] // empty | "\(.status // "")|\(.conclusion // "")|\(.createdAt // "")"' \
               2>/dev/null || echo "")"
-            case "${_rtr_wf_conclusion}" in
-              failure|cancelled|timed_out)
+            IFS='|' read -r _rtr_wf_status _rtr_wf_conclusion _rtr_wf_at <<< "${_rtr_wf_row}"
+            # Timestamp ties do not prove a failure is the newest result;
+            # prefer non-failures when ordering cannot be established.
+            if [ -n "${_rtr_wf_at}" ] && { [[ "${_rtr_wf_at}" > "${_rtr_newest_at}" ]] ||
+                 { [ "${_rtr_wf_at}" = "${_rtr_newest_at}" ] &&
+                   [ -n "${_rtr_failed_conclusion}" ] && [ "${_rtr_wf_conclusion}" = "success" ]; }; }; then
+              _rtr_newest_at="${_rtr_wf_at}"
+              _rtr_failed_conclusion=""
+              _rtr_failed_wf=""
+              case "${_rtr_wf_status}:${_rtr_wf_conclusion}" in
+              completed:failure|completed:cancelled|completed:timed_out)
                 _rtr_failed_conclusion="${_rtr_wf_conclusion}"
                 _rtr_failed_wf="${wf_candidate}"
-                break
                 ;;
-            esac
+              esac
+            fi
           done
+          # A default-branch run is not returned by --branch. Compare its
+          # newest result with the branch result before acting on an older
+          # failure. The bounded listing is shared with the active guard.
+          local _rtr_named_json _rtr_named_row _rtr_named_status _rtr_named_conclusion _rtr_named_at
+          if ! _rtr_named_json="$(_pr_named_review_dispatch_runs "${pr_num}")"; then
+            echo "::warning::Issue #${issue_num} PR #${pr_num} PR-named run lookup unavailable; retry next poll rather than pushing an empty commit."
+            STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            return 1
+          fi
+          _rtr_named_row="$(printf '%s' "${_rtr_named_json}" | jq -r '.[0] // empty | "\(.status // "")|\(.conclusion // "")|\(.createdAt // "")"' 2>/dev/null || echo "")"
+          IFS='|' read -r _rtr_named_status _rtr_named_conclusion _rtr_named_at <<< "${_rtr_named_row}"
+          if [ -n "${_rtr_named_at}" ] && { [[ "${_rtr_named_at}" > "${_rtr_newest_at}" ]] ||
+               { [ "${_rtr_named_at}" = "${_rtr_newest_at}" ] &&
+                 [ "${_rtr_named_conclusion}" != "failure" ] && [ "${_rtr_named_conclusion}" != "cancelled" ] && [ "${_rtr_named_conclusion}" != "timed_out" ]; }; }; then
+            _rtr_failed_conclusion=""
+            _rtr_failed_wf=""
+            case "${_rtr_named_status}:${_rtr_named_conclusion}" in
+              completed:failure|completed:cancelled|completed:timed_out)
+                _rtr_failed_conclusion="${_rtr_named_conclusion}"
+                _rtr_failed_wf="PR-named review" ;;
+            esac
+          fi
           if [ -n "${_rtr_failed_conclusion}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
             local _rtr_dispatch_rc=0
@@ -13836,13 +13893,17 @@ STALL_EOF
             _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
               --arg br "${head_ref}" \
               --arg sha "${_rtr_head_sha}" \
+              --arg pr "${pr_num}" \
               --argjson now "${_rtr_now_epoch}" \
               --argjson threshold "${_rtr_stall_secs}" '
               [.workflow_runs[]?
-               | select((.status // "") == "in_progress" or (.status // "") == "queued")
+               | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                   or ($pr != "" and .event == "workflow_dispatch" and
+                       ((.display_title == ("Internal: AI Review & Autofix [pr:" + $pr + "]") and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$"))) or
+                        (.display_title == ("AI Review [pr:" + $pr + "]") and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -13850,9 +13911,7 @@ STALL_EOF
                    or (.name // "") == "Review Autofix"
                    or (.name // "") == "Internal: AI Review & Autofix"
                    or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                   or ((.path // "") | endswith("ai-review.yml"))
-                   or ((.path // "") | endswith("internal-review.yml"))
-                   or ((.path // "") | endswith("review_autofix.yml"))
+                   or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                  )
                | ([.run_started_at, .created_at]
                   | map(select(type == "string" and . != ""))[0] // "") as $ts
@@ -13877,7 +13936,7 @@ STALL_EOF
           # Before the destructive empty-commit push, confirm against an
           # authoritative branch-scoped run listing; a false negative here
           # discards a full in-flight review pass (RC1 of the #11/#12 incident).
-          _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+          _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
           if [ -n "${_rtr_direct_inflight_id}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
@@ -14274,17 +14333,18 @@ invoke_stall_judge() {
   local workflows_json
   local workflow_outcomes
   workflows_json="$(_load_actions_runs_cached)"
-  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" '
+  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" '
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
                or (.name // "") == "Internal Review"
                or (.name // "") == "Review Autofix"
                or (.name // "") == "Internal: AI Review & Autofix"
                or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-               or (.path // "" | endswith("ai-review.yml"))
-               or (.path // "" | endswith("internal-review.yml"))
-               or (.path // "" | endswith("review_autofix.yml")))
-      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha))
+               or (.path // "" | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")))
+      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
+               or ($pr != "" and .event == "workflow_dispatch" and
+                   ((.display_title == ("Internal: AI Review & Autofix [pr:" + $pr + "]") and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$"))) or
+                    (.display_title == ("AI Review [pr:" + $pr + "]") and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$"))))))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -16475,13 +16535,17 @@ STALL_EOF
 			  _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
 			    --arg br "${head_ref}" \
                 --arg sha "${head_sha}" \
+                --arg pr "${pr_num}" \
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
                 [.workflow_runs[]?
-                 | select((.status // "") == "in_progress" or (.status // "") == "queued")
+                 | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                     or ($pr != "" and .event == "workflow_dispatch" and
+                         ((.display_title == ("Internal: AI Review & Autofix [pr:" + $pr + "]") and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$"))) or
+                          (.display_title == ("AI Review [pr:" + $pr + "]") and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -16489,9 +16553,7 @@ STALL_EOF
                      or (.name // "") == "Review Autofix"
                      or (.name // "") == "Internal: AI Review & Autofix"
                      or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                     or ((.path // "") | endswith("ai-review.yml"))
-                     or ((.path // "") | endswith("internal-review.yml"))
-                     or ((.path // "") | endswith("review_autofix.yml"))
+                     or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                    )
                  | ([.run_started_at, .created_at]
                     | map(select(type == "string" and . != ""))[0] // "") as $ts
@@ -16512,7 +16574,7 @@ STALL_EOF
             # cache-miss path so the steady state adds zero API calls.
             _std_rtr_direct_inflight_id=""
             if [ -z "${_std_rtr_inflight_id}" ]; then
-              _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+              _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
             fi
 			if [ -n "${_std_rtr_inflight_id}" ]; then
 			  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${REVIEW_RUN_MAX_RUNTIME_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
@@ -17262,11 +17324,8 @@ _CONFLICT_DISPATCH_TRACKER="${TMPDIR:-/tmp}/.conflict_dispatch_$$"
 # dispatch, so every poll cycle re-dispatched — each new run replaced
 # the pending predecessor and re-fired the conflict Telegram warning.
 #
-# Default-branch dispatches: review_autofix_sweep.yml dispatches from the
-# default branch (issue #4618), so the guard also counts active
-# internal-review.yml workflow_dispatch runs named
-# "Internal: AI Review & Autofix [pr:<pr_number>]" (one extra call, only
-# when the head-branch lookups found nothing).
+# Default-branch dispatches have no PR head-branch identity. The miss-path
+# lookup below matches the wrapper's exact workflow and PR-scoped run name.
 #
 # Usage: _has_active_autofix_run <pr_number> <head_ref>
 # Returns 0 if an active run exists (skip dispatch), 1 otherwise.
@@ -17291,30 +17350,44 @@ _has_active_autofix_run()
 		fi
 	done
 
-	# review_autofix_sweep.yml dispatches internal-review.yml from the
-	# default branch (issue #4618), so its runs never match the
-	# head-branch lookups above. internal-review.yml names each dispatched
-	# run "Internal: AI Review & Autofix [pr:<N>]"; match that exact name
-	# on workflow_dispatch runs. One extra call, issued only when the
-	# head-branch lookups found nothing (§15: they filter by --branch and
-	# cannot return a default-branch run). A repo without
-	# internal-review.yml gets a non-retryable error and counts 0.
+	# The branch-scoped lookups cannot see default-branch dispatches. Reuse
+	# one bounded dispatch listing rather than a call for each wrapper.
 	if [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
-		local pr_named_active
-		pr_named_active="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
-			--workflow internal-review.yml \
-			--event workflow_dispatch \
-			--limit 100 \
-			--json status,displayTitle \
-			--jq "[.[] | select(.status == \"in_progress\" or .status == \"queued\" or .status == \"pending\") | select(.displayTitle == \"Internal: AI Review & Autofix [pr:${pr_number}]\")] | length" \
-			2>/dev/null || echo "0")"
+		local pr_named_active pr_named_runs
+		if ! pr_named_runs="$(_pr_named_review_dispatch_runs "${pr_number}")"; then
+			echo "::warning::${log_prefix} PR-named review run lookup unavailable; retry next poll."
+			return 0
+		fi
+		pr_named_active="$(printf '%s' "${pr_named_runs}" | jq -r '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' 2>/dev/null || echo "0")"
 		if [ "${pr_named_active:-0}" -gt 0 ] 2>/dev/null; then
-			echo "  ${log_prefix} Active autofix run found (workflow=internal-review.yml, dispatched for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
+			echo "  ${log_prefix} Active autofix run found (workflow_dispatch for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
 			return 0
 		fi
 	fi
 
 	return 1
+}
+
+# Input: positive decimal PR number. Returns newest-first matching dispatched
+# review runs [{databaseId,status,conclusion,createdAt,startedAt,...}], or []
+# when absent. Exactly one bounded Actions listing on a valid input, shared
+# across both wrapper names; invalid input or an unavailable/malformed listing
+# returns nonzero. Callers must not treat lookup failure as confirmed absence.
+# The wrapper name and exact title are correlation data, not authorization.
+_pr_named_review_dispatch_runs()
+{
+	local _pn_pr="$1" _pn_runs
+	[[ "${_pn_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+	_pn_runs="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+		--event workflow_dispatch --limit 100 \
+		--json databaseId,status,conclusion,createdAt,startedAt,displayTitle,workflowName \
+		2>/dev/null)" || return 1
+	printf '%s' "${_pn_runs}" | jq -ec --arg pr "${_pn_pr}" '
+		if type != "array" then error("invalid review run listing") else
+		[.[] | select(type == "object")
+		 | select((.workflowName == "Internal: AI Review & Autofix" and .displayTitle == ("Internal: AI Review & Autofix [pr:" + $pr + "]"))
+		       or (.workflowName == "AI Review" and .displayTitle == ("AI Review [pr:" + $pr + "]")))]
+		 | sort_by(.createdAt // "", .databaseId // 0) | reverse end' 2>/dev/null
 }
 
 # Helper: Dispatch review workflow for merge conflict resolution
@@ -17325,9 +17398,8 @@ _has_active_autofix_run()
 # runner with a clean checkout — more reliable than the shared
 # orchestrator environment.
 #
-# workflow_dispatch resolves from the target ref (the PR branch),
-# which always exists, bypassing the unbuildable merge-ref problem
-# that affects pull_request synchronize events.
+# workflow_dispatch selects the default-branch workflow; the reviewer
+# resolves the PR head from its number, not from executable PR-head YAML.
 #
 # Usage: _dispatch_review_for_conflicts <pr_number> <head_ref>
 # Returns: 0 = dispatched, 1 = dispatch failed, 2 = skipped (active run exists).
@@ -17336,6 +17408,10 @@ _dispatch_review_for_conflicts()
 	local pr_number="$1"
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "::warning::[conflict-dispatch] Invalid PR number; skipping review dispatch."
+		return 1
+	fi
 
 	# Guard 1: skip if already dispatched in this poll cycle.
 	# Multiple code paths (ready-to-merge loop, in-progress loop,
@@ -17369,10 +17445,9 @@ _dispatch_review_for_conflicts()
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
 		if gh_retry gh workflow run "${wf_candidate}" \
 			--repo "${GITHUB_REPOSITORY}" \
-			--ref "${head_ref}" \
 			-f pr_number="${pr_number}" \
 			-f allow_workflow_edits="${allow_workflow_edits_flag}" 2>/dev/null; then
-			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
+			echo "  ${log_prefix} Dispatched ${wf_candidate} from default branch for ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
 			# Record in cycle-local tracker to prevent duplicate dispatches
 			echo "${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 			return 0
