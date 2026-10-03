@@ -1215,6 +1215,13 @@ def _load_guard_module(path: Path):
 twin_guard = _load_guard_module(TEMPLATE_GUARD_PATH)
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_cdpath(monkeypatch) -> None:
+	"""`guard_targets` reads CDPATH from the environment (issue #6090), so a
+	runner that exports one must not change what the `cd` tests resolve."""
+	monkeypatch.delenv("CDPATH", raising=False)
+
+
 def _targets(command: str, cwd: Path) -> list[tuple]:
 	return [
 		(t.subcommand, t.cwd, t.branch, t.tip, t.reaches_remote, bool(t.fallback_reason))
@@ -1641,11 +1648,16 @@ def worktree_repo(tmp_path: Path):
 	return repo, worktree, stub_bin, merged_sha, calls_log
 
 
-def _run_twin_hook(cwd: Path, stub_bin: Path, command: str) -> subprocess.CompletedProcess:
+def _run_twin_hook(
+	cwd: Path, stub_bin: Path, command: str, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
 	env = _git_env()
 	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env.pop("CLAUDE_PR_MERGE_GUARD", None)
+	# An inherited CDPATH makes relative `cd`s unjudgeable (issue #6090).
+	env.pop("CDPATH", None)
+	env.update(extra_env or {})
 	cache_dir = stub_bin.parent / "cache"
 	cache_dir.mkdir(exist_ok=True)
 	env["TMPDIR"] = str(cache_dir)
@@ -2433,3 +2445,286 @@ def test_e2e_a_redefined_cd_blocks_on_a_stranded_checkout(worktree_repo, command
 	assert "pull/41" in proc.stderr
 	assert "merged-PR guard: could not resolve" in proc.stderr
 	assert "redefinition of `cd`" in proc.stderr
+
+
+# ──────────────────────────────────────────────────────────────────
+# CDPATH (issue #6090)
+# ──────────────────────────────────────────────────────────────────
+
+
+def _cdpath_targets(command: str, cwd: Path) -> list[tuple]:
+	return [
+		(t.subcommand, t.cwd, bool(t.fallback_reason), bool(t.unjudgeable_reason))
+		for t in twin_guard.guard_targets(command, str(cwd))
+	]
+
+
+@pytest.mark.parametrize(
+	("command", "source"),
+	[
+		("CDPATH=.. cd .git && git push origin HEAD:claude/stale", "inline `CDPATH=`"),
+		("CDPATH=..; cd sub && git commit -m x", "set or used earlier"),
+		("export CDPATH=..; cd sub && git push origin HEAD:y", "set or used earlier"),
+		("declare -x CDPATH=..\ncd sub\ngit commit -m x", "set or used earlier"),
+		("CDPATH=.. true; cd sub && git commit -m x", "set or used earlier"),
+		("unset CDPATH; cd sub && git commit -m x", "set or used earlier"),
+		("CDPATH=.. pushd sub && git push origin HEAD:y", "inline `CDPATH=`"),
+		("CDPATH=.. cd -P -- sub && git commit -m x", "inline `CDPATH=`"),
+		("CDPATH=.. cd \"$DIR\" && git commit -m x", "inline `CDPATH=`"),
+		("CDPATH=.. cd '~/sub' && git commit -m x", "inline `CDPATH=`"),
+		("CDPATH=.. builtin cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
+		("CDPATH=.. builtin -- cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
+		("CDPATH+=.. cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
+		("CDPATH+=..; cd sub && git commit -m x", "set or used earlier"),
+		("CDPATH=.. command -p -- cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
+		("export CDPATH=..; command cd sub && git commit -m x", "set or used earlier"),
+		# Repeated prefixes apply in order: `CDPATH=.. CDPATH+=` leaves `..`.
+		("CDPATH=.. CDPATH+= cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
+		("CDPATH= CDPATH+=.. cd sub && git commit -m x", "inline `CDPATH=`"),
+		("CDPATH=a CDPATH+=.. cd sub && git commit -m x", "inline `CDPATH=`"),
+		# A list boundary or a later relative `cd` does not clear it.
+		("CDPATH=.. cd .git; git push origin HEAD:y", "inline `CDPATH=`"),
+		("CDPATH=.. cd .git; cd ./sub && git commit -m x", "inline `CDPATH=`"),
+		("CDPATH=.. cd .git\ncd ./sub\ngit push origin HEAD:y", "inline `CDPATH=`"),
+	],
+)
+def test_a_cd_that_cdpath_may_redirect_makes_later_calls_unjudgeable(
+	tmp_path: Path, command: str, source: str
+) -> None:
+	"""Bash looks the operand up in CDPATH first, so the guard cannot name the
+	repository and must not fall back to the session checkout either."""
+	(tmp_path / "sub").mkdir()
+	(tmp_path / ".git").mkdir()
+	targets = twin_guard.guard_targets(command, str(tmp_path))
+	assert len(targets) == 1, command
+	assert targets[0].unjudgeable_reason, command
+	assert "CDPATH" in targets[0].unjudgeable_reason
+	assert source in targets[0].unjudgeable_reason, targets[0].unjudgeable_reason
+	assert targets[0].fallback_reason == ""
+
+
+def test_an_inherited_cdpath_makes_a_relative_cd_unjudgeable(tmp_path: Path, monkeypatch) -> None:
+	(tmp_path / "sub").mkdir()
+	monkeypatch.setenv("CDPATH", "..")
+	targets = twin_guard.guard_targets("cd sub && git push origin HEAD:y", str(tmp_path))
+	assert [bool(t.unjudgeable_reason) for t in targets] == [True]
+	assert "inherited from the environment" in targets[0].unjudgeable_reason
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"CDPATH=.. cd ./sub && git commit -m x",
+		"CDPATH=.. cd {tmp}/sub && git commit -m x",
+		"CDPATH=.. cd .. && cd {name}/sub && git commit -m x",
+		"CDPATH= cd sub && git commit -m x",
+		"CDPATH='' cd sub && git commit -m x",
+	],
+)
+def test_a_cd_that_cdpath_cannot_redirect_resolves_as_before(tmp_path: Path, monkeypatch, command: str) -> None:
+	(tmp_path / "sub").mkdir()
+	# The empty inline prefix overrides an inherited CDPATH for that `cd` too.
+	monkeypatch.setenv("CDPATH", "/nonexistent")
+	resolved = command.format(tmp=tmp_path, name=tmp_path.name)
+	if not resolved.startswith(("CDPATH= ", "CDPATH='' ")):
+		monkeypatch.delenv("CDPATH")
+	assert _cdpath_targets(resolved, tmp_path) == [("commit", str(tmp_path / "sub"), False, False)], resolved
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"CDPATH=.. CDPATH= cd sub && git commit -m x",
+		"CDPATH+=.. CDPATH= cd sub && git commit -m x",
+		"CDPATH= CDPATH+= cd sub && git commit -m x",
+	],
+)
+def test_repeated_cdpath_prefixes_that_leave_it_empty_turn_it_off(tmp_path: Path, monkeypatch, command: str) -> None:
+	"""Bash applies the prefixes in order, so the last plain `CDPATH=` decides,
+	also over an inherited CDPATH."""
+	(tmp_path / "sub").mkdir()
+	monkeypatch.setenv("CDPATH", "/nonexistent")
+	assert _cdpath_targets(command, tmp_path) == [("commit", str(tmp_path / "sub"), False, False)], command
+
+
+def test_cd_home_and_cd_dash_are_not_cdpath_lookups(tmp_path: Path, monkeypatch) -> None:
+	home = tmp_path / "home"
+	(home / "sub").mkdir(parents=True)
+	monkeypatch.setenv("HOME", str(home))
+	monkeypatch.setenv("CDPATH", "..")
+	assert _cdpath_targets("cd && git commit -m x", tmp_path) == [("commit", str(home), False, False)]
+	assert _cdpath_targets("cd ~/sub && git commit -m x", tmp_path) == [("commit", str(home / "sub"), False, False)]
+	# `cd -` stays an unknown directory with today's fallback, not a block.
+	assert _cdpath_targets("cd - && git commit -m x", tmp_path) == [("commit", str(tmp_path), True, False)]
+
+
+def test_no_cdpath_anywhere_keeps_relative_cd_resolution(tmp_path: Path) -> None:
+	(tmp_path / "sub").mkdir()
+	assert _cdpath_targets("cd sub && git commit -m x", tmp_path) == [("commit", str(tmp_path / "sub"), False, False)]
+
+
+def test_a_cdpath_cd_after_an_unknown_directory_is_still_unjudgeable(tmp_path: Path) -> None:
+	(tmp_path / "sub").mkdir()
+	assert _cdpath_targets(f"pushd {tmp_path}; CDPATH=.. cd sub && git push origin HEAD:y", tmp_path) == [
+		("push", str(tmp_path), False, True)
+	]
+
+
+def test_calls_before_a_cdpath_cd_keep_their_directory(tmp_path: Path) -> None:
+	(tmp_path / "wt").mkdir()
+	(tmp_path / "sub").mkdir()
+	assert _cdpath_targets("cd wt && git commit -m x; cd ..; CDPATH=.. cd sub; git push origin HEAD:y", tmp_path) == [
+		("commit", str(tmp_path / "wt"), False, False),
+		("push", str(tmp_path), False, True),
+	]
+
+
+def test_the_cdpath_rule_does_not_outlive_an_inline_prefix(tmp_path: Path) -> None:
+	"""`cd` is a regular builtin: its own `CDPATH=` prefix applies to it alone."""
+	(tmp_path / "a" / "b").mkdir(parents=True)
+	assert _cdpath_targets("CDPATH= cd a && cd b && git commit -m x", tmp_path) == [
+		("commit", str(tmp_path / "a" / "b"), False, False)
+	]
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"CDPATH=.. cd sub && git push origin --delete feature/x",
+		"CDPATH=.. cd sub && git push origin :feature/x",
+		"CDPATH=.. cd sub && git push --tags origin",
+		"CDPATH=.. cd sub && git status",
+	],
+)
+def test_a_call_that_writes_no_branch_after_a_cdpath_cd_is_not_judged(tmp_path: Path, command: str) -> None:
+	(tmp_path / "sub").mkdir()
+	assert twin_guard.guard_targets(command, str(tmp_path)) == []
+
+
+def _cdpath_exploit_layout(worktree_repo) -> tuple[Path, Path, Path]:
+	"""The #6090 shape on the `worktree_repo` fixture: the session checkout is
+	rebuilt from main (allowed), holds a plain `wt` directory, and the stranded
+	worktree sits at the merged head next to it. With `CDPATH=<parent>`,
+	`cd wt` reaches the stranded worktree while `$PWD/wt` is the clean repo."""
+	repo, worktree, stub_bin, merged_sha, _ = worktree_repo
+	_git(repo, "checkout", "-q", "-B", "feature/x", "main")
+	(repo / "wt").mkdir()
+	_git(worktree, "checkout", "-q", "--detach", merged_sha)
+	return repo, worktree, stub_bin
+
+
+@pytest.mark.parametrize("suffix", ["", " CDPATH+="])
+def test_e2e_cdpath_really_redirects_the_cd(worktree_repo, suffix: str) -> None:
+	repo, worktree, _ = _cdpath_exploit_layout(worktree_repo)
+	proc = subprocess.run(
+		["bash", "-c", f"CDPATH={worktree.parent}{suffix} cd wt >/dev/null && pwd -P"],
+		cwd=repo,
+		capture_output=True,
+		text=True,
+		env=_git_env(),
+		timeout=30,
+	)
+	assert proc.stdout.strip() == str(worktree.resolve())
+
+
+@pytest.mark.parametrize("form", ["inline", "bare", "export", "builtin", "append", "repeated", "separator"])
+def test_e2e_cdpath_redirected_push_of_merged_history_is_blocked(worktree_repo, form: str) -> None:
+	"""The exploit of #6090: the old guard judged `$PWD/wt` (the rebuilt repo)
+	and allowed the push that Bash runs from the stranded worktree."""
+	repo, worktree, stub_bin = _cdpath_exploit_layout(worktree_repo)
+	calls_log = worktree_repo[4]
+	prefix = {
+		"inline": f"CDPATH={worktree.parent} cd wt",
+		"bare": f"CDPATH={worktree.parent}; cd wt",
+		"export": f"export CDPATH={worktree.parent}; cd wt",
+		"builtin": f"CDPATH={worktree.parent} builtin -- cd wt",
+		"append": f"CDPATH+={worktree.parent} cd wt",
+		"repeated": f"CDPATH={worktree.parent} CDPATH+= cd wt",
+		"separator": f"CDPATH={worktree.parent} cd wt; true",
+	}[form]
+	proc = _run_twin_hook(repo, stub_bin, f"{prefix} && git push origin HEAD:feature/x")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "cannot tell which repository" in proc.stderr
+	assert "CDPATH" in proc.stderr
+	assert "cd ./<dir>" in proc.stderr
+	assert not calls_log.exists() or calls_log.read_text(encoding="utf-8") == ""
+
+
+def test_e2e_inherited_cdpath_redirected_commit_is_blocked(worktree_repo) -> None:
+	repo, worktree, stub_bin = _cdpath_exploit_layout(worktree_repo)
+	proc = _run_twin_hook(repo, stub_bin, "cd wt && git commit -m x", extra_env={"CDPATH": str(worktree.parent)})
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "inherited from the environment" in proc.stderr
+
+
+def test_e2e_dot_slash_cd_is_judged_normally_with_cdpath_set(worktree_repo) -> None:
+	"""The remediation the block names: `./wt` is never looked up in CDPATH."""
+	repo, worktree, stub_bin = _cdpath_exploit_layout(worktree_repo)
+	proc = _run_twin_hook(
+		repo,
+		stub_bin,
+		"cd ./wt && git push origin HEAD:feature/x",
+		extra_env={"CDPATH": str(worktree.parent)},
+	)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_e2e_cdpath_block_is_off_with_the_guard(worktree_repo) -> None:
+	repo, worktree, stub_bin = _cdpath_exploit_layout(worktree_repo)
+	proc = _run_twin_hook(
+		repo,
+		stub_bin,
+		"cd wt && git push origin HEAD:feature/x",
+		extra_env={"CDPATH": str(worktree.parent), "CLAUDE_PR_MERGE_GUARD": "off"},
+	)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_command_dash_v_cd_is_not_a_directory_change(tmp_path: Path) -> None:
+	(tmp_path / "sub").mkdir()
+	assert _cdpath_targets("CDPATH=.. command -v cd sub; cd ./sub && git commit -m x", tmp_path) == [
+		("commit", str(tmp_path / "sub"), False, False)
+	]
+
+
+# ──────────────────────────────────────────────────────────────────
+# `NAME+=value` assignment prefixes (review round 2 of #6113)
+# ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("command", ["X+=1 git push origin HEAD:y", "X+=1 Y=2 git commit -m x", "then X+=1 git push"])
+def test_append_assignment_prefixes_do_not_hide_git(command: str) -> None:
+	assert twin_guard.git_subcommands(command) & twin_guard.GUARDED_SUBCOMMANDS, command
+
+
+def test_append_assignment_prefix_git_call_is_judged(tmp_path: Path) -> None:
+	assert _cdpath_targets("X+=1 git push origin HEAD:y", tmp_path) == [("push", str(tmp_path), False, False)]
+
+
+def test_empty_cdpath_append_keeps_an_inherited_cdpath(tmp_path: Path, monkeypatch) -> None:
+	"""`CDPATH+=` appends nothing, so unlike `CDPATH=` it does not switch it off."""
+	(tmp_path / "sub").mkdir()
+	assert _cdpath_targets("CDPATH+= cd sub && git commit -m x", tmp_path) == [
+		("commit", str(tmp_path / "sub"), False, False)
+	]
+	monkeypatch.setenv("CDPATH", "..")
+	assert _cdpath_targets("CDPATH+= cd sub && git commit -m x", tmp_path) == [("commit", str(tmp_path), False, True)]
+	assert _cdpath_targets("CDPATH= cd sub && git commit -m x", tmp_path) == [
+		("commit", str(tmp_path / "sub"), False, False)
+	]
+
+
+def test_git_dir_append_prefix_falls_back_to_the_session_checkout(tmp_path: Path) -> None:
+	(tmp_path / "x").mkdir()
+	targets = twin_guard.guard_targets("GIT_DIR+=x git commit -m y", str(tmp_path))
+	assert [(t.cwd, t.unjudgeable_reason) for t in targets] == [(str(tmp_path), "")]
+	assert "GIT_DIR+=" in targets[0].fallback_reason
+	assert "export GIT_DIR" in twin_guard.guard_targets("export GIT_DIR+=x; git commit -m y", str(tmp_path))[0].fallback_reason
+
+
+def test_e2e_append_assignment_prefix_push_from_a_stranded_checkout_is_blocked(worktree_repo) -> None:
+	"""`X+=1 git push …` used to read `X+=1` as the executable and skip the push."""
+	repo, _, stub_bin, _, _ = worktree_repo
+	proc = _run_twin_hook(repo, stub_bin, "X+=1 git push origin HEAD:feature/x")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
