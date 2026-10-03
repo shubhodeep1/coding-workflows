@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:19:49Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "A migration that replays a legacy cumulative count as a prefix must order records by when they were logged, not by log file name: a newer session log can sort ahead of an older one and its never-counted records would be taken as already handled.",
+  "phase": "implement_plan",
+  "pr_number": 5028,
+  "record_id": "lesson-implement-plan-6ac237fd270d27b6710926e2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5012-legacy-outage-filed-counts",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}

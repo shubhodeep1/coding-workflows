@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-03T05:19:49Z",
+  "issue_number": null,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Log timestamps with whole-second precision do not order records across files; a migration that must never hide a record should treat a cross-file tie as the worst-case order and keep line order only within one append-only file.",
+  "phase": "implement_plan",
+  "pr_number": 5028,
+  "record_id": "lesson-implement-plan-5afe3c48a01713ddd714a63d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:intervention",
+    "plan:issue-5012-legacy-outage-filed-counts",
+    "file:.claude/scripts/permission_prompts.py"
+  ]
+}
