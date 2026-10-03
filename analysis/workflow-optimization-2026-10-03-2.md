@@ -238,3 +238,50 @@ The differing permanent-error retry behavior is covered by API-005 rather than r
 | Code modularization | Four reviewer scripts, two redispatch scripts, `review_autofix.yml`, staged helpers | Large |
 | Expression size reduction | `implement.yml`, one staged script, support inventory | Medium |
 | Medium/Low fixes | `scripts/tg_helpers.sh`, `orchestrate_clarify_respond.yml`, `scripts/review_rb_judge.sh`, `scripts/workspace_init.sh`, `ci.yml` | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-03)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is ready for implementation; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented because it touches a protected pagination, retry, or race-sensitive path.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** MERGE-001 · **Safety tag:** `RISKY_SKIP`  
+  **Calls:** `scripts/review_merge_train.sh:267-271` (`_mt_find_marker_comment_id`) and `scripts/review_merge_train.sh:285-300` (`_mt_upsert_comment`); the gate passes the listed ID at `scripts/review_merge_train.sh:368-401`.  
+  **Current → proposed:** 2 → 1 logical reads when an existing queue-marker comment is upserted; conditional writes remain unchanged.  
+  **Endpoints:** `GET /repos/{repo}/issues/{pr}/comments?per_page=100` and `GET /repos/{repo}/issues/comments/{comment_id}`.  
+  **Evidence:** The paginated listing selects a matching comment’s `.id`; `_mt_upsert_comment` then fetches that comment’s `.body` solely to compare it with the proposed body.  
+  **Proposed fix:** After manual review, extend `_mt_find_marker_comment_id` to return the selected ID *and* body as one snapshot, and pass both to `_mt_upsert_comment`. Preserve the current last-match selection and its behavior on an incomplete listing.  
+  **Safety rationale:** `--paginate` is a `RISKY_SKIP` trigger, and replacing the later GET also changes how fresh the body comparison is.  
+  **Downstream signal:** Do not auto-implement. Manually verify pagination failure handling and whether a concurrent comment edit must be detected by the later GET; retain that GET if freshness is required.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Poller batching must preserve independent cache-miss fallbacks and label completeness.
+- API-002: `RISKY_SKIP` — The adjacent reads are in the race-sensitive poller; preserve each read’s failure behavior.
+- API-003: `RISKY_SKIP` — Reissue includes stall-recovery paths, where freshness and failure behavior require manual review.
+- API-004: `RISKY_SKIP` — Batched candidate metadata must not weaken the poller’s per-PR identity verification.
+- API-005: `RISKY_SKIP` — Changing calls inside retry loops requires manual rate-limit and permanent-error classification review.
+
+### Summary Counts
+
+Counts include the net-new finding and the five reviewed Deep Audit cross-references.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 0 | — |
+| `NEEDS_VERIFICATION` | 0 | — |
+| `RISKY_SKIP` | 6 | MERGE-001, API-001–API-005 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
