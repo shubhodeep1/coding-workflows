@@ -15775,11 +15775,17 @@ _check_open_pr_conflict_guard() {
 # so they are sent once.
 #
 # Sets MERGED_HEAL_LABELS_JSON (the issue's labels after the call) and
-# MERGED_HEAL_STATE_CHANGED (true when the state file changed). API calls:
+# MERGED_HEAL_STATE_CHANGED (true when the state file changed), and sets
+# MERGED_HEAL_WAVE_HOLD to true (never back to false) on a failed write or
+# label edit. API calls:
 # on a heal, one label edit and one comment; on the first alert, none
 # beyond Telegram. Reads only data the caller already fetched.
 declare -g MERGED_HEAL_LABELS_JSON='[]'
 declare -g MERGED_HEAL_STATE_CHANGED='false'
+# Set to true when a failed write or label edit leaves the issue counting as
+# merged this cycle; the reconcile loop resets it before its first call (PR
+# #5633 review rounds 9, 11, 15 and 16).
+declare -g MERGED_HEAL_WAVE_HOLD='false'
 _heal_rejected_merged_state() {
   local issue_num="$1"
   local issue_state="$2"
