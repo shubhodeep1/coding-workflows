@@ -613,6 +613,21 @@ def test_claude_md_section_28g():
 	assert "a security follow-up closed without a merged PR or blocked, a conformance fix check that reports FIX-DEFECTIVE." in failure
 
 
+def test_readme_failure_modes_route_escalations_to_the_judge():
+	# README's Claude issue failure modes match §28.C / §28.G: an escalation
+	# stop goes to the judge without a push, and only the other stops wait for
+	# a `/reclarify` (task gap, review round 2 on a3d48c0).
+	readme = _flat(ROOT / "README.md")
+	assert "an exhausted cap, a failed security or validation run, an ask-first operation, a missing base branch) comments once on the issue" not in readme
+	start = readme.index("A failure escalation (CLAUDE.md §28.C:")
+	section = readme[start:readme.index("If `claude_issue_route.py`", start)]
+	assert "`<!-- ai:claude-blocked:v1 kind=escalation stop=<stop id> -->`" in section
+	assert "sends no push notification, and the project checker starts the escalation judge (CLAUDE.md §28.G)" in section
+	assert "a FIX-DEFECTIVE fix check" in section
+	assert section.index("sends no push notification") < section.index("Any other stop (an ask-first operation")
+	assert section.index("Any other stop (an ask-first operation") < section.index("comment `/reclarify` to resume")
+
+
 @pytest.mark.parametrize("name", ["escalation-judge.md", "implement-plan-claude.md"])
 def test_template_parity(name):
 	# Red until the [claude-twin-sync] copy lands the twins in .claude/.
