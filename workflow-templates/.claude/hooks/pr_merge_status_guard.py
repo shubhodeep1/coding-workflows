@@ -1099,8 +1099,9 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 	when the hook's environment holds a non-empty one, when any word of an
 	earlier segment contains `CDPATH` (an assignment, `export`, even
 	`unset`: whether an earlier command ran cannot be proven, so nothing
-	clears it), and for that `cd` alone when it carries a non-empty
-	`CDPATH=` prefix; an empty `CDPATH=` prefix turns it off for that `cd`.
+	clears it), and for that `cd` alone when its `CDPATH=` / `CDPATH+=`
+	prefixes, applied in order as Bash applies them, leave a non-empty value;
+	prefixes that leave it empty turn it off for that `cd`.
 	"""
 	try:
 		segments = _shell_segments_with_separators(command)
@@ -1192,11 +1193,29 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 		cdpath_command, cdpath_command_args = _cdpath_directory_command(tokens[index:])
 		own_cdpath_prefix = bool(cdpath_command)
 		if own_cdpath_prefix and _CDPATH_VARIABLE in assignments:
-			if assignments[_CDPATH_VARIABLE]:
+			# Bash applies repeated prefixes in order (`CDPATH=.. CDPATH+= cd x`
+			# leaves `..`), so they are replayed rather than read from the last
+			# one alone. The value is None until a plain `CDPATH=`: an append
+			# before it extends a value the guard cannot see.
+			own_cdpath_value: str | None = None
+			own_cdpath_appended = ""
+			for cdpath_prefix_word in tokens[assignment_start:index]:
+				cdpath_prefix_match = _ASSIGNMENT_PREFIX_RE.match(cdpath_prefix_word)
+				if not cdpath_prefix_match or cdpath_prefix_match.group(1) != _CDPATH_VARIABLE:
+					continue
+				cdpath_prefix_text = cdpath_prefix_word[cdpath_prefix_match.end() :]
+				if not cdpath_prefix_match.group(2):
+					own_cdpath_value = cdpath_prefix_text
+				elif own_cdpath_value is None:
+					own_cdpath_appended += cdpath_prefix_text
+				else:
+					own_cdpath_value += cdpath_prefix_text
+			if own_cdpath_value or (own_cdpath_value is None and own_cdpath_appended):
 				segment_cdpath_source = "an inline `CDPATH=` assignment"
-			elif _CDPATH_VARIABLE not in appended_assignment_names:
+			elif own_cdpath_value == "":
 				segment_cdpath_source = ""
-			# An empty `CDPATH+=` appends nothing and keeps what was set.
+			# Only empty `CDPATH+=` appends: they append nothing and keep what
+			# was set.
 		if not cdpath_source and any(
 			_CDPATH_VARIABLE in word
 			for position, word in enumerate(tokens)

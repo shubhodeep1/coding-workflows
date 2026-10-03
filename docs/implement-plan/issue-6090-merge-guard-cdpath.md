@@ -4,17 +4,17 @@
 - Source issue: shubhodeep1/coding-workflows#6090
 - Repo: shubhodeep1/coding-workflows   Default branch: main   Issue base: claude/implement-plan-issue-5144-merge-guard-effective-repo
 - Project branch: claude/implement-plan-issue-6090-merge-guard-cdpath   Final PR: #6109 draft
-- Status: BLOCKED until the `[claude-twin-sync]` copy for PR #6113 lands; IN_PROGRESS from that commit on
-- Stage: phase 1/1
+- Status: BLOCKED until the second `[claude-twin-sync]` copy for PR #6113 lands (review round 4 changed the twin); IN_PROGRESS from that commit on
+- Stage: phase 1/1 — review round
 - Activation: not started
-- Waiting on: PR #6113: twin sync (queued with the supervising session), then review round 3
+- Waiting on: PR #6113: twin sync of the round-4 twin change, then review round 5 (or merge)
 - Stage model: claude-opus-5-5   Permission mode: auto
 - Check-in: none
-- Last updated: 2026-10-02
-- Last note: review round 2 (run 37045792546) fixed in one `[claude-autofix]` commit: every assignment-prefix matcher in the hook (`git_subcommands`, the tilde-word scan, `guard_targets`, `export GIT_DIR`) now accepts Bash `NAME+=value`, so `X+=1 git push` is guarded and `CDPATH+=… cd` counts; an empty `CDPATH+=` keeps an inherited CDPATH, and `GIT_DIR+=` leaves the directory unknown. Guard tests: 408 pass, only `test_template_copies_are_identical` fails until the twin sync.
+- Last updated: 2026-10-03
+- Last note: review round 4 (workflow round 1 on f39ce36, run 37089828261): the repeated-prefix finding was valid (`CDPATH=.. CDPATH+= cd x` leaves `..` in Bash, but the guard read only the last prefix), fixed in the twin by replaying a `cd`'s own `CDPATH=` / `CDPATH+=` prefixes in order; the separator-reset finding and its test gap were rejected (a list boundary, a later `cd` or `git -C` never clears the unjudgeable state), with the reviewer's shapes added as regression tests. Guard tests: 420 pass, only `test_template_copies_are_identical` fails until the twin sync.
 
 ## Phases
-1. [ ] Phase 1 — block guarded git calls after a CDPATH-redirectable `cd` / `pushd` — PR #6113 open (twin sync pending); review rounds: 2; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
+1. [ ] Phase 1 — block guarded git calls after a CDPATH-redirectable `cd` / `pushd` — PR #6113 open (second twin sync pending); review rounds: 4; interventions: 0 — protected paths: `.claude/hooks/pr_merge_status_guard.py`
    - Twin hook: `GuardTarget.unjudgeable_reason`, CDPATH state in `guard_targets`, block in `_evaluate_bash`
    - Tests in `tests/test_pr_merge_status_guard.py` (unit + e2e on `worktree_repo`) reading the twin
    - CLAUDE.md §21.B paragraph; `changelog.d/6090-merge-guard-cdpath.md`
@@ -44,7 +44,11 @@
 ## Lessons
 - [source:intervention] When a guard recognises a builtin behind a wrapper (`builtin`, `command`), let each wrapper consume its own `--` end-of-options marker, or the wrapped command slips past. (files: workflow-templates/.claude/hooks/pr_merge_status_guard.py)
 - [source:intervention] A shell command walker must read Bash assignment words as `NAME=` and `NAME+=` everywhere it skips prefixes, or `X+=1 git push` hides the command; keep one shared assignment regex. (files: workflow-templates/.claude/hooks/pr_merge_status_guard.py)
+- [source:intervention] Replay repeated assignment prefixes in the order Bash applies them (`CDPATH=.. CDPATH+= cd x` leaves `..`); keeping only the last prefix per name lets an earlier value slip past a guard. (files: workflow-templates/.claude/hooks/pr_merge_status_guard.py)
 
 ## Notes
 - Protected-path approval: phase 1 — twin-first (automatic, interim until #4785) (2026-10-02)
 - Security pass: `Security pass: skip` per `security_pass_skip.py` (`ai:security` created and labelled by the issue automation).
+- Twin sync f39ce36 (`[claude-twin-sync]` by the supervising session on 2026-10-03 02:26Z, AD-8) made `.claude/hooks/pr_merge_status_guard.py` and its twin byte-equal at sha256 7f8f2e36…d5c809; 409 passed in `tests/test_pr_merge_status_guard.py` on f39ce36 (parity included). Review round 3 (head d07a1c9) had one low finding (`~user` operands), rejected on the PR with no code change.
+- `/reclarify` posted on #6090 2026-10-03 02:26Z; `ai:claude-blocked` removed from #6090 on 2026-10-03 02:34Z.
+- Review round 4 (2026-10-03) changed the twin again, so a second `[claude-twin-sync]` copy is needed before the review can converge.

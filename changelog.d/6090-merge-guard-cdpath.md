@@ -5,8 +5,8 @@ Bash looks a `cd` operand up in `CDPATH` before the current directory unless it 
 
 | The numbers that matter | Value |
 | --- | --- |
-| `CDPATH` sources counted | non-empty `CDPATH` in the hook's environment; any word containing `CDPATH` in an earlier segment; a non-empty `CDPATH=` prefix on the `cd` itself (that `cd` only) |
-| Turns it off | an empty `CDPATH=` prefix on that `cd` |
+| `CDPATH` sources counted | non-empty `CDPATH` in the hook's environment; any word containing `CDPATH` in an earlier segment; `CDPATH=` / `CDPATH+=` prefixes on the `cd` itself that leave a non-empty value, applied in order as Bash applies them (that `cd` only) |
+| Turns it off | prefixes on that `cd` that leave `CDPATH` empty (`CDPATH=`, or `CDPATH=.. CDPATH=`) |
 | Not affected | operands `/…`, `.`, `..`, `./…`, `../…`; unquoted `~` / `~/…`; `cd` with no operand; `cd -`; deletion and tag-only pushes |
 | Append prefixes | `NAME+=value` is read as an assignment: `X+=1 git push …` is guarded, `CDPATH+=… cd x` counts as a `CDPATH` source, and an empty `CDPATH+=` keeps an inherited one |
 | GitHub API calls for a blocked call | 0 |

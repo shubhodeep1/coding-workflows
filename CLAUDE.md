@@ -949,9 +949,10 @@ with `/` or is `.`, `..`, `./…` or `../…`. `.git` is therefore searched:
 `CDPATH=.. cd .git` enters the parent repository's `.git`. The guard treats `CDPATH` as possibly set when the
 hook's environment holds a non-empty one, when any word of an earlier segment
 contains `CDPATH` (an assignment, `export`, even `unset`: nothing clears it,
-since an earlier command may not have run), and, for that `cd` alone, when it
-carries a non-empty `CDPATH=` prefix. An empty `CDPATH=` prefix turns it off
-for that `cd`. After such a `cd`, Bash may be in another repository altogether,
+since an earlier command may not have run), and, for that `cd` alone, when its
+`CDPATH=` / `CDPATH+=` prefixes, applied in order as Bash applies them, leave a
+non-empty value (`CDPATH=.. CDPATH+= cd x` leaves `..`). Prefixes that leave it
+empty turn it off for that `cd`. After such a `cd`, Bash may be in another repository altogether,
 so judging the session checkout could judge the wrong one. Every later guarded
 call that writes a branch is therefore **blocked**, with no API call and
 whatever the branch, and the message names the fix: `cd ./<dir>` or an

@@ -2478,6 +2478,14 @@ def _cdpath_targets(command: str, cwd: Path) -> list[tuple]:
 		("CDPATH+=..; cd sub && git commit -m x", "set or used earlier"),
 		("CDPATH=.. command -p -- cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
 		("export CDPATH=..; command cd sub && git commit -m x", "set or used earlier"),
+		# Repeated prefixes apply in order: `CDPATH=.. CDPATH+=` leaves `..`.
+		("CDPATH=.. CDPATH+= cd .git && git push origin HEAD:y", "inline `CDPATH=`"),
+		("CDPATH= CDPATH+=.. cd sub && git commit -m x", "inline `CDPATH=`"),
+		("CDPATH=a CDPATH+=.. cd sub && git commit -m x", "inline `CDPATH=`"),
+		# A list boundary or a later relative `cd` does not clear it.
+		("CDPATH=.. cd .git; git push origin HEAD:y", "inline `CDPATH=`"),
+		("CDPATH=.. cd .git; cd ./sub && git commit -m x", "inline `CDPATH=`"),
+		("CDPATH=.. cd .git\ncd ./sub\ngit push origin HEAD:y", "inline `CDPATH=`"),
 	],
 )
 def test_a_cd_that_cdpath_may_redirect_makes_later_calls_unjudgeable(
@@ -2521,6 +2529,22 @@ def test_a_cd_that_cdpath_cannot_redirect_resolves_as_before(tmp_path: Path, mon
 	if not resolved.startswith(("CDPATH= ", "CDPATH='' ")):
 		monkeypatch.delenv("CDPATH")
 	assert _cdpath_targets(resolved, tmp_path) == [("commit", str(tmp_path / "sub"), False, False)], resolved
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"CDPATH=.. CDPATH= cd sub && git commit -m x",
+		"CDPATH+=.. CDPATH= cd sub && git commit -m x",
+		"CDPATH= CDPATH+= cd sub && git commit -m x",
+	],
+)
+def test_repeated_cdpath_prefixes_that_leave_it_empty_turn_it_off(tmp_path: Path, monkeypatch, command: str) -> None:
+	"""Bash applies the prefixes in order, so the last plain `CDPATH=` decides,
+	also over an inherited CDPATH."""
+	(tmp_path / "sub").mkdir()
+	monkeypatch.setenv("CDPATH", "/nonexistent")
+	assert _cdpath_targets(command, tmp_path) == [("commit", str(tmp_path / "sub"), False, False)], command
 
 
 def test_cd_home_and_cd_dash_are_not_cdpath_lookups(tmp_path: Path, monkeypatch) -> None:
@@ -2589,10 +2613,11 @@ def _cdpath_exploit_layout(worktree_repo) -> tuple[Path, Path, Path]:
 	return repo, worktree, stub_bin
 
 
-def test_e2e_cdpath_really_redirects_the_cd(worktree_repo) -> None:
+@pytest.mark.parametrize("suffix", ["", " CDPATH+="])
+def test_e2e_cdpath_really_redirects_the_cd(worktree_repo, suffix: str) -> None:
 	repo, worktree, _ = _cdpath_exploit_layout(worktree_repo)
 	proc = subprocess.run(
-		["bash", "-c", f"CDPATH={worktree.parent} cd wt >/dev/null && pwd -P"],
+		["bash", "-c", f"CDPATH={worktree.parent}{suffix} cd wt >/dev/null && pwd -P"],
 		cwd=repo,
 		capture_output=True,
 		text=True,
@@ -2602,7 +2627,7 @@ def test_e2e_cdpath_really_redirects_the_cd(worktree_repo) -> None:
 	assert proc.stdout.strip() == str(worktree.resolve())
 
 
-@pytest.mark.parametrize("form", ["inline", "bare", "export", "builtin", "append"])
+@pytest.mark.parametrize("form", ["inline", "bare", "export", "builtin", "append", "repeated", "separator"])
 def test_e2e_cdpath_redirected_push_of_merged_history_is_blocked(worktree_repo, form: str) -> None:
 	"""The exploit of #6090: the old guard judged `$PWD/wt` (the rebuilt repo)
 	and allowed the push that Bash runs from the stranded worktree."""
@@ -2614,6 +2639,8 @@ def test_e2e_cdpath_redirected_push_of_merged_history_is_blocked(worktree_repo, 
 		"export": f"export CDPATH={worktree.parent}; cd wt",
 		"builtin": f"CDPATH={worktree.parent} builtin -- cd wt",
 		"append": f"CDPATH+={worktree.parent} cd wt",
+		"repeated": f"CDPATH={worktree.parent} CDPATH+= cd wt",
+		"separator": f"CDPATH={worktree.parent} cd wt; true",
 	}[form]
 	proc = _run_twin_hook(repo, stub_bin, f"{prefix} && git push origin HEAD:feature/x")
 	assert proc.returncode == 2, proc.stdout + proc.stderr
