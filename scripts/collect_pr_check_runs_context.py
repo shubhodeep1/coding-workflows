@@ -213,13 +213,19 @@ gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/commits/${HEAD_SHA}/chec
 def _parse_pages(raw_text: str) -> list[dict[str, Any]]:
 	text = raw_text.strip()
 	if not text:
-		return []
+		raise ValueError("empty_output")
 	try:
 		obj = json.loads(text)
 	except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-		return []
+		raise ValueError("invalid_json") from None
 	pages = obj if isinstance(obj, list) else [obj]
-	return [page for page in pages if isinstance(page, dict)]
+	if not pages:
+		raise ValueError("no_pages")
+	if any(not isinstance(page, dict) for page in pages):
+		raise ValueError("invalid_page")
+	if any(not isinstance(page.get("check_runs"), list) for page in pages):
+		raise ValueError("missing_check_runs")
+	return pages
 
 
 def _extract_runs(raw_text: str) -> list[dict[str, Any]]:
@@ -332,12 +338,18 @@ def _fetch_log_tail(*, details_url: str, log_tail_bytes: int, repository: str, t
 
 
 def _build_context_text(*, raw_text: str, head_sha: str, final_status: str) -> str:
+	if final_status == "api_error":
+		return _sentinel_text(
+			head_sha=head_sha,
+			collection_status=final_status,
+			message="Check-run API output was unavailable or invalid; treat absence of failures as unknown rather than confirmed-passing.",
+		)
 	strict_merge = os.environ.get("CHECK_RUNS_STRICT_MERGE_SNAPSHOT", "false") == "true"
 	if strict_merge:
 		validated_runs = _strict_merge_runs(
 			raw_text, head_sha, os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("SELF_RUN_ID", ""),
 		)
-		if validated_runs is None and final_status != "api_error":
+		if validated_runs is None:
 			final_status = "invalid_snapshot"
 		runs = [
 			run for run in (validated_runs or [])
@@ -370,9 +382,7 @@ def _build_context_text(*, raw_text: str, head_sha: str, final_status: str) -> s
 	buf.write(f"failed_count: {len(failed)}\n")
 	buf.write(f"incomplete_count: {len(incomplete)}\n")
 	buf.write("\n")
-	if final_status == "api_error":
-		buf.write("Check-run API call failed; treat absence of failures as unknown rather than confirmed-passing.\n\n")
-	if not failed and not incomplete and final_status not in ("api_error",):
+	if not failed and not incomplete and (not strict_merge or final_status == "ready"):
 		buf.write("No failed or incomplete check-runs detected on the PR head SHA.\n")
 	for idx, run in enumerate(failed):
 		app = run.get("app") or {}
@@ -496,6 +506,19 @@ def main() -> int:
 						for run in eligible_runs
 					) else "not_ready"
 				break
+			try:
+				_parse_pages(raw_text)
+			except ValueError as exc:
+				print(f"::warning::CHECK_RUNS_AUTOFIX_MALFORMED_OUTPUT head_sha={_short(head_sha, 40)} reason={exc} bytes={len(raw_text.encode('utf-8'))}")
+				now = int(time.time())
+				if now >= deadline:
+					final_status = "api_error"
+					break
+				time.sleep(min(poll_interval, deadline - now))
+				if int(time.time()) >= deadline:
+					final_status = "api_error"
+					break
+				continue
 
 			wait_view = _build_wait_view(raw_text, self_run_id)
 			in_flight = len(wait_view)
