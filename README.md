@@ -341,7 +341,13 @@ identity with type `Bot`. Issues labelled `ai:orchestrator-tracking`, `ai:securi
 `ai:retro` remain excluded. A trusted maintainer can start clarification on an outside issue with
 `/reclarify` and continue planning with `/answer`, but must explicitly post `/approved` after
 reviewing the plan: an outside author's issue is never auto-approved. The `/reclarify` route accepts
-only comments from a user whose `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`. The `/answer` route in `ai-plan` and the
+only comments from a user whose `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`.
+The command works on the first line; on an issue labelled `ai:claude-blocked`,
+`ai:claude-handoff-failed`, or `ai:blocked`, it also works at the start of a later
+line of a marker-free comment. Inline mentions and automation-marked comments
+do not resume an issue. The five-minute poller posts a deduplicated warning and
+sends a Telegram WARNING when a trusted answer to an `ai:claude-blocked` comment
+remains unrouted after 15 minutes; it does not resume the issue itself. The `/answer` route in `ai-plan` and the
 `/approved` route in `ai-implement` accept the same trusted-user associations and also accept
 `github-actions[bot]` with their documented auto-answer and auto-approve markers, respectively. Copy
 the predicate verbatim — a wrapper without it still runs the reusable workflow's own job-level gate,
@@ -362,7 +368,7 @@ jobs:
   clarify:
     if: >-
       ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
-      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '/reclarify'))
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```

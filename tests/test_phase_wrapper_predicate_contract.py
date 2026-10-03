@@ -75,7 +75,7 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 			"github.event.issue.pull_request == null",
 			"github.event.comment.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)",
-			"startsWith(github.event.comment.body, '/reclarify')",
+			"contains(github.event.comment.body, '/reclarify')",
 		),
 	)
 	opened, reclarify = _canonical_predicate("clarify").split(" || (github.event_name == 'issue_comment'", 1)

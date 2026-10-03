@@ -369,6 +369,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        id: stage_support
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
@@ -802,7 +803,7 @@ jobs:
         run: bash scripts/orchestrate_poll_process.sh
 
       - name: Release staged-support latches without active projects
-        if: steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows'
+        if: steps.find_tracking.outputs.has_work != 'true' && steps.stage_support.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

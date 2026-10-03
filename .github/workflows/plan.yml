@@ -1983,6 +1983,7 @@ jobs:
           sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
           {
             echo "Implementation Plan"
+            echo "<!-- ai:implementation-plan:v1 -->"
             echo
             cat "${CODEX_OUTPUT_FILE}"
             echo

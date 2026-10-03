@@ -14748,7 +14748,7 @@ _fetch_candidate_issue_details_graphql() {
           number
           state
           labels(first: 50) { nodes { name } }
-          comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
+          comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { __typename login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
             nodes {
               ... on CrossReferencedEvent {
@@ -14805,7 +14805,7 @@ _fetch_candidate_issue_details_graphql() {
               body: .body,
               created_at: .createdAt,
               author_association: (.authorAssociation // ""),
-              user: {login: (.author.login // "")}
+              user: {login: (.author.login // ""), type: (.author.__typename // "User")}
             }],
             linked_pr: (
               [
@@ -14844,6 +14844,93 @@ _fetch_candidate_issue_details_graphql() {
   done
 
   echo "${merged}"
+}
+
+# Alert-only sweep: one issue list, GraphQL batches (up to 25 aliases/call),
+# then one paginated comments read only on a cache miss or a full 100-comment
+# window. The standalone recovery lists other phase labels, not
+# ai:claude-blocked; the latch sweep lists only ai:needs-human. Neither
+# existing call can supply this candidate set. A missing/incomplete history
+# skips the candidate; it never resumes it.
+check_unrouted_claude_blocked_answers() {
+  local blocked_candidates blocked_count blocked_details blocked_idx blocked_issue
+  local blocked_comments blocked_evidence blocked_marker blocked_notice
+  local blocked_now
+  if ! blocked_candidates="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+    --label 'ai:claude-blocked' --json number --limit 1000 2>/dev/null)" \
+    || ! blocked_count="$(printf '%s' "${blocked_candidates}" | jq -r 'if type == "array" and all(.[]; (.number | type) == "number") then length else error("invalid issue list") end' 2>/dev/null)"; then
+    echo "::warning::CLAUDE_BLOCKED_ANSWER_SKIP reason=issue_list_unavailable"
+    return 0
+  fi
+  if [ "${blocked_count}" -eq 0 ]; then
+    return 0
+  fi
+  # Avoid a silent partial scan at gh's explicit listing limit.
+  if [ "${blocked_count}" -ge 1000 ]; then
+    echo "::warning::CLAUDE_BLOCKED_ANSWER_SKIP reason=issue_list_limit"
+    return 0
+  fi
+  blocked_now="${CLAUDE_BLOCKED_ANSWER_NOW:-$(date -u +%s)}"
+  [[ "${blocked_now}" =~ ^[0-9]+$ ]] || blocked_now="$(date -u +%s)"
+  blocked_details="$(_fetch_candidate_issue_details_graphql "$(printf '%s' "${blocked_candidates}" | jq -c '[.[].number]')")"
+  for ((blocked_idx=0; blocked_idx<blocked_count; blocked_idx++)); do
+    blocked_issue="$(printf '%s' "${blocked_candidates}" | jq -r ".[${blocked_idx}].number")"
+    if printf '%s' "${blocked_details}" | jq -e --arg n "${blocked_issue}" \
+      'has($n) and (.[$n].state != "open" or (.[$n].labels | index("ai:claude-blocked")) == null)' >/dev/null 2>&1; then
+      continue
+    fi
+    blocked_comments="$(printf '%s' "${blocked_details}" | jq -c --arg n "${blocked_issue}" \
+      'if .[$n].state == "open" and (.[$n].labels | index("ai:claude-blocked")) != null
+          and .[$n].comments_available == true and (.[$n].comments | type) == "array"
+          and (.[$n].comments | length) < 100 then .[$n].comments else null end' 2>/dev/null || echo null)"
+    if [ "${blocked_comments}" = "null" ]; then
+      # A full GraphQL window may have lost the block marker or an earlier
+      # warning. The issue list already established live open/label state;
+      # a failed history fetch is inconclusive, not an empty history.
+      if ! blocked_comments="$(gh_retry gh api --paginate \
+        "repos/${GITHUB_REPOSITORY}/issues/${blocked_issue}/comments?per_page=100" 2>/dev/null | jq -sc 'add // []' 2>/dev/null)"; then
+        echo "CLAUDE_BLOCKED_ANSWER_SKIP issue=${blocked_issue} reason=comments_unavailable"
+        continue
+      fi
+    fi
+    # IDs break same-second timestamp ties. Only trusted human replies count
+    # as answers; trusted automation markers can close an episode, not open it.
+    blocked_evidence="$(printf '%s' "${blocked_comments}" | jq -c --argjson now "${blocked_now}" '
+      def trusted: (.user.login // "") != "" and
+        (((.user.login // "") == "github-actions[bot]" and (.user.type // "") == "Bot") or
+         ((.user.type // "User") == "User" and
+          ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))));
+      def marker: (.body // "") | (contains("<!--") or contains("[auto-"));
+      if type != "array" or any(.[]; (.id | type) != "number" or
+          (.created_at | type) != "string" or
+          ((.created_at | try fromdateiso8601 catch null) == null)) then null
+      else
+        [ .[] | select(trusted) ] | sort_by(.created_at, .id) as $history
+        | ([$history[] | select((.body // "") | startswith("<!-- ai:claude-blocked:v1 -->"))] | last) as $block
+        | if $block == null then null else
+            ([$history[] | select([.created_at, .id] > [$block.created_at, $block.id])
+              | select((.user.type // "User") == "User" and (marker | not))] | last) as $answer
+            | if $answer == null or (($answer.created_at | fromdateiso8601) > ($now - 900))
+                or ([$history[] | select([.created_at, .id] > [$answer.created_at, $answer.id])
+                  | select((.body // "") | startswith("<!-- ai:claude-issue-routed:v1 -->"))] | length) > 0
+                or ([$history[] | select((.body // "") |
+                  startswith("<!-- ai:claude-blocked-answer-unrouted:v1 block=\($block.id) -->"))] | length) > 0
+              then null else {block_id: $block.id} end
+          end
+      end' 2>/dev/null || echo null)"
+    blocked_marker="$(printf '%s' "${blocked_evidence}" | jq -r '.block_id // empty' 2>/dev/null || true)"
+    [[ "${blocked_marker}" =~ ^[0-9]+$ ]] || continue
+    blocked_notice="<!-- ai:claude-blocked-answer-unrouted:v1 block=${blocked_marker} -->
+An answer was posted after the latest Claude block, but no Claude issue routing was recorded within 15 minutes. Check the answer and post /reclarify as the first line if resumption is intended. No command was posted automatically."
+    # Do not retry a non-idempotent POST after a lost response. The next
+    # tick sees the marker if the write did land, and serial poller runs
+    # prevent simultaneous warnings for the same block episode.
+    if gh api "repos/${GITHUB_REPOSITORY}/issues/${blocked_issue}/comments" \
+      -f body="${blocked_notice}" >/dev/null; then
+      echo "CLAUDE_BLOCKED_ANSWER_UNROUTED issue=${blocked_issue} block=${blocked_marker}"
+      tg_notify_issue "${blocked_issue}" "WARNING: answer after Claude block has not been routed (block comment ${blocked_marker})." "WARNING"
+    fi
+  done
 }
 
 # _fetch_linked_pr_status_graphql — Batch-fetch latest-linked-PR state
@@ -17554,6 +17641,7 @@ fi
 
 if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then
   release_staged_support_needs_human_latches
+  check_unrouted_claude_blocked_answers
   exit 0
 fi
 
@@ -23220,6 +23308,8 @@ done
 run_standalone_stall_recovery
 
 release_staged_support_needs_human_latches
+
+check_unrouted_claude_blocked_answers
 
 close_merged_issues_sweep
 

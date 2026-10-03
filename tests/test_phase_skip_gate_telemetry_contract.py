@@ -56,6 +56,7 @@ def _assert_before(block: str, earlier: str, later: str) -> None:
 def test_clarify_route_emits_stable_gate_telemetry() -> None:
 	block = _step_block(CLARIFY_WF, "Decide clarify route")
 
+	assert "reason=not_reclarify_command outcome=skip" in block
 	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}" in block
 	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_issue_author outcome=skip issue=${ISSUE_NUMBER}" in block
 	assert "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}" in block
@@ -66,6 +67,8 @@ def test_clarify_route_emits_stable_gate_telemetry() -> None:
 	fast_block = _step_block(CLARIFY_WF, "Orchestrator-managed fast path")
 	assert "steps.clarify_route.outputs.orchestrator_fast_path == 'true'" in label_block
 	assert "steps.clarify_route.outputs.orchestrator_fast_path == 'true'" in fast_block
+	assert "steps.clarify_route.outputs.command_rejected != 'true'" in _step_block(CLARIFY_WF, "Record clarification run start")
+	assert "steps.clarify_route.outputs.command_rejected != 'true'" in _step_block(CLARIFY_WF, "Record clarification run completed")
 
 
 def test_clarify_opened_route_checks_fetched_provenance() -> None:
@@ -111,6 +114,46 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 			assert f"orchestrator_fast_path={str(fast_path).lower()}" in outputs, result.stdout
 			if event_name == "issues" and association is None:
 				assert "reason=untrusted_issue_author" in result.stdout
+
+
+def test_clarify_comment_command_boundary() -> None:
+	workflow = yaml.safe_load(_read(CLARIFY_WF))
+	step = next(step for step in workflow["jobs"]["clarify"]["steps"] if step.get("name") == "Decide clarify route")
+	with tempfile.TemporaryDirectory() as workdir:
+		root = Path(workdir)
+		meta_path = root / "issue.json"
+		output_path = root / "output"
+		cases = (
+			("/reclarify\nanswer", [], True),
+			("answer\n/reclarify", ["ai:blocked"], True),
+			("answer\r\n/reclarify\r\n", ["ai:claude-blocked"], True),
+			("answer\n/reclarify", [], False),
+			("answer `/reclarify`", ["ai:blocked"], False),
+			("answer\n  /reclarify", ["ai:blocked"], False),
+			("<!-- ai:claude-blocked:v1 -->\n/reclarify", ["ai:blocked"], False),
+			("/reclarify\n<!-- ai:claude-issue-progress:v1 -->", [], False),
+			("<!-- ai:implementation-plan:v1 -->\n/reclarify", ["ai:blocked"], False),
+		)
+		for body, labels, expected in cases:
+			meta_path.write_text(json.dumps({"state": "open", "labels": [{"name": label} for label in labels]}), encoding="utf-8")
+			output_path.write_text("", encoding="utf-8")
+			env = os.environ.copy()
+			for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+				env.pop(name, None)
+			env.update({"ISSUE_META_FILE": str(meta_path), "GITHUB_OUTPUT": str(output_path), "EVENT_NAME": "issue_comment", "EVENT_ACTION": "created", "COMMENT_BODY": body, "RUN_ID": "1", "ISSUE_NUMBER": "123"})
+			result = subprocess.run(["bash", "-c", step["run"]], env=env, text=True, capture_output=True, check=True)
+			outputs = output_path.read_text(encoding="utf-8")
+			if expected:
+				assert "is_forced_reclarify=true" in outputs, (body, outputs)
+			else:
+				assert "reason=not_reclarify_command outcome=skip" in result.stdout, body
+				assert "skip_codex=true" in outputs and "command_rejected=true" in outputs, body
+		meta_path.write_text(json.dumps({"state": "closed", "labels": [{"name": "ai:claude-blocked"}]}), encoding="utf-8")
+		output_path.write_text("", encoding="utf-8")
+		env["COMMENT_BODY"] = "answer\n/reclarify"
+		subprocess.run(["bash", "-c", step["run"]], env=env, text=True, capture_output=True, check=True)
+		assert "is_closed=true" in output_path.read_text(encoding="utf-8")
+	assert "<!-- ai:implementation-plan:v1 -->" in _step_block(PLAN_WF, "Post implementation plan")
 
 
 def test_plan_gate_steps_emit_stable_skip_and_defer_telemetry() -> None:

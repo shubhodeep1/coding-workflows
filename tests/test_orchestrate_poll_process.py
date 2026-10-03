@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -1845,7 +1846,8 @@ if args[0] == 'api':
 						'body': str(comment.get('body', '')),
 						'createdAt': str(comment.get('created_at', '2026-01-01T00:00:00Z')),
 						'authorAssociation': str(comment.get('author_association', '')),
-						'author': {'login': str((comment.get('user') or {}).get('login', ''))},
+						'author': {'login': str((comment.get('user') or {}).get('login', '')),
+							'__typename': str((comment.get('user') or {}).get('type', 'User'))},
 					})
 				issue_payload['comments'] = {'nodes': comment_nodes}
 			if 'timelineItems(' in query:
@@ -4972,6 +4974,52 @@ def test_staged_support_latch_sweep_only_mode_releases_without_tracking_work() -
 	combined_log = result["stdout"] + result["stderr"]
 	assert f"STAGED_SUPPORT_LATCH_RELEASED issue=700 engine_sha={engine_sha}" in combined_log
 	assert "Standalone issue stall recovery" not in combined_log
+
+
+def test_claude_blocked_answer_sweep_without_tracking_projects() -> None:
+	clock = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+	def comment(body: str, ident: int, age_seconds: int, *, association: str = "OWNER") -> dict:
+		return {"id": ident, "body": body, "author_association": association,
+			"user": {"login": "maintainer"},
+			"created_at": (clock - timedelta(seconds=age_seconds)).isoformat().replace("+00:00", "Z")}
+
+	block = comment("<!-- ai:claude-blocked:v1 -->", 300, 1800)
+	answer = comment("Q1: A\n/reclarify", 301, 900)
+	env = {"STAGED_SUPPORT_LATCH_SWEEP_ONLY": "true", "CLAUDE_BLOCKED_ANSWER_NOW": str(int(clock.timestamp()))}
+	def run(history: list[dict], **options: object) -> dict:
+		return _run_latch_release_tick(issue_labels=["ai:claude-blocked"], issue_comments=history,
+			env_overrides=env, **options)
+
+	early = run([block, comment("answer", 301, 899)])
+	assert not any("ai:claude-blocked-answer-unrouted:v1" in c["body"] for c in early["issues"]["700"]["comments"])
+	first = run([block, answer])
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED issue=700 block=300" in first["stdout"]
+	assert "Standalone issue stall recovery" not in first["stdout"]
+	warnings = [c["body"] for c in first["issues"]["700"]["comments"] if "ai:claude-blocked-answer-unrouted:v1" in c["body"]]
+	assert len(warnings) == 1
+	previous_warning = comment(warnings[0], 302, 10)
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED" not in run([block, answer, previous_warning])["stdout"]
+	previous_warning["user"] = {"login": "github-actions[bot]", "type": "Bot"}
+	previous_warning["author_association"] = "NONE"
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED" not in run([block, answer, previous_warning])["stdout"]
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED" not in run([block, answer,
+		comment("<!-- ai:claude-issue-routed:v1 -->", 302, 10)])["stdout"]
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED" not in run([block, answer,
+		comment("<!-- ai:claude-issue-routed:v1 -->", 302, 900)])["stdout"]
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED" in run([block,
+		comment("<!-- ai:claude-issue-routed:v1 -->", 302, 1000), answer])["stdout"]
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED" not in run([block,
+		comment("<!-- ai:implementation-plan:v1 -->\n/reclarify", 301, 900)])["stdout"]
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED" not in run([block,
+		comment("answer", 301, 900, association="NONE")])["stdout"]
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED" not in run([block, answer],
+		gql_comments_unavailable_for=[700], fail_issue_comment_get_after={700: 0})["stdout"]
+	# Exactly 100 cached comments require the complete REST history; an older
+	# episode warning outside the window must still prevent a duplicate.
+	full_history = [block, answer, previous_warning] + [comment("<!-- ai:progress -->", 303 + n, 5) for n in range(99)]
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED" not in run(full_history)["stdout"]
+	assert "CLAUDE_BLOCKED_ANSWER_UNROUTED issue=700 block=300" in run(
+		[block, answer] + [comment("<!-- ai:progress -->", 303 + n, 5) for n in range(99)])["stdout"]
 
 
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:

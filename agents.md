@@ -244,7 +244,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `scripts/claude_issue_queue_watchdog.sh`) — standalone issues are
     implemented by Claude Code by default. On issue open / `/reclarify`,
     clarify's `Decide clarify route` step routes each issue that would
-    otherwise run Codex clarify. Orchestrator-managed issues (label or
+    otherwise run Codex clarify. The job-level `contains('/reclarify')` is
+    only a prefilter: first-line commands retain their behavior, while a
+    later-line command must start at column zero, carry no automation marker,
+    and target an issue still labelled `ai:claude-blocked`,
+    `ai:claude-handoff-failed`, or `ai:blocked`. Inline mentions cannot route.
+    The scheduled poller's alert-only sweep warns once per block-comment ID
+    when a trusted answer remains unrouted after 15 minutes, including ticks
+    without active tracking projects. Orchestrator-managed issues (label or
     `Managed by: AI Orchestrator` body line), tracking / security-audit /
     retro issues and `^[E2E ` fixtures → codex. Otherwise `ai:codex` → codex,
     then `ai:claude` → claude, then repo var `AI_ISSUE_IMPLEMENTER` (default
@@ -1856,6 +1863,8 @@ and shipped:
 - `opencode_agent_failure`
 - `CLAUDE_ISSUE_HANDOFF`
 - `CLAUDE_ISSUE_INTAKE`
+- `CLAUDE_BLOCKED_ANSWER_UNROUTED`
+- `CLAUDE_BLOCKED_ANSWER_SKIP`
 - `AUTOFIX_FAILURE_HEADLINE`
 - `MODEL_CATALOG_BACKFILL`
 - `AUTOFIX_GATE_CLAUDE_FIXER`
@@ -2052,6 +2061,8 @@ LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=CLAUDE_ISSUE_HANDOFF
 LOG_PREFIX.name=CLAUDE_ISSUE_INTAKE
+LOG_PREFIX.name=CLAUDE_BLOCKED_ANSWER_UNROUTED
+LOG_PREFIX.name=CLAUDE_BLOCKED_ANSWER_SKIP
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER
 LOG_PREFIX.name=AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED
