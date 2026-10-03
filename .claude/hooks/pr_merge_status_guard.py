@@ -65,8 +65,14 @@ directory cannot be resolved (a variable, a subshell, `pushd`, a `cd` joined
 by `||`, `&` or `|`, a path that does not exist yet), or a refspec cannot be
 turned into one branch (a variable, a glob, a `heads/` shorthand, a source
 starting with `-`), that call is judged on the session checkout as before
-and a warning names the reason. Each `(slug, branch)` pair is looked up once
-per hook call.
+and a warning names the reason. The exception is a `cd` or `pushd` that
+`CDPATH` may redirect (an operand other than `/…`, `.`, `..`, `./…` or
+`../…`, so `.git` counts, while
+`CDPATH` is inherited, set earlier in the command, or given as a non-empty
+prefix): Bash may enter a directory in another repository altogether, so
+judging the session checkout could judge the wrong one, and every later call
+that writes a branch is blocked without a lookup (issue #6090). Each
+`(slug, branch)` pair is looked up once per hook call.
 
 The same check guards the GitHub MCP push tools (`mcp__github__push_files`,
 `mcp__github__create_or_update_file`), which write to a remote branch without
@@ -133,6 +139,15 @@ _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
 _UNRESOLVABLE_PATH_MARKERS = ("$", "`", "*", "?", "[")
 # Builtins that change the directory in ways the command walker does not model.
 _UNMODELLED_DIRECTORY_COMMANDS = frozenset({"pushd", "popd"})
+# Builtins that look a relative operand up in `CDPATH` before the current
+# directory (issue #6090). Bash skips the search only for an operand that
+# starts with `/` or is `.`, `..`, `./…` or `../…`.
+_CDPATH_DIRECTORY_COMMANDS = frozenset({"cd", "pushd"})
+_CDPATH_VARIABLE = "CDPATH"
+# A Bash assignment word: `NAME=value` or the append form `NAME+=value`,
+# which Bash accepts as a command prefix and as a bare assignment too
+# (review round 2 of #6113: `X+=1 git push` hid the push from the guard).
+_ASSIGNMENT_PREFIX_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\+?)=")
 # Shell keywords that can prefix a directory change inside the same segment
 # (`if cd x; then …`), which the walker cannot place in the command's flow.
 _DIRECTORY_KEYWORD_PREFIXES = frozenset({"if", "then", "else", "elif", "do", "while", "until", "!", "time"})
@@ -457,7 +472,7 @@ def git_subcommands(command: str) -> set[str]:
 		index = 0
 		while index < len(tokens) and tokens[index] in _COMMAND_RESERVED_WORD_PREFIXES:
 			index += 1
-		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+		while index < len(tokens) and _ASSIGNMENT_PREFIX_RE.match(tokens[index]):
 			index += 1
 		if index >= len(tokens):
 			continue
@@ -491,7 +506,11 @@ class GuardTarget(NamedTuple):
 	`bulk_reason` is set for a push that writes more branches than the one
 	judged (`--all`, `--branches`, `--mirror`, the `:` matching refspec, a
 	`*` pattern): the checked-out branch is judged as before and the push
-	also asks for confirmation.
+	also asks for confirmation. `unjudgeable_reason` is set when Bash may run
+	the call in a repository the guard cannot name at all (a `cd` that
+	`CDPATH` may redirect, issue #6090): falling back to the session
+	checkout could judge the wrong repository, so the call is blocked
+	without a lookup.
 	"""
 
 	subcommand: str
@@ -501,6 +520,7 @@ class GuardTarget(NamedTuple):
 	reaches_remote: bool
 	fallback_reason: str = ""
 	bulk_reason: str = ""
+	unjudgeable_reason: str = ""
 
 
 def _literal_tilde_words(command: str) -> frozenset[str]:
@@ -546,7 +566,7 @@ def _tilde_word_flags(command: str) -> list[tuple[str, bool]]:
 			return
 		text = "".join(character for character, _quoted in word)
 		positions = [0]
-		assignment = re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", text)
+		assignment = _ASSIGNMENT_PREFIX_RE.match(text)
 		if assignment and not any(quoted for _character, quoted in word[: assignment.end()]):
 			positions.append(assignment.end())
 		word_flags.append((text, any(tilde_is_literal(position) for position in positions)))
@@ -666,6 +686,76 @@ def _cd_destination(
 	return _resolve_guard_path(
 		operands[0], base, physical=physical, expand_tilde=operands[0] not in literal_tilde_words
 	)
+
+
+def _cdpath_directory_command(words: list[str]) -> tuple[str, list[str]]:
+	"""(`cd` or `pushd`, its arguments) when `words` run that builtin, else ("", []).
+
+	Besides a bare `cd` / `pushd`, `builtin [--] cd …` and
+	`command [-p] [--] cd …` run the builtin too, and search `CDPATH` the same way (issue #6090).
+	`command -v` / `-V` only describe the word, so they change nothing.
+	"""
+	if not words:
+		return "", []
+	head, rest = words[0], words[1:]
+	if head in _CDPATH_DIRECTORY_COMMANDS:
+		return head, rest
+	position = 0
+	if head == "command":
+		while position < len(rest) and rest[position].startswith("-") and rest[position] != "-":
+			if rest[position] == "--":
+				position += 1
+				break
+			if any(flag in "vV" for flag in rest[position][1:]):
+				return "", []
+			position += 1
+	elif head == "builtin":
+		# `builtin -- cd …` runs the builtin too (review round 1 of #6113).
+		if rest[:1] == ["--"]:
+			position = 1
+	else:
+		return "", []
+	if position < len(rest) and rest[position] in _CDPATH_DIRECTORY_COMMANDS:
+		return rest[position], rest[position + 1 :]
+	return "", []
+
+
+def _cdpath_lookup_operand(executable: str, args: list[str], tilde_expands: frozenset[str] | None) -> str:
+	"""The first operand of a `cd` / `pushd` that Bash looks up in `CDPATH`, or "".
+
+	Bash searches every `CDPATH` entry before the current directory for an
+	operand that does not start with `/` and is not `.`, `..`, `./…` or
+	`../…` (issue #6090: `CDPATH=.. cd .git` enters the parent's `.git`). An
+	unquoted `~` or `~/…` expands to the home directory first, so it is not
+	searched; `tilde_expands` holds the words whose `~` the shell expands, or
+	is None when that is unknown. A word that needs expansion (`$X`) may or
+	may not be searched, so it counts. Options and `pushd` stack rotations
+	(`+N`, `-N`) are not operands; neither are `cd -` and an empty word.
+	"""
+	operands: list[str] = []
+	options_done = False
+	for arg in args:
+		if not options_done and arg == "--":
+			options_done = True
+			continue
+		option_prefixes = ("-", "+") if executable == "pushd" else ("-",)
+		if not options_done and len(arg) > 1 and arg.startswith(option_prefixes):
+			continue
+		options_done = True
+		operands.append(arg)
+	for operand in operands:
+		if not operand or operand == "-":
+			continue
+		if operand.startswith("/") or operand in (".", "..") or operand.startswith(("./", "../")):
+			continue
+		if (
+			(operand == "~" or operand.startswith("~/"))
+			and tilde_expands is not None
+			and operand in tilde_expands
+		):
+			continue
+		return operand
+	return ""
 
 
 def _cd_redefinition_reason(executable: str, args: list[str]) -> str:
@@ -897,6 +987,7 @@ def _git_invocation_targets(
 	unresolved: str,
 	session_cwd: str,
 	literal_tilde_words: frozenset[str] = frozenset(),
+	unjudgeable: str = "",
 ) -> list[GuardTarget]:
 	"""Targets for one `git <args>` segment; [] when it is not guarded.
 
@@ -906,7 +997,10 @@ def _git_invocation_targets(
 	reached so far and with symlinks followed, as git's `chdir` resolves
 	them. A `~` the shell leaves literal (quoted, or after `--git-dir=`)
 	names a directory called `~`. An unresolvable directory falls back to the
-	session checkout's branch and HEAD.
+	session checkout's branch and HEAD, unless `unjudgeable` says the call
+	may run in a repository the guard cannot name (issue #6090): then a call
+	that writes a branch yields one target carrying that reason, which
+	`_evaluate_bash` blocks.
 	"""
 	repo_dir = directory
 	reason = unresolved
@@ -968,6 +1062,10 @@ def _git_invocation_targets(
 				(target.bulk_reason for target in parsed_push_targets if target.bulk_reason),
 				"",
 			)
+		if unjudgeable:
+			# Judging the session checkout here could judge another
+			# repository than the one Bash runs the call in (issue #6090).
+			return [GuardTarget(subcommand, session_cwd, "", "HEAD", reaches_remote, "", "", unjudgeable)]
 		return [GuardTarget(subcommand, session_cwd, "", "HEAD", reaches_remote, reason, fallback_bulk_reason)]
 	if subcommand == "commit":
 		return [GuardTarget(subcommand, repo_dir, "", "HEAD", False)]
@@ -992,6 +1090,17 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 	it ignores is judged here; reserved words ahead of `git` (`then git push`)
 	are skipped as there. Whether a `~` is literal is read per word, so a
 	quoted `"~/x"` in one place does not change an unquoted `~/x` elsewhere.
+
+	A `cd` or `pushd` whose operand Bash looks up in `CDPATH` first, while
+	`CDPATH` may be set, makes the directory unjudgeable rather than unknown
+	(issue #6090): Bash may enter another repository than any the guard could
+	pick, so every later call that writes a branch yields an
+	`unjudgeable_reason` target instead of a fallback. `CDPATH` counts as set
+	when the hook's environment holds a non-empty one, when any word of an
+	earlier segment contains `CDPATH` (an assignment, `export`, even
+	`unset`: whether an earlier command ran cannot be proven, so nothing
+	clears it), and for that `cd` alone when it carries a non-empty
+	`CDPATH=` prefix; an empty `CDPATH=` prefix turns it off for that `cd`.
 	"""
 	try:
 		segments = _shell_segments_with_separators(command)
@@ -1025,6 +1134,13 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 	list_start_directory = directory
 	list_may_fail = False
 	conditional_cd = False
+	# Where a `CDPATH` that a later `cd` would search may come from ("" when
+	# none), and why the directory became unjudgeable ("" until a `cd` that
+	# `CDPATH` may redirect). Once set, neither is cleared (issue #6090).
+	cdpath_source = (
+		"`CDPATH` inherited from the environment" if os.environ.get(_CDPATH_VARIABLE, "") else ""
+	)
+	unjudgeable = ""
 	for tokens, separator_before, separator_after in segments:
 		list_boundary = separator_before.replace("\n", "")
 		if list_boundary in ("", ";", "&"):
@@ -1059,10 +1175,38 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 		leading_reserved_words = tokens[:index]
 		compound_depth += sum(1 for word in leading_reserved_words if word in _COMPOUND_OPENING_WORDS)
 		assignments: dict[str, str] = {}
-		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
-			name, value = tokens[index].split("=", 1)
-			assignments[name] = value
+		# Names assigned with `+=`: their value appends to one the guard
+		# cannot see, so it is not the whole value.
+		appended_assignment_names: set[str] = set()
+		assignment_start = index
+		while index < len(tokens) and (assignment_match := _ASSIGNMENT_PREFIX_RE.match(tokens[index])):
+			name = assignment_match.group(1)
+			assignments[name] = tokens[index][assignment_match.end() :]
+			if assignment_match.group(2):
+				appended_assignment_names.add(name)
 			index += 1
+		# The `CDPATH` this segment's `cd` / `pushd` would search: its own
+		# prefix decides for it alone (both are regular builtins, so the
+		# prefix does not outlive them); otherwise what earlier segments set.
+		segment_cdpath_source = cdpath_source
+		cdpath_command, cdpath_command_args = _cdpath_directory_command(tokens[index:])
+		own_cdpath_prefix = bool(cdpath_command)
+		if own_cdpath_prefix and _CDPATH_VARIABLE in assignments:
+			if assignments[_CDPATH_VARIABLE]:
+				segment_cdpath_source = "an inline `CDPATH=` assignment"
+			elif _CDPATH_VARIABLE not in appended_assignment_names:
+				segment_cdpath_source = ""
+			# An empty `CDPATH+=` appends nothing and keeps what was set.
+		if not cdpath_source and any(
+			_CDPATH_VARIABLE in word
+			for position, word in enumerate(tokens)
+			if not (
+				own_cdpath_prefix
+				and assignment_start <= position < index
+				and word.startswith((f"{_CDPATH_VARIABLE}=", f"{_CDPATH_VARIABLE}+="))
+			)
+		):
+			cdpath_source = "`CDPATH` set or used earlier in the command"
 		if index >= len(tokens):
 			if "GIT_DIR" in assignments and directory is not None:
 				directory, unresolved = None, "a `GIT_DIR=` assignment may apply to later commands"
@@ -1073,6 +1217,22 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 			# `for …`, `case …`, `select …`: not a command, but a body follows.
 			compound_depth += 1
 		cd_redefinition = _cd_redefinition_reason(executable, args)
+		if cdpath_command and segment_cdpath_source and not unjudgeable:
+			# Checked whether or not the directory is already known: falling
+			# back to the session checkout after it could judge the wrong
+			# repository too (issue #6090).
+			cdpath_operand = _cdpath_lookup_operand(
+				cdpath_command,
+				cdpath_command_args,
+				frozenset(expanding_texts) if tilde_flags_aligned and not tilde_quoting_reason else None,
+			)
+			if cdpath_operand:
+				unjudgeable = (
+					f"`{cdpath_command} {cdpath_operand}`, which Bash looks up in CDPATH before the current "
+					f"directory ({segment_cdpath_source})"
+				)
+				directory, unresolved = None, unjudgeable
+				continue
 		if directory is not None:
 			if cd_redefinition:
 				directory, unresolved = None, cd_redefinition
@@ -1089,7 +1249,7 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 				# several times, so the directory after it is unknown.
 				directory, unresolved = None, "a `cd` inside an `if`, loop or `case` body"
 				continue
-			elif executable == "export" and any(arg.split("=", 1)[0] == "GIT_DIR" for arg in args):
+			elif executable == "export" and any(arg.split("=", 1)[0].rstrip("+") == "GIT_DIR" for arg in args):
 				directory, unresolved = None, "`export GIT_DIR`"
 			elif executable == "cd" and not (
 				_is_sequential_separator(separator_before) and _is_sequential_separator(separator_after)
@@ -1118,13 +1278,22 @@ def guard_targets(command: str, session_cwd: str) -> list[GuardTarget]:
 		if executable != "git" and not executable.endswith("/git"):
 			continue
 		git_directory, git_unresolved = directory, unresolved
+		if git_directory is not None and "GIT_DIR" in appended_assignment_names:
+			# `GIT_DIR+=x` appends to a value the guard cannot see.
+			git_directory, git_unresolved = None, "a `GIT_DIR+=` assignment"
 		if git_directory is not None and tilde_quoting_reason:
 			# Only this call: its own `-C` / `GIT_DIR` / `--git-dir` word may
 			# be the ambiguous one; later commands keep the directory.
 			git_directory, git_unresolved = None, f"`git` with {tilde_quoting_reason}"
 		targets.extend(
 			_git_invocation_targets(
-				args, assignments, git_directory, git_unresolved, session_cwd, segment_literal_tilde_words
+				args,
+				assignments,
+				git_directory,
+				git_unresolved,
+				session_cwd,
+				segment_literal_tilde_words,
+				unjudgeable,
 			)
 		)
 	return targets
@@ -1628,6 +1797,19 @@ def _history_block_message(branch: str, base: str, detail: str, api_failure: str
 	)
 
 
+def _unjudgeable_block_message(target: GuardTarget) -> str:
+	"""stderr for a guarded call whose repository cannot be named (issue #6090)."""
+	return (
+		f"BLOCKED: the merged-PR guard (CLAUDE.md §21) cannot tell which repository this "
+		f"`git {target.subcommand}` runs in: it comes after {target.unjudgeable_reason}. Bash may "
+		"enter a directory in another repository than the one the guard would judge, so the "
+		"call is not allowed unjudged.\n\n"
+		"Fix: give the `cd` (or `pushd`) an absolute path or a `./`-prefixed one (`cd ./<dir>`), "
+		"which Bash never looks up in CDPATH, or drop it and use `git -C <absolute path>`, then "
+		"run the command again."
+	)
+
+
 def _warn(reason: str) -> None:
 	"""Emit a non-blocking warning to the user and allow the command."""
 	print(json.dumps({"systemMessage": f"merged-PR guard skipped: {reason}"}))
@@ -1788,6 +1970,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if target in judged:
 			continue
 		judged.add(target)
+		if target.unjudgeable_reason:
+			# No lookup: the repository the call runs in cannot be named.
+			blocks.append(_unjudgeable_block_message(target))
+			continue
 		if target.fallback_reason:
 			notices.append(
 				f"merged-PR guard: could not resolve where `git {target.subcommand}` runs "
