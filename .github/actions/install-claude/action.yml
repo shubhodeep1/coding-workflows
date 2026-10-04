@@ -1,0 +1,66 @@
+name: Install Claude Code CLI
+description: |
+  Install and verify the pinned @anthropic-ai/claude-code CLI used by the
+  Claude engine (scripts/ai_engine.sh). The version comes from
+  .github/ai/claude_engine.json `cli_version` unless the caller passes one.
+  Mirrors install-opencode; installing the CLI grants no credential.
+
+inputs:
+  claude_version:
+    description: Pinned Claude Code CLI version (exact x.y.z). Empty reads cli_version from the engine config.
+    required: false
+    default: ""
+  config_path:
+    description: Path to claude_engine.json, read when claude_version is empty.
+    required: false
+    default: .codex-workflow-src/.github/ai/claude_engine.json
+
+outputs:
+  version:
+    description: The installed CLI version.
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node 22
+      uses: actions/setup-node@v6
+      with:
+        node-version: "22"
+
+    - name: Cache npm downloads
+      uses: actions/cache@v5
+      with:
+        path: ~/.npm
+        key: claude-cli-npm-${{ runner.os }}-${{ inputs.claude_version || hashFiles(inputs.config_path) }}
+
+    - name: Install and verify Claude Code CLI
+      id: install
+      shell: bash
+      env:
+        CLAUDE_VERSION_INPUT: ${{ inputs.claude_version }}
+        CLAUDE_ENGINE_CONFIG_PATH: ${{ inputs.config_path }}
+      run: |
+        set -euo pipefail
+
+        version="${CLAUDE_VERSION_INPUT}"
+        if [ -z "${version}" ]; then
+          if [ ! -f "${CLAUDE_ENGINE_CONFIG_PATH}" ]; then
+            echo "::error::install-claude: no claude_version input and ${CLAUDE_ENGINE_CONFIG_PATH} is missing" >&2
+            exit 2
+          fi
+          version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cli_version"])' "${CLAUDE_ENGINE_CONFIG_PATH}")"
+        fi
+        if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::install-claude: claude_version must be an exact numeric semantic version" >&2
+          exit 2
+        fi
+
+        npm install -g "@anthropic-ai/claude-code@${version}" --no-audit --no-fund
+
+        installed="$(claude --version | awk '{print $1}')"
+        if [ "${installed}" != "${version}" ]; then
+          echo "::error::install-claude: expected version ${version}, got ${installed}" >&2
+          exit 1
+        fi
+        echo "version=${installed}" >> "${GITHUB_OUTPUT}"

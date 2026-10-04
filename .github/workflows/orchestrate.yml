@@ -28,6 +28,16 @@ name: AI Orchestrate (Reusable)
         required: false
         type: string
         default: ""
+      engine:
+        description: >
+          Optional engine label for the project: `claude` labels the tracking
+          issue and each child issue `ai:engine-claude`, `codex` labels them
+          `ai:codex`. Empty (the default) adds no label. The poller and the
+          implement PR copy the label to later work; role selection honors it
+          after the separate Phase 5 role cutovers.
+        required: false
+        type: string
+        default: ""
     secrets:
       GH_PAT:
         required: true
@@ -78,7 +88,12 @@ jobs:
       - name: Log trigger context
         env:
           PROJECT_DESCRIPTION: ${{ inputs.project_description }}
+          ENGINE_INPUT: ${{ inputs.engine }}
         run: |
+          case "$(printf '%s' "${ENGINE_INPUT:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            ''|claude|codex) ;;
+            *) echo "::error::engine must be empty, claude or codex (got '${ENGINE_INPUT}')"; exit 1 ;;
+          esac
           echo "Orchestrate workflow triggered"
           echo "Run ID: ${{ github.run_id }}"
           echo "Model: ${MODEL_EDITOR}"
@@ -986,9 +1001,26 @@ jobs:
       - name: Ensure orchestrator labels exist
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENGINE_INPUT: ${{ inputs.engine }}
         run: |
           set -euo pipefail
           source scripts/label_helpers.sh
+          # Engine label (plan Phase 6, D2): applied atomically at creation
+          # so the first clarify run already sees it.
+          case "$(printf '%s' "${ENGINE_INPUT:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            "") PROJECT_ENGINE_LABEL="" ;;
+            claude) PROJECT_ENGINE_LABEL="ai:engine-claude" ;;
+            codex) PROJECT_ENGINE_LABEL="ai:codex" ;;
+            *)
+              echo "::error::engine must be empty, claude or codex (got '${ENGINE_INPUT}')"
+              exit 1
+              ;;
+          esac
+          if [ -n "${PROJECT_ENGINE_LABEL}" ]; then
+            ensure_label_exists "${PROJECT_ENGINE_LABEL}" "${{ github.repository }}"
+          fi
+          echo "PROJECT_ENGINE_LABEL=${PROJECT_ENGINE_LABEL}" >> "$GITHUB_ENV"
+          echo "AI_ENGINE_PROJECT_LABEL label=${PROJECT_ENGINE_LABEL:-none}"
           ensure_label_exists "ai:orchestrator-tracking" "${{ github.repository }}"
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
           ensure_label_exists "ai:orchestrator-managed" "${{ github.repository }}"
@@ -1012,11 +1044,15 @@ jobs:
 
           PROJECT_TITLE="$(jq -r '.project_title' "${DECOMPOSITION_FILE}")"
 
+          tracking_create_args=(--label "ai:orchestrator-tracking")
+          if [ -n "${PROJECT_ENGINE_LABEL:-}" ]; then
+            tracking_create_args+=(--label "${PROJECT_ENGINE_LABEL}")
+          fi
           TRACKING_ISSUE_URL="$(gh_retry gh issue create \
             --repo "${{ github.repository }}" \
             --title "[Orchestrator] ${PROJECT_TITLE}" \
             --body-file "${TRACKING_BODY_FILE}" \
-            --label "ai:orchestrator-tracking")"
+            "${tracking_create_args[@]}")"
 
           TRACKING_ISSUE_NUMBER="$(echo "${TRACKING_ISSUE_URL}" | grep -oE '[0-9]+$')"
 
@@ -1188,12 +1224,15 @@ jobs:
           EOF
           )"
 
+            child_create_args=(--label "ai:clarification" --label "ai:orchestrator-managed")
+            if [ -n "${PROJECT_ENGINE_LABEL:-}" ]; then
+              child_create_args+=(--label "${PROJECT_ENGINE_LABEL}")
+            fi
             ISSUE_URL="$(gh_retry gh issue create \
               --repo "${{ github.repository }}" \
               --title "${TITLE}" \
               --body "${FULL_BODY}" \
-              --label "ai:clarification" \
-              --label "ai:orchestrator-managed")"
+              "${child_create_args[@]}")"
 
             ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
             ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"

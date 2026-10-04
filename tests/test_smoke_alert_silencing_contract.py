@@ -54,7 +54,7 @@ SMOKE_SILENCING_WORKFLOWS = (
 # cannot silently drop one (count and text are both pinned).
 EXPECTED_STEP_DECLARATIONS = {
 	# 4 = the Claude issue handoff step + the three clarify notification steps.
-	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
+	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 3,  # the Claude issue handoff step was retired (replace-claude-sessions Phase 2)
 	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
 	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
 	"review_autofix.yml": [
