@@ -2068,6 +2068,27 @@ def test_security_audit_oversized_cap_fails_before_codex() -> None:
 		assert not state.get("codex_calls") and not output_path.exists()
 
 
+def test_security_audit_full_scan_chunks_explicit_prior_and_fix_cycle_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-prior-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _oversized_fixture_repo(tmp_path)
+		for scope_var, entries in (
+			("SECURITY_AUDIT_PRIOR_FINDINGS", [{"finding_id": "prior", "file": "large.py"}]),
+			("SECURITY_AUDIT_FIX_CYCLE_DIFFS", [{"cycle": 1, "since_sha": base_sha, "head_sha": head_sha, "files": ["large.py"]}]),
+		):
+			scope_path = tmp_path / f"{scope_var}.json"
+			scope_path.write_text(json.dumps(entries), encoding="utf-8")
+			proc, result = _run_security_audit({}, cwd=repo_dir, extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / f"{scope_var}.out.json"),
+				scope_var: str(scope_path),
+			})
+			assert proc.returncode == 0, proc.stderr
+			assert "large.py (" in result["codex_stdin"][0]
+			assert json.loads(result["security_audit_findings_output"])["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+
+
 def test_security_audit_full_scan_reports_unscoped_oversized_file() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-") as td:
 		repo_dir, _base_sha, head_sha = _oversized_fixture_repo(Path(td))

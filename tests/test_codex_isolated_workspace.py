@@ -149,7 +149,7 @@ def test_export_oversized_chunks_only_scoped_safe_tracked_files(repo, tmp_path):
 	os.symlink(repo / "large.txt", repo / "large-link.txt")
 	git(repo, "add", "large.txt", "unscoped.txt", "secret.json", "CLAUDE.md", "large-link.txt")
 	scope = tmp_path / "scope.txt"
-	scope.write_text("large.txt\nsecret.json\nCLAUDE.md\nlarge-link.txt\nsrc/app.py\n")
+	scope.write_text("large.txt\nsrc/app.py\n")
 	dest = tmp_path / "export"
 	proc = run("export-oversized", repo, scope, dest, len(data), len(data), hide="CLAUDE.md")
 	assert "scoped=1" in proc.stderr and "unscoped=2" in proc.stderr
@@ -165,6 +165,35 @@ def test_export_oversized_chunks_only_scoped_safe_tracked_files(repo, tmp_path):
 	assert tree(dest) == sorted([chunk["file"] for chunk in item["chunks"]] + ["manifest.json"])
 
 
+@pytest.mark.parametrize("filtered_name,hide", [("secret.json", None), ("CLAUDE.md", "CLAUDE.md")])
+def test_export_oversized_refuses_filtered_scoped_file(repo, tmp_path, filtered_name, hide):
+	(repo / filtered_name).write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+	git(repo, "add", filtered_name)
+	scope = tmp_path / "scope.txt"
+	scope.write_text(f"{filtered_name}\n")
+	dest = tmp_path / "export"
+	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, check=False, hide=hide)
+	assert proc.returncode == 1 and "scoped file excluded by read-only filter" in proc.stderr
+	assert not dest.exists()
+
+
+@pytest.mark.parametrize("excluded_name", ["large-link.txt", "setuid.txt"])
+def test_export_oversized_refuses_scoped_files_missing_from_snapshot(repo, tmp_path, excluded_name):
+	(repo / "large.txt").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+	if excluded_name == "large-link.txt":
+		(repo / excluded_name).symlink_to("large.txt")
+	else:
+		(repo / excluded_name).write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+		(repo / excluded_name).chmod(0o4755)
+	git(repo, "add", "large.txt", excluded_name)
+	scope = tmp_path / "scope.txt"
+	scope.write_text(f"{excluded_name}\n")
+	dest = tmp_path / "export"
+	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, check=False)
+	assert proc.returncode == 1 and "scoped file excluded by read-only snapshot" in proc.stderr
+	assert not dest.exists()
+
+
 @pytest.mark.parametrize("file_cap,total_cap", [
 	("1048576", "67108864"), ("16777216", "1048576"), ("0", "67108864"), ("invalid", "67108864"),
 ])
@@ -177,6 +206,8 @@ def test_export_oversized_rejects_caps_before_writing(repo, tmp_path, file_cap, 
 	proc = run("export-oversized", repo, scope, dest, file_cap, total_cap, check=False)
 	assert proc.returncode == 1 and "CODEX_ISOLATION export-oversized rejected" in proc.stderr
 	assert not dest.exists()
+	if total_cap == "1048576":
+		assert "files=1 total=2097153 cap=1048576 last_path=large.txt" in proc.stderr
 
 
 def test_export_oversized_hard_cuts_single_long_line(repo, tmp_path):

@@ -19,7 +19,8 @@ Subcommands:
   export-oversized HOST SCOPE_FILE DEST MAX_FILE_BYTES MAX_TOTAL_BYTES
       Export scoped files omitted by snapshot-readonly as bounded chunks,
       using its same credential and hidden-path filters. Filtered files are
-      never exported; unscoped oversized files are listed for coverage only.
+      never exported; scoped filtered files reject the audit. Unscoped
+      oversized files are listed for coverage only.
 
   snapshot-workspace HOST DEST MANIFEST
       Copy HOST except credential-looking paths and `.git` into DEST, keeping
@@ -298,13 +299,29 @@ def export_oversized(host, scope_file, dest, max_file, max_total):
 	total = 0
 	for name in sorted(set(names)):
 		if not readonly_allowed(name):
+			if name in scope:
+				try:
+					filtered_node = walk_no_follow(host, name)
+					filtered_node.lstat()
+				except (FileNotFoundError, NotADirectoryError):
+					pass  # A deleted file has no contents to audit.
+				else:
+					raise Rejected(f"scoped file excluded by read-only filter (path={name})")
 			continue
 		try:
 			node = walk_no_follow(host, name)
 			info = node.lstat()
-		except (FileNotFoundError, NotADirectoryError, Rejected):
+		except (FileNotFoundError, NotADirectoryError):
 			continue
-		if not stat.S_ISREG(info.st_mode) or info.st_mode & (stat.S_ISUID | stat.S_ISGID) or info.st_size <= MAX_READONLY_FILE:
+		except Rejected:
+			if name in scope:
+				raise
+			continue
+		if not stat.S_ISREG(info.st_mode) or info.st_mode & (stat.S_ISUID | stat.S_ISGID):
+			if name in scope:
+				raise Rejected(f"scoped file excluded by read-only snapshot (path={name})")
+			continue
+		if info.st_size <= MAX_READONLY_FILE:
 			continue
 		if name not in scope:
 			unscoped.append({"path": name, "size": info.st_size})
@@ -313,7 +330,10 @@ def export_oversized(host, scope_file, dest, max_file, max_total):
 			raise Rejected(f"scoped oversized file exceeds cap (path={name} size={info.st_size} cap={file_cap})")
 		total += info.st_size
 		if total > total_cap:
-			raise Rejected(f"scoped oversized total exceeds cap (path={name} size={total} cap={total_cap})")
+			raise Rejected(
+				f"scoped oversized total exceeds cap "
+				f"(files={len(scoped) + 1} total={total} cap={total_cap} last_path={name})"
+			)
 		scoped.append((name, node, info))
 
 	remove_node(dest)
@@ -780,7 +800,7 @@ def main():
 	command = sys.argv[1] if len(sys.argv) > 1 else ""
 	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "transfer": 3, "seed-git": 2, "copy-include": 2}
 	if command not in arity or len(sys.argv) != arity[command] + 2:
-		print("usage: codex_isolated_workspace.py <snapshot-readonly|snapshot-workspace|prep-finalize|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
+		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
 		raise SystemExit(2)
 	args = [Path(value) for value in sys.argv[2:]]
 	global HIDDEN_NAMES

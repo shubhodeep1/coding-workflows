@@ -1247,12 +1247,13 @@ PY
 	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (line window ${SECURITY_AUDIT_WAIVER_LINE_WINDOW})"
 fi
 
-# Export only oversized files in the final incremental scope. A full scan
-# records skipped files for coverage, without adding them to its explicit scope.
+# Full scans still explicitly scope prior-finding and fix-cycle files; other
+# oversized files are reported for coverage without being exported.
 : > "${OVERSIZED_SCOPE_FILE}"
 if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
 	cp "${CHANGED_FILES_FILE}" "${OVERSIZED_SCOPE_FILE}"
 fi
+cat "${PRIOR_FINDINGS_SCOPE_FILE}" "${FIX_CYCLE_DIFFS_SCOPE_FILE}" >> "${OVERSIZED_SCOPE_FILE}"
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_isolated_workspace.py" export-oversized \
 	"${REPO_ROOT}" "${OVERSIZED_SCOPE_FILE}" "${OVERSIZED_EXPORT_DIR}" \
 	"${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" "${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES}" 2> "${OVERSIZED_ERROR_FILE}"; then
