@@ -130,7 +130,7 @@ PY
 # operation is logged and the rest still run.
 unblock_run_ops()
 {
-	local ops_file="$1" count idx op issue number created body label labels_json
+	local ops_file="$1" count idx op issue number created body label
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -303,7 +303,7 @@ PY
 
 unblock_main()
 {
-	local now stop_json fp decision verdict_name round marker_line comment_body terminal ops_file wait
+	local now stop_json fp verdict_name round marker_line comment_body terminal ops_file wait
 	if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
 		unblock_log "item=${ITEM:-} outcome=skip reason=disabled"
 		return 0
