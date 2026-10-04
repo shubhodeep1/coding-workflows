@@ -76,6 +76,18 @@ def test_newer_success_and_visible_retry_on_other_id_block():
 	post.assert_not_called()
 
 
+def test_push_run_on_same_sha_is_included_in_newest_and_retry_checks():
+	push = run(run_id=124, event="push", head_sha=SHA, head_branch="stable",
+		pull_requests=[], conclusion="success", created_at="2026-10-03T07:00:00Z")
+	lines, _, post = exercise(completed=[run(), push])
+	assert "run=124 action=skip reason=push_run" in lines[0]
+	post.assert_not_called()
+	lines, _, post = exercise(completed=[run(), dict(push, run_attempt=2,
+		created_at="2026-10-03T05:00:00Z")])
+	assert "reason=already_retried" in lines[0]
+	post.assert_not_called()
+
+
 @pytest.mark.parametrize("status", ["queued", "in_progress", "pending"])
 def test_active_run_on_current_head_blocks(status):
 	active = run(status=status)
