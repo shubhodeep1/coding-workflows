@@ -5,13 +5,29 @@
   "entry_id": "processed_command_6238_5985391839_approved",
   "issue_number": 6238,
   "metadata": {
+    "branch": "ai/issue-6238",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "README.md",
+      "changelog.d/6238-claude-read-profile-no-shell.md",
+      "prompts/_templates/mode-judge-security-pass-exhaustion.txt",
+      "prompts/mode-judge-security-pass-exhaustion.txt",
+      "scripts/ai_engine.sh",
+      "scripts/claude_engine.py",
+      "tests/test_ai_engine.py"
+    ],
+    "issue_number": 6238,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6238",
+    "pr_number": 6242,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6242",
+    "run_attempt": "1",
+    "run_id": "37242222577",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37242222577"
   },
   "run_attempt": 1,
   "run_id": "37242222577",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-04T23:03:48Z",
+  "status": "completed",
+  "timestamp": "2026-10-04T23:16:28Z",
   "workflow": "implement"
 }
