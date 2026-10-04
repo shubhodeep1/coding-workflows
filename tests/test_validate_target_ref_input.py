@@ -1,8 +1,8 @@
 """Contract for the optional `target_ref` validate input.
 
-/implement-plan-claude validates its project branch before the branch merges
-into the default branch, so the reusable workflow and both dispatch wrappers
-accept an explicit branch. Empty keeps the tracking-issue / default-branch
+An explicit branch whose single open PR goes into the default branch can be
+validated before it merges, so the reusable workflow and both dispatch
+wrappers accept it. Empty keeps the tracking-issue / default-branch
 resolution unchanged.
 """
 
@@ -159,205 +159,15 @@ def test_target_listing_has_no_base_filter(tmp_path: Path):
 	assert "-f base=" not in _authorize_step()["run"]
 
 
-def test_project_branch_base_requires_one_parent_pr_into_default(tmp_path: Path):
-	invoke = _make_invoke(tmp_path)
-	branch = "claude/implement-plan-issue-4687-bind-rejections"
-	parent_branch = "claude/implement-plan-issue-4586-hold-reason"
-	sha = "b" * 40
-	pr = _pr(branch, parent_branch, sha)
-	parent = _pr(parent_branch, "main", "c" * 40)
-
-	assert invoke([pr], target=branch, parent=[parent]) == (0, f"sha={sha}\n")
-	assert len(invoke.calls) == 2
-	assert f"head=owner:{parent_branch}" in invoke.calls[1]
-	assert "base=" not in invoke.calls[1]
-
-	# No parent PR, two parent PRs, or the parent read failing.
-	assert invoke([pr], target=branch, parent=[]) == (1, "")
-	assert invoke([pr], target=branch, parent=[parent, parent]) == (1, "")
-	assert invoke([pr], target=branch, parent=[parent], second_failure=True) == (1, "")
-	# A parent PR into another branch: only one level of stacking is allowed.
-	assert invoke([pr], target=branch, parent=[_pr(parent_branch, "claude/implement-plan-grandparent")]) == (1, "")
-	assert invoke([pr], target=branch, parent=[_pr(parent_branch, "stable")]) == (1, "")
-	# The parent PR must pass the same identity checks.
-	for edit in (
-		{"head": {**parent["head"], "repo": {"full_name": "fork/repo"}}},
-		{"base": {**parent["base"], "repo": {"full_name": "fork/repo"}}},
-		{"head": {**parent["head"], "ref": "claude/implement-plan-other"}},
-		{"head": {**parent["head"], "sha": "short"}},
-		{"head": {key: value for key, value in parent["head"].items() if key != "sha"}},
-		{"state": "closed"},
-		{"author_association": "CONTRIBUTOR"},
-	):
-		assert invoke([pr], target=branch, parent=[{**parent, **edit}]) == (1, ""), edit
-	# A base the jq pattern accepts but git rejects stops before the parent read,
-	# with its own error.
-	for bad_base in ("claude/implement-plan-a..b", "claude/implement-plan-a.lock", "claude/implement-plan-a."):
-		assert invoke([_pr(branch, bad_base, sha)], target=branch, parent=[parent]) == (1, ""), bad_base
-		assert len(invoke.calls) == 1, bad_base
-		assert "its PR base is not a valid branch name" in invoke.stdout, bad_base
-		assert bad_base not in invoke.stdout, bad_base
-	# The target PR itself still needs a trusted, same-repo binding.
-	assert invoke([{**pr, "author_association": "NONE"}], target=branch, parent=[parent]) == (1, "")
-	assert invoke([pr, pr], target=branch, parent=[parent]) == (1, "")
-
-
-HEAL_CREATED_AT = "2026-09-27T17:05:53Z"
-
-
-def _heal_issue(**overrides) -> dict:
-	"""A heal issue as scripts/workflow_failure_heal_intake.sh files it (issue #4665)."""
-	issue = {
-		"number": 4665,
-		"user": {"login": "owner", "type": "User"},
-		"author_association": "OWNER",
-		"created_at": HEAL_CREATED_AT,
-		"labels": [{"name": "ai:claude"}, {"name": "ai:workflow-heal"}],
-		"body": (
-			"<!-- workflow-failure-heal:fp=63e3d23a -->\n"
-			"<!-- workflow-failure-heal:gen=1 -->\n"
-			"\n"
-			"- **Target branch:** `stable`\n"
-			"\n"
-			"## Automated workflow failure heal (generation 1 of max 3)\n"
-		),
-	}
-	issue.update(overrides)
-	return issue
-
-
-def _labeled(label: str, actor: str = "owner", at: str = "2026-09-27T17:05:55Z") -> dict:
-	return {"event": "labeled", "label": {"name": label}, "actor": {"login": actor}, "created_at": at}
-
-
-HEAL_EVENTS = [_labeled("ai:workflow-heal"), _labeled("ai:claude", at="2026-09-27T17:06:28Z")]
-
-
-def test_stable_base_requires_verified_heal_issue(tmp_path: Path):
+def test_stacked_and_stable_bases_are_refused(tmp_path: Path):
+	"""The project-branch and stable bases (#4734 / #4791) were removed with
+	the retired /implement-plan-claude chain: only a PR into the default
+	branch authorizes an explicit target, with one listing call."""
 	invoke = _make_invoke(tmp_path)
 	branch = "claude/implement-plan-issue-4665-reissue-new-output-paths"
-	sha = "d" * 40
-	pr = _pr(branch, "stable", sha)
-	heal = _heal_issue()
-
-	assert invoke([pr], target=branch, issue=heal, events=HEAL_EVENTS) == (0, f"sha={sha}\n")
-	assert len(invoke.calls) == 3
-	assert "repos/owner/repo/issues/4665" in invoke.calls[1]
-	assert "/events" not in invoke.calls[1]
-	assert invoke.calls[2].endswith("repos/owner/repo/issues/4665/events")
-	assert "per_page=100" in invoke.calls[2]
-	assert "--paginate --slurp" in invoke.calls[2]
-	# Unrelated later labels, including by other accounts, do not matter.
-	assert invoke([pr], target=branch, issue=heal, events=HEAL_EVENTS + [_labeled("ai:claude-blocked", actor="someone")])[0] == 0
-	# github-actions[bot] is the other heal automation author.
-	bot = {"login": "github-actions[bot]", "type": "Bot"}
-	bot_pr = {**pr, "user": bot}
-	bot_events = [_labeled("ai:workflow-heal", actor="github-actions[bot]")]
-	assert invoke([bot_pr], target=branch, issue=_heal_issue(user=bot, author_association="NONE"), events=bot_events)[0] == 0
-	# Label exactly at creation and at the 120 s edge are accepted.
-	assert invoke([pr], target=branch, issue=heal, events=[_labeled("ai:workflow-heal", at=HEAL_CREATED_AT)])[0] == 0
-	assert invoke([pr], target=branch, issue=heal, events=[_labeled("ai:workflow-heal", at="2026-09-27T17:07:53Z")])[0] == 0
-
-	rejected_issues = {
-		"label missing": _heal_issue(labels=[{"name": "ai:claude"}]),
-		"no labels": {key: value for key, value in heal.items() if key != "labels"},
-		"a pull request": _heal_issue(pull_request={"url": "x"}),
-		"collaborator author": _heal_issue(author_association="COLLABORATOR"),
-		"member author": _heal_issue(author_association="MEMBER"),
-		"other bot author": _heal_issue(user={"login": "owner", "type": "Bot"}),
-		"no user": {key: value for key, value in heal.items() if key != "user"},
-		"author is not the PR author": _heal_issue(user={"login": "someone", "type": "User"}),
-		"no fp marker": _heal_issue(body="- **Target branch:** `stable`\n"),
-		"marker mid-line": _heal_issue(body="see <!-- workflow-failure-heal:fp=abc -->\n- **Target branch:** `stable`\n"),
-		"other marker only": _heal_issue(body="<!-- check-failure-triage:fp=abc -->\n- **Target branch:** `stable`\n"),
-		"no target branch": _heal_issue(body="<!-- workflow-failure-heal:fp=abc -->\n"),
-		"target branch main": _heal_issue(body="<!-- workflow-failure-heal:fp=abc -->\n- **Target branch:** `main`\n"),
-		"integration branch wins": _heal_issue(body=(
-			"<!-- workflow-failure-heal:fp=abc -->\n- **Target branch:** `stable`\n"
-			"- **Integration branch:** `orchestrator/project-1`\n"
-		)),
-		"null body": _heal_issue(body=None),
-		"no created_at": {key: value for key, value in heal.items() if key != "created_at"},
-		"unreadable created_at": _heal_issue(created_at="yesterday"),
-		"not an object": [heal],
-	}
-	for name, issue in rejected_issues.items():
-		assert invoke([pr], target=branch, issue=issue, events=HEAL_EVENTS) == (1, ""), name
-		assert len(invoke.calls) == 2, name
-
-	rejected_events = {
-		"no labeled event": [_labeled("ai:claude")],
-		"no events": [],
-		"labelled by someone else": [_labeled("ai:workflow-heal", actor="someone")],
-		"re-labelled by someone else": [_labeled("ai:workflow-heal"), _labeled("ai:workflow-heal", actor="someone", at="2026-09-28T01:00:00Z")],
-		"labelled late": [_labeled("ai:workflow-heal", at="2026-09-27T17:07:54Z")],
-		"labelled before creation": [_labeled("ai:workflow-heal", at="2026-09-27T17:05:52Z")],
-		"unreadable event time": [_labeled("ai:workflow-heal", at="soon")],
-		"no actor": [{"event": "labeled", "label": {"name": "ai:workflow-heal"}, "created_at": "2026-09-27T17:05:55Z"}],
-		"not an array": {"events": HEAL_EVENTS},
-	}
-	for name, events in rejected_events.items():
-		assert invoke([pr], target=branch, issue=heal, events=events) == (1, ""), name
-		assert len(invoke.calls) == 3, name
-
-	# Every events page is verified, so a long label history is read in full
-	# rather than failing at 100 events.
-	filler = [_labeled("ai:other", at="2026-09-27T18:00:00Z")] * 99
-	assert invoke([pr], target=branch, issue=heal, event_pages=[HEAL_EVENTS[:1] + filler, HEAL_EVENTS[1:]])[0] == 0
-	late_relabel = _labeled("ai:workflow-heal", actor="someone", at="2026-09-28T01:00:00Z")
-	rejected_pages = {
-		"re-labelled by someone else on a later page": [HEAL_EVENTS[:1] + filler, [late_relabel]],
-		"labelled first on a later page, too late": [filler, [_labeled("ai:workflow-heal", at="2026-09-27T18:00:01Z")]],
-		"pages not an array": {"pages": [HEAL_EVENTS]},
-		"a bare event list, not the --slurp page wrapper": HEAL_EVENTS,
-		"a page not an array": [HEAL_EVENTS, {"events": []}],
-		"no pages": [],
-	}
-	for name, pages in rejected_pages.items():
-		assert invoke([pr], target=branch, issue=heal, event_pages=pages) == (1, ""), name
-		assert len(invoke.calls) == 3, name
-
-	# Read failures fail closed.
-	assert invoke([pr], target=branch, issue=heal, events=HEAL_EVENTS, second_failure=True) == (1, "")
-	assert invoke([pr], target=branch, issue=heal, events=HEAL_EVENTS, third_failure=True) == (1, "")
-	# The target PR author must be a plain login before anything else is read.
-	# The 39-character cap counts a `[bot]` suffix too (an App slug is at most
-	# 34 characters).
-	for login in ("", "two words", "owner$(id)", "-owner", "owner-", "own--er", "o" * 40, "owner[bot]x", "o" * 35 + "[bot]", "o" * 39 + "[bot]", None):
-		assert invoke([{**pr, "user": {"login": login, "type": "User"}}], target=branch, issue=heal, events=HEAL_EVENTS) == (1, ""), login
-		assert len(invoke.calls) == 1, login
-	assert invoke([{key: value for key, value in pr.items() if key != "user"}], target=branch, issue=heal, events=HEAL_EVENTS) == (1, "")
-	# Logins that follow GitHub's rules pass the pattern: single inner hyphens,
-	# the 39-character maximum, and a `[bot]` suffix within it.
-	for login in ("o-w-n-e-r", "o" * 39, "o" * 34 + "[bot]"):
-		user = {"login": login, "type": "User"}
-		issue = _heal_issue(user=user)
-		assert invoke([{**pr, "user": user}], target=branch, issue=issue, events=[_labeled("ai:workflow-heal", actor=login)])[0] == 0, login
-	# A stable base is refused for a head that is not an issue project.
-	other = "claude/implement-plan-some-project"
-	assert invoke([_pr(other, "stable")], target=other, issue=heal, events=HEAL_EVENTS) == (1, "")
-	assert invoke.calls and len(invoke.calls) == 1
-	# Fork heads and untrusted authors are still refused.
-	assert invoke([{**pr, "head": {**pr["head"], "repo": {"full_name": "fork/repo"}}}], target=branch, issue=heal, events=HEAL_EVENTS) == (1, "")
-	assert invoke([{**pr, "author_association": "CONTRIBUTOR"}], target=branch, issue=heal, events=HEAL_EVENTS) == (1, "")
-
-
-def test_stable_heal_issue_branch_line_forms(tmp_path: Path):
-	invoke = _make_invoke(tmp_path)
-	branch = "claude/implement-plan-issue-4665-reissue-new-output-paths"
-	pr = _pr(branch, "stable")
-	for line in (
-		"- **Target branch:** `stable`",
-		"Target branch: stable",
-		"Target branch: `stable` (the release line)",
-		"- **Integration branch:** `stable`",
-		"Integration branch: stable\r",
-	):
-		issue = _heal_issue(body=f"<!-- workflow-failure-heal:fp=abc -->\r\n{line}\n")
-		assert invoke([pr], target=branch, issue=issue, events=HEAL_EVENTS)[0] == 0, line
-	for line in ("Target branch: stable-2", "Target branch: `stable2`", "Target branch: stable now"):
-		issue = _heal_issue(body=f"<!-- workflow-failure-heal:fp=abc -->\n{line}\n")
-		assert invoke([pr], target=branch, issue=issue, events=HEAL_EVENTS) == (1, ""), line
+	for base in ("claude/implement-plan-issue-4586-hold-reason", "stable"):
+		assert invoke([_pr(branch, base)], target=branch) == (1, ""), base
+		assert len(invoke.calls) == 1, base
 
 
 def test_other_bases_are_refused(tmp_path: Path):

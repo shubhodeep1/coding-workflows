@@ -338,7 +338,7 @@ def test_sync_labels_creates_missing_labels() -> None:
 		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
 
 	assert rc == 0
-	assert payload == {"created": 2, "updated": 0, "unchanged": 0, "errors": []}
+	assert payload == {"created": 2, "updated": 0, "unchanged": 0, "deleted": 0, "errors": []}
 	assert [entry["method"] for entry in request_log] == ["GET", "POST", "GET", "POST"]
 	assert _request_payload(request_log[1]) == {"color": "123abc", "description": "Alpha label", "name": "ai:alpha"}
 	assert _request_payload(request_log[3]) == {"color": "abcdef", "description": "Beta label", "name": "ai:beta"}
@@ -355,7 +355,7 @@ def test_sync_labels_leaves_matching_labels_unchanged() -> None:
 		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
 
 	assert rc == 0
-	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "errors": []}
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
 	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
 	assert stderr_text.count("LABEL_SYNC_UNCHANGED:") == 2
 
@@ -372,7 +372,7 @@ def test_sync_labels_updates_mismatched_labels() -> None:
 		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
 
 	assert rc == 0
-	assert payload == {"created": 0, "updated": 2, "unchanged": 0, "errors": []}
+	assert payload == {"created": 0, "updated": 2, "unchanged": 0, "deleted": 0, "errors": []}
 	assert [entry["method"] for entry in request_log] == ["GET", "PATCH", "GET", "PATCH"]
 	assert _request_payload(request_log[1]) == {"color": "123abc", "description": "Alpha label"}
 	assert _request_payload(request_log[3]) == {"color": "abcdef", "description": "Beta label"}
@@ -428,7 +428,7 @@ def test_sync_labels_treats_matching_already_exists_create_conflict_as_created()
 		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
 
 	assert rc == 0
-	assert payload == {"created": 1, "updated": 0, "unchanged": 1, "errors": []}
+	assert payload == {"created": 1, "updated": 0, "unchanged": 1, "deleted": 0, "errors": []}
 	assert [entry["method"] for entry in request_log] == ["GET", "POST", "GET", "GET"]
 	assert "resolved already_exists conflict by re-reading label" in stderr_text
 
@@ -476,7 +476,7 @@ def test_sync_labels_retries_rate_limited_requests() -> None:
 			ai_labels.random.uniform = original_uniform
 
 	assert rc == 0
-	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "errors": []}
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
 	assert [entry["method"] for entry in request_log] == ["GET", "GET", "GET"]
 	assert sleep_calls == [60.0]
 	assert stderr_text.count("LABEL_SYNC_UNCHANGED:") == 2
@@ -521,7 +521,7 @@ def test_sync_labels_dry_run_skips_mutations() -> None:
 		)
 
 	assert rc == 0
-	assert payload == {"created": 1, "updated": 1, "unchanged": 0, "errors": []}
+	assert payload == {"created": 1, "updated": 1, "unchanged": 0, "deleted": 0, "errors": []}
 	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
 	assert "LABEL_SYNC_CREATED:" in stderr_text
 	assert "LABEL_SYNC_UPDATED:" in stderr_text

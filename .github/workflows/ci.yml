@@ -492,6 +492,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine.py
 
+      - name: Engine label propagation tests (ai:engine-claude)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_engine_label_propagation.py
+
       - name: Claude engine permission policy tests (P5)
         run: |
           set -euo pipefail
@@ -519,53 +524,25 @@ jobs:
           npm ci --no-audit --no-fund
           npx vitest run
 
-      - name: PR status check-in reminder hook tests (CLAUDE.md §26)
+      - name: Session automation retirement guard and retired labels/files tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_check_in_reminder.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_no_session_automation.py tests/test_ai_labels_retired.py tests/test_update_workflows_retired_files.py
 
-      - name: Check-in status helper tests (/implement-plan-claude, CLAUDE.md §26)
+      - name: Security-pass skip rule tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_skip.py
 
-      - name: Stale Routine sweep tests (CLAUDE.md §26.G)
+      - name: Security dependency hold tests (issue 4934)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stale_routines.py
-
-      - name: Stale session sweep tests (CLAUDE.md §26.I)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_session_janitor.py
-
-      - name: Unattended helper and permission prompt report tests (CLAUDE.md §23.I)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_dispatch_workflow.py \
-            tests/test_edit_comment.py \
-            tests/test_permission_prompts.py
-
-      - name: Claude-fixer hand-back, claim and catch-all sweep tests (CLAUDE.md §26.C, §26.H)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status_hand_back.py tests/test_claude_pr_sweep.py tests/test_check_in_session_targeting.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py
 
       - name: Skip-AI marker rule and gate skip notice tests (issue 4985)
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_skip_ai_marker_rule.py
-
-      - name: /implement-plan-claude command contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py tests/test_session_titles.py
-
-      - name: Claude issue implementer tests (routing, handoff, intake, §28 command contract)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_issue_route.py tests/test_implement_issue_claude_command.py tests/test_security_pass_skip.py
 
       - name: CLAUDE.md section numbering guard (§6 identifiers)
         run: |
@@ -576,11 +553,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_audit_plans_command.py
-
-      - name: Implement-plan lessons ingestion + conformance-stage contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ingest_implement_plan_lessons.py
 
       - name: Orchestrate lib unit tests
         run: |
@@ -893,7 +865,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
 
-      - name: Review autofix Claude-fixer mode and validate target_ref contract tests
+      - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_claude_fixer_mode.py tests/test_validate_target_ref_input.py
@@ -1077,7 +1049,7 @@ jobs:
           from pathlib import Path
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          assert set(payload) == {"created", "updated", "unchanged", "errors"}
+          assert set(payload) == {"created", "updated", "unchanged", "deleted", "errors"}
           assert isinstance(payload["errors"], list)
           PY
 
