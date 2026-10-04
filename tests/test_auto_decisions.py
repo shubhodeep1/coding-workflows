@@ -144,6 +144,6 @@ def test_clarify_wiring() -> None:
 
 def test_implement_appends_the_section_before_the_lint() -> None:
 	text = IMPLEMENT.read_text(encoding="utf-8")
-	assert "lint_pr_body_auto_close.py auto_decisions.py implement_staged_support_workspace.sh; do" in text
+	assert "security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do" in text
 	section = text.index("auto_decisions.py\" pr-section")
 	assert text.index('printf \'Refs #%s\\n\' "${TRACKING_ISSUE_NUMBER}"') < section < text.index('printf \'%s\\n\\n\' "${PR_TITLE}" > "${PR_LINT_FILE}"')
