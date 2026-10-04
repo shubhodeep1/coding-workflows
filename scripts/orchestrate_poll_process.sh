@@ -43,6 +43,29 @@ if [ -f "scripts/nag_reminder.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/nag_reminder.sh 2>/dev/null || true
 fi
+
+# Every judge Codex run reads untrusted text (issue bodies, comments, PR
+# diffs), so it goes through the credential-free, network-isolated container
+# (scripts/codex_isolated_exec.sh). Resolved once here, as an absolute path,
+# before any judge runs. The two judges that edit files (review-blocked fix,
+# integration conflict) work in separate git worktrees under RUNTIME_DIR, so
+# agent output never lands in this checkout, whose scripts the poller keeps
+# running.
+ORCH_SCRIPTS_ROOT="$(pwd)/scripts"
+ORCH_CODEX_ISOLATED_EXEC="${ORCH_SCRIPTS_ROOT}/codex_isolated_exec.sh"
+# Fingerprint verifier for the integration judge's resolution: the staged
+# copy when there is one, else the trusted support checkout.
+ORCH_FINGERPRINT_VERIFIER=""
+for _orch_fp_candidate in \
+  "${ORCH_SCRIPTS_ROOT}/verify_integration_fingerprints.py" \
+  "$(pwd)/.codex-workflow-src/scripts/verify_integration_fingerprints.py" \
+  "$(pwd)/.codex-workflow-src-main/scripts/verify_integration_fingerprints.py"; do
+  if [ -f "${_orch_fp_candidate}" ]; then
+    ORCH_FINGERPRINT_VERIFIER="${_orch_fp_candidate}"
+    break
+  fi
+done
+unset _orch_fp_candidate
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
 # _pr_required_check_names_for_base). Single source of truth shared with
@@ -6391,7 +6414,8 @@ security_pass_exhaustion_judge() {
         --phase "orchestrate-security-pass-judge" \
         --stdout-file "${output_file}" \
         --stderr-file "${error_file}" \
-        -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
+        -- bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode read-only \
+          -- --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
           --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true
     fi
     judge_json="$(_robust_parse_json_file "${output_file}")"
@@ -8447,6 +8471,27 @@ invoke_judge_for_integration_conflict() {
     --model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
+  # The poller, not the agent, fetches both branches and starts the merge
+  # in a separate worktree (never this checkout, whose scripts the poller
+  # keeps running). The agent only resolves the conflicted files, in the
+  # credential-free, network-isolated container; the poller then verifies
+  # the resolution against the intent fingerprints, commits it and pushes
+  # it (_integration_judge_commit_and_push).
+  local judge_wt="${RUNTIME_DIR:-/tmp}/integration-judge-wt-${final_pr}"
+  local judge_conflicts=""
+  _integration_judge_remove_worktree "${judge_wt}"
+  if ! git fetch --no-tags origin \
+      "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" \
+      "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 \
+    || ! git worktree add --force --detach "${judge_wt}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+    echo "::warning::[integration-heal] Could not fetch ${default_branch}/${integration_branch} or create the judge worktree for PR #${final_pr}."
+    _integration_judge_remove_worktree "${judge_wt}"
+    return 1
+  fi
+  git -C "${judge_wt}" -c user.name="codex-bot" -c user.email="codex@users.noreply.github.com" \
+    merge --no-ff --no-commit "refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || true
+  judge_conflicts="$(git -C "${judge_wt}" diff --name-only --diff-filter=U 2>/dev/null || true)"
+
   local prompt_file
   local output_file
   local judge_static_file
@@ -8456,6 +8501,7 @@ invoke_judge_for_integration_conflict() {
 
   if ! assemble_judge_static_context "${judge_static_file}"; then
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
+    _integration_judge_remove_worktree "${judge_wt}"
     return 1
   fi
 
@@ -8517,12 +8563,19 @@ invoke_judge_for_integration_conflict() {
     echo "mergeable state. Final PR #${final_pr} (${integration_branch} -> ${default_branch})"
     echo "is currently unmergeable."
     echo
-    echo "Your task: fetch both branches, resolve the merge conflicts in a"
-    echo "way that preserves the intent of every sub-issue already merged"
-    echo "into ${integration_branch}, push the resolution to"
-    echo "${integration_branch}, and then verify GitHub reports the final"
-    echo "PR as mergeable=true. Do NOT merge the PR yourself — the poller"
-    echo "will do that once mergeability is restored."
+    echo "Your working directory is a checkout of \`${integration_branch}\`"
+    echo "with \`${default_branch}\` merged in (\`git merge --no-commit\`);"
+    echo "the conflicted files below contain conflict markers. Your task:"
+    echo "resolve every conflict in the working tree in a way that preserves"
+    echo "the intent of every sub-issue already merged into"
+    echo "${integration_branch}. Do NOT run git commit, git push or any"
+    echo "network command: you have no network access and no credentials."
+    echo "The poller verifies your resolution, commits it and pushes it to"
+    echo "${integration_branch}; it merges the PR once GitHub reports it"
+    echo "mergeable."
+    echo
+    echo "Conflicted files:"
+    printf '%s\n' "${judge_conflicts}"
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -8545,9 +8598,10 @@ invoke_judge_for_integration_conflict() {
     echo "Each entry is keyed by GitHub issue number; \`must_contain\`"
     echo "patterns are regexes that MUST match in the post-resolve tree,"
     echo "\`must_not_contain\` patterns are regexes that MUST NOT match."
-    echo "After you push, \`scripts/verify_integration_fingerprints.py\`"
+    echo "After you finish, \`scripts/verify_integration_fingerprints.py\`"
     echo "is run against this exact JSON — every violation is a hard"
-    echo "rejection that returns the project to this judge cycle.  Use"
+    echo "rejection (nothing is pushed) that returns the project to this"
+    echo "judge cycle.  Use"
     echo "this as the authoritative spec when reconciling conflicts;"
     echo "the truncated PR diff above is context, the fingerprints are"
     echo "the test."
@@ -8571,14 +8625,82 @@ invoke_judge_for_integration_conflict() {
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
-    echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
+  if [ -z "${judge_conflicts}" ]; then
+    echo "  [integration-heal] ${default_branch} merges into ${integration_branch} without conflicts locally; skipping the judge agent for PR #${final_pr}."
+  elif ! bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${judge_wt}" \
+      -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access \
+      < "${prompt_file}" > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
+    echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+    _integration_judge_remove_worktree "${judge_wt}"
+    return 1
+  fi
+  echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
+  _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" || true
+  rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+  _integration_judge_remove_worktree "${judge_wt}"
+  return 0
+}
+
+# _integration_judge_remove_worktree <path> — drop a judge worktree and
+# its administrative entry; quiet when it does not exist.
+_integration_judge_remove_worktree() {
+  local wt="$1"
+  git worktree remove --force "${wt}" >/dev/null 2>&1 || true
+  rm -rf -- "${wt}"
+  git worktree prune >/dev/null 2>&1 || true
+}
+
+# _integration_judge_commit_and_push <worktree> <final_pr> <integration_branch> <default_branch>
+#
+# Trusted half of the integration-conflict judge: the agent edited files in
+# <worktree> (through scripts/codex_isolated_exec.sh); this stages them,
+# refuses to push while unmerged paths or conflict markers remain or while
+# the merged sub-issue intent fingerprints are violated, then commits the
+# merge and pushes it to <integration_branch>. Returns 0 after a push, 1
+# when nothing was pushed (the next poll tick re-evaluates mergeability).
+_integration_judge_commit_and_push() {
+  local wt="$1"
+  local final_pr="$2"
+  local integration_branch="$3"
+  local default_branch="$4"
+  local fp_file fp_exit=0
+
+  git -C "${wt}" add -u -- . >/dev/null 2>&1 || true
+  if [ -n "$(git -C "${wt}" diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+    echo "::warning::[integration-heal] Judge left unmerged paths for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  if git -C "${wt}" diff --cached 2>/dev/null | grep -Eq '^\+(<<<<<<<|>>>>>>>)( |$)'; then
+    echo "::warning::[integration-heal] Conflict markers remain in the judge resolution for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  fp_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_fp.XXXXXX")"
+  jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${fp_file}" 2>/dev/null || printf '{}' > "${fp_file}"
+  if [ "$(wc -c < "${fp_file}" 2>/dev/null || echo 0)" -gt 2 ]; then
+    if [ -z "${ORCH_FINGERPRINT_VERIFIER}" ]; then
+      fp_exit=2
+      echo "::warning::[integration-heal] Fingerprint verifier unavailable; refusing to push an unverified judge resolution."
+    else
+      (cd "${wt}" && INTEGRATION_BRANCH_NAME="${integration_branch}" python3 "${ORCH_FINGERPRINT_VERIFIER}" "${fp_file}") || fp_exit=$?
+    fi
+  fi
+  rm -f "${fp_file}"
+  if [ "${fp_exit}" -ne 0 ]; then
+    echo "::warning::[integration-heal] Judge resolution for PR #${final_pr} violates the merged sub-issue fingerprints (exit ${fp_exit}); nothing pushed."
+    return 1
+  fi
+  if ! git -C "${wt}" -c user.name="codex-bot" -c user.email="codex@users.noreply.github.com" -c commit.gpgsign=false \
+      commit --no-verify -q -m "Merge ${default_branch} into ${integration_branch} (integration judge, PR #${final_pr})" >/dev/null 2>&1; then
+    echo "::warning::[integration-heal] Could not commit the judge resolution for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  git -C "${wt}" remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" >/dev/null 2>&1 || true
+  if git -C "${wt}" push origin "HEAD:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+    echo "  [integration-heal] Pushed the judge resolution to ${integration_branch} for PR #${final_pr}."
     return 0
   fi
-
-  echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
-  rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+  echo "::warning::[integration-heal] Push of the judge resolution to ${integration_branch} failed for PR #${final_pr}."
   return 1
 }
 
@@ -14606,7 +14728,7 @@ invoke_stall_judge() {
         printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
       else
         sanitize_codex_prompt_file "${stall_judge_prompt_file}"
-        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+        bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
       fi
       if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
         judge_success="true"
@@ -20738,6 +20860,10 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
       #                              could not determine a target branch.
       RB_COMBINED_MODE="false"
       RB_COMBINED_BRANCH_INFO=""
+      # Combined mode works in its own worktree, never in this checkout
+      # (the poller keeps running scripts/ from here after the agent edits).
+      RB_COMBINED_WORKDIR="${RUNTIME_DIR:-/tmp}/rb-judge-wt-${rb_issue}"
+      _integration_judge_remove_worktree "${RB_COMBINED_WORKDIR}"
       RB_TARGET_MERGED="false"
       HEAD_REF=""
       BASE_REF=""
@@ -20861,14 +20987,14 @@ ${FOLLOWUP_BLOCK_REASON}"
               echo "::warning::Could not fetch or locate base ref '${BASE_REF}' for issue #${rb_issue}; creating follow-up branch from current HEAD as a best-effort fallback. The resulting PR diff may be larger than intended."
             fi
             if [ -n "${_rb_co_src}" ] \
-              && git checkout -B "${FOLLOWUP_BRANCH}" "${_rb_co_src}" 2>/dev/null; then
+              && git worktree add --force -B "${FOLLOWUP_BRANCH}" "${RB_COMBINED_WORKDIR}" "${_rb_co_src}" >/dev/null 2>&1; then
               RB_COMBINED_MODE="true"
               # Reflect the actual checkout source in the judge prompt
               # context. When the HEAD fallback fires, the follow-up branch
               # is not based on ${BASE_REF}; saying otherwise misleads the
               # judge into applying fixes on a wrong base.
               RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) based on ${_rb_co_src_desc}. The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
-            elif git checkout -B "${FOLLOWUP_BRANCH}" 2>/dev/null; then
+            elif git worktree add --force -B "${FOLLOWUP_BRANCH}" "${RB_COMBINED_WORKDIR}" >/dev/null 2>&1; then
               # Fallback: if checkout with the computed source ref fails,
               # keep the follow-up path alive by branching from local HEAD.
               # The follow-up PR still targets ${BASE_REF}; only local start
@@ -20883,10 +21009,10 @@ ${FOLLOWUP_BLOCK_REASON}"
           fi
         elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
           if git fetch --no-tags origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \
-            && git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
+            && git worktree add --force -B "${HEAD_REF}" "${RB_COMBINED_WORKDIR}" "refs/remotes/origin/${HEAD_REF}" >/dev/null 2>&1; then
             RB_COMBINED_MODE="true"
             RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."
-          elif git checkout -B "${HEAD_REF}" 2>/dev/null; then
+          elif git worktree add --force -B "${HEAD_REF}" "${RB_COMBINED_WORKDIR}" >/dev/null 2>&1; then
             # Fallback: same rationale as the merged-PR fallback above —
             # keep the combined-mode fix path alive when the initial fetch
             # can't reach origin, at the cost of starting the branch from
@@ -20902,14 +21028,11 @@ ${FOLLOWUP_BLOCK_REASON}"
         fi
       fi
 
-      # Reset workspace state (tracked files only) after a combined judge
-      # call whose decision was NOT fix. Untracked files are left alone so
-      # pre-fetched scripts and artifacts are not swept.
+      # Drop the combined-mode worktree after a judge call whose decision
+      # was NOT fix (or once a fix was pushed). This checkout never left its
+      # branch, so its pre-fetched scripts and artifacts are untouched.
       rb_cleanup_combined_workspace() {
-        if [ "${RB_COMBINED_MODE}" = "true" ]; then
-          git reset --hard HEAD 2>/dev/null || true
-          git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
-        fi
+        _integration_judge_remove_worktree "${RB_COMBINED_WORKDIR}"
       }
 
       # Build the judge prompt for review-blocked evaluation
@@ -20997,7 +21120,14 @@ ${FOLLOWUP_BLOCK_REASON}"
       else
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
-          cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+          # Credential-free, network-isolated agent. In combined mode it edits
+          # a copy of the PR worktree; its changes are copied back into that
+          # worktree only, and the poller commits and pushes them below.
+          if [ "${RB_COMBINED_MODE}" = "true" ]; then
+            bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${RB_COMBINED_WORKDIR}" -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+          else
+            bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+          fi
           if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break
@@ -21260,7 +21390,7 @@ sys.exit(1)
               RB_SKIP_RETRY_INCREMENT="true"
             elif [ "${RB_COMBINED_MODE}" != "true" ]; then
               echo "::warning::Combined-mode branch prep did not succeed for PR #${RB_PR}; cannot apply judge fixes this tick."
-              git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
+              rb_cleanup_combined_workspace
               REVIEW_BLOCKED_STATE_CHANGED=true
             else
               # Remove workflow-generated/fetched artifacts so they are never
@@ -21277,7 +21407,7 @@ sys.exit(1)
               # fail-closed: skip cleanup (strictly safer — at worst a
               # commit carries a few extra untracked fetched files that
               # downstream path excludes already block from staging).
-              _orig_origin_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+              _orig_origin_url="$(git -C "${RB_COMBINED_WORKDIR}" config --get remote.origin.url 2>/dev/null || true)"
               case "${_orig_origin_url}" in
                 ""|*/coding-workflows|*/coding-workflows.git|*/coding-workflows/|*/coding-workflows.git/)
                   : # self-repo or unknown — keep files; consumer-repo-only cleanup
@@ -21301,17 +21431,17 @@ sys.exit(1)
                     scripts/codex_model_catalog.json \
                     .github/prompts .github/scripts \
                     .github/ai/orchestrate_schema.v1.json; do
-                    if git ls-files --error-unmatch -- "${_orch_cleanup_artifact}" >/dev/null 2>&1; then
+                    if git -C "${RB_COMBINED_WORKDIR}" ls-files --error-unmatch -- "${_orch_cleanup_artifact}" >/dev/null 2>&1; then
                       echo "Preserving repo-tracked path during artifact cleanup: ${_orch_cleanup_artifact}"
                       case "${_orch_cleanup_artifact}" in
                         scripts/git_ref_health_check.sh|scripts/tg_helpers.sh|scripts/codex_model_catalog.json|.github/ai/orchestrate_schema.v1.json)
                           # Bootstrap overwrites these paths before the judge runs.
-                          git restore --source=HEAD --worktree -- "${_orch_cleanup_artifact}"
+                          git -C "${RB_COMBINED_WORKDIR}" restore --source=HEAD --worktree -- "${_orch_cleanup_artifact}"
                           ;;
                       esac
                       continue
                     fi
-                    rm -rf -- "${_orch_cleanup_artifact}"
+                    rm -rf -- "${RB_COMBINED_WORKDIR:?}/${_orch_cleanup_artifact}"
                   done
                   unset _orch_cleanup_artifact
                   ;;
@@ -21319,9 +21449,9 @@ sys.exit(1)
               unset _orig_origin_url
 
               # Check if there are changes to commit
-              if [ -n "$(git status --porcelain)" ]; then
-                git config user.name "codex-bot"
-                git config user.email "codex@users.noreply.github.com"
+              if [ -n "$(git -C "${RB_COMBINED_WORKDIR}" status --porcelain)" ]; then
+                git -C "${RB_COMBINED_WORKDIR}" config user.name "codex-bot"
+                git -C "${RB_COMBINED_WORKDIR}" config user.email "codex@users.noreply.github.com"
                 if [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ]; then
                   # Use a single add call so empty/minimal repos do not fail on
                   # exclude-only pathspecs.
@@ -21333,31 +21463,31 @@ sys.exit(1)
                   # already excludes them; the pathspec exclude is redundant
                   # and turns into a hard failure once a step creates
                   # node_modules/.
-                  git add -A -- . ':!.github/prompts' ':!.github/scripts'
+                  git -C "${RB_COMBINED_WORKDIR}" add -A -- . ':!.github/prompts' ':!.github/scripts'
                 else
                   # Keep workflow-edit guard exclusions while avoiding brittle
                   # tracked/untracked split staging pathspec failures. Same
                   # gitignore-dir exclusion caveat as above applies.
-                  git add -A -- . ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.github/prompts' ':!.github/scripts'
+                  git -C "${RB_COMBINED_WORKDIR}" add -A -- . ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.github/prompts' ':!.github/scripts'
                 fi
                 echo "Staged files before commit:"
-                git diff --cached --name-only | sed 's/^/ - /' || true
-                if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
+                git -C "${RB_COMBINED_WORKDIR}" diff --cached --name-only | sed 's/^/ - /' || true
+                if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && git -C "${RB_COMBINED_WORKDIR}" diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
                   echo "Error: scripts/, prompts/, .github/ai/, or .github/workflows is staged while ALLOW_WORKFLOW_EDITS=false"
                   exit 1
                 fi
-                if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
+                if git -C "${RB_COMBINED_WORKDIR}" diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
                   echo "Error: .github/prompts or .github/scripts is staged"
                   exit 1
                 fi
-                git commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
+                git -C "${RB_COMBINED_WORKDIR}" commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
 
 Orchestrator judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
 ${RB_FIX_DESC}" || true
 
-                git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+                git -C "${RB_COMBINED_WORKDIR}" remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
 
                 if [ "${RB_TARGET_MERGED}" = "true" ]; then
                   # Push follow-up branch and create a new PR
@@ -21367,7 +21497,7 @@ ${RB_FIX_DESC}" || true
                     tg_notify "Refused merged follow-up PR creation for review-blocked issue #${rb_issue} (PR #${RB_PR}): integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base was '${BASE_REF}'."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
                     RB_FOLLOWUP_REFUSED="true"
                     REVIEW_BLOCKED_STATE_CHANGED=true
-                  elif git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                  elif git -C "${RB_COMBINED_WORKDIR}" push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
                     if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
@@ -21428,7 +21558,7 @@ ${RB_FIX_DESC}
                   fi
                 else
                   # Push to existing open PR branch
-                  if git push origin "HEAD:${HEAD_REF}" 2>/dev/null; then
+                  if git -C "${RB_COMBINED_WORKDIR}" push origin "HEAD:${HEAD_REF}" 2>/dev/null; then
                     echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
                     # Remove review-blocked label — the push triggers synchronize
                     # which re-runs review_autofix with a reset autofix counter.
@@ -21471,9 +21601,8 @@ ${RB_FIX_DESC}
                 fi
               fi
 
-              # Switch back to default branch for remaining processing,
-              # discarding any unstaged tracked edits that were not
-              # included in the fix commit (e.g., excluded paths).
+              # Drop the worktree, discarding any edits that were not included
+              # in the fix commit (e.g., excluded paths).
               rb_cleanup_combined_workspace
             fi
 
@@ -22903,10 +23032,8 @@ ${PR_DIFF}
     fi
     echo "Judge attempt ${attempt}/${max_attempts}..."
     sanitize_codex_prompt_file "${judge_effective_prompt_file}"
-    # The pipeline may return 141 (SIGPIPE) when the prompt is larger
-    # than the OS pipe buffer and codex closes stdin before cat finishes.
-    # This is harmless — check the output file regardless of exit code.
-    cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    # The exit status is not used: the output file is checked regardless.
+    bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${judge_effective_prompt_file}" > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
     rm -f "${judge_attempt_prompt_file}"
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
     if [ -n "${judge_json_candidate}" ]; then

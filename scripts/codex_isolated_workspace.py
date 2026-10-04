@@ -1,0 +1,615 @@
+#!/usr/bin/env python3
+"""Host-side file handling for scripts/codex_isolated_exec.sh.
+
+The isolated Codex container never sees the host checkout, its .git directory
+(which holds the GH_PAT remote URL and checkout extraheader), HOME, the runner
+file-command files, or any credential. This module builds the disposable copy
+the container works on and, in workspace mode, carries the agent's file
+changes back to the host.
+
+Subcommands:
+
+  snapshot-readonly HOST DEST
+      Copy every tracked regular file of HOST into DEST (CLAUDE.md answer
+      Q11 A): all top-level directories, symlinks and secret-looking paths
+      skipped, files over MAX_READONLY_FILE skipped and logged, totals capped
+      at MAX_READONLY_FILES / MAX_READONLY_TOTAL (exceeding fails closed).
+      Falls back to walking HOST when it is not a git work tree.
+
+  snapshot-workspace HOST DEST MANIFEST
+      Copy all of HOST except any `.git` path component into DEST, keeping
+      symlinks as symlinks (never dereferenced), and record the copy in
+      MANIFEST. Paths listed in MANIFEST's `prep_roots` (dependency
+      directories created by the credential-free dependency phase) are kept
+      in DEST and never copied from or back to HOST.
+
+  prep-finalize HOST DEST MANIFEST
+      After the dependency phase: record every top-level path it created as
+      a prep root and restore every snapshotted path from HOST, so build
+      backends cannot change the files the agent starts from.
+
+  transfer HOST DEST MANIFEST
+      Apply the agent's changes in DEST to HOST (answer Q5 A): changed or new
+      regular files are written atomically with mode 0644/0755, removed files
+      and symlinks are unlinked. A new or changed symlink, a special file, or
+      any host path that no longer matches the manifest rejects the whole
+      transfer before the first host write.
+
+  seed-git HOST DEST
+      Best effort: create a credential-free git repository in DEST whose
+      HEAD is HOST's HEAD tree, so `git diff` / `git status` inside the
+      container match the host. Only objects cross; no config, remote,
+      hook or credential does.
+
+  copy-include SRC TARGET
+      Copy a trusted runtime file or directory SRC (regular files only, no
+      symlinks, no .git) to TARGET; the helper mounts it read-only at SRC's
+      absolute path, or places it inside a read-only workdir snapshot.
+
+Every failure prints `::error::CODEX_ISOLATION ...` and exits 1.
+"""
+
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+
+MAX_READONLY_FILE = 2 * 1024 * 1024
+MAX_READONLY_FILES = 50000
+MAX_READONLY_TOTAL = 512 * 1024 * 1024
+MAX_WORKSPACE_ENTRIES = 300000
+MAX_WORKSPACE_TOTAL = 4 * 1024 * 1024 * 1024
+MAX_WORKSPACE_FILE = 512 * 1024 * 1024
+MAX_TRANSFER_FILES = 50000
+MAX_TRANSFER_TOTAL = 2 * 1024 * 1024 * 1024
+MAX_INCLUDE_TOTAL = 256 * 1024 * 1024
+CHUNK = 1024 * 1024
+
+# Read-only snapshots never include support checkouts, Codex state, env files
+# or anything that looks like a credential store (clarify's rules, Q11 A).
+READONLY_BAD_PARTS = {".git", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials", "__pycache__"}
+SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
+
+
+class Rejected(Exception):
+	pass
+
+
+def log(message):
+	print(f"CODEX_ISOLATION {message}", file=sys.stderr)
+
+
+def git_env(home):
+	"""Environment for host-side git reads (local object reads only).
+
+	The caller's environment is kept (GIT_DIR / GIT_WORK_TREE matter: the
+	implement workspace is a split work tree), with system/global config,
+	prompts and optional locks switched off. Nothing here talks to a remote,
+	and nothing read here reaches the container except blob/tree objects.
+	"""
+	env = dict(os.environ)
+	env.update({
+		"HOME": str(home),
+		"GIT_CONFIG_GLOBAL": os.devnull,
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_TERMINAL_PROMPT": "0",
+		"GIT_LFS_SKIP_SMUDGE": "1",
+		"GIT_OPTIONAL_LOCKS": "0",
+	})
+	return env
+
+
+GIT_SAFE = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+
+
+def safe_name(name):
+	parts = PurePosixPath(name).parts
+	return bool(parts) and not name.startswith("/") and ".." not in parts and "\\" not in name and "\n" not in name and "\r" not in name and "\0" not in name
+
+
+def has_git_part(name):
+	return ".git" in PurePosixPath(name).parts
+
+
+def readonly_allowed(name):
+	if not safe_name(name):
+		return False
+	for part in PurePosixPath(name).parts:
+		lower = part.lower()
+		if lower in READONLY_BAD_PARTS or lower.startswith(".env") or lower.endswith(SECRET_SUFFIXES):
+			return False
+	return True
+
+
+def walk_no_follow(path, name):
+	"""Return the final node for `name` under `path`, refusing symlinked parents."""
+	node = path
+	parts = PurePosixPath(name).parts
+	for index, part in enumerate(parts):
+		node = node / part
+		if index < len(parts) - 1:
+			info = node.lstat()
+			if not stat.S_ISDIR(info.st_mode):
+				raise Rejected("non-directory parent")
+	return node
+
+
+def copy_regular(source, target, info, limit):
+	"""Copy one regular file without following symlinks; returns (sha256, size)."""
+	if info.st_size > limit:
+		raise Rejected("file too large")
+	fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+	digest = hashlib.sha256()
+	size = 0
+	with os.fdopen(fd, "rb") as handle:
+		opened = os.fstat(handle.fileno())
+		if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+			raise Rejected("file changed during copy")
+		target.parent.mkdir(parents=True, exist_ok=True)
+		with open(target, "xb") as sink:
+			while True:
+				chunk = handle.read(CHUNK)
+				if not chunk:
+					break
+				size += len(chunk)
+				if size > limit:
+					raise Rejected("file grew during copy")
+				digest.update(chunk)
+				sink.write(chunk)
+	mode = 0o755 if info.st_mode & 0o111 else 0o644
+	os.chmod(target, mode)
+	return digest.hexdigest(), size, mode
+
+
+def hash_regular(path):
+	info = path.lstat()
+	if not stat.S_ISREG(info.st_mode):
+		raise Rejected("not a regular file")
+	fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+	digest = hashlib.sha256()
+	with os.fdopen(fd, "rb") as handle:
+		while True:
+			chunk = handle.read(CHUNK)
+			if not chunk:
+				break
+			digest.update(chunk)
+	return digest.hexdigest(), 0o755 if info.st_mode & 0o111 else 0o644
+
+
+def tracked_paths(host):
+	try:
+		out = subprocess.run(GIT_SAFE + ["ls-files", "-z", "--cached"], cwd=host, env=git_env(tempfile.gettempdir()), check=True, capture_output=True).stdout
+	except (OSError, subprocess.CalledProcessError):
+		return None
+	return [entry.decode("utf-8") for entry in out.split(b"\0") if entry]
+
+
+def walk_paths(host, skip_dirs=frozenset()):
+	for directory, dirs, files in os.walk(host, followlinks=False):
+		rel = Path(directory).relative_to(host)
+		for child in sorted(dirs):
+			name = (rel / child).as_posix()
+			if child == ".git" or name in skip_dirs:
+				dirs.remove(child)
+		for child in sorted(files):
+			yield (rel / child).as_posix()
+		for child in sorted(dirs):
+			if os.path.islink(os.path.join(directory, child)):
+				yield (rel / child).as_posix()
+
+
+def snapshot_readonly(host, dest):
+	names = tracked_paths(host)
+	source = "git"
+	if names is None:
+		names = list(walk_paths(host))
+		source = "walk"
+	count = 0
+	total = 0
+	skipped_large = 0
+	skipped_other = 0
+	for name in sorted(set(names)):
+		if not readonly_allowed(name):
+			skipped_other += 1
+			continue
+		try:
+			node = walk_no_follow(host, name)
+			info = node.lstat()
+		except (FileNotFoundError, NotADirectoryError, Rejected):
+			skipped_other += 1
+			continue
+		if not stat.S_ISREG(info.st_mode) or info.st_mode & (stat.S_ISUID | stat.S_ISGID):
+			skipped_other += 1  # Symlinks and special files never enter the snapshot.
+			continue
+		if info.st_size > MAX_READONLY_FILE:
+			skipped_large += 1
+			continue
+		count += 1
+		total += info.st_size
+		if count > MAX_READONLY_FILES or total > MAX_READONLY_TOTAL:
+			raise Rejected(f"read-only snapshot limit exceeded (files={count} bytes={total})")
+		copy_regular(node, dest.joinpath(*PurePosixPath(name).parts), info, MAX_READONLY_FILE)
+	log(f"snapshot mode=read-only source={source} files={count} bytes={total} skipped_large={skipped_large} skipped_other={skipped_other}")
+
+
+def load_manifest(manifest):
+	data = json.loads(manifest.read_text(encoding="utf-8"))
+	if not isinstance(data, dict) or not isinstance(data.get("entries"), dict) or not isinstance(data.get("prep_roots"), list):
+		raise Rejected("invalid manifest")
+	return data
+
+
+def under_prep_root(name, prep_roots):
+	return any(name == root or name.startswith(root + "/") for root in prep_roots)
+
+
+def clear_except(directory, prefix, keep):
+	"""Remove everything under `directory` except `keep` paths and their ancestors."""
+	for child in os.listdir(directory):
+		name = f"{prefix}{child}"
+		path = directory / child
+		if name in keep:
+			continue
+		if path.is_dir() and not path.is_symlink():
+			if any(root.startswith(name + "/") for root in keep):
+				clear_except(path, name + "/", keep)
+				continue
+			shutil.rmtree(path)
+		else:
+			path.unlink()
+
+
+def snapshot_workspace(host, dest, manifest):
+	prep_roots = []
+	if manifest.exists():
+		prep_roots = load_manifest(manifest)["prep_roots"]
+	# Start from an empty copy apart from dependency directories created by
+	# the credential-free dependency phase. Leftovers from an earlier (or
+	# killed) attempt never survive into the next one.
+	dest.mkdir(parents=True, exist_ok=True)
+	clear_except(dest, "", set(prep_roots))
+	entries = {}
+	total = 0
+	skipped = 0
+	for directory, dirs, files in os.walk(host, followlinks=False):
+		rel = Path(directory).relative_to(host)
+		for child in sorted(dirs):
+			name = (rel / child).as_posix()
+			path = Path(directory) / child
+			if child == ".git" or under_prep_root(name, prep_roots):
+				dirs.remove(child)
+				continue
+			if path.is_symlink():
+				dirs.remove(child)
+				files.append(child)
+				continue
+			entries[name] = ["d"]
+			(dest / name).mkdir(parents=True, exist_ok=True)
+		for child in sorted(files):
+			name = (rel / child).as_posix()
+			if child == ".git" or under_prep_root(name, prep_roots):
+				continue  # A worktree's .git file points back at the host repository.
+			if not safe_name(name):
+				raise Rejected("unsafe workspace path")
+			path = Path(directory) / child
+			info = path.lstat()
+			if len(entries) >= MAX_WORKSPACE_ENTRIES:
+				raise Rejected("workspace entry limit exceeded")
+			if stat.S_ISLNK(info.st_mode):
+				link = os.readlink(path)
+				target = dest / name
+				target.parent.mkdir(parents=True, exist_ok=True)
+				os.symlink(link, target)
+				entries[name] = ["l", link]
+			elif stat.S_ISREG(info.st_mode):
+				digest, size, mode = copy_regular(path, dest / name, info, MAX_WORKSPACE_FILE)
+				total += size
+				if total > MAX_WORKSPACE_TOTAL:
+					raise Rejected("workspace size limit exceeded")
+				entries[name] = ["f", digest, mode]
+			else:
+				skipped += 1
+	manifest.write_text(json.dumps({"entries": entries, "prep_roots": prep_roots}), encoding="utf-8")
+	log(f"snapshot mode=workspace entries={len(entries)} bytes={total} skipped_special={skipped} prep_roots={len(prep_roots)}")
+
+
+def current_state(path):
+	"""Describe a copy-side node: ["f", sha, mode] | ["l", target] | ["d"] | ["x"] (special)."""
+	info = path.lstat()
+	if stat.S_ISLNK(info.st_mode):
+		return ["l", os.readlink(path)]
+	if stat.S_ISDIR(info.st_mode):
+		return ["d"]
+	if stat.S_ISREG(info.st_mode):
+		digest, mode = hash_regular(path)
+		return ["f", digest, mode]
+	return ["x"]
+
+
+def copy_tree_state(dest, prep_roots):
+	state = {}
+	for directory, dirs, files in os.walk(dest, followlinks=False):
+		rel = Path(directory).relative_to(dest)
+		for child in sorted(dirs):
+			name = (rel / child).as_posix()
+			if child == ".git" or under_prep_root(name, prep_roots):
+				dirs.remove(child)
+				continue
+			path = Path(directory) / child
+			if path.is_symlink():
+				dirs.remove(child)
+				state[name] = current_state(path)
+				continue
+			state[name] = ["d"]
+		for child in files:
+			name = (rel / child).as_posix()
+			if child == ".git" or under_prep_root(name, prep_roots):
+				continue
+			if len(state) > MAX_WORKSPACE_ENTRIES:
+				raise Rejected("result entry limit exceeded")
+			state[name] = current_state(Path(directory) / child)
+	return state
+
+
+def prep_finalize(host, dest, manifest):
+	data = load_manifest(manifest)
+	entries = data["entries"]
+	roots = set()
+	# Top-most paths the dependency phase created (node_modules, *.egg-info
+	# next to a package, ...) become prep roots: kept in the copy, never
+	# copied from or back to the host. Everything that was snapshotted is
+	# then restored from the host, so build backends cannot change the files
+	# the agent starts from.
+	for directory, dirs, files in os.walk(dest, followlinks=False):
+		rel = Path(directory).relative_to(dest)
+		for child in list(dirs) + list(files):
+			name = (rel / child).as_posix()
+			if child == ".git" and rel == Path("."):
+				if child in dirs:
+					dirs.remove(child)
+				continue
+			if name not in entries:
+				roots.add(name)
+				if child in dirs:
+					dirs.remove(child)
+	data["prep_roots"] = sorted(roots)
+	manifest.write_text(json.dumps(data), encoding="utf-8")
+	snapshot_workspace(host, dest, manifest)
+	log(f"prep-finalize prep_roots={len(data['prep_roots'])}")
+
+
+def host_matches(host_path, expected):
+	try:
+		info = host_path.lstat()
+	except FileNotFoundError:
+		return expected is None
+	if expected is None:
+		return False
+	kind = expected[0]
+	if kind == "d":
+		return stat.S_ISDIR(info.st_mode)
+	if kind == "l":
+		return stat.S_ISLNK(info.st_mode) and os.readlink(host_path) == expected[1]
+	if kind == "f":
+		return stat.S_ISREG(info.st_mode) and list(hash_regular(host_path)) == expected[1:]
+	return False
+
+
+def transfer(host, dest, manifest):
+	data = load_manifest(manifest)
+	entries = data["entries"]
+	prep_roots = data["prep_roots"]
+	results = copy_tree_state(dest, prep_roots)
+	writes = []
+	deletes = {}
+	rmdirs = []
+	total = 0
+	for name in sorted(set(entries) | set(results)):
+		if has_git_part(name) or under_prep_root(name, prep_roots):
+			continue
+		old = entries.get(name)
+		new = results.get(name)
+		if old == new:
+			continue
+		if not safe_name(name):
+			raise Rejected("unsafe result path")
+		if new is not None and new[0] == "l":
+			raise Rejected(f"symlink result is not transferred: {name}")
+		if new is not None and new[0] == "x":
+			raise Rejected(f"special file result is not transferred: {name}")
+		if old is not None and old[0] == "d":
+			# A removed directory (or one replaced by a file): its children
+			# are handled as their own entries; the directory itself is
+			# removed once it is empty.
+			rmdirs.append(name)
+		elif old is not None and (new is None or new[0] == "d"):
+			deletes[name] = old
+		if new is not None and new[0] == "f":
+			writes.append((name, old, new))
+			total += (dest / name).lstat().st_size
+	if len(writes) + len(deletes) > MAX_TRANSFER_FILES or total > MAX_TRANSFER_TOTAL:
+		raise Rejected(f"transfer limit exceeded (files={len(writes) + len(deletes)} bytes={total})")
+	# Every precondition is checked before the first host write: host paths
+	# still match the manifest, parents are real directories (or are being
+	# replaced), and a new file never lands on an existing host path.
+	for name, old in deletes.items():
+		if not host_matches(walk_no_follow(host, name), old):
+			raise Rejected(f"host path changed since snapshot: {name}")
+	removed = set(deletes) | set(rmdirs)
+	for name, old, _new in writes:
+		parts = PurePosixPath(name).parts
+		node = host
+		for index in range(len(parts) - 1):
+			node = node / parts[index]
+			parent = "/".join(parts[: index + 1])
+			try:
+				info = node.lstat()
+			except FileNotFoundError:
+				break
+			if parent in deletes:
+				break
+			if not stat.S_ISDIR(info.st_mode):
+				raise Rejected(f"result parent is not a host directory: {name}")
+		target = host / name
+		if old is not None and old[0] == "d":
+			if not (target.is_dir() and not target.is_symlink()):
+				raise Rejected(f"host path changed since snapshot: {name}")
+			continue
+		if old is None and any(name.startswith(prefix + "/") for prefix in removed):
+			if target.exists() or target.is_symlink():
+				raise Rejected(f"new result conflicts with host path: {name}")
+			continue
+		if not host_matches(target, old):
+			raise Rejected(f"host path changed since snapshot: {name}")
+	for name in sorted(deletes, key=lambda item: item.count("/"), reverse=True):
+		(host / name).unlink()
+	for name in sorted(rmdirs, key=lambda item: item.count("/"), reverse=True):
+		path = host / name
+		try:
+			if path.is_dir() and not path.is_symlink():
+				path.rmdir()
+		except OSError:
+			pass  # Still holds host-only files (for example ignored build output).
+	written = 0
+	for name, _old, new in writes:
+		target = host / name
+		target.parent.mkdir(parents=True, exist_ok=True)
+		if target.is_dir() and not target.is_symlink():
+			raise Rejected(f"result replaces a non-empty host directory: {name}")
+		fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".codex-isolated-")
+		try:
+			digest = hashlib.sha256()
+			with os.fdopen(fd, "wb") as sink:
+				src_fd = os.open(dest / name, os.O_RDONLY | os.O_NOFOLLOW)
+				with os.fdopen(src_fd, "rb") as handle:
+					while True:
+						chunk = handle.read(CHUNK)
+						if not chunk:
+							break
+						digest.update(chunk)
+						sink.write(chunk)
+			if digest.hexdigest() != new[1]:
+				raise Rejected(f"result changed during transfer: {name}")
+			os.chmod(tmp, new[2])
+			os.replace(tmp, target)
+			written += 1
+		finally:
+			if os.path.exists(tmp):
+				os.unlink(tmp)
+	log(f"transfer written={written} deleted={len(deletes)} removed_dirs={len(rmdirs)} bytes={total}")
+
+
+def remove_node(path):
+	if path.is_dir() and not path.is_symlink():
+		shutil.rmtree(path, ignore_errors=True)
+	elif path.exists() or path.is_symlink():
+		path.unlink()
+
+
+def seed_git(host, dest):
+	home = Path(tempfile.mkdtemp(prefix="codex-isolated-git-"))
+	try:
+		env = git_env(home)
+		try:
+			tree = subprocess.run(GIT_SAFE + ["rev-parse", "--verify", "HEAD^{tree}"], cwd=host, env=env, check=True, capture_output=True, text=True).stdout.strip()
+		except (OSError, subprocess.CalledProcessError):
+			log("seed-git outcome=skipped reason=no_head")
+			return
+		if not tree or not all(c in "0123456789abcdef" for c in tree):
+			log("seed-git outcome=skipped reason=bad_tree")
+			return
+		pack = home / "objects.pack"
+		with open(pack, "wb") as sink:
+			objects = subprocess.run(GIT_SAFE + ["rev-list", "--objects", tree], cwd=host, env=env, check=True, capture_output=True).stdout
+			subprocess.run(GIT_SAFE + ["pack-objects", "--stdout", "-q"], cwd=host, env=env, input=objects, stdout=sink, check=True)
+		local = dict(env)
+		local.pop("GIT_INDEX_FILE", None)
+		local.pop("GIT_OBJECT_DIRECTORY", None)
+		local.pop("GIT_ALTERNATE_OBJECT_DIRECTORIES", None)
+		local.update({
+			"GIT_DIR": str(dest / ".git"), "GIT_WORK_TREE": str(dest),
+			"GIT_AUTHOR_NAME": "isolated", "GIT_AUTHOR_EMAIL": "isolated@invalid",
+			"GIT_COMMITTER_NAME": "isolated", "GIT_COMMITTER_EMAIL": "isolated@invalid",
+		})
+		remove_node(dest / ".git")
+		subprocess.run(["git", "init", "-q", str(dest)], env=local, check=True, capture_output=True)
+		with open(pack, "rb") as source:
+			subprocess.run(["git", "unpack-objects", "-q"], env=local, stdin=source, check=True, capture_output=True)
+		commit = subprocess.run(["git", "commit-tree", tree, "-m", "isolated snapshot"], env=local, check=True, capture_output=True, text=True).stdout.strip()
+		subprocess.run(["git", "update-ref", "refs/heads/isolated", commit], env=local, check=True, capture_output=True)
+		subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/isolated"], env=local, check=True, capture_output=True)
+		subprocess.run(["git", "read-tree", tree], env=local, check=True, capture_output=True)
+		log("seed-git outcome=ok")
+	except (OSError, subprocess.CalledProcessError) as exc:
+		log(f"seed-git outcome=skipped reason={type(exc).__name__}")
+		remove_node(dest / ".git")
+	finally:
+		shutil.rmtree(home, ignore_errors=True)
+
+
+def copy_include(source, target):
+	"""Copy SRC (regular files only, no symlinks, no .git) to exactly TARGET."""
+	source = Path(os.path.abspath(source))
+	if not source.is_absolute() or source.is_symlink():
+		raise Rejected("include must be an absolute, non-symlink path")
+	total = 0
+	info = source.lstat()
+	if stat.S_ISREG(info.st_mode):
+		pairs = [(source, target, info)]
+	elif stat.S_ISDIR(info.st_mode):
+		pairs = []
+		for directory, dirs, files in os.walk(source, followlinks=False):
+			dirs[:] = [d for d in dirs if d != ".git" and not (Path(directory) / d).is_symlink()]
+			for child in files:
+				path = Path(directory) / child
+				child_info = path.lstat()
+				if child != ".git" and stat.S_ISREG(child_info.st_mode):
+					pairs.append((path, target / path.relative_to(source), child_info))
+	else:
+		raise Rejected("include must be a regular file or directory")
+	for path, destination, path_info in pairs:
+		total += path_info.st_size
+		if total > MAX_INCLUDE_TOTAL:
+			raise Rejected("include size limit exceeded")
+		if destination.exists():
+			destination.unlink()
+		copy_regular(path, destination, path_info, MAX_INCLUDE_TOTAL)
+	if not pairs and stat.S_ISDIR(info.st_mode):
+		target.mkdir(parents=True, exist_ok=True)
+	log(f"include files={len(pairs)} bytes={total}")
+
+
+def main():
+	command = sys.argv[1] if len(sys.argv) > 1 else ""
+	arity = {"snapshot-readonly": 2, "snapshot-workspace": 3, "prep-finalize": 3, "transfer": 3, "seed-git": 2, "copy-include": 2}
+	if command not in arity or len(sys.argv) != arity[command] + 2:
+		print("usage: codex_isolated_workspace.py <snapshot-readonly|snapshot-workspace|prep-finalize|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
+		raise SystemExit(2)
+	args = [Path(value) for value in sys.argv[2:]]
+	try:
+		if command == "snapshot-readonly":
+			snapshot_readonly(*args)
+		elif command == "snapshot-workspace":
+			snapshot_workspace(*args)
+		elif command == "prep-finalize":
+			prep_finalize(*args)
+		elif command == "transfer":
+			transfer(*args)
+		elif command == "seed-git":
+			seed_git(*args)
+		else:
+			copy_include(*args)
+	except (OSError, ValueError, UnicodeError, Rejected, subprocess.CalledProcessError) as exc:
+		detail = str(exc) if isinstance(exc, Rejected) else type(exc).__name__
+		print(f"::error::CODEX_ISOLATION {command} rejected: {detail}", file=sys.stderr)
+		raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+	main()

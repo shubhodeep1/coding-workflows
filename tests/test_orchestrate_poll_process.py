@@ -22,6 +22,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 
 # Upper bound for a single poller invocation under test. The mocked poller
 # should complete in a few seconds; anything longer indicates a hang (e.g. an
@@ -2758,8 +2760,16 @@ from pathlib import Path
 
 store_path = Path(os.environ['GH_MOCK_STORE'])
 store = json.loads(store_path.read_text(encoding='utf-8'))
-args = sys.argv[1:]
+raw_args = sys.argv[1:]
 real_git = os.environ.get('REAL_GIT_BIN', 'git')
+# The poller's judge worktrees run `git -C <worktree> ...` (and `-c k=v`);
+# match on the subcommand that follows those global options, but keep them
+# for the real git call so the worktree stays the target.
+global_opts = []
+args = list(raw_args)
+while len(args) >= 2 and args[0] in ('-C', '-c'):
+	global_opts.extend(args[:2])
+	args = args[2:]
 
 if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and '--name-only' in args:
 	paths = list(store.get('merge_tree_conflict_paths', []))
@@ -2778,6 +2788,19 @@ if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCES
 
 if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
 	sys.exit(1)
+# Combined-mode branch prep now creates a judge worktree instead of
+# switching the poller's own checkout; the checkout-failure knob covers it.
+if args[:2] == ['worktree', 'add'] and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
+	sys.exit(1)
+
+if args and args[0] == 'fetch' and len([a for a in args[1:] if a not in ('--no-tags', 'origin')]) > 1:
+	# Several refspecs in one call (the integration judge fetches both
+	# branches at once): emulate each one through this mock.
+	for one_refspec in [a for a in args[1:] if a not in ('--no-tags', 'origin')]:
+		one = subprocess.run([sys.executable, __file__, *global_opts, 'fetch', '--no-tags', 'origin', one_refspec])
+		if one.returncode != 0:
+			sys.exit(one.returncode)
+	sys.exit(0)
 
 if args and args[0] == 'fetch':
 	refspec = None
@@ -2843,7 +2866,7 @@ if args and args[0] == 'fetch':
 					sys.exit(update_ref.returncode)
 				sys.exit(1)
 
-proc = subprocess.run([real_git, *args])
+proc = subprocess.run([real_git, *raw_args])
 sys.exit(proc.returncode)
 ''',
 		)
@@ -3408,19 +3431,23 @@ sys.exit(proc.returncode)
 			env["MOCK_STALL_JUDGE_JSON"] = json.dumps(mock_stall_judge_json)
 		if codex_touch_file:
 			touch_path = Path(codex_touch_file)
-			if not touch_path.is_absolute():
-				# Relative paths resolve inside the sandbox git repo, which is
-				# the poller's cwd and the checkout the judge edits. Resolving
-				# them against runtime_dir (outside the repo) meant the mock
-				# judge never changed a tracked tree; the follow-up-PR tests
-				# then only saw a dirty tree because the consumer artifact
-				# cleanup used to delete tracked files (fixed in #4033).
-				touch_path = sandbox / touch_path
+			# Relative paths stay relative: the mock codex resolves them
+			# against its working directory, which is the copy of the judge's
+			# worktree inside the (fake) isolated container, so the edit
+			# reaches the worktree only through the helper's write-back, as a
+			# real judge edit does. Resolving them against runtime_dir
+			# (outside the repo) meant the mock judge never changed a tracked
+			# tree; the follow-up-PR tests then only saw a dirty tree because
+			# the consumer artifact cleanup used to delete tracked files
+			# (fixed in #4033).
 			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
 		if mock_orch_state_v2_pack_mode:
 			env["MOCK_ORCH_STATE_V2_PACK_MODE"] = mock_orch_state_v2_pack_mode
 		if env_overrides:
 			env.update({str(k): str(v) for k, v in env_overrides.items()})
+		# Judges launch Codex through scripts/codex_isolated_exec.sh; the
+		# recording fake docker runs the mock codex in the fake container.
+		env = enable_fake_isolation(bin_dir, sandbox / "scripts", env)
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],

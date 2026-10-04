@@ -320,8 +320,13 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 } > "${PROMPT_FILE}"
 
 if command -v codex >/dev/null 2>&1; then
+	# The PR description and check logs are untrusted, so the agent runs in
+	# the credential-free, network-isolated container
+	# (scripts/codex_isolated_exec.sh, read-only snapshot): beyond the
+	# env -u below, it never holds the OpenRouter key or the checkout's .git.
 	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
-		codex --ask-for-approval never \
+		bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh" run --mode read-only -- \
+		--ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
 		-c include_apply_patch_tool=true \
 		exec --skip-git-repo-check \

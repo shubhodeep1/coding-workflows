@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,8 @@ CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "security-audit.yml"
 INTERNAL_CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "internal-clarify.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_audit.sh"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 _SANITIZED_GIT_ENV_KEYS = ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")
 
 
@@ -220,6 +223,10 @@ def _run_security_audit(
 				_install_security_audit_support_tree(tmp_path, failure_mode=support_failure_mode)
 			)
 		env.update(extra_env or {})
+		# The audit agent runs through scripts/codex_isolated_exec.sh from the
+		# support tree; the fake docker runs the mock codex in the fake container.
+		support_scripts = Path(env["SECURITY_AUDIT_SUPPORT_DIR"]) / "scripts" if env.get("SECURITY_AUDIT_SUPPORT_DIR") else REPO_ROOT / "scripts"
+		env = enable_fake_isolation(bin_dir, support_scripts, env)
 		proc = subprocess.run(
 			["bash", "--noprofile", "--norc", str(SCRIPT_PATH), *script_args],
 			cwd=run_cwd,

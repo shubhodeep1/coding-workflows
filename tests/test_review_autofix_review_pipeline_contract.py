@@ -2858,7 +2858,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in consolidate
 	assert 'reviewer\n    "${MODEL_EDITOR}"' in rb_judge
-	assert 'writer\n        "${MODEL_EDITOR}"' in rb_judge
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run\n        "${RB_FIX_PROMPT}"\n        "${RB_FIX_OUTPUT}"\n        "${MODEL_EDITOR}"' in rb_judge
 	assert 'OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer' in rb_judge
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in rb_judge

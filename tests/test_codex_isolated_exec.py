@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""Behaviour tests for scripts/codex_isolated_exec.sh.
+
+Docker is replaced by tests/codex_isolation_fakes.py's recording `docker`,
+which runs a fake `codex` inside the mounted copy. Everything else is real:
+the snapshot, the synthetic .git, the host-side model broker and the
+workspace transfer. The assertions are the isolation contract: neither
+Docker nor the agent ever receives GH_TOKEN / GITHUB_TOKEN / GH_PAT, the
+OpenRouter key or the Telegram secret; the container has no network, a
+read-only root and no capabilities; the host checkout and its .git are never
+mounted; and Codex never falls back to running on the host.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from codex_isolation_fakes import (  # noqa: E402
+	assert_no_secret_env,
+	copy_isolation_support,
+	docker_runs,
+	install_fake_docker,
+	read_docker_log,
+	short_temp_dir,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TOKEN = "ghp_isolationtesttoken000000000000000000"
+OPENROUTER_KEY = "sk-or-isolation-test-key"
+
+FAKE_CODEX = r'''#!__PYTHON__
+import json, os, sys
+prompt = sys.stdin.read()
+record = {"argv": sys.argv[1:], "cwd": os.getcwd(), "env": dict(os.environ), "prompt": prompt,
+	"files": sorted(os.listdir("."))}
+gitcfg = os.path.join(".git", "config")
+record["gitconfig"] = open(gitcfg).read() if os.path.exists(gitcfg) else ""
+with open(__LOG__, "a") as handle:
+	handle.write(json.dumps(record) + "\n")
+action = os.environ.get("CODEX_ISOLATED_WORKDIR") and __ACTION__
+if action == "edit":
+	open("src/app.py", "w").write("print('edited by agent')\n")
+	open("new_file.py", "w").write("y = 2\n")
+elif action == "symlink":
+	os.symlink("/etc/passwd", "evil")
+print("FAKE_CODEX_OUTPUT")
+sys.exit(int(__EXIT__))
+'''
+
+
+def git(repo, *args):
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	env.update({"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+	return subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True, text=True).stdout
+
+
+@pytest.fixture()
+def sandbox(tmp_path):
+	runner_temp = short_temp_dir()
+	scripts = tmp_path / "support"
+	copy_isolation_support(scripts)
+	repo = runner_temp / "repo"
+	repo.mkdir()
+	git(repo, "init", "-q")
+	git(repo, "remote", "add", "origin", f"https://x-access-token:{TOKEN}@github.com/o/r")
+	(repo / "src").mkdir()
+	(repo / "src" / "app.py").write_text("print('app')\n")
+	git(repo, "add", "-A")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+	bin_dir = tmp_path / "bin"
+	docker_log = tmp_path / "docker.jsonl"
+	codex_log = tmp_path / "codex.jsonl"
+	install_fake_docker(bin_dir, docker_log)
+	codex_home = tmp_path / "hostcodex"
+	codex_home.mkdir()
+	(codex_home / "config.toml").write_text('web_search = "disabled"\nmodel_reasoning_effort = "low"\n')
+	yield {
+		"runner_temp": runner_temp,
+		"scripts": scripts,
+		"repo": repo,
+		"bin": bin_dir,
+		"docker_log": docker_log,
+		"codex_log": codex_log,
+		"codex_home": codex_home,
+	}
+	shutil.rmtree(runner_temp, ignore_errors=True)
+
+
+def write_fake_codex(sandbox, action="none", exit_code=0):
+	script = (
+		FAKE_CODEX.replace("__PYTHON__", sys.executable)
+		.replace("__LOG__", repr(str(sandbox["codex_log"])))
+		.replace("__ACTION__", repr(action))
+		.replace("__EXIT__", repr(str(exit_code)))
+	)
+	target = sandbox["bin"] / "codex"
+	target.write_text(script)
+	target.chmod(0o755)
+
+
+def run_helper(sandbox, *helper_args, env_extra=None, path=None, prompt="Prompt with untrusted issue text"):
+	env = {
+		"PATH": path if path is not None else f"{sandbox['bin']}:{os.environ['PATH']}",
+		"HOME": str(sandbox["runner_temp"]),
+		"RUNNER_TEMP": str(sandbox["runner_temp"]),
+		"CODEX_HOME": str(sandbox["codex_home"]),
+		"GH_TOKEN": TOKEN,
+		"GITHUB_TOKEN": TOKEN,
+		"GH_PAT": TOKEN,
+		"OPENROUTER_API_KEY": OPENROUTER_KEY,
+		"TG_BOT_SECRET": "tg-secret",
+		"PYTHONDONTWRITEBYTECODE": "1",
+	}
+	env.update(env_extra or {})
+	return subprocess.run(
+		["bash", str(sandbox["scripts"] / "codex_isolated_exec.sh"), *helper_args],
+		cwd=sandbox["repo"],
+		input=prompt,
+		capture_output=True,
+		text=True,
+		env=env,
+		timeout=120,
+	)
+
+
+CODEX_ARGS = ["--", "--ask-for-approval", "never", "exec", "--skip-git-repo-check", "--model", "openai/gpt-5.4", "--sandbox", "danger-full-access"]
+
+
+def codex_records(sandbox):
+	path = sandbox["codex_log"]
+	return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def mounts_of(run_entry):
+	argv = run_entry["argv"]
+	return [argv[i + 1] for i, value in enumerate(argv) if value == "--mount"]
+
+
+def test_read_only_run_has_no_secrets_no_network_and_no_host_checkout(sandbox):
+	write_fake_codex(sandbox)
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip() == "FAKE_CODEX_OUTPUT"
+
+	for entry in read_docker_log(sandbox["docker_log"]):
+		# LC_CTYPE is added by the fake docker's own Python (PEP 538).
+		assert set(entry["env"]) <= {"PATH", "HOME", "LC_CTYPE"}, entry["env"].keys()
+	run_entry = docker_runs(sandbox["docker_log"])[0]
+	argv = run_entry["argv"]
+	for flag in ("--init", "--read-only", "-i"):
+		assert flag in argv
+	assert argv[argv.index("--network") + 1] == "none"
+	assert argv[argv.index("--cap-drop") + 1] == "ALL"
+	assert argv[argv.index("--security-opt") + 1] == "no-new-privileges"
+	env_flags = [argv[i + 1] for i, value in enumerate(argv) if value == "--env"]
+	assert "CODEX_ISOLATED_PROXY_KEY=isolated-placeholder" in env_flags
+	assert not any(OPENROUTER_KEY in flag or TOKEN in flag for flag in env_flags)
+	repo = str(sandbox["repo"])
+	work_mounts = [m for m in mounts_of(run_entry) if f"dst={repo}" in m]
+	assert len(work_mounts) == 1 and work_mounts[0].endswith(",readonly")
+	assert f"src={repo}," not in work_mounts[0], "the host checkout itself must never be mounted"
+	assert not any("/.git" in m or "docker.sock" in m for m in mounts_of(run_entry))
+
+	record = codex_records(sandbox)[0]
+	assert_no_secret_env(record["env"])
+	assert record["cwd"] != repo
+	assert TOKEN not in record["gitconfig"]
+	assert record["prompt"] == "Prompt with untrusted issue text"
+	assert record["argv"][-4:] == ["--model", "openai/gpt-5.4", "--sandbox", "danger-full-access"]
+	assert record["env"]["CODEX_ISOLATED_REASONING"] == "low"
+	assert record["env"]["CODEX_ISOLATED_WEB_SEARCH"] == "disabled"
+
+
+def test_codex_exit_status_passes_through(sandbox):
+	write_fake_codex(sandbox, exit_code=3)
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS)
+	assert proc.returncode == 3
+
+
+def test_workspace_run_copies_agent_edits_back(sandbox):
+	write_fake_codex(sandbox, action="edit")
+	proc = run_helper(sandbox, "run", "--mode", "workspace", *CODEX_ARGS)
+	assert proc.returncode == 0, proc.stderr
+	repo = sandbox["repo"]
+	assert (repo / "src" / "app.py").read_text() == "print('edited by agent')\n"
+	assert (repo / "new_file.py").read_text() == "y = 2\n"
+	assert TOKEN in (repo / ".git" / "config").read_text()
+	run_entry = docker_runs(sandbox["docker_log"])[0]
+	work_mount = [m for m in mounts_of(run_entry) if f"dst={repo}" in m][0]
+	assert not work_mount.endswith(",readonly")
+
+
+def test_workspace_symlink_result_is_refused(sandbox):
+	write_fake_codex(sandbox, action="symlink")
+	proc = run_helper(sandbox, "run", "--mode", "workspace", *CODEX_ARGS)
+	assert proc.returncode == 1
+	assert "workspace transfer rejected" in proc.stderr
+	assert not (sandbox["repo"] / "evil").is_symlink()
+
+
+def test_missing_docker_fails_closed_and_never_runs_host_codex(sandbox, tmp_path):
+	write_fake_codex(sandbox)
+	(sandbox["bin"] / "docker").unlink()
+	# PATH holds the fake codex (standing in for the host binary) and every
+	# system tool except Docker.
+	no_docker = tmp_path / "no-docker-bin"
+	no_docker.mkdir()
+	for system_dir in ("/usr/local/bin", "/usr/bin", "/bin"):
+		if not Path(system_dir).is_dir():
+			continue
+		for entry in Path(system_dir).iterdir():
+			target = no_docker / entry.name
+			if entry.name != "docker" and not target.exists():
+				target.symlink_to(entry)
+	path = f"{sandbox['bin']}:{no_docker}"
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS, path=path)
+	assert proc.returncode == 1
+	assert "::error::CODEX_ISOLATION" in proc.stderr
+	assert codex_records(sandbox) == []
+
+
+def test_missing_openrouter_key_fails_closed(sandbox):
+	write_fake_codex(sandbox)
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS, env_extra={"OPENROUTER_API_KEY": ""})
+	assert proc.returncode == 1
+	assert codex_records(sandbox) == []
+
+
+def test_include_is_mounted_read_only_at_its_own_path(sandbox):
+	write_fake_codex(sandbox)
+	runtime = sandbox["runner_temp"] / "runtime"
+	runtime.mkdir()
+	(runtime / "context.txt").write_text("context\n")
+	proc = run_helper(sandbox, "run", "--mode", "read-only", "--include", str(runtime / "context.txt"), *CODEX_ARGS)
+	assert proc.returncode == 0, proc.stderr
+	run_entry = docker_runs(sandbox["docker_log"])[0]
+	include_mounts = [m for m in mounts_of(run_entry) if f"dst={runtime}/context.txt" in m]
+	assert len(include_mounts) == 1 and include_mounts[0].endswith(",readonly")
+
+
+def test_persistent_root_is_reused_and_cleaned_up(sandbox):
+	write_fake_codex(sandbox, action="edit")
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]))
+	assert prep.returncode == 0, prep.stderr
+	root = prep.stdout.strip()
+	assert Path(root).name.startswith("codex-isolated-")
+	proc = run_helper(sandbox, "run", "--mode", "workspace", "--root", root, *CODEX_ARGS)
+	assert proc.returncode == 0, proc.stderr
+	assert Path(root).is_dir(), "a persistent root survives the run"
+	assert run_helper(sandbox, "cleanup", "--root", root).returncode == 0
+	assert not Path(root).exists()
+
+
+def test_foreign_root_is_rejected(sandbox, tmp_path):
+	write_fake_codex(sandbox)
+	foreign = sandbox["runner_temp"] / "not-ours"
+	foreign.mkdir()
+	proc = run_helper(sandbox, "run", "--mode", "workspace", "--root", str(foreign), *CODEX_ARGS)
+	assert proc.returncode == 1 and "sandbox root rejected" in proc.stderr
+	proc = run_helper(sandbox, "cleanup", "--root", str(foreign))
+	assert proc.returncode == 1 and foreign.exists()
+
+
+def test_thread_reuse_direct_run_launches_through_the_helper(sandbox, tmp_path):
+	write_fake_codex(sandbox)
+	prompt = tmp_path / "prompt.txt"
+	prompt.write_text("Prompt\n")
+	output = tmp_path / "out.txt"
+	env = {
+		"PATH": f"{sandbox['bin']}:{os.environ['PATH']}",
+		"HOME": str(sandbox["runner_temp"]),
+		"RUNNER_TEMP": str(sandbox["runner_temp"]),
+		"CODEX_HOME": str(sandbox["codex_home"]),
+		"GH_TOKEN": TOKEN,
+		"OPENROUTER_API_KEY": OPENROUTER_KEY,
+		"RUNTIME_DIR": str(tmp_path / "runtime"),
+		"CODEX_ISOLATED_EXEC": str(sandbox["scripts"] / "codex_isolated_exec.sh"),
+		"CODEX_ISOLATED_MODE": "read-only",
+		"CODEX_THREAD_REUSE_STATE_KEY": "implement",
+		"CODEX_THREAD_REUSE_PROMPT_FILE": str(prompt),
+		"CODEX_THREAD_REUSE_OUTPUT_FILE": str(output),
+		"CODEX_THREAD_REUSE_PHASE": "implement",
+		"CODEX_THREAD_REUSE_MODEL": "openai/gpt-5.4",
+		"PYTHONDONTWRITEBYTECODE": "1",
+	}
+	proc = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "codex_thread_reuse.sh"), "direct-run"],
+		cwd=sandbox["repo"], env=env, capture_output=True, text=True, timeout=120,
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert output.read_text().strip() == "FAKE_CODEX_OUTPUT"
+	assert docker_runs(sandbox["docker_log"]), "codex_thread_reuse.sh must launch through the helper"
+	assert_no_secret_env(codex_records(sandbox)[0]["env"])

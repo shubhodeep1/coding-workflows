@@ -18,6 +18,9 @@ from typing import Callable
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# Discovery launches Codex through the credential-free, network-isolated
+# helper (scripts/codex_isolated_exec.sh, read-only snapshot of the clone).
+ISOLATED_CODEX_PREFIX = ("bash", str(REPO_ROOT / "scripts" / "codex_isolated_exec.sh"), "run", "--mode", "read-only")
 MODULE_PATH = REPO_ROOT / "scripts" / "validation_refresh_runner.py"
 
 spec = importlib.util.spec_from_file_location("validation_refresh_runner", MODULE_PATH)
@@ -582,7 +585,7 @@ def test_discovery_dispatch_opens_seed_pr_when_manifest_missing() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				# Discovery dispatch begins:
 				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
-				PlannedCall(("codex",), stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),
+				PlannedCall(ISOLATED_CODEX_PREFIX, stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),
 				PlannedCall(("gh", "pr", "list"), stdout="[]\n"),
 				PlannedCall(("git", "checkout", "-B")),
 				PlannedCall(("git", "config", "user.name")),
@@ -641,7 +644,7 @@ def test_discovery_dispatch_reports_agree_when_types_match() -> None:
 				PlannedCall(("git", "fetch", "origin", "main")),
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
-				PlannedCall(("codex",), stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),
+				PlannedCall(ISOLATED_CODEX_PREFIX, stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),
 				# No PR — agree path skips push and gh pr create.
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
@@ -662,7 +665,7 @@ def test_discovery_dispatch_reports_agree_when_types_match() -> None:
 		assert recorded["discovered_type"] == "node-runtime"
 		assert recorded["pr_url"] is None
 		# No codex retry, no push.
-		assert sum(1 for cmd, _cwd, _check, _env in executor.seen if cmd[0] == "codex") == 1
+		assert sum(1 for cmd, _cwd, _check, _env in executor.seen if tuple(cmd[:len(ISOLATED_CODEX_PREFIX)]) == ISOLATED_CODEX_PREFIX) == 1
 		assert all(cmd[:3] != ["git", "push", "-u"] for cmd, _cwd, _check, _env in executor.seen)
 		executor.assert_consumed()
 
@@ -689,7 +692,7 @@ def test_discovery_dispatch_opens_disagree_pr_on_type_mismatch() -> None:
 				PlannedCall(("git", "fetch", "origin", "main")),
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
-				PlannedCall(("codex",), stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),  # discovery says node-runtime
+				PlannedCall(ISOLATED_CODEX_PREFIX, stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),  # discovery says node-runtime
 				PlannedCall(("gh", "pr", "list"), stdout="[]\n"),
 				PlannedCall(("git", "checkout", "-B")),
 				PlannedCall(("git", "config", "user.name")),
@@ -785,9 +788,9 @@ def test_discovery_dispatch_records_failed_when_codex_exhausts() -> None:
 				PlannedCall(("git", "fetch", "origin", "main")),
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
-				PlannedCall(("codex",), stdout="error: nope\n", check=False),
-				PlannedCall(("codex",), stdout="error: still nope\n", check=False),
-				PlannedCall(("codex",), stdout="error: never\n", check=False),
+				PlannedCall(ISOLATED_CODEX_PREFIX, stdout="error: nope\n", check=False),
+				PlannedCall(ISOLATED_CODEX_PREFIX, stdout="error: still nope\n", check=False),
+				PlannedCall(ISOLATED_CODEX_PREFIX, stdout="error: never\n", check=False),
 				PlannedCall(("git", "fetch", "origin", "main")),
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),

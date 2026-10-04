@@ -1279,7 +1279,11 @@ fi
 security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
 security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
 
-if codex --ask-for-approval never \
+# The audited code is untrusted input, so the agent runs in the
+# credential-free, network-isolated container (read-only snapshot of the
+# audit checkout), launched from the trusted support checkout.
+if bash "${SECURITY_AUDIT_SUPPORT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/codex_isolated_exec.sh" run --mode read-only -- \
+		--ask-for-approval never \
 		-c model_verbosity=low \
 		-c include_apply_patch_tool=true \
 		exec \

@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Contract: every Codex agent that reads untrusted text runs isolated.
+
+The plan, implement, validate, orchestrator, log-analysis, triage,
+security-audit and failure-heal agents read issue bodies, comments, PR diffs
+or CI / workflow logs. A prompt injection there must not be able to read
+GH_PAT (GH_TOKEN), the OpenRouter key, or the checkout's .git (whose config
+carries the GH_PAT remote URL and checkout extraheader). They therefore run
+through scripts/codex_isolated_exec.sh: a credential-free, network-isolated
+container that reaches the model only through the host-side broker
+(scripts/clarify_openrouter_broker.py). These checks pin that wiring; the
+behaviour is covered by tests/test_codex_isolated_exec.py.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = REPO_ROOT / "scripts"
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+HELPER = SCRIPTS / "codex_isolated_exec.sh"
+
+# Files allowed to start the codex binary directly: the two container
+# entrypoints (Codex runs inside the isolated container there).
+CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh"}
+
+RAW_CODEX = re.compile(r'''(?:^|[\s;&|(]|--\s)(?<!Usage: )codex\s+(?:--ask-for-approval|-c\s|exec\b|"\$@")''')
+PY_RAW_CODEX = re.compile(r'''\[\s*"codex"\s*,''')
+
+
+def logical_lines(text: str):
+	"""Shell-ish lines with backslash continuations joined; comments and echo text dropped."""
+	buffer = ""
+	for raw in text.splitlines():
+		stripped = raw.strip()
+		if stripped.startswith("#"):
+			continue
+		if raw.rstrip().endswith("\\"):
+			buffer += raw.rstrip()[:-1] + " "
+			continue
+		line = buffer + raw
+		buffer = ""
+		if re.match(r'''\s*(echo|printf)\b''', line):
+			continue
+		yield line
+
+
+def raw_codex_sites(path: Path):
+	text = path.read_text(encoding="utf-8")
+	if path.suffix == ".py":
+		return [m.group(0) for m in PY_RAW_CODEX.finditer(text)]
+	return [line.strip() for line in logical_lines(text) if RAW_CODEX.search(line)]
+
+
+def test_no_codex_agent_is_started_outside_the_isolation_helpers():
+	offenders = {}
+	for path in sorted(list(SCRIPTS.glob("*.sh")) + list(SCRIPTS.glob("*.py")) + list(WORKFLOWS.glob("*.yml"))):
+		if path.name in CONTAINER_ENTRYPOINTS:
+			continue
+		sites = raw_codex_sites(path)
+		if sites:
+			offenders[str(path.relative_to(REPO_ROOT))] = sites
+	assert not offenders, (
+		"Codex must run through scripts/codex_isolated_exec.sh (credential-free, network-isolated "
+		f"container); found direct launches: {offenders}"
+	)
+
+
+def test_thread_reuse_launches_through_the_isolated_launcher():
+	text = (SCRIPTS / "codex_thread_reuse.sh").read_text(encoding="utf-8")
+	assert 'cmd=("${CODEX_THREAD_REUSE_LAUNCHER[@]}" --ask-for-approval never' in text
+	assert 'CODEX_THREAD_REUSE_LAUNCHER=(bash "${CODEX_ISOLATED_EXEC}" run --mode "${CODEX_ISOLATED_MODE:-read-only}")' in text
+	assert text.count('"${CODEX_THREAD_REUSE_LAUNCHER[@]}" "${prefix[@]}" exec') == 3
+
+
+@pytest.mark.parametrize(
+	"relative, needle",
+	[
+		("scripts/run_plan_codex.sh", 'bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --'),
+		("scripts/validate_process.sh", 'CODEX_ISOLATED_MODE="read-only"'),
+		("scripts/self_heal_validation.sh", 'self_heal_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)'),
+		("scripts/implement_diagnose_post_codex_failure.sh", 'diagnose_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)'),
+		("scripts/workflow_retro_fanout.sh", 'codex_isolated_exec.sh" run --mode read-only --workdir "${REPO_ROOT}"'),
+		("scripts/check_failure_triage.sh", 'codex_isolated_exec.sh" run --mode read-only --'),
+		("scripts/security_audit.sh", 'codex_isolated_exec.sh" run --mode read-only --'),
+		("scripts/workflow_failure_heal_intake.sh", 'heal_isolated_args=(run --mode read-only)'),
+		("scripts/validation_discovery_bootstrap.py", 'CODEX_ISOLATED_EXEC = Path(__file__).resolve().parent / "codex_isolated_exec.sh"'),
+		("scripts/orchestrate_poll_process.sh", 'ORCH_CODEX_ISOLATED_EXEC="${ORCH_SCRIPTS_ROOT}/codex_isolated_exec.sh"'),
+		(".github/workflows/orchestrate.yml", "bash scripts/codex_isolated_exec.sh run --mode read-only --"),
+		(".github/workflows/workflow-log-analysis.yml", "bash scripts/codex_isolated_exec.sh run --mode read-only --"),
+		(".github/workflows/implement.yml", 'codex_isolated_exec.sh" run --mode read-only \\'),
+	],
+)
+def test_each_agent_site_uses_the_helper(relative, needle):
+	assert needle in (REPO_ROOT / relative).read_text(encoding="utf-8")
+
+
+def test_helper_container_has_no_credentials_network_or_host_checkout():
+	text = HELPER.read_text(encoding="utf-8")
+	run_block = text[text.index('env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm -i --init'):]
+	run_block = run_block[: run_block.index("docker_pid=$!")]
+	for flag in ("--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--user"):
+		assert flag in run_block
+	docker_flags = run_block[: run_block.index('"${image}" /bin/bash -c')]
+	env_flags = re.findall(r'''--env\s+"?([^"\s]+)''', docker_flags)
+	assert env_flags and "--env-file" not in docker_flags and " -e " not in docker_flags
+	for secret in ("OPENROUTER_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "TG_BOT_SECRET"):
+		assert not any(secret in flag for flag in env_flags), f"{secret} must never be passed to the agent container"
+	assert "docker.sock" not in text
+	# The key is handed only to the host-side broker, in an otherwise empty env.
+	assert 'env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}"' in text
+	# Support files come from the helper's own (trusted) directory, never the cwd.
+	assert 'support_dir="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"' in text
+	# No switch that turns isolation off and no host fallback.
+	assert "CODEX_ISOLATION_DISABLED" not in text and "fallback" not in text.lower().replace("fall back", "")
+
+
+def step_block(workflow_text: str, name: str) -> str:
+	start = workflow_text.index(f"      - name: {name}\n")
+	end = workflow_text.find("\n      - name: ", start + 1)
+	return workflow_text[start:] if end == -1 else workflow_text[start:end]
+
+
+def test_implement_runs_privileged_helpers_from_the_trusted_copy():
+	text = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	stage = step_block(text, "Stage workflow support files")
+	# The trusted run copy exists in every repo, not only coding-workflows.
+	run_dir_line = 'IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"'
+	assert run_dir_line in stage
+	assert stage.index(run_dir_line) > stage.index('if [ "${is_self_repo}" = "true" ]; then\n            STAGED_SUPPORT_LEDGER=')
+	assert stage.index(run_dir_line) > stage.index('"STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"')
+	for name in ("codex_isolated_exec.sh", "codex_isolated_workspace.py", "clarify_openrouter_broker.py"):
+		assert f" {name}" in stage
+	assert '_staged_support_hooks_dest="${RUNTIME_DIR}/staged_support_run/.github/ai/workspace_hooks/implement"' in stage
+
+	codex_index = text.index("      - name: Run Codex implementation\n")
+	after_editor = text[codex_index:]
+	# No step from the Codex step onward executes a workspace copy of a
+	# support script: the agent's transferred edits could be in it.
+	prompt_free = re.sub(r"cat > \"\$\{PROMPT_TEMPLATE_FILE\}\" <<'EOF'.*?\n          EOF\n", "", after_editor, flags=re.S)
+	executions = re.findall(r'''(?:^|[\s;&|(])(?:bash|source|\.|python3)\s+"?scripts/[A-Za-z0-9_]+\.(?:sh|py)''', prompt_free, flags=re.M)
+	assert executions == [], executions
+	codex_step = step_block(text, "Run Codex implementation")
+	assert 'CODEX_ISOLATED_EXEC="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/codex_isolated_exec.sh"' in codex_step
+	assert 'prepare --workdir "$(pwd)" --deps' in codex_step
+	assert 'CODEX_ISOLATED_MODE="workspace"' in codex_step
+	repair = step_block(text, "Attempt post-Codex syntax repair")
+	assert 'CODEX_ISOLATED_ROOT="${CODEX_ISOLATED_IMPLEMENT_ROOT:-}"' in repair
+	assert "CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}" in text
+
+
+def test_isolated_runs_carry_no_serena_hints():
+	text = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	assert "Serena MCP is available in this run" not in text
+	for script in ("validate_process.sh", "self_heal_validation.sh"):
+		body = (SCRIPTS / script).read_text(encoding="utf-8")
+		assert '[ -n "${CODEX_ISOLATED_EXEC:-}" ] || [ "${SERENA_AVAILABLE:-false}" != "true" ]' in body
+
+
+@pytest.mark.parametrize(
+	"workflow",
+	["plan.yml", "implement.yml", "orchestrate.yml", "orchestrate_poll.yml", "check_failure_triage.yml", "validate.yml"],
+)
+def test_workflows_stage_the_isolation_support_files(workflow):
+	text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+	for name in ("codex_isolated_exec.sh", "codex_isolated_workspace.py", "clarify_openrouter_broker.py"):
+		assert name in text, f"{workflow} must stage {name}"
+
+
+@pytest.mark.parametrize(
+	"workflow",
+	[
+		"plan.yml", "implement.yml", "orchestrate.yml", "orchestrate_poll.yml", "check_failure_triage.yml",
+		"validate.yml", "workflow-log-analysis.yml", "validation-refresh.yml", "security-audit.yml",
+		"workflow-failure-heal-intake.yml",
+	],
+)
+def test_workflows_pin_the_sandbox_codex_version(workflow):
+	text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+	assert "CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}" in text
+
+
+def test_poller_file_editing_judges_use_worktrees_and_trusted_push():
+	text = (SCRIPTS / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert 'git checkout -B "${FOLLOWUP_BRANCH}"' not in text
+	assert 'git checkout -B "${HEAD_REF}"' not in text
+	assert 'RB_COMBINED_WORKDIR="${RUNTIME_DIR:-/tmp}/rb-judge-wt-${rb_issue}"' in text
+	assert 'run --mode workspace --workdir "${RB_COMBINED_WORKDIR}"' in text
+	assert 'git -C "${RB_COMBINED_WORKDIR}" push origin "HEAD:${HEAD_REF}"' in text
+	# Integration judge: the poller fetches, merges, verifies and pushes; the
+	# agent only resolves files and is told it has no network or credentials.
+	assert 'run --mode workspace --workdir "${judge_wt}"' in text
+	assert "fetch both branches" not in text
+	assert "Do NOT run git commit, git push or any" in text
+	assert '_integration_judge_commit_and_push "${judge_wt}"' in text
+	assert 'python3 "${ORCH_FINGERPRINT_VERIFIER}" "${fp_file}"' in text
+
+
+def test_review_blocked_fix_writer_runs_in_the_review_sandbox():
+	text = (SCRIPTS / "review_rb_judge.sh").read_text(encoding="utf-8")
+	assert 'GITHUB_ENV="${rb_fix_sandbox_env}" GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare' in text
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in text
+	fix_block = text[text.index("rb_fix_opencode_cmd=("):]
+	fix_block = fix_block[: fix_block.index(")\n")]
+	assert "opencode_run_cmd" not in fix_block
