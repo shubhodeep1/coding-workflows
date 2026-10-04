@@ -1903,7 +1903,11 @@ never rewritten.
 `CLARIFY_RESPOND`, `SECURITY_JUDGE`, `SECURITY_AUDIT`, `WORKFLOW_HEAL`) run with
 `Read`, `Grep`, `Glob` and a fixed list of read-only `git` / `gh` commands in
 `dontAsk` mode; every other role runs `bypassPermissions`, where the P5 deny
-rules still apply.
+rules still apply, with the tools `Read`, `Grep`, `Glob`, `Bash`, `Edit`,
+`Write`, `WebFetch` and `WebSearch` (the review editor's sandbox included).
+The CLI's `default` tool set is not used: it loads about 35 tools, and their
+descriptions alone push a no-op start-up past the 25,000-token context gate
+in `claude-engine-smoke.yml`.
 
 **Accounts and fallback.** `claude_run` reads the account pool the token step
 writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
