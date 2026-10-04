@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Per CLAUDE.md \u00a720, add exactly one changelog fragment when the PR changes observable behavior, including the editor-fallback error message change to include a transfer failure reason code.\n  expected_change_site: changelog.d/6181-<slug>.md [new]\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: No changelog fragment for issue #6181 exists in the PR diff; PR DIFF contains no new file under `changelog.d/`; `.ai/.workspace_source_manifest.txt:190` references `changelog.d/5144-worktree-merge-guard.md` (a different issue), but no fragment for #6181 is added; `scripts/review_apply_fixes.sh:2165` now includes `reason=<code>`.\n- requirement: `.ai/.workspace_source_manifest.txt` must list only paths that exist in the workspace it inventories.\n  expected_change_site: `.ai/.workspace_source_manifest.txt` line 190 of the new manifest\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No `changelog.d/5144-worktree-merge-guard.md` appears in `pr_changed_files.txt` or `last_commit_stat.txt`; the PR's only manifest delta is this orphan reference.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: Per CLAUDE.md \u00a720, add exactly one changelog fragment when the PR changes observable behavior. The PR changes the error message from a static \"Review sandbox result transfer was incomplete; refusing editor fallback.\" to include a transfer failure reason code such as reason=host_baseline_changed, which is user-visible behavior operators would want documented in the changelog.\n  Expected change site: changelog.d/6181-*.md [new]\n  Evidence of absence: No changelog fragment for issue #6181 exists in the PR diff. The five changed files are .ai/.workspace_source_manifest.txt, scripts/review_apply_fixes.sh, scripts/review_untrusted_sandbox.sh, scripts/review_untrusted_workspace.py, and tests/test_review_autofix_review_pipeline_contract.py. None of them is a changelog fragment, and no new file creation is part of the diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Per CLAUDE.md \u00a720, when a PR changes observable behavior the PR must ship exactly one `changelog.d/<issue-or-pr>-<slug>.md` fragment. The PR changes the editor-fallback error message to embed a transfer-failure reason code (`Review sandbox result transfer was incomplete; refusing editor fallback. reason=<code>`), introduces the `review_sandbox_transfer_reason_*` per-attempt marker pair (write side `scripts/review_untrusted_sandbox.sh:181`, read side `scripts/review_apply_fixes.sh:1964,2154`), and adds a fixed-catalog `reason_code` mapping in `scripts/review_untrusted_workspace.py:217-229` \u2014 all observable operator-visible behavior changes.\n  Expected change site: `changelog.d/6181-<slug>.md` [new] alongside the existing fragment directory entries.\n  Evidence of absence: PR DIFF contains no new file under `changelog.d/`; the `.ai/.workspace_source_manifest.txt` hunk (lines 187-193 of `original_pr_diff.patch`) adds an unrelated `changelog.d/5144-worktree-merge-guard.md` row instead, and the upstream pipeline still folds whatever fragment path is registered (per `scripts/assemble_changelog.py` and `changelog.d/` delivery contract in README \u00a720) so this PR will release without a documented entry.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: `.ai/.workspace_source_manifest.txt` must list only paths that exist in the workspace it inventories (its sorted-line entries are reconciled by `scripts/workspace_init.sh` and consumed downstream by orchestrator poll + review pipelines, per `scripts/workspace_init.sh` and the \u00a720 wiring rules in CLAUDE.md). The PR adds an entry for `changelog.d/5144-worktree-merge-guard.md` but ships no such file in this PR \u2014 the only files added are `scripts/review_apply_fixes.sh`, `scripts/review_untrusted_sandbox.sh`, `scripts/review_untrusted_workspace.py`, and `tests/test_review_autofix_review_pipeline_contract.py` (per `last_commit_stat.txt` and `pr_changed_files.txt`). The entry is also unrelated to issue #6181 (which is about sandbox transfer diagnostics, not worktree merge guards), strongly suggesting a copy-paste from another PR's manifest.\n  Expected change site: `.ai/.workspace_source_manifest.txt` line 190 of the new manifest; either remove the line or replace it with the correct fragment path once the missing fragment above is added.\n  Evidence of absence: No `changelog.d/5144-worktree-merge-guard.md` appears in `pr_changed_files.txt` or `last_commit_stat.txt`. The manifest line was added in the same hunk as the surrounding entries, so the PR's only manifest delta is this orphan reference.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: Per CLAUDE.md \u00a720, add exactly one changelog fragment when the PR changes observable behavior. The PR changes the error message to include a transfer failure reason code (observable behavior change for operators parsing workflow logs).\n  Expected change site: changelog.d/6181-*.md [new]\n  Evidence of absence: No changelog fragment for issue #6181 exists in the PR diff. The manifest update at `.ai/.workspace_source_manifest.txt:190` references `changelog.d/5144-worktree-merge-guard.md` (a different issue), but no fragment for #6181 is added. The error message in `scripts/review_apply_fixes.sh:2165` now includes `reason=<code>` which is user-visible behavior that operators would want documented.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "df1cd54f5b2658d9e80538fe6f3afa768b68f12376635dd1e427506a9bcdf848",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6184,
+    "run_id": "37186604246",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37186604246",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004080216_a10b1e7b85",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6184,
+    "run_id": "37186604246"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T08:02:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
