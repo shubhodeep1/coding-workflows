@@ -210,6 +210,8 @@ def test_poller_file_editing_judges_use_worktrees_and_trusted_push():
 	assert 'if ! jq -ce' in text
 	assert '"$(wc -c < "${fp_file}" 2>/dev/null || echo 0)" -gt 3' in text
 	assert 'git -C "${wt}" add -A -- .' in text
+	assert 'git -C "${wt}" remote set-url origin "https://x-access-token:${GH_TOKEN}' not in text
+	assert 'push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:refs/heads/${integration_branch}"' in text
 
 
 def test_review_blocked_fix_writer_runs_in_the_review_sandbox():

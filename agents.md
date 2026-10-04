@@ -563,6 +563,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   integration-conflict judge work in separate git worktrees under
   `RUNTIME_DIR`; the poller (not the agent) fetches, merges, checks
   conflict markers and the merged sub-issue fingerprints, commits and pushes.
+  Its push uses a one-shot credential helper instead of storing `GH_TOKEN` in
+  the shared Git config of the judge worktree.
   A failed publication logs a warning but counts as a completed judge
   invocation; the next poll tick rechecks mergeability rather than terminalizing
   the project. An already-up-to-date merge creates no empty commit.

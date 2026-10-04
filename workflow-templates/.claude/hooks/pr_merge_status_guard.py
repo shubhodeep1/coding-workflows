@@ -348,6 +348,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			working_directory = None
 		index = 0
 		environment: dict[str, str] = {}
+		# Bash append assignments are prefixes too; keep the following git visible.
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
 			if name.endswith("+"):
@@ -641,7 +642,8 @@ def git_subcommands(command: str) -> set[str]:
 		# Unbalanced quotes — the command is not something we can read.
 		return found
 	for tokens in segments:
-		# Drop leading environment assignments (`GIT_DIR=... git commit`).
+		# Drop leading environment assignments (`GIT_DIR=... git commit`),
+		# including append assignments such as `COUNT+=1 git push`.
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1

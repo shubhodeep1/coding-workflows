@@ -8734,8 +8734,11 @@ _integration_judge_commit_and_push() {
     echo "::warning::[integration-heal] Could not commit the judge resolution for PR #${final_pr}; nothing pushed."
     return 1
   fi
-  git -C "${wt}" remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" >/dev/null 2>&1 || true
-  if git -C "${wt}" push origin "HEAD:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+  # Worktrees share the poller's Git config; use a one-shot credential helper
+  # instead of persisting the token in origin's URL.
+  if git -C "${wt}" -c credential.helper= \
+      -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
+      push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:refs/heads/${integration_branch}" >/dev/null 2>&1; then
     echo "  [integration-heal] Pushed the judge resolution to ${integration_branch} for PR #${final_pr}."
     return 0
   fi
