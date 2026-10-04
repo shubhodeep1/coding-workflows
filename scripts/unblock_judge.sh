@@ -102,7 +102,7 @@ unblock_latest_wait()
 	jq -r --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" '
 		[.[] | select((.user.login // "") == $login)
 			| . as $c
-			| ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "") as $last
+			| ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r")) as $last
 			| ($last | capture("^<!-- ai:unblock-wait:v1 item=(?<item>[0-9]+) fixup=(?<fixup>[0-9]+)(?<done> done)? -->$")?) as $m
 			| select($m.item == $item)
 			| {id: $c.id, fixup: $m.fixup, done: (if ($m.done // "") != "" then "done" else "open" end), at: ($c.created_at // ""), updated: ($c.updated_at // $c.created_at // "")}]
@@ -308,7 +308,7 @@ except (OSError, ValueError):
 def norm(text):
 	text = re.sub(r"https?://\S+", "", text)
 	text = re.sub(r"\b[0-9a-f]{7,40}\b", "", text)
-	text = re.sub(r"\d{3,}", "", text)
+	text = re.sub(r"\b\d{6,}\b", "", text)
 	return " ".join(text.split())[:300]
 reason = ""
 for comment in reversed(comments if isinstance(comments, list) else []):
@@ -492,9 +492,9 @@ unblock_main()
 			local missing_project_markers unblock_marker_entry
 			if ! missing_project_markers="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" \
 				--slurpfile project "${RUNTIME_DIR}/project_comments.json" '
-				[$project[0][]? | select((.user.login // "") == $login) | ((.body // "") | split("\n") | map(select(length > 0)) | last // "")] as $known
+				[$project[0][]? | select((.user.login // "") == $login) | ((.body // "") | split("\n") | map(select(length > 0)) | last // "" | rtrimstr("\r"))] as $known
 				| [.[] | select((.user.login // "") == $login)
-				   | ((.body // "") | split("\n") | map(select(length > 0)) | last // "")
+				   | ((.body // "") | split("\n") | map(select(length > 0)) | last // "" | rtrimstr("\r"))
 				   | select(startswith("<!-- ai:unblock:v1 item=" + $item + " ") and endswith(" -->"))
 				   | select(. as $entry | ($known | index($entry)) == null)] | unique | .[]
 			' "${RUNTIME_DIR}/item_comments.json")"; then

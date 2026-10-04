@@ -8,6 +8,8 @@ import datetime as dt
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -234,6 +236,69 @@ def test_follow_up_activity_restarts_the_24_hour_clock() -> None:
 	assert _decide(entries=old)["terminal_reason"] == "still_blocked_24h"
 	recent = NOW - dt.timedelta(hours=2)
 	assert _decide(entries=old, last_activity=recent)["terminal"] is False
+
+
+def test_operator_step_writer_preserves_newer_same_key_comments(monkeypatch: pytest.MonkeyPatch) -> None:
+	writer_path = ROOT / "scripts" / "operator_step_issue.py"
+	writer_spec = importlib.util.spec_from_file_location("operator_step_issue_review", writer_path)
+	assert writer_spec and writer_spec.loader
+	writer = importlib.util.module_from_spec(writer_spec)
+	writer_spec.loader.exec_module(writer)
+	tracker = {"number": 5, "body": writer.render_body([]), "user": {"login": BOT}, "author_association": "OWNER"}
+	comments: list[dict] = []
+	calls: list[list[str]] = []
+
+	def fake_gh(args: list[str]) -> str:
+		calls.append(args)
+		if args[1] == "user":
+			return BOT
+		if "issues?labels=" in args[1]:
+			return json.dumps([tracker])
+		if "--slurp" in args:
+			return json.dumps([comments])
+		if args[1] == "repos/o/r/issues/5/comments":
+			comments.append({"id": len(comments) + 100, "user": {"login": BOT}, "body": args[-1][5:]})
+			return json.dumps(comments[-1])
+		raise AssertionError(f"unexpected API call: {args}")
+
+	monkeypatch.setattr(writer, "_gh", fake_gh)
+	assert writer.upsert("o/r", "pr-7", "PR #7", [{"title": "Old", "instructions": "step A"}])["entries"] == 1
+	assert writer.upsert("o/r", "pr-7", "PR #7", [{"title": "New", "instructions": "step B"}])["entries"] == 1
+	assert len(comments) == 2 and "**New**" in comments[-1]["body"]
+	assert not any("PATCH" in args or "DELETE" in args for args in calls)
+	writer.upsert("o/r", "pr-7", "PR #7", [{"title": "New", "instructions": "step B"}])
+	assert len(comments) == 2  # No duplicate when the latest entry is identical.
+
+
+def test_fingerprint_evidence_keeps_http_status_codes(tmp_path: Path) -> None:
+	comments = tmp_path / "item_comments.json"
+	(tmp_path / "failing_checks.json").write_text("[]", encoding="utf-8")
+	reasons = []
+	for status_code in (404, 500):
+		comments.write_text(json.dumps([_comment(f"Check returned {status_code} in run 37217510601")]), encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", 'source scripts/unblock_judge.sh; unblock_evidence'],
+			capture_output=True, text=True, check=False,
+			env={"PATH": os.environ["PATH"], "RUNTIME_DIR": str(tmp_path),
+				"UNBLOCK_LOGIN": BOT, "ITEM_KIND": "issue", "ITEM": "7"},
+		)
+		assert result.returncode == 0, result.stderr
+		reasons.append(json.loads(result.stdout)["reason"])
+	assert reasons == ["Check returned 404 in run", "Check returned 500 in run"]
+
+
+def test_crlf_wait_marker_is_still_recognized(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for marker parsing")
+	(tmp_path / "item_comments.json").write_text(json.dumps([{
+		**_comment("Waiting.\r\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->\r\n"), "id": 123,
+	}]), encoding="utf-8")
+	result = subprocess.run(
+		["bash", "-c", 'source scripts/unblock_judge.sh; unblock_latest_wait'],
+		capture_output=True, text=True, check=False,
+		env={"PATH": os.environ["PATH"], "RUNTIME_DIR": str(tmp_path), "UNBLOCK_LOGIN": BOT, "ITEM": "7"},
+	)
+	assert result.returncode == 0 and result.stdout.startswith("123 50 open "), result.stderr
 
 
 # --- scripts/unblock_actions.py ---------------------------------------------

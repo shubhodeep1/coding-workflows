@@ -2586,10 +2586,11 @@ and resolver chains, a failed project) now goes to the unblock judge
   `unblock_judge_dispatch.yml` runs. `scripts/unblock_scan.py` picks items
   blocked for at least `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES`, with no trusted
   `ai:unblock` marker younger than `UNBLOCK_JUDGE_RETRY_HOURS` and no judge
-  running, oldest first, at most one while the shared writer concurrency
-  group is in use. The scan waits for an active judge rather than cancelling
-  its pending successor; `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK=0` disables dispatch.
-  Failed projects are added from the poller's own state.
+  running, oldest first, at most one per tick. The scan waits for an active
+  judge; `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK=0` disables dispatch.
+  Failed projects are added from the poller's own state and take priority in
+  the 30-item details batch. When more than 30 projects have failed, that
+  batch rotates each five-minute tick so none is permanently left out.
 - **Judge.** `unblock_judge_dispatch.yml` (from `workflow-templates/` in a
   consumer) calls `.github/workflows/unblock_judge.yml`, which runs
   `scripts/unblock_judge.sh` with the UNBLOCK_JUDGE role
@@ -2629,10 +2630,13 @@ and resolver chains, a failed project) now goes to the unblock judge
   `ai:orchestrator-managed` label and membership in the project's state;
   missing or unverifiable state skips actuation until it can be confirmed.
   `operator_step` also writes the `ai:operator-step` issue and sends a
-  Telegram WARNING. Each source owns one keyed issue comment, so concurrent
-  activation and unblock runs update independent comments instead of
-  overwriting one shared issue body. Concurrent first-time tracker creation
-  converges on the oldest trusted tracker and closes the duplicate.
+  Telegram WARNING. New operator steps are appended as keyed comments, never
+  written back into the shared issue body. The newest trusted comment for a
+  key is authoritative; older comments and legacy body entries remain as
+  history. A missing or stale tracker listing fails closed after bounded
+  retries rather than posting to a potentially non-canonical issue. Concurrent
+  first-time creation can leave duplicate tracker issues for reconciliation;
+  this writer does not close one containing entries it has not migrated.
   `override_guard` extends the issue's `files_touched` block, or, for the
   destructive latch, leaves a one-shot `override=bulk_delete` marker that
   `implement.yml` spends on the issue's next run. The bulk-delete exception

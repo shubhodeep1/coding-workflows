@@ -37,9 +37,9 @@ An item is picked when all hold:
     --trusted-login) is older than --marker-hours, or there is none;
   - no judge run for it is queued or in progress, and no non-cancelled run
     started in the last --inflight-minutes.
-Oldest block first, at most one dispatch while the shared operator-step
-writer concurrency group is in use. --max=0 disables dispatch; larger values
-are capped at one. An active judge holds the queue until it finishes.
+Oldest block first, at most one dispatch per tick. --max=0 disables dispatch;
+larger values are capped at one. An active judge holds the queue until it
+finishes.
 Output: one JSON line
 `{"dispatch": [{"item", "kind"}], "skipped": {<reason>: <count>}}`, where kind
 is `project` (label ai:orchestrator-tracking), `pr` or `issue`.
@@ -230,8 +230,7 @@ def select(
 			kind = "issue"
 		candidates.append((since, number, kind))
 	candidates.sort()
-	# GitHub Actions keeps only one pending run per concurrency group. Dispatching
-	# a second judge would replace (cancel) the first pending run.
+	# A running judge owns this scan's dispatch slot until it finishes.
 	active_judge = any(
 		isinstance(run, dict)
 		and RUN_NAME_RE.match(str(run.get("display_title") or run.get("name") or ""))

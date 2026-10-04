@@ -169,6 +169,9 @@ def test_project_hooks_run_before_the_command_handlers() -> None:
 	assert 'echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}"' in text
 	assert 'capture("^<!-- ai:unblock-fixup-request:v1 item=' in text
 	assert 'id>unblock-[0-9]+-r[0-9]+) -->$")?' in text
+	assert 'split("\\n") | map(rtrimstr("\\r"))' in text
+	assert '($failed[0] | unique) as $all_projects' in text
+	assert '((now / 300 | floor) % ($all_projects | length)) as $offset' in text
 
 
 def test_hand_overs_add_a_scanned_label_or_failed_state() -> None:

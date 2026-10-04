@@ -15776,7 +15776,7 @@ handle_unblock_judge_project_hooks() {
   requests="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '
     [.[]? | select((.user.login // "") == $login)
       | (.body // "") as $b
-      | ($b | split("\n")) as $lines
+      | ($b | split("\n") | map(rtrimstr("\r"))) as $lines
       | ($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")?) as $m
       | {item: $m.item, id: $m.id,
          title: (($lines[1] // "") | sub("^###\\s*"; "")),
@@ -15922,7 +15922,14 @@ run_unblock_scan() {
   printf '%s' "${search_items}" > "${work_dir}/search.json"
   sort -u "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null | jq -R 'select(test("^[0-9]+$")) | tonumber' | jq -s '.' > "${work_dir}/failed_projects.json" 2>/dev/null \
     || echo '[]' > "${work_dir}/failed_projects.json"
-  numbers_json="$(jq -c --slurpfile failed "${work_dir}/failed_projects.json" '([.[].number] + $failed[0]) | unique | .[:30]' "${work_dir}/search.json" 2>/dev/null || echo '[]')"
+  numbers_json="$(jq -c --slurpfile failed "${work_dir}/failed_projects.json" '
+    ($failed[0] | unique) as $all_projects
+    | ($all_projects | if length > 30 then
+        ((now / 300 | floor) % ($all_projects | length)) as $offset
+        | .[$offset:] + .[:$offset]
+      else . end | .[:30]) as $projects
+    | $projects + ([.[].number] | unique | map(select(. as $number | $projects | index($number) == null)) | .[:(30 - ($projects | length))])
+  ' "${work_dir}/search.json" 2>/dev/null || echo '[]')"
   count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
   [[ "${count}" =~ ^[0-9]+$ ]] || count=0
   if [ "${count}" -eq 0 ]; then

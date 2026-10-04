@@ -44,6 +44,9 @@ for i, a in enumerate(args):
 	if a == "-f":
 		k, _, v = args[i + 1].partition("=")
 		fields.setdefault(k, v)
+method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
+if "user" in args:
+	done("pipeline-bot")
 if endpoint.endswith("/labels/ai%3Aoperator-step"):
 	if state.get("label_missing"):
 		json.dump(state, open(state_path, "w"))
@@ -60,6 +63,9 @@ if "issues?labels=ai:operator-step" in endpoint:
 	if os.environ.get("FAKE_GH_CRLF_LIST") == "1":
 		done(json.dumps([{**listed_issue, "body": listed_issue["body"].replace("\n", "\r\n")} for listed_issue in state.get("operator_issues", [])]))
 	done(json.dumps(state.get("operator_issues", [])))
+if endpoint.endswith("/comments?per_page=100") and method == "GET":
+	comment_endpoint = endpoint.split("?", 1)[0]
+	done(json.dumps([[comment for comment in state["comments"] if comment["endpoint"] == comment_endpoint]]))
 if endpoint.endswith("/files?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_FILES") == "1":
 		sys.exit(1)
@@ -80,8 +86,10 @@ if "-X" in args and "PATCH" in args:
 				issue["body"] = fields.get("body", "")
 	done("{}")
 if endpoint.endswith("/comments"):
-	state["comments"].append({"endpoint": endpoint, "body": fields.get("body", "")})
-	done("{}")
+	comment = {"id": state.get("next_comment_id", 100), "endpoint": endpoint, "body": fields.get("body", ""), "user": {"login": "pipeline-bot"}}
+	state["next_comment_id"] = comment["id"] + 1
+	state["comments"].append(comment)
+	done(json.dumps(comment))
 if endpoint == "repos/o/r/issues" and "title" in fields:
 	if os.environ.get("FAKE_GH_FAIL_CREATE") == "1":
 		sys.exit(1)
@@ -107,7 +115,7 @@ def _setup(tmp_path: Path, **state) -> tuple[dict, Path]:
 	gh.write_text(FAKE_GH, encoding="utf-8")
 	gh.chmod(0o755)
 	state_file = tmp_path / "state.json"
-	base = {"calls": [], "comments": [], "created": [], "closed": [], "operator_issues": [], "linked": {}}
+	base = {"calls": [], "comments": [], "created": [], "closed": [], "operator_issues": [], "linked": {}, "next_comment_id": 100}
 	base.update(state)
 	state_file.write_text(json.dumps(base), encoding="utf-8")
 	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_STATE=str(state_file), PYTHONDONTWRITEBYTECODE="1")
@@ -162,8 +170,8 @@ def test_dormant_verdict_posts_marker_opens_fix_issue_and_records_operator_step(
 	assert fix_issue["body"].startswith("<!-- ai:activation-fix:v1 source=pr-42 -->")
 	operator_issue = state["created"][1]
 	assert operator_issue["labels[]"] == "ai:operator-step"
-	assert "<!-- ai:operator-step:entry key=pr-42 -->" in operator_issue["body"]
-	assert "Stays off until then: `NIGHTLY_REPORT_ENABLED`." in operator_issue["body"]
+	operator_entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
+	assert "Stays off until then: `NIGHTLY_REPORT_ENABLED`." in operator_entry["body"]
 
 
 def test_live_verdict_only_posts_the_marker(tmp_path: Path) -> None:
@@ -336,12 +344,13 @@ def test_writer_replaces_its_own_entry_and_keeps_others(tmp_path: Path) -> None:
 		return json.loads(state_file.read_text(encoding="utf-8"))
 
 	state = run("pr-2")
-	assert state["patched"]["endpoint"] == "repos/o/r/issues/5"
-	assert [key for key, _ in writer.parse_entries(state["patched"]["body"])] == ["pr-1", "pr-2"]
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1"]
 	state = run("pr-1")
-	body = state["patched"]["body"]
-	assert [key for key, _ in writer.parse_entries(body)] == ["pr-1", "pr-2"]
-	assert "**B**" in body and "**A**" not in body
+	assert [comment["body"].split("\n", 1)[0] for comment in state["comments"]] == [
+		"<!-- ai:operator-step:entry key=pr-2 -->", "<!-- ai:operator-step:entry key=pr-1 -->",
+	]
+	assert "**B**" in state["comments"][-1]["body"]
+	assert "**A**" in state["operator_issues"][0]["body"]  # Legacy entry is immutable.
 	assert state["created"] == []
 
 
@@ -357,8 +366,10 @@ def test_writer_reconciles_duplicate_trackers_without_losing_entries(tmp_path: P
 	)
 	assert result.returncode == 0, result.stdout
 	state = json.loads(state_file.read_text(encoding="utf-8"))
-	assert state["closed"] == [6]
-	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1", "pr-2", "pr-3"]
+	assert state["closed"] == []  # Do not close an issue whose legacy entries have not been migrated.
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1"]
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][1]["body"])] == ["pr-2"]
+	assert state["comments"][-1]["body"].startswith("<!-- ai:operator-step:entry key=pr-3 -->")
 
 
 def test_writer_upserts_against_crlf_tracker_body(tmp_path: Path) -> None:
@@ -374,8 +385,8 @@ def test_writer_upserts_against_crlf_tracker_body(tmp_path: Path) -> None:
 	)
 	state = json.loads(state_file.read_text(encoding="utf-8"))
 	assert result.returncode == 0, result.stdout
-	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1", "pr-2"]
-	assert "\r" not in state["operator_issues"][0]["body"]
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1"]
+	assert state["comments"][-1]["body"].startswith("<!-- ai:operator-step:entry key=pr-2 -->")
 
 
 def test_writer_does_not_recreate_when_label_listing_lags_create(tmp_path: Path) -> None:
@@ -389,7 +400,7 @@ def test_writer_does_not_recreate_when_label_listing_lags_create(tmp_path: Path)
 	state = json.loads(state_file.read_text(encoding="utf-8"))
 	assert result.returncode == 0, result.stdout
 	assert len(state["created"]) == 1
-	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-7"]
+	assert state["comments"][-1]["body"].startswith("<!-- ai:operator-step:entry key=pr-7 -->")
 
 
 def test_writer_trims_oldest_entries_to_fit() -> None:
