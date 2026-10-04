@@ -5,13 +5,34 @@
   "entry_id": "processed_command_6236_5985368381_approved",
   "issue_number": 6236,
   "metadata": {
+    "branch": "ai/issue-6236",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/claude-engine-smoke.yml",
+      ".github/workflows/orchestrate_poll.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/6236-read-profile-claude-isolation.md",
+      "scripts/ai_engine.sh",
+      "scripts/clarify_sandbox/Dockerfile",
+      "scripts/stage_workflow_support.sh",
+      "scripts/workflow_failure_heal_intake.sh",
+      "tests/test_ai_engine.py",
+      "tests/test_orchestrator_judges_claude_engine.py",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 6236,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6236",
+    "pr_number": 6245,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6245",
+    "run_attempt": "1",
+    "run_id": "37242019477",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37242019477"
   },
   "run_attempt": 1,
   "run_id": "37242019477",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-04T23:01:03Z",
+  "status": "completed",
+  "timestamp": "2026-10-04T23:27:32Z",
   "workflow": "implement"
 }
