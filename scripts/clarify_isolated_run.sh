@@ -100,6 +100,52 @@ except (OSError, ValueError, UnicodeError) as exc:
     raise SystemExit("clarify source snapshot rejected") from None
 PY
 
+# Workflow-heal evidence (optional): a trusted step fetched the failing runs'
+# logs into CLARIFY_EVIDENCE_DIR because the agent has no token to read them.
+# Copy its regular files (never a symlink) into the run root and mount that
+# copy read-only at /evidence; the host directory itself is never mounted.
+evidence_mount=()
+if [ -n "${CLARIFY_EVIDENCE_DIR:-}" ]; then
+	evidence_src="$(realpath -e -- "${CLARIFY_EVIDENCE_DIR}" 2>/dev/null || true)"
+	evidence_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}" 2>/dev/null || echo /invalid)"
+	if [ -n "${evidence_src}" ] && [ -d "${evidence_src}" ] && [[ "${evidence_src}" == "${evidence_root}"/* ]]; then
+		mkdir -m 0755 "${run_root}/evidence"
+		if PYTHONDONTWRITEBYTECODE=1 python3 - "${evidence_src}" "${run_root}/evidence" <<'EVIDENCE_PY'
+import os
+import pathlib
+import stat
+import sys
+
+src, dest = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+total = 0
+for directory, dirs, files in os.walk(src, followlinks=False):
+	rel = pathlib.Path(directory).relative_to(src)
+	dirs[:] = [d for d in dirs if not (rel == pathlib.Path(".") and d == "cache") and not (pathlib.Path(directory) / d).is_symlink()]
+	for name in files:
+		path = pathlib.Path(directory) / name
+		info = path.lstat()
+		if not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024 * 1024:
+			continue
+		total += info.st_size
+		if total > 4 * 1024 * 1024:
+			raise SystemExit("evidence too large")
+		target = dest / rel / name
+		target.parent.mkdir(parents=True, exist_ok=True)
+		fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+		with os.fdopen(fd, "rb") as source, target.open("xb") as sink:
+			sink.write(source.read(2 * 1024 * 1024))
+		os.chmod(target, 0o644)
+EVIDENCE_PY
+		then
+			evidence_mount=(--mount "type=bind,src=${run_root}/evidence,dst=/evidence,readonly")
+		else
+			echo '::warning::Clarify heal evidence copy failed; continuing without /evidence' >&2
+		fi
+	else
+		echo '::warning::Clarify heal evidence directory rejected; continuing without /evidence' >&2
+	fi
+fi
+
 # Nothing from the privileged checkout, HOME or runtime workspace is mounted.
 # The Docker build context contains only the pinned Dockerfile.
 image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"
@@ -124,6 +170,7 @@ env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
 	--mount "type=bind,src=${run_root}/socket,dst=/socket,readonly" \
 	--mount "type=bind,src=$(realpath scripts/clarify_openrouter_broker.py),dst=/bridge.py,readonly" \
 	--mount "type=bind,src=${run_root}/results,dst=/results" \
+	"${evidence_mount[@]}" \
 	--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex \
 	--env CLARIFY_PROXY_KEY=isolated-placeholder \
 	--env "CLARIFY_MODEL=${MODEL_EDITOR}" --env "CLARIFY_REASONING=${MODEL_REASONING_EFFORT}" \

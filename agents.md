@@ -162,9 +162,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
     the intake fetches the failed job logs, diagnoses against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
-    `Target branch: stable`, or the PR's head branch when a review/autofix
-    failure comes from a PR in this repo, since that run executed the PR's
-    own workflow code; `consumer-app-defect` → issue in the consumer;
+    `Target branch: stable`, or, for a review/autofix failure from a PR in
+    this repo, the branch its support scripts came from: `main` or `stable`
+    by one compare call each, the PR's head branch only when `script_ref` is
+    the PR's own head SHA, else `stable` (`target_branch_source=support_ref`);
+    `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only;
     `already-fixed` → Telegram + comment only, honoured only when its
     `## Fixed by` section cites a commit that landed after the failing SHA,
@@ -221,9 +223,20 @@ Phases of the unattended pipeline (each is a separate workflow file under
     accepts the flat shape too, and a rejected dispatch logs `detail=` with
     the first 300 characters of the API error. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
-    code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
-    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
-    `WORKFLOW_HEAL`.
+    code itself. An autofix report with no failed job reads the review job
+    (`codex-agent`), whose run concludes success, and the diagnosis prompt
+    gets step-sliced logs (`scripts/workflow_failure_heal_evidence.py
+    slice-log`: step table, ±80 lines around each `##[error]`, the failing
+    step's env, the working-tree / summary groups); the fingerprint still uses
+    `filter_log`. Clarify, plan and implement add a **workflow-heal evidence
+    folder** for a trusted `ai:workflow-heal` issue (`collect`: sliced job
+    logs, allowlisted artifact files, provenance, lineage with whether each
+    fix reached `main`, runs on the failing head, rate limit / OpenRouter key
+    status; 400 KB, reused across stages through actions/cache), mounted
+    read-only at `/evidence` in the clarify sandbox, and point the prompt at it
+    (`=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`). Stable log prefixes:
+    `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
+    `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`, `WORKFLOW_HEAL_EVIDENCE`.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,
@@ -1867,6 +1880,7 @@ and shipped:
 - `WORKFLOW_HEAL_AUTOFIX_REPORT`
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
+- `WORKFLOW_HEAL_EVIDENCE`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
@@ -2062,6 +2076,7 @@ LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
+LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED

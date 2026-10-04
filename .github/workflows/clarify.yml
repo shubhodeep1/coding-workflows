@@ -221,7 +221,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py claude_issue_route.py claude_issue_handoff.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py workflow_failure_heal.py workflow_failure_heal_evidence.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py claude_issue_route.py claude_issue_handoff.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -890,6 +890,65 @@ jobs:
           sed -i -E "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}\"/" ~/.codex/config.toml
           echo "MODEL_REASONING_EFFORT=${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}" >> "$GITHUB_ENV"
 
+      # Workflow-heal evidence (issue #6055). The agent cannot read GitHub
+      # Actions logs (no token / sign-in), so for a trusted ai:workflow-heal
+      # issue a trusted step fetches the failing runs' sliced logs, artifact
+      # files and provenance into an evidence folder the prompt points at.
+      # actions/cache carries completed runs from the previous stage, so a
+      # later stage spends ~5 API calls instead of ~20. Fail-open throughout.
+      - name: Gate workflow-heal evidence
+        id: heal_evidence_gate
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          enabled=false
+          if [ -f scripts/workflow_failure_heal_evidence.py ] && [ -s "${ISSUE_META_FILE:-}" ]; then
+            gate="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py eligible --issue-json "${ISSUE_META_FILE}" 2>/dev/null || echo '{}')"
+            [ "$(printf '%s' "${gate}" | jq -r '.eligible // false' 2>/dev/null)" = "true" ] && enabled=true
+          fi
+          echo "enabled=${enabled}" >> "$GITHUB_OUTPUT"
+          echo "cache_key=heal-evidence-${ISSUE_NUMBER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "cache_prefix=heal-evidence-${ISSUE_NUMBER}-" >> "$GITHUB_OUTPUT"
+
+      - name: Restore workflow-heal evidence cache
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/heal-evidence
+          key: ${{ steps.heal_evidence_gate.outputs.cache_key }}
+          restore-keys: ${{ steps.heal_evidence_gate.outputs.cache_prefix }}
+
+      - name: Collect workflow-heal evidence
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          HEAL_EVIDENCE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/heal-evidence"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py collect \
+            --repo "${GITHUB_REPOSITORY}" \
+            --issue-json "${ISSUE_META_FILE}" \
+            --comments-json "${ISSUE_COMMENTS_FILE:-}" \
+            --out-dir "${evidence_dir}" \
+            --display-root "/evidence" \
+            --default-branch "${HEAL_EVIDENCE_DEFAULT_BRANCH}"
+          if [ -s "${evidence_dir}/INDEX.md" ]; then
+            echo "HEAL_EVIDENCE_DIR=${evidence_dir}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Save workflow-heal evidence cache
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true' && env.HEAL_EVIDENCE_DIR != ''
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/heal-evidence
+          key: ${{ steps.heal_evidence_gate.outputs.cache_key }}
+
       - name: Run Codex
         id: run_codex
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
@@ -1072,11 +1131,19 @@ jobs:
             echo
             echo "=== ISSUE CONTEXT ==="
             cat "${ISSUE_CONTEXT_FILE}"
+            if [ -n "${HEAL_EVIDENCE_DIR:-}" ]; then
+              echo
+              PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py prompt-section --evidence-dir "${HEAL_EVIDENCE_DIR}" || true
+            fi
           } > "${CODEX_PROMPT_FILE}"
 
           if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
             sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
           fi
+
+          # The isolated run mounts a read-only copy of the evidence folder at
+          # /evidence (scripts/clarify_isolated_run.sh); empty means none.
+          export CLARIFY_EVIDENCE_DIR="${HEAL_EVIDENCE_DIR:-}"
 
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3

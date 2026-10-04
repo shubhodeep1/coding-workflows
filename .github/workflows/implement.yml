@@ -1014,7 +1014,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh claude_issue_route.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py workflow_failure_heal.py workflow_failure_heal_evidence.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh claude_issue_route.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -2030,6 +2030,65 @@ jobs:
           set -euo pipefail
           bash scripts/run_workspace_hook.sh implement before_run
 
+      # Workflow-heal evidence (issue #6055). The agent cannot read GitHub
+      # Actions logs (no token / sign-in), so for a trusted ai:workflow-heal
+      # issue a trusted step fetches the failing runs' sliced logs, artifact
+      # files and provenance into an evidence folder the prompt points at.
+      # actions/cache carries completed runs from the previous stage, so a
+      # later stage spends ~5 API calls instead of ~20. Fail-open throughout.
+      - name: Gate workflow-heal evidence
+        id: heal_evidence_gate
+        if: env.SKIP_IMPLEMENT != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          enabled=false
+          if [ -f scripts/workflow_failure_heal_evidence.py ] && [ -s "${ISSUE_META_FILE:-}" ]; then
+            gate="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py eligible --issue-json "${ISSUE_META_FILE}" 2>/dev/null || echo '{}')"
+            [ "$(printf '%s' "${gate}" | jq -r '.eligible // false' 2>/dev/null)" = "true" ] && enabled=true
+          fi
+          echo "enabled=${enabled}" >> "$GITHUB_OUTPUT"
+          echo "cache_key=heal-evidence-${ISSUE_NUMBER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "cache_prefix=heal-evidence-${ISSUE_NUMBER}-" >> "$GITHUB_OUTPUT"
+
+      - name: Restore workflow-heal evidence cache
+        if: env.SKIP_IMPLEMENT != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/heal-evidence
+          key: ${{ steps.heal_evidence_gate.outputs.cache_key }}
+          restore-keys: ${{ steps.heal_evidence_gate.outputs.cache_prefix }}
+
+      - name: Collect workflow-heal evidence
+        if: env.SKIP_IMPLEMENT != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          HEAL_EVIDENCE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          evidence_dir="${RUNNER_TEMP}/heal-evidence"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py collect \
+            --repo "${GITHUB_REPOSITORY}" \
+            --issue-json "${ISSUE_META_FILE}" \
+            --comments-json "${ISSUE_COMMENTS_FILE:-}" \
+            --out-dir "${evidence_dir}" \
+            --display-root "${RUNNER_TEMP}/heal-evidence" \
+            --default-branch "${HEAL_EVIDENCE_DEFAULT_BRANCH}"
+          if [ -s "${evidence_dir}/INDEX.md" ]; then
+            echo "HEAL_EVIDENCE_DIR=${evidence_dir}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Save workflow-heal evidence cache
+        if: env.SKIP_IMPLEMENT != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true' && env.HEAL_EVIDENCE_DIR != ''
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/heal-evidence
+          key: ${{ steps.heal_evidence_gate.outputs.cache_key }}
+
       - name: Run Codex implementation
         if: env.SKIP_IMPLEMENT != 'true'
         id: implement_run
@@ -2290,6 +2349,10 @@ jobs:
             echo
             echo "=== IMPLEMENTATION CONTEXT ==="
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
+            if [ -n "${HEAL_EVIDENCE_DIR:-}" ]; then
+              echo
+              PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py prompt-section --evidence-dir "${HEAL_EVIDENCE_DIR}" || true
+            fi
           } > "${CODEX_PROMPT_FILE}"
 
           # Safety net: codex-cli hard-caps `turn/start` stdin at 1,048,576

@@ -240,6 +240,11 @@ EOF
   echo
   echo "=== PLANNING CONTEXT ==="
   cat "${PLANNING_CONTEXT_FILE}"
+  # Workflow-heal evidence folder (set by plan.yml for ai:workflow-heal issues).
+  if [ -n "${HEAL_EVIDENCE_DIR:-}" ]; then
+    echo
+    PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py prompt-section --evidence-dir "${HEAL_EVIDENCE_DIR}" || true
+  fi
 } > "${CODEX_PROMPT_FILE}"
 
 # Update progress comment to signal model invocation is starting

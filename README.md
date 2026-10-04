@@ -1688,7 +1688,50 @@ through `clarify → plan → implement → review`.
   `WORKFLOW_HEAL`. The log filter drops the script source GitHub echoes at the
   top of every `run:` step (the ANSI-cyan lines inside `##[group]Run …`), so
   the tail the model reads is what the steps printed; errors a step raised
-  appear as `##[error]…`.
+  appear as `##[error]…`. The prompt itself gets a **step-sliced** copy of
+  each log (`scripts/workflow_failure_heal_evidence.py slice-log`): the job's
+  step table, ±80 lines around each `##[error]` labelled with the step that
+  printed it, the `env:` block of the step that raised the first error, the
+  diagnostic groups the workflows print for this purpose (`Working tree
+  state`, `Editor-touched files`, `REVIEW_AUTOFIX_RUN_SUMMARY_V1`, editor
+  attempt warnings) and a short tail, within the same 60 KB per job. The
+  fingerprint still comes from the filtered log, so existing lineages keep
+  their fingerprints. A review/autofix report usually comes from a run that
+  **concluded success** (the failure is recorded by a marker), so when no job
+  failed the intake reads the review job (`codex-agent`) instead of reading
+  nothing (`runs=0`, issue #6055). The issue body records the failing runs as
+  `<!-- workflow-failure-heal:runs=<repo>:<id>,… -->`.
+- **Evidence for clarify, plan and implement:** the heal pipeline's agents
+  cannot open Actions logs (the web UI needs a sign-in and the clarify
+  sandbox has no token), which left heal issues such as #4412, #4416, #4487
+  and #6055 blocked on "logs are sign-in only". For a trusted
+  `ai:workflow-heal` issue (the label, the `fp=` marker, an
+  OWNER/MEMBER/COLLABORATOR or `github-actions[bot]` author) each of the three
+  stages runs `workflow_failure_heal_evidence.py collect` in a trusted step
+  (`GH_PAT`) before its agent and writes an evidence folder: per failing run
+  (the `runs=` marker, `**Failed run:**` lines, and occurrence comments by the
+  issue's own author; at most 3, newest) the sliced log of the failing or
+  review job and the diagnostic files of the `codex-review-autofix-failure-logs-*`
+  / `reviewer-logs-*` artifacts (editor attempts, `.err`, `status_*`);
+  provenance (source PR state, the failing head against the default and
+  target branches); earlier heals of the same lineage with where each fix PR
+  merged and **whether that reached `main`**; the other runs on the failing
+  head; and the GitHub rate limit and OpenRouter key balance (numbers only).
+  `INDEX.md` summarises it and `manifest.json` lists every file and every
+  skipped part. The prompt gets `=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`
+  with the index; clarify's sandbox gets a read-only copy at `/evidence`
+  (`CLARIFY_EVIDENCE_DIR`, accepted only under `RUNNER_TEMP`, regular files
+  only), plan and implement read it from `${RUNNER_TEMP}/heal-evidence`.
+  Budget: 400 KB in total and 60 KB per file (reviewer outputs, then other
+  artifact files, then job logs of the oldest run are dropped first); about
+  20 REST calls for the first stage and about 5 for a later one, since
+  actions/cache (`heal-evidence-<issue>-…`) carries finished runs between
+  stages and only runs not yet fetched are read; when fewer than 500 core
+  calls remain, artifacts, the run timeline and lineage compares are skipped
+  (`GET /rate_limit` is free). Every part fails open: what could not be
+  fetched is listed under `skipped` and the stage carries on. Log prefix
+  `WORKFLOW_HEAL_EVIDENCE` (`collected issue=… runs=… reused=… api_calls=…
+  skipped=… rate_limit_low=…`).
 - **"Already fixed?" context:** the prompt also carries (1) the branch
   progress since the failing code, from one REST compare call
   (`compare/<sha>...<branch>`: a release run or a review/autofix run in this
@@ -1708,15 +1751,24 @@ through `clarify → plan → implement → review`.
   implement work against the stable line and the PR is a hotfix on `stable`;
   `auto-release-stable.yml` releases it within its 6-hourly schedule and
   `forward-merge-stable-to-main.yml` carries it to `main`. A failed release run
-  targets the branch it failed on. A failed review/autofix run on a pull
-  request **in coding-workflows itself** targets that pull request's head
-  branch instead: `review_autofix.yml` resolves `SCRIPT_REF` to `github.sha`
-  here, so the run executed the PR's own workflow code, and the defect may not
-  exist on `stable` at all. A `stable` hotfix could not unblock the PR, and
-  merging it would carry the PR's unreleased changes into `stable`. When the
-  PR branch no longer exists, the issue falls back to `stable` and the intake
-  logs `warn source_pr_branch_missing`. The `created` log line records the
-  choice as `target_branch_source=default|failed_run_branch|source_pr_head|base_branch`.
+  targets the branch it failed on: a release run on `stable` gets a `stable`
+  hotfix, a `main` → `stable` promotion run on `main` gets a fix on `main`. A
+  failed review/autofix run on a pull request **in coding-workflows itself**
+  targets the branch its support scripts came from: "Resolve workflow support
+  ref" in `review_autofix.yml` accepts only `refs/heads/main`,
+  `refs/tags/stable` or a pinned SHA, never the PR's head, so the defect lives
+  there. The intake maps the report's `script_ref` (else `wrapper_sha`) with
+  one compare call each against `main` and `stable` (`behind`/`identical`
+  means the branch contains it) and logs `support_ref_branch support_ref=…
+  branch=…`; when it cannot tell, the issue keeps `stable`. Only when
+  `script_ref` is the PR's own head SHA, so the run executed the PR's own
+  workflow code, does the issue target the PR's head branch (a `stable`
+  hotfix could not unblock the PR); when that branch no longer exists it falls
+  back to `stable` and logs `warn source_pr_branch_missing`. Targeting the PR
+  head regardless stranded the same fix twice (#4478, #4585) on project
+  branches that never reached `main` (issue #6055). The `created` log line
+  records the choice as
+  `target_branch_source=default|failed_run_branch|source_pr_head|support_ref|base_branch`.
   Two further tokens cover review/autofix failures **self-inflicted** by a
   branch of this repository. The autofix reporter sends ownership facts with
   its report (`base_branch`, `script_ref`, the PR's `changed_files`, and
@@ -2067,7 +2119,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` | `3` | coding-workflows only. Max heal generations for one failure fingerprint (or, for review/autofix reports, one pull request and the heal issue it fixes) before the chain is escalated (`ai:workflow-heal-escalated` + Telegram CRITICAL) instead of opening another issue. |
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
-| `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |
+| `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets the branch its support scripts came from (`main` or `stable`), or that PR's head branch when the run staged the PR's own scripts (falling back to this value when the branch is gone or the support branch cannot be told). |
 | `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
