@@ -245,7 +245,8 @@ The consumer merged-PR hook (`workflow-templates/.claude/hooks/pr_merge_status_g
 checks an adjacent unquoted numeric token before `>` as a file descriptor
 (`git push origin 2>/dev/null` still checks the current branch); a separated
 or quoted number is a push refspec (`git push origin 2 > /dev/null` checks
-branch `2`).
+branch `2`). An unresolved push destination or source prompts for confirmation
+after the checkout check, because the actual pushed branch or tip may differ.
 
 The `gh api` permission guard in `.claude/hooks/gh_api_write_guard.py` and
 its `workflow-templates/` twin exempts an unquoted literal-ID loop counter

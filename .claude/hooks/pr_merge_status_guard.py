@@ -14,8 +14,9 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories or refspecs warn and
-fall back to the session checkout check. Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unknown directories warn and fall back to
+the session checkout check; unresolved push refspecs also ask for confirmation.
+Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 
 Detection rule — all three conditions must hold before the command is blocked:
@@ -502,7 +503,8 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			continue
 		if branch is None:
 			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; checking the current branch instead"))
+				"could not resolve git push refspec; checking the current branch instead",
+				bulk="unresolved git push destination"))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
 	if bulk:
@@ -1319,6 +1321,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					)
 				if code != 0:
 					_warn("could not resolve git push source; checking the session checkout instead")
+					bulk_reasons.append("unresolved git push source")
 					target = _GuardTarget(checkout, {}, "", "HEAD", True)
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
@@ -1378,7 +1381,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		return 2, "\n\n".join(blocks)
 	if bulk_reasons:
 		_request_confirmation(
-			"Bulk git push may write more branches than the current branch: "
+			"Git push may write branches or source tips the guard could not verify: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
 	return 0, ""

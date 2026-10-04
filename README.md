@@ -1051,7 +1051,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (see the retired-files paragraph below). Nothing to configure in the
 > consumer. The merged-PR guard distinguishes `git push origin 2>/dev/null`
 > (stderr redirection, check the current branch) from `git push origin 2 > /dev/null`
-> (push branch `2`, redirect stdout).
+> (push branch `2`, redirect stdout). When a push refspec contains an unresolved
+> destination or source (for example `git push origin "$TARGET"`), checking
+> the current branch alone is not enough; the hook asks for confirmation.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest

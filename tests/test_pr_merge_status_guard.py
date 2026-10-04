@@ -938,6 +938,33 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	assert lookups == ["feature/x"]
 
 
+@pytest.mark.parametrize("command", ['git push origin "$TARGET"', 'git push origin HEAD:"$TARGET"'])
+def test_unresolved_push_destination_requests_confirmation(merged_branch_repo, command: str, capsys) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 0, message
+	assert any(
+		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
+		and "unresolved git push destination" in item.get("systemMessage", "")
+		for item in map(json.loads, capsys.readouterr().out.splitlines())
+	)
+
+
+def test_unresolved_push_source_requests_confirmation(merged_branch_repo, capsys) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": 'git push origin "$SOURCE":feature/x'}})
+	assert code == 0, message
+	assert any(
+		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
+		and "unresolved git push source" in item.get("systemMessage", "")
+		for item in map(json.loads, capsys.readouterr().out.splitlines())
+	)
+
+
 def test_numeric_push_refspec_before_redirect_is_not_lost(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
@@ -962,6 +989,7 @@ def test_fd_redirect_checks_current_push_branch(merged_branch_repo, monkeypatch,
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
 	_git(repo, "branch", "2", "main")
+	_git(repo, "branch", "1", "main")
 	lookups: list[str] = []
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
