@@ -1,0 +1,13 @@
+{
+  "name": "claude-pool-broker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "vitest": "5.0.3",
+    "wrangler": "4.147.0"
+  }
+}

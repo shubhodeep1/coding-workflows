@@ -4773,6 +4773,16 @@ jobs:
           if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
             PR_CREATE_ARGS+=(--label "force-review" --label "e2e-smoke-test")
           fi
+          # Engine label (plan Phase 6, D2): the PR's review roles follow the
+          # issue's engine. Read from the issue metadata already fetched for
+          # this run (no extra API call); ai:codex wins over ai:engine-claude.
+          if [ -n "${ISSUE_META_FILE:-}" ] && [ -s "${ISSUE_META_FILE}" ]; then
+            PR_ENGINE_LABEL="$(jq -r '[.labels[]?.name] | if index("ai:codex") then "ai:codex" elif index("ai:engine-claude") then "ai:engine-claude" else "" end' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+            if [ -n "${PR_ENGINE_LABEL}" ]; then
+              PR_CREATE_ARGS+=(--label "${PR_ENGINE_LABEL}")
+              echo "AI_ENGINE_PR_LABEL issue=${ISSUE_NUMBER:-unknown} label=${PR_ENGINE_LABEL}"
+            fi
+          fi
 
           if ! gh pr create "${PR_CREATE_ARGS[@]}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
             echo "PR creation failed. This may indicate a PR was created by another process during execution."
@@ -4836,6 +4846,11 @@ jobs:
             fi
             if [ -n "${EXISTING_PR}" ]; then
               echo "Found existing PR: ${EXISTING_PR}"
+              if [ -n "${PR_ENGINE_LABEL:-}" ] && ! gh_retry gh pr edit "${EXISTING_PR}" \
+                  --repo "${{ github.repository }}" --add-label "${PR_ENGINE_LABEL}"; then
+                echo "::error::Could not copy the issue's engine label to existing PR ${EXISTING_PR}"
+                exit 1
+              fi
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
               exit 0
             fi

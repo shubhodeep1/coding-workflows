@@ -106,6 +106,8 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 				"COMMENT_BODY": "/reclarify" if event_name == "issue_comment" else "",
 				"RUN_ID": "1",
 				"ISSUE_NUMBER": "123",
+				# The step env sets it from vars.AI_ISSUE_IMPLEMENTER (empty when unset).
+				"AI_ISSUE_IMPLEMENTER": "",
 			})
 			# Actions substitutes the expression before bash runs the step.
 			script = step["run"].replace("${{ github.repository }}", "o/r")

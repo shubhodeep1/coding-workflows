@@ -32,6 +32,8 @@ name: Security Audit
 permissions:
   contents: read
   issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 # The consumer wrapper (workflow-templates/ai-security-audit.yml) already
 # serialises runs under `security-audit-<repo>`. A called workflow that
