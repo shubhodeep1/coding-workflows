@@ -58,6 +58,8 @@ permissions:
   contents: write
   actions: read
   issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 concurrency:
   group: workflow-log-analysis-${{ github.repository }}-${{ github.ref_name }}

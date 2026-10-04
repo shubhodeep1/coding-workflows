@@ -292,7 +292,7 @@ def test_bot_commit_touching_shipped_claude_command_counts_as_untested() -> None
 		_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1"),
 		_commit(BOT_SHA, "chore: tweak", "github-actions[bot]", "github-actions[bot]"),
 	]
-	result = _verifying_run(_project_state(), compare_commits=commits, commit_files={BOT_SHA: ["analysis/report.md", "workflow-templates/.claude/commands/fix-claude-pr.md"]})
+	result = _verifying_run(_project_state(), compare_commits=commits, commit_files={BOT_SHA: ["analysis/report.md", "workflow-templates/.claude/commands/investigate-issue.md"]})
 	assert result["latest_state"]["comprehensive_promotion"]["status"] == "deferred"
 	assert result["release_dispatches"] == []
 
