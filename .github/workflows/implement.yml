@@ -437,6 +437,8 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          RETARGET_MERGED_BASE_ENABLED: ${{ vars.RETARGET_MERGED_BASE_ENABLED || 'true' }}
+          RETARGET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -501,6 +503,18 @@ jobs:
             GH_TOKEN="${GH_TOKEN}" \
             bash "${resolver_script}"
           })"; then
+            # Port P6 (replace-claude-sessions plan, Phase 8d): an integration
+            # branch whose own PR already merged (and whose tip is still that
+            # PR's head) is finished, so new work targets that PR's base.
+            # The helper ships next to the resolver; an older staged source
+            # without it keeps the branch unchanged. Fail-open by design.
+            retarget_helper="$(dirname "${resolver_script}")/retarget_merged_base.sh"
+            if [ -n "${integration_branch}" ] && [ -n "${RETARGET_DEFAULT_BRANCH}" ] && [ -f "${retarget_helper}" ]; then
+              retarget_branch="$(GH_TOKEN="${GH_TOKEN}" bash "${retarget_helper}" resolve "${{ github.repository }}" "${integration_branch}" "${RETARGET_DEFAULT_BRANCH}")" || retarget_branch=""
+              if [ -n "${retarget_branch}" ]; then
+                integration_branch="${retarget_branch}"
+              fi
+            fi
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
