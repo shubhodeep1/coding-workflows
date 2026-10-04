@@ -509,7 +509,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True, remote=remote_value))
 	if bulk:
-		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk))
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value))
 	return targets
 
 

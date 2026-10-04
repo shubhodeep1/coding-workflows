@@ -942,6 +942,16 @@ def test_push_to_unverified_repository_requires_confirmation(merged_branch_repo,
 	assert "private" not in output
 
 
+def test_matching_refspec_on_unverified_remote_does_not_check_origin(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not query origin for another repository"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push https://github.com/other/repo :"}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
 def test_explicit_origin_url_still_checks_origin_pr(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")

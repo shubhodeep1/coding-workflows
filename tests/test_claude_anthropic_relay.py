@@ -195,6 +195,23 @@ def test_broker_rejects_large_unauthorized_body_without_broken_pipe(chain) -> No
 	assert _Upstream.seen == []
 
 
+def test_rejection_restores_socket_timeout_before_reply(chain, monkeypatch) -> None:
+	observed_timeouts = []
+	original_send_error = relay.Relay.send_error
+
+	def record_timeout(handler, *args, **kwargs):
+		observed_timeouts.append(handler.connection.gettimeout())
+		return original_send_error(handler, *args, **kwargs)
+
+	monkeypatch.setattr(relay.Relay, "send_error", record_timeout)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	body = json.dumps({"model": MODEL, "padding": "x" * 262144}).encode()
+	connection.request("POST", "/v1/messages", body, {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	assert connection.getresponse().status == 400
+	connection.close()
+	assert observed_timeouts == [5]
+
+
 def test_early_rejection_does_not_wait_indefinitely_for_missing_body(chain) -> None:
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.putrequest("POST", "/v1/messages")

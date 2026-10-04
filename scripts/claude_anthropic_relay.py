@@ -116,6 +116,8 @@ class Relay(http.server.BaseHTTPRequestHandler):
 						remaining -= len(chunk)
 				except OSError:
 					pass  # Malformed/slow clients still get a bounded rejection.
+				finally:
+					self.connection.settimeout(5)
 		self.send_error(status, "Request rejected")
 		self.close_connection = True
 
