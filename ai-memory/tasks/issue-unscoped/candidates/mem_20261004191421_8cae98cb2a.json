@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/audit-plans.md:103, 126-127 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The root audit-plans command retains legacy wording that differs from the workflow template, causing the byte-for-byte parity test to fail.\n  WHY: `tests/test_audit_plans_command.py` requires the files to match; the reviewers classify the resulting CI failure as a blocker.\n- .claude/hooks/pr_merge_status_guard.py:259-272, 325-361, 425-510, 643-646, 1306-1322 | severity=high | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The root guard is reported to lack parser changes present in the workflow-template copy, causing the hook byte-parity test to fail.\n  WHY: `tests/test_pr_merge_status_guard.py:1000` is reported to assert byte equality; deepseek_deepseek-v4-pro and minimax_minimax-m3 disagree, stating that the guard changes are present or correctly restored and that the CI failure is instead in `test_audit_plans_command::test_template_parity`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description states \"edited `.claude/hooks/pr_merge_status_guard.py:262-361,425-510,643-646,1306-1322` to match its workflow-template copy. This restores redirect handling, append-assignment and `cd ... || exit` parsing, and push-target handling.\"\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py`\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The root file on disk has 1474 lines; the template has 1501 lines. Grep confirms `redirect_target`, `remote_provided`, `resolved_source_sha`, and `\\+?=` are absent from the root file but present in the template. The claimed edit did not land on disk despite the commit message saying \"[ai-autofix] apply PR fixes\" on this file. The byte-parity test (`test_pr_merge_status_guard.py:1000`) will fail.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_audit_plans_command.py: lines 29-30, in test_template_parity() | severity=BLOCKER | confidence=5\n  PROBLEM: workflow-templates/.claude/commands/audit-plans.md lines 103, 126, and 127 contain updated Claude-engine orchestrator hand-off phrasing, while .claude/commands/audit-plans.md retains legacy in-session phrasing.\n  WHY: The byte-for-byte equality assertion fails, causing the tests-hooks-and-orchestrator CI job and aggregate lint check to fail.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/audit-plans.md: lines 103, 126-127 (vs workflow-templates/.claude/commands/audit-plans.md) | severity=BLOCKER | confidence=5\n  PROBLEM: The root audit-plans command retains legacy in-session `/implement-plan-claude` wording instead of matching the template's orchestrator hand-off wording.\n  WHY: `tests/test_audit_plans_command.py:29` asserts byte-for-byte equality, so the wording differences trigger an AssertionError and cause the `tests-hooks-and-orchestrator` CI job to fail.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/audit-plans.md: Lines 103 and 126-127; tests/test_audit_plans_command.py:29-30 | severity=BLOCKER | confidence=5\n  PROBLEM: The root command still has the legacy \u201cin-session\u201d and \u201cClaude implements it in-session\u201d wording, while the workflow template describes the Claude-engine orchestrator hand-off.\n  WHY: The parity test requires these files to be byte-identical, and CI\u2019s `test_template_parity` fails on this mismatch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- `.claude/hooks/pr_merge_status_guard.py`: Lines 259-272, 325-361, 425-510, 643-646, 1306-1322 | severity=BLOCKER | confidence=5\n  PROBLEM: The root hook is missing seven guard hunks that the template copy has: redirect handling (`<`, `>`, `>&`), `|| exit` after `cd`, `+=` append assignments, `--repo` option tracking in push, `HEAD` resolution to current branch, and push source SHA resolution.\n  WHY: The byte-equality assertion in `tests/test_pr_merge_status_guard.py:1000` fails because the root hook lacks the template's parsing logic.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- `.claude/hooks/pr_merge_status_guard.py`: lines 259-272 (_shell_segments_with_operators), 339 (assignment regex), 425-499 (_push_targets), 1306-1320 (_evaluate_bash) | severity=BLOCKER | confidence=5\n  PROBLEM: The last run diff claims to add redirect-target handling, append-assignment (`+=`) parsing, `--repo`/`--rep` remote detection, `HEAD` refspec resolution, and `resolved_source_sha` to the root guard file. None of these changes are present in the actual file on disk.\n  WHY: `tests/test_pr_merge_status_guard.py:1000` asserts `TEMPLATE_GUARD_PATH.read_text() == GUARD_PATH.read_text()` (byte-for-byte parity). The template has the new features but the root hook does not, causing this assertion to fail.\n- TASK_GAP\n  Requirement: PR description states \"edited `.claude/hooks/pr_merge_status_guard.py:262-361,425-510,643-646,1306-1322` to match its workflow-template copy. This restores redirect handling, append-assignment and `cd ... || exit` parsing, and push-target handling.\"\n  Expected change site: `.claude/hooks/pr_merge_status_guard.py` \u2014 the root guard file must be byte-identical to `workflow-templates/.claude/hooks/pr_merge_status_guard.py`.\n  Evidence of absence: The root file on disk has 1474 lines; the template has 1501 lines. Grep confirms `redirect_target`, `remote_provided`, `resolved_source_sha`, and `\\+?=` are absent from the root file but present in the template. The claimed edit did not land on disk despite the commit message saying \"[ai-autofix] apply PR fixes\" on this file. The byte-parity test (`test_pr_merge_status_guard.py:1000`) will fail.\n  severity=BLOCKER\n  ISSUE_CONFIDENCE=5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f2d99b2fa5d9368cdb586b03bafac5febf8a196c9ea8cc5388b875989c2d9dd2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37225559816",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37225559816",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004191421_8cae98cb2a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37225559816"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T19:14:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
