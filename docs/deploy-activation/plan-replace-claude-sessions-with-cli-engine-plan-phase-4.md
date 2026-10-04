@@ -7,7 +7,7 @@
 - How it runs: on demand — every job with a Claude role calls `.github/actions/claude-pool-token`, which POSTs a GitHub OIDC token to `https://claude-pool-broker.shubhodeep.workers.dev/v1/pool`; the pool secret is refreshed by `claude-workers` `claude-pool-key-sync.yml` (cron hourly at :23, push to main, workflow_dispatch)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-04
-- Last note: Step 1 done; Step 3 already satisfied (2 pool accounts); Step 2 emitted.
+- Last note: Step 2 first attempt failed (zsh `read -p`); CF_BROKER_DEPLOY_TOKEN currently holds an empty `:` value; corrective Step 2 emitted.
 
 ## Runbook
 1. [x] Prereqs: Homebrew, gh, Node, `gh auth login`, read claude-workers secret names   — done 2026-10-04: `gh api user` = shubhodeep1; claude-workers secrets = CLAUDE_POOL_TOKEN_FUNTOKEN1, CLAUDE_POOL_TOKEN_FUNTOKEN2, GH_PAT
@@ -34,3 +34,5 @@
 - Slug carries `-phase-4` so later phases of the same plan get their own log.
 - No `/implement-plan-claude` progress log exists for this plan, so there are no auto-decisions to review.
 - Step 1 output showed `CF_BROKER_DEPLOY_TOKEN` is not set yet, so Step 2 is needed.
+- Step 2 attempt 1 (2026-10-04): the operator's shell is zsh, where `read -p` means coprocess, so both values were empty; `curl` returned `"success":false` and `CF_BROKER_DEPLOY_TOKEN` was saved as `:`. Harmless until the key sync is merged (Step 4); the corrective step overwrites it.
+- Log pushes continue on `claude/determined-pascal-kvyrbg-2`, `-3`, … (operator answer Q1: A, 2026-10-04): the first branch's PR #6186 merged and its ruleset blocks non-fast-forward pushes and deletion.
