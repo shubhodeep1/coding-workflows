@@ -262,7 +262,7 @@ def test_write_role_command_line(sandbox: dict) -> None:
 		"--effort": "low",
 		"--system-prompt-file": str(INSTRUCTIONS),
 		"--setting-sources": "",
-		"--tools": "default",
+		"--tools": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
 		"--permission-mode": "bypassPermissions",
 		"--output-format": "stream-json",
 	}
@@ -293,6 +293,26 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob,Bash"
 	assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
 	assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+
+
+def test_profile_tool_lists_match_claude_engine() -> None:
+	# The write profile names its tools: `--tools default` loads ~35 tools and
+	# pushed a no-op start-up past the 25,000-token context gate of
+	# claude-engine-smoke.yml (run 37191845530: 29,369 tokens).
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location("claude_engine", REPO_ROOT / "scripts" / "claude_engine.py")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	engine_src = AI_ENGINE.read_text(encoding="utf-8")
+	assert f'read) tools="{module.PROFILE_TOOLS["read"]}"' in engine_src
+	assert f'*) tools="{module.PROFILE_TOOLS["write"]}"' in engine_src
+	sandbox_src = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert f'--tools {module.PROFILE_TOOLS["write"]} --permission-mode bypassPermissions' in sandbox_src
+	for src in (engine_src, sandbox_src):
+		assert "--tools default" not in src
+		assert 'tools="default"' not in src
+	assert module.PROFILE_TOOLS["write"] != "default"
 
 
 def test_allow_workflow_edits_reaches_the_policy(sandbox: dict) -> None:

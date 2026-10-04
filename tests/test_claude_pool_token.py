@@ -106,11 +106,13 @@ def env(tmp_path: Path):
 	values = {
 		key: value
 		for key, value in os.environ.items()
-		if not key.startswith(("CLAUDE_", "ACTIONS_ID_TOKEN", "GITHUB_OUTPUT")) and key.lower() not in ("http_proxy", "https_proxy", "all_proxy")
+		if not key.startswith(("CLAUDE_", "ACTIONS_ID_TOKEN", "GITHUB_OUTPUT")) and key != "GITHUB_ACTIONS" and key.lower() not in ("http_proxy", "https_proxy", "all_proxy")
 	}
 	values.update(
 		{
 			"PATH": f"{fake_bin}:{os.environ['PATH']}",
+			# Most cases exercise the loopback broker outside Actions; the Actions-only rejection test overrides this.
+			"GITHUB_ACTIONS": "false",
 			"RUNNER_TEMP": str(runner_temp),
 			"GITHUB_OUTPUT": str(tmp_path / "output.txt"),
 			"CLAUDE_ENGINE_CONFIG": str(config),

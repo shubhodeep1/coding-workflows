@@ -221,6 +221,13 @@ in parallel with it (see "CI job layout" below). Rejections emit the secret-safe
 ubiquitous `grep` instead of `rg` so runner images without ripgrep still fail
 only on real policy drift.
 
+The `gh api` permission guard in `.claude/hooks/gh_api_write_guard.py` and
+its `workflow-templates/` twin exempts an unquoted literal-ID loop counter
+only when the entire loop passes the read-only body validator. Unvetted
+loops with unquoted `gh api` arguments still prompt; the two hooks must stay
+byte-identical (`tests/test_gh_api_write_guard.py`). Shell-rewrite hazards
+inside a loop prompt even when the loop counter is not expanded.
+
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
 pass that output to action inputs or through step-local environment variables,
@@ -1198,6 +1205,7 @@ and shipped:
 - `AI_PHASE_GATE_V1`
 - `WORKFLOW_SCENARIO_TRACE_WRITTEN`
 - `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`
+- `RETARGET_MERGED_BASE` (`scripts/retarget_merged_base.sh`: `mode=resolve|pr repo= pr= from= to= merged_pr= outcome=retargeted|unchanged reason=`)
 - `STANDALONE_AUTO_DECIDE` (`clarify.yml` "Standalone auto-decide": `issue= outcome=answered|skip|failed reason= decisions=`)
 - `AI_ENGINE_SELECTED` (`scripts/ai_engine.sh`: `role= engine= model= effort= source=`)
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
@@ -1398,6 +1406,7 @@ LOG_PREFIX.name=AI_PHASE_FAILURE_V1
 LOG_PREFIX.name=AI_PHASE_GATE_V1
 LOG_PREFIX.name=WORKFLOW_SCENARIO_TRACE_WRITTEN
 LOG_PREFIX.name=WORKFLOW_SCENARIO_TRACE_PARSE_FAIL
+LOG_PREFIX.name=RETARGET_MERGED_BASE
 LOG_PREFIX.name=STANDALONE_AUTO_DECIDE
 LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
