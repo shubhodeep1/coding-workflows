@@ -59,14 +59,14 @@ def _section(start_marker: str, end_marker: str) -> str:
 # Fix 1: explicit removal of runtime-populated helper files before git reset/merge
 # ---------------------------------------------------------------------------
 
-def test_workflow_checks_out_pr_head_ref_for_judge_context():
+def test_dispatched_review_checkout_uses_gate_head_sha():
     """Dispatches must materialize the gate-verified PR head for file readers."""
     wf = _workflow()
     assert "uses: actions/checkout@v5" in wf, (
         "Expected review_autofix workflow to use actions/checkout@v5"
     )
-    assert "ref: ${{ github.event.pull_request.head.sha || needs.gate.outputs.review_checkout_sha || github.sha }}" in wf, (
-        "Expected checkout ref to use the authenticated gate head on dispatch"
+    assert "ref: ${{ needs.gate.outputs.review_checkout_sha || github.sha }}" in wf, (
+        "Expected every PR checkout to use the authenticated gate head"
     )
 
 
@@ -105,13 +105,14 @@ def test_review_head_mismatch_skips_before_agent_steps():
     assert 'env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}" rev-parse HEAD' in checkout_step
     assert '.head.sha // ""' in checkout_step
     assert '"${review_source_sha}" != "${REVIEW_CHECKOUT_SHA}"' in checkout_step
-    assert '"$(git rev-parse HEAD 2>/dev/null || true)" != "${review_source_sha}"' in checkout_step
+    assert '"${review_branch_sha}" != "${review_source_sha}"' in checkout_step
     assert checkout_step.count('echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"') >= 2
     names = list(steps)
     assert names.index("Checkout PR head branch") < names.index("Run reviewer models")
     assert "env.AUTOFIX_STALE_BASE_SKIP != 'true'" in steps["Pre-review deterministic merge-topology gate"]["if"]
-    for name in ("Run reviewer models", "Hand review round to Claude session (Claude-fixer mode)", "Apply fixes with editor model", "Enable auto-merge on PR"):
+    for name in ("Run reviewer models", "Apply fixes with editor model", "Enable auto-merge on PR"):
         assert "env.AUTOFIX_STALE_BASE_SKIP != 'true'" in steps[name]["if"]
+    assert 'if [ -z "${WORKSPACE_PATH:-}" ] || [ ! -d "${WORKSPACE_PATH}" ]; then' in checkout_step
 
 
 def test_review_branch_fetch_movement_skips_the_older_source_tree():

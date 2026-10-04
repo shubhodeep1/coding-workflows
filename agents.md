@@ -471,12 +471,14 @@ a new value, add it to the appropriate overrides file with a
   the PR worktree.
 - The review gate's existing PR read validates the same-repository head and
   exports `review_checkout_sha` only for a 40-hex SHA. `Checkout repo` uses
-  that SHA for dispatched PRs, so reviewer and other `GITHUB_WORKSPACE` file
-  reads see the PR head rather than the dispatching branch; the no-PR push
-  route still uses `github.sha`. Fork, missing-repo and invalid-head PRs skip
-  both review and deterministic auto-merge. Before OpenCode setup, the job
+  that SHA for every PR event, so reviewer and other `GITHUB_WORKSPACE` file
+  reads see the verified PR head rather than the dispatching branch or a stale
+  pull-request event payload; the no-PR push route still uses `github.sha`.
+  Fork, missing-repo and invalid-head PRs skip both review and deterministic
+  auto-merge. Before OpenCode setup, the job
   refuses project OpenCode configuration/plugins in the source checkout; it
-  also checks the split workspace before reviewer launch. A
+  also requires an existing split workspace and checks its configuration
+  before reviewer launch. An unreadable fetched git head fails the job; a
   source/workspace/PR-metadata SHA mismatch, or a branch that advances during
   fetch, sets `AUTOFIX_STALE_BASE_SKIP` so no reviewer, editor or merge acts
   on stale files.

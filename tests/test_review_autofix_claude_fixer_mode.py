@@ -30,6 +30,13 @@ from review_autofix_step_scripts import (  # noqa: E402
 	REVIEW_AUTOFIX_WORKFLOW_PATH,
 	expanded_review_autofix_text,
 )
+# CI runs this module explicitly; collect the dispatched-checkout regressions too.
+from test_review_autofix_merge_precheck import (  # noqa: E402,F401
+	test_dispatch_checkout_file_read_uses_head_not_default_branch,
+	test_review_branch_fetch_movement_skips_the_older_source_tree,
+	test_review_head_mismatch_skips_before_agent_steps,
+	test_review_rejects_project_opencode_configuration_before_agent_setup,
+)
 
 TOPOLOGY_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_merge_topology_gate.sh"
 WRAPPERS = (REPO_ROOT / "workflow-templates" / "ai-review.yml",)
@@ -263,6 +270,20 @@ def test_small_diff_claude_pr_takes_the_deterministic_skip():
 			pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2})
 	assert proc.returncode == 0, proc.stderr
 	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "small_diff"
+
+
+def test_unverified_pr_head_never_enters_deterministic_merge():
+	assert WORKFLOW["jobs"]["codex-agent"]["if"] == "${{ needs.gate.outputs.should_run == 'true' }}"
+	assert WORKFLOW["jobs"]["deterministic-skip-merge"]["if"] == "${{ needs.gate.outputs.deterministic_skip == 'true' }}"
+	for head_repo, head_sha in (("other/repo", HEAD), ("", HEAD), ("o/r", "bad-sha")):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=CLAUDE_REF, comments=[],
+				files=DOCS_FILES, pr_overrides={"changed_files": 2,
+					"head": {"ref": CLAUDE_REF, "sha": head_sha, "repo": {"full_name": head_repo}}})
+		assert proc.returncode == 0, proc.stderr
+		assert out["should_run"] == "false" and out["deterministic_skip"] == "false"
+		assert out["skip_reason"] == "review_checkout_unverified"
+		assert out["review_checkout_sha"] == ""
 
 
 def test_claude_pr_skip_keeps_the_protected_path_and_size_guards():

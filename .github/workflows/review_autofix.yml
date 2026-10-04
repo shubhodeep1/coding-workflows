@@ -2527,7 +2527,7 @@ jobs:
           # the merge ref may not exist, causing checkout to fail and
           # preventing the entire workflow — including conflict resolution
           # — from running.
-          ref: ${{ github.event.pull_request.head.sha || needs.gate.outputs.review_checkout_sha || github.sha }}
+          ref: ${{ needs.gate.outputs.review_checkout_sha || github.sha }}
           # Shallow clone to bound disk/memory cost on history-heavy
           # consumer repos.  fetch-depth: 0 (full clone with all branches +
           # tags) was the dominant cause of "runner died mid-step" on
@@ -3632,6 +3632,10 @@ jobs:
             fi
           fi
 
+          if [ -z "${WORKSPACE_PATH:-}" ] || [ ! -d "${WORKSPACE_PATH}" ]; then
+            echo "::error::Review workspace is unavailable; refusing to start agents."
+            exit 1
+          fi
           for path in .opencode opencode.json opencode.jsonc .opencode.json .opencode.jsonc; do
             if [ -e "${WORKSPACE_PATH}/${path}" ] || [ -L "${WORKSPACE_PATH}/${path}" ]; then
               echo "::error::Review workspace contains project OpenCode configuration; refusing to start agents."
@@ -3713,10 +3717,13 @@ jobs:
             git checkout -f -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}"
           fi
 
-          if [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ "$(git rev-parse HEAD 2>/dev/null || true)" != "${review_source_sha}" ]; then
-            echo "::warning::PR head moved after source checkout; skipping review of the older file tree."
-            echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
-            exit 0
+          if [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+            review_branch_sha="$(git rev-parse HEAD 2>/dev/null)" || { echo "::error::Unable to read the fetched PR head."; exit 1; }
+            if [ "${review_branch_sha}" != "${review_source_sha}" ]; then
+              echo "::warning::PR head moved after source checkout; skipping review of the older file tree."
+              echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
           fi
 
           echo "CAN_PUSH=true" >> "$GITHUB_ENV"
