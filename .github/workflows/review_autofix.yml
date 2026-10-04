@@ -5583,6 +5583,28 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
+      - name: Single-issue security pass
+        # Port P1 (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
+        # Phase 8a): a clean review of a standalone PR into the default branch
+        # holds "Enable auto-merge on PR" and "Mark linked issues ready to
+        # merge" until a security audit of the current head comes back clean
+        # (scripts/review_single_issue_security_pass.sh gate; the audit posts
+        # its result and re-runs this review). At MAX_SECURITY_PASS_CYCLES the
+        # PR is labelled ai:security-pass-failed for the unblock judge. Same
+        # condition as the auto-merge step, so it runs exactly when a merge
+        # would.
+        id: single_issue_security_pass
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+        run: |
+          bash "${SUPPORT_SCRIPTS_DIR}/review_single_issue_security_pass.sh" gate
+
       - name: Enable auto-merge on PR
         # Clean-review-tail gate: did_commit=false OR LEDGER_ONLY_COMMIT_STRICT=true.
         # The STRICT flag means "only the review-issue ledger was committed";
@@ -5601,7 +5623,7 @@ jobs:
         # `${AUTOFIX_SKIP_SELF_TRIGGERED:-false}`, so the default is `false`
         # and the [ai-autofix] synchronize is NOT skipped). The autofix loop now actually "keeps going
         # until there are no edits" instead of converging on a stale head.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && steps.single_issue_security_pass.outputs.hold != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -5625,7 +5647,7 @@ jobs:
         # head f11d6dc while editor commit 005824e was still local) and the
         # docstring at scripts/review_commit_changes.sh:32-41 for the same
         # rationale that already governs EDITOR_CHANGES_LOST at :3315-3326.
-        if: "success() && env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true' && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        if: "success() && env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true' && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && steps.single_issue_security_pass.outputs.hold != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}

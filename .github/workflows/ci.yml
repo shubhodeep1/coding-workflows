@@ -477,6 +477,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
 
+      - name: Single-issue security pass tests (port P1)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_single_issue_security_pass.py
+
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
         run: |
           set -euo pipefail

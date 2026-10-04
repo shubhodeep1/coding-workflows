@@ -218,6 +218,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_reject_verify.sh` — Shell helper for review reject verify.
 - `scripts/review_resolve_review_threads.sh` — resolve PR review threads that the editor stage already audited.
 - `scripts/review_resolve_review_threads_plan.py` — Build the thread-resolution plan for review_resolve_review_threads.sh.
+- `scripts/review_single_issue_security_pass.sh` — Hold a standalone PR's auto-merge until a security audit of its head is clean, and report the audit result back (port P1).
 - `scripts/review_run_judge_interim.sh` — Shell helper for review run judge interim.
 - `scripts/review_run_reviewers.sh` — Shell helper for review run reviewers.
 - `scripts/review_synthesise_smoke.sh` — Shell helper for review synthesise smoke.
