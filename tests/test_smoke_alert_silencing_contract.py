@@ -53,8 +53,10 @@ SMOKE_SILENCING_WORKFLOWS = (
 # Exact step-level declarations expected per workflow, so a future edit
 # cannot silently drop one (count and text are both pinned).
 EXPECTED_STEP_DECLARATIONS = {
-	# 4 = the Claude issue handoff step + the three clarify notification steps.
-	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 3,  # the Claude issue handoff step was retired (replace-claude-sessions Phase 2)
+	# 4 = the three clarify notification steps + "Standalone auto-decide"
+	# (replace-claude-sessions Phase 8b), whose answer poster's loop guard can
+	# alert. The Claude issue handoff step was retired in Phase 2.
+	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
 	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
 	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
 	"review_autofix.yml": [

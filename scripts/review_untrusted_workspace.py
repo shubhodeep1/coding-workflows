@@ -224,7 +224,20 @@ def main():
 		else:
 			transfer(host, workspace, manifest)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
-		print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__})", file=sys.stderr)
+		# Only fixed, path-free transfer reasons may cross into workflow logs.
+		reason_code = {
+			"symlink in workspace path": "symlink_path",
+			"unsafe file type or size": "unsafe_file",
+			"file changed during read": "file_changed",
+			"workspace entry limit exceeded": "entry_limit",
+			"unsafe workspace directory": "unsafe_directory",
+			"unsafe workspace result path": "unsafe_result_path",
+			"workspace size limit exceeded": "workspace_size_limit",
+			"host baseline changed": "host_baseline_changed",
+			"new result conflicts with host path": "host_path_conflict",
+			"unsafe result path": "unsafe_result_path",
+		}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "unknown"
+		print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)
 		raise SystemExit(1) from None
 
 
