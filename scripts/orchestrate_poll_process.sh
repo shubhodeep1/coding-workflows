@@ -580,7 +580,9 @@ run_project_activation_verify() {
   fi
   verify_default="${FINAL_DEFAULT_BRANCH:-${DEFAULT_BRANCH_TRACKING:-}}"
   if [ -z "${verify_default}" ]; then
-    verify_default="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+    # `|| true`: under the poller's `set -euo pipefail` a failing command
+    # substitution in an assignment would end the whole tick.
+    verify_default="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
   fi
   [ -n "${verify_default}" ] || verify_default="main"
   verify_dir="${RUNTIME_DIR:-/tmp}/activation-verify-project-${TRACKING_NUM}"
