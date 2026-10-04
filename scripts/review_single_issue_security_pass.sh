@@ -30,9 +30,9 @@
 #           behaviour before this port.
 #   report  Run by security-audit.yml after an audit dispatched with
 #           `pr_number`. Posts the `status=clean|findings|failed` marker for
-#           the audited commit. On clean or failed it re-dispatches the review
-#           for the PR, so the next review run merges (clean) or starts the
-#           next cycle (failed). Findings become follow-up issues that target
+#           the audited commit. On clean, failed or final-cycle findings it
+#           re-dispatches review, so the next review merges or escalates.
+#           Findings become follow-up issues that target
 #           the PR branch; their merges push to the PR and start a new review.
 #
 # Marker (last non-empty line of a comment by the pipeline account; any other
@@ -41,8 +41,10 @@
 #
 # API budget (CLAUDE.md §15). gate: none for an ineligible PR; for an eligible
 # one, reuses the PR payload and comments the review job already fetched, plus
-# at most 3 GETs for the skip check, then one dispatch and one comment (or one
-# label write). report: one comment and at most one dispatch.
+# at most 3 GETs for the skip check and one /user identity read (the gate
+# job's /user result is not exported), then one dispatch and one comment (or
+# one label write). report: one PR read to bind the audit inputs, one /user
+# identity read, one paginated comments read, one comment and at most one dispatch.
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
 set -uo pipefail
@@ -66,23 +68,23 @@ single_pass_marker()
 	printf '<!-- ai:single-issue-security-pass:v1 status=%s head=%s cycle=%s -->' "$1" "$2" "$3"
 }
 
-# Prints the trusted markers of a comments JSON file as TSV:
-# created_at, status, head, cycle.
+# Prints the pipeline's markers as TSV: created_at, id, status, head, cycle.
 single_pass_markers()
 {
 	local comments_file="$1"
+	[ -n "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] || return 1
 	[ -s "${comments_file}" ] || return 0
-	jq -r '
+	jq -r --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" '
 		.[]?
 		| select(type == "object")
-		| select(((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
-		| [(.created_at // ""), ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | gsub("^\\s+|\\s+$"; ""))]
+		| select(.user.login == $author)
+		| [(.created_at // ""), (.id // 0), ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | gsub("^\\s+|\\s+$"; ""))]
 		| @tsv
-	' "${comments_file}" 2>/dev/null | while IFS=$'\t' read -r created line; do
+	' "${comments_file}" 2>/dev/null | while IFS=$'\t' read -r created id line; do
 		if [[ "${line}" =~ ${SECURITY_PASS_MARKER_RE} ]]; then
-			printf '%s\t%s\t%s\t%s\n' "${created}" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+			printf '%s\t%s\t%s\t%s\t%s\n' "${created}" "${id}" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
 		fi
-	done | sort
+	done | sort -t $'\t' -k1,1 -k2,2n
 }
 
 single_pass_audit_workflow()
@@ -144,17 +146,29 @@ single_pass_gate()
 			return 0
 		fi
 	fi
-	markers="$(single_pass_markers "${comments}")"
-	if printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" '$2 == "clean" && $3 == h { found = 1 } END { exit found ? 0 : 1 }'; then
+	# The gate job also probes /user, but its identity is not exported to this job.
+	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ] || [ ! -s "${comments}" ] \
+		|| ! jq -e 'type == "array"' "${comments}" >/dev/null 2>&1; then
+		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable"
+		single_pass_output true
+		return 0
+	fi
+	if ! markers="$(single_pass_markers "${comments}")"; then
+		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable"
+		single_pass_output true
+		return 0
+	fi
+	cycles_used="$(printf '%s\n' "${markers}" | awk -F'\t' 'NF >= 5 && $5 + 0 > m { m = $5 + 0 } END { print m + 0 }')"
+	latest="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" '$4 == h' | tail -n 1)"
+	latest_created="$(printf '%s' "${latest}" | cut -f1)"
+	latest_status="$(printf '%s' "${latest}" | cut -f3)"
+	latest_head="$(printf '%s' "${latest}" | cut -f4)"
+	if [ "${latest_status}" = "clean" ] && [ "${latest_head}" = "${head_sha}" ]; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean"
 		single_pass_output false
 		return 0
 	fi
-	cycles_used="$(printf '%s\n' "${markers}" | awk -F'\t' 'NF >= 4 && $4 > m { m = $4 } END { print m + 0 }')"
-	latest="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" '$3 == h' | tail -n 1)"
-	latest_created="$(printf '%s' "${latest}" | cut -f1)"
-	latest_status="$(printf '%s' "${latest}" | cut -f2)"
-	latest_head="$(printf '%s' "${latest}" | cut -f3)"
 	if [ "${latest_status}" = "pending" ] && [ "${latest_head}" = "${head_sha}" ]; then
 		age_hours="$(python3 -c 'import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); print(int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//3600))' "${latest_created}" 2>/dev/null || echo 0)"
 		if [ "${age_hours}" -lt "${stale_hours}" ]; then
@@ -163,7 +177,7 @@ single_pass_gate()
 			return 0
 		fi
 	fi
-	if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ]; then
+	if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ] && [ "${cycles_used}" -lt "${max_cycles}" ]; then
 		# The follow-up fixes merge into this branch and change the head; the
 		# next cycle audits that head.
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=awaiting_followups cycle=${cycles_used}"
@@ -172,12 +186,17 @@ single_pass_gate()
 	fi
 	if [ "${cycles_used}" -ge "${max_cycles}" ]; then
 		if ! printf ',%s,' "${labels}" | grep -q ',ai:security-pass-failed,'; then
-			gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:security-pass-failed' >/dev/null 2>&1 \
-				|| echo "::warning::Could not label PR #${PR_NUMBER} ai:security-pass-failed."
+			if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:security-pass-failed' >/dev/null 2>&1; then
+				echo "::error::Could not label PR #${PR_NUMBER} ai:security-pass-failed; failing closed so workflow recovery can retry."
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=failed reason=label_write_failed cycle=${cycles_used}"
+				single_pass_output true
+				return 1
+			fi
 			gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
 				-f body="## Single-issue security pass exhausted
 
-The security audit of this PR still reports findings after ${cycles_used} of ${max_cycles} cycles, so auto-merge stays off. The PR is labelled \`ai:security-pass-failed\`; the unblock judge takes it from here and never waives the pass." >/dev/null 2>&1 || true
+The security audit of this PR has used ${cycles_used} of ${max_cycles} cycles, so auto-merge stays off. The PR is labelled \`ai:security-pass-failed\` for the unblock judge." >/dev/null 2>&1 \
+				|| echo "::warning::Could not post the security-pass exhaustion comment on PR #${PR_NUMBER}."
 		fi
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=cycles_exhausted cycle=${cycles_used}"
 		single_pass_output true
@@ -205,9 +224,25 @@ $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 single_pass_report()
 {
 	local pr_number="${SECURITY_PASS_PR_NUMBER:-}" head_sha="${SECURITY_PASS_HEAD_SHA:-}" outcome="${SECURITY_PASS_AUDIT_OUTCOME:-}"
-	local findings="${SECURITY_PASS_FINDINGS:-}" default_branch="${DEFAULT_BRANCH:-}" comments_file status cycle body review_workflow
+	local findings="${SECURITY_PASS_FINDINGS:-}" default_branch="${DEFAULT_BRANCH:-}" comments_file status cycle body review_workflow pr_head
+	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}"
+	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	if ! [[ "${pr_number}" =~ ^[0-9]+$ ]] || ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
 		single_pass_log "mode=report pr=${pr_number} outcome=skip reason=missing_input"
+		return 0
+	fi
+	# Audit data and PR number are independent dispatch inputs. Bind the result
+	# to the live same-repository PR before trusting it as a merge authorization.
+	if [ -z "${SECURITY_PASS_AUDIT_BRANCH:-}" ] || ! pr_head="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}" 2>/dev/null)" \
+		|| ! jq -e --arg sha "${head_sha}" --arg branch "${SECURITY_PASS_AUDIT_BRANCH}" --arg repo "${REPOSITORY}" --arg base "${default_branch}" \
+			'.state == "open" and .head.sha == $sha and .head.ref == $branch and .head.repo.full_name == $repo and .base.ref == $base' <<< "${pr_head}" >/dev/null 2>&1; then
+		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=pr_head_mismatch"
+		return 0
+	fi
+	# No other report-side call provides the identity of the comment author.
+	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
+		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=author_unverifiable"
 		return 0
 	fi
 	if [ "${outcome}" = "success" ] && [[ "${findings}" =~ ^[0-9]+$ ]]; then
@@ -220,13 +255,18 @@ single_pass_report()
 		status="failed"
 	fi
 	comments_file="$(mktemp)"
-	if gh api --paginate "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' > "${comments_file}" 2>/dev/null; then
-		cycle="$(single_pass_markers "${comments_file}" | awk -F'\t' -v h="${head_sha}" '$2 == "pending" && $3 == h { c = $4 } END { print c + 0 }')"
+	if gh api --paginate "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' > "${comments_file}" 2>/dev/null \
+		&& jq -e 'type == "array"' "${comments_file}" >/dev/null 2>&1; then
+		cycle="$(single_pass_markers "${comments_file}" | awk -F'\t' -v h="${head_sha}" '$3 == "pending" && $4 == h { c = $5 } END { print c + 0 }')"
 	else
 		cycle=0
 	fi
 	rm -f "${comments_file}"
-	[ "${cycle}" -ge 1 ] || cycle=1
+	if [ "${cycle}" -lt 1 ]; then
+		echo "::warning::No verified pending marker for PR #${pr_number} at ${head_sha}; refusing to publish an audit result."
+		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=pending_unverifiable"
+		return 0
+	fi
 	case "${status}" in
 		clean) body="## Single-issue security pass: clean
 
@@ -241,7 +281,7 @@ The audit of \`${head_sha}\` did not finish. The review re-runs and starts the n
 	body+=$'\n\n'"$(single_pass_marker "${status}" "${head_sha}" "${cycle}")"
 	gh api "repos/${REPOSITORY}/issues/${pr_number}/comments" -f body="${body}" >/dev/null 2>&1 \
 		|| echo "::warning::Could not post the security-pass result on PR #${pr_number}."
-	if [ "${status}" != "findings" ] && [ -n "${default_branch}" ]; then
+	if { [ "${status}" != "findings" ] || [ "${cycle}" -ge "${max_cycles}" ]; } && [ -n "${default_branch}" ]; then
 		review_workflow="$(single_pass_review_workflow)"
 		gh workflow run "${review_workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f pr_number="${pr_number}" >/dev/null 2>&1 \
 			|| echo "::warning::Could not re-dispatch ${review_workflow} for PR #${pr_number}; the next review event picks the result up."

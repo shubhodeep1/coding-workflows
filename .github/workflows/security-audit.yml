@@ -41,6 +41,7 @@ name: Security Audit
 permissions:
   contents: read
   issues: write
+  actions: write
   # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
   id-token: write
 
@@ -299,11 +300,13 @@ jobs:
         if: always() && inputs.pr_number != '' && env.AUDIT_DATA_SHA != ''
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ env.AUDIT_DEFAULT_BRANCH }}
           SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
           SECURITY_PASS_AUDIT_OUTCOME: ${{ steps.run_security_audit.outcome }}
+          SECURITY_PASS_AUDIT_BRANCH: ${{ env.AUDIT_BRANCH }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
         run: |
           set -uo pipefail
           SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"
@@ -311,9 +314,6 @@ jobs:
           audit_log="${RUNNER_TEMP}/security_audit_run.log"
           if [ -s "${audit_log}" ]; then
             SECURITY_PASS_FINDINGS="$(sed -n 's/^security-audit: tracker=#[0-9]* findings=\([0-9][0-9]*\) followups_created=.*$/\1/p' "${audit_log}" | tail -n 1)"
-            if [ -z "${SECURITY_PASS_FINDINGS}" ] && grep -q '^security-audit: .*skipping' "${audit_log}"; then
-              SECURITY_PASS_FINDINGS="0"
-            fi
           fi
           export SECURITY_PASS_HEAD_SHA SECURITY_PASS_FINDINGS
           if [ ! -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then

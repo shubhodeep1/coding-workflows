@@ -20,6 +20,7 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: write
   # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
   id-token: write
 concurrency:
