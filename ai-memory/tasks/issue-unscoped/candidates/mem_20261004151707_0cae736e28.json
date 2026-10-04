@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:lines 331-336\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The CHECK_TRIAGE Claude branch does not strip `OPENROUTER_API_KEY`.\n  WHY: Claude does not need the key, and the triage role's write profile makes it reachable by the model.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/check_failure_triage.sh:lines 331-336\n  PROBLEM: The CHECK_TRIAGE Claude branch strips GH_TOKEN, GITHUB_TOKEN, and TG_* credentials but does not strip OPENROUTER_API_KEY.\n  WHY: Claude does not need the OpenRouter key, and the triage role uses a write profile (Bash tool available), so the key is reachable by the model.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cbac12d7db2f978d12f6807fb1347a60b90f22536bd4c1b10b398af9504b8372",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37211226681",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37211226681",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004151707_0cae736e28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37211226681"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-04T15:17:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
