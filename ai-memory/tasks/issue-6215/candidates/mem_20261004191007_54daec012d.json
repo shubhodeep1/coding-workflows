@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should anchor the run list as intake-issued and unmodified?\nChoices:\nA. Before using any run, check with GraphQL that the heal issue body and each occurrence comment were never edited by anyone except the intake account (via the `lastEditedAt` / `editor` / `userContentEdits` fields). If that can't be shown, ignore all body/comment-supplied runs and the body-derived `source` / `Head SHA` for cross-repo fetches. This costs one batched GraphQL call. (RECOMMENDED)\nB. Have the intake also write the run list, source repo, PR and head SHA to a durable record keyed by issue number (on the `ai-memory` branch or a hidden marker written only at creation). The collector trusts only that record. This needs intake + collector changes, and issues filed before the change fall back to issue-repo-only runs.\nC. Keep reading runs from the issue prose and rely only on per-run API verification against the body's head SHA / PR. **Note:** this does not close the finding, because those fields are editable too.\nQ2: How should cross-repository (consumer) run fetches be authorised?\nChoices:\nA. Keep `GH_PAT`, but fetch a consumer's runs only when the provenance check (Q1) passes and the run's own API metadata matches the verified repo, head SHA and PR/head branch. Otherwise skip with a logged reason. No new secret. (RECOMMENDED)\nB. Add an optional read-only credential limited to a single repo (e.g. a new secret or a GitHub App installation token scoped to the source repo, with a default of unset). When it is unset, skip all consumer-repo run, artifact, timeline and compare fetches; same-repo runs keep `GH_PAT`.\nC. Stop cross-repo collection altogether. Only runs in this repository are fetched.\nQ3: When some run references fail verification, what should happen to the rest of the evidence folder?\nChoices:\nA. Skip only the unverifiable runs, record each as a `skipped` entry with its reason in the index, and keep the other sections that already use verified context (provenance, lineage, timeline). (RECOMMENDED)\nB. If any run fails verification, drop the whole cross-repo part (runs, timeline, compare) for that issue and keep only same-repo data.\nC. Fail the evidence step closed (no folder) whenever any run fails verification. **Note:** this blocks clarify, plan and implement evidence for heal issues with stale or rotated runs.",
+  "fingerprint": "c683914237b35bf6bf3265069d57fcddd16edfb2e93568e6ae6aa75dfb1dc11b",
+  "lineage": {
+    "issue_number": 6215,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37226703035",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37226703035",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261004191007_54daec012d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6215,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37226703035"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6215 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-04T19:10:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
