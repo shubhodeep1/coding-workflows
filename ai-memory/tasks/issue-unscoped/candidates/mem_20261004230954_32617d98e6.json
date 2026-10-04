@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:274 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The redirect parser treats escaped digits before `>` as a file-descriptor prefix and removes a numeric git push refspec.\n  WHY: For `git push origin \\123>out.log`, the guard drops refspec `123` and checks the current branch instead, potentially allowing a push to merged-PR history.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:274 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The mirrored redirect parser treats escaped digits before `>` as a file-descriptor prefix and removes a numeric git push refspec.\n  WHY: For `git push origin \\123>out.log`, the guard drops refspec `123` and checks the current branch instead, potentially allowing a push to merged-PR history.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py:274 | severity=high | confidence=4\n  PROBLEM: The fd-prefix check strips a numeric segment when the raw byte before `>` in the command string is a digit, but it does not account for shell escapes.\n  WHY: If a Claude session issues `git push origin \\123>out.log` where branch `123` is the destination of a merged PR and the current checkout branch is different, the guard incorrectly strips `123` as an fd prefix and checks the wrong branch, allowing a push to merged-PR history that it is meant to block.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:274 | severity=high | confidence=4\n  PROBLEM: The mirrored hook has the same escaped-digit fd-prefix parsing bug.\n  WHY: The guard incorrectly strips `123` as an fd prefix and checks the wrong branch, allowing a push to merged-PR history that it is meant to block.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:~line 274 | severity=high | confidence=4\n  PROBLEM: The redirect check treats any digit immediately before `>` as an attached file-descriptor prefix, without checking whether that digit was escaped.\n  WHY: `git push origin \\123>out.log` causes the guard to fall back to checking the current branch; if the current branch is not merged, the guard allows the push to branch `123`.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:274 | severity=high | confidence=4\n  PROBLEM: The mirrored hook has the same escaped-digit redirect parsing bug.\n  WHY: The guard can fall back to checking the current branch and allow a push to branch `123`.\n- tests/test_pr_merge_status_guard.py:end of `test_numeric_push_refspec_survives_separate_redirect`\n  PROBLEM: The test skips the escape form (`\\123>out.log`), so it does not pin the parser regression.\n  WHY: A follow-up commit cannot prove a fix without an assertion that fails today.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py: Redirection parsing, the `redirect_start` digit check immediately before `segment.pop()` (around lines 270-273) | severity=high | confidence=5\n  PROBLEM: The parser treats a digit immediately before `>` as an attached file-descriptor prefix without checking whether it was escaped.\n  WHY: For `git push origin \\123>out.log`, the parser removes `123`, so the guard checks the current branch instead of the destination branch; a push to a merged PR branch is allowed when the current branch is not that merged branch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py:270-277 | severity=high | confidence=4\n  PROBLEM: The parser does not check whether the digit immediately before `>` was escaped.\n  WHY: The guard treats the push as having no refspec and checks the current branch instead of `123`, potentially allowing a push to a merged-PR destination.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:274 | severity=high | confidence=4\n  PROBLEM: The mirrored hook has the same escaped-digit refspec parsing bug.\n  WHY: The guard can check the current branch instead of `123` and allow a push it is meant to block.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/pr_merge_status_guard.py:274 | severity=high | confidence=4\n  PROBLEM: The redirect-parsing fix checks whether the character immediately before `>` in the raw command is a digit, but it does not check whether that digit was backslash-escaped.\n  WHY: The guard treats the push as having no refspec, falls back to checking the current branch, and misses a push targeting merged branch `123`.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:274 | severity=high | confidence=4\n  PROBLEM: The mirrored hook has the same escaped-digit redirect-parsing bug.\n  WHY: The guard can miss a push targeting merged branch `123`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "27c090904ae60c43c2e2515a11ed6730bd2ea05d217035f4248d5d3faee66d8b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6220,
+    "run_id": "37241294476",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37241294476",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004230954_32617d98e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6220,
+    "run_id": "37241294476"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T23:09:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
