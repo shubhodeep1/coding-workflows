@@ -109,6 +109,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/assemble_changelog.py` — Fold per-PR changelog.d fragments into CHANGELOG.md (Keep a Changelog or date-heading layout) and manage the .gitattributes union backstop.
 - `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
+- `scripts/auto_decisions.py` — Parse RECOMMENDED clarify answers and keep the standalone auto-decisions (AD) comment and PR-body section (port P3).
 - `scripts/auto_release_stable.sh` — Dispatch the release gate when the stable branch is ahead of its tag.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
