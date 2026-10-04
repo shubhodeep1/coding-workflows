@@ -590,6 +590,7 @@ codex_thread_reuse_claude_direct_run()
 	local transform_mode="${7:-none}"
 	local marker_start="${8:-}"
 	local marker_end="${9:-}"
+	local timeout_secs="${CODEX_THREAD_REUSE_TIMEOUT_SECS:-}"
 	local role="${CODEX_THREAD_REUSE_ENGINE_ROLE:-}"
 	local engine_dir=""
 	local root=""
@@ -598,6 +599,7 @@ codex_thread_reuse_claude_direct_run()
 	local effective_prompt="${prompt_file}"
 	local claude_prompt=""
 	local claude_rc=0
+	local -a claude_cmd=()
 	local -a tee_targets=()
 
 	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -630,16 +632,24 @@ codex_thread_reuse_claude_direct_run()
 
 	[ -n "${log_file}" ] && tee_targets+=("${log_file}")
 	[ -n "${cumulative_log_file}" ] && tee_targets+=("${cumulative_log_file}")
+	claude_cmd=(bash -c 'source "$1"; shift; claude_run "$@"' _ "${engine_dir}/ai_engine.sh")
+	if [ -n "${timeout_secs}" ]; then
+		if command -v timeout >/dev/null 2>&1; then
+			claude_cmd=(timeout --signal=TERM --kill-after=5s "${timeout_secs}s" "${claude_cmd[@]}")
+		else
+			echo "::warning::timeout unavailable; ${role} will rely on the enclosing job timeout." >&2
+		fi
+	fi
 	if [ "${#tee_targets[@]}" -gt 0 ]; then
-		claude_run "${role}" "${effective_prompt}" "${output_file}" "${PWD}" "${claude_session_id}" \
+		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "${PWD}" "${claude_session_id}" \
 			2> >(tee -a "${tee_targets[@]}" >&2) || claude_rc=$?
 	else
-		claude_run "${role}" "${effective_prompt}" "${output_file}" "${PWD}" "${claude_session_id}" || claude_rc=$?
+		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "${PWD}" "${claude_session_id}" || claude_rc=$?
 	fi
 	if [ -n "${claude_prompt}" ]; then
 		rm -f "${claude_prompt}"
 	fi
-	if [ "${claude_rc}" -ne 0 ] && [ "${claude_rc}" -ne 75 ]; then
+	if [ "${claude_rc}" -ne 0 ]; then
 		rm -f "${id_file}"
 	fi
 	return "${claude_rc}"
@@ -675,25 +685,30 @@ codex_thread_reuse_direct_run()
 	local resume_allowed='false'
 	local rc=0
 	local engine_rc=0
+	local claude_unavailable_file=""
 
 	# Claude engine (plan Phase 5b): CODEX_THREAD_REUSE_ENGINE=claude runs the
 	# role on Claude first; only exit 75 (Claude unavailable) continues to the
 	# codex path below, which is unchanged.
 	if [ "${CODEX_THREAD_REUSE_ENGINE:-codex}" = 'claude' ]; then
-		AI_ENGINE_MODEL_HINT="${model}" \
-			AI_ENGINE_EFFORT_HINT="${AI_ENGINE_EFFORT_HINT:-${MODEL_REASONING_EFFORT:-}}" \
-			codex_thread_reuse_claude_direct_run \
-			"${state_key}" \
-			"${prompt_file}" \
-			"${output_file}" \
-			"${log_file}" \
-			"${cumulative_log_file}" \
-			"${continuation_file}" \
-			"${transform_mode}" \
-			"${marker_start}" \
-			"${marker_end}" || engine_rc=$?
-		if [ "${engine_rc}" -ne 75 ]; then
-			return "${engine_rc}"
+		claude_unavailable_file="$(codex_thread_reuse_ensure_runtime_root)/states/claude-$(codex_thread_reuse_safe_key "${state_key}").unavailable"
+		if [ ! -f "${claude_unavailable_file}" ]; then
+			AI_ENGINE_MODEL_HINT="${model}" \
+				AI_ENGINE_EFFORT_HINT="${AI_ENGINE_EFFORT_HINT:-${MODEL_REASONING_EFFORT:-}}" \
+				codex_thread_reuse_claude_direct_run \
+				"${state_key}" \
+				"${prompt_file}" \
+				"${output_file}" \
+				"${log_file}" \
+				"${cumulative_log_file}" \
+				"${continuation_file}" \
+				"${transform_mode}" \
+				"${marker_start}" \
+				"${marker_end}" || engine_rc=$?
+			if [ "${engine_rc}" -ne 75 ]; then
+				return "${engine_rc}"
+			fi
+			: > "${claude_unavailable_file}"
 		fi
 		echo "Claude unavailable for ${state_key}; running the codex path (plan D1)." >&2
 	fi
