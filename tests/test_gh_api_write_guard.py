@@ -685,7 +685,12 @@ READ_LOOP_UNVETTED = [
 
 @pytest.mark.parametrize("command", READ_LOOP_UNVETTED)
 def test_unvetted_loop_keeps_no_decision(command):
-	assert _decide(command) is None
+	# An unvetted loop with an unquoted gh api argument is not exempt:
+	# a body command could change the counter before that argument expands.
+	if "gh api " in command and "$r" in command:
+		assert _decide(command) == guard.DECISION_ASK
+	else:
+		assert _decide(command) is None
 
 
 def test_expanded_file_field_in_loop_still_asks():
@@ -909,6 +914,7 @@ def test_literal_loop_counter_is_not_an_unquoted_expansion():
 	# counter: it can only expand to one of the literal tokens.
 	assert _decide("for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done") == guard.DECISION_ALLOW
 	assert _decide("for ID in 1 2; do gh api repos/o/r/actions/runs/${ID}/jobs; done") == guard.DECISION_ALLOW
+	assert _decide("for r in 1 2; do gh api repos/o/r/issues/$r --jq .; done") == guard.DECISION_ALLOW
 	assert guard._literal_loop_counter("for r in 1 2; do gh api repos/o/r/pulls/$r; done") == "r"
 
 
@@ -918,6 +924,12 @@ def test_literal_loop_counter_is_not_an_unquoted_expansion():
 	"for r in 1; do read r; gh api repos/o/r/issues/1/comments$r; done",
 	"for r in 1; do declare r=x; gh api repos/o/r/issues/1/comments$r; done",
 	"for r in 1; do printf -v r '%s' x; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do . ./rebind.sh; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do r[0]=' -Fbody=@/etc/passwd'; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do r['index']=' -Fbody=@/etc/passwd'; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do select r in x; do break; done; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do trap '. ./rebind.sh' DEBUG; gh api repos/o/r/issues/1/comments$r; done",
+	"for r in 1; do :; gh api repos/o/r/issues/1/comments$r; done",
 	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs$X; done",
 	"for r in 1; do gh api repos/o/r/actions/runs/${r:-x}/jobs; done",
 	"for r in 1; do gh api repos/o/r/actions/runs/$rx/jobs; done",

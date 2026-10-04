@@ -1178,8 +1178,9 @@ reviews, comments, and conflicts stay a direct §12 request.
   `gh api` argument contains an unquoted `$`/backtick expansion that could
   word-split into a new flag; a double-quoted dynamic endpoint retains its
   no-decision outcome inside a loop. The counter of a literal-ID
-  `for VAR in …; do` loop is exempt while nothing in the body can reassign
-  it (`_literal_loop_counter`), since it expands only to a literal token.
+  `for VAR in …; do` loop is exempt only when its entire body passes the
+  read-loop validator (`_literal_loop_counter`), since unvetted commands can
+  reassign it and make the expansion unsafe.
   The heredoc scanner ignores quoted or
   escaped `<<`, here-strings, comments, and expansion/arithmetic text rather
   than hiding a subsequent call. Keep this check in any #4786/#4909 loop

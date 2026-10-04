@@ -918,6 +918,15 @@ def _literal_loop_counter(command: str) -> str:
 	body = command[header.end():]
 	if _REBIND_WORD_RE.search(body) or re.search(r"(?:^|[^A-Za-z0-9_])" + re.escape(var) + r"\+?=", body) or "printf -v" in body:
 		return ""
+	# Only the vetted read-loop grammar can prove that no other body command
+	# (including shell builtins or future assignment forms) changes the counter.
+	try:
+		loop_invocations = gh_api_invocations(shell_segments(command))
+		loop_results = [classify(parse_gh_api_args(args), command, lambda: "") for args in loop_invocations]
+	except (ValueError, Unreadable):
+		return ""
+	if not _is_approvable_read_loop(command, loop_results):
+		return ""
 	return var
 
 
@@ -1556,6 +1565,7 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."
+			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
 		)
 
 	writes = [description for kind, description in results if kind == KIND_WRITE]
