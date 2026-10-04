@@ -1199,6 +1199,41 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
 
+### Isolated Codex agents
+
+Every Codex agent that reads untrusted text runs in a credential-free,
+network-isolated Docker container (`scripts/codex_isolated_exec.sh`), the same
+way clarify already did. That covers plan, implement (attempts, post-Codex
+repair, diagnose and the PR issue summary), validate, the validation discovery
+bootstrap, the orchestrator's decomposer and judges, workflow log analysis and
+the retro fan-out, check-failure triage, the security audit and the workflow
+failure heal intake. A prompt injection in an issue, comment, PR diff or log
+can no longer read `GH_PAT`, the OpenRouter key, the Telegram secrets or the
+checkout's `.git`: none of them is inside the container, the container has no
+network, and model calls go through a host-side broker that holds the key and
+forwards one fixed endpoint for one model.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Container | `--network none --read-only --cap-drop ALL --security-opt no-new-privileges`, runner UID, no runner env |
+| Image | built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after) |
+| Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap |
+| Workspace write-back | changed regular files only (mode 0644/0755); symlinks, special files or a host file changed meanwhile reject the whole transfer |
+| Implement dependencies | installed once per job in a credential-free networked container; never copied back |
+
+What this means for operators: runners need Docker (GitHub-hosted
+`ubuntu-latest` has it). A missing Docker or a failed image build fails the
+step with `::error::CODEX_ISOLATION …`; Codex never falls back to running on
+the host, and there is no variable that turns isolation off. The implement
+agent has no network, so it cannot `pip install` or `npm install` during the
+run; dependencies the repository declares are preinstalled, and it marks any
+other validation UNVERIFIED. Serena (and any MCP server) is not available
+inside the container, so isolated prompts carry no Serena hints; Semble
+results are rendered on the host and are unaffected. Workspace `after_run`
+hooks run from the copy taken before the editor. Details, including the
+trusted-copy rule for scripts the job runs after an agent wrote files, are in
+`agents.md` under "Isolated Codex agents".
+
 ### Workflow file size limit
 
 GitHub does not start runs for a workflow file over 512,000 bytes (500 KiB).

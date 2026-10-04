@@ -29,9 +29,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    memory, retry, and comment handling remain on the runner.
 3. **plan** (`plan.yml`, `internal-plan.yml`) — read the clarified issue and
    emit a structured implementation plan with files-to-change and a
-   per-issue ≤60-minute time budget.
+   per-issue ≤60-minute time budget. Codex runs in the isolated container
+   (see "Isolated Codex agents").
 4. **implement** (`implement.yml`, `internal-implement.yml`) — execute the
-   plan with codex-cli; write the actual files.
+   plan with codex-cli; write the actual files. Codex runs in the isolated
+   container and edits a copy of the workspace (see "Isolated Codex agents").
 5. **implement-diagnose** (`scripts/implement_diagnose_post_codex_failure.sh`,
    driven by `MODEL_DIAGNOSE`) — analyse a post-Codex validation failure and
    emit JSON fix-up issue proposals.
@@ -482,8 +484,10 @@ a new value, add it to the appropriate overrides file with a
   `STAGED_SUPPORT_LEDGER` (`${RUNTIME_DIR}/staged_support_overwrites.txt`) with the
   installed content under `STAGED_SUPPORT_BASE_DIR`; it also records support
   paths recreated over branch-side deletions. Executable support-ref copies live
-  under `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`. All three paths are exported through
-  `GITHUB_ENV` and only exist when `github.repository` is this repository.
+  under `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`. The ledger and base paths are
+  exported through `GITHUB_ENV` and only exist when `github.repository` is this
+  repository; `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` exists in every repository (see
+  "Isolated Codex agents").
 - `scripts/implement_commit_changes.sh` consumes the ledger before `git add`:
   restore-to-HEAD for untouched copies, 3-way `git merge-file` re-base for
   editor-edited copies, preserve editor-selected modes and branch/editor deletions, remove untouched
@@ -620,6 +624,74 @@ a new value, add it to the appropriate overrides file with a
   in that script must also be listed in `review_apply_fixes_preflight()`
   (contract-tested), and the variable must already be set when the preflight
   step runs.
+
+## Isolated Codex agents
+
+Every Codex agent that reads untrusted text (issue bodies, comments, PR diffs,
+CI and workflow logs, audited code) runs through
+`scripts/codex_isolated_exec.sh`, never as a host `codex` process. Prompt
+injection in that text therefore cannot read `GH_PAT` (`GH_TOKEN`), the
+OpenRouter key, the Telegram secrets, or the checkout's `.git` (whose config
+carries the `GH_PAT` remote URL and the checkout extraheader).
+
+- **Container.** A Docker container built from a fixed, generated build
+  context (Node 22 + Python 3 + git + build-essential + ripgrep + the
+  `CODEX_VERSION` Codex CLI), run with `--network none --read-only --cap-drop
+  ALL --security-opt no-new-privileges --init`, the runner's UID, and no
+  environment from the runner. Nothing from the host is mounted except a
+  disposable copy of the working directory (at its own absolute path), the
+  broker socket, the helper's own support files, and the runtime files a call
+  site names with `--include` (read-only).
+- **Model traffic.** `scripts/clarify_openrouter_broker.py` runs on the host
+  with the key (`broker` mode, Unix socket) and in the container as a loopback
+  bridge (`bridge` mode). It forwards only `POST /api/v1/responses` for the one
+  model the call names. The provider-hosted `web_search` tool keeps working.
+- **Modes.** `read-only`: a copy of the tracked regular files (all top-level
+  directories; symlinks, `.git`, `.env*`, `secrets`, `credentials` and key
+  files skipped; files over 2 MiB skipped and logged; 50,000 files / 512 MiB
+  cap) mounted read-only. `workspace`: a copy of the whole directory except
+  `.git` (symlinks kept as symlinks); afterwards every changed regular file is
+  written back atomically with mode 0644/0755 and removed files are deleted
+  (also after a failed or interrupted attempt). A new or changed symlink, a
+  special file, or a host path that changed since the snapshot rejects the
+  whole transfer before the first host write
+  (`scripts/codex_isolated_workspace.py`). Both modes get a credential-free
+  synthetic `.git` whose `HEAD` is the host `HEAD` tree.
+- **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
+  dependencies once per job in a credential-free container that does have
+  network (`npm ci --ignore-scripts`, `pip install` into `/opt/codex-venv`).
+  Their output stays in the sandbox ("prep roots") and is never copied back.
+  The agent itself has no network: it marks validators it cannot run
+  UNVERIFIED instead of installing them.
+- **Trusted copies.** The helper reads its support files from its own
+  directory. Callers run it from a copy no agent can write: implement runs the
+  helper, `codex_thread_reuse.sh` and every script its Codex, repair and later
+  steps execute from `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` (now staged in every
+  repository), and runs `after_run` workspace hooks from a copy taken before
+  the editor. In the orchestrator poller, the review-blocked fix and the
+  integration-conflict judge work in separate git worktrees under
+  `RUNTIME_DIR`; the poller (not the agent) fetches, merges, checks
+  conflict markers and the merged sub-issue fingerprints, commits and pushes.
+  The review-blocked judge's OpenCode fix writer runs in
+  `scripts/review_untrusted_sandbox.sh`.
+- **Sites.** plan, implement (attempts, post-Codex repair, diagnose, PR issue
+  summary), validate discover / diagnose / self-heal, the validation discovery
+  bootstrap, the orchestrate decomposer, the poller's wave / stall /
+  security-pass / review-blocked / integration-conflict judges, the four
+  workflow-log-analysis passes and the consumer retro fan-out, check-failure
+  triage, the security audit, and the workflow failure heal intake.
+  `tests/test_codex_agent_isolation_contract.py` fails when a direct `codex`
+  launch appears anywhere else (clarify keeps its own
+  `scripts/clarify_isolated_run.sh`).
+- **No MCP tools inside.** Serena (and any other MCP server) is not configured
+  in the container, so isolated prompts carry no Serena hints. Semble results
+  are rendered into prompts on the host and are unaffected.
+- **Failure modes.** Missing Docker, an image build, broker or snapshot failure
+  exits 1 with `::error::CODEX_ISOLATION …`; Codex never falls back to the
+  host, and there is no switch that turns isolation off. A stall-guard
+  `SIGKILL` can leave a container behind; the next run on the same sandbox
+  root removes it by label, and an orphan without its broker has no model
+  access. Log prefix: `CODEX_ISOLATION`.
 
 ## Workflow file size limit
 
@@ -1720,6 +1792,7 @@ Workflow-log-analysis and API-hygiene reporting depend on these stable log
 prefixes. Renames are breaking unless an alongside-old shim is documented
 and shipped:
 
+- `CODEX_ISOLATION`
 - `LABEL_REPAIR`
 - `LABEL_REPAIR_DIFF`
 - `LABEL_SYNC_CREATED`

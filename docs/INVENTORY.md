@@ -130,6 +130,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/claude_session_janitor.py` — Stale session sweep: name the finished fixer, issue-start, and report sessions the Claude issue pickup archives (CLAUDE.md §26.I).
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
+- `scripts/codex_isolated_exec.sh` — Run one Codex agent in a credential-free, network-isolated container (read-only or workspace mode) behind the host-side model broker.
+- `scripts/codex_isolated_workspace.py` — Snapshot, dependency-prep finalisation and validated write-back for `codex_isolated_exec.sh` workspaces.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
 - `scripts/codex_model_catalog_overrides.yaml` — YAML asset for codex_model_catalog_overrides.yaml.
 - `scripts/codex_stall_guard.sh` — Shell helper for codex stall guard.
@@ -246,7 +248,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
 - `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
-- `scripts/smoke_review_dispatch.sh` — Sourced helpers that find and verify the E2E smoke gate's default-branch review dispatch runs.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-6-luna, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
