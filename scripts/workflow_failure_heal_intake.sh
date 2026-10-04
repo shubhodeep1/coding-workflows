@@ -154,6 +154,10 @@ if [ ! -f "${HEAL_PY}" ]; then
 	exit 1
 fi
 
+# Step-sliced logs for the diagnosis prompt (fail open: filtered logs only
+# when the helper is missing). The fingerprint keeps using filter_log.
+EVIDENCE_PY="$(dirname "${HEAL_PY}")/workflow_failure_heal_evidence.py"
+
 PAYLOAD_FILE="${RUNTIME_DIR}/payload.json"
 if ! python3 "${HEAL_PY}" validate-payload --payload-json "${PAYLOAD_RAW_FILE}" > "${PAYLOAD_FILE}" 2> "${RUNTIME_DIR}/payload_error.txt"; then
 	PAYLOAD_ERROR="$(head -c 300 "${RUNTIME_DIR}/payload_error.txt" 2>/dev/null | tr '\n' ' ' || true)"
@@ -238,8 +242,13 @@ while IFS=$'\t' read -r run_id run_url; do
 		# refuses the body ("the response contains terminal escape sequences")
 		# even when stdout is a file, and every job read as "(job log
 		# unavailable)": no error signature, no downstream-gate dedup.
+		SLICED_LOG="${LOG_DIR}/run-${run_id}-job-${job_id}.sliced.txt"
+		: > "${SLICED_LOG}"
 		if gh_retry gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" > "${RAW_LOG}" 2>/dev/null && [ -s "${RAW_LOG}" ]; then
 			python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}" || : > "${FILTERED_LOG}"
+			if [ -f "${EVIDENCE_PY}" ]; then
+				python3 "${EVIDENCE_PY}" slice-log --log-file "${RAW_LOG}" --jobs-json "${JOBS_FILE}" --job-id "${job_id}" --max-bytes "${MAX_LOG_BYTES}" > "${SLICED_LOG}" 2>/dev/null || : > "${SLICED_LOG}"
+			fi
 			rm -f "${RAW_LOG}"
 		else
 			log "warn job_log_fetch_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
@@ -247,10 +256,20 @@ while IFS=$'\t' read -r run_id run_url; do
 		fi
 		LOG_FILES+=("${FILTERED_LOG}")
 		jq --arg run_id "${run_id}" --arg url "${run_url}" --arg job_id "${job_id}" --arg job_name "${job_name}" \
-			--arg workflow_name "${workflow_name}" --arg failing_step "${failing_step}" --arg log_file "${FILTERED_LOG}" \
-			'. + [{run_id: $run_id, url: $url, job_id: $job_id, job_name: $job_name, workflow_name: $workflow_name, failing_step: $failing_step, log_file: $log_file}]' \
+			--arg workflow_name "${workflow_name}" --arg failing_step "${failing_step}" --arg log_file "${FILTERED_LOG}" --arg sliced_file "${SLICED_LOG}" \
+			'. + [{run_id: $run_id, url: $url, job_id: $job_id, job_name: $job_name, workflow_name: $workflow_name, failing_step: $failing_step, log_file: $log_file, sliced_file: $sliced_file}]' \
 			"${SUMMARIES_FILE}" > "${SUMMARIES_FILE}.tmp" && mv "${SUMMARIES_FILE}.tmp" "${SUMMARIES_FILE}"
-	done < <(jq -r '.jobs[] | select((.conclusion // "") | IN("failure","timed_out","cancelled"))
+	# A review/autofix failure is recorded by a marker, not a failed job: the
+	# review run usually concludes success. With no failed job, an autofix
+	# report reads the review job itself (`codex-agent`), or the intake had
+	# no log at all (issue #6055: runs=0). The fingerprint of an autofix
+	# report comes from the reporter's evidence, so this changes no lineage.
+	done < <(jq -r --arg focus "$([ "${SOURCE_KIND}" = "autofix_failure" ] && echo 1 || true)" '
+		(.jobs | map(select((.conclusion // "") | IN("failure","timed_out","cancelled")))) as $failed
+		| (if ($failed | length) > 0 then $failed
+			elif $focus == "1" then (.jobs | map(select((.name // "") | test("(^|/\\s*)codex-agent$"))))
+			else [] end)
+		| .[]
 		| [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // "")]
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
@@ -667,11 +686,18 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	fi
 	echo "=== FAILED RUN LOGS (UNTRUSTED) ==="
 	if [ "${SUMMARY_COUNT}" -gt 0 ]; then
-		while IFS=$'\t' read -r run_url job_name workflow_name failing_step log_file; do
-			echo "--- run ${run_url} | workflow: ${workflow_name} | job: ${job_name} | failing step: ${failing_step:-unknown} ---"
-			cat "${log_file}" 2>/dev/null || echo "(log unavailable)"
+		# Fields are joined with the unit separator (0x1f): a tab is IFS
+		# whitespace, so an empty failing step (a review job that did not
+		# fail) collapsed and shifted every later field one column left.
+		while IFS=$'\x1f' read -r run_url job_name workflow_name failing_step log_file sliced_file; do
+			echo "--- run ${run_url} | workflow: ${workflow_name} | job: ${job_name} | failing step: ${failing_step:-none (review job)} ---"
+			if [ -n "${sliced_file}" ] && [ -s "${sliced_file}" ]; then
+				cat "${sliced_file}"
+			else
+				cat "${log_file}" 2>/dev/null || echo "(log unavailable)"
+			fi
 			echo
-		done < <(jq -r '.[] | [.url, .job_name, .workflow_name, .failing_step, .log_file] | @tsv' "${SUMMARIES_FILE}")
+		done < <(jq -r '.[] | [.url, .job_name, .workflow_name, .failing_step, .log_file, (.sliced_file // "")] | map(tostring | gsub("[\u001f\n\r]"; " ")) | join("\u001f")' "${SUMMARIES_FILE}")
 	else
 		echo "(no failed run could be linked to this escalation; diagnose from the issue context and the escalation label semantics)"
 	fi
@@ -796,6 +822,26 @@ _branch_exists()
 	gh_retry gh api "repos/${repo}/branches/${encoded_branch}" >/dev/null 2>&1
 }
 
+# Branch the review run's support scripts came from: "stable" for the
+# stable ref, otherwise the first of main / stable that contains the SHA.
+# One compare call per branch tried (at most 2); prints nothing when it
+# cannot tell, and the caller keeps the default target.
+_support_ref_branch()
+{
+	local ref="$1" branch="" status=""
+	case "${ref}" in
+		stable|refs/tags/stable) printf 'stable\n'; return 0 ;;
+	esac
+	[[ "${ref}" =~ ^[0-9a-f]{40}$ ]] || return 0
+	for branch in main stable; do
+		status="$({ gh_retry gh api "repos/${SELF_REPO}/compare/${branch}...${ref}" 2>/dev/null || true; } | jq -r '.status // empty' 2>/dev/null || true)"
+		case "${status}" in
+			behind|identical) printf '%s\n' "${branch}"; return 0 ;;
+		esac
+	done
+	return 0
+}
+
 _comment_on_source()
 {
 	local body_file="$1"
@@ -853,15 +899,31 @@ case "${CLASSIFICATION}" in
 		if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAD_BRANCH}" ]; then
 			TARGET_BRANCH="${HEAD_BRANCH}"
 			TARGET_BRANCH_SOURCE="failed_run_branch"
-		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ -n "${HEAD_BRANCH}" ]; then
-			# A review/autofix run in this repo executes the pull request's own
-			# workflow code (review_autofix.yml resolves SCRIPT_REF to
-			# github.sha here), so the defect it hit lives on that PR's branch
-			# and may not exist on the stable line at all. A fix aimed at
-			# stable cannot unblock the PR and would drag the PR's unreleased
-			# changes into stable, so the fix targets the PR's head branch.
-			TARGET_BRANCH="${HEAD_BRANCH}"
-			TARGET_BRANCH_SOURCE="source_pr_head"
+		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+			# A review/autofix run in this repo stages its support scripts from
+			# a trusted ref ("Resolve workflow support ref" in review_autofix.yml
+			# accepts only refs/heads/main, refs/tags/stable or a pinned SHA),
+			# never from the pull request's head. The defect lives where that
+			# code came from, so the fix targets that branch. Targeting the PR's
+			# head stranded heal fixes #4478 and #4585 on project branches that
+			# never reached main (issue #6055). A failure the PR's own changes
+			# caused is classified pr-self-inflicted and opens no issue.
+			# The reporter sends the support SHA as script_ref and wrapper_sha.
+			# When it is the PR's own head SHA, the PR's scripts did run, and the
+			# PR's branch is where the code came from (issue #4329 / PR #4332).
+			SUPPORT_REF="${PAYLOAD_SCRIPT_REF:-${WRAPPER_SHA}}"
+			SUPPORT_BRANCH=""
+			if [ -n "${HEAD_BRANCH}" ] && [ -n "${SUPPORT_REF}" ] && [ "${SUPPORT_REF,,}" = "${HEAD_SHA,,}" ]; then
+				TARGET_BRANCH="${HEAD_BRANCH}"
+				TARGET_BRANCH_SOURCE="source_pr_head"
+			else
+				SUPPORT_BRANCH="$(_support_ref_branch "${SUPPORT_REF,,}")"
+				if [ -n "${SUPPORT_BRANCH}" ]; then
+					TARGET_BRANCH="${SUPPORT_BRANCH}"
+					TARGET_BRANCH_SOURCE="support_ref"
+				fi
+			fi
+			log "support_ref_branch support_ref=${SUPPORT_REF:-none} branch=${SUPPORT_BRANCH:-unknown} target_branch_source=${TARGET_BRANCH_SOURCE}"
 		fi
 		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
 			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then

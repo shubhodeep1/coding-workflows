@@ -972,7 +972,7 @@ def _stage(tmp: Path, *, with_codex: bool, wrapper_pin: str | None = None) -> tu
 	work = tmp / "work"
 	(work / "scripts").mkdir(parents=True)
 	(work / "prompts").mkdir()
-	for name in ("workflow_failure_heal.py", "workflow_failure_heal_report.sh", "workflow_failure_heal_intake.sh", "label_helpers.sh", "render_prompt.sh"):
+	for name in ("workflow_failure_heal.py", "workflow_failure_heal_evidence.py", "workflow_failure_heal_report.sh", "workflow_failure_heal_intake.sh", "label_helpers.sh", "render_prompt.sh"):
 		src = SCRIPTS_DIR / name
 		if src.exists():
 			shutil.copy(src, work / "scripts" / name)
@@ -1707,11 +1707,12 @@ def test_intake_cap_report_fingerprints_by_its_failure_fingerprint() -> None:
 	assert len(set(printed)) == 3
 
 
-def _self_repo_autofix_payload() -> dict:
+def _self_repo_autofix_payload(**overrides) -> dict:
 	return _autofix_payload(
 		source_repo=SELF_REPO,
 		issue_url=f"https://github.com/{SELF_REPO}/pull/4174",
 		run_refs=[{"repo": SELF_REPO, "run_id": "500", "url": f"https://github.com/{SELF_REPO}/actions/runs/500"}],
+		**overrides,
 	)
 
 
@@ -1724,11 +1725,11 @@ def _self_repo_autofix_state(branches: list[str]) -> dict:
 
 
 def test_intake_self_repo_autofix_failure_targets_source_pr_branch() -> None:
-	# A review/autofix run on a PR in coding-workflows itself executes the PR's
-	# own scripts (SCRIPT_REF = github.sha), so a fix aimed at stable can
-	# neither unblock the PR nor merge without dragging the PR's unreleased
-	# changes into stable (issue #4329 / PR #4332 against PR #4323).
-	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(), _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	# When the review run staged the PR's own scripts (script_ref = the PR's
+	# head SHA), a fix aimed at stable can neither unblock the PR nor merge
+	# without dragging the PR's unreleased changes into stable (issue #4329 /
+	# PR #4332 against PR #4323), so the PR's branch stays the target.
+	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(script_ref=SHA_B), _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	created = state_after["issues_created"][0]
 	assert created["repo"] == SELF_REPO
@@ -1744,7 +1745,7 @@ def test_intake_self_repo_autofix_failure_targets_source_pr_branch() -> None:
 
 
 def test_intake_self_repo_autofix_failure_falls_back_to_stable_when_pr_branch_is_gone() -> None:
-	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(), _self_repo_autofix_state(["stable", "main"]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(script_ref=SHA_B), _self_repo_autofix_state(["stable", "main"]), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "warn source_pr_branch_missing branch=ai/issue-4173; falling back to stable" in result.stdout
 	created = state_after["issues_created"][0]
@@ -1753,6 +1754,69 @@ def test_intake_self_repo_autofix_failure_falls_back_to_stable_when_pr_branch_is
 	assert "target_branch=stable" in result.stdout and "target_branch_source=default" in result.stdout
 	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
 	assert outcome and "as a hotfix on `stable`" in outcome[0]["body"]
+
+
+def test_intake_self_repo_autofix_failure_targets_the_support_ref_branch() -> None:
+	# The review run staged trusted support scripts from main (not the PR's
+	# head), so the defect lives on main and the fix targets main. Targeting
+	# the PR's branch stranded #4478 and #4585 on project branches (#6055).
+	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"])
+	state["compare"] = {"status": "behind", "ahead_by": 0, "behind_by": 3, "commits": [], "files": []}
+	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(script_ref=SHA_A), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
+	assert "target_branch=main" in result.stdout and "target_branch_source=support_ref" in result.stdout
+	assert f"support_ref_branch support_ref={SHA_A} branch=main" in result.stdout
+	compare_calls = [call for call in state_after["calls"] if any(f"/compare/main...{SHA_A}" in part for part in call)]
+	assert len(compare_calls) == 1
+	outcome = [c for c in state_after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/4174/comments"]
+	assert outcome and "as a hotfix on `main`" in outcome[0]["body"]
+
+
+def test_intake_self_repo_autofix_failure_with_unknown_support_ref_uses_the_default() -> None:
+	# The compare calls fail (no route): the support branch cannot be told,
+	# so the documented default target (WORKFLOW_HEAL_TARGET_BRANCH) applies.
+	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(script_ref=SHA_A), _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "branch=unknown target_branch_source=default" in result.stdout
+
+
+def test_intake_reads_the_review_job_when_the_review_run_did_not_fail() -> None:
+	# A review/autofix failure is recorded by a marker; the review job itself
+	# concluded success. The intake still reads it (issue #6055: runs=0).
+	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"])
+	state["jobs"]["500"] = [
+		{"id": 9000, "name": "review / gate", "workflow_name": "AI Review", "conclusion": "success", "steps": []},
+		{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "success", "steps": [{"number": 1, "name": "Apply fixes with editor model", "conclusion": "success", "started_at": "2026-09-23T13:51:00Z", "completed_at": "2026-09-23T13:52:00Z"}]},
+	]
+	state["job_logs"]["9001"] = (
+		"2026-09-23T13:51:01.000Z ##[group]Run bash scripts/review_apply_fixes.sh\n"
+		"2026-09-23T13:51:01.000Z env:\n"
+		"2026-09-23T13:51:01.000Z   GIT_WORK_TREE: /home/runner/work/_temp/workspaces/4174-500-1\n"
+		"2026-09-23T13:51:01.000Z ##[endgroup]\n"
+		"2026-09-23T13:51:28.000Z ##[group]Working tree state (checkpoint=commit_step_start)\n"
+		"2026-09-23T13:51:28.000Z (clean)\n"
+		"2026-09-23T13:51:28.000Z ##[endgroup]\n"
+		"2026-09-23T13:51:29.000Z ##[error]Editor claimed changes but no commit was produced.\n"
+	)
+	result, state_after, prompt = _run_intake(_self_repo_autofix_payload(script_ref=SHA_B), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "runs=1" in result.stdout
+	# The diagnosis prompt carries the step-sliced log, not just the filtered one.
+	assert "job: review / codex-agent | failing step: none (review job)" in prompt
+	assert "## Env of the step that raised the first error" in prompt
+	assert "GIT_WORK_TREE: /home/runner/work/_temp/workspaces/4174-500-1" in prompt
+	assert "Working tree state (checkpoint=commit_step_start)" in prompt
+	# Only the review job's log is read, not the gate's.
+	assert not any(any("/actions/jobs/9000/logs" in part for part in call) for call in state_after["calls"])
+	created = state_after["issues_created"][0]
+	assert f"- **Failed run:** https://github.com/{SELF_REPO}/actions/runs/500" in created["body"]
+	assert f"<!-- workflow-failure-heal:runs={SELF_REPO}:500 -->" in created["body"]
 
 
 def _stage_autofix_report(tmp: Path, *, comments: list[dict], flags: dict[str, str], summary_line: str | None = RUN_SUMMARY_LINE) -> tuple[Path, Path, dict[str, str]]:

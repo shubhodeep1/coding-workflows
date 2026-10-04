@@ -1664,8 +1664,18 @@ def compose_issue_body(
 		f"<!-- {MARKER_PREFIX}root={root} -->",
 		f"<!-- {MARKER_PREFIX}source={payload['source_repo']}#{payload.get('issue_number') or 'run'} -->",
 		f"<!-- {MARKER_PREFIX}classification={classification} -->",
-		"",
 	]
+	# The failing runs, machine-readable, so the clarify / plan / implement
+	# evidence step (workflow_failure_heal_evidence.py) can fetch their logs
+	# even when the intake found no job to summarise.
+	run_tokens = [
+		f"{ref['repo']}:{ref['run_id']}"
+		for ref in payload.get("run_refs") or []
+		if isinstance(ref, dict) and is_valid_repo_slug(ref.get("repo")) and str(ref.get("run_id") or "").isdigit()
+	]
+	if run_tokens:
+		parts.append(f"<!-- {MARKER_PREFIX}runs={','.join(run_tokens)} -->")
+	parts.append("")
 	if target_branch:
 		parts.append(f"- **Target branch:** `{target_branch}`")
 	tracking_issue = orchestrator_tracking_issue(integration_branch)

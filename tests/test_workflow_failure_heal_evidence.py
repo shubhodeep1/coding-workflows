@@ -1,0 +1,519 @@
+#!/usr/bin/env python3
+"""Tests for scripts/workflow_failure_heal_evidence.py (heal evidence bundle)."""
+
+from __future__ import annotations
+
+import importlib.util
+import io
+import json
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "workflow_failure_heal_evidence.py"
+
+_spec = importlib.util.spec_from_file_location("workflow_failure_heal_evidence", SCRIPT)
+assert _spec and _spec.loader
+ev = importlib.util.module_from_spec(_spec)
+sys.modules["workflow_failure_heal_evidence"] = ev
+_spec.loader.exec_module(ev)
+
+REPO = "acme/coding-workflows"
+HEAD_SHA = "a" * 40
+MERGE_SHA = "b" * 40
+CYAN = "\x1b[36;1m"
+
+
+def _ts(second: int) -> str:
+	return f"2026-10-04T01:{second // 60:02d}:{second % 60:02d}.1234567Z"
+
+
+def _review_log() -> str:
+	"""A review job log shaped like run 37166027253 (issue #6055)."""
+	lines = [
+		f"{_ts(0)} ##[group]Run actions/checkout@v4",
+		f"{_ts(1)} ##[endgroup]",
+		f"{_ts(10)} ##[group]Run bash scripts/review_apply_fixes.sh",
+		f"{_ts(10)} {CYAN}bash scripts/review_apply_fixes.sh  # echoed script line",
+		f"{_ts(10)} shell: /usr/bin/bash -e {{0}}",
+		f"{_ts(10)} env:",
+		f"{_ts(10)}   GIT_DIR: /home/runner/work/cw/cw/.git",
+		f"{_ts(10)}   GIT_WORK_TREE: /home/runner/work/_temp/workspaces/6133-1",
+		f"{_ts(10)} ##[endgroup]",
+		f"{_ts(11)} ##[warning]Editor claimed changes but git shows no substantive diff from HEAD on attempt 1.",
+	]
+	lines += [f"{_ts(12)} noise line {i}" for i in range(300)]
+	lines += [
+		f"{_ts(20)} ##[group]Working tree state (checkpoint=commit_step_start)",
+		f"{_ts(20)} (clean)",
+		f"{_ts(20)} ##[endgroup]",
+		f"{_ts(21)} Editor-touched files (0):",
+		f"{_ts(22)} ##[group]Run bash scripts/review_autofix_step_editor_uncommitted_changes.sh",
+		f"{_ts(22)} {CYAN}echo '::error::this echoed error must not count'",
+		f"{_ts(22)} env:",
+		f"{_ts(22)}   GIT_WORK_TREE: /home/runner/work/_temp/workspaces/6133-1",
+		f"{_ts(22)}   EDITOR_CHANGES_LOST: true",
+		f"{_ts(22)} ##[endgroup]",
+		f"{_ts(23)} ##[error]Editor claimed changes but no commit was produced.",
+	]
+	lines += [f"{_ts(24)} trailing line {i}" for i in range(200)]
+	lines.append(f"{_ts(25)} REVIEW_AUTOFIX_RUN_SUMMARY_V1 {{\"finalize_reason\":\"editor_changes_lost\"}}")
+	return "\n".join(lines) + "\n"
+
+
+STEPS = [
+	{"number": 1, "name": "Checkout", "conclusion": "success", "started_at": "2026-10-04T01:00:00Z", "completed_at": "2026-10-04T01:00:09Z"},
+	{"number": 2, "name": "Apply fixes with editor model", "conclusion": "success", "started_at": "2026-10-04T01:00:10Z", "completed_at": "2026-10-04T01:00:21Z"},
+	{"number": 3, "name": "Detect editor-claimed-but-uncommitted changes", "conclusion": "success", "started_at": "2026-10-04T01:00:22Z", "completed_at": "2026-10-04T01:00:25Z"},
+]
+
+
+# ---------------------------------------------------------------------------
+# slice_job_log
+# ---------------------------------------------------------------------------
+
+
+def test_slice_keeps_the_decisive_lines_filter_log_dropped() -> None:
+	sliced = ev.slice_job_log(_review_log(), steps=STEPS)
+	# Step table, the first real error with its window, the env of the step
+	# that raised it, the checkpoint group and the run summary all survive.
+	assert "| 3 | Detect editor-claimed-but-uncommitted changes | success |" in sliced
+	assert "##[error]Editor claimed changes but no commit was produced." in sliced
+	assert "## Env of the step that raised the first error" in sliced
+	assert "GIT_WORK_TREE: /home/runner/work/_temp/workspaces/6133-1" in sliced
+	assert "Working tree state (checkpoint=commit_step_start)" in sliced and "(clean)" in sliced
+	assert "Editor-touched files (0):" in sliced
+	assert "REVIEW_AUTOFIX_RUN_SUMMARY_V1" in sliced
+	assert "claimed changes but git shows no substantive diff" in sliced
+	# The echoed step script is not output, so its ::error:: text is dropped.
+	assert "this echoed error must not count" not in sliced
+	assert "\x1b" not in sliced
+	# Error windows are labelled with the step that printed them.
+	assert 'step 3 "Detect editor-claimed-but-uncommitted changes"' in sliced
+
+
+def test_repeated_step_env_does_not_crowd_out_the_checkpoints() -> None:
+	"""Every step header repeats the job env; 500 steps of AUTOFIX_* env lines
+	must not fill the diagnostics quota before the real checkpoint (run
+	37166027253 had the checkpoints ~19,000 lines in)."""
+	header = []
+	for n in range(500):
+		header += [
+			f"{_ts(1)} ##[group]Run step {n}",
+			f"{_ts(1)} env:",
+			f"{_ts(1)}   AUTOFIX_FAILURE_HEAD_SHA: {HEAD_SHA}",
+			f"{_ts(1)} ##[endgroup]",
+			f"{_ts(1)} AUTOFIX_GATE pr=1 head={HEAD_SHA}",
+		]
+	text = "\n".join(header) + "\n" + _review_log()
+	sliced = ev.slice_job_log(text, steps=STEPS)
+	assert "Working tree state (checkpoint=commit_step_start)" in sliced
+	assert sliced.count("AUTOFIX_GATE pr=1") == 1
+	assert "AUTOFIX_FAILURE_HEAD_SHA" not in sliced.split("## Diagnostic groups and lines", 1)[1].split("## Last", 1)[0]
+
+
+def test_slice_respects_the_byte_budget_and_keeps_errors_first() -> None:
+	sliced = ev.slice_job_log(_review_log(), steps=STEPS, max_bytes=4000)
+	assert len(sliced.encode("utf-8")) <= 4000
+	assert "##[error]Editor claimed changes but no commit was produced." in sliced
+
+
+def test_slice_without_errors_or_steps_still_returns_the_tail() -> None:
+	text = "\n".join(f"{_ts(1)} line {i}" for i in range(500))
+	sliced = ev.slice_job_log(text)
+	assert "line 499" in sliced and "line 10\n" not in sliced
+	assert "## Error windows" not in sliced
+
+
+# ---------------------------------------------------------------------------
+# Trust, eligibility, run references
+# ---------------------------------------------------------------------------
+
+
+def _issue(**overrides):
+	body = (
+		"<!-- workflow-failure-heal:fp=" + "f" * 64 + " -->\n"
+		"<!-- workflow-failure-heal:gen=1 -->\n"
+		"<!-- workflow-failure-heal:root=" + "f" * 64 + " -->\n"
+		f"<!-- workflow-failure-heal:source={REPO}#6133 -->\n"
+		f"<!-- workflow-failure-heal:runs={REPO}:111 -->\n"
+		"- **Target branch:** `main`\n"
+		f"- **Head SHA:** `{HEAD_SHA}`\n"
+		"- **Failed on branch:** `ai/issue-5144`\n"
+		"- **Failure reason:** `editor_changes_lost`\n"
+		f"- **Heal intake run:** https://github.com/{REPO}/actions/runs/999\n"
+	)
+	issue = {
+		"number": 7000,
+		"body": body,
+		"labels": [{"name": "ai:workflow-heal"}],
+		"user": {"login": "healer", "type": "User"},
+		"author_association": "OWNER",
+	}
+	issue.update(overrides)
+	return issue
+
+
+def test_eligibility_requires_label_marker_and_trusted_author() -> None:
+	assert ev.eligibility(_issue()) == (True, "eligible")
+	assert ev.eligibility(_issue(labels=[]))[1] == "not_heal_issue"
+	assert ev.eligibility(_issue(body="no marker"))[1] == "no_heal_marker"
+	assert ev.eligibility(_issue(author_association="NONE"))[1] == "untrusted_issue_author"
+	bot = _issue(user={"login": "github-actions[bot]", "type": "Bot"}, author_association="NONE")
+	assert ev.eligibility(bot)[0] is True
+	other_bot = _issue(user={"login": "evil[bot]", "type": "Bot"}, author_association="NONE")
+	assert ev.eligibility(other_bot)[1] == "untrusted_issue_author"
+	assert ev.eligibility(None)[1] == "issue_unreadable"
+
+
+def test_run_refs_come_only_from_trusted_sources() -> None:
+	occurrence = "<!-- workflow-failure-heal:occurrence -->\n- **Failed run:** https://github.com/{repo}/actions/runs/{run}\n"
+	comments = [
+		{"user": {"login": "healer"}, "body": occurrence.format(repo=REPO, run=222)},
+		# Another author cannot add a run, even with the marker.
+		{"user": {"login": "mallory"}, "body": occurrence.format(repo=REPO, run=333)},
+		# A run in an unrelated repository is never fetched.
+		{"user": {"login": "healer"}, "body": occurrence.format(repo="evil/repo", run=444)},
+		# Without the occurrence marker a link is just text.
+		{"user": {"login": "healer"}, "body": f"see https://github.com/{REPO}/actions/runs/555"},
+		{"user": {"login": "healer"}, "body": occurrence.format(repo=REPO, run=666)},
+	]
+	refs = ev.trusted_run_refs(_issue(), comments, allowed_repos=[REPO], limit=3)
+	assert [ref["run_id"] for ref in refs] == ["111", "222", "666"]
+	# The heal intake run linked in the body is not a failing run.
+	assert all(ref["run_id"] != "999" for ref in refs)
+	assert [ref["run_id"] for ref in ev.trusted_run_refs(_issue(), comments, allowed_repos=[REPO], limit=2)] == ["222", "666"]
+
+
+def test_heal_context_reads_the_intake_fields() -> None:
+	ctx = ev.heal_context(_issue())
+	assert ctx["source_repo"] == REPO and ctx["source_number"] == "6133"
+	assert ctx["head_sha"] == HEAD_SHA and ctx["target_branch"] == "main"
+	assert ctx["failure_reason"] == "editor_changes_lost"
+
+
+def test_select_jobs_falls_back_to_the_review_job_when_nothing_failed() -> None:
+	jobs = [
+		{"id": 1, "name": "review / gate", "conclusion": "success"},
+		{"id": 2, "name": "review / codex-agent", "conclusion": "success"},
+		{"id": 3, "name": "lint", "conclusion": "success"},
+	]
+	assert [job["id"] for job in ev.select_jobs(jobs, 3)] == [2]
+	jobs[2]["conclusion"] = "failure"
+	assert [job["id"] for job in ev.select_jobs(jobs, 3)] == [3]
+	assert ev.select_jobs([{"id": 9, "name": "codex-agent", "conclusion": "skipped"}], 3)[0]["id"] == 9
+	assert ev.select_jobs([{"id": 9, "name": "build", "conclusion": "success"}], 3) == []
+
+
+def test_lenient_json_reads_paginated_concatenated_arrays(tmp_path: Path) -> None:
+	path = tmp_path / "comments.json"
+	path.write_text('[{"id": 1}]\n[{"id": 2}]\n')
+	assert ev._load_json_lenient(str(path)) == [{"id": 1}, {"id": 2}]
+	assert ev._load_json_lenient(str(tmp_path / "missing.json")) is None
+
+
+# ---------------------------------------------------------------------------
+# Artifacts
+# ---------------------------------------------------------------------------
+
+
+def _zip(members: dict[str, bytes]) -> bytes:
+	buffer = io.BytesIO()
+	with zipfile.ZipFile(buffer, "w") as archive:
+		for name, data in members.items():
+			archive.writestr(name, data)
+	return buffer.getvalue()
+
+
+def test_reviewer_logs_keep_only_status_and_stderr_members() -> None:
+	blob = _zip({"status_deepseek.txt": b"rc=0", "review_deepseek.txt": b"long review", "pass1_x.log": b"wire", "slot.err": b"boom"})
+	kept = dict(ev.extract_artifact_texts(blob, max_file_bytes=1000, member_re=ev.ARTIFACT_MEMBER_RES["reviewer-logs"]))
+	assert set(kept) == {"status_deepseek.txt", "slot.err"}
+	assert ev._artifact_kind("reviewer-logs-37150557820-1") == "reviewer-logs"
+	assert ev._artifact_kind("codex-review-autofix-failure-logs-1-2") == "codex-review-autofix-failure-logs"
+	assert ev._artifact_kind("other-1-2") == ""
+
+
+def test_artifact_extraction_is_allowlisted_and_traversal_safe() -> None:
+	blob = _zip({
+		"previous_reviews/editor_attempt_1.err": b"editor stderr\x1b[31m red\n",
+		"../escape.txt": b"nope",
+		"/abs.txt": b"nope",
+		"binary.bin": b"\x00\x01",
+		"summariser_pass1.log": b"x" * 5000,
+	})
+	out = dict(ev.extract_artifact_texts(blob, max_file_bytes=1000))
+	assert set(out) == {"previous_reviews__editor_attempt_1.err", "summariser_pass1.log"}
+	assert "\x1b" not in out["previous_reviews__editor_attempt_1.err"]
+	assert len(out["summariser_pass1.log"].encode()) <= 1000
+	assert ev.extract_artifact_texts(b"not a zip", max_file_bytes=1000) == []
+
+
+# ---------------------------------------------------------------------------
+# Collector end to end against a fake `gh`
+# ---------------------------------------------------------------------------
+
+
+class FakeGh:
+	def __init__(self, *, remaining: int = 4000, missing: set[str] | None = None) -> None:
+		self.remaining = remaining
+		self.missing = missing or set()
+		self.paths: list[str] = []
+		jobs = [
+			{"id": 10, "name": "review / gate", "conclusion": "success", "status": "completed", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "workflow_name": "Internal: AI Review & Autofix", "steps": []},
+			{"id": 11, "name": "review / codex-agent", "conclusion": "success", "status": "completed", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "workflow_name": "Internal: AI Review & Autofix", "steps": STEPS},
+		]
+		self.routes = {
+			"rate_limit": {"resources": {"core": {"limit": 5000, "remaining": remaining, "reset": 1}, "graphql": {"limit": 5000, "remaining": 4999, "reset": 1}}},
+			f"repos/{REPO}/actions/runs/111/jobs?per_page=100": {"jobs": jobs},
+			f"repos/{REPO}/actions/runs/222/jobs?per_page=100": {"jobs": jobs},
+			f"repos/{REPO}/actions/jobs/11/logs": _review_log(),
+			f"repos/{REPO}/actions/runs/111/artifacts?per_page=100": {"artifacts": [
+				{"id": 501, "name": "codex-review-autofix-failure-logs-111-1", "expired": False, "size_in_bytes": 100},
+				{"id": 502, "name": "some-other-artifact", "expired": False, "size_in_bytes": 100},
+			]},
+			f"repos/{REPO}/actions/runs/222/artifacts?per_page=100": {"artifacts": []},
+			f"repos/{REPO}/actions/artifacts/501/zip": _zip({"editor_attempt_1.err": b"Review isolation snapshot or transfer rejected\n"}),
+			f"repos/{REPO}/pulls/6133": {"number": 6133, "state": "open", "merged_at": None, "base": {"ref": "main"}, "head": {"ref": "ai/issue-5144", "sha": HEAD_SHA}},
+			f"repos/{REPO}/compare/{HEAD_SHA}...main": {"status": "ahead", "ahead_by": 2, "commits": [{"sha": "c" * 40, "commit": {"message": "fix things"}}], "files": [{"filename": "scripts/x.sh"}]},
+			f"repos/{REPO}/issues?labels=ai:workflow-heal&state=all&per_page=100&page=1": [
+				_issue(),
+				dict(_issue(), number=4477, title="earlier heal", state="closed", state_reason="completed"),
+				dict(_issue(), number=4000, title="unrelated", body="<!-- workflow-failure-heal:fp=" + "e" * 64 + " -->"),
+			],
+			"graphql": {"data": {"repository": {"i4477": {"closedByPullRequestsReferences": {"nodes": [
+				{"number": 4478, "state": "MERGED", "merged": True, "mergedAt": "2026-09-25T16:32:08Z", "baseRefName": "orchestrator/project-4139", "mergeCommit": {"oid": MERGE_SHA}},
+			]}}}}},
+			f"repos/{REPO}/compare/main...{MERGE_SHA}": {"status": "diverged", "ahead_by": 45, "behind_by": 252},
+			f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30": {"workflow_runs": [
+				{"id": 111, "name": "Internal: AI Review & Autofix [pr:6133]", "event": "workflow_dispatch", "status": "completed", "conclusion": "success", "created_at": "2026-10-04T00:47:35Z", "html_url": f"https://github.com/{REPO}/actions/runs/111"},
+			]},
+		}
+
+	def __call__(self, cmd, capture_output=True, timeout=None, check=False):
+		assert cmd[:2] == ["gh", "api"]
+		args = [arg for arg in cmd[2:] if arg != "--allow-escape-sequences"]
+		key = "graphql" if args[0] == "graphql" else args[-1]
+		self.paths.append(key)
+		if key in self.missing or key not in self.routes:
+			return subprocess.CompletedProcess(cmd, 1, b"", b"gh: Not Found (HTTP 404)")
+		value = self.routes[key]
+		data = value if isinstance(value, bytes) else (value.encode() if isinstance(value, str) else json.dumps(value).encode())
+		return subprocess.CompletedProcess(cmd, 0, data, b"")
+
+
+def _collector(tmp_path: Path, fake: FakeGh, **kwargs):
+	return ev.Collector(
+		ev.GitHub(fake, sleep=lambda _s: None),
+		tmp_path / "evidence",
+		display_root="/evidence",
+		openrouter_status=lambda: {"available": True, "limit": 10, "usage": 9.5, "limit_remaining": 0.5},
+		**kwargs,
+	)
+
+
+def _occurrence(run_id: int) -> dict:
+	return {"user": {"login": "healer"}, "body": f"<!-- workflow-failure-heal:occurrence -->\n- **Failed run:** https://github.com/{REPO}/actions/runs/{run_id}\n"}
+
+
+def test_collect_builds_the_bundle_and_index(tmp_path: Path) -> None:
+	fake = FakeGh()
+	manifest = _collector(tmp_path, fake).collect(_issue(), [_occurrence(222)], issue_repo=REPO)
+	out = tmp_path / "evidence"
+	job_file = out / f"runs/{REPO.replace('/', '__')}__111/job-11.txt"
+	assert job_file.is_file()
+	job_text = job_file.read_text()
+	assert job_text.startswith('# Job "review / codex-agent" (conclusion: success)')
+	assert "UNTRUSTED" in job_text and "GIT_WORK_TREE" in job_text
+	artifact = out / f"runs/{REPO.replace('/', '__')}__111/artifact-codex-review-autofix-failure-logs-111-1/editor_attempt_1.err"
+	assert "transfer rejected" in artifact.read_text()
+	# Only the allowlisted artifact is downloaded.
+	assert f"repos/{REPO}/actions/artifacts/502/zip" not in fake.paths
+	index = (out / "INDEX.md").read_text()
+	assert "UNTRUSTED DATA" in index and "`/evidence/runs/" in index
+	assert "PR #4478 MERGED, merged into `orchestrator/project-4139` at bbbbbbbbbbbb; reached `main`: NO" in index
+	assert "#4000" not in index  # different lineage
+	assert "Source PR acme/coding-workflows#6133: state open" in index
+	assert "`main` vs the failing head" in index
+	assert "OpenRouter key: limit 10, usage 9.5, remaining 0.5" in index
+	assert "GitHub API core: 4000/5000 remaining" in index
+	data = json.loads((out / "manifest.json").read_text())
+	assert data == manifest and data["schema"] == "workflow_failure_heal_evidence.v1"
+	assert {"path": "INDEX.md", "bytes": (out / "INDEX.md").stat().st_size} in data["files"]
+	assert all(not item["path"].startswith("cache/") for item in data["files"])
+	# Budget: jobs, log, artifact list + 1 download per run with artifacts,
+	# PR, compare, issue list, GraphQL, lineage compare, timeline.
+	assert manifest["api_calls"] == len([p for p in fake.paths if p != "rate_limit"])
+	assert manifest["api_calls"] <= 20
+
+
+def test_a_later_stage_reuses_completed_runs(tmp_path: Path) -> None:
+	_collector(tmp_path, FakeGh()).collect(_issue(), [_occurrence(222)], issue_repo=REPO)
+	second = FakeGh()
+	manifest = _collector(tmp_path, second).collect(_issue(), [_occurrence(222)], issue_repo=REPO)
+	assert not any("/actions/runs/111/" in path or "/actions/jobs/" in path for path in second.paths)
+	assert manifest["api_calls"] <= 8
+	assert "reused from an earlier stage" in (tmp_path / "evidence" / "INDEX.md").read_text()
+
+
+def test_a_failed_log_fetch_is_retried_by_the_next_stage(tmp_path: Path) -> None:
+	first = FakeGh(missing={f"repos/{REPO}/actions/jobs/11/logs"})
+	manifest = _collector(tmp_path, first).collect(_issue(), [], issue_repo=REPO)
+	assert {"part": "job:11", "reason": "log_unavailable"} in manifest["skipped"]
+	second = FakeGh()
+	_collector(tmp_path, second).collect(_issue(), [], issue_repo=REPO)
+	assert f"repos/{REPO}/actions/jobs/11/logs" in second.paths
+
+
+def test_low_rate_limit_skips_the_optional_parts(tmp_path: Path) -> None:
+	fake = FakeGh(remaining=100)
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	reasons = {(item["part"], item["reason"]) for item in manifest["skipped"]}
+	assert ("artifacts:111", "rate_limit_low") in reasons
+	assert ("timeline", "rate_limit_low") in reasons
+	assert not any(path.endswith("/zip") or "actions/runs?head_sha" in path for path in fake.paths)
+	assert manifest["rate_limit_low"] is True
+	# The job log is still fetched: it is the core of the bundle.
+	assert f"repos/{REPO}/actions/jobs/11/logs" in fake.paths
+
+
+def test_total_size_limit_drops_oldest_extras_first(tmp_path: Path) -> None:
+	manifest = _collector(tmp_path, FakeGh(), max_total_bytes=12_000, max_file_bytes=6000).collect(_issue(), [_occurrence(222)], issue_repo=REPO)
+	out = tmp_path / "evidence"
+	total = sum(p.stat().st_size for p in out.rglob("*") if p.is_file() and "cache" not in p.parts and p.name not in ("manifest.json", "INDEX.md"))
+	assert total <= 12_000
+	size_skips = [item for item in manifest["skipped"] if item["reason"] == "total_size_limit"]
+	assert len(size_skips) == 1 and size_skips[0]["part"].startswith("files:")
+	run_dir = f"runs/{REPO.replace('/', '__')}"
+	# Artifacts go before job logs, and the oldest run's job log before the newest's.
+	assert not (out / f"{run_dir}__111/artifact-codex-review-autofix-failure-logs-111-1").exists() or not any((out / f"{run_dir}__111/artifact-codex-review-autofix-failure-logs-111-1").iterdir())
+	assert not (out / f"{run_dir}__111/job-11.txt").exists()
+	assert (out / f"{run_dir}__222/job-11.txt").exists()
+	assert "(dropped: size limit)" in (out / "INDEX.md").read_text()
+	index = (out / "INDEX.md").read_text()
+	# The index never points at a file the budget removed.
+	for line in index.splitlines():
+		for path in __import__("re").findall(r"`/evidence/([^`]+)`", line):
+			assert (out / path).exists() or path.endswith("/"), path
+
+
+def test_no_trusted_runs_still_writes_provenance(tmp_path: Path) -> None:
+	issue = _issue(body=_issue()["body"].replace(f"<!-- workflow-failure-heal:runs={REPO}:111 -->\n", ""))
+	manifest = _collector(tmp_path, FakeGh()).collect(issue, [], issue_repo=REPO)
+	assert {"part": "runs", "reason": "no_trusted_run_links"} in manifest["skipped"]
+	assert "(no run could be linked; see Skipped)" in (tmp_path / "evidence" / "INDEX.md").read_text()
+
+
+def test_dropped_runs_are_pruned_from_the_cache(tmp_path: Path) -> None:
+	stale = tmp_path / "evidence" / "runs" / "acme__old__1"
+	stale.mkdir(parents=True)
+	(stale / "meta.json").write_text("{}")
+	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	assert not stale.exists()
+
+
+# ---------------------------------------------------------------------------
+# GitHub wrapper and OpenRouter status
+# ---------------------------------------------------------------------------
+
+
+def test_github_wrapper_retries_transient_errors_only() -> None:
+	calls = []
+
+	def runner(cmd, capture_output=True, timeout=None, check=False):
+		calls.append(cmd)
+		if len(calls) == 1:
+			return subprocess.CompletedProcess(cmd, 1, b"", b"HTTP 502: Bad Gateway")
+		return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+
+	gh = ev.GitHub(runner, sleep=lambda _s: None)
+	assert gh.json("repos/a/b") == {"ok": True}
+	assert gh.calls == 2
+
+	def not_found(cmd, capture_output=True, timeout=None, check=False):
+		return subprocess.CompletedProcess(cmd, 1, b"", b"HTTP 404: Not Found")
+
+	gh = ev.GitHub(not_found, sleep=lambda _s: None)
+	assert gh.json("repos/a/b") is None and gh.calls == 1
+
+
+def test_job_log_fetch_falls_back_when_gh_lacks_the_escape_flag() -> None:
+	seen = []
+
+	def old_gh(cmd, capture_output=True, timeout=None, check=False):
+		seen.append(cmd)
+		if "--allow-escape-sequences" in cmd:
+			return subprocess.CompletedProcess(cmd, 1, b"", b"unknown flag: --allow-escape-sequences")
+		return subprocess.CompletedProcess(cmd, 0, b"log", b"")
+
+	gh = ev.GitHub(old_gh, sleep=lambda _s: None)
+	assert gh.raw("repos/a/b/actions/jobs/1/logs", escapes=True) == b"log"
+	assert gh.raw("repos/a/b/actions/jobs/2/logs", escapes=True) == b"log"
+	# The flag is probed once, then dropped for the rest of the run.
+	assert sum("--allow-escape-sequences" in cmd for cmd in seen) == 1
+
+
+def test_openrouter_status_reports_numbers_only() -> None:
+	class Response(io.BytesIO):
+		def __enter__(self):
+			return self
+
+		def __exit__(self, *exc):
+			return False
+
+	seen = {}
+
+	def opener(request, timeout=None):
+		seen["auth"] = request.get_header("Authorization")
+		return Response(json.dumps({"data": {"label": "secret-label", "limit": 10, "usage": 3, "limit_remaining": 7, "is_free_tier": False}}).encode())
+
+	status = ev.openrouter_key_status("sk-test", opener=opener)
+	assert status == {"available": True, "limit": 10, "usage": 3, "limit_remaining": 7, "is_free_tier": False}
+	assert seen["auth"] == "Bearer sk-test"
+	assert ev.openrouter_key_status("") == {"available": False, "reason": "no_key"}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def test_cli_collect_skips_an_ineligible_issue(tmp_path: Path) -> None:
+	issue_file = tmp_path / "issue.json"
+	issue_file.write_text(json.dumps(_issue(labels=[])))
+	proc = subprocess.run(
+		[sys.executable, str(SCRIPT), "collect", "--repo", REPO, "--issue-json", str(issue_file), "--out-dir", str(tmp_path / "out")],
+		capture_output=True, text=True, check=False, env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+	assert proc.returncode == 0
+	assert json.loads(proc.stdout) == {"collected": False, "reason": "not_heal_issue"}
+	assert not (tmp_path / "out").exists()
+
+
+def test_cli_slice_log_uses_the_job_steps(tmp_path: Path) -> None:
+	log_file = tmp_path / "job.log"
+	log_file.write_text(_review_log())
+	jobs = tmp_path / "jobs.json"
+	jobs.write_text(json.dumps({"jobs": [{"id": 11, "steps": STEPS}]}))
+	proc = subprocess.run(
+		[sys.executable, str(SCRIPT), "slice-log", "--log-file", str(log_file), "--jobs-json", str(jobs), "--job-id", "11", "--max-bytes", "20000"],
+		capture_output=True, text=True, check=True, env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+	assert "| 2 | Apply fixes with editor model |" in proc.stdout
+	assert len(proc.stdout.encode()) <= 20000
+
+
+def test_cli_rejects_an_invalid_repo(tmp_path: Path) -> None:
+	proc = subprocess.run(
+		[sys.executable, str(SCRIPT), "collect", "--repo", "not a slug", "--out-dir", str(tmp_path)],
+		capture_output=True, text=True, check=False, env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+	assert proc.returncode == 2
+
+
+if __name__ == "__main__":
+	raise SystemExit(pytest.main([__file__, "-q"]))
