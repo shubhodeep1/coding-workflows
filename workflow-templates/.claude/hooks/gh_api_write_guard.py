@@ -66,7 +66,8 @@ Decision for the whole Bash call (a hook decides once per tool call):
     expands or parses these unlike the tokenizer, so a word could become a
     hidden flag or command → `permissionDecision: ask` (issue #4619);
   - a direct `gh api` argument contains an unquoted expansion that Bash
-    could word-split into another flag → `permissionDecision: ask` (#5558);
+    could word-split into another flag → `permissionDecision: ask` (#5558),
+    except in a literal-ID loop, where the loop validator decides;
   - any `write` → `permissionDecision: ask`;
   - every call is `read` or `routine` and the command contains nothing else
     but safe helpers: items joined by `;` / `&&`, each a `gh api` call
