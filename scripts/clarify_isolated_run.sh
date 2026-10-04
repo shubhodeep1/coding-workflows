@@ -11,7 +11,7 @@ engine="${4:-codex}"
 engine_role="${5:-CLARIFY}"
 case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
 [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
-[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
+[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
 support="scripts"
 if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
 	if [[ "${CLARIFY_ISOLATION_SUPPORT_DIR}" != /* ]] || [ ! -d "${CLARIFY_ISOLATION_SUPPORT_DIR}" ]; then
@@ -191,6 +191,7 @@ if [ "${engine}" = claude ]; then
 			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder \
 			--env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 --env DISABLE_AUTOUPDATER=1 \
 			--env "CLAUDE_MODEL=${claude_model}" --env "CLAUDE_EFFORT=${claude_effort}" \
+			--env "CLARIFY_ISOLATION_TIMEOUT_SECS=${isolation_timeout}" \
 			--workdir /source "${image}" /bin/bash -c '
 				set -euo pipefail
 				printf "{\"projects\":{\"/source\":{\"hasTrustDialogAccepted\":true}}}\n" > "${HOME}/.claude.json"
@@ -198,13 +199,23 @@ if [ "${engine}" = claude ]; then
 				bridge_pid=$!
 				trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
 				python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
-				claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
-					--system-prompt-file /instructions.md \
-					--setting-sources "" --settings /settings.json \
-					--strict-mcp-config --disable-slash-commands \
-					--exclude-dynamic-system-prompt-sections \
-					--tools Read,Grep,Glob --permission-mode dontAsk \
-					--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
+				if [ -n "${CLARIFY_ISOLATION_TIMEOUT_SECS}" ]; then
+					timeout "${CLARIFY_ISOLATION_TIMEOUT_SECS}" claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
+						--system-prompt-file /instructions.md \
+						--setting-sources "" --settings /settings.json \
+						--strict-mcp-config --disable-slash-commands \
+						--exclude-dynamic-system-prompt-sections \
+						--tools Read,Grep,Glob --permission-mode dontAsk \
+						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
+				else
+					claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
+						--system-prompt-file /instructions.md \
+						--setting-sources "" --settings /settings.json \
+						--strict-mcp-config --disable-slash-commands \
+						--exclude-dynamic-system-prompt-sections \
+						--tools Read,Grep,Glob --permission-mode dontAsk \
+						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
+				fi
 			' || run_rc=$?
 		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
 		[ ! -f "${run_root}/results/stderr" ] || tee -a "${log_file}" < "${run_root}/results/stderr" >&2

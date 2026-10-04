@@ -138,14 +138,16 @@ def test_isolated_runner_checks_role_support_and_timeout_before_docker() -> None
 		prompt = tmp_path / "prompt.txt"
 		prompt.write_text("prompt", encoding="utf-8")
 		base_env = dict(os.environ, MODEL_EDITOR="openai/gpt-6-sol", MODEL_REASONING_EFFORT="high")
-		for role, extra_env, error in (
-			("PLAN", {}, "Invalid clarify engine role"),
-			("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": "relative"}, "Invalid clarify isolation support directory"),
-			("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": str(tmp_path / "missing")}, "Invalid clarify isolation support directory"),
-			("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "0"}, "Invalid clarify isolation timeout"),
-			("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "abc"}, "Invalid clarify isolation timeout"),
+		for engine, role, extra_env, error in (
+			("codex", "PLAN", {}, "Invalid clarify engine role"),
+			("claude", "PLAN", {}, "Invalid clarify engine role"),
+			("codex", "UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": "relative"}, "Invalid clarify isolation support directory"),
+			("codex", "UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": str(tmp_path / "missing")}, "Invalid clarify isolation support directory"),
+			("codex", "UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "0"}, "Invalid clarify isolation timeout"),
+			("codex", "UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "abc"}, "Invalid clarify isolation timeout"),
+			("claude", "UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "abc"}, "Invalid clarify isolation timeout"),
 		):
-			result = subprocess.run(["bash", str(runner), str(prompt), str(tmp_path / "out"), str(tmp_path / "log"), "codex", role],
+			result = subprocess.run(["bash", str(runner), str(prompt), str(tmp_path / "out"), str(tmp_path / "log"), engine, role],
 				cwd=REPO_ROOT, env={**base_env, **extra_env}, text=True, capture_output=True, check=False)
 			assert result.returncode == 1 and error in result.stderr, result.stderr
 
@@ -154,10 +156,12 @@ def test_isolated_runner_support_override_and_optional_in_container_timeout() ->
 	runner = (REPO_ROOT / "scripts" / "clarify_isolated_run.sh").read_text(encoding="utf-8")
 	assert 'support="scripts"' in runner  # Existing clarify call sites keep their relative support paths.
 	assert '[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]]' in runner
+	assert '[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]]' in runner
 	assert '"${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"' in runner
 	assert 'install -D -m 0644 "${support}/write_codex_config.sh"' in runner
 	assert 'install -D -m 0644 "${support}/codex_model_catalog.json"' in runner
 	assert '--env "CLARIFY_ISOLATION_TIMEOUT_SECS=${isolation_timeout}"' in runner
+	assert 'timeout "${CLARIFY_ISOLATION_TIMEOUT_SECS}" claude -p' in runner
 	assert 'if [ -n "${CLARIFY_ISOLATION_TIMEOUT_SECS}" ]; then' in runner
 	assert 'timeout "${CLARIFY_ISOLATION_TIMEOUT_SECS}" codex ' in runner
 	assert '\n\t\telse\n\t\t\tcodex ' in runner
