@@ -532,7 +532,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   model the call names. The provider-hosted `web_search` tool keeps working.
 - **Modes.** `read-only`: a copy of the tracked regular files (all top-level
   directories; symlinks, `.git`, `.env*`, `secrets`, `credentials`, `.ssh`,
-  `.npmrc`, `.netrc`, `.config`, credential-store filenames and key files
+  `.npmrc`, `.netrc`, `.config`, credential-store filenames (including `.conf`,
+  `.cfg`, and `.properties`) and key files
   skipped; source modules such as `secret_manager.py` remain visible;
   files over 2 MiB skipped and logged; 50,000 files / 512 MiB cap) mounted
   read-only. `workspace`: a copy of the directory excluding the same

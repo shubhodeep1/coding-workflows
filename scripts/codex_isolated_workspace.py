@@ -154,7 +154,7 @@ def readonly_allowed(name):
 		if (lower in READONLY_BAD_PARTS or lower.startswith(".env") or lower.endswith(SECRET_SUFFIXES)
 			or lower in ("secret", "credential")
 			or lower.endswith(("_secret", "_secrets", "_credential", "_credentials", "-secret", "-secrets", "-credential", "-credentials"))
-			or (lower.rsplit(".", 1)[-1] in ("json", "yaml", "yml", "toml", "ini", "env", "txt")
+			or (lower.rsplit(".", 1)[-1] in ("json", "yaml", "yml", "toml", "ini", "env", "txt", "conf", "cfg", "properties")
 				and (lower.rsplit(".", 1)[0] in ("secret", "secrets", "credential", "credentials")
 					or lower.rsplit(".", 1)[0].endswith(("_secret", "_secrets", "_credential", "_credentials", "-secret", "-secrets", "-credential", "-credentials"))))):
 			return False

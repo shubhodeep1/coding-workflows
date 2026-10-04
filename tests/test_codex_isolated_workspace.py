@@ -88,6 +88,7 @@ def test_credential_paths_are_absent_from_snapshots_and_synthetic_git(repo, tmp_
 		"client_secret.json", "secrets.json", "credentials.yaml", "secrets.yml",
 		"credentials.toml", "credentials.ini", "aws_credentials", "aws_credentials.json",
 		"client-secret.json", "client-secret.yaml", "secret.json", "credentials.txt",
+		"credentials.conf", "secret.cfg", "client_secret.properties",
 	)
 	for name in hidden:
 		path = repo / name
