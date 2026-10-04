@@ -51,7 +51,7 @@ fi
 # integration conflict) work in separate git worktrees under RUNTIME_DIR, so
 # agent output never lands in this checkout, whose scripts the poller keeps
 # running.
-ORCH_SCRIPTS_ROOT="$(pwd)/scripts"
+ORCH_SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "$(pwd)/scripts")"
 ORCH_CODEX_ISOLATED_EXEC="${ORCH_SCRIPTS_ROOT}/codex_isolated_exec.sh"
 # Fingerprint verifier for the integration judge's resolution: the staged
 # copy when there is one, else the trusted support checkout.
@@ -21523,8 +21523,6 @@ Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
 ${RB_FIX_DESC}" || true
 
-                git -C "${RB_COMBINED_WORKDIR}" remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
-
                 if [ "${RB_TARGET_MERGED}" = "true" ]; then
                   # Push follow-up branch and create a new PR
                   if [ "${RB_INTEGRATION_BRANCH_VALID}" = "true" ] \
@@ -21533,7 +21531,9 @@ ${RB_FIX_DESC}" || true
                     tg_notify "Refused merged follow-up PR creation for review-blocked issue #${rb_issue} (PR #${RB_PR}): integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base was '${BASE_REF}'."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
                     RB_FOLLOWUP_REFUSED="true"
                     REVIEW_BLOCKED_STATE_CHANGED=true
-                  elif git -C "${RB_COMBINED_WORKDIR}" push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                  elif git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
+                      -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
+                      push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
                     if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
@@ -21595,7 +21595,9 @@ ${RB_FIX_DESC}
                   fi
                 else
                   # Push to existing open PR branch
-                  if git -C "${RB_COMBINED_WORKDIR}" push origin "HEAD:${HEAD_REF}" 2>/dev/null; then
+                  if git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
+                      -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
+                      push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${HEAD_REF}" 2>/dev/null; then
                     echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
                     # Remove review-blocked label — the push triggers synchronize
                     # which re-runs review_autofix with a reset autofix counter.

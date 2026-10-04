@@ -192,11 +192,15 @@ def test_workflows_pin_the_sandbox_codex_version(workflow):
 
 def test_poller_file_editing_judges_use_worktrees_and_trusted_push():
 	text = (SCRIPTS / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert 'ORCH_SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")"' in text
 	assert 'git checkout -B "${FOLLOWUP_BRANCH}"' not in text
 	assert 'git checkout -B "${HEAD_REF}"' not in text
 	assert 'RB_COMBINED_WORKDIR="${RUNTIME_DIR:-/tmp}/rb-judge-wt-${rb_issue}"' in text
 	assert 'run --mode workspace --workdir "${RB_COMBINED_WORKDIR}"' in text
-	assert 'git -C "${RB_COMBINED_WORKDIR}" push origin "HEAD:${HEAD_REF}"' in text
+	assert 'git -C "${RB_COMBINED_WORKDIR}" remote set-url origin "https://x-access-token:${GH_TOKEN}' not in text
+	assert 'push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${HEAD_REF}"' in text
+	assert 'push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${FOLLOWUP_BRANCH}"' in text
+	assert text.count("-c 'credential.helper=!f()") == 3
 	# Integration judge: the poller fetches, merges, verifies and pushes; the
 	# agent only resolves files and is told it has no network or credentials.
 	assert 'run --mode workspace --workdir "${judge_wt}"' in text

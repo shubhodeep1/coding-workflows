@@ -1210,6 +1210,8 @@ hooks run from the copy taken before the editor. The persistent implement
 sandbox is removed by the job's final cleanup step. Details, including the
 trusted-copy rule for scripts the job runs after an agent wrote files, are in
 `agents.md` under "Isolated Codex agents".
+Review-blocked follow-up and existing-PR pushes use one-shot Git credentials;
+the poller does not write `GH_TOKEN` into shared worktree Git configuration.
 If the integration judge cannot publish a resolution, the poller warns and
 rechecks mergeability on the next tick instead of failing the project immediately.
 
