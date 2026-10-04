@@ -119,7 +119,7 @@ def find_issues(issues: object) -> list[dict]:
 def parse_entries(body: str) -> list[tuple[str, str]]:
 	"""(key, section text) pairs in body order; text before the first entry is ignored."""
 	entries: list[tuple[str, list[str]]] = []
-	for line in body.split("\n"):
+	for line in body.replace("\r\n", "\n").split("\n"):
 		match = ENTRY_RE.match(line.strip())
 		if match:
 			entries.append((match.group(1), [line.strip()]))

@@ -19513,6 +19513,9 @@ The poller will resume processing on the next cycle."
 
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     handle_comprehensive_release_callback_if_needed "${PROJECT_STATUS}" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+    if [ "${PROJECT_STATUS}" = "complete" ]; then
+      run_project_activation_verify
+    fi
     if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
       if completion_status_comment_failed_state_observation; then
         _completion_status_failed_observation_rc=0

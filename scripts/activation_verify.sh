@@ -164,6 +164,10 @@ activation_main()
 					return 0
 				fi
 			fi
+			if ! printf '%s' "${activation_files_json}" | jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' >/dev/null 2>&1; then
+				activation_log "mode=pr item=${item} outcome=skip reason=files_unavailable"
+				return 0
+			fi
 			jq -n --arg pr "${PR_NUMBER}" --arg sha "${MERGE_SHA:-}" --arg title "${PR_TITLE:-}" --arg body "${PR_BODY:-}" \
 				--argjson linked "${linked_json}" \
 				--argjson files "${activation_files_json}" \

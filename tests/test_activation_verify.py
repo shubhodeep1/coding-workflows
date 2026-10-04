@@ -46,6 +46,8 @@ if "issues?labels=ai:operator-step" in endpoint:
 	if state.get("stale_operator_lists", 0) and state.get("created"):
 		state["stale_operator_lists"] -= 1
 		done("[]")
+	if os.environ.get("FAKE_GH_CRLF_LIST") == "1":
+		done(json.dumps([{**listed_issue, "body": listed_issue["body"].replace("\n", "\r\n")} for listed_issue in state.get("operator_issues", [])]))
 	done(json.dumps(state.get("operator_issues", [])))
 if endpoint.endswith("/files?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_FILES") == "1":
@@ -225,6 +227,18 @@ def test_pr_file_lookup_failure_cannot_misgrade_multi_commit_rebase(tmp_path: Pa
 	assert state["comments"] == [] and state["created"] == []
 
 
+def test_pr_file_lookup_failure_cannot_grade_an_empty_diff(tmp_path: Path) -> None:
+	target = tmp_path / "target"
+	target.mkdir()
+	subprocess.run(["git", "init", str(target)], check=True, capture_output=True)
+	for message in ("first", "second"):
+		subprocess.run(["git", "-C", str(target), "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+			"commit", "--allow-empty", "-m", message], check=True, capture_output=True)
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_FILES": "1", "PR_COMMITS": "1"})
+	assert "reason=files_unavailable" in result.stdout
+	assert state["comments"] == [] and state["created"] == []
+
+
 def test_model_key_is_redacted_before_any_github_write(tmp_path: Path) -> None:
 	api_key = "test-activation-secret-123"
 	verdict = dict(DORMANT, summary=f"OpenRouter key: {api_key}",
@@ -307,6 +321,23 @@ def test_writer_reconciles_duplicate_trackers_without_losing_entries(tmp_path: P
 	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1", "pr-2", "pr-3"]
 
 
+def test_writer_upserts_against_crlf_tracker_body(tmp_path: Path) -> None:
+	first_entry = writer.render_entry("pr-1", "one", [{"title": "A", "instructions": "x"}])
+	first_body = writer.render_body([("pr-1", first_entry)])
+	env, state_file = _setup(tmp_path, operator_issues=[_issue(first_body)])
+	env["FAKE_GH_CRLF_LIST"] = "1"
+	steps = tmp_path / "steps.json"
+	steps.write_text(json.dumps([{"title": "B", "instructions": "y"}]), encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(WRITER), "upsert", "--repo", "o/r", "--key", "pr-2", "--source", "two", "--steps-file", str(steps)],
+		capture_output=True, text=True, env=env, check=False,
+	)
+	state = json.loads(state_file.read_text(encoding="utf-8"))
+	assert result.returncode == 0, result.stdout
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1", "pr-2"]
+	assert "\r" not in state["operator_issues"][0]["body"]
+
+
 def test_writer_does_not_recreate_when_label_listing_lags_create(tmp_path: Path) -> None:
 	env, state_file = _setup(tmp_path, stale_operator_lists=2)
 	steps = tmp_path / "steps.json"
@@ -362,6 +393,7 @@ def test_poller_runs_it_on_every_completion_path() -> None:
 	assert len(calls) == 4
 	for i in calls:
 		assert lines[i + 1].strip() == "run_project_activation_verify"
+	assert 'if [ "${PROJECT_STATUS}" = "complete" ]; then\n      run_project_activation_verify' in text
 	assert 'TRACKING_NUM="${TRACKING_NUM}" \\' in text
 	assert 'PROJECT_FILES_JSON="$(jq -c' in text
 	assert '(.body // "" | sub("[[:space:]]+$"; ""))' in text
