@@ -8,3 +8,9 @@ RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" --no-audit --no-fund
 # runs with --network none; only the fixed-path model relay is reachable.
 RUN npm install --prefix /opt/opencode-provider @openrouter/ai-sdk-provider@3.1.0 --no-audit --no-fund
 ENV NODE_PATH=/opt/opencode-provider/node_modules
+# Claude engine (scripts/ai_engine.sh): installed only when `prepare claude`
+# passes a version; the OpenCode image is unchanged without it.
+ARG CLAUDE_CLI_VERSION=
+RUN if [ -n "${CLAUDE_CLI_VERSION}" ]; then \
+      npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" --no-audit --no-fund; \
+    fi

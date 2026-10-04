@@ -201,9 +201,9 @@ jobs:
           #     *.yml workflow wrappers already behave.
           #   - Consumer-local files NOT present in upstream are left
           #     alone (consumers can keep .claude/skills/private-foo/).
-          #   - Files removed upstream are NOT deleted from the
-          #     consumer; orphans accumulate. Intentional retirement
-          #     is a future feature.
+          #   - Files removed upstream are NOT deleted here; the next
+          #     step ("Remove retired upstream files") deletes the ones
+          #     listed in workflow-templates/retired_files.txt.
           # If upstream has no workflow-templates/.claude/ at this
           # stable ref, log and exit 0 — the sync is additive.
 
@@ -246,6 +246,64 @@ jobs:
             echo ".claude/ assets synced: ${CHANGED_COUNT} file(s) changed."
           else
             echo ".claude/ assets already up to date."
+          fi
+
+      - name: Remove retired upstream files
+        id: retired_files
+        run: |
+          set -euo pipefail
+
+          # Files coding-workflows no longer ships (workflow-templates/
+          # retired_files.txt: "<consumer path> <sha256> [<sha256> ...]").
+          # The .claude/ sync above never deletes, so retired assets would
+          # otherwise linger. A file is deleted only when its sha256 matches
+          # a released version listed in the manifest; a consumer-modified
+          # copy is kept and logged (RETIRED_FILE_KEPT_MODIFIED). No GitHub
+          # API calls; a missing manifest is a no-op.
+          MANIFEST="${{ steps.fetch.outputs.upstream_dir }}/retired_files.txt"
+          : > /tmp/retired_removed_files.txt
+          echo "retired_removed=0" >> "$GITHUB_OUTPUT"
+          echo "retired_has_changes=false" >> "$GITHUB_OUTPUT"
+          if [ ! -f "${MANIFEST}" ]; then
+            echo "Upstream has no workflow-templates/retired_files.txt at this ref — nothing to retire."
+            exit 0
+          fi
+
+          REMOVED=0
+          while read -r retired_path retired_hashes; do
+            case "${retired_path}" in
+              ''|'#'*) continue ;;
+            esac
+            case "${retired_path}" in
+              /*|*..*|.git/*)
+                echo "::warning::RETIRED_FILE_SKIPPED path=${retired_path} reason=unsafe_path"
+                continue
+                ;;
+            esac
+            if [ ! -f "${retired_path}" ] || [ -L "${retired_path}" ]; then
+              continue
+            fi
+            actual="$(sha256sum "${retired_path}" | awk '{print $1}')"
+            matched=false
+            for expected in ${retired_hashes}; do
+              if [ "${actual}" = "${expected}" ]; then
+                matched=true
+                break
+              fi
+            done
+            if [ "${matched}" = "true" ]; then
+              rm -f -- "${retired_path}"
+              printf '%s\n' "${retired_path}" >> /tmp/retired_removed_files.txt
+              REMOVED=$((REMOVED + 1))
+              echo "RETIRED_FILE_REMOVED path=${retired_path}"
+            else
+              echo "::warning::RETIRED_FILE_KEPT_MODIFIED path=${retired_path} sha256=${actual}"
+            fi
+          done < "${MANIFEST}"
+
+          echo "retired_removed=${REMOVED}" >> "$GITHUB_OUTPUT"
+          if [ "${REMOVED}" -gt 0 ]; then
+            echo "retired_has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Sync top-level CLAUDE.md from upstream
@@ -512,7 +570,7 @@ jobs:
           fi
 
       - name: Commit and push updates
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
         run: |
           set -euo pipefail
 
@@ -537,6 +595,12 @@ jobs:
               [ -n "$changed_path" ] || continue
               git add -- "$changed_path"
             done < /tmp/claude_md_changed_file.txt
+          fi
+          if [ -f /tmp/retired_removed_files.txt ] && [ -s /tmp/retired_removed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              git add -A -- "$changed_path"
+            done < /tmp/retired_removed_files.txt
           fi
           if [ -f /tmp/changelog_asset_files.txt ] && [ -s /tmp/changelog_asset_files.txt ]; then
             while IFS= read -r changed_path; do
@@ -589,6 +653,16 @@ jobs:
           if [ -n "$CLAUDE_MD_CHANGED_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}Top-level CLAUDE.md:\n${CLAUDE_MD_CHANGED_LIST}\n"
           fi
+          RETIRED_REMOVED_LIST=""
+          if [ -f /tmp/retired_removed_files.txt ] && [ -s /tmp/retired_removed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              RETIRED_REMOVED_LIST="${RETIRED_REMOVED_LIST}• ${changed_path}\n"
+            done < /tmp/retired_removed_files.txt
+          fi
+          if [ -n "$RETIRED_REMOVED_LIST" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Retired files removed:\n${RETIRED_REMOVED_LIST}\n"
+          fi
           CHANGELOG_ASSET_LIST=""
           if [ -f /tmp/changelog_asset_files.txt ] && [ -s /tmp/changelog_asset_files.txt ]; then
             while IFS= read -r changed_path; do
@@ -613,7 +687,7 @@ jobs:
           git push
 
       - name: Send Telegram notification
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -810,6 +884,8 @@ jobs:
           echo "- **.claude/ assets synced:** ${CLAUDE_CHANGED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
           CLAUDE_MD_CHANGED="${{ steps.claude_md_sync.outputs.claude_md_changed }}"
           echo "- **Top-level CLAUDE.md synced:** ${CLAUDE_MD_CHANGED:-false}" >> "$GITHUB_STEP_SUMMARY"
+          RETIRED_REMOVED_COUNT="${{ steps.retired_files.outputs.retired_removed }}"
+          echo "- **Retired files removed:** ${RETIRED_REMOVED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${HAS_UPDATES}" = "true" ]; then
