@@ -15983,14 +15983,6 @@ run_standalone_stall_recovery() {
       continue
     fi
 
-    # Claude-claimed issues (ai:claude without an ai:codex switch) are driven
-    # by the Claude issue flow's own check-in chain; re-issuing a Codex phase
-    # here would start a competing implementation.
-    if echo "${labels_json}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null 2>&1; then
-      echo "STALL_SKIP issue=${issue_num} reason=claude_routed action=none"
-      continue
-    fi
-
     # A generated security follow-up waits for the previous same-file fix.
     # The candidate batch already carries body/labels/comments; only an
     # uncached target or declared prerequisite requires an issue read.
@@ -16004,7 +15996,7 @@ run_standalone_stall_recovery() {
         .[$n] | {number: ($n | tonumber), body, labels,
           repository_url: ("https://api.github.com/repos/" + $repo)}' > "${_security_dependency_issue_file}"
     fi
-    _security_dependency_verdict="$(python3 scripts/claude_issue_route.py security-dependency \
+    _security_dependency_verdict="$(python3 scripts/security_dependency.py security-dependency \
       --issue-json "${_security_dependency_issue_file}" --repo "${GITHUB_REPOSITORY}" \
       --issue-number "${issue_num}" 2>/dev/null || echo '{"status":"held"}')"
     _security_dependency_status="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.status // "held"' 2>/dev/null || echo held)"
@@ -16039,7 +16031,6 @@ run_standalone_stall_recovery() {
         continue
       fi
     fi
-
     # Resolve both values through the shared Python predicates in one call so
     # the standalone path cannot drift from managed stall detection.  Safe
     # defaults first: under `set -euo pipefail` an empty read (python
@@ -23734,16 +23725,6 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 	if _linked_pr_is_merge_queued "${S_PR_JSON}"; then
 		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
-		continue
-	fi
-
-	# A draft claude/* PR (an /implement-plan-claude project integration PR)
-	# is synced with its base by its own chain at final merge, and
-	# Claude-fixer mode owns claude/* conflicts (CLAUDE.md §26.H). An
-	# update-branch push or review dispatch here only burns runs and posts a
-	# conflict alert on every tick. Uses the PR object fetched above.
-	if [[ "${S_HEAD_REF}" == claude/* ]] && [ "$(echo "${S_PR_JSON}" | jq -r '.draft // false')" = "true" ]; then
-		echo "  PR #${S_PR} is a draft claude/* PR; its own chain resolves conflicts. Skipping standalone conflict recovery."
 		continue
 	fi
 
