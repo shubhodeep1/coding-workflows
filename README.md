@@ -1895,6 +1895,12 @@ cannot start (no CLI, no credential, every account gated: exit `75`, logged
 `AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call, and
 the rest of the job stays on codex. `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
+Review write roles read PR labels from the existing PR-state lookup, including
+`workflow_dispatch` runs; if that lookup cannot verify labels, those roles use
+OpenCode rather than selecting Claude from a default. The orchestrator poller
+includes tracking-issue labels in its existing issue listing, so a project
+labeled `ai:engine-claude` triggers CLI and credential setup even when the
+global engine variable selects codex.
 
 | Piece | What it does |
 |---|---|

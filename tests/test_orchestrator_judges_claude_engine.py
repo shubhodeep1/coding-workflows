@@ -10,6 +10,7 @@ site's codex command (G4).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -184,6 +185,8 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	resolve = steps[names.index("Resolve AI engine")]
 	assert resolve["id"] == "ai_engine"
 	assert resolve["env"]["AI_ENGINE_LABELS"] == ""
+	assert '--json number,title,labels' in steps[names.index("Find active tracking issues")]["run"]
+	assert 'any(.[]; any(.labels[]?; .name == "ai:engine-claude"))' in resolve["run"]
 	assert "for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE; do" in resolve["run"]
 	for name, uses in (
 		("Install Claude Code CLI", "./.codex-workflow-src/.github/actions/install-claude"),
@@ -198,6 +201,22 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"):
 		assert process_env[f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
 	assert process_env["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
+
+
+def test_poll_preflight_installs_for_label_even_with_global_codex(tmp_path: Path) -> None:
+	steps = _poll_steps()
+	preflight = next(step["run"] for step in steps if step.get("name") == "Resolve AI engine")
+	issue_file = tmp_path / "tracking_issues.json"
+	output_file = tmp_path / "github_output"
+	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "codex", "AI_ENGINE_LABELS": ""}
+	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"):
+		env[f"AI_ENGINE_{role}"] = ""
+	for labels, expected in ((["ai:engine-claude"], "true"), (["ai:codex"], "false")):
+		issue_file.write_text(json.dumps([{"number": 1, "labels": [{"name": label} for label in labels]}]), encoding="utf-8")
+		output_file.write_text("", encoding="utf-8")
+		result = subprocess.run(["bash", "-c", preflight], cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		assert output_file.read_text(encoding="utf-8").strip() == f"any_claude={expected}"
 
 
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"

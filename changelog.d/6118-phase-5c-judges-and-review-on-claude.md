@@ -11,7 +11,7 @@
 | Exit code that falls back | `75` (logged `AI_ENGINE_FALLBACK role= reason=`) |
 | Sandbox progress line | `CLAUDE_ENGINE progress role=REVIEW_EDITOR transcript_bytes=<n>`, every `REVIEW_SANDBOX_PROGRESS_SECS` (60) when the transcript grew |
 
-What this means for operators: project decomposition, judge verdicts, review fixes, consolidated findings and conflict resolutions are written by Claude from now on. To keep the review side on OpenCode, set the repository variable `CLAUDE_FIXER_ENABLED` to `false`. It wins over the `ai:engine-claude` label and `AI_ENGINE`. To move one role back, set `AI_ENGINE_<ROLE>` to `codex`, for example `AI_ENGINE_WAVE_JUDGE=codex`. The poll job installs the CLI and fetches the account pool only on ticks with active projects, and only when a judge role resolves to Claude.
+What this means for operators: project decomposition, judge verdicts, review fixes, consolidated findings and conflict resolutions are written by Claude from now on. To keep the review side on OpenCode, set the repository variable `CLAUDE_FIXER_ENABLED` to `false`. It wins over the `ai:engine-claude` label and `AI_ENGINE`. To move one role back, set `AI_ENGINE_<ROLE>` to `codex`, for example `AI_ENGINE_WAVE_JUDGE=codex`. PR labels are honored even on dispatch-triggered reviews; when a PR's labels cannot be verified, its review write roles stay on OpenCode. The poll job installs the CLI and fetches the account pool only on ticks with active projects, including those whose `ai:engine-claude` label overrides a global codex setting.
 
 ### For contributors
 

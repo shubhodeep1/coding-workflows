@@ -391,6 +391,10 @@ def test_resolve_step_wiring():
 	step = AGENT_STEPS["Resolve AI engine"]
 	assert step["id"] == "ai_engine"
 	assert step["env"]["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
+	state = AGENT_STEPS["Check PR state (defense-in-depth)"]["run"]
+	assert 'pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo \'null\')"' in state
+	assert 'echo "AI_ENGINE_LABELS=${AI_ENGINE_LABELS}" >> "$GITHUB_ENV"' in state
+	assert '["ai:codex"]' in state
 	for role in FIXER_ROLES:
 		assert step["env"][f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
 	names = list(AGENT_STEPS)
@@ -422,6 +426,33 @@ def test_a_role_variable_still_moves_one_role_to_codex(tmp_path):
 	values = _run_resolve_step(tmp_path, AI_ENGINE_CONFLICT_RESOLVER="codex")
 	assert values["AI_ENGINE_RESOLVED_CONFLICT_RESOLVER"] == "codex"
 	assert values["AI_ENGINE_RESOLVED_REVIEW_EDITOR"] == "claude"
+
+
+def test_pr_labels_take_precedence_over_engine_variables(tmp_path):
+	values = _run_resolve_step(tmp_path, AI_ENGINE_LABELS='["ai:codex"]', AI_ENGINE="claude")
+	assert {values[f"AI_ENGINE_RESOLVED_{role}"] for role in FIXER_ROLES} == {"codex"}
+	values = _run_resolve_step(tmp_path, AI_ENGINE_LABELS='["ai:engine-claude"]', AI_ENGINE="codex")
+	assert {values[f"AI_ENGINE_RESOLVED_{role}"] for role in FIXER_ROLES} == {"claude"}
+
+
+def test_pr_state_label_snapshot_fails_closed_on_unavailable_metadata(tmp_path):
+	state = AGENT_STEPS["Check PR state (defense-in-depth)"]["run"]
+	label_line = next(line.strip() for line in state.splitlines() if line.strip().startswith('AI_ENGINE_LABELS="$('))
+	for metadata, expected in (
+		('{"labels":[{"name":"ai:engine-claude"},{"name":"other"}]}', '["ai:engine-claude","other"]'),
+		('null', '["ai:codex"]'),
+		('{"labels":"malformed"}', '["ai:codex"]'),
+	):
+		result = subprocess.run(
+			["bash", "-c", 'set -euo pipefail\npr_meta="$PR_META"\n' + label_line + '\nprintf "%s\\n" "$AI_ENGINE_LABELS"'],
+			env={**os.environ, "PR_META": metadata},
+			cwd=tmp_path,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.strip() == expected
 
 
 def test_missing_engine_keeps_every_role_on_codex(tmp_path):

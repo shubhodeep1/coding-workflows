@@ -2709,6 +2709,10 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo 'null')"
+          # An unavailable label snapshot must not override an explicit ai:codex
+          # label by selecting Claude from the role default.
+          AI_ENGINE_LABELS="$(printf '%s\n' "${pr_meta}" | jq -ce 'if (.labels | type) == "array" then [.labels[] | .name | select(type == "string")] else error("labels unavailable") end' 2>/dev/null || printf '%s' '["ai:codex"]')"
+          echo "AI_ENGINE_LABELS=${AI_ENGINE_LABELS}" >> "$GITHUB_ENV"
           pr_state="$(printf '%s\n' "${pr_meta}" | jq -r 'if ((.merged_at != null) or (.merged == true)) then "merged" else (.state // "") end' | grep -xE 'open|closed|merged' || echo "")"
           if [ -z "${pr_state}" ]; then
             echo "::warning::Unable to determine PR #${PR_NUMBER} state; assuming open."
