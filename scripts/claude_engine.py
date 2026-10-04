@@ -153,8 +153,9 @@ USAGE_LIMIT_TEXT_RE = re.compile(
 # `timeout` sends SIGTERM (exit 124); its --kill-after sends SIGKILL (137).
 TIMEOUT_EXIT_CODES = (124, 137)
 
-# Read-only roles may run these commands and nothing else in Bash. `gh api`
-# also passes the gh_api_write_guard.py hook, which denies every write.
+# Read-only roles may run these commands and nothing else in Bash. Plain
+# `gh api` reads require explicit guard approval, and ai_engine.sh strips the
+# write-capable runner credentials before the Claude child starts.
 READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Read",
 	"Grep",
@@ -164,11 +165,9 @@ READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Bash(git diff*)",
 	"Bash(git status*)",
 	"Bash(git ls-files*)",
-	"Bash(git grep*)",
 	"Bash(gh issue view*)",
 	"Bash(gh pr view*)",
 	"Bash(gh pr diff*)",
-	"Bash(gh api *)",
 )
 # Defence in depth for #6217: these wildcard rules are not a substitute for
 # the read-guard hook, which checks abbreviated and clustered git options.
@@ -473,8 +472,9 @@ def render_settings(
 	``__CHECKOUT__`` and ``__GUARD_HOOK__`` placeholders are replaced inside
 	string values only. The two ``.github/workflows`` deny rules are dropped
 	when ``allow_workflow_edits``; the ``.claude/**`` rules never are. The
-	``read`` profile gets its allow list and a Bash guard; ``write`` gets none (it runs in
-	``bypassPermissions``, where deny rules still apply).
+	``read`` profile gets its allow list, a Bash guard, and a read-only gh api
+	guard; ``write`` gets no allow list (it runs in ``bypassPermissions``, where
+	deny rules still apply).
 	"""
 	if profile not in PROFILES:
 		raise EngineError(f"unknown profile: {profile!r}")
@@ -503,6 +503,16 @@ def render_settings(
 		return value
 
 	settings = substitute(settings)
+	if profile == "read":
+		guard_command = f'python3 "{guard_hook}"'
+		guard_found = False
+		for hook_group in settings.get("hooks", {}).get("PreToolUse", []):
+			for hook_entry in hook_group.get("hooks", []):
+				if hook_entry.get("command") == guard_command:
+					hook_entry["command"] = guard_command + " --read-only"
+					guard_found = True
+		if not guard_found:
+			raise EngineError("read profile requires the gh api guard hook")
 	permissions = settings.setdefault("permissions", {})
 	deny = [rule for rule in permissions.get("deny", []) if isinstance(rule, str)]
 	if allow_workflow_edits:
@@ -928,6 +938,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
 
 
 def cmd_settings(args: argparse.Namespace) -> int:
+	"""Write a role-specific policy; read roles require the flagged gh api guard."""
 	template = Path(args.template) if args.template else SCRIPT_DIR / TEMPLATE_NAME
 	if args.guard_hook:
 		guard_hook = args.guard_hook

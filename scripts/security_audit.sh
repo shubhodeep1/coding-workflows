@@ -1270,11 +1270,9 @@ fi
 
 security_audit_require_file "codex-preflight" "${RENDERED_PROMPT_FILE}"
 SECURITY_AUDIT_CODEX_HOME="${CODEX_HOME:-${HOME:-}/.codex}"
-security_audit_require_directory "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}"
-security_audit_require_file "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}/config.toml"
-if ! command -v codex >/dev/null 2>&1; then
-	security_audit_emit_failure "codex-preflight" "codex" "required command is unavailable"
-	exit 1
+if [ "${AI_ENGINE_RESOLVED_SECURITY_AUDIT:-codex}" != "claude" ]; then
+	security_audit_require_directory "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}"
+	security_audit_require_file "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}/config.toml"
 fi
 security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
 security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
@@ -1297,6 +1295,15 @@ if [ -f "${security_audit_engine_sh}" ]; then
 		bash -c 'source "$1" && claude_run_selected SECURITY_AUDIT "$2" "$3" "$4"' _ \
 		"${security_audit_engine_sh}" "${RENDERED_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" \
 		2> "${CODEX_ERROR_FILE}" || security_audit_claude_rc=$?
+fi
+
+if [ "${security_audit_claude_rc}" -eq 75 ] && [ "${AI_ENGINE_RESOLVED_SECURITY_AUDIT:-codex}" = "claude" ]; then
+	security_audit_require_directory "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}"
+	security_audit_require_file "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}/config.toml"
+fi
+if [ "${security_audit_claude_rc}" -eq 75 ] && ! command -v codex >/dev/null 2>&1; then
+	security_audit_emit_failure "codex-preflight" "codex" "required command is unavailable"
+	exit 1
 fi
 
 if [ "${security_audit_claude_rc}" -ne 75 ]; then

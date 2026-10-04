@@ -97,6 +97,9 @@ There is deliberately no environment-variable escape hatch.
 
 Exit code is always 0 (Claude Code hook protocol); the decision travels in the
 JSON `hookSpecificOutput` on stdout.
+
+With `--read-only`, every non-read `gh api` call and every uncertain call is
+denied instead of prompting. Without the flag, interactive behaviour is unchanged.
 """
 
 from __future__ import annotations
@@ -649,7 +652,7 @@ def parse_gh_api_args(args: list[str]) -> dict:
 	Raises Unreadable on an unknown flag, a missing value, or anything other
 	than exactly one endpoint.
 	"""
-	parsed = {"method": None, "endpoints": [], "fields": [], "headers": [], "input": None}
+	parsed = {"method": None, "endpoints": [], "fields": [], "headers": [], "input": None, "hostname": None}
 	index = 0
 	options_done = False
 	while index < len(args):
@@ -687,6 +690,8 @@ def parse_gh_api_args(args: list[str]) -> dict:
 			parsed["headers"].append(value)
 		elif role == "input":
 			parsed["input"] = value
+		elif role == "hostname":
+			parsed["hostname"] = value
 		elif role == "jq" and _JQ_CLI_OPTION_RE.match(value):
 			raise MalformedJq(value)
 	if len(parsed["endpoints"]) != 1:
@@ -1255,7 +1260,7 @@ _ECHO_READ_HINT = (
 )
 
 
-def _approved_echo_read_command(command: str) -> tuple[str, list[tuple[str, str]]] | None:
+def _approved_echo_read_command(command: str, read_only: bool = False) -> tuple[str, list[tuple[str, str]]] | None:
 	"""Validate quoted echo substitutions and return their inert replacement.
 
 	Only a complete double-quoted substitution containing one REST read is
@@ -1323,6 +1328,8 @@ def _approved_echo_read_command(command: str) -> tuple[str, list[tuple[str, str]
 			try:
 				parsed = parse_gh_api_args(args)
 			except Unreadable:
+				return None
+			if read_only and not _read_only_get_allowed(parsed):
 				return None
 			endpoint = parsed["endpoints"][0].lstrip("/")
 			if parsed["method"] not in _READ_METHODS or endpoint.split("?", 1)[0] == "graphql":
@@ -1424,7 +1431,24 @@ def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 	return KIND_WRITE, description
 
 
-def evaluate(payload: dict) -> tuple[str | None, str]:
+def _read_only_get_allowed(parsed: dict) -> bool:
+	endpoint = parsed["endpoints"][0]
+	return (
+		parsed["method"] == "GET"
+		and parsed["hostname"] in (None, "github.com")
+		and not endpoint.startswith("//")
+		and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", endpoint)
+		and endpoint.lstrip("/").split("?", 1)[0] != "graphql"
+	)
+
+
+def _read_only_result(decision: str, reason: str, read_only: bool) -> tuple[str, str]:
+	if read_only and decision == DECISION_ASK:
+		return DECISION_DENY, f"read-only role: gh api writes are denied ({reason})"
+	return decision, reason
+
+
+def evaluate(payload: dict, read_only: bool = False) -> tuple[str | None, str]:
 	"""Decide the permission outcome for one PreToolUse payload.
 
 	Returns `(decision, reason)`: decision is "deny", "ask", "allow", or None
@@ -1444,33 +1468,39 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 
 	stripped_command, heredocs = strip_heredoc_bodies(command)
 	if not heredocs:
-		approved_echo = _approved_echo_read_command(command)
+		approved_echo = _approved_echo_read_command(command, read_only=read_only)
 		if approved_echo is not None:
 			rewritten, echo_results = approved_echo
 			outer_invocations = gh_api_invocations(shell_segments(rewritten))
 			outer_results: list[tuple[str, str]] = []
 			for args in outer_invocations:
 				try:
-					outer_results.append(classify(parse_gh_api_args(args), rewritten, lambda: ""))
+					parsed = parse_gh_api_args(args)
+					outer_results.append(
+						(KIND_WRITE, "read-only role permits only GitHub REST GET requests")
+						if read_only and not _read_only_get_allowed(parsed) else classify(parsed, rewritten, lambda: "")
+					)
 				except Unreadable:
 					break
-			if len(outer_results) == len(outer_invocations) and all(kind == KIND_READ for kind, _ in outer_results):
+			if len(outer_results) == len(outer_invocations) and all(kind == KIND_READ for kind, _ in outer_results) and (
+				not read_only or all(kind == KIND_READ and description.startswith("GET ") for kind, description in echo_results)
+			):
 				if _is_approvable_command(rewritten, allow_echo_only=True) or _is_approvable_read_loop(rewritten, outer_results):
 					return DECISION_ALLOW, "gh api guard (CLAUDE.md §23.H): echo of a read-only gh api substitution."
 	try:
 		segments = shell_segments(stripped_command)
 	except ValueError:
-		return DECISION_ASK, (
+		return _read_only_result(DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): the command could not be parsed, so its gh api call is treated as a write."
 			+ (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
-		)
+		), read_only)
 	invocations = gh_api_invocations(segments)
 	if has_hidden_gh_api(segments, heredocs, stripped_command):
-		return DECISION_ASK, (
+		return _read_only_result(DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): a gh api call could run hidden inside a $(...) or backtick word, "
 			"an executor (bash -c, sudo, xargs, python3, ...), or a heredoc fed to one, so it is treated as a "
 			"write. Run it as its own plain command." + (_ECHO_READ_HINT if "$(" in command else "")
-		)
+		), read_only)
 
 	cwd = payload.get("cwd")
 	if not isinstance(cwd, str) or not os.path.isdir(cwd):
@@ -1486,7 +1516,12 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	malformed_jq_values: list[str] = []
 	for args in invocations:
 		try:
-			results.append(classify(parse_gh_api_args(args), command, repo_slug_lookup))
+			parsed = parse_gh_api_args(args)
+			# Interactive reads include HEAD and GraphQL; read roles admit REST GET only.
+			if read_only and not _read_only_get_allowed(parsed):
+				results.append((KIND_WRITE, "read-only role permits only GET requests to REST endpoints on github.com"))
+			else:
+				results.append(classify(parsed, command, repo_slug_lookup))
 		except MalformedJq as exc:
 			malformed_jq_values.append(exc.value)
 		except Unreadable as exc:
@@ -1503,21 +1538,25 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"the output to jq with its own options. A program that starts with a minus sign goes in "
 			"parentheses, e.g. --jq '(-length)'. Nothing ran."
 		)
+	if read_only:
+		non_reads = [description for kind, description in results if kind != KIND_READ]
+		if non_reads:
+			return DECISION_DENY, "read-only role: gh api writes are denied (" + "; ".join(non_reads) + ")"
 
 	hazard = _shell_rewrite_hazard(stripped_command)
 	# Only a fully validated literal-ID loop may bypass the shell-hazard check.
 	if hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)):
-		return DECISION_ASK, (
+		return _read_only_result(DECISION_ASK, (
 			f"gh api guard (CLAUDE.md §23.H): the command uses {hazard}, which Bash expands or parses differently "
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
-		)
+		), read_only)
 	if _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results):
-		return DECISION_ASK, (
+		return _read_only_result(DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."
 			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
-		)
+		), read_only)
 
 	writes = [description for kind, description in results if kind == KIND_WRITE]
 	if writes:
@@ -1531,6 +1570,8 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	if invocations and _is_approvable_read_loop(command, results):
 		summary = "; ".join(f"{kind} call {description}" for kind, description in results)
 		return DECISION_ALLOW, f"gh api guard (CLAUDE.md §23.H): for loop over literal IDs whose body only reads: {summary}."
+	if read_only and invocations:
+		return DECISION_DENY, "read-only role: gh api requires an explicitly approved GET command."
 	return None, ""
 
 
@@ -1548,25 +1589,30 @@ def _emit(decision: str, reason: str) -> None:
 	)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+	arguments = [] if argv is None else argv
+	if any(argument != "--read-only" for argument in arguments):
+		_emit(DECISION_DENY, "gh api guard: unknown guard argument.")
+		return 0
+	read_only = "--read-only" in arguments
 	try:
 		raw = sys.stdin.read()
 	except (OSError, ValueError):
-		_emit(DECISION_ASK, "gh api guard (CLAUDE.md §23.H): could not read the hook payload.")
+		_emit(*_read_only_result(DECISION_ASK, "gh api guard (CLAUDE.md §23.H): could not read the hook payload.", read_only))
 		return 0
 	try:
 		payload = json.loads(raw) if raw.strip() else {}
 	except ValueError:
-		_emit(DECISION_ASK, "gh api guard (CLAUDE.md §23.H): hook payload is not valid JSON.")
+		_emit(*_read_only_result(DECISION_ASK, "gh api guard (CLAUDE.md §23.H): hook payload is not valid JSON.", read_only))
 		return 0
 	if not isinstance(payload, dict):
-		_emit(DECISION_ASK, "gh api guard (CLAUDE.md §23.H): hook payload is not a JSON object.")
+		_emit(*_read_only_result(DECISION_ASK, "gh api guard (CLAUDE.md §23.H): hook payload is not a JSON object.", read_only))
 		return 0
 
 	try:
-		decision, reason = evaluate(payload)
+		decision, reason = evaluate(payload, read_only=True) if read_only else evaluate(payload)
 	except Exception as exc:  # noqa: BLE001 - fail closed: prompt rather than allow
-		_emit(DECISION_ASK, f"gh api guard (CLAUDE.md §23.H): internal error ({exc}).")
+		_emit(*_read_only_result(DECISION_ASK, f"gh api guard (CLAUDE.md §23.H): internal error ({exc}).", read_only))
 		return 0
 
 	if decision:
@@ -1575,4 +1621,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-	sys.exit(main())
+	sys.exit(main(sys.argv[1:]))

@@ -262,6 +262,8 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	redirect_target = False
 	for token in lexer:
 		if redirect_target:
+			if token == "&":
+				continue  # The next token is the redirected file descriptor.
 			redirect_target = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):

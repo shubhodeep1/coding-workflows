@@ -83,6 +83,16 @@ def test_guard_hook_runs_on_every_bash_call() -> None:
 	hooks = _render()["hooks"]["PreToolUse"]
 	assert hooks[0]["matcher"] == "Bash"
 	assert hooks[0]["hooks"][0]["command"] == 'python3 "/support/.claude/hooks/gh_api_write_guard.py"'
+	assert _render(profile="read")["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == (
+		'python3 "/support/.claude/hooks/gh_api_write_guard.py" --read-only'
+	)
+
+
+def test_read_profile_requires_guard_command() -> None:
+	settings = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+	settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = "echo missing"
+	with pytest.raises(ce.EngineError, match="read profile requires the gh api guard hook"):
+		ce.render_settings(json.dumps(settings), "/work/repo", "/support/.claude/hooks/gh_api_write_guard.py", profile="read")
 
 
 def test_env_block_carries_no_credentials() -> None:
@@ -101,6 +111,8 @@ def test_profiles() -> None:
 	assert _render(profile="write")["permissions"]["allow"] == []
 	allow = _render(profile="read", read_guard_hook="/support/scripts/claude_engine.py")["permissions"]["allow"]
 	assert {"Read", "Grep", "Glob"} <= set(allow)
+	assert "Bash(gh api *)" not in allow
+	assert "Bash(git grep*)" not in allow
 	assert all(rule.startswith(("Read", "Grep", "Glob", "Bash(git ", "Bash(gh ")) for rule in allow)
 	assert not any("merge" in rule or "push" in rule for rule in allow)
 	with pytest.raises(ce.EngineError):
@@ -130,7 +142,7 @@ def test_settings_cli_writes_owner_only_file(tmp_path: Path) -> None:
 	assert oct(out.stat().st_mode & 0o777) == "0o600"
 	anchor = str(tmp_path.resolve()).lstrip("/")
 	assert f"Edit(//{anchor}/.claude/**)" in settings["permissions"]["deny"]
-	assert settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].endswith('/.claude/hooks/gh_api_write_guard.py"')
+	assert settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].endswith('/.claude/hooks/gh_api_write_guard.py" --read-only')
 
 
 def test_settings_cli_fails_without_the_guard_hook(tmp_path: Path) -> None:

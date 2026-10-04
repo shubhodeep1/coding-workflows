@@ -757,6 +757,25 @@ def test_worktree_push_to_open_branch_from_merged_checkout(merged_branch_repo) -
 	assert "skipped" not in proc.stdout
 
 
+@pytest.mark.parametrize("redirect", ["2>&1", ">&2", "&>out.log", "<&0", "2>&-", ">out.log 2>&1"])
+def test_push_redirects_do_not_check_the_merged_checkout_branch(merged_branch_repo, monkeypatch, redirect: str) -> None:
+	repo, _ = merged_branch_repo
+	assert guard._shell_segments_with_operators(f"git push origin HEAD:feature/open {redirect}") == [
+		("", ["git", "push", "origin", "HEAD:feature/open"]),
+	]
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [OPEN_PR] if branch == "feature/open" else [dict(MERGED_PR, headRefOid=_git(repo, "rev-parse", "HEAD"))]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"git push origin HEAD:feature/open {redirect}"}})
+	assert code == 0, message
+	assert lookups == ["feature/open"]
+
+
 @pytest.mark.parametrize("prefix", ["cd {worktree} && git", "git -C {worktree}",
 	"GIT_DIR={worktree}/.git GIT_WORK_TREE={worktree} git"])
 def test_worktree_push_to_merged_branch_from_other_checkout(merged_branch_repo, prefix: str) -> None:
