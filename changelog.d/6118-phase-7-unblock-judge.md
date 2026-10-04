@@ -16,12 +16,16 @@ Once per poll tick, `orchestrate_poll_process.sh` searches for items carrying a 
 
 What this means for operators: blocked items resolve themselves or end closed with `ai:unblock-closed` and one Telegram CRITICAL. A closed project is marked `abandoned` and its tracking issue closed. Steps only you can take arrive in the `ai:operator-step` issue, with the work kept off behind a flag until you act. You can still act on any blocked item yourself. Set `UNBLOCK_JUDGE_ENABLED=false` to turn the judge off.
 
+This release also adds activation verification after default-branch merges and orchestrator project completion. `scripts/activation_verify.sh` grades merged work `LIVE` or `DORMANT`, files code gaps for the normal pipeline, and records human-only gaps in the repository's single `ai:operator-step` issue. The model reads merged code without GitHub or Telegram credentials; `ACTIVATION_VERIFY_ENABLED=false` disables the check.
+
 ### For contributors
 
 Three give-up exits that used to end in a Telegram alert alone now hand over to the scan.
 - **Project judge.** `JUDGE_OUTPUT_FAILURE_MAX` (default 3) consecutive runs with no usable output fail the project with `ai:blocked`.
 - **Merge deferrals.** The first time `MAX_MERGE_DEFERRALS` is reached, the PR gets `ai:needs-human`.
-- **Review-blocked judge.** Its terminal skips (`llm_failed`, `json_parse_failed`, `missing_followup_details`, `merged_pr_unsafe_action`) add `ai:needs-human` to the PR.
+- **Review-blocked judge.** Its terminal skips (`llm_failed`, `json_parse_failed`, `missing_followup_details`, `merged_pr_unsafe_action`, `auto_merge_disabled`) add `ai:needs-human` to the PR.
 - **Workflow-failure heal.** An escalation with no prior issue labels the failure report itself.
 
 `override_guard` on the destructive latch leaves a one-shot `override=bulk_delete` marker. `implement.yml` spends it on the issue's next run, and only when no canonical workflow source is among the deletions. The selection and action logic is pure Python (`scripts/unblock_scan.py`, `scripts/unblock_ledger.py`, `scripts/unblock_actions.py`). `tests/test_unblock_judge.py` and `tests/test_unblock_scan.py` run in their own `ci.yml` step.
+
+Activation verification uses the ACTIVATION_VERIFY role from `prompts/mode-activation-verify.txt`. A merge that closes an activation-fix issue is not verified again, preventing recursive fix issues; `tests/test_activation_verify.py` covers the verifier and operator-step writer.

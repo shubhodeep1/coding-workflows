@@ -298,11 +298,11 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		)
 		ops += reset_ops(ctx, f"accepted with a follow-up issue: {verdict['reason']}")
 	elif name == "close":
-		ops.append({"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]})
 		if ctx["kind"] != "project":
 			# A project's tracking issue is closed by the poller, which also
 			# sets its state to abandoned (the close goes through the API, §19).
 			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": ctx["kind"] == "pr"})
+		ops.append({"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]})
 		ops.append({"op": "telegram", "level": "CRITICAL", "text": f"Unblock judge closed #{item} ({ctx['stop']}): {_one_line(verdict['reason'])}"})
 	else:
 		raise UsageError(f"unknown verdict {name!r}")

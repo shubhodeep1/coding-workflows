@@ -74,7 +74,7 @@
     "UNBLOCK_JUDGE": {
       "engine": "codex",
       "claude_model": "claude-opus-5-5",
-      "profile": "write"
+      "profile": "read"
     },
     "REVIEW_EDITOR": {
       "engine": "codex",

@@ -32,7 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
-      group: unblock-judge-${{ github.repository }}-${{ inputs.item }}
+      # Shared with issue_pr_status.yml's activation verifier because both
+      # read-modify-write the repository's single ai:operator-step issue.
+      group: operator-step-writer-${{ github.repository }}
       cancel-in-progress: false
     steps:
       - name: Resolve trusted unblock support commit

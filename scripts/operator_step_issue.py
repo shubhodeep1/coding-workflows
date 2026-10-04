@@ -27,8 +27,9 @@ Usage:
 Output is one JSON line: `issue`, `url`, `created`, `entries`. Exit 0 on
 success, 1 on bad arguments, 2 when a GitHub call failed.
 
-GitHub API budget (CLAUDE.md §15): one list of open `ai:operator-step` issues,
-then one update or one create.
+GitHub API budget (CLAUDE.md §15): one identity read, one list of open
+`ai:operator-step` issues, then one update or a label lookup (and creation
+when missing) followed by one issue create.
 """
 
 from __future__ import annotations
@@ -46,7 +47,6 @@ TITLE = "Operator steps waiting"
 ENTRY_RE = re.compile(r"^<!-- ai:operator-step:entry key=([a-z0-9][a-z0-9-]{0,63}) -->$")
 KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 MAX_BODY = 60000
 MAX_STEPS = 20
 MAX_FIELD = 2000
@@ -81,13 +81,12 @@ def _gh(args: list[str]) -> str:
 	return result.stdout
 
 
-def _trusted(issue: dict) -> bool:
+def _trusted(issue: dict, trusted_login: str) -> bool:
 	user = issue.get("user") if isinstance(issue.get("user"), dict) else {}
-	login = str(user.get("login") or "")
-	return login.endswith("[bot]") or issue.get("author_association") in TRUSTED_ASSOCIATIONS
+	return bool(trusted_login) and user.get("login") == trusted_login
 
 
-def find_issue(issues: object) -> dict | None:
+def find_issue(issues: object, trusted_login: str) -> dict | None:
 	"""The oldest open, trusted issue whose body starts with the marker."""
 	if not isinstance(issues, list):
 		return None
@@ -96,7 +95,7 @@ def find_issue(issues: object) -> dict | None:
 		for issue in issues
 		if isinstance(issue, dict)
 		and "pull_request" not in issue
-		and _trusted(issue)
+		and _trusted(issue, trusted_login)
 		and str(issue.get("body") or "").split("\n", 1)[0].strip() == MARKER
 	]
 	return min(candidates, key=lambda issue: int(issue.get("number") or 0)) if candidates else None
@@ -153,12 +152,17 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
 	if not KEY_RE.match(key):
 		raise UsageError(f"--key must be lower-case letters, digits and '-', got {key!r}")
+	# The issue list carries authors, not the GH_PAT identity. Callers do not
+	# always have an identity read (activation's is conditional on a fix marker).
+	trusted_login = _gh(["api", "user", "--jq", ".login"]).strip()
+	if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?", trusted_login):
+		raise ApiError("could not verify the pipeline login")
 	listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
 	try:
 		issues = json.loads(listing or "[]")
 	except ValueError as exc:
 		raise ApiError(f"unreadable issue list: {exc}") from exc
-	existing = find_issue(issues)
+	existing = find_issue(issues, trusted_login)
 	entry = render_entry(key, source, steps)
 	entries = parse_entries(str(existing.get("body") or "")) if existing else []
 	if any(entry_key == key for entry_key, _ in entries):
@@ -170,6 +174,12 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 		number = int(existing["number"])
 		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", f"body={body}"])
 		return {"issue": number, "url": existing.get("html_url", ""), "created": False, "entries": len(parse_entries(body))}
+	try:
+		_gh(["api", f"repos/{repo}/labels/ai%3Aoperator-step"])
+	except ApiError as exc:
+		if "HTTP 404" not in str(exc):
+			raise
+		_gh(["api", f"repos/{repo}/labels", "-f", f"name={LABEL}", "-f", "color=fbca04", "-f", "description=Steps only a person can take; the pipeline continues and the gated work stays off until they are done"])
 	created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={TITLE}", "-f", f"body={body}", "-f", f"labels[]={LABEL}"]) or "{}")
 	return {"issue": created.get("number"), "url": created.get("html_url", ""), "created": True, "entries": len(parse_entries(body))}
 

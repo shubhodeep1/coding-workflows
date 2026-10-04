@@ -122,7 +122,7 @@ def test_override_guard_only_for_the_guard_latches() -> None:
 	assert "override_guard" not in ledger.decide(7, "needs-human", FP, [], None, NOW)["allowed"]
 
 
-@pytest.mark.parametrize("stop", ["security-pass-failed", "validation-failed"])
+@pytest.mark.parametrize("stop", ["security-pass-failed", "validation-failed", "validate-failed", "harness-broken"])
 def test_no_waiver_for_security_or_validation(stop: str) -> None:
 	assert "accept_with_followup" not in ledger.decide(7, stop, FP, [], None, NOW)["allowed"]
 
@@ -318,6 +318,7 @@ def test_operator_step_records_the_step_and_warns() -> None:
 
 def test_close_labels_and_closes_but_leaves_a_project_to_the_poller() -> None:
 	issue_ops = actions.plan(_verdict("close"), _ctx())
+	assert [op["op"] for op in issue_ops[:2]] == ["close", "add_labels"]
 	assert {"op": "add_labels", "issue": 7, "labels": ["ai:unblock-closed"]} in issue_ops
 	assert {"op": "close", "issue": 7, "reason": "not_planned", "pr": False} in issue_ops
 	project_ops = actions.plan(_verdict("close"), _ctx("project", "project-failed"))
@@ -369,6 +370,9 @@ if endpoint == "user":
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 f = fields()
 if method == "POST" and endpoint.endswith("/comments"):
+	if os.environ.get("FAKE_GH_FAIL_RESUME") and f.get("body", "").startswith("/answer"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	state["comments"].append({"endpoint": endpoint, "body": f.get("body", "")})
 	done("{}")
 if method == "POST" and endpoint.endswith("/labels"):
@@ -378,18 +382,24 @@ if method == "DELETE":
 	state["labels_removed"].append(endpoint)
 	done("{}")
 if method == "PATCH":
+	if os.environ.get("FAKE_GH_FAIL_CLOSE") and f.get("state") == "closed":
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	state["patched"].append([endpoint, f])
 	done("{}")
 if method == "POST" and endpoint.endswith("/issues"):
 	state["created"].append(f)
 	done("901" if jq else json.dumps({"number": 901}))
 if endpoint.endswith("/comments?per_page=100"):
+	if os.environ.get("FAKE_GH_FAIL_COMMENTS"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	done(json.dumps(state["item_comments"]))
 if endpoint.startswith("repos/o/r/issues/"):
 	number = endpoint.rsplit("/", 1)[1]
 	issue = state["issues"].get(number, {})
-	if jq == "{state, state_reason}":
-		done(json.dumps({"state": issue.get("state"), "state_reason": issue.get("state_reason")}))
+	if jq == "{state, state_reason, labels: [.labels[]?.name]}":
+		done(json.dumps({"state": issue.get("state"), "state_reason": issue.get("state_reason"), "labels": [label["name"] for label in issue.get("labels", [])]}))
 	done(json.dumps(issue))
 done("")
 '''
@@ -441,6 +451,19 @@ def test_judge_refuses_a_verdict_outside_the_menu(tmp_path: Path) -> None:
 	assert state["labels_removed"] == [] and state["created"] == []
 
 
+def test_comment_fetch_failure_does_not_reset_the_ledger(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, FAKE_GH_FAIL_COMMENTS="1")
+	assert "reason=comments_unavailable" in result.stdout
+	assert state["comments"] == [] and state["labels_added"] == []
+
+
+def test_failed_close_does_not_add_terminal_label(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "close", "reason": "nothing left"}, FAKE_GH_FAIL_CLOSE="1")
+	assert "op=close issue=7 outcome=failed" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
+	assert state["labels_added"] == []
+
+
 def test_judge_closes_without_the_model_when_the_caps_are_spent(tmp_path: Path) -> None:
 	comments = [
 		_comment(ledger.marker(7, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
@@ -458,10 +481,18 @@ def test_judge_waits_on_an_open_fixup_and_follows_up_when_it_merged(tmp_path: Pa
 	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {"state": "open"}})
 	assert "fixup=50 outcome=waiting" in result.stdout and state["comments"] == []
 	assert state["patched"][0][0] == "repos/o/r/issues/comments/123"
-	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {"state": "closed", "state_reason": "completed"}})
+	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}})
 	assert "fixup=50 outcome=followup" in result.stdout
 	assert state["comments"][-1]["body"].startswith("/answer")
 	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {"state": "closed", "state_reason": "completed", "labels": []}})
+	assert "fixup=50 outcome=followup" not in result.stdout
+	assert not any(comment["body"].startswith("/answer") for comment in state["comments"])
+	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}, FAKE_GH_FAIL_RESUME="1")
+	assert "reason=followup_failed" in result.stdout
+	assert not any("ai:unblock-wait:v1 item=7 fixup=50 done" in fields.get("body", "") for _, fields in state["patched"])
+	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {}}, verdict={"verdict": "retry_budget", "reason": "x", "instructions": "y"})
+	assert "reason=fixup_unavailable" in result.stdout and state["comments"] == []
 
 
 def test_judge_skips_closed_and_unblocked_items_and_honours_the_switch(tmp_path: Path) -> None:
@@ -488,6 +519,10 @@ def test_dispatch_wrappers_and_reusable_workflow() -> None:
 		assert wf["jobs"]["judge"]["uses"] == f"shubhodeep1/coding-workflows/.github/workflows/unblock_judge.yml{ref}"
 		assert wf["permissions"]["id-token"] == "write"
 	reusable = yaml.safe_load((ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8"))
+	assert reusable["jobs"]["unblock-judge"]["concurrency"] == {
+		"group": "operator-step-writer-${{ github.repository }}",
+		"cancel-in-progress": False,
+	}
 	steps = {step["name"]: step for step in reusable["jobs"]["unblock-judge"]["steps"]}
 	assert steps["Judge the blocked item"]["continue-on-error"] is True
 	assert "unblock_judge.sh" in steps["Judge the blocked item"]["run"]

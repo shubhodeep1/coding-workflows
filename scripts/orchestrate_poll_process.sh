@@ -561,8 +561,9 @@ lesson_event_json_for_stall() {
 # a detached worktree of the default branch, once per project: the verdict
 # comment on the tracking issue carries
 # <!-- ai:activation:v1 verdict=... source=project-<n> -->, and COMMENTS
-# (already fetched for this tracking issue) is checked for it, so the guard
-# costs no API call. Gated by ACTIVATION_VERIFY_ENABLED (default true); every
+# (already fetched for this tracking issue) is checked against the cached
+# per-tick GH_PAT login (one identity read only when a marker is present).
+# Gated by ACTIVATION_VERIFY_ENABLED (default true); every
 # failure is logged and ignored, never failing the poll.
 run_project_activation_verify() {
   local verify_default verify_dir
@@ -574,7 +575,11 @@ run_project_activation_verify() {
     return 0
   fi
   if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "source=project-${TRACKING_NUM} -->" \
-    '[.[]? | (.body // "") | select(contains("<!-- ai:activation:v1 ") and contains($src))] | length > 0' >/dev/null 2>&1; then
+    'any(.[]?; (.body // "") | contains("<!-- ai:activation:v1 ") and contains($src))' >/dev/null 2>&1; then
+    unblock_trusted_login >/dev/null
+  fi
+  if [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ] && printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "source=project-${TRACKING_NUM} -->" --arg login "${UNBLOCK_TRUSTED_LOGIN}" \
+    'any(.[]?; (.user.login // "") == $login and ((.body // "") | contains("<!-- ai:activation:v1 ") and contains($src)))' >/dev/null 2>&1; then
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=already_verified"
     return 0
   fi
@@ -15757,7 +15762,8 @@ handle_unblock_judge_project_hooks() {
     || ! printf '%s' "${COMMENTS:-[]}" | jq -e 'any(.[]?; (.body // "") | startswith("<!-- ai:unblock-fixup-request:v1 "))' >/dev/null 2>&1; then
     return 0
   fi
-  login="$(unblock_trusted_login)"
+  unblock_trusted_login >/dev/null
+  login="${UNBLOCK_TRUSTED_LOGIN}"
   [ -n "${login}" ] || return 0
   requests="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '
     [.[]? | select((.user.login // "") == $login)
@@ -15834,10 +15840,14 @@ unblock_handover_merge_deferral() {
   local pr="$1" issue="$2" why="$3"
   [[ "${pr}" =~ ^[0-9]+$ ]] || return 0
   ensure_label_exists "ai:needs-human"
-  gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
-    || echo "::warning::Could not add ai:needs-human to PR #${pr} after MAX_MERGE_DEFERRALS."
-  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" \
-    -f body="Merge deferred ${MAX_MERGE_DEFERRALS} times for issue #${issue} because of persistent ${why}; handed to the unblock judge." >/dev/null 2>&1 || true
+  if ! printf '%s' "${_rtm_pr_json:-{}}" | jq -e 'any(.labels[]?; .name == "ai:needs-human")' >/dev/null 2>&1; then
+    gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
+      || echo "::warning::Could not add ai:needs-human to PR #${pr} after MAX_MERGE_DEFERRALS."
+  fi
+  if [ "${4:-}" = "${MAX_MERGE_DEFERRALS}" ]; then
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" \
+      -f body="Merge deferred ${MAX_MERGE_DEFERRALS} times for issue #${issue} because of persistent ${why}; handed to the unblock judge." >/dev/null 2>&1 || true
+  fi
 }
 
 # Hand-over (plan Phase 7, Q13): counts consecutive project-judge runs with
@@ -15857,6 +15867,7 @@ unblock_handover_judge_output() {
     post_tracking_comment "## Judge gave no usable verdict
 
 The project judge produced no usable output (${why}) ${failures} time(s) in a row (JUDGE_OUTPUT_FAILURE_MAX=${JUDGE_OUTPUT_FAILURE_MAX}). The project is marked failed for the unblock judge; \`/judge_resume\` resumes it." || true
+    echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
     echo "UNBLOCK_HANDOVER tracking_issue=${TRACKING_NUM} stop=judge_output reason=${why} failures=${failures} outcome=failed"
   else
     jq --argjson n "${failures}" '.judge_output_failures = $n' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -15910,7 +15921,8 @@ run_unblock_scan() {
     echo "UNBLOCK_SCAN candidates=0 dispatched=0 outcome=idle"
     return 0
   fi
-  if [ -z "$(unblock_trusted_login)" ]; then
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
     echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=login_unavailable"
     return 0
   fi
@@ -15956,7 +15968,7 @@ run_unblock_scan() {
   if ! selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
     --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
     --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
-    --trusted-login "$(unblock_trusted_login)" --now "${now_iso}" \
+    --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
     --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
     --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
     --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
@@ -20608,9 +20620,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
               echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — sibling conflict detected."
               if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
                 tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent sibling merge-tree conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
-                if [ "${_rtm_defer_count}" -eq "${MAX_MERGE_DEFERRALS}" ]; then
-                  unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "sibling merge-tree conflicts"
-                fi
+                unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "sibling merge-tree conflicts" "${_rtm_defer_count}"
 		      fi
 		      continue
 		    fi
@@ -20646,9 +20656,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		        echo "  [premerge-rebase] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — pre-merge rebase conflicts."
 		        if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
 		          tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent pre-merge rebase conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
-		          if [ "${_rtm_defer_count}" -eq "${MAX_MERGE_DEFERRALS}" ]; then
-		            unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "pre-merge rebase conflicts"
-		          fi
+		          unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "pre-merge rebase conflicts" "${_rtm_defer_count}"
 		        fi
 		        continue
 		        ;;

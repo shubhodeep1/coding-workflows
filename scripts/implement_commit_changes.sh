@@ -453,7 +453,8 @@ if [ -n "${deleted_staged}" ]; then
   # bulk-delete threshold for this run only, and never when a canonical
   # workflow source is among the deletions.
   unblock_bulk_override_applies="false"
-  if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ]; then
+  if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&
+    printf '%s\n' "${deleted_staged}" | jq -R -s -e --argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}" 'all(split("\n")[] | select(length > 0); . as $path | $paths | index($path) != null)' >/dev/null 2>&1; then
     unblock_bulk_override_applies="true"
     echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
   fi

@@ -68,6 +68,7 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 			"'ai:orchestrator-tracking'",
 			"'ai:security-audit'",
 			"'ai:retro'",
+			"'ai:operator-step'",
 			"github.event.issue.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.issue.author_association)",
 			"github.event.issue.user.type == 'Bot'",

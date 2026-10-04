@@ -74,6 +74,7 @@ def test_checked_in_config_matches_code_defaults() -> None:
 	raw = json.loads(CONFIG.read_text(encoding="utf-8"))
 	config, _ = ce.normalize_config(raw)
 	assert {**config, "broker_url": ""} == ce.DEFAULT_CONFIG
+	assert config["role_defaults"]["UNBLOCK_JUDGE"]["profile"] == "read"
 
 
 @pytest.mark.parametrize(

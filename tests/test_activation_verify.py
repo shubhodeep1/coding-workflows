@@ -36,7 +36,7 @@ def done(out=""):
 	if out:
 		print(out)
 	sys.exit(0)
-endpoint = next((a for a in args[1:] if a.startswith("repos/")), "")
+endpoint = next((a for a in args[1:] if a == "user" or a.startswith("repos/")), "")
 fields = {}
 for i, a in enumerate(args):
 	if a == "-f":
@@ -44,6 +44,17 @@ for i, a in enumerate(args):
 		fields.setdefault(k, v)
 if "issues?labels=ai:operator-step" in endpoint:
 	done(json.dumps(state.get("operator_issues", [])))
+if endpoint == "user":
+	done("pipeline-bot")
+if endpoint.endswith("/labels/ai%3Aoperator-step"):
+	if state.get("label_missing"):
+		json.dump(state, open(state_path, "w"))
+		print("HTTP 404: Not Found", file=sys.stderr)
+		sys.exit(1)
+	done(json.dumps({"name": "ai:operator-step"}))
+if endpoint == "repos/o/r/labels" and fields.get("name") == "ai:operator-step":
+	state["label_missing"] = False
+	done(json.dumps({"name": "ai:operator-step"}))
 if "-X" in args and "PATCH" in args:
 	state["patched"] = {"endpoint": endpoint, "body": fields.get("body", "")}
 	done("{}")
@@ -54,7 +65,11 @@ if endpoint == "repos/o/r/issues" and "title" in fields:
 	state["created"].append(fields)
 	done(json.dumps({"number": 900 + len(state["created"]), "html_url": "u"}))
 if endpoint.startswith("repos/o/r/issues/"):
-	done(json.dumps(state.get("linked", {})))
+	linked = state.get("linked", {})
+	if jq := (args[args.index("--jq") + 1] if "--jq" in args else ""):
+		if jq.startswith("{number, title, body:"):
+			linked = dict(linked, user=linked.get("user", {"login": "pipeline-bot"}))
+	done(json.dumps(linked))
 done("")
 '''
 
@@ -129,10 +144,32 @@ def test_live_verdict_only_posts_the_marker(tmp_path: Path) -> None:
 	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
 
 
+def test_operator_tracker_creates_missing_label(tmp_path: Path) -> None:
+	# Core-profile consumers have no label-sync workflow.
+	env, state_file = _setup(tmp_path, label_missing=True)
+	steps = tmp_path / "steps.json"
+	steps.write_text(json.dumps([{"title": "Set flag", "instructions": "Enable after deployment"}]), encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(WRITER), "upsert", "--repo", "o/r", "--key", "pr-1", "--source", "PR #1", "--steps-file", str(steps)],
+		capture_output=True, text=True, env=env, check=False,
+	)
+	assert result.returncode == 0, result.stdout
+	state = json.loads(state_file.read_text(encoding="utf-8"))
+	assert any("repos/o/r/labels" in call and "name=ai:operator-step" in call for call in state["calls"])
+	assert state["created"][0]["labels[]"] == "ai:operator-step"
+
+
 def test_merge_of_an_activation_fix_is_not_verified_again(tmp_path: Path) -> None:
 	linked = {"number": 7, "title": "t", "body": "<!-- ai:activation-fix:v1 source=pr-41 -->\nfix"}
 	result, state = _verify(tmp_path, DORMANT, linked=linked)
 	assert "reason=activation_fix_merge" in result.stdout and state["comments"] == []
+
+
+def test_untrusted_issue_cannot_suppress_activation(tmp_path: Path) -> None:
+	linked = {"number": 7, "title": "t", "body": "<!-- ai:activation-fix:v1 source=pr-41 -->", "user": {"login": "someone"}}
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "summary": "Runs.", "gaps": []}, linked=linked)
+	assert "activation_fix_merge" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("source=pr-42 -->")
 
 
 @pytest.mark.parametrize("verdict", ["not json", json.dumps({"verdict": "MAYBE"})])
@@ -153,7 +190,7 @@ def test_verdict_text_cannot_forge_a_marker(tmp_path: Path) -> None:
 
 
 def _issue(body: str, number: int = 5, association: str = "OWNER") -> dict:
-	return {"number": number, "body": body, "author_association": association, "user": {"login": "o"}, "html_url": f"u/{number}"}
+	return {"number": number, "body": body, "author_association": association, "user": {"login": "pipeline-bot" if association == "OWNER" else "someone"}, "html_url": f"u/{number}"}
 
 
 def test_writer_replaces_its_own_entry_and_keeps_others(tmp_path: Path) -> None:
@@ -190,8 +227,9 @@ def test_writer_trims_oldest_entries_to_fit() -> None:
 def test_writer_refuses_bad_keys_and_ignores_untrusted_issues() -> None:
 	with pytest.raises(writer.UsageError):
 		writer.upsert("o/r", "Bad Key", "s", [{"title": "t"}])
-	assert writer.find_issue([_issue(writer.MARKER, association="NONE")]) is None
-	assert writer.find_issue([_issue("no marker")]) is None
+	assert writer.find_issue([_issue(writer.MARKER, association="NONE")], "pipeline-bot") is None
+	assert writer.find_issue([_issue("no marker")], "pipeline-bot") is None
+	assert writer.find_issue([_issue(writer.MARKER)], "someone") is None
 
 
 def test_status_workflow_wiring() -> None:
@@ -202,6 +240,7 @@ def test_status_workflow_wiring() -> None:
 	assert "github.event.pull_request.base.ref == github.event.repository.default_branch" in job["if"]
 	assert "vars.ACTIVATION_VERIFY_ENABLED != 'false'" in job["if"]
 	assert job["continue-on-error"] is True
+	assert job["concurrency"] == {"group": "operator-step-writer-${{ github.repository }}", "cancel-in-progress": False}
 	assert workflow["jobs"]["sync-issue-status"]["outputs"]["linked_issue"] == "${{ steps.linked_issue.outputs.number }}"
 	steps = {step["name"]: step for step in job["steps"]}
 	assert "activation_verify.sh\" pr" in steps["Verify activation"]["run"]
@@ -217,6 +256,7 @@ def test_poller_runs_it_on_every_completion_path() -> None:
 	poll = POLL.read_text(encoding="utf-8")
 	assert "for activation_asset in scripts/activation_verify.sh scripts/operator_step_issue.py prompts/mode-activation-verify.txt prompts/_templates/mode-activation-verify.txt; do" in poll
 	assert "ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}" in poll
+	assert '(.user.login // "") == $login' in text
 
 
 def test_model_text_never_starts_a_comment_line(tmp_path: Path) -> None:

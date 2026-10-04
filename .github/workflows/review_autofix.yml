@@ -6116,7 +6116,7 @@ jobs:
           # ai:needs-human so the unblock scan picks it up. Transient gates
           # keep retrying through stall recovery without a label.
           case "${JUDGE_SKIP_REASON:-}" in
-            llm_failed*|json_parse_failed*|missing_followup_details|merged_pr_unsafe_action)
+            llm_failed*|json_parse_failed*|missing_followup_details|merged_pr_unsafe_action|auto_merge_disabled)
               if ! gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:needs-human" >/dev/null; then
                 echo "::warning::Failed to add ai:needs-human to PR #${PR_NUMBER} for the unblock judge."
               fi

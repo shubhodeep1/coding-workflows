@@ -1876,7 +1876,7 @@ jobs:
           fi
           override_comment_id="$(jq -r --arg login "${pipeline_login}" --arg issue "${ISSUE_NUMBER}" '
             [.[] | select((.user.login // "") == $login)] as $mine
-            | ([$mine[] | (.body // "") | scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->") | .[0]]) as $used
+            | ([$mine[] | (.body // "") | scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->")]) as $used
             | [$mine[]
                 | select(((.body // "") | split("\n") | map(select(test("\\S"))) | last // "")
                     | test("^<!-- ai:unblock:v1 item=" + $issue + " stop=destructive-blocked fingerprint=[0-9a-f]{12} verdict=override_guard round=[1-9][0-9]* override=bulk_delete -->$"))
@@ -1887,6 +1887,15 @@ jobs:
             echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=no_unspent_marker"
             exit 0
           fi
+          approved_deletions="$(jq -c --argjson id "${override_comment_id}" '
+            .[] | select(.id == $id) | (.body // "")
+            | capture("(?m)^Approved deletions: (?<paths>\\[[^\\n]*\\])$").paths | fromjson
+            | select(type == "array" and length > 0 and all(.[]; type == "string"))
+          ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+          if [ -z "${approved_deletions}" ]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=approved_paths_unavailable"
+            exit 0
+          fi
           if ! gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="This run uses the unblock judge's bulk-delete override once.
 
@@ -1895,6 +1904,7 @@ jobs:
             exit 0
           fi
           echo "UNBLOCK_BULK_DELETE_OVERRIDE=true" >> "$GITHUB_ENV"
+          echo "UNBLOCK_BULK_DELETE_PATHS=${approved_deletions}" >> "$GITHUB_ENV"
           echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=enabled marker=${override_comment_id}"
 
       - name: Record implementation run start event
@@ -3479,7 +3489,8 @@ jobs:
             # bulk-delete threshold for this run only, and never when a canonical
             # workflow source is among the deletions.
             unblock_bulk_override_applies="false"
-            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ]; then
+            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&
+              printf '%s\n' "${deleted_staged}" | jq -R -s -e --argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}" 'all(split("\n")[] | select(length > 0); . as $path | $paths | index($path) != null)' >/dev/null 2>&1; then
               unblock_bulk_override_applies="true"
               echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
             fi

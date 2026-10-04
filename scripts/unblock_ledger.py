@@ -124,7 +124,7 @@ OVERRIDES = ("bulk_delete",)
 CANONICAL_SOURCE_RE = re.compile(
 	r"^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)"
 )
-NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed")
+NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed", "validate-failed", "harness-broken")
 
 MAX_ROUNDS_PER_ITEM = 2
 MAX_ROUNDS_PER_PROJECT = 6

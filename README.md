@@ -2597,7 +2597,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   issue, never for `.github/workflows/**`, `.claude/**` or `scripts/**` in
   this repository and never for deleting a canonical workflow source;
   `accept_with_followup` never for a failed security pass or validation. The
-  model's output is validated before anything happens.
+  model's output is validated before anything happens. The model runs without
+  GitHub or Telegram credentials; Claude uses the read-only tool profile.
+  A failed ledger-history read or project marker write skips action for that run.
 - **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
   then carried out with the existing commands: on a tracking issue
   `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on
@@ -2605,15 +2607,24 @@ and resolver chains, a failed project) now goes to the unblock judge
   `/reclarify`; on a pull request a review dispatch. `descope` and
   `operator_step` file a fix-up issue (for a project's item, the poller files
   it into the current wave and resumes a failed project); once the fix-up
-  merges, the next judge run posts the resume command. `operator_step` also
+  is closed with `ai:merged`, the next judge run posts the resume command.
+  A failed fix-up lookup or resume write leaves the wait marker pending for
+  another run; closing a fix-up without a merge does not resume its parent.
+  `operator_step` also
   writes the `ai:operator-step` issue and sends a Telegram WARNING.
+  Activation-verifier and unblock-judge jobs share a repository-scoped
+  concurrency group so simultaneous runs cannot overwrite tracker entries.
   `override_guard` extends the issue's `files_touched` block, or, for the
   destructive latch, leaves a one-shot `override=bulk_delete` marker that
-  `implement.yml` spends on the issue's next run.
+  `implement.yml` spends on the issue's next run. The bulk-delete exception
+  applies only when every staged deletion is one of the approved paths;
+  missing or malformed path evidence leaves the normal threshold in force.
 - **Terminal.** When the caps are spent, or the item is still blocked 24
   hours after the last round, the judge closes it as not planned with a
   report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
   poller then sets the state to `abandoned` and closes the tracking issue.
+  For an issue or PR, a failed close leaves the terminal label unset so a
+  later scan can retry.
 
 A person can still act on any blocked item at any time; the judge only
 picks up what is still blocked. `UNBLOCK_JUDGE_ENABLED=false` turns all of

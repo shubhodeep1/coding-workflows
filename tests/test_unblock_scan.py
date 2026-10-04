@@ -167,7 +167,7 @@ def test_hand_overs_add_a_scanned_label_or_failed_state() -> None:
 	assert text.count('unblock_handover_judge_output "unparseable"') == 1
 	assert text.count("unblock_handover_merge_deferral ") == 2
 	review = (ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
-	assert "llm_failed*|json_parse_failed*|missing_followup_details|merged_pr_unsafe_action)" in review
+	assert "llm_failed*|json_parse_failed*|missing_followup_details|merged_pr_unsafe_action|auto_merge_disabled)" in review
 	heal = (ROOT / "scripts/workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
 	assert 'gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "${ESCALATED_LABEL}"' in heal
 
@@ -190,5 +190,6 @@ def test_poll_workflow_stages_the_scan_and_passes_its_knobs() -> None:
 @pytest.mark.parametrize("path", [".github/workflows/implement.yml", "scripts/implement_commit_changes.sh"])
 def test_bulk_override_never_covers_canonical_deletions(path: str) -> None:
 	text = (ROOT / path).read_text(encoding="utf-8")
-	assert 'if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ]; then' in text
+	assert 'if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&' in text
+	assert '--argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}"' in text
 	assert '[ "${unblock_bulk_override_applies}" != "true" ]; then' in text

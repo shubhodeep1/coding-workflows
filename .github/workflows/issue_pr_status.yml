@@ -730,6 +730,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     continue-on-error: true
+    concurrency:
+      group: operator-step-writer-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Resolve trusted activation support commit
         id: resolve_support

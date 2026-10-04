@@ -38,8 +38,9 @@
 # a command at the start of any tracking-issue comment line.
 #
 # Never fails its caller: every problem is logged and the exit code is 0.
-# API budget (CLAUDE.md §15): the linked-issue read in `pr` mode, one comment,
-# at most one issue create, and the operator-step writer's two calls.
+# API budget (CLAUDE.md §15): the linked-issue read in `pr` mode, a conditional
+# identity read for a fix marker, one comment, at most one issue create, and
+# the operator-step writer's identity/list/write calls.
 # Log: ACTIVATION_VERIFY mode= item= verdict= code_gaps= operator_gaps= outcome= reason=
 set -uo pipefail
 
@@ -118,11 +119,15 @@ activation_main()
 			target_issue="${PR_NUMBER}"
 			local linked_json="{}"
 			if [[ "${LINKED_ISSUE:-}" =~ ^[0-9]+$ ]]; then
-				linked_json="$(gh api "repos/${REPOSITORY}/issues/${LINKED_ISSUE}" --jq '{number, title, body: ((.body // "")[0:6000])}' 2>/dev/null || echo '{}')"
+				linked_json="$(gh api "repos/${REPOSITORY}/issues/${LINKED_ISSUE}" --jq '{number, title, body: ((.body // "")[0:6000]), user: {login: .user.login}}' 2>/dev/null || echo '{}')"
 				printf '%s' "${linked_json}" | jq -e 'type == "object"' >/dev/null 2>&1 || linked_json="{}"
-				if printf '%s' "${linked_json}" | jq -e '(.body // "") | test("<!-- ai:activation-fix:v1")' >/dev/null 2>&1; then
-					activation_log "mode=pr item=${item} outcome=skip reason=activation_fix_merge"
-					return 0
+				if printf '%s' "${linked_json}" | jq -e '(.body // "") | startswith("<!-- ai:activation-fix:v1 source=")' >/dev/null 2>&1; then
+					local activation_login
+					activation_login="$(gh api user --jq '.login' 2>/dev/null || true)"
+					if [ -n "${activation_login}" ] && printf '%s' "${linked_json}" | jq -e --arg login "${activation_login}" '.user.login == $login' >/dev/null 2>&1; then
+						activation_log "mode=pr item=${item} outcome=skip reason=activation_fix_merge"
+						return 0
+					fi
 				fi
 				target_issue="${LINKED_ISSUE}"
 			fi
