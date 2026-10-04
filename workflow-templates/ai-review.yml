@@ -22,7 +22,7 @@ on:
         default: false
         type: boolean
       claude_fixer_converged_head:
-        description: "Claude-fixer mode (/implement-plan-claude PRs): head SHA the Claude session found nothing left to fix on; enables auto-merge after the review workflow verifies it"
+        description: "Deprecated; ignored. Accepted so an old dispatcher that still sends it does not fail (the Claude-fixer hand-off was retired)"
         required: false
         default: ""
         type: string
@@ -43,5 +43,4 @@ jobs:
       pr_title: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.title) || '' }}
       pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
-      claude_fixer_converged_head: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.claude_fixer_converged_head || '' }}
     secrets: inherit

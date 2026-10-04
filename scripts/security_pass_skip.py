@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Decide whether an issue-mode project may skip its own security pass.
+"""Decide whether an automation-filed issue may skip its own security pass.
 
-`/implement-issue-claude` step 6 writes `Security pass: skip` in the plan
-header only when this script prints `"skip": true`. A skip label alone
+Moved from `.claude/scripts/` when the session-based Claude automation was
+retired (docs/plans/replace-claude-sessions-with-cli-engine-plan.md); the
+single-issue security pass of that plan's Phase 8a reuses these rules, so a
+follow-up of a follow-up does not recurse. A skip label alone
 (`ai:security`, `ai:check-triage`, `ai:workflow-heal`) proves nothing: anyone
 who can label an issue can add one (security finding
 `mutable-label-skips-security-pass`, issue #4623). The skip is allowed only
@@ -55,8 +57,7 @@ from typing import Any, Callable
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
-# Checked in this order; the first label that verifies wins. Same labels as
-# SECURITY_PASS_SKIP_LABELS in scripts/claude_issue_route.py.
+# Checked in this order; the first label that verifies wins.
 SKIP_LABEL_MARKERS: dict[str, re.Pattern[str]] = {
 	"ai:security": re.compile(r"(?m)^<!-- ai:security-finding:\S+ -->[ \t]*$"),
 	"ai:check-triage": re.compile(r"(?m)^<!-- check-failure-triage:fp=\S+ -->[ \t]*$"),
