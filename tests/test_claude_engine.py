@@ -57,6 +57,7 @@ def _jsonl(*events: dict) -> str:
 
 # Roles whose checked-in default is Claude, by cutover phase.
 CUTOVER_ROLES = {"CLARIFY", "CLARIFY_RESPOND", "PLAN"}  # Phase 5a
+CUTOVER_ROLES |= {"IMPLEMENT", "IMPLEMENT_REPAIR", "IMPLEMENT_DIAGNOSE"}  # Phase 5b
 
 
 def test_checked_in_config_is_valid_and_inert() -> None:

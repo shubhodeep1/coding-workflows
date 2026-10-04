@@ -1871,18 +1871,25 @@ The Actions pipelines can run a model role on the Claude Code CLI
 cutovers switch the defaults one group at a time. **On Claude today:**
 `CLARIFY` (`clarify.yml`), `CLARIFY_RESPOND` (`orchestrate_clarify_respond.yml`:
 the answer, the self-critique and the revision) and `PLAN` (`plan.yml` through
-`scripts/run_plan_codex.sh`), since Phase 5a. Every other role still defaults
-to `codex`.
+`scripts/run_plan_codex.sh`), since Phase 5a; `IMPLEMENT`, `IMPLEMENT_REPAIR`
+(`implement.yml` through `scripts/codex_thread_reuse.sh`, which resumes the
+role's Claude session across attempts the way it resumes a codex thread) and
+`IMPLEMENT_DIAGNOSE` (`scripts/implement_diagnose_post_codex_failure.sh`),
+since Phase 5b. Every other role still defaults to `codex`.
 
 **How a cut-over role runs.** The job's "Resolve AI engine" step picks the
 engine for the role. Only when it is `claude` do "Install Claude Code CLI" and
 "Resolve Claude credential" (the account pool) run. The model call then runs
 on Claude (`claude_run`, or the clarify sandbox's Claude branch). When Claude
 cannot start (no CLI, no credential, clarify image build failure or every
-account gated: exit `75`, logged `AI_ENGINE_FALLBACK`), the same attempt runs
-the unchanged codex call, and
-the rest of the job stays on codex. `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
+account gated: exit `75`, logged
+`AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call.
+`AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
+Implementation attempts on Claude honor the same `CODEX_THREAD_REUSE_TIMEOUT_SECS`
+wall-clock bound as codex attempts; diagnosis is bounded to 300 seconds on
+either engine. An exit-75 implementation fallback remains on codex for later
+attempts of that role in the same job.
 
 | Piece | What it does |
 |---|---|
