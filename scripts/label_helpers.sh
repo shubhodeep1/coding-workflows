@@ -74,6 +74,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:workflow-heal"]="d876e3"
 	["ai:workflow-heal-escalated"]="b60205"
 	["ai:codex"]="0e8a16"
+	["ai:engine-claude"]="7057ff"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -130,6 +131,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:workflow-heal"]="Issue auto-filed from an escalated workflow failure by workflow failure heal"
 	["ai:workflow-heal-escalated"]="Workflow failure heal chain hit the lineage cap; needs human attention"
 	["ai:codex"]="Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
+	["ai:engine-claude"]="Request the Claude engine for this issue or orchestrator project (pending engine support)"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'

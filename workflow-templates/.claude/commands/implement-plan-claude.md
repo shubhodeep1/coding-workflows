@@ -1,4 +1,4 @@
-Hand the plan documented at the path / reference in `$ARGUMENTS` to the **AI orchestrator** for implementation, **on the Claude engine**. This is the Claude-engine counterpart of `/implement-plan-ai`: it dispatches the same orchestrator with the same reference-only `project_description`, and marks the project `ai:engine-claude` so every role of its work (clarify, plan, implement, review, judges, security pass, validation) runs `claude -p` with Claude Opus 5.5 at `high` effort inside the Actions pipelines. It does **not** implement the plan in this session and opens **no** PR of its own. `$ARGUMENTS` is free-form prose that must resolve to a single plan markdown doc, exactly as for `/implement-plan-ai`.
+Hand the plan documented at the path / reference in `$ARGUMENTS` to the **AI orchestrator**, requesting the Claude engine. This is the Claude-engine counterpart of `/implement-plan-ai`: it dispatches the same orchestrator with the same reference-only `project_description` and requests the `ai:engine-claude` label for the project. Until the engine-label plumbing lands in Phase 6, that label is inert and roles still use their configured engines. It does **not** implement the plan in this session and opens **no** PR of its own. `$ARGUMENTS` is free-form prose that must resolve to a single plan markdown doc, exactly as for `/implement-plan-ai`.
 
 The session-driven `/implement-plan-claude` chain (stage sessions, checkers, hand-back Routines, Claude-fixer hand-offs) was retired on 2026-10-03 (`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). The pipelines now do that work themselves.
 
@@ -8,11 +8,11 @@ $ARGUMENTS
 
 1. **Run `/implement-plan-ai`'s procedure.** `Read` `.claude/commands/implement-plan-ai.md` and follow its steps 1–8 exactly (resolve the plan, read the context, make the plan reachable on the remote, pick the orchestrator wrapper, compose the reference-only `project_description`, dispatch, capture the run and the tracking issue, report), with the two differences below. Its Tool Access and Rules sections apply unchanged.
 2. **Say which engine.** Add one line to the `project_description` instruction preamble: `Engine: Claude (ai:engine-claude) — run every role of this project on the Claude engine.`
-3. **Label the tracking issue.** Once the `ai:orchestrator-tracking` issue for the dispatched run exists, add the `ai:engine-claude` label to it (a §23.B routine label write). If it has not appeared yet when you report, say so and give the command to add the label later. Until the engine-label plumbing lands (Phase 6 of the plan above), the label is recorded but inert: the project runs on each role's configured engine.
+3. **Label the tracking issue.** Once the `ai:orchestrator-tracking` issue for the dispatched run exists, add the `ai:engine-claude` label to it (a §23.B routine label write) and verify it is present. If the issue has not appeared or the label write fails (including when the label has not yet been synced), report the dispatched run and the missing label explicitly; do not claim the project is bound to the Claude engine. The workflow may already be running on the configured engine. Do not dispatch a second project to retry labelling.
 
 ## Output Format
 
-`/implement-plan-ai`'s output block, with `Mode: AI orchestrator on the Claude engine (dispatched — NOT implemented in this session)` and one extra line: `Engine label: ai:engine-claude on <tracking issue url> (or: pending — tracking issue not opened yet)`.
+`/implement-plan-ai`'s output block, with `Mode: AI orchestrator (Claude engine requested; dispatched — NOT implemented in this session)` and one extra line: `Engine label: ai:engine-claude on <tracking issue url> (or: not applied — <tracking issue pending | label-write error>; work may proceed on the configured engine)`.
 
 ## Rules
 
