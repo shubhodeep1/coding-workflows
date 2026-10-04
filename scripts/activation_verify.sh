@@ -156,16 +156,16 @@ activation_main()
 				# covers the PR. The event's commit count distinguishes it from a squash.
 				if [ "$(git -C "${TARGET_DIR}" rev-list --parents -n 1 "${MERGE_SHA:-HEAD}" 2>/dev/null | wc -w)" -ne 3 ] \
 					&& [ "${PR_COMMITS:-}" != "1" ]; then
-					activation_log "mode=pr item=${item} outcome=skip reason=files_unavailable"
+					activation_log "mode=pr item=${item} outcome=skip reason=multi_commit_rebase"
 					return 0
 				fi
 				if ! activation_files_json="$(git -C "${TARGET_DIR}" diff --name-only "${MERGE_SHA:-HEAD}^1" "${MERGE_SHA:-HEAD}" 2>/dev/null | jq -Rsc 'split("\n") | map(select(length > 0))')"; then
-					activation_log "mode=pr item=${item} outcome=skip reason=files_unavailable"
+					activation_log "mode=pr item=${item} outcome=skip reason=fallback_diff_failed"
 					return 0
 				fi
 			fi
 			if ! printf '%s' "${activation_files_json}" | jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' >/dev/null 2>&1; then
-				activation_log "mode=pr item=${item} outcome=skip reason=files_unavailable"
+				activation_log "mode=pr item=${item} outcome=skip reason=fallback_diff_empty"
 				return 0
 			fi
 			jq -n --arg pr "${PR_NUMBER}" --arg sha "${MERGE_SHA:-}" --arg title "${PR_TITLE:-}" --arg body "${PR_BODY:-}" \
@@ -271,16 +271,19 @@ activation_main()
 	if [ "${operator_gaps}" -gt 0 ]; then
 		steps_file="${RUNTIME_DIR}/activation_operator_steps.json"
 		jq '[.gaps[] | select(.kind == "operator") | {title, instructions: (.fix + (if .evidence != "" then "\nEvidence: " + .evidence else "" end)), dormant_until}]' "${verdict_file}" > "${steps_file}"
-		PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_DIR}/scripts/operator_step_issue.py" upsert --repo "${REPOSITORY}" --key "${key}" \
-			--source "Activation of ${item_label}" --steps-file "${steps_file}" >/dev/null 2>&1 \
-			|| { echo "::warning::Could not update the ai:operator-step issue for ${key}."; activation_log "mode=${mode} item=${item} outcome=skip reason=operator_issue_failed"; return 0; }
+		if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_DIR}/scripts/operator_step_issue.py" upsert --repo "${REPOSITORY}" --key "${key}" \
+			--source "Activation of ${item_label}" --steps-file "${steps_file}" >"${RUNTIME_DIR}/operator_step_issue.log" 2>&1; then
+			echo "::warning::Could not update the ai:operator-step issue for ${key}: $(tr '\r\n' '  ' < "${RUNTIME_DIR}/operator_step_issue.log" | cut -c1-300)"
+			activation_log "mode=${mode} item=${item} outcome=skip reason=operator_issue_failed"
+			return 0
+		fi
 	fi
 
 	comment_body="$(jq -r --arg key "${key}" --argjson lookup_ok "${activation_fix_lookup_ok}" '
 		"## Activation: " + .verdict + "\n\nSummary: " + .summary + "\n\n"
 		+ (if .trigger != "" then "Trigger: " + .trigger + "\n\n" else "" end)
 		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title] | join("\n")) + "\n\n" else "" end)
-		+ (if $lookup_ok then "<!-- ai:activation:v1 verdict=" + .verdict + " source=" + $key + " -->" else "Code-gap follow-up is pending: the GitHub fix-issue lookup failed. The activation verdict is not finalized; retry verification." end)
+		+ (if $lookup_ok then "<!-- ai:activation:v1 verdict=" + .verdict + " source=" + $key + " -->" else "Code-gap follow-up is pending: the GitHub fix-issue lookup failed. The activation verdict is not finalized; retry verification.\n\n<!-- ai:activation:v1 partial=true source=" + $key + " -->" end)
 	' "${verdict_file}")"
 	if ! gh api "repos/${REPOSITORY}/issues/${target_issue}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
 		echo "::warning::Could not post the activation verdict on #${target_issue}."

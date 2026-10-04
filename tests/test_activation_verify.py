@@ -6,8 +6,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -218,12 +220,19 @@ def test_failed_fix_lookup_still_reports_unfinalized_verdict_and_operator_steps(
 	assert len(state["created"]) == 1
 	assert state["created"][0]["title"] == "Operator steps waiting"
 	assert "Code-gap follow-up is pending" in state["comments"][-1]["body"]
-	assert "<!-- ai:activation:v1" not in state["comments"][-1]["body"]
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 partial=true source=pr-42 -->")
+	assert "<!-- ai:activation:v1 verdict=" not in state["comments"][-1]["body"]
 
 
 def test_pr_file_lookup_failure_cannot_misgrade_multi_commit_rebase(tmp_path: Path) -> None:
 	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_FILES": "1", "PR_COMMITS": "2"})
-	assert "reason=files_unavailable" in result.stdout
+	assert "reason=multi_commit_rebase" in result.stdout
+	assert state["comments"] == [] and state["created"] == []
+
+
+def test_pr_file_lookup_failure_reports_failed_single_commit_diff(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_FILES": "1", "PR_COMMITS": "1"})
+	assert "reason=fallback_diff_failed" in result.stdout
 	assert state["comments"] == [] and state["created"] == []
 
 
@@ -235,7 +244,7 @@ def test_pr_file_lookup_failure_cannot_grade_an_empty_diff(tmp_path: Path) -> No
 		subprocess.run(["git", "-C", str(target), "-c", "user.name=test", "-c", "user.email=test@example.invalid",
 			"commit", "--allow-empty", "-m", message], check=True, capture_output=True)
 	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_FILES": "1", "PR_COMMITS": "1"})
-	assert "reason=files_unavailable" in result.stdout
+	assert "reason=fallback_diff_empty" in result.stdout
 	assert state["comments"] == [] and state["created"] == []
 
 
@@ -393,7 +402,8 @@ def test_poller_runs_it_on_every_completion_path() -> None:
 	assert len(calls) == 4
 	for i in calls:
 		assert lines[i + 1].strip() == "run_project_activation_verify"
-	assert 'if [ "${PROJECT_STATUS}" = "complete" ]; then\n      run_project_activation_verify' in text
+	assert 'if [ "${PROJECT_STATUS}" = "complete" ] && [ "${COMMENTS_FETCH_OK:-false}" = "true" ] &&' in text
+	assert 'endswith("<!-- ai:activation:v1 partial=true source=" + $src + " -->")' in text
 	assert 'TRACKING_NUM="${TRACKING_NUM}" \\' in text
 	assert 'PROJECT_FILES_JSON="$(jq -c' in text
 	assert '(.body // "" | sub("[[:space:]]+$"; ""))' in text
@@ -402,6 +412,31 @@ def test_poller_runs_it_on_every_completion_path() -> None:
 	poll = POLL.read_text(encoding="utf-8")
 	assert "for activation_asset in scripts/activation_verify.sh scripts/operator_step_issue.py prompts/mode-activation-verify.txt prompts/_templates/mode-activation-verify.txt; do" in poll
 	assert "ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}" in poll
+
+
+def test_completed_project_retries_only_recent_trusted_partial_verdicts() -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required to evaluate the poller's retry predicate")
+	text = POLLER.read_text(encoding="utf-8")
+	filter_text = text.split('printf \'%s\' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" \'', 1)[1].split("' >/dev/null 2>&1; then", 1)[0]
+	def partial(minutes_ago: int, *, association: str = "OWNER", source: str = "project-77") -> dict:
+		return {
+			"author_association": association,
+			"body": f"Incomplete.\n\n<!-- ai:activation:v1 partial=true source={source} -->\n",
+			"created_at": (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+		}
+	for comments, expected in (
+		([partial(1)], True),
+		([partial(10), partial(1)], True),
+		([partial(10), partial(5), partial(1)], False),
+		([partial(31), partial(1)], False),
+		([partial(1, association="NONE")], False),
+		([partial(1, source="project-78")], False),
+		([], False),
+	):
+		result = subprocess.run(["jq", "-e", "--arg", "src", "project-77", filter_text],
+			input=json.dumps(comments), text=True, capture_output=True, check=False)
+		assert (result.returncode == 0) == expected, result.stderr
 
 
 def test_model_text_never_starts_a_comment_line(tmp_path: Path) -> None:

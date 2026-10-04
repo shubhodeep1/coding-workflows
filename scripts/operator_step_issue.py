@@ -143,7 +143,7 @@ def render_entry(key: str, source: str, steps: list[dict]) -> str:
 
 
 def render_body(entries: list[tuple[str, str]]) -> str:
-	parts = [MARKER, "## Operator steps", "", INTRO]
+	parts = [MARKER, "## Operator steps", INTRO]
 	kept = list(entries)
 	while True:
 		body = "\n\n".join(parts + [text for _, text in kept]) + "\n"

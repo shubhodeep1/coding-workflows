@@ -557,8 +557,9 @@ lesson_event_json_for_stall() {
 # run_project_activation_verify: activation verification at project
 # completion (port P4, docs/plans/replace-claude-sessions-with-cli-engine-plan.md
 # Phase 8c). Called right after emit_orchestrator_completion_lessons on every
-# completion path. Runs scripts/activation_verify.sh in `project` mode against
-# a detached worktree of the default branch, once per project: the verdict
+# completion path and, for recent partial verdicts, on subsequent ticks.
+# Runs scripts/activation_verify.sh in `project` mode against
+# a detached worktree of the default branch; a terminal verdict
 # comment on the tracking issue carries
 # <!-- ai:activation:v1 verdict=... source=project-<n> -->, and COMMENTS
 # (already fetched for this tracking issue) is checked for it, so the guard
@@ -19513,7 +19514,17 @@ The poller will resume processing on the next cycle."
 
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     handle_comprehensive_release_callback_if_needed "${PROJECT_STATUS}" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
-    if [ "${PROJECT_STATUS}" = "complete" ]; then
+    # Retry only a trusted, comment-backed partial verdict while its first
+    # occurrence is recent. Failed writes without a marker never start an
+    # unbounded expensive verification loop on completed projects.
+    if [ "${PROJECT_STATUS}" = "complete" ] && [ "${COMMENTS_FETCH_OK:-false}" = "true" ] &&
+      printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" '
+        [.[]? | select((.user.login // "") == "github-actions[bot]" or
+          ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+          | select((.body // "" | sub("[[:space:]]+$"; "")) | endswith("<!-- ai:activation:v1 partial=true source=" + $src + " -->"))
+          | .created_at | fromdateiso8601? | select(. != null)] as $partials
+        | ($partials | length) > 0 and ($partials | length) < 3 and (now - ($partials | min)) < 1800
+      ' >/dev/null 2>&1; then
       run_project_activation_verify
     fi
     if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
