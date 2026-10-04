@@ -81,6 +81,15 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ACTIVATION_VERIFY_ENABLED` | No | `true` | issue_pr_status, orchestrate_poll | Activation verification (port P4 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). After a PR merges into the default branch (integration branches excluded), the `activation-verify` job in `issue_pr_status.yml` runs `scripts/activation_verify.sh pr`; when an orchestrator project completes, the poller runs it in `project` mode against the default branch, once per project. The ACTIVATION_VERIFY role (`prompts/mode-activation-verify.txt`) grades the merged work LIVE or DORMANT and lists each gap as `code` or `operator`. The verdict is posted on the linked issue (else the PR) or the tracking issue, ending in `<!-- ai:activation:v1 verdict=<V> source=<pr-N|project-N> -->`; `code` gaps become one standalone issue for the pipeline (body starts `<!-- ai:activation-fix:v1 source=... -->`, and its own merge is not verified again); `operator` gaps go to the repository's single `ai:operator-step` issue (`scripts/operator_step_issue.py`); one Telegram message (WARNING when DORMANT). The model runs read-only without GitHub or Telegram credentials. Never fails its workflow. Logs `ACTIVATION_VERIFY mode= item= verdict= code_gaps= operator_gaps= outcome= reason=`. |
 | `ACTIVATION_VERIFY_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | issue_pr_status, orchestrate_poll | Model for the activation verifier. |
 | `THINKING_LEVEL_ACTIVATION_VERIFY` | No | `high` | issue_pr_status, orchestrate_poll | Reasoning effort for the activation verifier. |
+| `UNBLOCK_JUDGE_ENABLED` | No | `true` | orchestrate_poll, unblock_judge | Unblock judge (Phase 7 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`, see [Unblock judge](#unblock-judge)). `false` stops the poller's unblock scan, the judge runs, and the poller's fix-up adoption; items then wait for a person as before. |
+| `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK` | No | `5` | orchestrate_poll | Most `unblock_judge_dispatch.yml` runs the scan starts per poll tick, oldest block first. |
+| `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES` | No | `30` | orchestrate_poll | How long an item must carry its block label (or a project must have been failed) before the scan sends it to the judge. |
+| `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
+| `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
+| `UNBLOCK_JUDGE_FIXUP_WAIT_HOURS` | No | `72` | unblock_judge | How long the judge waits for the fix-up issue of a `descope` or `operator_step` verdict to merge before it decides again. |
+| `UNBLOCK_JUDGE_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | unblock_judge | Model for the UNBLOCK_JUDGE role (codex path; the Claude path follows `.github/ai/claude_engine.json`). |
+| `THINKING_LEVEL_UNBLOCK_JUDGE` | No | `high` | unblock_judge | Reasoning effort for the unblock judge. |
+| `JUDGE_OUTPUT_FAILURE_MAX` | No | `3` | orchestrate_poll | Consecutive project-judge runs with no usable output (the model failed, or its output did not parse) before the project fails with `ai:blocked` for the unblock judge. Reset by the next parsed verdict. Must be a positive integer; invalid values fall back to `3`. |
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. **Orchestrator integration PRs (head ref matching `ORCH_INTEGRATION_BRANCH_PATTERN`, default `^orchestrator/project-`) are unconditionally excluded** even when this is `true`: the orchestrator's `finalize_integration_merge_if_needed` handles their merge synchronously once the project is genuinely complete (all waves merged AND the default branch contains the integration tip). Without this exception, an integration-conflict self-healing dispatch could let review_autofix ship the integration branch partway through the project — stranding subsequent wave PRs on the integration branch with no path to default. The PR-metadata fetch fails closed: a transient API error suppresses auto-merge for that cycle (next sync event retries). See shubhodeep1/binance-blessings#135 for the regression case that motivated the exclusion. **forward-merge fallback PRs (head ref matching `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml` when the automated stable→main merge hits conflict or branch protection) auto-merge via a real merge commit instead of a squash** — gated by `FORWARD_MERGE_FALLBACK_AUTO_MERGE` (default `true`; see its own row). These PRs MUST land as a 2-parent merge commit so `stable`'s tip stays reachable from `main`; `gh pr merge --squash --auto` (the regular auto-merge call) silently strips that ancestry, after which `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check refuses the next promote run with the "squash/rebase strips ancestry" error (see `.github/workflows/promote-main-to-stable.yml:115-126` and the CAUTION banner injected into every fallback PR body at `.github/workflows/forward-merge-stable-to-main.yml:265-270`). So the forward-merge branch instead calls `gh pr merge --merge --auto` — the unattended equivalent of the manual "Create a merge commit", which preserves ancestry. The `^auto/forward-merge-stable-` pattern is hard-coded — the branch prefix is owned by the forward-merge workflow and never varies per repo. Both the codex-agent "Enable auto-merge on PR" step and the `deterministic-skip-merge` sibling job apply this merge-commit path, so a small forward-merge fallback that happens to fall under `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS` cannot short-circuit to a squash merge via the deterministic-skip path either. Every reviewed or deterministic-skip auto-merge request is bound with `--match-head-commit` to the head that was reviewed or evaluated by the gate; an unavailable head fails closed, and a concurrent push is rejected so its `synchronize` run can evaluate the new head. **Limitation:** when required checks are pending, GitHub may retain an already-enabled auto-merge setting across later pushes; re-verifying that later head remains separate hardening work. |
 | `FORWARD_MERGE_FALLBACK_AUTO_MERGE` | No | `true` | review_autofix | Controls how forward-merge fallback PRs (head ref `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml`) are merged when review passes with no changes needed. When `true` (default), `review_autofix.yml` enables auto-merge with a **real merge commit** (`gh pr merge --merge --auto`) so `stable`'s commits stay reachable from `main` and `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check keeps passing. Requires "Allow merge commits" **and** "Allow auto-merge" in repo settings; if either is off the enable call logs a `::warning::` and the PR is left for a manual "Create a merge commit". Applies to **both** flavours of fallback PR — conflict-resolved (body: "failed due to merge conflicts", resolved unattended by `[ai-merge-resolve]`) and branch-protection (body: "could not push directly"). Set to any non-`true` value to restore the previous behaviour of leaving every forward-merge fallback PR for a manual merge commit. Independent of `ENABLE_AUTO_MERGE`, but `ENABLE_AUTO_MERGE=false` still disables all auto-merge including this path. |
@@ -2539,6 +2548,59 @@ This does **not** reset the total `judge_cycle` counter (which is informational 
 Use this after manual intervention (e.g. fixing a problematic issue, merging a stuck PR, or adjusting `MAX_JUDGE_CYCLES`/`MAX_RECOVERY_ATTEMPTS` variables). There is no limit on how many times `/judge_resume` can be used.
 
 > **Note:** `/judge_resume` only applies to judge/recovery failures. For validation failures (`ai:validation-failed`), use `/revalidate` instead.
+
+### Unblock judge
+
+Every stop that used to wait for a person (`ai:blocked`, `ai:needs-human`,
+the scope and destructive latches, `ai:*-failed`, the escalated triage, heal
+and resolver chains, a failed project) now goes to the unblock judge
+(Phase 7 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`).
+
+- **Scan.** Once per poll tick, after the per-project loop,
+  `run_unblock_scan` in `scripts/orchestrate_poll_process.sh` makes one REST
+  search for open issues and pull requests with a block label
+  (`scripts/unblock_ledger.py labels`), one batched GraphQL query for their
+  label events and last comments, and one list of recent
+  `unblock_judge_dispatch.yml` runs. `scripts/unblock_scan.py` picks items
+  blocked for at least `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES`, with no trusted
+  `ai:unblock` marker younger than `UNBLOCK_JUDGE_RETRY_HOURS` and no judge
+  running, oldest first, at most `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK`.
+  Failed projects are added from the poller's own state.
+- **Judge.** `unblock_judge_dispatch.yml` (from `workflow-templates/` in a
+  consumer) calls `.github/workflows/unblock_judge.yml`, which runs
+  `scripts/unblock_judge.sh` with the UNBLOCK_JUDGE role
+  (`prompts/mode-judge-unblock.txt`). It reads the item, its comments, the
+  failing run's log tail, the PR diff and, for a project, its state and
+  specification, and picks one verdict: `retry_budget`, `auto_answer`,
+  `descope`, `override_guard`, `reissue`, `accept_with_followup`,
+  `operator_step` or `close`.
+- **Hard limits** (`scripts/unblock_ledger.py`). A verdict is never repeated
+  for the same failure fingerprint; at most 2 rounds per item and 6 per
+  project; `override_guard` only for the scope and destructive latches on an
+  issue, never for `.github/workflows/**`, `.claude/**` or `scripts/**` in
+  this repository and never for deleting a canonical workflow source;
+  `accept_with_followup` never for a failed security pass or validation. The
+  model's output is validated before anything happens.
+- **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
+  then carried out with the existing commands: on a tracking issue
+  `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on
+  an issue `/approved` (after `ai:awaiting-approval`), `/answer` or
+  `/reclarify`; on a pull request a review dispatch. `descope` and
+  `operator_step` file a fix-up issue (for a project's item, the poller files
+  it into the current wave and resumes a failed project); once the fix-up
+  merges, the next judge run posts the resume command. `operator_step` also
+  writes the `ai:operator-step` issue and sends a Telegram WARNING.
+  `override_guard` extends the issue's `files_touched` block, or, for the
+  destructive latch, leaves a one-shot `override=bulk_delete` marker that
+  `implement.yml` spends on the issue's next run.
+- **Terminal.** When the caps are spent, or the item is still blocked 24
+  hours after the last round, the judge closes it as not planned with a
+  report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
+  poller then sets the state to `abandoned` and closes the tracking issue.
+
+A person can still act on any blocked item at any time; the judge only
+picks up what is still blocked. `UNBLOCK_JUDGE_ENABLED=false` turns all of
+it off.
 
 ### Validation Controls
 
