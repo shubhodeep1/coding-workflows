@@ -15891,10 +15891,12 @@ The project judge produced no usable output (${why}) ${failures} time(s) in a ro
 # label (oldest update first, at most 30); when it returns candidates, one
 # batched GraphQL query (labeled events and the last 30 comments of each),
 # one list of the dispatch workflow's recent runs, the `user` read once per
-# tick, and one dispatch per chosen item. A failed read skips the scan for
-# this tick: nothing is dispatched on partial data.
+# tick, and one dispatch per chosen item. An incomplete comment window may
+# need one paginated REST history read for the oldest eligible item; GraphQL
+# cannot order comments by edit time, so its last 30 cannot prove whether an
+# older wait marker was refreshed. Failed reads never dispatch on partial data.
 run_unblock_scan() {
-  local labels_q search_items numbers_json count query fragment i n details_resp details runs now_iso selection
+  local labels_q search_items numbers_json count query fragment i n details_resp details runs now_iso selection verify_item verified_details
   local work_dir="${RUNNER_TEMP:-/tmp}/unblock-scan"
   if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
     echo "UNBLOCK_SCAN outcome=skip reason=disabled"
@@ -15970,6 +15972,7 @@ run_unblock_scan() {
     | map(select(.value != null) | {key: (.key | ltrimstr("i")), value: {
         labeled: [.value.timelineItems.nodes[]? | select(.label != null) | {label: .label.name, created_at: .createdAt}],
         comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}],
+        comment_count: .value.comments.totalCount,
         history_incomplete: ((.value.comments.totalCount | type) != "number" or (.value.comments.nodes | type) != "array" or .value.comments.totalCount > (.value.comments.nodes | length))
       }})
     | from_entries' 2>/dev/null || echo '{}')"
@@ -15991,6 +15994,35 @@ run_unblock_scan() {
     --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")"; then
     echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=select_failed"
     return 0
+  fi
+  verify_item="$(printf '%s' "${selection}" | jq -r '.verify_history // empty')"
+  if [[ "${verify_item}" =~ ^[1-9][0-9]*$ ]]; then
+    # No complete history exists in the batched GraphQL response. Verify only
+    # one rotating candidate per tick; never treat a partial REST read as clear.
+    if gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${verify_item}/comments?per_page=100" > "${work_dir}/full_comments.json" 2>/dev/null &&
+      jq -e --argjson expected "$(printf '%s' "${details}" | jq -r --arg id "${verify_item}" '.[$id].comment_count // -1')" '
+        type == "array" and $expected >= 0 and
+        all(.[]; type == "array" and all(.[]; type == "object" and (.body | type) == "string" and (.created_at | type) == "string")) and
+        ([.[][]] | length >= $expected)
+      ' "${work_dir}/full_comments.json" >/dev/null 2>&1; then
+      verified_details="$(jq -c --arg id "${verify_item}" --slurpfile pages "${work_dir}/full_comments.json" '
+        .[$id].comments = [$pages[0][][] | {login: (.user.login // ""), body: .body, created_at: (.updated_at // .created_at)}]
+        | .[$id].history_incomplete = false
+      ' "${work_dir}/details.json" 2>/dev/null || true)"
+      if [ -n "${verified_details}" ]; then
+        printf '%s' "${verified_details}" > "${work_dir}/details.json"
+        selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
+          --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
+          --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+          --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
+          --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
+          --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
+          --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+          --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")" || return 0
+      fi
+    else
+      echo "UNBLOCK_SCAN item=${verify_item} outcome=skip reason=full_history_unavailable"
+    fi
   fi
   local dispatched=0 item kind
   while IFS=$'\t' read -r item kind; do

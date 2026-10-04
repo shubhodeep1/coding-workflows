@@ -2604,8 +2604,11 @@ and resolver chains, a failed project) now goes to the unblock judge
   Failed projects are added from the poller's own state and take priority in
   the 30-item details batch. When more than 30 projects have failed, that
   batch rotates each five-minute tick so none is permanently left out. A
-  truncated comment window that cannot cover the six-hour marker cooldown
-  defers dispatch rather than risk an early repeat.
+  incomplete comment window defers dispatch rather than risk an early repeat
+  of a marker edited outside the creation-ordered last 30 comments. The scan
+  checks the full paginated comment history for one rotating candidate per tick
+  before dispatching; a failed or partial history read defers that candidate
+  to another tick. This adds one conditional paginated REST read to the scan.
 - **Judge.** `unblock_judge_dispatch.yml` (from `workflow-templates/` in a
   consumer) calls `.github/workflows/unblock_judge.yml`, which runs
   `scripts/unblock_judge.sh` with the UNBLOCK_JUDGE role

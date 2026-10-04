@@ -34,16 +34,18 @@ An item is picked when all hold:
     poller posts when the project fails; else `updated_at`);
   - its newest trusted unblock marker (`<!-- ai:unblock:v1 ` or
     `<!-- ai:unblock-wait:v1 `, as the comment's last non-empty line, by
-    --trusted-login) is older than --marker-hours, or there is none; a
-    truncated comment window must cover the entire cooldown interval;
+    --trusted-login) is older than --marker-hours, or there is none; an
+    incomplete comment window cannot rule out an older edited marker until
+    the poller verifies its full comment history;
   - no judge run for it is queued or in progress, and no non-cancelled run
     started in the last --inflight-minutes.
 Oldest block first, at most one dispatch per tick. --max=0 disables dispatch;
 larger values are capped at one. An active judge holds the queue until it
 finishes.
 Output: one JSON line
-`{"dispatch": [{"item", "kind"}], "skipped": {<reason>: <count>}}`, where kind
-is `project` (label ai:orchestrator-tracking), `pr` or `issue`.
+`{"dispatch": [{"item", "kind"}], "skipped": {<reason>: <count>}, "verify_history": n|null}`,
+where kind is `project` (label ai:orchestrator-tracking), `pr` or `issue`.
+`verify_history` asks the poller to read one complete history and rerun selection.
 
 No GitHub API calls and no network (CLAUDE.md §15). Exit 0 ok, 1 bad
 arguments, 2 unreadable input.
@@ -174,6 +176,7 @@ def select(
 	busy = _busy_items(runs, now, inflight)
 	skipped: dict[str, int] = {}
 	candidates: list[tuple[dt.datetime, int, str]] = []
+	unverified: list[tuple[dt.datetime, int]] = []
 	seen: set[int] = set()
 
 	def skip(reason: str) -> None:
@@ -224,10 +227,9 @@ def select(
 			skip("recent_verdict")
 			continue
 		if info.get("history_incomplete"):
-			comment_times = [_time(comment.get("created_at")) for comment in info.get("comments") or [] if isinstance(comment, dict)]
-			if not comment_times or any(when is None for when in comment_times) or min(comment_times) > now - marker_age:
-				skip("unverified_marker_history")
-				continue
+			unverified.append((since, number))
+			skip("unverified_marker_history")
+			continue
 		if TRACKING_LABEL in labels or number in failed:
 			kind = "project"
 		elif item.get("pull_request"):
@@ -245,10 +247,14 @@ def select(
 	)
 	effective_limit = 0 if active_judge else min(limit, 1)
 	chosen = candidates[:effective_limit]
+	verify_history = None
+	if effective_limit and unverified and (not chosen or min(unverified) < (chosen[0][0], chosen[0][1])):
+		verify_history = sorted(unverified)[int(now.timestamp() // 300) % len(unverified)][1]
+		chosen = []
 	if len(candidates) > effective_limit:
 		reason = "judge_running" if active_judge else "over_tick_cap"
 		skipped[reason] = skipped.get(reason, 0) + len(candidates) - effective_limit
-	return {"dispatch": [{"item": number, "kind": kind} for _, number, kind in chosen], "skipped": skipped}
+	return {"dispatch": [{"item": number, "kind": kind} for _, number, kind in chosen], "skipped": skipped, "verify_history": verify_history}
 
 
 def build_parser() -> argparse.ArgumentParser:

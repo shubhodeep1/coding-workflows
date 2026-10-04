@@ -585,6 +585,9 @@ def test_judge_redacts_model_key_before_recording_or_acting(tmp_path: Path) -> N
 	assert "outcome=acted" in result.stdout, result.stderr
 	assert all(secret not in comment["body"] for comment in state["comments"])
 	assert any("[redacted]" in comment["body"] for comment in state["comments"])
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": secret, "instructions": f"pin {secret}"}, OPENROUTER_API_KEY=f" {secret}\n")
+	assert "outcome=acted" in result.stdout, result.stderr
+	assert all(secret not in comment["body"] for comment in state["comments"])
 
 
 def test_project_marker_failure_does_not_lose_the_recorded_action(tmp_path: Path) -> None:

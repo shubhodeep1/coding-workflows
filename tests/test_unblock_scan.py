@@ -90,7 +90,26 @@ def test_incomplete_comment_window_cannot_prove_six_hour_cooldown() -> None:
 	info["comments"] = []
 	assert _select(search, {"1": info})["skipped"] == {"unverified_marker_history": 1}
 	info["comments"].append({"login": BOT, "body": "older comment", "created_at": _iso(7)})
-	assert _select(search, {"1": info})["dispatch"] == [{"item": 1, "kind": "issue"}]
+	# An even older wait marker can have been refreshed after this comment
+	# without moving into the creation-ordered last-30 window.
+	assert _select(search, {"1": info})["skipped"] == {"unverified_marker_history": 1}
+	assert _select(search, {"1": info})["verify_history"] == 1
+	verified = dict(info, history_incomplete=False)
+	assert _select(search, {"1": verified})["dispatch"] == [{"item": 1, "kind": "issue"}]
+	# The full history exposes an older wait comment refreshed one hour ago.
+	verified["comments"] = [{"login": BOT, "body": "<!-- ai:unblock-wait:v1 item=1 fixup=9 -->", "created_at": _iso(1)}]
+	assert _select(search, {"1": verified})["skipped"] == {"recent_verdict": 1}
+
+
+def test_incomplete_histories_rotate_one_verification_per_tick() -> None:
+	search = [_item(1, ["ai:blocked"]), _item(2, ["ai:blocked"])]
+	details = {str(n): dict(_details("ai:blocked", 8), history_incomplete=True) for n in (1, 2)}
+	first = _select(search, details)
+	second = scan.select(search, details, [], [], BOT, NOW + dt.timedelta(minutes=5),
+		dt.timedelta(minutes=30), dt.timedelta(hours=6), dt.timedelta(minutes=60), 5)
+	assert {first["verify_history"], second["verify_history"]} == {1, 2}
+	assert first["dispatch"] == second["dispatch"] == []
+	assert _select(search, details, limit=0)["verify_history"] is None
 
 
 def test_running_or_recent_judge_runs_hold_the_item() -> None:
@@ -168,6 +187,9 @@ def test_scan_budget_is_one_search_one_graphql_one_runs_list() -> None:
 	assert body.count('gh api --method GET "search/issues"') == 1
 	assert body.count("gh api graphql") == 1
 	assert body.count("unblock_judge_dispatch.yml/runs") == 1
+	assert body.count('gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${verify_item}/comments?per_page=100"') == 1
+	assert '([.[][]] | length >= $expected)' in body
+	assert 'created_at: (.updated_at // .created_at)' in body
 	assert "gh workflow run unblock_judge_dispatch.yml" in body
 	assert 'UNBLOCK_JUDGE_ENABLED:-true}" = "false"' in body
 
