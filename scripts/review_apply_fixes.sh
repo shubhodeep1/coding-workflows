@@ -1960,6 +1960,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 
   tmp_output="$(mktemp)"
   tmp_err="$(mktemp)"
+  # A prior attempt (or a reused mktemp name) must not supply this reason.
+  rm -f "${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"
 
   # ── Heartbeat file for progress tracking ──
   hb_file="$(mktemp /tmp/heartbeat_editor.XXXXXX)"
@@ -2148,7 +2150,22 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
   if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
-    echo "::error::Review sandbox result transfer was incomplete; refusing editor fallback." >&2
+    transfer_reason=unknown
+    transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"
+    if [ -f "${transfer_reason_file}" ] && [ ! -L "${transfer_reason_file}" ] &&
+       [ "$(wc -c < "${transfer_reason_file}")" -le 160 ] &&
+       [ "$(wc -l < "${transfer_reason_file}")" -eq 1 ]; then
+      transfer_reason_line="$(< "${transfer_reason_file}")"
+      case "${transfer_reason_line}" in
+        '::error::Review isolation snapshot or transfer rejected (ValueError) reason='*)
+          case "${transfer_reason_line##*reason=}" in
+            symlink_path|unsafe_file|file_changed|entry_limit|unsafe_directory|unsafe_result_path|workspace_size_limit|host_baseline_changed|host_path_conflict)
+              transfer_reason="${transfer_reason_line##*reason=}" ;;
+          esac ;;
+      esac
+    fi
+    echo "::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason=${transfer_reason}" | tee -a "${tmp_err}" >&2
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
     exit 1
   fi
 

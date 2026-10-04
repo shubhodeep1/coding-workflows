@@ -10,11 +10,19 @@ an open PR carrying it anywhere — the work is silently stranded. Prose
 instructions do not survive that timescale; this hook does, because the harness
 runs it on every Bash tool call regardless of what the model remembers.
 
+Each guarded Bash git invocation is checked in its own effective repository:
+a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
+applied without executing the Bash text. Pushes with explicit branch refspecs
+are checked against the destination branch and the source commit, including
+when the source is a detached HEAD. Unknown directories or refspecs warn and
+fall back to the session checkout check. Repeated targets share a PR snapshot
+per repository and branch, while different source tips are checked separately.
+
 Detection rule — all three conditions must hold before the command is blocked:
 
-  1. A *merged* PR exists whose head ref is the current branch, AND
-  2. no *open* PR exists for the current branch, AND
-  3. that merged PR's head commit is an ancestor of HEAD — i.e. the pending
+  1. A *merged* PR exists whose head ref is the judged branch, AND
+  2. no *open* PR exists for that branch, AND
+  3. that merged PR's head commit is an ancestor of the source tip — the pending
      commit would literally stack on already-merged history.
 
 Condition 3 is what makes the guard self-clearing. The branch name is reused
@@ -81,8 +89,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-
+from typing import NamedTuple
 
 # Guarded git subcommands. `push` is included alongside `commit` because
 # amend/rebase flows reach the remote without issuing a fresh `git commit`.
@@ -150,6 +160,35 @@ _GH_TIMEOUT_SECONDS = 15
 _GIT_TIMEOUT_SECONDS = 5
 # Network-bound git calls (`ls-remote`, `fetch`) used by the history fallback.
 _GIT_REMOTE_TIMEOUT_SECONDS = 15
+_GIT_ENVIRONMENT: ContextVar[dict[str, str] | None] = ContextVar("guard_git_environment", default=None)
+
+# Options with an argument must not turn that argument into a refspec. Unknown
+# options are treated as uncertain rather than authorizing a different branch.
+_PUSH_VALUE_OPTIONS = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
+_PUSH_BOOLEAN_OPTIONS = frozenset({
+	"-u", "--set-upstream", "-f", "--force", "--force-with-lease", "--force-if-includes",
+	"--follow-tags", "--atomic", "--dry-run", "-n", "--porcelain", "--quiet", "-q",
+	"--verbose", "-v", "--signed", "--no-signed", "--no-verify", "--progress",
+	"--ipv4", "--ipv6", "--prune", "--no-prune",
+})
+
+
+class _GitInvocation(NamedTuple):
+	cwd: str
+	environment: dict[str, str]
+	subcommand: str
+	arguments: list[str]
+	warning: str = ""
+
+
+class _GuardTarget(NamedTuple):
+	cwd: str
+	environment: dict[str, str]
+	branch: str
+	tip: str
+	reaches_remote: bool
+	warning: str = ""
+	bulk: str = ""
 
 
 class LookupUnavailable(Exception):
@@ -164,6 +203,7 @@ def _run(argv: list[str], cwd: str | None, timeout: int) -> tuple[int, str, str]
 	fail-open path.
 	"""
 	try:
+		overrides = _GIT_ENVIRONMENT.get()
 		proc = subprocess.run(
 			argv,
 			cwd=cwd,
@@ -171,6 +211,7 @@ def _run(argv: list[str], cwd: str | None, timeout: int) -> tuple[int, str, str]
 			text=True,
 			timeout=timeout,
 			check=False,
+			**({"env": {**os.environ, **overrides}} if overrides else {}),
 		)
 	except FileNotFoundError:
 		return 127, "", f"{argv[0]}: not found"
@@ -203,6 +244,238 @@ def _shell_segments(command: str) -> list[list[str]]:
 	if current_segment:
 		segments.append(current_segment)
 	return segments
+
+
+def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
+	"""Return simple commands and the operator preceding each one.
+
+	This is not a Bash interpreter. Unsupported control flow is marked unknown
+	by the caller, never executed to infer an authorization decision.
+	"""
+	lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer.commenters = ""
+	lexer.whitespace = " \t\r"
+	lexer.whitespace_split = True
+	result: list[tuple[str, list[str]]] = []
+	segment: list[str] = []
+	operator = ""
+	for token in lexer:
+		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
+			if segment:
+				result.append((operator, segment))
+				segment = []
+			operator = token
+		else:
+			segment.append(token)
+	if segment:
+		result.append((operator, segment))
+	return result
+
+
+@contextmanager
+def _git_environment(overrides: dict[str, str]):
+	state = _GIT_ENVIRONMENT.set(overrides or None)
+	try:
+		yield
+	finally:
+		_GIT_ENVIRONMENT.reset(state)
+
+
+def _literal_guard_path(
+	path: str, cwd: str, *, shell_cd: bool = False, git_file: bool = False
+) -> str | None:
+	"""Resolve a path only when its spelling and destination are unambiguous."""
+	if not path or path.startswith("~") or any(char in path for char in "$`*?[]{}()\\\n"):
+		return None
+	if shell_cd and not os.path.isabs(path) and os.environ.get("CDPATH") and not path.startswith(("./", "../")):
+		return None
+	resolved = os.path.realpath(os.path.join(cwd, path))
+	if os.path.isdir(resolved) and os.access(resolved, os.X_OK):
+		return resolved
+	if git_file and os.path.isfile(resolved):
+		# Linked worktrees have a .git file containing a gitdir pointer. Git
+		# accepts that file as GIT_DIR; validate its target before using it.
+		try:
+			with Path(resolved).open(encoding="utf-8") as pointer_file:
+				pointer = pointer_file.read(4097)
+		except (OSError, UnicodeError):
+			return None
+		if len(pointer) <= 4096 and pointer.startswith("gitdir: ") and "\n" not in pointer.strip("\n"):
+			actual = os.path.realpath(os.path.join(os.path.dirname(resolved), pointer[8:].strip()))
+			if os.path.isdir(actual) and os.access(actual, os.X_OK):
+				return resolved
+	return None
+
+
+def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation]:
+	try:
+		segments = _shell_segments_with_operators(command)
+	except ValueError:
+		return []
+	working_directory: str | None = checkout
+	conditional_cd = False
+	invocations: list[_GitInvocation] = []
+	for operator, tokens in segments:
+		if operator not in ("", "&&") and conditional_cd:
+			working_directory = None
+			conditional_cd = False
+		if operator not in ("", "&&", ";", "\n"):
+			working_directory = None
+		# A cd after a condition may not have happened when a later list starts.
+		if tokens[0] == "cd":
+			operand = tokens[1:]
+			if operand[:1] == ["--"]:
+				operand = operand[1:]
+			working_directory = (
+				_literal_guard_path(operand[0], working_directory, shell_cd=True)
+				if len(operand) == 1 and working_directory is not None else None
+			)
+			conditional_cd = operator == "&&" or conditional_cd
+			continue
+		if tokens[0] in ("pushd", "popd", "eval", "source", ".", "(", "{"):
+			working_directory = None
+		index = 0
+		environment: dict[str, str] = {}
+		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+			name, value = tokens[index].split("=", 1)
+			if name in ("GIT_DIR", "GIT_WORK_TREE"):
+				environment[name] = value
+			index += 1
+		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
+			continue
+		index += 1
+		git_cwd = working_directory
+		uncertain = git_cwd is None
+		while index < len(tokens) and tokens[index].startswith("-"):
+			option = tokens[index]
+			value = None
+			if option in GIT_GLOBAL_OPTS_WITH_VALUE:
+				if index + 1 >= len(tokens):
+					uncertain = True
+					break
+				value = tokens[index + 1]
+				index += 1
+			elif option.startswith("-C") and option != "-C":
+				value = option[2:]
+			elif option.startswith(("--git-dir=", "--work-tree=")):
+				value = option.split("=", 1)[1]
+			if value is not None:
+				if option.startswith("-C"):
+					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
+					uncertain |= git_cwd is None
+				elif option.startswith("--git-dir"):
+					environment["GIT_DIR"] = value
+				elif option.startswith("--work-tree"):
+					environment["GIT_WORK_TREE"] = value
+			index += 1
+		if index >= len(tokens) or tokens[index] not in GUARDED_SUBCOMMANDS:
+			continue
+		if not uncertain and git_cwd is not None:
+			for name, value in environment.items():
+				# git -C is applied before relative git-directory/work-tree options.
+				path = _literal_guard_path(value, git_cwd, git_file=name == "GIT_DIR")
+				if path is None:
+					uncertain = True
+					break
+				environment[name] = path
+		invocations.append(_GitInvocation(
+			checkout if uncertain else git_cwd or checkout,
+			{} if uncertain else environment,
+			tokens[index], tokens[index + 1:],
+			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
+		))
+	return invocations
+
+
+def _branch_ref(ref: str) -> str | None:
+	"""Extract a literal branch ref; None means its meaning is uncertain."""
+	if ref.startswith("refs/heads/"):
+		ref = ref[len("refs/heads/"):]
+	elif ref.startswith("refs/"):
+		return ""  # tags and other namespaces do not write a branch
+	if (
+		not re.fullmatch(r"[A-Za-z0-9_./-]+", ref)
+		or ref.startswith(("-", "/", "."))
+		or ref.endswith(("/", ".", ".lock"))
+		or ".." in ref or "//" in ref or "@{" in ref
+	):
+		return None
+	return ref
+
+
+def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarget]:
+	"""Identify the destination branches and source tips of a git push."""
+	if invocation.warning:
+		return [_GuardTarget(invocation.cwd, {}, "", "HEAD", True, invocation.warning)]
+	positionals: list[str] = []
+	bulk = ""
+	delete = False
+	tags = False
+	uncertain = False
+	arguments = invocation.arguments
+	index = 0
+	while index < len(arguments):
+		word = arguments[index]
+		if word == "--":
+			positionals.extend(arguments[index + 1:])
+			break
+		if word == "-d" or word in ("--delete", "--de", "--del", "--dele", "--delet"):
+			delete = True
+		elif word == "--no-delete":
+			delete = False
+		elif word in ("--tags", "--tag", "--ta"):
+			tags = True
+		elif word == "--no-tags":
+			tags = False
+		elif word in ("--all", "--mirror", "--branches"):
+			bulk = word
+		elif word in _PUSH_VALUE_OPTIONS or word in ("--pu", "--push-o", "--rep", "--rece", "--e") or re.fullmatch(r"-[ufnqv]*o", word):
+			index += 1
+			if index >= len(arguments):
+				uncertain = True
+		elif re.fullmatch(r"-[ufnqv]*d[ufnqv]*", word):
+			delete = True
+		elif word.startswith(("--push-option=", "--repo=", "--receive-pack=", "--exec=", "--force-with-lease=")) or (word.startswith("-o") and word != "-o"):
+			pass
+		elif word.startswith("-"):
+			if word not in _PUSH_BOOLEAN_OPTIONS and not re.fullmatch(r"-[ufnqv]+", word):
+				uncertain = True
+		else:
+			positionals.append(word)
+		index += 1
+	if delete and not uncertain:
+		return []  # Deletes do not strand new commits on a branch.
+	if uncertain:
+		return [_GuardTarget(checkout, {}, "", "HEAD", True,
+			"could not resolve git push options; checking the current branch instead")]
+	refspecs = positionals[1:] if positionals else []
+	if not refspecs and tags and not bulk:
+		return []
+	if not refspecs:
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk)]
+	targets: list[_GuardTarget] = []
+	for refspec in refspecs:
+		refspec = refspec.removeprefix("+")
+		if refspec == ":" or "*" in refspec:
+			bulk = "pattern or matching refspec"
+			continue
+		if ":" in refspec:
+			source, destination = refspec.split(":", 1)
+			if not source:
+				continue  # Branch deletion.
+		else:
+			source = destination = refspec
+		branch = _branch_ref(destination)
+		if branch == "":
+			continue
+		if branch is None or not re.fullmatch(r"[A-Za-z0-9_./-]+|HEAD", source):
+			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
+				"could not resolve git push refspec; checking the current branch instead"))
+			continue
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
+	if bulk:
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk))
+	return targets
 
 
 def _contains_shell_substitution(command: str) -> bool:
@@ -989,49 +1262,92 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	if not guarded_git_subcommands:
 		return 0, ""
 
-	cwd = _payload_cwd(payload)
-
-	branch = current_branch(cwd)
-	if not branch:
-		# Detached HEAD, or not a git repo — nothing branch-shaped to check.
-		return 0, ""
-	base = default_branch(cwd)
-	if base and branch == base:
-		# Committing on the default branch is not the stranded-work scenario.
-		return 0, ""
-
-	slug = repo_slug(cwd)
-	if not slug:
-		_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
-		return 0, ""
-
-	reaches_remote = "push" in guarded_git_subcommands
-	cached = _read_cache(slug, branch)
-	try:
-		pull_requests = cached if cached is not None else query_pull_requests(slug, branch, cwd)
-	except LookupUnavailable as exc:
-		return _unreachable_outcome(str(exc), "HEAD", branch, base, cwd, reaches_remote)
-
-	offender = blocking_pull_request(pull_requests, cwd, base)
-
-	# Re-verify a block against live data. Cheap allows may come from cache;
-	# blocks may not, so that opening a new PR clears the guard immediately
-	# rather than after the TTL expires.
-	if offender is not None and cached is not None:
-		try:
-			pull_requests = query_pull_requests(slug, branch, cwd)
-		except LookupUnavailable as exc:
-			return _unreachable_outcome(
-				f"could not re-verify: {exc}", "HEAD", branch, base, cwd, reaches_remote
-			)
-		_write_cache(slug, branch, pull_requests)
-		offender = blocking_pull_request(pull_requests, cwd, base)
-	elif cached is None:
-		_write_cache(slug, branch, pull_requests)
-
-	if offender is None:
-		return 0, ""
-	return 2, _block_message(offender, branch, base)
+	checkout = _payload_cwd(payload)
+	# A snapshot is memoized per slug/branch, not per tip: two refspecs may
+	# share a destination while pushing different commits. An API failure is
+	# memoized as well, to keep the call budget bounded on repeated targets.
+	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
+	blocks: list[str] = []
+	bulk_reasons: list[str] = []
+	for invocation in _guarded_git_invocations(command, checkout):
+		targets = (
+			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
+			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
+		)
+		for target in targets:
+			if target.bulk:
+				bulk_reasons.append(target.bulk)
+			if target.warning:
+				_warn(target.warning)
+			if target.tip != "HEAD":
+				with _git_environment(target.environment):
+					code, _, _ = _run(
+						["git", "rev-parse", "--verify", "--end-of-options", f"{target.tip}^{{commit}}"],
+						target.cwd, _GIT_TIMEOUT_SECONDS,
+					)
+				if code != 0:
+					_warn("could not resolve git push source; checking the session checkout instead")
+					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+			with _git_environment(target.environment):
+				branch = target.branch or current_branch(target.cwd)
+				if not branch:
+					# Detached HEAD without a literal branch destination.
+					continue
+				base = default_branch(target.cwd)
+				if base and branch == base:
+					continue
+				slug = repo_slug(target.cwd)
+				if not slug:
+					_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
+					continue
+				tip = target.tip
+				key = (slug, branch)
+				if key not in pr_snapshots:
+					cached = _read_cache(slug, branch)
+					try:
+						pull_requests = cached if cached is not None else query_pull_requests(slug, branch, target.cwd)
+					except LookupUnavailable as exc:
+						pr_snapshots[key] = (None, True, str(exc))
+					else:
+						if cached is None:
+							_write_cache(slug, branch, pull_requests)
+						pr_snapshots[key] = (pull_requests, cached is None, "")
+				pull_requests, fresh, failure = pr_snapshots[key]
+				if failure:
+					outcome, message = _unreachable_outcome(
+						failure, tip, branch, base, target.cwd, target.reaches_remote
+					)
+					if outcome == 2:
+						blocks.append(message)
+					continue
+				if pull_requests is None:
+					continue
+				offender = blocking_pull_request(pull_requests, target.cwd, base, tip)
+				if offender is not None and not fresh:
+					try:
+						pull_requests = query_pull_requests(slug, branch, target.cwd)
+					except LookupUnavailable as exc:
+						failure = f"could not re-verify: {exc}"
+						pr_snapshots[key] = (None, True, failure)
+						outcome, message = _unreachable_outcome(
+							failure, tip, branch, base, target.cwd, target.reaches_remote
+						)
+						if outcome == 2:
+							blocks.append(message)
+						continue
+					_write_cache(slug, branch, pull_requests)
+					pr_snapshots[key] = (pull_requests, True, "")
+					offender = blocking_pull_request(pull_requests, target.cwd, base, tip)
+				if offender is not None:
+					blocks.append(_block_message(offender, branch, base, tip_label=tip))
+	if blocks:
+		return 2, "\n\n".join(blocks)
+	if bulk_reasons:
+		_request_confirmation(
+			"Bulk git push may write more branches than the current branch: "
+			+ ", ".join(sorted(set(bulk_reasons)))
+		)
+	return 0, ""
 
 
 def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
