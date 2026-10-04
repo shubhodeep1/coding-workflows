@@ -38,6 +38,8 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 jobs:
   judge:

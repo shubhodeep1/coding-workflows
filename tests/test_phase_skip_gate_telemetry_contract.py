@@ -111,7 +111,7 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 			})
 			# Actions substitutes ${{ github.repository }} before bash runs the step.
 			script = step["run"].replace("${{ github.repository }}", "owner/repo")
-			result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True)
+			result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True, cwd=REPO_ROOT)
 			outputs = output_path.read_text(encoding="utf-8")
 			assert f"skip_codex={str(skip).lower()}" in outputs, result.stdout
 			assert f"orchestrator_fast_path={str(fast_path).lower()}" in outputs, result.stdout
