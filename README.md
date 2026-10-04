@@ -1851,7 +1851,7 @@ The Actions pipelines can run a model role on the Claude Code CLI
 (`claude -p`) instead of codex or OpenCode
 (`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). The plumbing
 is in place but **inert**: every role's code default is `codex`, no call site
-uses it yet, and the role cutovers switch the defaults one group at a time.
+uses it yet, and the separate Phase 5 role cutovers switch the defaults one group at a time.
 
 | Piece | What it does |
 |---|---|
@@ -1882,11 +1882,15 @@ input (`claude` or `codex`; empty leaves the project unlabelled), and the
 orchestrator puts the matching label (`ai:engine-claude` or `ai:codex`) on
 the tracking issue and the wave-1 issues it creates. The poller copies the
 tracking issue's engine label onto every issue and PR it creates later, and
-`implement.yml` copies an issue's engine label onto its PR, so every role of
-the project reads the same label from its own event payload. When both labels
-are present, `ai:codex` is copied. `/implement-plan-claude` dispatches with
+`implement.yml` copies an issue's engine label onto its PR. The separate
+role cutovers must pass work-item labels into engine selection; today the
+labels do not select a production engine. When both labels are
+present, `ai:codex` is copied. `/implement-plan-claude` dispatches with
 `engine=claude`; against a wrapper that has no `engine` input yet it
-dispatches without it and labels the tracking issue instead.
+dispatches without it and labels the tracking issue instead. Wave-1 issues
+created before that later label write do not inherit it. If `implement.yml`
+reuses an existing open PR after a create race, it also applies the issue's
+engine label before reporting that PR; a label-write failure stops the run.
 
 **Model and effort.** A role keeps its existing model variable when the value
 starts with `claude-`; otherwise it uses Opus 5.5 (`claude-opus-5-5`), or

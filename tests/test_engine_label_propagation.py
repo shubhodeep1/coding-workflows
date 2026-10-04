@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Engine label plumbing (plan Phase 6, decision D2).
 
-`ai:engine-claude` puts every role of a work item on Claude Opus 5.5 at high;
-`ai:codex` puts it on codex and wins when both are present. The orchestrator
+`ai:engine-claude` is propagated for the separate role cutovers;
+`ai:codex` wins when both are present. The orchestrator
 applies the label from its `engine` input at creation, the poller copies the
 tracking issue's label to every issue and PR it creates, implement copies the
-issue's label to its PR, and scripts/claude_engine.py reads the label from the
-job's own event payload.
+issue's label to its PR, and scripts/claude_engine.py can read work-item labels
+when a role supplies them.
 """
 
 from __future__ import annotations
@@ -87,6 +87,19 @@ def test_orchestrate_rejects_an_unknown_engine(tmp_path: Path) -> None:
 	assert "PROJECT_ENGINE_LABEL" not in github_env
 
 
+def test_orchestrate_rejects_invalid_engine_before_decomposition() -> None:
+	steps = _steps(ORCHESTRATE, "orchestrate")
+	assert list(steps).index("Log trigger context") < list(steps).index("Ensure orchestrator labels exist")
+	script = steps["Log trigger context"]["run"].replace("${{ github.run_id }}", "1")
+	for engine_value, accepted in (("gpt", False), (" Claude ", True), ("", True)):
+		result = subprocess.run(
+			["bash", "-c", script], capture_output=True, text=True, check=False,
+			env=dict(os.environ, ENGINE_INPUT=engine_value, PROJECT_DESCRIPTION="test"),
+		)
+		assert (result.returncode == 0) is accepted
+	assert list(steps).index("Log trigger context") < list(steps).index("Run Codex (decomposer)")
+
+
 def test_orchestrate_applies_the_label_at_creation() -> None:
 	steps = _steps(ORCHESTRATE, "orchestrate")
 	tracking = steps["Create tracking issue"]["run"]
@@ -146,6 +159,8 @@ def test_implement_copies_the_issue_label_to_its_pr() -> None:
 	assert '"ai:codex" elif index("ai:engine-claude") then "ai:engine-claude"' in step
 	assert 'PR_CREATE_ARGS+=(--label "${PR_ENGINE_LABEL}")' in step
 	assert step.index('PR_CREATE_ARGS+=(--label "${PR_ENGINE_LABEL}")') < step.index('gh pr create "${PR_CREATE_ARGS[@]}"')
+	assert 'gh_retry gh pr edit "${EXISTING_PR}"' in step
+	assert step.index('gh_retry gh pr edit "${EXISTING_PR}"') < step.index('echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"')
 
 
 def test_implement_plan_claude_dispatches_with_the_engine_input() -> None:
@@ -153,3 +168,5 @@ def test_implement_plan_claude_dispatches_with_the_engine_input() -> None:
 		text = (base / "commands" / "implement-plan-claude.md").read_text(encoding="utf-8")
 		assert "-f engine=claude" in text
 		assert "has no `engine` input yet" in text
+		assert "role cutovers" in text
+		assert "every role of this project on the Claude engine" not in text
