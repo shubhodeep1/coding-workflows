@@ -477,6 +477,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
 
+      - name: Retarget after a merged base tests (port P6)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_retarget_merged_base.py
+
       - name: Standalone clarify auto-decide tests (port P3)
         run: |
           set -euo pipefail
