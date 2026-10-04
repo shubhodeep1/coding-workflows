@@ -30,13 +30,6 @@ from review_autofix_step_scripts import (  # noqa: E402
 	REVIEW_AUTOFIX_WORKFLOW_PATH,
 	expanded_review_autofix_text,
 )
-# CI runs this module explicitly; collect the dispatched-checkout regressions too.
-from test_review_autofix_merge_precheck import (  # noqa: E402,F401
-	test_dispatch_checkout_file_read_uses_head_not_default_branch,
-	test_review_branch_fetch_movement_skips_the_older_source_tree,
-	test_review_head_mismatch_skips_before_agent_steps,
-	test_review_rejects_project_opencode_configuration_before_agent_setup,
-)
 
 TOPOLOGY_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_merge_topology_gate.sh"
 WRAPPERS = (REPO_ROOT / "workflow-templates" / "ai-review.yml",)
