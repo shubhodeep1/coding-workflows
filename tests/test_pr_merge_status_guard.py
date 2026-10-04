@@ -972,7 +972,8 @@ def test_fd_redirect_checks_current_push_branch(merged_branch_repo, monkeypatch,
 	assert lookups == ["feature/x"]
 
 
-def test_quoted_numeric_refspec_before_redirect_is_preserved(merged_branch_repo, monkeypatch) -> None:
+@pytest.mark.parametrize("refspec", ['"2"', "'2'", r"\2", "''2"])
+def test_quoted_numeric_refspec_before_redirect_is_preserved(merged_branch_repo, monkeypatch, refspec: str) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
 	_git(repo, "branch", "2", "feature/x")
@@ -985,7 +986,7 @@ def test_quoted_numeric_refspec_before_redirect_is_preserved(merged_branch_repo,
 		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "2" else []
 	monkeypatch.setattr(guard, "query_pull_requests", listing)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": 'git push origin "2">/dev/null'}})
+		"tool_input": {"command": f"git push origin {refspec}>/dev/null"}})
 	assert code == 2, message
 	assert lookups == ["2"]
 

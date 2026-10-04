@@ -270,6 +270,7 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			# a push refspec. A separated or quoted digit is a real argument.
 			if (segment and segment[-1].isascii() and segment[-1].isdigit()
 				and command[previous_token_end - len(segment[-1]):previous_token_end] == segment[-1]
+				and command[previous_token_end - len(segment[-1]) - 1:previous_token_end - len(segment[-1])] not in ("\\", "'", '"')
 				and command[previous_token_end:previous_token_end + 1] in "<>"):
 				segment.pop()
 			redirect_target = True
