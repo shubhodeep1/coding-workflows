@@ -152,6 +152,7 @@ jobs:
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           UNBLOCK_JUDGE_MODEL: ${{ vars.UNBLOCK_JUDGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           UNBLOCK_JUDGE_REASONING: ${{ vars.THINKING_LEVEL_UNBLOCK_JUDGE || 'high' }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           UNBLOCK_JUDGE_FIXUP_WAIT_HOURS: ${{ vars.UNBLOCK_JUDGE_FIXUP_WAIT_HOURS || '72' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_UNBLOCK_JUDGE: ${{ vars.AI_ENGINE_UNBLOCK_JUDGE || '' }}

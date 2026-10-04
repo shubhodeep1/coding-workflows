@@ -29,9 +29,9 @@
 # UNBLOCK_JUDGE_FIXUP_WAIT_HOURS (default 72), MOCK_UNBLOCK_JUDGE_JSON (tests
 # only: used instead of the model), MOCK_UNBLOCK_JUDGE_NOW (tests only).
 #
-# The model runs with GH_TOKEN, GITHUB_TOKEN and TG_BOT_SECRET removed from
-# its environment, and its output is data: only verdicts the ledger accepts
-# are acted on, and only through the operations unblock_actions.py plans.
+# Codex runs in a network-isolated container with a host-side provider broker;
+# its output is data, and verdicts containing literal or encoded credentials
+# are rejected before only ledger-approved operations are acted on.
 #
 # Never fails its caller: every problem is logged and the exit code is 0.
 # API budget (CLAUDE.md §15), per run: one `user` read, the item, its
@@ -590,7 +590,7 @@ ${marker_line}" >/dev/null 2>&1; then
 # no usable answer.
 unblock_ask_model()
 {
-	local prompt_file="${RUNTIME_DIR}/prompt.txt" output_file="${RUNTIME_DIR}/model_output.txt" run_id model reasoning engine rc
+	local prompt_file="${RUNTIME_DIR}/prompt.txt" output_file="${RUNTIME_DIR}/model_output.txt" run_id model reasoning engine rc iso_rc parse_rc
 	run_id="$(jq -r '[.[] | (.body // "") | scan("/actions/runs/([0-9]+)") | .[0]] | last // empty' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true)"
 	: > "${RUNTIME_DIR}/run_log_tail.txt"
 	if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
@@ -655,6 +655,11 @@ unblock_ask_model()
 	else
 		model="${UNBLOCK_JUDGE_MODEL:-${WORKFLOW_EDITOR_MODEL:-openai/gpt-6-sol}}"
 		reasoning="${UNBLOCK_JUDGE_REASONING:-high}"
+		if [[ ! "${model}" =~ ^[a-zA-Z0-9/_.-]+$ ]] || [[ ! "${reasoning}" =~ ^(xhigh|high|medium|low|none)$ ]]; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=model_failed reason=invalid_model_config"
+			echo '{}' > "${RUNTIME_DIR}/verdict_raw.json"
+			return 0
+		fi
 		engine="codex"
 		if [ -f "${SUPPORT_DIR}/scripts/ai_engine.sh" ]; then
 			# shellcheck source=/dev/null
@@ -669,17 +674,60 @@ unblock_ask_model()
 				claude_run UNBLOCK_JUDGE "${prompt_file}" "${output_file}" "${TARGET_DIR}" ) || rc=$?
 		fi
 		if [ "${rc}" -eq 75 ]; then
-			if bash "${SUPPORT_DIR}/scripts/write_codex_config.sh" --model "${model}" --reasoning "${reasoning}" >/dev/null 2>&1; then
-				(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${UNBLOCK_JUDGE_TIMEOUT_SECS:-1500}" \
-					codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check --model "${model}" --sandbox read-only \
-					< "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/codex.err") || true
+			iso_rc=0
+			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET \
+				MODEL_EDITOR="${model}" MODEL_REASONING_EFFORT="${reasoning}" \
+				CLARIFY_ISOLATION_SUPPORT_DIR="${SUPPORT_DIR}/scripts" \
+				CLARIFY_ISOLATION_TIMEOUT_SECS="${UNBLOCK_JUDGE_TIMEOUT_SECS:-1500}" \
+				bash "${SUPPORT_DIR}/scripts/clarify_isolated_run.sh" "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/codex.err" codex UNBLOCK_JUDGE) || iso_rc=$?
+			if [ "${iso_rc}" -ne 0 ]; then
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=model_failed reason=isolation_failed rc=${iso_rc}"
+				: > "${output_file}"
 			fi
 		fi
 	fi
-	if ! unblock_py - "${output_file}" > "${RUNTIME_DIR}/verdict_raw.json" <<'PY'
-import json, os, re, sys
+	parse_rc=0
+	unblock_py - "${output_file}" > "${RUNTIME_DIR}/verdict_raw.json" <<'PY' || parse_rc=$?
+import base64, json, os, re, sys, urllib.parse
 raw = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+separators = re.compile(r'''[\s\-_.:/,"']''')
+def strings(value):
+	if isinstance(value, str):
+		yield value
+	elif isinstance(value, list):
+		for item in value:
+			yield from strings(item)
+	elif isinstance(value, dict):
+		for key, item in value.items():
+			yield from strings(key)
+			yield from strings(item)
+def contains_secret(value):
+	text = "".join(strings(value))
+	compact = separators.sub("", text).lower()
+	if re.search(r"sk-or-v1-[0-9a-fA-F]{32,}|sk-or-[A-Za-z0-9_-]{20,}", text):
+		return True
+	if len(api_key) < 16:
+		return False
+	key_bytes = api_key.encode("utf-8")
+	literal_needles = {api_key, api_key[::-1], urllib.parse.quote(api_key, safe="")}
+	compact_needles = {separators.sub("", api_key).lower(), key_bytes.hex(), base64.b32encode(key_bytes).decode("ascii").rstrip("=").lower()}
+	for shift in range(3):
+		shifted = b"\0" * shift + key_bytes
+		for encode in (base64.b64encode, base64.urlsafe_b64encode):
+			encoded = encode(shifted).decode("ascii")
+			if shift == 0:
+				literal_needles.add(encoded)
+				literal_needles.add(encoded.rstrip("="))
+			else:
+				# Ignore the prefix group and incomplete tail; the middle depends
+				# entirely on credential bytes, regardless of adjacent data.
+				middle = encoded[4:(len(encoded.rstrip("=")) // 4) * 4]
+				if len(middle) >= 16:
+					literal_needles.add(middle)
+	return any(needle and needle in text for needle in literal_needles) or any(
+		len(needle) >= 16 and needle in compact for needle in compact_needles
+	)
 def redact_verdict_value(value):
 	if isinstance(value, str):
 		return value.replace(api_key, "[redacted]") if api_key else value
@@ -694,11 +742,14 @@ for start in [m.start() for m in re.finditer(r"\{", raw)]:
 	except ValueError:
 		continue
 	if isinstance(value, dict) and "verdict" in value:
+		if contains_secret(value):
+			sys.exit(3)
 		print(json.dumps(redact_verdict_value(value)))
 		sys.exit(0)
 sys.exit(1)
 PY
-	then
+	if [ "${parse_rc}" -ne 0 ]; then
+		[ "${parse_rc}" -ne 3 ] || unblock_log "item=${ITEM} outcome=skip reason=verdict_secret_rejected"
 		echo '{}' > "${RUNTIME_DIR}/verdict_raw.json"
 	fi
 	return 0
