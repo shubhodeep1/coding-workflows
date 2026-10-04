@@ -225,6 +225,20 @@ def test_broker_rejection_ignores_peer_reset_during_response(chain, monkeypatch:
 	assert _Upstream.seen == []
 
 
+def test_broker_rejection_ignores_peer_abort_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	def abort_on_write(_handler, _status):
+		raise ConnectionAbortedError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "_reject", abort_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
+	assert _Upstream.seen == []
+
+
 def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 	def refused(host, timeout=None, context=None):
 		return http.client.HTTPConnection("127.0.0.1", 9, timeout=2)
