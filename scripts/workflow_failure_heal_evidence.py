@@ -759,6 +759,7 @@ class Collector:
 		issue_number = issue.get("number")
 		if not heal.is_valid_repo_slug(issue_repo) or isinstance(issue_number, bool) or not str(issue_number).isdigit() or int(issue_number) <= 0:
 			result["reason"] = "issue_identity_invalid"
+			log("provenance outcome=unverified reason=issue_identity_invalid comments_verified=0/0")
 			return result
 		owner, name = issue_repo.split("/", 1)
 		candidates = [
@@ -1067,6 +1068,9 @@ class Collector:
 		ctx = heal_context(issue)
 		# The source marker is editable issue prose. Never let it widen GH_PAT
 		# access beyond this repo and the intake's registered consumer set.
+		# Parse source-linked runs only for the skipped index before the registry
+		# gate removes an unregistered source; this does not authorize any reads.
+		candidate_refs = trusted_run_refs(issue, comments, allowed_repos=[issue_repo, ctx["source_repo"]], limit=self.max_runs)
 		registered_repos = _load_json_lenient(os.environ.get("WORKFLOW_HEAL_CONSUMER_REGISTRY") or ".github/ai/consumer_repos.json")
 		if ctx["source_repo"] != issue_repo and (
 			not isinstance(registered_repos, list) or ctx["source_repo"] not in registered_repos
@@ -1074,8 +1078,6 @@ class Collector:
 			self._skip("source_repo", "not_registered")
 			ctx["source_repo"] = ""
 			ctx["source_number"] = ""
-		# Parse rejected references only for the skipped index; never fetch them.
-		candidate_refs = trusted_run_refs(issue, comments, allowed_repos=[issue_repo] + ([ctx["source_repo"]] if ctx["source_repo"] else []), limit=self.max_runs)
 		provenance_check = self._verify_provenance(issue, comments, issue_repo)
 		if not provenance_check["body"]:
 			self._skip("run_provenance", provenance_check["reason"])
@@ -1095,7 +1097,12 @@ class Collector:
 		verified_run_keys = {(ref["repo"], ref["run_id"]) for ref in refs}
 		for candidate_ref in candidate_refs:
 			if (candidate_ref["repo"], candidate_ref["run_id"]) not in verified_run_keys:
-				self._skip(f"run:{candidate_ref['repo']}:{candidate_ref['run_id']}", "unverified_intake_provenance")
+				reason = "unverified_intake_provenance"
+				if candidate_ref["repo"] != issue_repo and (
+					not isinstance(registered_repos, list) or candidate_ref["repo"] not in registered_repos
+				):
+					reason = "not_registered"
+				self._skip(f"run:{candidate_ref['repo']}:{candidate_ref['run_id']}", reason)
 		if not refs:
 			self._skip("runs", "no_trusted_run_links")
 		runs = []

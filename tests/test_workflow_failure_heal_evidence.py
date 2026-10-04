@@ -214,8 +214,13 @@ def test_edited_source_marker_cannot_fetch_unregistered_repository(tmp_path: Pat
 	monkeypatch.setenv("WORKFLOW_HEAL_CONSUMER_REGISTRY", str(registry))
 	issue = _issue(body=_issue()["body"].replace(REPO, "private/other"))
 	fake = FakeGh()
-	manifest = _collector(tmp_path, fake).collect(issue, [], issue_repo=REPO)
+	comment = _occurrence(222)
+	comment["body"] = comment["body"].replace(REPO, "private/other")
+	manifest = _collector(tmp_path, fake).collect(issue, [comment], issue_repo=REPO)
 	assert {"part": "source_repo", "reason": "not_registered"} in manifest["skipped"]
+	assert {"part": "run:private/other:111", "reason": "not_registered"} in manifest["skipped"]
+	assert {"part": "run:private/other:222", "reason": "not_registered"} in manifest["skipped"]
+	assert "run:private/other:111: not_registered" in (tmp_path / "evidence/INDEX.md").read_text()
 	assert not any("private/other" in path for path in fake.paths)
 	assert "no_trusted_run_links" in {item["reason"] for item in manifest["skipped"]}
 
@@ -541,6 +546,12 @@ def test_unavailable_intake_identity_skips_all_runs(tmp_path: Path) -> None:
 	manifest = _collector(tmp_path, fake).collect(_issue(), [_occurrence(222)], issue_repo=REPO)
 	assert manifest["run_provenance"]["reason"] == "intake_identity_unavailable"
 	assert "provenance" not in fake.paths and not any("/actions/jobs/" in path for path in fake.paths)
+
+
+def test_invalid_issue_identity_logs_provenance_reason(tmp_path: Path, capsys) -> None:
+	result = _collector(tmp_path, FakeGh())._verify_provenance(_issue(number=0), [], REPO)
+	assert result["reason"] == "issue_identity_invalid"
+	assert "provenance outcome=unverified reason=issue_identity_invalid comments_verified=0/0" in capsys.readouterr().err
 
 
 def test_comment_edited_by_other_does_not_suppress_body_run(tmp_path: Path) -> None:
