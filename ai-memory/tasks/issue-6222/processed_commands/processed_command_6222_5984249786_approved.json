@@ -5,13 +5,23 @@
   "entry_id": "processed_command_6222_5984249786_approved",
   "issue_number": 6222,
   "metadata": {
+    "branch": "ai/issue-6222",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".claude/commands/audit-plans.md"
+    ],
+    "issue_number": 6222,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6222",
+    "pr_number": 6227,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6227",
+    "run_attempt": "1",
+    "run_id": "37233603783",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37233603783"
   },
   "run_attempt": 1,
   "run_id": "37233603783",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-04T20:52:40Z",
+  "status": "completed",
+  "timestamp": "2026-10-04T21:06:01Z",
   "workflow": "implement"
 }
