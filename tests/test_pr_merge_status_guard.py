@@ -31,6 +31,9 @@ if not GUARD_PATH.is_file():
 	GUARD_PATH = TEMPLATE_GUARD_PATH
 if not SETTINGS_PATH.is_file():
 	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
+SESSION_START_PATH = GUARD_PATH.parent / "session-start.sh"
+if not SESSION_START_PATH.is_file():
+	SESSION_START_PATH = TEMPLATE_GUARD_PATH.parent / "session-start.sh"
 
 
 def _load_guard():
@@ -48,7 +51,7 @@ def test_resolved_session_asset_paths_exist() -> None:
 	"""The source repo may retire root session assets; template fallbacks must remain complete."""
 	assert GUARD_PATH.is_file()
 	assert SETTINGS_PATH.is_file()
-	assert (GUARD_PATH.parent / "session-start.sh").is_file()
+	assert SESSION_START_PATH.is_file()
 
 
 def _git_env() -> dict[str, str]:
@@ -230,7 +233,7 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	and the whitelist is what stops a lookalike host from aiming `gh -R` at an
 	unrelated github.com repo.
 	"""
-	session_start = GUARD_PATH.parent / "session-start.sh"
+	session_start = SESSION_START_PATH
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
