@@ -3443,6 +3443,7 @@ jobs:
             canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
               | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
               || true)"
+            unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)/' || true)"
             total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
             # Count non-.md deletions to decide whether the lenient
             # markdown-only threshold applies. Case-insensitive match so
@@ -3487,12 +3488,16 @@ jobs:
 
             # The unblock judge's one-shot override (plan Phase 7, Q12) lifts the
             # bulk-delete threshold for this run only, and never when a canonical
-            # workflow source is among the deletions.
+            # workflow source or protected automation path is among the deletions.
             unblock_bulk_override_applies="false"
             if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&
+              [ -z "${unblock_protected_deletions}" ] &&
               printf '%s\n' "${deleted_staged}" | jq -R -s -e --argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}" 'all(split("\n")[] | select(length > 0); . as $path | $paths | index($path) != null)' >/dev/null 2>&1; then
               unblock_bulk_override_applies="true"
               echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
+            fi
+            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -n "${unblock_protected_deletions}" ]; then
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths"
             fi
             if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ] && [ "${unblock_bulk_override_applies}" != "true" ]; then
               echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."

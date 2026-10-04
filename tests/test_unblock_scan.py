@@ -237,7 +237,10 @@ def test_poll_workflow_stages_the_scan_and_passes_its_knobs() -> None:
 def test_bulk_override_never_covers_canonical_deletions(path: str) -> None:
 	text = (ROOT / path).read_text(encoding="utf-8")
 	assert 'if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&' in text
+	assert 'unblock_protected_deletions="$(printf \'%s\\n\' "${deleted_staged}" | grep -iE \'^(\\.github|\\.claude|workflow-templates)/\' || true)"' in text
+	assert '[ -z "${unblock_protected_deletions}" ] &&' in text
 	assert '--argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}"' in text
+	assert 'UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths' in text
 	assert '[ "${unblock_bulk_override_applies}" != "true" ]; then' in text
 
 
