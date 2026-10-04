@@ -235,7 +235,10 @@ claude_run()
 	local tools mode
 	case "${profile}" in
 		read) tools="Read,Grep,Glob,Bash"; mode="dontAsk" ;;
-		*) tools="default"; mode="bypassPermissions" ;;
+		# An explicit list, not "default": the default set loads ~35 tools whose
+		# descriptions push a no-op start-up past the 25,000-token context gate.
+		# Keep in sync with PROFILE_TOOLS["write"] in claude_engine.py.
+		*) tools="Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch"; mode="bypassPermissions" ;;
 	esac
 
 	local rc=0

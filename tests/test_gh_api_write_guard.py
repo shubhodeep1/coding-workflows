@@ -414,6 +414,13 @@ def test_shell_rewrite_hazard_asks(name):
 	assert construct in reason
 
 
+def test_unvetted_literal_id_loop_with_shell_comment_asks():
+	command = "for r in 1; do gh api repos/o/r/issues/1; # comment\n done"
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard.DECISION_ASK
+	assert "a shell comment" in reason
+
+
 # Quoted, escaped, or mid-word forms Bash does not expand or treat as a comment.
 @pytest.mark.parametrize(
 	"command",
