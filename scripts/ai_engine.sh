@@ -205,8 +205,8 @@ claude_run()
 	model="$(_ai_engine_json_field "${resolved}" model)"
 	effort="$(_ai_engine_json_field "${resolved}" effort)"
 	profile="$(_ai_engine_json_field "${resolved}" profile)"
-	# AI_ENGINE_READ_ONLY=true narrows a write role to the read profile for
-	# one call (the review-blocked judge's verdict pass); it never widens one.
+	# Defense in depth: AI_ENGINE_READ_ONLY=true narrows even if resolve
+	# changes; an inherited value only removes tools, never grants them.
 	if [ "${AI_ENGINE_READ_ONLY:-false}" = "true" ]; then
 		profile="read"
 	fi
@@ -243,7 +243,7 @@ claude_run()
 	_ai_engine_py trust --workdir "${workdir}" || echo "::warning::claude_run: could not mark ${workdir} trusted" >&2
 	local tools mode
 	case "${profile}" in
-		read) tools="Read,Grep,Glob,Bash"; mode="dontAsk" ;;
+		read) tools="Read,Grep,Glob"; mode="dontAsk" ;;
 		# An explicit list, not "default": the default set loads ~35 tools whose
 		# descriptions push a no-op start-up past the 25,000-token context gate.
 		# Keep in sync with PROFILE_TOOLS["write"] in claude_engine.py.
