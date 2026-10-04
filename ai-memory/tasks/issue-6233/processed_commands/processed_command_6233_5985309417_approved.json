@@ -5,13 +5,29 @@
   "entry_id": "processed_command_6233_5985309417_approved",
   "issue_number": 6233,
   "metadata": {
+    "branch": "ai/issue-6233",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "README.md",
+      "changelog.d/6118-phase-7-unblock-judge.md",
+      "docs/plans/replace-claude-sessions-with-cli-engine-plan.md",
+      "prompts/_templates/mode-judge-unblock.txt",
+      "prompts/mode-judge-unblock.txt",
+      "scripts/unblock_ledger.py",
+      "tests/test_unblock_judge.py"
+    ],
+    "issue_number": 6233,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6233",
+    "pr_number": 6240,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6240",
+    "run_attempt": "1",
+    "run_id": "37241522126",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37241522126"
   },
   "run_attempt": 1,
   "run_id": "37241522126",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-04T22:52:53Z",
+  "status": "completed",
+  "timestamp": "2026-10-04T23:07:37Z",
   "workflow": "implement"
 }
