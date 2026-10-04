@@ -29,6 +29,7 @@ import socketserver
 import ssl
 import stat
 import sys
+import time
 
 MAX_BODY = 32 * 1024 * 1024
 UPSTREAM_HOST = "api.anthropic.com"
@@ -108,6 +109,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		# or (on the broker) any client authorization cross the boundary.
 		mode = self.server.mode
 		length = self.headers.get("Content-Length", "")
+		headers = forwarded_request_headers(self.headers)
 		if (
 			not PATH_RE.match(self.path)
 			or self.headers.get("Transfer-Encoding")
@@ -123,10 +125,22 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or not length.isascii()
 			or not length.isdecimal()
 			or not 0 < int(length) <= MAX_BODY
+			or headers is None
 		):
-			return self._reject(400)
-		headers = forwarded_request_headers(self.headers)
-		if headers is None:
+			# Consume only bounded, declared bodies so an early rejection does not
+			# close the socket while the client is still writing it.
+			if length.isascii() and length.isdecimal() and 0 < int(length) <= MAX_BODY:
+				rejected_deadline = time.monotonic() + 1
+				rejected_remaining = int(length)
+				try:
+					while rejected_remaining and (rejected_wait := rejected_deadline - time.monotonic()) > 0:
+						self.connection.settimeout(rejected_wait)
+						rejected_chunk = self.rfile.read1(min(rejected_remaining, 65536))
+						if not rejected_chunk:
+							break
+						rejected_remaining -= len(rejected_chunk)
+				except OSError:
+					pass
 			return self._reject(400)
 		body = self.rfile.read(int(length))
 		if len(body) != int(length):

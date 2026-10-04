@@ -178,9 +178,26 @@ def test_broker_rejects_a_model_outside_the_allow_list(chain) -> None:
 def test_broker_rejects_client_authorization(chain) -> None:
 	# A caller on the socket cannot bring its own credential.
 	connection = relay.UnixHTTPConnection(chain["socket"])
-	body = json.dumps({"model": MODEL}).encode()
+	body = json.dumps({"model": MODEL, "padding": "x" * (1024 * 1024)}).encode()
 	connection.request("POST", "/v1/messages", body, {"Content-Type": "application/json", "Authorization": "Bearer mine"})
-	assert connection.getresponse().status == 400
+	response = connection.getresponse()
+	assert response.status == 400
+	response.read()
+	connection.close()
+	assert _Upstream.seen == []
+
+
+def test_broker_rejection_does_not_wait_for_an_unfinished_body(chain) -> None:
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "1048576")
+	connection.endheaders()
+	connection.sock.settimeout(3)
+	response = connection.getresponse()
+	assert response.status == 400
+	response.read()
 	connection.close()
 	assert _Upstream.seen == []
 
