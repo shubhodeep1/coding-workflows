@@ -11,6 +11,8 @@ permissions:
   issues: write
   pull-requests: write
   actions: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 jobs:
   poll:
     # State snapshot publication is configured centrally by the called

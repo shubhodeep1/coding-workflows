@@ -1,0 +1,13 @@
+# claude-pool-broker: hands the Claude account pool to trusted Actions jobs
+# (docs/plans/replace-claude-sessions-with-cli-engine-plan.md, Phase 4).
+# Account: FT_GAMES_CF (CLAUDE.md §24). Route: workers.dev only.
+# The CLAUDE_POOL_TOKENS secret is written only by
+# shubhodeep1/claude-workers' claude-pool-key-sync.yml, never here.
+name = "claude-pool-broker"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+PROBE_MODEL = "claude-haiku-4-5-20251001"
+GATE = "0.9"

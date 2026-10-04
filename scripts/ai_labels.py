@@ -109,6 +109,19 @@ def load_label_contract(path: Path) -> dict[str, Any]:
             if fallback_value not in members:
                 raise LabelContractError(f"Phase group fallback must be a member: {fallback_value}")
 
+    retired_labels = payload.get("retired_labels", [])
+    if not isinstance(retired_labels, list):
+        raise LabelContractError("retired_labels must be an array when present")
+    seen_retired: set[str] = set()
+    for retired_label in retired_labels:
+        if not isinstance(retired_label, str) or not retired_label.strip() or retired_label != retired_label.strip():
+            raise LabelContractError(f"retired_labels entries must be non-empty trimmed strings: {retired_label!r}")
+        if retired_label in labels:
+            raise LabelContractError(f"Label is both declared and retired: {retired_label}")
+        if retired_label in seen_retired:
+            raise LabelContractError(f"Duplicate retired label: {retired_label}")
+        seen_retired.add(retired_label)
+
     return payload
 
 
@@ -655,14 +668,87 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
             dry_run=False,
         )
 
+    label_error_count = len(errors)
+    deleted_count = _delete_retired_labels(contract, repo=repo, dry_run=dry_run, errors=errors)
+
     output = {
         "created": created_count,
         "updated": updated_count,
         "unchanged": unchanged_count,
+        "deleted": deleted_count,
         "errors": errors,
     }
     _print_json(output)
-    return 1 if label_items and len(errors) == len(label_items) else 0
+    return 1 if label_items and label_error_count == len(label_items) else 0
+
+
+def _delete_retired_labels(
+    contract: dict[str, Any],
+    *,
+    repo: str,
+    dry_run: bool,
+    errors: list[dict[str, Any]],
+) -> int:
+    """Delete the contract's ``retired_labels`` from ``repo`` when present.
+
+    Input: the loaded label contract (``retired_labels`` is an optional list of
+    label names that are no longer used and are reserved, never re-declared).
+    Output: the number of labels deleted (or, with ``dry_run``, that would be
+    deleted); failures are appended to ``errors`` and never abort the sync.
+    API calls (CLAUDE.md §15): one ``DELETE`` per retired label, where a 404
+    means the label is already gone; ``dry_run`` issues one read-only ``GET``
+    per retired label instead. Logs ``LABEL_SYNC_DELETED`` /
+    ``LABEL_SYNC_RETIRED_ABSENT`` per label.
+    """
+    deleted_count = 0
+    for label_name in contract.get("retired_labels", []):
+        label_path = _github_label_path(repo, label_name)
+        try:
+            if dry_run:
+                _github_api_request(label_path)
+            else:
+                _github_api_request(label_path, method="DELETE", require_token=True)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                _log_label_sync(
+                    "LABEL_SYNC_RETIRED_ABSENT",
+                    repo=repo,
+                    label_name=label_name,
+                    action="delete",
+                    dry_run=dry_run,
+                )
+                continue
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="delete",
+                dry_run=dry_run,
+                message=_http_error_message(exc),
+                status=exc.code,
+            )
+            continue
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="delete",
+                dry_run=dry_run,
+                message=str(exc),
+            )
+            continue
+        deleted_count += 1
+        _log_label_sync(
+            "LABEL_SYNC_DELETED",
+            repo=repo,
+            label_name=label_name,
+            action="delete",
+            dry_run=dry_run,
+        )
+    return deleted_count
 
 
 def build_parser() -> argparse.ArgumentParser:
