@@ -626,6 +626,7 @@ def _run_restore_same_head_resume_step(
 		env=_git_clean_env({
 			"GITHUB_ENV": str(github_env_file),
 			"PR_NUMBER": pr_number,
+			"RETARGETED_BASE_REF": "main",
 			"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
 			"PREVIOUS_REVIEWS_DIR": str(effective_reviews_dir),
 			"RUNTIME_DIR": str(effective_runtime_dir),
@@ -2427,6 +2428,7 @@ def _run_restore_same_head_resume_harness(
 
 		for marker in markers:
 			payload = dict(marker)
+			payload.setdefault("base_ref", "main")
 			if payload.get("head_sha") == "__HEAD__":
 				payload["head_sha"] = head_sha
 			round_value = int(payload["resume_round"])
@@ -2546,6 +2548,7 @@ def _run_partial_finalize_step(
 			"GITHUB_ENV": str(github_env_file),
 			"GH_TOKEN": "test-token",
 			"PR_NUMBER": "123",
+			"RETARGETED_BASE_REF": "main",
 			"RUNTIME_DIR": str(runtime),
 			"PREVIOUS_REVIEWS_DIR": str(reviews),
 			"EDITOR_SUMMARY_FILE": str(editor_summary),
@@ -6454,6 +6457,8 @@ def test_review_partial_finalize_marker_sets_no_progress_terminal_state() -> Non
 		second = _run_partial_finalize_step(context, previous_env=first["github_env"])
 
 	assert first["github_env"]["AUTOFIX_RESUME_STATE"] == "resumable"
+	assert first["marker_payload"]["base_ref"] == "main"
+	assert "base_ref=main" in first["latest_comment"]
 	assert first["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "true"
 	assert second["github_env"]["AUTOFIX_RESUME_ROUND"] == "2"
 	assert second["github_env"]["AUTOFIX_RESUME_STATE"] == "no_progress"
@@ -7976,6 +7981,7 @@ def main() -> int:
 	test_stage_step_model_catalog_backfill_fails_open()
 	test_review_isolation_wiring_and_model_relay()
 	test_review_isolation_workspace_transfer_and_hostile_paths()
+	test_review_isolation_transfer_failure_evidence()
 	test_review_isolation_traverses_only_allowed_github_directories()
 	test_review_isolation_transfers_into_active_work_tree()
 	test_review_relay_accepts_only_configured_chat_model()
@@ -8058,6 +8064,10 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	assert '--env OPENROUTER_API_KEY=isolated-placeholder' in helper
 	assert 'review_untrusted_workspace.py" transfer' in helper
 	assert ': > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"' in helper
+	assert '2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"' in helper
+	assert helper.count('2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"') == 2
+	assert 'rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"' in helper
+	assert 'rm -f "${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"' in _apply_fixes_text()
 	assert 'if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then' in _apply_fixes_text()
 	assert 'review_sandbox/Dockerfile' in stage
 	assert '"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in _workflow_text()
@@ -8111,13 +8121,61 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		# A later retry has an updated baseline; a concurrent host edit does not.
 		(host / "scripts/app.py").write_text("host changed\n")
 		(source / "scripts/app.py").write_text("isolated changed\n")
-		assert run("transfer").returncode != 0
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
 		assert (host / "scripts/app.py").read_text() == "host changed\n"
 		(host / "scripts/app.py").write_text("after\n")
 		(source / "scripts/new.py").unlink()
 		(source / "scripts/new.py").symlink_to("/etc/passwd")
-		assert run("transfer").returncode != 0
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=symlink_path\n"
 		assert (host / "scripts/new.py").read_text() == "new\n"
+
+
+def test_review_isolation_transfer_failure_evidence() -> None:
+	apply_fixes = _apply_fixes_text()
+	start = '  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then'
+	# Execute the actual early-exit block, not a reimplementation of its parsing.
+	block = start + apply_fixes.split(start, 1)[1].split("\n  fi\n", 1)[0] + "\n  fi\n"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		archive = root / "previous_reviews"
+		archive.mkdir()
+		(root / "review_sandbox_transfer_failed").touch()
+		attempt_output = root / "attempt-output"
+		attempt_err = root / "attempt-stderr"
+		reason_file = root / f"review_sandbox_transfer_reason_{attempt_output.name}"
+		old_reason = root / "review_sandbox_transfer_reason_previous-attempt"
+		old_reason.write_text("::error::Review isolation snapshot or transfer rejected (ValueError) reason=symlink_path\n")
+		base_env = {**os.environ, "RUNTIME_DIR": str(root), "PREVIOUS_REVIEWS_DIR": str(archive),
+			"attempt": "2", "tmp_output": str(attempt_output), "tmp_err": str(attempt_err)}
+		valid_reason = "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
+		for diagnostic, expected in (
+			(valid_reason, "host_baseline_changed"),
+			(None, "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=forged\n", "unknown"),
+			(valid_reason + "secret second line\n", "unknown"),
+			("untrusted contents " * 100, "unknown"),
+		):
+			attempt_err.write_text("existing editor stderr\n")
+			if diagnostic is None:
+				reason_file.unlink(missing_ok=True)
+			else:
+				reason_file.write_text(diagnostic)
+			result = subprocess.run(["bash", "-c", "set -eu\n" + block], env=base_env,
+				capture_output=True, text=True, check=False)
+			assert result.returncode == 1
+			assert (root / "review_sandbox_transfer_failed").exists()
+			assert result.stderr == f"::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason={expected}\n"
+			assert (archive / "editor_attempt_2.err").read_text() == "existing editor stderr\n" + result.stderr
+			assert "secret" not in result.stderr
+		# A successful transfer removes the marker, so even a stale reason is ignored.
+		(root / "review_sandbox_transfer_failed").unlink()
+		result = subprocess.run(["bash", "-c", "set -eu\n" + block], env=base_env,
+			capture_output=True, text=True, check=False)
+		assert result.returncode == 0 and not result.stderr
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:

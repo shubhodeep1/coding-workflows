@@ -222,7 +222,7 @@ if [ "${engine}" = claude ]; then
 					--setting-sources "" --settings /settings.json \
 					--strict-mcp-config --disable-slash-commands \
 					--exclude-dynamic-system-prompt-sections \
-					--tools default --permission-mode bypassPermissions \
+					--tools Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch --permission-mode bypassPermissions \
 					--output-format stream-json --verbose < /prompt
 			' > "${root}/transcript.jsonl" || run_rc=$?
 		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
@@ -247,7 +247,7 @@ if [ "${engine}" = claude ]; then
 	# Never transfer on a failed model invocation or a swapped host baseline.
 	if [ "${rc}" -eq 0 ]; then
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
-		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json"; then
+		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json" 2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"; then
 			rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"
 		else
 			rc=1
@@ -327,7 +327,8 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}"
 		# The marker survives a killed/incomplete transfer. The editor wrapper
 		# fails the step instead of treating a partial host edit as a retry.
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
-		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json"; then
+		# Only the trusted transfer helper writes this attempt-scoped diagnostic.
+		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json" 2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"; then
 			rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"
 		else
 			rc=1

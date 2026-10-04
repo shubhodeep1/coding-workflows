@@ -107,6 +107,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/assemble_changelog.py` — Fold per-PR changelog.d fragments into CHANGELOG.md (Keep a Changelog or date-heading layout) and manage the .gitattributes union backstop.
 - `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
+- `scripts/auto_decisions.py` — Parse RECOMMENDED clarify answers and keep the standalone auto-decisions (AD) comment and PR-body section (port P3).
 - `scripts/auto_release_stable.sh` — Dispatch the release gate when the stable branch is ahead of its tag.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
@@ -200,6 +201,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/render_validation_templates.py` — Render validation harness templates from a slot manifest.
 - `scripts/repo_root.py` — Resolve the repository root from scripts and tests.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
+- `scripts/retarget_merged_base.sh` — Retarget work stacked on a branch whose own PR already merged to that PR's base (port P6).
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
 - `scripts/review_autofix_step_changes_lost_redispatch.sh` — body of the review_autofix.yml "Re-dispatch review on editor-changes-lost" step (sourced by the step): re-dispatches one review run per head from the default branch, bounded by `autofix_changes_lost_head_retry_consumed` (issue #4898).

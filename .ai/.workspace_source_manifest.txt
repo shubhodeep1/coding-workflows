@@ -187,6 +187,7 @@ changelog.d/4891-gh-api-guard-deny-jq-cli-options.md
 changelog.d/4948-protected-path-twin-first-default.md
 changelog.d/4990-pickup-throughput.md
 changelog.d/5110-reviewer-loop-guards-gpt-6-luna.md
+changelog.d/5144-worktree-merge-guard.md
 changelog.d/5293-unchained-git-sync-calls.md
 changelog.d/5495-gh-retry-stdout-isolation.md
 changelog.d/5627-resolver-private-model-index.md

@@ -106,7 +106,7 @@ def env(tmp_path: Path):
 	values = {
 		key: value
 		for key, value in os.environ.items()
-		if not key.startswith(("CLAUDE_", "ACTIONS_ID_TOKEN", "GITHUB_OUTPUT")) and key.lower() not in ("http_proxy", "https_proxy", "all_proxy")
+		if not key.startswith(("CLAUDE_", "ACTIONS_ID_TOKEN", "GITHUB_OUTPUT")) and key != "GITHUB_ACTIONS" and key.lower() not in ("http_proxy", "https_proxy", "all_proxy")
 	}
 	values.update(
 		{

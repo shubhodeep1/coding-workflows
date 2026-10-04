@@ -221,7 +221,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -372,6 +372,7 @@ jobs:
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
+            echo "ISSUE_ALL_COMMENTS_FILE=${RUNTIME_DIR}/issue_all_comments.json"
             echo "ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/issue_context.txt"
             echo "THREAD_HISTORY_FILE=${RUNTIME_DIR}/thread_history.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
@@ -525,13 +526,17 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          # Keep clarify prompt context bounded to preserve historical behavior.
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+          # Reuse the full comment snapshot for auto-decisions and the backup
+          # loop guard; only the first 50 enter the clarify prompt.
+          gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" > "${RUNTIME_DIR}/issue_comment_pages.json"
+          jq -e 'if type == "array" and all(.[]; type == "array") then add // [] else error("invalid comment pages") end' \
+            "${RUNTIME_DIR}/issue_comment_pages.json" > "${ISSUE_ALL_COMMENTS_FILE}"
+          jq '.[0:50]' "${ISSUE_ALL_COMMENTS_FILE}" > "${ISSUE_COMMENTS_FILE}"
 
           # Build full thread history only when semantic cache is enabled.
           if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
-            if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
-              | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+            if ! jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' \
+              "${ISSUE_ALL_COMMENTS_FILE}" > "${THREAD_HISTORY_FILE}"; then
               echo "::warning::Semantic cache thread-history fetch failed; forcing cache bypass for this run (fail-open)"
               MAX_CHARS="${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}"
               if [[ "${MAX_CHARS}" =~ ^[0-9]+$ ]]; then
@@ -1207,6 +1212,7 @@ jobs:
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "CRITICAL"
 
       - name: Post clarification questions
+        id: post_questions
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1225,8 +1231,99 @@ jobs:
             echo "/answer"
           } > "${RUNTIME_DIR}/clarification_comment.md"
 
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")"
+          CLARIFICATION_POST_RESPONSE="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")")"
+          printf '%s\n' "${CLARIFICATION_POST_RESPONSE}"
+          # The standalone auto-decide step below answers this comment.
+          cp "${RUNTIME_DIR}/clarification_comment.md" "${RUNTIME_DIR}/clarification_comment.txt"
+          echo "comment_id=$(printf '%s' "${CLARIFICATION_POST_RESPONSE}" | jq -r '.id // 0' 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+
+      - name: Standalone auto-decide
+        # Port P3 (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
+        # Phase 8b): a standalone issue's questions are answered at once with
+        # each question's RECOMMENDED option, through the orchestrator's answer
+        # poster (scripts/orchestrate_parse_and_post_answer.sh, which keeps its
+        # clarify loop guard and ai:blocked escalation), and every pick is
+        # recorded as an AD-<n> entry in one <!-- ai:auto-decisions:v1 -->
+        # comment that implement.yml repeats in the PR body. Skipped for
+        # orchestrator-managed issues (their fast path answers), for a human
+        # /reclarify (the human asked to answer), when any question has no
+        # RECOMMENDED option, and when STANDALONE_AUTO_DECIDE_ENABLED=false.
+        # The 60-minute stall-ladder auto-answer stays as the backstop. Never
+        # fails the run.
+        if: steps.post_questions.outcome == 'success' && steps.clarify_route.outputs.is_orchestrator_managed != 'true' && steps.clarify_route.outputs.is_forced_reclarify != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          STANDALONE_AUTO_DECIDE_ENABLED: ${{ vars.STANDALONE_AUTO_DECIDE_ENABLED || 'true' }}
+          ORCHESTRATOR_MAX_CLARIFY_CYCLES: ${{ vars.ORCHESTRATOR_MAX_CLARIFY_CYCLES || '3' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          AUTO_DECIDE_CLARIFICATION_COMMENT_ID: ${{ steps.post_questions.outputs.comment_id }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          if [ "${STANDALONE_AUTO_DECIDE_ENABLED}" = "false" ]; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=disabled"
+            exit 0
+          fi
+          if ! [[ "${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=no_question_comment_id"
+            exit 0
+          fi
+          AUTO_DECIDE_FILE="${RUNTIME_DIR}/auto_decisions.json"
+          if ! python3 scripts/auto_decisions.py parse --questions-file "${QUESTIONS_FILE}" > "${AUTO_DECIDE_FILE}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=parse_failed"
+            exit 0
+          fi
+          AUTO_DECIDE_COUNT="$(jq -r '.decisions | length' "${AUTO_DECIDE_FILE}")"
+          AUTO_DECIDE_UNDECIDED="$(jq -r '.undecided | join(",")' "${AUTO_DECIDE_FILE}")"
+          if [ "${AUTO_DECIDE_COUNT}" -eq 0 ] || [ -n "${AUTO_DECIDE_UNDECIDED}" ]; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=undecided_questions decisions=${AUTO_DECIDE_COUNT} undecided=${AUTO_DECIDE_UNDECIDED:-none}"
+            exit 0
+          fi
+          AUTO_DECIDE_ANSWERS_FILE="${RUNTIME_DIR}/auto_decide_answers.txt"
+          jq -r '.answers' "${AUTO_DECIDE_FILE}" > "${AUTO_DECIDE_ANSWERS_FILE}"
+          AUTO_DECIDE_THREAD_HISTORY_FILE="${RUNTIME_DIR}/auto_decide_thread_history.txt"
+          if ! jq -r '.[] | select((.body // "") | startswith("/answer [auto-answered-by-orchestrator]")) | .body' \
+            "${ISSUE_ALL_COMMENTS_FILE}" > "${AUTO_DECIDE_THREAD_HISTORY_FILE}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=comment_history_unavailable"
+            exit 0
+          fi
+          AUTO_DECIDE_POST_LOG="${RUNTIME_DIR}/auto_decide_post.log"
+          if ! CODEX_OUTPUT_FILE="${AUTO_DECIDE_ANSWERS_FILE}" \
+            CLARIFICATION_COMMENT_ID="${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" \
+            THREAD_HISTORY_FILE="${AUTO_DECIDE_THREAD_HISTORY_FILE}" \
+            ISSUE_TITLE="${ISSUE_TITLE:-}" \
+            bash scripts/orchestrate_parse_and_post_answer.sh 2>&1 | tee "${AUTO_DECIDE_POST_LOG}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=failed reason=answer_poster_failed"
+            exit 0
+          fi
+          if ! grep -q "^Posted auto-answer on issue #${ISSUE_NUMBER}$" "${AUTO_DECIDE_POST_LOG}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=answer_not_posted decisions=${AUTO_DECIDE_COUNT}"
+            exit 0
+          fi
+          AUTO_DECIDE_RENDER_FILE="${RUNTIME_DIR}/auto_decisions_comment.json"
+          if ! python3 scripts/auto_decisions.py render --comments-file "${ISSUE_ALL_COMMENTS_FILE}" \
+            --decisions-file "${AUTO_DECIDE_FILE}" \
+            --source "clarify comment ${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" > "${AUTO_DECIDE_RENDER_FILE}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered reason=ad_render_failed decisions=${AUTO_DECIDE_COUNT}"
+            exit 0
+          fi
+          AUTO_DECIDE_EXISTING_ID="$(jq -r '.comment_id // empty' "${AUTO_DECIDE_RENDER_FILE}")"
+          if [[ "${AUTO_DECIDE_EXISTING_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${AUTO_DECIDE_EXISTING_ID}" \
+              -f body="$(jq -r '.body' "${AUTO_DECIDE_RENDER_FILE}")" >/dev/null \
+              || echo "::warning::Could not update the auto-decisions comment ${AUTO_DECIDE_EXISTING_ID} on issue #${ISSUE_NUMBER}"
+          else
+            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+              -f body="$(jq -r '.body' "${AUTO_DECIDE_RENDER_FILE}")" >/dev/null \
+              || echo "::warning::Could not post the auto-decisions comment on issue #${ISSUE_NUMBER}"
+          fi
+          echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decisions=${AUTO_DECIDE_COUNT} ad_total=$(jq -r '.total' "${AUTO_DECIDE_RENDER_FILE}")"
 
       - name: Record clarification candidate (needs clarification)
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
