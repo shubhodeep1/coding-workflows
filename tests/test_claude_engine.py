@@ -55,14 +55,18 @@ def _jsonl(*events: dict) -> str:
 
 # --- config ------------------------------------------------------------------
 
+# Roles whose checked-in default is Claude, by cutover phase.
+CUTOVER_ROLES = {"CLARIFY", "CLARIFY_RESPOND", "PLAN"}  # Phase 5a
+
 
 def test_checked_in_config_is_valid_and_inert() -> None:
 	raw = json.loads(CONFIG.read_text(encoding="utf-8"))
 	config, invalid = ce.normalize_config(raw)
 	assert invalid == []
 	assert set(config["role_defaults"]) == set(ce.ROLES)
-	# Phase 3 is inert: no role defaults to Claude yet.
-	assert {fields["engine"] for fields in config["role_defaults"].values()} == {"codex"}
+	# Roles move to Claude only in their own cutover phase (plan Phase 5a-5d).
+	on_claude = {role for role, fields in config["role_defaults"].items() if fields["engine"] == "claude"}
+	assert on_claude == CUTOVER_ROLES
 	assert config["broker_url"] == "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool"
 	assert config["gate_utilization"] == 0.9
 	assert config["probe_model"] == "claude-haiku-4-5-20251001"
@@ -70,10 +74,14 @@ def test_checked_in_config_is_valid_and_inert() -> None:
 
 
 def test_checked_in_config_matches_code_defaults() -> None:
-	# Only the broker URL differs: a missing config file means no broker.
+	# Only the broker URL and the cut-over roles' engine differ: a missing
+	# config file means no broker and every role on codex.
 	raw = json.loads(CONFIG.read_text(encoding="utf-8"))
 	config, _ = ce.normalize_config(raw)
-	assert {**config, "broker_url": ""} == ce.DEFAULT_CONFIG
+	expected = json.loads(json.dumps(ce.DEFAULT_CONFIG))
+	for role in CUTOVER_ROLES:
+		expected["role_defaults"][role]["engine"] = "claude"
+	assert {**config, "broker_url": ""} == expected
 
 
 @pytest.mark.parametrize(
