@@ -434,7 +434,7 @@ def openrouter_key_status(api_key: str | None, *, opener: Callable[..., Any] | N
 	request = urllib.request.Request("https://openrouter.ai/api/v1/key", headers={"Authorization": f"Bearer {api_key}"})
 	try:
 		with (opener or urllib.request.urlopen)(request, timeout=10) as response:
-			data = json.loads(response.read().decode("utf-8"))
+			data = json.loads(response.read(65536).decode("utf-8"))
 	except (urllib.error.URLError, OSError, ValueError, UnicodeError) as exc:
 		return {"available": False, "reason": type(exc).__name__}
 	info = data.get("data") if isinstance(data, dict) else None

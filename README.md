@@ -1043,9 +1043,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`hooks/pr_watch_guard.py`, §25). The former post-push PR status check-in
 > reminder, the permission-prompt logger and their helper scripts were retired
 > (see the retired-files paragraph below). Nothing to configure in the
-> consumer. The merged-PR guard conservatively checks numeric branch refspecs
-> before output redirects instead of dropping them as possible file descriptors;
-> an ambiguous `git push origin 2>/dev/null` may check branch `2` as well.
+> consumer. The merged-PR guard distinguishes `git push origin 2>/dev/null`
+> (stderr redirection, check the current branch) from `git push origin 2 > /dev/null`
+> (push branch `2`, redirect stdout).
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest

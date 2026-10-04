@@ -240,10 +240,10 @@ ubiquitous `grep` instead of `rg` so runner images without ripgrep still fail
 only on real policy drift.
 
 The consumer merged-PR hook (`workflow-templates/.claude/hooks/pr_merge_status_guard.py`)
-retains numeric tokens before redirections as possible push refspecs: shell
-tokenization cannot distinguish `git push origin 2 > /dev/null` from a numeric
-file-descriptor prefix after discarding whitespace. Ambiguous redirects can
-cause an extra branch lookup; they must not hide a push to merged history.
+checks an adjacent unquoted numeric token before `>` as a file descriptor
+(`git push origin 2>/dev/null` still checks the current branch); a separated
+or quoted number is a push refspec (`git push origin 2 > /dev/null` checks
+branch `2`).
 
 The `gh api` permission guard in `.claude/hooks/gh_api_write_guard.py` and
 its `workflow-templates/` twin exempts an unquoted literal-ID loop counter

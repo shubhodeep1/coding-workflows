@@ -260,13 +260,18 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
+	previous_token_end = -1
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			# shlex cannot distinguish an fd prefix from a numeric refspec
-			# followed by whitespace; retain it for a conservative branch check.
+			# A bare digit immediately adjacent to the redirect is an fd, not
+			# a push refspec. A separated or quoted digit is a real argument.
+			if (segment and segment[-1].isascii() and segment[-1].isdigit()
+				and command[previous_token_end - len(segment[-1]):previous_token_end] == segment[-1]
+				and command[previous_token_end:previous_token_end + 1] in "<>"):
+				segment.pop()
 			redirect_target = True
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
@@ -276,6 +281,7 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			operator = token
 		else:
 			segment.append(token)
+			previous_token_end = lexer.instream.tell() - 1
 	if segment:
 		result.append((operator, segment))
 	return result

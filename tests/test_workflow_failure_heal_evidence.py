@@ -610,6 +610,9 @@ def test_openrouter_status_reports_numbers_only() -> None:
 	assert status == {"available": True, "limit": 10, "usage": 3, "limit_remaining": 7, "is_free_tier": False}
 	assert seen["auth"] == "Bearer sk-test"
 	assert ev.openrouter_key_status("") == {"available": False, "reason": "no_key"}
+	large_response = Response(b"x" * 100_000)
+	assert ev.openrouter_key_status("sk-test", opener=lambda _request, timeout=None: large_response) == {"available": False, "reason": "JSONDecodeError"}
+	assert large_response.tell() == 65536
 
 
 # ---------------------------------------------------------------------------

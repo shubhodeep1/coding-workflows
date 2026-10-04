@@ -954,6 +954,48 @@ def test_numeric_push_refspec_before_redirect_is_not_lost(merged_branch_repo, mo
 	assert lookups == ["2"]
 
 
+@pytest.mark.parametrize("redirect", ["2>/dev/null", "2>&1", "2> /dev/null"])
+def test_fd_redirect_checks_current_push_branch(merged_branch_repo, monkeypatch, redirect: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "2", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"git push origin {redirect}"}})
+	assert code == 2, message
+	assert lookups == ["feature/x"]
+
+
+def test_quoted_numeric_refspec_before_redirect_is_preserved(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "2", "feature/x")
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "2" else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": 'git push origin "2">/dev/null'}})
+	assert code == 2, message
+	assert lookups == ["2"]
+
+
+def test_non_ascii_digit_is_not_a_file_descriptor() -> None:
+	assert guard._shell_segments_with_operators("git push origin ²>/dev/null") == [
+		("", ["git", "push", "origin", "²"]),
+	]
+
+
 def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	worktree = repo.parent / "other"
