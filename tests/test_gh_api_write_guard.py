@@ -663,10 +663,6 @@ READ_LOOP_UNVETTED = [
 	"for r in 1 *; do gh run view $r; done",
 	"for r in '1' 2; do gh run view $r; done",
 	"for r in 1; do gh run view $r --json $FIELDS; done",
-	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs -X GET -f per_page=$r; done",
-	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs?per_page=$r; done",
-	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs > result.json; done",
-	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs; python3 -c 'print(1)'; done",
 	"for r in 1; do for x in 2; do gh run view $x; done; done",
 	"while true; do gh api repos/o/r/issues; done",
 	"echo start; for r in 1; do gh run view $r; done",
@@ -675,7 +671,6 @@ READ_LOOP_UNVETTED = [
 	"for r in 1; do gh pr view $r --unknown; done",
 	"for r in 1; do gh run view $(echo $r); done",
 	"for r in 1; do gh run view prefix$r; done",
-	"for r in 1; do gh api $r/repos/o/r/issues; done",
 	"for PATH in 1; do gh run view $PATH; done",
 	"for https_proxy in 1; do gh run view $https_proxy; done",
 	"for r in -1; do gh run view $r; done",
@@ -686,6 +681,17 @@ READ_LOOP_UNVETTED = [
 @pytest.mark.parametrize("command", READ_LOOP_UNVETTED)
 def test_unvetted_loop_keeps_no_decision(command):
 	assert _decide(command) is None
+
+
+@pytest.mark.parametrize("command", [
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs -X GET -f per_page=$r; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs?per_page=$r; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs > result.json; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs; python3 -c 'print(1)'; done",
+	"for r in 1; do gh api $r/repos/o/r/issues; done",
+])
+def test_unvetted_loop_with_unquoted_api_expansion_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
 
 
 def test_expanded_file_field_in_loop_still_asks():

@@ -4899,6 +4899,11 @@ jobs:
             fi
             if [ -n "${EXISTING_PR}" ]; then
               echo "Found existing PR: ${EXISTING_PR}"
+              if [ -n "${PR_ENGINE_LABEL:-}" ] && ! gh_retry gh pr edit "${EXISTING_PR}" \
+                  --repo "${{ github.repository }}" --add-label "${PR_ENGINE_LABEL}"; then
+                echo "::error::Could not copy the issue's engine label to existing PR ${EXISTING_PR}"
+                exit 1
+              fi
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
               exit 0
             fi

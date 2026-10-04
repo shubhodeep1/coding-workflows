@@ -1869,7 +1869,7 @@ uses it yet, and the role cutovers switch the defaults one group at a time.
 
 | Piece | What it does |
 |---|---|
-| `.github/ai/claude_engine.json` | Pinned CLI version (`cli_version`), token broker URL (empty until the broker ships), OIDC audience, usage gate (`0.9`), probe model, and per-role `engine` / `claude_model` / `profile` defaults. Read only from the trusted support checkout; a missing file means every role on codex. |
+| `.github/ai/claude_engine.json` | Pinned CLI version (`cli_version`), deployed token broker URL, OIDC audience, usage gate (`0.9`), probe model, and per-role `engine` / `claude_model` / `profile` defaults. Read only from the trusted support checkout; a missing file means every role on codex. |
 | `scripts/ai_engine.sh` | Sourced by call sites. `ai_engine_for_role <ROLE>` prints `codex` or `claude` and logs `AI_ENGINE_SELECTED role= engine= model= effort= source=`. `claude_run <ROLE> <prompt> <out> <workdir> [session_id]` runs the CLI and writes the final answer to `<out>`, the file the codex path writes. |
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
@@ -1896,11 +1896,15 @@ input (`claude` or `codex`; empty leaves the project unlabelled), and the
 orchestrator puts the matching label (`ai:engine-claude` or `ai:codex`) on
 the tracking issue and the wave-1 issues it creates. The poller copies the
 tracking issue's engine label onto every issue and PR it creates later, and
-`implement.yml` copies an issue's engine label onto its PR, so every role of
-the project reads the same label from its own event payload. When both labels
-are present, `ai:codex` is copied. `/implement-plan-claude` dispatches with
+`implement.yml` copies an issue's engine label onto its PR. The separate
+role cutovers must pass work-item labels into engine selection; today the
+labels do not select a production engine. When both labels are
+present, `ai:codex` is copied. `/implement-plan-claude` dispatches with
 `engine=claude`; against a wrapper that has no `engine` input yet it
-dispatches without it and labels the tracking issue instead.
+dispatches without it and labels the tracking issue instead. Wave-1 issues
+created before that later label write do not inherit it. If `implement.yml`
+reuses an existing open PR after a create race, it also applies the issue's
+engine label before reporting that PR; a label-write failure stops the run.
 
 **Model and effort.** A role keeps its existing model variable when the value
 starts with `claude-`; otherwise it uses Opus 5.5 (`claude-opus-5-5`), or
@@ -1933,7 +1937,9 @@ credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
 `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
-it back afterwards.
+it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
+file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
+and reports that path instead of overwriting the new content.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in
@@ -1962,6 +1968,9 @@ the job runs codex (D1). The `ai-*.yml` wrapper templates and the
 `internal-*.yml` callers of the Claude-hosting reusable workflows grant
 `id-token: write`; consumers whose sync is stale fall back to codex until
 their next `@stable` sync.
+The token action accepts only the deployed broker URL in Actions jobs and
+only removes pool directories immediately under `$RUNNER_TEMP`; a rejected
+URL or unsafe directory returns `available=false` without minting an OIDC token.
 
 ## Project Orchestrator
 

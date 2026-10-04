@@ -37,19 +37,23 @@ probe_enabled="${CLAUDE_POOL_PROBE:-true}"
 probe_timeout="${CLAUDE_POOL_PROBE_TIMEOUT_SECS:-120}"
 [[ "${probe_timeout}" =~ ^[0-9]+$ ]] && [ "${probe_timeout}" -gt 0 ] || probe_timeout=120
 output_file="${GITHUB_OUTPUT:-/dev/null}"
-# The pool directory is removed on every failure: only ever a dedicated,
-# absolute `…/claude-pool*` directory, never a parent or a relative path.
+# The pool directory is removed on failure only under the runner's temp root.
+case "${RUNNER_TEMP:-/tmp}:${pool_dir}" in
+	/*:/*) ;;
+	*) printf 'available=false\nreason=pool_dir_invalid\naccounts=0\npool_dir=%s\n' "${pool_dir}" >> "${output_file}"; exit 0 ;;
+esac
 case "${pool_dir}" in
-	/*/claude-pool|/*/claude-pool-*) ;;
+	"${RUNNER_TEMP:-/tmp}"/claude-pool|"${RUNNER_TEMP:-/tmp}"/claude-pool-*) ;;
 	*)
 		echo "::error::claude_pool_token.sh: CLAUDE_ENGINE_POOL_DIR must be an absolute …/claude-pool directory" >&2
-		echo "available=false" >> "${output_file}"
-		echo "reason=pool_dir_invalid" >> "${output_file}"
+		printf 'available=false\nreason=pool_dir_invalid\naccounts=0\npool_dir=%s\n' "${pool_dir}" >> "${output_file}"
 		exit 0
 		;;
 esac
 case "${pool_dir}" in
-	*/../*|*/./*|*/..|*/.) echo "available=false" >> "${output_file}"; echo "reason=pool_dir_invalid" >> "${output_file}"; exit 0 ;;
+	*/../*|*/./*|*/..|*/.|"${RUNNER_TEMP:-/tmp}"/claude-pool-*/*)
+		printf 'available=false\nreason=pool_dir_invalid\naccounts=0\npool_dir=%s\n' "${pool_dir}" >> "${output_file}"
+		exit 0 ;;
 esac
 
 engine_py()
@@ -67,14 +71,17 @@ finish()
 		echo "accounts=${count}"
 		echo "pool_dir=${pool_dir}"
 	} >> "${output_file}"
-	if [ "${available}" != "true" ]; then
+	if [ "${available}" != "true" ] && [ ! -L "${pool_dir}" ]; then
 		rm -rf -- "${pool_dir}"
 	fi
 	exit 0
 }
 
+[ ! -L "${pool_dir}" ] || finish false pool_dir_invalid
 [ -f "${config}" ] || finish false config_missing
 broker_url="$(engine_py config --config "${config}" --key broker_url 2>/dev/null)" || finish false config_invalid
+[ -z "${broker_url}" ] || [[ "${broker_url}" =~ ^https://claude-pool-broker\.shubhodeep\.workers\.dev/v1/pool$|^http://(127\.0\.0\.1|localhost)(:[0-9]{1,5})?/v1/pool$ ]] || finish false broker_url_invalid
+[ "${GITHUB_ACTIONS:-false}" != true ] || [ -z "${broker_url}" ] || [[ "${broker_url}" == "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool" ]] || finish false broker_url_invalid
 audience="$(engine_py config --config "${config}" --key oidc_audience 2>/dev/null)" || finish false config_invalid
 probe_model="$(engine_py config --config "${config}" --key probe_model 2>/dev/null)" || finish false config_invalid
 gate="$(engine_py config --config "${config}" --key gate_utilization 2>/dev/null)" || finish false config_invalid
@@ -94,7 +101,7 @@ umask 077
 printf 'Authorization: bearer %s\n' "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" > "${work}/oidc-request-headers"
 oidc_code="$(curl -sS -o "${work}/oidc.json" -w '%{http_code}' --max-time 30 \
 	-H @"${work}/oidc-request-headers" \
-	"${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" 2>/dev/null)" || oidc_code="000"
+	"${ACTIONS_ID_TOKEN_REQUEST_URL}$([[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" == *\?* ]] && printf '&' || printf '?')audience=${audience}" 2>/dev/null)" || oidc_code="000"
 rm -f -- "${work}/oidc-request-headers"
 [ "${oidc_code}" = "200" ] || finish false "oidc_request_failed_${oidc_code}"
 if ! python3 - "${work}/oidc.json" "${work}/broker-request-headers" <<'PY'
@@ -169,13 +176,14 @@ mapfile -t accounts < "${pool_dir}/broker-order"
 
 write_order()
 {
-	printf '%s\n' "$@" > "${pool_dir}/order"
-	cp -- "${pool_dir}/tokens/$1" "${pool_dir}/token"
+	[ "$#" -gt 0 ] && [ -f "${pool_dir}/tokens/$1" ] || return 1
+	printf '%s\n' "$@" > "${pool_dir}/order" || return 1
+	cp -- "${pool_dir}/tokens/$1" "${pool_dir}/token" || return 1
 	chmod 0600 "${pool_dir}/order" "${pool_dir}/token"
 }
 
 if [ "${probe_enabled}" = "false" ]; then
-	write_order "${accounts[@]}"
+	write_order "${accounts[@]}" || finish false pool_write_failed
 	finish true probe_skipped "${#accounts[@]}"
 fi
 command -v claude >/dev/null 2>&1 || finish false cli_missing
@@ -189,7 +197,7 @@ for name in "${accounts[@]}"; do
 	probe_rc=0
 	(
 		cd "${work}/probe-cwd" || exit 1
-		unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
+		unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL GH_TOKEN GITHUB_TOKEN
 		CLAUDE_CODE_OAUTH_TOKEN="$(cat -- "${pool_dir}/tokens/${name}")"
 		export CLAUDE_CODE_OAUTH_TOKEN
 		export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1
@@ -218,5 +226,5 @@ for name in "${accounts[@]}"; do
 		*) rm -f -- "${pool_dir}/tokens/${name}" ;;
 	esac
 done
-write_order "${ordered[@]}"
+write_order "${ordered[@]}" || finish false pool_write_failed
 finish true selected "${#ordered[@]}"

@@ -109,8 +109,7 @@ jobs:
             echo "::error::Context gate failed: CLAUDE.md was loaded"
             exit 1
           fi
-          for transcript in "${AI_ENGINE_LAST_RUN_DIR}"/transcript-*.jsonl; do :; done
-          startup="$(python3 scripts/claude_engine.py inspect --transcript "${transcript}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["startup_input_tokens"])')"
+          startup="$(python3 scripts/claude_engine.py inspect --transcript "${AI_ENGINE_LAST_RUN_DIR}/successful-transcript.jsonl" | python3 -c 'import json,sys; print(json.load(sys.stdin)["startup_input_tokens"])')"
           echo "SMOKE startup_input_tokens=${startup}"
           test "${startup}" -lt 25000
 
@@ -130,14 +129,14 @@ jobs:
           source scripts/ai_engine.sh
           claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/deny.txt" "${workdir}"
           test ! -e "${workdir}/.github/workflows/smoke-denied.yml"
-          for transcript in "${AI_ENGINE_LAST_RUN_DIR}"/transcript-*.jsonl; do :; done
-          python3 scripts/claude_engine.py inspect --transcript "${transcript}" | python3 -c '
-          import json, sys
+          python3 scripts/claude_engine.py inspect --transcript "${AI_ENGINE_LAST_RUN_DIR}/successful-transcript.jsonl" | python3 -c '
+          import json, re, sys
           calls = json.load(sys.stdin)["tool_calls"]
           merge = [c for c in calls if c["tool"] == "Bash" and c["target"].startswith("gh pr merge")]
           write = [c for c in calls if c["tool"] in ("Write", "Edit") and "/.github/workflows/" in c["target"]]
-          assert merge and all(c["is_error"] for c in merge), merge
-          assert write and all(c["is_error"] for c in write), write
+          denied = lambda c: c["is_error"] and re.search(r"denied|permission|not permitted|not allowed|blocked", c["result"], re.I)
+          assert merge and all(denied(c) for c in merge), merge
+          assert write and all(denied(c) for c in write), write
           print("SMOKE P5 denials ok")
           '
 
