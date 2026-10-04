@@ -165,7 +165,7 @@ READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Bash(gh api *)",
 )
 PROFILE_TOOLS: dict[str, str] = {
-	"write": "default",
+	"write": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
 	"read": "Read,Grep,Glob,Bash",
 }
 PROFILE_MODES: dict[str, str] = {

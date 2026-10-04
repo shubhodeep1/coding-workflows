@@ -101,6 +101,7 @@ def _marker(head_sha: str, *, resume_state: str, resume_round: int, should_conti
 		edits_withheld_for_safety=false
 		withheld_reason=none
 		head_sha={head_sha}
+		base_ref=main
 		resume_round={resume_round}
 		resume_round_limit={limit}
 		resume_state={resume_state}
@@ -115,6 +116,7 @@ def _run_parser(comments: list[dict[str, object]], head_sha: str) -> dict[str, s
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PARTIAL_MARKER_COMMENTS_JSON"] = json.dumps([{"author_login": MARKER_AUTHOR_LOGIN, **comment} for comment in comments])
 	env["GATE_HEAD_SHA"] = head_sha
+	env["GATE_BASE_REF"] = "main"
 	env["GATE_BOT_LOGIN"] = BOT_LOGIN
 	env["GATE_MARKER_AUTHOR_LOGIN"] = MARKER_AUTHOR_LOGIN
 	result = subprocess.run(
@@ -228,6 +230,17 @@ def test_parser_marks_newest_terminal_marker_for_current_head() -> None:
 	assert decision["resume_round_limit"] == "3"
 	assert decision["marker_comment_id"] == "2"
 	assert decision["untrusted_markers"] == "0"
+
+
+def test_parser_does_not_skip_current_head_for_legacy_or_other_base_markers() -> None:
+	bound_marker = _marker(HEAD, resume_state="no_progress", resume_round=3, should_continue=False)
+	comments = [
+		{"id": 1, "body": bound_marker.replace("base_ref=main\n", "")},
+		{"id": 2, "body": bound_marker.replace("base_ref=main", "base_ref=stack/a")},
+	]
+	decision = _run_parser(comments, HEAD)
+	assert decision["terminal"] == "false"
+	assert decision["matching_markers"] == "0"
 
 
 def test_parser_ignores_markers_for_other_heads() -> None:
