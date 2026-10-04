@@ -245,6 +245,13 @@ tokenization cannot distinguish `git push origin 2 > /dev/null` from a numeric
 file-descriptor prefix after discarding whitespace. Ambiguous redirects can
 cause an extra branch lookup; they must not hide a push to merged history.
 
+The `gh api` permission guard in `.claude/hooks/gh_api_write_guard.py` and
+its `workflow-templates/` twin exempts an unquoted literal-ID loop counter
+only when the entire loop passes the read-only body validator. Unvetted
+loops with unquoted `gh api` arguments still prompt; the two hooks must stay
+byte-identical (`tests/test_gh_api_write_guard.py`). Shell-rewrite hazards
+inside a loop prompt even when the loop counter is not expanded.
+
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
 pass that output to action inputs or through step-local environment variables,
@@ -1338,6 +1345,7 @@ and shipped:
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED`
 - `SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED`
 - `VALIDATION_RUN_ATTRIBUTION`
+- `CI_CANCELLED_RERUN`
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
@@ -1539,6 +1547,7 @@ LOG_PREFIX.name=ORCHESTRATOR_ENGINE_SHA
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED
 LOG_PREFIX.name=SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED
 LOG_PREFIX.name=VALIDATION_RUN_ATTRIBUTION
+LOG_PREFIX.name=CI_CANCELLED_RERUN
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY
