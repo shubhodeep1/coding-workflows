@@ -202,7 +202,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fix reached `main`, runs on the failing head, rate limit / OpenRouter key
     status; 400 KB, reused across stages through actions/cache). Cross-repo
     reads require the source repo in the intake's consumer registry; missing
-    registry data skips them. The folder is mounted
+    registry data skips them. Run references also require intake-account-only
+    authorship and edit history for the heal issue and occurrence comments;
+    cross-repo runs additionally require matching run metadata (repo and
+    reported head or PR). Unverifiable runs are skipped before log/artifact
+    reads, including when a cached run is restored. The folder is mounted
     read-only at `/evidence` in the clarify sandbox, and point the prompt at it
     (`=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`). Stable log prefixes:
     `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
