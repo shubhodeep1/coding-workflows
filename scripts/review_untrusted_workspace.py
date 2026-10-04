@@ -31,6 +31,18 @@ def git_env(manifest):
 		"GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
 
 
+def host_git_env(host, manifest):
+	# Listing the host's files is the one place GIT_DIR may apply: the review
+	# job's work tree is a copy without its own .git (#6055). It never reaches
+	# the synthetic repository, which keeps git_env.
+	env = git_env(manifest)
+	git_dir = os.environ.get("GIT_DIR", "")
+	if git_dir and not (host / ".git").exists():
+		env["GIT_DIR"] = os.path.abspath(git_dir)
+		env["GIT_WORK_TREE"] = str(host)
+	return env
+
+
 def allowed(name):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
@@ -108,8 +120,9 @@ def enumerate_workspace(root):
 def snapshot(host, workspace, manifest):
 	paths = set()
 	env = git_env(manifest)
+	host_env = host_git_env(host, manifest)
 	for cmd in (["git", "ls-files", "-z"], ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
-		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p)
+		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=host_env).split(b"\0") if p)
 	baseline = {}
 	total = 0
 	for name in sorted(paths):
