@@ -11,9 +11,9 @@
  *   - come from shubhodeep1/coding-workflows or a repository listed in its
  *     .github/ai/consumer_repos.json (fetched from main, cached 10 minutes,
  *     last good copy kept when a fetch fails);
- *   - name a job_workflow_ref under shubhodeep1/coding-workflows/.github/workflows/,
- *     i.e. a job of a coding-workflows reusable workflow, never a consumer's
- *     own workflow file.
+ *   - name an approved coding-workflows workflow and commit in
+ *     job_workflow_ref / job_workflow_sha, with protected-branch ancestry;
+ *     a consumer's own workflow or an unreviewed branch must not get the pool.
  *
  * Success: 200 `{"accounts":[{"name","token"}],"probe_model","gate"}`.
  * Refusal: 403 `{"error": <reason code>}`. Broker-side trouble (JWKS or
@@ -43,6 +43,20 @@ export const AUDIENCE = "coding-workflows-claude-pool";
 export const OWNER = "shubhodeep1";
 export const SELF_REPO = "shubhodeep1/coding-workflows";
 export const WORKFLOW_PREFIX = "shubhodeep1/coding-workflows/.github/workflows/";
+const GITHUB_REPO_API = "https://api.github.com/repos/shubhodeep1/coding-workflows";
+const APPROVED_WORKFLOWS = new Set([
+	"check_failure_triage.yml",
+	"clarify.yml",
+	"implement.yml",
+	"orchestrate.yml",
+	"orchestrate_clarify_respond.yml",
+	"orchestrate_poll.yml",
+	"plan.yml",
+	"review_autofix.yml",
+	"security-audit.yml",
+	"validate.yml",
+]);
+const SHA_RE = /^[a-f0-9]{40}$/i;
 export const REGISTRY_URL =
 	"https://raw.githubusercontent.com/shubhodeep1/coding-workflows/main/.github/ai/consumer_repos.json";
 export const MAX_TOKEN_AGE_SECONDS = 600;
@@ -288,6 +302,87 @@ export function createHandler(deps: Deps)
 		return claims;
 	}
 
+	async function githubEvidence(path: string): Promise<Record<string, unknown>>
+	{
+		try {
+			// The existing JWKS and consumer-registry reads provide neither branch
+			// protection nor commit ancestry; authorization needs fresh GitHub evidence.
+			const response = await deps.fetch(`${GITHUB_REPO_API}${path}`, {
+				headers: { accept: "application/vnd.github+json" },
+			});
+			if (!response.ok) {
+				throw new Error("GitHub request failed");
+			}
+			const body: unknown = await response.json();
+			if (body && typeof body === "object" && !Array.isArray(body)) {
+				return body as Record<string, unknown>;
+			}
+		} catch {
+			// Authorization evidence is never served from a stale cache.
+		}
+		throw new Refusal(503, "workflow_evidence_unavailable");
+	}
+
+	async function approvedAncestry(sha: string, branches: readonly string[]): Promise<void>
+	{
+		let unavailable = false;
+		for (const branch of branches) {
+			try {
+				const branchBody = await githubEvidence(`/branches/${branch}`);
+				const tip = (branchBody.commit as { sha?: unknown } | null)?.sha;
+				if (branchBody.name !== branch || typeof branchBody.protected !== "boolean" || typeof tip !== "string" || !SHA_RE.test(tip)) {
+					throw new Refusal(503, "workflow_evidence_unavailable");
+				}
+				if (!branchBody.protected) {
+					continue;
+				}
+				const comparison = await githubEvidence(`/compare/${sha}...${tip}`);
+				const base = (comparison.base_commit as { sha?: unknown } | null)?.sha;
+				if (typeof base !== "string" || base.toLowerCase() !== sha.toLowerCase() ||
+					!Number.isSafeInteger(comparison.ahead_by) || (comparison.ahead_by as number) < 0 ||
+					!Number.isSafeInteger(comparison.behind_by) || (comparison.behind_by as number) < 0 ||
+					!(["ahead", "identical", "behind", "diverged"].includes(comparison.status as string))) {
+					throw new Refusal(503, "workflow_evidence_unavailable");
+				}
+				if ((comparison.status === "identical" && tip.toLowerCase() === sha.toLowerCase() && comparison.ahead_by === 0 && comparison.behind_by === 0) ||
+					(comparison.status === "ahead" && tip.toLowerCase() !== sha.toLowerCase() &&
+						(comparison.ahead_by as number) > 0 && comparison.behind_by === 0)) {
+					return;
+				}
+			} catch (error) {
+				if (!(error instanceof Refusal) || error.status !== 503) {
+					throw error;
+				}
+				unavailable = true;
+			}
+		}
+		throw new Refusal(unavailable ? 503 : 403, unavailable ? "workflow_evidence_unavailable" : "unapproved_workflow_sha");
+	}
+
+	async function stableTagCommit(): Promise<string>
+	{
+		const reference = await githubEvidence("/git/ref/tags/stable");
+		if (reference.ref !== "refs/tags/stable") {
+			throw new Refusal(503, "workflow_evidence_unavailable");
+		}
+		let object = reference.object as { type?: unknown; sha?: unknown } | null;
+		// GitHub's stable release tag is annotated; bound peeling to prevent loops.
+		for (let depth = 0; depth < 3; depth++) {
+			if (!object || typeof object.sha !== "string" || !SHA_RE.test(object.sha)) {
+				break;
+			}
+			if (object.type === "commit") {
+				return object.sha;
+			}
+			if (object.type !== "tag") {
+				break;
+			}
+			const tag = await githubEvidence(`/git/tags/${object.sha}`);
+			object = tag.object as { type?: unknown; sha?: unknown } | null;
+		}
+		throw new Refusal(503, "workflow_evidence_unavailable");
+	}
+
 	async function authorize(claims: Record<string, unknown>): Promise<string>
 	{
 		if (typeof claims.repository_owner !== "string" || claims.repository_owner.toLowerCase() !== OWNER) {
@@ -307,7 +402,32 @@ export function createHandler(deps: Deps)
 			}
 		}
 		const workflowRef = claims.job_workflow_ref;
-		if (typeof workflowRef !== "string" || !workflowRef.toLowerCase().startsWith(WORKFLOW_PREFIX)) {
+		if (typeof workflowRef !== "string") {
+			throw new Refusal(403, "wrong_workflow");
+		}
+		const match = /^([^@]+)@([^@]+)$/.exec(workflowRef);
+		if (!match || !match[1].toLowerCase().startsWith(WORKFLOW_PREFIX) ||
+			!APPROVED_WORKFLOWS.has(match[1].slice(WORKFLOW_PREFIX.length).toLowerCase())) {
+			throw new Refusal(403, "wrong_workflow");
+		}
+		const workflowSha = claims.job_workflow_sha;
+		if (typeof workflowSha !== "string" || !SHA_RE.test(workflowSha)) {
+			throw new Refusal(403, "bad_workflow_sha");
+		}
+		const ref = match[2].toLowerCase();
+		if (ref === "refs/heads/main" || ref === "refs/heads/stable") {
+			await approvedAncestry(workflowSha, [ref.slice("refs/heads/".length)]);
+		} else if (SHA_RE.test(ref)) {
+			if (ref !== workflowSha.toLowerCase()) {
+				throw new Refusal(403, "workflow_sha_mismatch");
+			}
+			await approvedAncestry(workflowSha, ["main", "stable"]);
+		} else if (ref === "refs/tags/stable") {
+			if ((await stableTagCommit()).toLowerCase() !== workflowSha.toLowerCase()) {
+				throw new Refusal(403, "workflow_sha_mismatch");
+			}
+			await approvedAncestry(workflowSha, ["main", "stable"]);
+		} else {
 			throw new Refusal(403, "wrong_workflow");
 		}
 		return repository;
