@@ -99,6 +99,10 @@ if [ -n "${SVB_REASON:-}" ]; then
     SCOPE_COMMIT_STATE="The out-of-scope commit was created locally, rolled back before push, and **not** pushed."
     SCOPE_REDISPATCH_HINT="If these paths are legitimately in scope, update or remove the issue's \`ai:scope:<glob>\` label, then remove \`ai:scope-blocked\` and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
     SCOPE_TG_TITLE="🚨 CRITICAL: ai:scope label blocked implementation"
+  elif [ "${SVB_REASON}" = "heal-evidence-no-allowlist" ] || [ "${SVB_REASON}" = "heal-evidence-guard-unavailable" ]; then
+    SCOPE_HEADER="🚨 **Heal-evidence scope lock rejected this implementation run.**"
+    SCOPE_REDISPATCH_HINT="Add a \`files_touched:\` block to the issue or a Files likely to change section to the plan, then remove \`ai:scope-blocked\` and re-approve. The \`ALLOW_OUT_OF_SCOPE_FILES\` override does not apply under this lock."
+    SCOPE_TG_TITLE="🚨 CRITICAL: heal-evidence scope lock blocked implementation"
   fi
   SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'
   if ! gh label create 'ai:scope-blocked' \

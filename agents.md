@@ -202,9 +202,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fix reached `main`, runs on the failing head, rate limit / OpenRouter key
     status; 400 KB, reused across stages through actions/cache). Cross-repo
     reads require the source repo in the intake's consumer registry; missing
-    registry data skips them. The folder is mounted
-    read-only at `/evidence` in the clarify sandbox, and point the prompt at it
-    (`=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`). Stable log prefixes:
+    registry data skips them. Clarify mounts the folder read-only at
+    `/evidence` and points its prompt at the index. Plan and implement receive
+    only the bounded `diagnostics.json` structured prompt section; raw job and
+    artifact files are not linked in those prompts. Their editor launches
+    scrub GitHub/Telegram credentials and temporarily hide checkout git auth.
+    Heal-evidence implement runs pin the issue/plan scope allowlist before the
+    editor; preflight and commit ignore scope bypass variables and block empty
+    allowlists. This is not a same-uid process isolation boundary.
+    Stable log prefixes:
     `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`, `WORKFLOW_HEAL_EVIDENCE`.
     A report whose failure reason is `identical_failure_cap`, or a generation
@@ -413,6 +419,9 @@ a new value, add it to the appropriate overrides file with a
   attempt loop and the "Attempt post-Codex syntax repair" loop) run
   `bash scripts/codex_thread_reuse.sh direct-run` through
   `env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR`.
+  A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
+  Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
+  origin/extraheader auth for the editor and restores it after each launch.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when
@@ -1373,6 +1382,8 @@ and shipped:
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
 - `WORKFLOW_HEAL_EVIDENCE`
+- `HEAL_EVIDENCE_SCOPE_LOCK`
+- `EDITOR_GIT_CREDENTIALS`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
@@ -1576,6 +1587,8 @@ LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
+LOG_PREFIX.name=HEAL_EVIDENCE_SCOPE_LOCK
+LOG_PREFIX.name=EDITOR_GIT_CREDENTIALS
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED

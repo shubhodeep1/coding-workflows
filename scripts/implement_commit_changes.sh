@@ -475,7 +475,7 @@ fi
 # log-and-allow. On a violation the commit is neither created nor
 # pushed; the "Destructive-commit guard — label + alert on rejection"
 # step labels the issue ai:scope-blocked and alerts.
-if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" != "true" ] && [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
   echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
 else
   scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
@@ -483,12 +483,19 @@ else
     scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
     scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
     printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
+    scope_input_args=(--issue-body-file "${ISSUE_BODY_FILE:-}")
+    if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
+      scope_input_file="$(mktemp "${TMPDIR:-/tmp}/implement-heal-scope.XXXXXX")"
+      printf '%s\n' "${HEAL_EVIDENCE_SCOPE_ALLOWLIST:-}" > "${scope_input_file}"
+      scope_input_args=(--allowlist-file "${scope_input_file}")
+      echo "HEAL_EVIDENCE_SCOPE_LOCK lock=true entries=$(printf '%s\n' "${HEAL_EVIDENCE_SCOPE_ALLOWLIST:-}" | sed '/^$/d' | wc -l | tr -d ' ')"
+    fi
     scope_violations=""
     scope_rc=0
     if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
       set +e
       scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
-        --issue-body-file "${ISSUE_BODY_FILE:-}" \
+        "${scope_input_args[@]}" \
         --staged-file "${scope_staged_file}" \
         --allowlist-out "${scope_allowlist_file}")"
       scope_rc=$?
@@ -496,18 +503,24 @@ else
     else
       scope_rc=127
     fi
-    rm -f "${scope_staged_file}"
+    rm -f "${scope_staged_file}" "${scope_input_file:-}"
     case "${scope_rc}" in
       0)
         echo "files_touched scope guard: all staged paths fall within the issue allowlist."
         ;;
       10)
+        if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
+          echo '::error::Heal-evidence scope lock requires a non-empty allowlist.'
+          echo 'scope_violation_blocked=heal-evidence-no-allowlist' >> "$GITHUB_OUTPUT"
+          rm -f "${scope_allowlist_file}"
+          exit 1
+        fi
         echo "::notice::files_touched scope guard skipped: issue declares no files_touched allowlist."
         ;;
       20)
         scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
         scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-        if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+        if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" != "true" ] && [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
           echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
           printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
         else
@@ -528,6 +541,12 @@ else
         fi
         ;;
       *)
+        if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
+          echo "::error::Heal-evidence scope guard unavailable (exit ${scope_rc})."
+          echo 'scope_violation_blocked=heal-evidence-guard-unavailable' >> "$GITHUB_OUTPUT"
+          rm -f "${scope_allowlist_file}"
+          exit 1
+        fi
         echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
         ;;
     esac
