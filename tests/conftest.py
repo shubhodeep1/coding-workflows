@@ -2,12 +2,11 @@
 
 Repo-pinning git environment isolation
 --------------------------------------
-The implement / review_autofix / validate workflows export ``GIT_DIR`` and
-``GIT_WORK_TREE`` into ``$GITHUB_ENV`` ("Activate workspace shell context")
-so every later step shares the source checkout's object store and a detached
-per-issue work tree. Anything launched from those steps inherits the pair,
-including the codex editor and every ``pytest`` it runs while validating its
-own change.
+The review_autofix / validate workflows export ``GIT_DIR`` and
+``GIT_WORK_TREE`` into ``$GITHUB_ENV`` ("Activate workspace shell context");
+implement exports them from its ``BASH_ENV`` hook instead. Repository commands
+in Bash steps still inherit the pair, including the codex editor and every
+``pytest`` it runs while validating its own change.
 
 Git resolves its repository from those variables *before* it looks at
 ``cwd``, so a test that builds a scratch repository under ``tmp_path`` with

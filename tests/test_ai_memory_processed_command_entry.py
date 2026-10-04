@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from unittest import mock
 from pathlib import Path
 
 
@@ -185,6 +186,12 @@ def _extract_ai_memory_telemetry(stderr: str) -> list[dict]:
 	return entries
 
 
+def _assert_memory_timings(telemetry: dict, expected_stages: set[str]) -> None:
+	timing_keys = {key for key in telemetry if key.endswith("_ms")}
+	assert timing_keys == expected_stages | {"elapsed_ms"}
+	assert all(isinstance(telemetry[key], int) and 0 <= telemetry[key] <= ai_memory_lib._MEMORY_TIMING_MAX_MS for key in timing_keys)
+
+
 def _isolated_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 	env = dict(os.environ)
 	# GitHub Actions workspaces can export repo-specific git routing vars; drop
@@ -330,14 +337,14 @@ def _stub_ai_memory_cli_branch():
 	ai_memory_lib.ensure_memory_layout(memory_root)
 	ai_memory_lib._sync_memory_reference_files(REPO_ROOT / "ai-memory", memory_root)
 
-	def _fake_read_memory_root_from_branch(_repo_root, *, memory_branch, memory_root_relative):
+	def _fake_read_memory_root_from_branch(_repo_root, *, memory_branch, memory_root_relative, timings=None):
 		assert memory_branch == "ai-memory"
 		snapshot_root = Path(tempfile.mkdtemp(prefix="ai-memory-cli-read-"))
 		test_cleanup_paths.append(snapshot_root)
 		shutil.copytree(store_root / memory_root_relative, snapshot_root / memory_root_relative, dirs_exist_ok=True)
 		return snapshot_root
 
-	def _fake_persist_memory_operation(_repo_root, *, memory_branch, memory_root_relative, push_retries, commit_message, operation):
+	def _fake_persist_memory_operation(_repo_root, *, memory_branch, memory_root_relative, push_retries, commit_message, operation, timings=None):
 		assert memory_branch == "ai-memory"
 		assert memory_root_relative == "ai-memory"
 		assert push_retries >= 1
@@ -1134,6 +1141,257 @@ def test_memory_record_run_event_wrapper_keeps_json_stdout_and_telemetry_stderr(
 	assert event["event_type"] == "candidate_written"
 	assert "AI_MEMORY_TELEMETRY" not in result.stdout
 	assert '"op": "record-run-event"' in result.stderr
+	telemetry = _extract_ai_memory_telemetry(result.stderr)
+	assert len(telemetry) == 1
+	assert telemetry[0]["did_push"] is True
+	_assert_memory_timings(telemetry[0], {"clone_ms", "commit_ms", "push_ms"})
+	assert not any(key.endswith("_ms") for key in payload)
+
+	# The branch exists after the write; reading it is one shallow clone, with
+	# the legacy JSON result still on stdout and context text on the output file.
+	output_file = _make_temp_output_file(prefix="ai-memory-timed-retrieve-")
+	exit_code, stdout, stderr = _run_ai_memory_cli([
+		"retrieve", "--repo-root", str(repo_root), "--role", "implementation",
+		"--output-file", str(output_file),
+	])
+	assert exit_code == 0
+	assert json.loads(stdout)["ok"] is True
+	assert "AI_MEMORY_TELEMETRY" not in stdout
+	assert output_file.read_text(encoding="utf-8").startswith("AI MEMORY CONTEXT\n")
+	read_telemetry = _extract_ai_memory_telemetry(stderr)
+	assert len(read_telemetry) == 1
+	_assert_memory_timings(read_telemetry[0], {"clone_ms"})
+	second_code, second_stdout, second_stderr = _run_ai_memory_cli([
+		"record-run-event", "--repo-root", str(repo_root), "--run-id", "4202",
+		"--workflow", "clarify", "--event-type", "candidate_written",
+		"--status", "ok", "--message", "Stored another event", "--actor", "octocat",
+	])
+	assert second_code == 0 and json.loads(second_stdout)["push_attempts"] == 1
+	second_telemetry = _extract_ai_memory_telemetry(second_stderr)
+	assert len(second_telemetry) == 1
+	_assert_memory_timings(second_telemetry[0], {"clone_ms", "fetch_ms", "commit_ms", "push_ms"})
+
+
+@contextlib.contextmanager
+def _poll_checkout_fixture():
+	work = _create_memory_helper_repo()
+	git_env = _isolated_git_env()
+	def git(*args: str) -> str:
+		return subprocess.run(["git", "-C", str(work), *args], check=True, text=True,
+			capture_output=True, env=git_env).stdout.strip()
+	git("checkout", "-B", "ai-memory")
+	git("push", "origin", "ai-memory")
+	git("checkout", "main")
+	run_id = str(time.time_ns())
+	runtime = Path("/tmp") / f"codex-orchestrate-poll-{run_id}-1"
+	runtime.mkdir(mode=0o700)
+	checkout = runtime / "poll-memory-checkout"
+	with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": run_id, "GITHUB_RUN_ATTEMPT": "1", "GITHUB_ACTIONS": "false"}):
+		try:
+			yield work, checkout, git
+		finally:
+			shutil.rmtree(runtime)
+
+
+def _poll_event(work: Path, checkout: Path, event_type: str, *, push_retries: int | None = None) -> tuple[int, dict, str]:
+	code, stdout, stderr = _run_ai_memory_cli([
+		"record-run-event", "--repo-root", str(work), "--poll-checkout-dir", str(checkout),
+		"--run-id", os.environ["GITHUB_RUN_ID"], "--workflow", "orchestrate_poll",
+		"--event-type", event_type, "--status", "ok", "--message", event_type,
+		"--actor", "octocat",
+		*(["--push-retries", str(push_retries)] if push_retries is not None else []),
+	])
+	return code, json.loads(stdout) if stdout else {}, stderr
+
+
+def test_poll_checkout_reconciles_foreign_update_and_cleans_up() -> None:
+	with _poll_checkout_fixture() as (work, checkout, git):
+		code, start, _ = _poll_event(work, checkout, "poll_started")
+		assert code == 0 and start["did_push"] and checkout.is_dir()
+		assert git("--git-dir", str(checkout / ".git"), "config", "--local", "--get", "remote.origin.url") == str(work.parent / "bare.git")
+		git("fetch", "origin", "ai-memory")
+		git("checkout", "-B", "foreign", "origin/ai-memory")
+		(work / "ai-memory" / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+		git("add", "ai-memory/foreign.txt")
+		git("commit", "-m", "foreign writer")
+		git("push", "origin", "HEAD:ai-memory")
+		git("checkout", "main")
+		code, end, stderr = _poll_event(work, checkout, "poll_completed")
+		assert code == 0 and end["did_push"] and "fresh clone" not in stderr
+		assert not checkout.exists()
+		bare = work.parent / "bare.git"
+		assert subprocess.run(["git", "--git-dir", str(bare), "show", "ai-memory:ai-memory/foreign.txt"],
+			check=True, capture_output=True, text=True, env=_isolated_git_env()).stdout == "foreign\n"
+		events = subprocess.run(["git", "--git-dir", str(bare), "show",
+			f"ai-memory:ai-memory/runs/{os.environ['GITHUB_RUN_ID']}/ledger/events.jsonl"],
+			check=True, capture_output=True, text=True, env=_isolated_git_env()).stdout
+		assert [json.loads(line)["event_type"] for line in events.splitlines()] == ["poll_started", "poll_completed"]
+
+
+def test_poll_checkout_push_race_retries_after_reconciliation() -> None:
+	with _poll_checkout_fixture() as (work, checkout, git):
+		assert _poll_event(work, checkout, "poll_started")[0] == 0
+		original = ai_memory_lib._run_git
+		injected = False
+		def race_git(cwd, args, *other, **kwargs):
+			nonlocal injected
+			if not injected and Path(cwd) == checkout and args[0] == "push":
+				injected = True
+				git("fetch", "origin", "ai-memory")
+				git("checkout", "-B", "foreign", "origin/ai-memory")
+				(work / "ai-memory" / "race.txt").write_text("survived\n", encoding="utf-8")
+				git("add", "ai-memory/race.txt")
+				git("commit", "-m", "concurrent writer")
+				git("push", "origin", "HEAD:ai-memory")
+				git("checkout", "main")
+			return original(cwd, args, *other, **kwargs)
+		with _patched_module_attrs(ai_memory_lib, _run_git=race_git):
+			code, end, _ = _poll_event(work, checkout, "poll_completed")
+		assert injected and code == 0 and end["push_attempts"] == 2
+		assert not checkout.exists()
+		assert subprocess.run(["git", "--git-dir", str(work.parent / "bare.git"), "show",
+			"ai-memory:ai-memory/race.txt"], check=True, capture_output=True, text=True,
+			env=_isolated_git_env()).stdout == "survived\n"
+
+
+def test_poll_checkout_missing_dirty_and_mismatched_fall_back() -> None:
+	for defect in ("missing", "dirty", "origin", "marker", "symlink", "diverged", "push_redirect"):
+		with _poll_checkout_fixture() as (work, checkout, git):
+			assert _poll_event(work, checkout, "poll_started")[0] == 0
+			if defect == "missing":
+				shutil.rmtree(checkout)
+			elif defect == "dirty":
+				(checkout / "ai-memory" / "dirty.txt").write_text("dirty", encoding="utf-8")
+			elif defect == "origin":
+				subprocess.run(["git", "-C", str(checkout), "remote", "set-url", "origin", str(work)],
+					check=True, env=_isolated_git_env())
+			elif defect == "marker":
+				(checkout / ".git" / "poll-memory-start").write_text("not a sha", encoding="ascii")
+			elif defect == "push_redirect":
+				subprocess.run(["git", "-C", str(checkout), "config", "--local",
+					f"url.{work}.pushInsteadOf", str(work.parent / "bare.git")],
+					check=True, env=_isolated_git_env())
+			elif defect == "diverged":
+				(checkout / "ai-memory" / "unpublished.txt").write_text("local", encoding="utf-8")
+				subprocess.run(["git", "-C", str(checkout), "add", "ai-memory/unpublished.txt"],
+					check=True, env=_isolated_git_env())
+				subprocess.run(["git", "-C", str(checkout), "commit", "-m", "unpublished"],
+					check=True, env=_isolated_git_env(), capture_output=True)
+				local_sha = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"],
+					check=True, env=_isolated_git_env(), capture_output=True, text=True).stdout
+				(checkout / ".git" / "poll-memory-start").write_text(local_sha, encoding="ascii")
+				git("fetch", "origin", "ai-memory")
+				git("checkout", "-B", "foreign", "origin/ai-memory")
+				(work / "ai-memory" / "foreign.txt").write_text("foreign", encoding="utf-8")
+				git("add", "ai-memory/foreign.txt")
+				git("commit", "-m", "foreign")
+				git("push", "origin", "HEAD:ai-memory")
+				git("checkout", "main")
+			else:
+				shutil.rmtree(checkout)
+				checkout.symlink_to(work, target_is_directory=True)
+			code, end, stderr = _poll_event(work, checkout, "poll_completed")
+			assert code == 0 and end["did_push"] and "fresh clone" in stderr, defect
+			if defect == "symlink":
+				assert checkout.is_symlink()  # never follow a redirected checkout
+			else:
+				assert not checkout.exists() or defect in ("dirty", "origin", "marker", "diverged", "push_redirect")
+
+
+def test_poll_checkout_partial_clone_failure_cleans_private_temp() -> None:
+	with _poll_checkout_fixture() as (work, checkout, _git):
+		original = ai_memory_lib._run_git
+		def fail_clone(cwd, args, *other, **kwargs):
+			if args[0] == "clone":
+				raise ai_memory_lib.MemoryGitError("clone unavailable")
+			return original(cwd, args, *other, **kwargs)
+		with _patched_module_attrs(ai_memory_lib, _run_git=fail_clone):
+			code, _, _ = _poll_event(work, checkout, "poll_started")
+		assert code == 2 and not checkout.exists()
+		assert list(checkout.parent.iterdir()) == []
+
+
+def test_poll_checkout_uses_credential_free_origin_and_transient_auth() -> None:
+	with _poll_checkout_fixture() as (work, checkout, git):
+		with mock.patch.dict(os.environ, {"GH_TOKEN": "test-token-never-persist"}):
+			assert _poll_event(work, checkout, "poll_started")[0] == 0
+			assert "test-token-never-persist" not in (checkout / ".git" / "config").read_text(encoding="utf-8")
+			assert git("--git-dir", str(checkout / ".git"), "config", "--local", "--get", "remote.origin.url") == str(work.parent / "bare.git")
+			token = ai_memory_lib._POLL_MEMORY_AUTH.set(True)
+			try:
+				auth_env = ai_memory_lib._git_subprocess_env()
+				assert "test-token-never-persist" not in auth_env["GIT_CONFIG_VALUE_1"]
+				assert "$GH_TOKEN" in auth_env["GIT_CONFIG_VALUE_1"]
+			finally:
+				ai_memory_lib._POLL_MEMORY_AUTH.reset(token)
+		git("remote", "set-url", "origin", "https://x-access-token:test-token-never-persist@github.com/acme/repo")
+		with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_SERVER_URL": "https://github.com",
+				"GITHUB_REPOSITORY": "acme/repo", "GH_TOKEN": "test-token-never-persist"}):
+			assert ai_memory_lib._poll_memory_origin(work) == "https://github.com/acme/repo"
+			with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "other/repo"}):
+				assert ai_memory_lib._poll_memory_origin(work) is None
+
+
+def test_poll_checkout_failed_fetch_falls_back_and_failed_push_cleans_partial_start() -> None:
+	with _poll_checkout_fixture() as (work, checkout, _git):
+		assert _poll_event(work, checkout, "poll_started")[0] == 0
+		original = ai_memory_lib._run_git
+		def fail_cached_fetch(cwd, args, *other, **kwargs):
+			if Path(cwd) == checkout and args[0] == "fetch":
+				return subprocess.CompletedProcess(args, 1, "", "fetch unavailable")
+			return original(cwd, args, *other, **kwargs)
+		with _patched_module_attrs(ai_memory_lib, _run_git=fail_cached_fetch):
+			code, end, stderr = _poll_event(work, checkout, "poll_completed")
+		assert code == 0 and end["did_push"] and "fresh clone" in stderr
+		# The final always() workflow step owns invalid/unused retained checkouts.
+		shutil.rmtree(checkout)
+		def fail_push(cwd, args, *other, **kwargs):
+			if args[0] == "push":
+				return subprocess.CompletedProcess(args, 1, "", "rejected")
+			return original(cwd, args, *other, **kwargs)
+		with _patched_module_attrs(ai_memory_lib, _run_git=fail_push):
+			code, _, _ = _poll_event(work, checkout, "poll_started", push_retries=1)
+		assert code == 2 and not checkout.exists()
+		assert list(checkout.parent.iterdir()) == []
+
+
+def test_failed_memory_clone_reports_only_numeric_timing_fields() -> None:
+	secret = "credential-like-sentinel-xyz"
+	def _failed_clone(*_args, **_kwargs):
+		raise ai_memory_lib.MemoryGitError(f"clone rejected {secret}")
+	with _patched_module_attrs(
+		ai_memory_lib, _run_git=_failed_clone, _resolve_origin_url=lambda _repo: "https://example.invalid/repo"
+	):
+		code, stdout, stderr = _run_ai_memory_cli([
+			"record-run-event", "--run-id", "1", "--workflow", "clarify",
+			"--event-type", "created", "--status", "ok", "--message", "private text",
+			"--actor", "octocat",
+		])
+	assert code == 2 and stdout == ""
+	telemetry = _extract_ai_memory_telemetry(stderr)
+	assert len(telemetry) == 1
+	assert telemetry[0]["ok"] is False
+	_assert_memory_timings(telemetry[0], {"clone_ms"})
+	assert secret not in json.dumps(telemetry)
+	assert "private text" not in json.dumps(telemetry)
+
+	# The read's missing-branch path is still fail-open even when git's error
+	# contains sensitive text: neither the URL nor the error enters telemetry.
+	output_file = _make_temp_output_file(prefix="ai-memory-timed-failed-read-")
+	with _patched_module_attrs(
+		ai_memory_lib,
+		_run_git=lambda *_args, **_kwargs: subprocess.CompletedProcess([], 128, "", f"remote {secret}"),
+		_resolve_origin_url=lambda _repo: "https://example.invalid/repo",
+	):
+		code, stdout, stderr = _run_ai_memory_cli([
+			"retrieve", "--role", "implementation", "--output-file", str(output_file),
+		])
+	assert code == 0 and json.loads(stdout)["miss_reason"] == "git_error"
+	assert output_file.read_text(encoding="utf-8") == "AI MEMORY CONTEXT\nstatus: unavailable\n"
+	telemetry = _extract_ai_memory_telemetry(stderr)
+	assert len(telemetry) == 1
+	_assert_memory_timings(telemetry[0], {"clone_ms"})
+	assert secret not in json.dumps(telemetry)
 
 
 def test_stage_workflow_support_bootstraps_memory_injection_patterns() -> None:
@@ -1506,6 +1764,7 @@ def test_retrieve_cli_success_emits_additive_budget_and_miss_fields() -> None:
 	assert telemetry["token_budget"] == 1600
 	assert telemetry["keyword_method"] == "none"
 	assert telemetry["miss_reason"] is None
+	_assert_memory_timings(telemetry, set())
 
 
 def test_retrieve_cli_zero_hit_reports_no_eligible_records() -> None:
@@ -1639,6 +1898,7 @@ def test_retrieve_cli_branch_unavailable_keeps_json_stdout_and_context_file() ->
 	assert telemetry["token_budget"] is None
 	assert telemetry["miss_reason"] == "branch_unavailable"
 	assert telemetry["warning"] == "branch_unavailable"
+	_assert_memory_timings(telemetry, set())
 
 
 def test_retrieve_cli_invalid_max_reports_flag_specific_error() -> None:

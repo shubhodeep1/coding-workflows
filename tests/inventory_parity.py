@@ -263,6 +263,19 @@ def main() -> int:
 				section_membership[path] = section_name
 		missing = sorted(set(expected_visible) - set(documented_paths))
 		extra = sorted(set(documented_paths) - set(expected_visible))
+		if missing or extra:
+			# Sort both sides for diagnostics only; inventory ordering is not a gate.
+			actual_sorted = sorted(documented_paths)
+			first_difference = next(
+				(index for index in range(min(len(expected_visible), len(actual_sorted)))
+				 if expected_visible[index] != actual_sorted[index]),
+				min(len(expected_visible), len(actual_sorted)),
+			)
+			failures.append(
+				f"docs/INVENTORY.md: {section_name}: first differing path at index {first_difference}: "
+				f"expected={expected_visible[first_difference] if first_difference < len(expected_visible) else '<end>'} "
+				f"actual={actual_sorted[first_difference] if first_difference < len(actual_sorted) else '<end>'}"
+			)
 		for path in missing:
 			failures.append(f"docs/INVENTORY.md: {section_name}: missing {path}")
 		for path in extra:

@@ -136,6 +136,8 @@ semble_query_block()
 	local stderr_tail=""
 	local bytes="0"
 	local last_byte=""
+	local query_bytes="0"
+	local included_bytes="0"
 
 	if [ "$#" -lt 3 ] || [ -z "${max_chunks}" ] || [ -z "${header_label}" ]; then
 		_semble_log_event "SEMBLE_FALLBACK" "target=invalid" "reason=invalid-args"
@@ -215,11 +217,18 @@ semble_query_block()
 	fi
 
 	bytes="$(wc -c < "${tmp_stdout}" | tr -d '[:space:]')"
-	_semble_log_event "SEMBLE_QUERY" "target=${target}" "chunks=${max_chunks}" "bytes=${bytes}" "ms=${elapsed_ms}"
+	query_bytes="$(printf '%s' "${query_text}" | wc -c | tr -d '[:space:]')"
+	last_byte="$(tail -c 1 "${tmp_stdout}" 2>/dev/null | od -An -t x1 | tr -d '[:space:]')"
+	included_bytes="${bytes}"
+	if [ -n "${last_byte}" ] && [ "${last_byte}" != "0a" ]; then
+		included_bytes="$((bytes + 1))"
+	fi
+	_semble_log_event "SEMBLE_QUERY" "target=${target}" "chunks=${max_chunks}" "bytes=${bytes}" "ms=${elapsed_ms}" \
+		"query_bytes=${query_bytes}" "returned_bytes=${bytes}" "included_bytes=${included_bytes}" \
+		"deduplicated_bytes=unavailable" "avoided_prompt_bytes=unavailable"
 
 	printf '=== SEMBLE: %s ===\n' "${header_label}"
 	cat "${tmp_stdout}"
-	last_byte="$(tail -c 1 "${tmp_stdout}" 2>/dev/null | od -An -t x1 | tr -d '[:space:]')"
 	if [ -n "${last_byte}" ] && [ "${last_byte}" != "0a" ]; then
 		printf '\n'
 	fi

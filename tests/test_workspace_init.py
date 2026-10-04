@@ -298,9 +298,68 @@ def test_workspace_shell_context_activates_before_repo_sensitive_steps() -> None
 	for block in (implement_activate, validate_activate):
 		assert 'cd "${WORKSPACE_PATH}"' in block
 		assert 'echo "BASH_ENV=${workspace_shell_env}"' in block
-		assert 'echo "GIT_WORK_TREE=${WORKSPACE_PATH}"' in block
+	assert 'export GIT_DIR="${GITHUB_WORKSPACE}/.git"' in implement_activate
+	assert 'export GIT_WORK_TREE="${WORKSPACE_PATH}"' in implement_activate
+	assert 'echo "GIT_DIR=' not in implement_activate
+	assert 'echo "GIT_WORK_TREE=' not in implement_activate
+	assert 'echo "GIT_WORK_TREE=${WORKSPACE_PATH}"' in validate_activate
 	assert implement_text.find("- name: Activate workspace shell context") < implement_text.find("- name: Run Codex implementation")
 	assert validate_text.find("- name: Activate workspace shell context") < validate_text.find("- name: Run validation process")
+	teardown_step = _step(IMPLEMENT_WORKFLOW, "Clear workspace shell context for post-actions")
+	assert teardown_step.get("if") == "always()"
+	assert teardown_step.get("run").strip() == 'echo "BASH_ENV=" >> "$GITHUB_ENV"'
+	assert implement_text.index("- name: Run workspace before_remove hook") < implement_text.index("- name: Cleanup temporary artifacts") < implement_text.index("- name: Clear workspace shell context for post-actions")
+	assert implement_text.rfind("- name:") == implement_text.index("- name: Clear workspace shell context for post-actions")
+
+
+def test_implement_shell_git_pin_is_not_inherited_by_checkout_post_actions(tmp_path: Path) -> None:
+	root_checkout = tmp_path / "root"
+	workspace_path = tmp_path / "workspace"
+	nested_checkout = root_checkout / "support"
+	runtime_dir = tmp_path / "runtime"
+	for path in (root_checkout, workspace_path, nested_checkout, runtime_dir):
+		path.mkdir(parents=True, exist_ok=True)
+	github_env = tmp_path / "github_env.txt"
+	env = os.environ.copy()
+	for name in ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+		env.pop(name, None)
+	for checkout_path in (root_checkout, nested_checkout):
+		subprocess.run(["git", "init", "-q", str(checkout_path)], env=env, check=True)
+	env.update({
+		"GITHUB_WORKSPACE": str(root_checkout),
+		"WORKSPACE_PATH": str(workspace_path),
+		"RUNTIME_DIR": str(runtime_dir),
+		"GITHUB_ENV": str(github_env),
+	})
+	activation = subprocess.run(
+		["bash", "-c", _step_run_text(IMPLEMENT_WORKFLOW, "Activate workspace shell context")],
+		cwd=str(root_checkout), env=env, capture_output=True, text=True,
+	)
+	assert activation.returncode == 0, activation.stderr
+	active_env = env | _parse_kv_file(github_env)
+	assert "GIT_DIR" not in active_env and "GIT_WORK_TREE" not in active_env
+	active_shell = subprocess.run(
+		["bash", "-c", 'printf "%s\\n%s\\n" "$GIT_DIR" "$GIT_WORK_TREE"; git rev-parse --show-toplevel'],
+		cwd=str(root_checkout), env=active_env, capture_output=True, text=True,
+	)
+	assert active_shell.returncode == 0, active_shell.stderr
+	assert active_shell.stdout.splitlines() == [str(root_checkout / ".git"), str(workspace_path), str(workspace_path)]
+
+	teardown = subprocess.run(
+		["bash", "-c", _step_run_text(IMPLEMENT_WORKFLOW, "Clear workspace shell context for post-actions")],
+		cwd=str(root_checkout), env=active_env, capture_output=True, text=True,
+	)
+	assert teardown.returncode == 0, teardown.stderr
+	post_action_env = env | _parse_kv_file(github_env)
+	assert post_action_env["BASH_ENV"] == ""
+	assert "GIT_DIR" not in post_action_env and "GIT_WORK_TREE" not in post_action_env
+	for checkout_path in (root_checkout, nested_checkout):
+		post_git = subprocess.run(
+			["git", "-C", str(checkout_path), "rev-parse", "--show-toplevel"],
+			env=post_action_env, capture_output=True, text=True,
+		)
+		assert post_git.returncode == 0, post_git.stderr
+		assert post_git.stdout.strip() == str(checkout_path)
 
 
 def test_validate_workspace_metadata_disables_reuse_without_numeric_tracking_issue() -> None:
@@ -331,6 +390,7 @@ def main() -> int:
 		test_metadata_miss_sets_created_now_true,
 		test_metadata_rejects_workspace_escape_key,
 		test_finalize_refreshes_source_tree_and_preserves_extra_state,
+		test_implement_shell_git_pin_is_not_inherited_by_checkout_post_actions,
 	):
 		_run_tmp_path_case(case_fn)
 	test_implement_workflow_stages_workspace_helper_and_orders_restore_keys()

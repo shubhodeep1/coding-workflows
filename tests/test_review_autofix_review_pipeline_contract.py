@@ -375,6 +375,7 @@ def _run_collect_pr_check_runs_harness(
 	poll_interval_secs: str = "20",
 	log_tail_bytes: str = "0",
 	gh_retry_max_attempts: str = "1",
+	strict_merge_snapshot: str = "false",
 ) -> dict[str, object]:
 	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-") as td:
 		tmp = Path(td)
@@ -412,6 +413,7 @@ def _run_collect_pr_check_runs_harness(
 			"GH_RETRY_MAX_ATTEMPTS": gh_retry_max_attempts,
 			"SELF_RUN_ID": self_run_id,
 			"CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT": exclude_self_from_context,
+			"CHECK_RUNS_STRICT_MERGE_SNAPSHOT": strict_merge_snapshot,
 		})
 
 		result = subprocess.run(
@@ -752,6 +754,90 @@ def _reviewer_risk_tier_helper_block() -> str:
 	start = text.index("# ── Reviewer risk-tier helpers")
 	end = text.index("# ── End reviewer risk-tier helpers", start)
 	return text[start:end]
+
+
+def _run_pass2_decision_harness(
+	*,
+	ledger: str | None = None,
+	raw_outputs: tuple[str, str] = ("NONE\n", "NONE\n"),
+	statuses: tuple[str, str] = ("success\n", "success\n"),
+	path: str = "src/example.py",
+	rename_from: str | None = None,
+	new_text: str = "before\nnew\nafter\n",
+	patch_override: str | None = None,
+	list_override: str | None = None,
+	moved_head: bool = False,
+	extra_slot: bool = False,
+	publish_failure: bool = False,
+) -> dict[str, str]:
+	text = _reviewers_text()
+	metadata_block = text[text.index("reviewer_collect_review_tier_path_metadata() {"):text.index('# Deterministic "random" reviewer pick')]
+	decision_block = text[text.index("# A missing or partial first-pass input"):text.index('rm -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}"')]
+	with tempfile.TemporaryDirectory(prefix="pass2-decision-") as td:
+		root = Path(td)
+		reviews = root / "previous_reviews"
+		reviews.mkdir()
+		subprocess.run(["git", "init", "-q", str(root)], check=True)
+		subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.invalid"], check=True)
+		subprocess.run(["git", "-C", str(root), "config", "user.name", "test"], check=True)
+		source_path = root / (rename_from or path)
+		source_path.parent.mkdir(parents=True, exist_ok=True)
+		source_path.write_text("before\nold\nafter\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(root), "add", "--all"], check=True)
+		subprocess.run(["git", "-C", str(root), "commit", "-qm", "base"], check=True)
+		base_sha = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+		subprocess.run(["git", "-C", str(root), "update-ref", "refs/remotes/origin/main", base_sha], check=True)
+		if rename_from:
+			new_path = root / path
+			new_path.parent.mkdir(parents=True, exist_ok=True)
+			subprocess.run(["git", "-C", str(root), "mv", rename_from, path], check=True)
+			source_path = new_path
+		source_path.write_text(new_text, encoding="utf-8")
+		subprocess.run(["git", "-C", str(root), "commit", "-qam", "change"], check=True)
+		head_sha = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+		patch = subprocess.check_output(["git", "-C", str(root), "diff", "origin/main...HEAD"], text=True)
+		if patch_override == "alter_context":
+			patch_override = patch.replace(" before\n", " concealed\n")
+		(root / "pr.patch").write_text(patch if patch_override is None else patch_override, encoding="utf-8")
+		(root / "paths.txt").write_text(f"{path}\n" if list_override is None else list_override, encoding="utf-8")
+		if moved_head:
+			source_path.write_text("moved\n", encoding="utf-8")
+			subprocess.run(["git", "-C", str(root), "commit", "-qam", "moved"], check=True)
+		models = ("model/one", "model/two")
+		(root / "reviewer_active_models.txt").write_text("\n".join(models) + "\n", encoding="utf-8")
+		for model, raw, status in zip(models, raw_outputs, statuses):
+			slug = model.replace("/", "_")
+			(reviews / f"pass1_{slug}.txt").write_text(raw, encoding="utf-8")
+			(reviews / f"status_pass1_{slug}.txt").write_text(status, encoding="utf-8")
+		if extra_slot:
+			(reviews / "pass1_unaccounted.txt").write_text("NONE\n", encoding="utf-8")
+		if ledger is None:
+			ledger = (
+				"=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n"
+				"=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n"
+				"=== FINDINGS FROM model_one ===\n(No findings reported.)\n=== END FINDINGS FROM model_one ===\n\n"
+				"=== FINDINGS FROM model_two ===\n(No findings reported.)\n=== END FINDINGS FROM model_two ===\n"
+			)
+		(reviews / "consensus_pass1.txt").write_text(ledger, encoding="utf-8")
+		env = {**os.environ, "SUPPORT_ROOT_DIR": str(REPO_ROOT), "SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"REVIEWER_ACTIVE_MODELS_FILE": str(root / "reviewer_active_models.txt"), "PREVIOUS_REVIEWS_DIR": str(reviews),
+			"PASS1_LEDGER_FILE": str(reviews / "consensus_pass1.txt"), "REVIEWER_CONSENSUS_FILE": str(root / "consensus.txt"),
+			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(root / "paths.txt"), "RAW_REVIEWER_PR_DIFF_FILE": str(root / "pr.patch"),
+			"INITIAL_HEAD_SHA": head_sha, "BASE_BRANCH": "main", "HAS_PR_DIFF": "true", "PR_NUMBER": "123"}
+		for shell_override in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+			env.pop(shell_override, None)
+		failure_injection = ('cp() { case "$2" in *status_review_model_two*) return 1 ;; esac; command cp "$@"; }\n'
+			if publish_failure else "")
+		result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + metadata_block + decision_block +
+			failure_injection +
+			'echo "DECISION=$(reviewer_pass2_skip_reason)"\n'
+			'if [ "$(reviewer_pass2_skip_reason)" = skip ]; then if ! reviewer_publish_clean_pass1; then echo PUBLISH_FAILED; fi; fi\n'],
+			cwd=root, env=env, text=True, capture_output=True, check=True)
+		return {"decision": result.stdout.split("DECISION=", 1)[1].splitlines()[0],
+			"publish_failed": "PUBLISH_FAILED" in result.stdout,
+			"consensus": (root / "consensus.txt").read_text(encoding="utf-8") if (root / "consensus.txt").exists() else "",
+			"bundle_inputs": "\n".join(p.read_text(encoding="utf-8") for p in sorted(reviews.glob("review_*.txt"))),
+			"statuses": "\n".join(p.read_text(encoding="utf-8").strip() for p in sorted(reviews.glob("status_review_*.txt")))}
 
 
 def _reviewer_failback_helper_block() -> str:
@@ -3299,6 +3385,52 @@ def test_post_review_snapshot_ignores_only_its_own_incomplete_check() -> None:
 	assert "incomplete_count: 0\n" in result["context_text"]
 
 
+def test_strict_merge_snapshot_requires_complete_same_head_evidence() -> None:
+	sha = "a" * 40
+	self_url = "https://github.com/owner/repo/actions/runs/777/job/1"
+	green = {"id": 2, "head_sha": sha, "status": "completed", "conclusion": "success"}
+	self_pending = {"id": 1, "head_sha": sha, "status": "in_progress", "conclusion": None,
+		"app": {"slug": "github-actions"}, "details_url": self_url}
+	for runs, total, expected in [
+		([green, self_pending], 2, "ready"),
+		([green, {**self_pending, "details_url": "https://evil.example/actions/runs/777/job/1"}], 2, "not_ready"),
+		([green, {**self_pending, "app": {"slug": "other"}}], 2, "not_ready"),
+		([green, {**self_pending, "status": "completed", "conclusion": "failure"}], 2, "not_ready"),
+		([green, {**self_pending, "id": 3, "details_url": "https://github.com/owner/repo/actions/runs/888/job/3"}], 2, "not_ready"),
+		([green], 2, "invalid_snapshot"),
+		([{**green, "head_sha": "b" * 40}], 1, "invalid_snapshot"),
+		([{**green, "conclusion": "unknown"}], 1, "invalid_snapshot"),
+		([{**green, "status": "mystery"}], 1, "invalid_snapshot"),
+		([green, green], 2, "invalid_snapshot"),
+		([self_pending], 1, "invalid_snapshot"),
+	]:
+		result = _run_collect_pr_check_runs_harness(
+			pr_payload={"head": {"sha": sha}}, self_run_id="777", strict_merge_snapshot="true",
+			wait_timeout_secs="0", check_runs_responses=[{"json": [{"total_count": total, "check_runs": runs}]}],
+		)
+		assert result["returncode"] == 0, result
+		assert f"collection_status: {expected}\n" in result["context_text"], (expected, result)
+		assert result["mock_state"]["check_runs_index"] == 1, result
+	for response in (
+		{"json": []}, {"json": [{"total_count": 1, "check_runs": [green]}, "bad-page"]},
+		{"stdout": "garbage"}, {"json": [{"check_runs": [green]}]},
+		{"json": [{"total_count": 2, "check_runs": [green]},
+			{"total_count": 1, "check_runs": [{**green, "id": 3}]}]},
+		{"json": [{"total_count": 1000, "check_runs": [green]}]},
+	):
+		result = _run_collect_pr_check_runs_harness(
+			pr_payload={"head": {"sha": sha}}, strict_merge_snapshot="true",
+			check_runs_responses=[response],
+		)
+		assert "collection_status: invalid_snapshot\n" in result["context_text"], result
+
+	api_error = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": sha}}, strict_merge_snapshot="true",
+		check_runs_responses=[{"exit_code": 1}],
+	)
+	assert "collection_status: api_error\n" in api_error["context_text"], api_error
+
+
 def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
 	result = _run_collect_pr_check_runs_harness(
 		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
@@ -4185,6 +4317,54 @@ def test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex(
 	assert "matched_path=scripts/review_helper.sh" in always_full_result["stdout"]
 
 
+def test_pass2_clean_skip_publishes_review_outputs_and_consensus() -> None:
+	result = _run_pass2_decision_harness()
+	assert result["decision"] == "skip"
+	assert result["bundle_inputs"] == "NONE\n\nNONE\n"
+	assert result["statuses"] == "success\nsuccess"
+	assert result["publish_failed"] is False
+	assert "=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)" in result["consensus"]
+	text = _reviewers_text()
+	assert 'echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"' in text
+	assert 'REVIEW_PASS_DECISION_V1 pass=2 decision=skip reason=complete_clean_pass1' in text
+	assert 'REVIEW_PASS_DECISION_V1 pass=2 decision=run reason=' in text
+	assert 'CROSS_POLLINATION_FILE="$(build_cross_pollination_summary' in text
+
+
+def test_pass2_uncertain_or_actionable_evidence_keeps_full_pass() -> None:
+	clean = _run_pass2_decision_harness()["consensus"]
+	for kwargs, expected in (
+		({"raw_outputs": ("File: src/example.py\nProblem: bug\nNONE\n", "NONE\n")}, "raw_not_clean"),
+		({"raw_outputs": ("Requirement: missing\nEvidence of absence: missing\nNONE\n", "NONE\n")}, "raw_not_clean"),
+		({"statuses": ("failed\n", "success\n")}, "slot_not_success"),
+		({"statuses": ("", "success\n")}, "slot_not_success"),
+		({"extra_slot": True}, "slot_unaccounted"),
+		({"ledger": clean.replace("(No task gaps reported.)", "- requirement: missing")}, "ledger_not_clean"),
+		({"ledger": clean.replace("=== END CONSENSUS TASK GAPS ===", "")}, "ledger_malformed"),
+		({"ledger": clean.replace("=== FINDINGS FROM model_two ===", "=== FINDINGS FROM unknown ===")}, "ledger_malformed"),
+		({"path": "scripts/handler.sh"}, "protected_or_unknown_path"),
+		({"rename_from": "scripts/handler.sh"}, "protected_or_unknown_path"),
+		({"path": "src/auth.py"}, "security_path"),
+		({"new_text": "before\nauth token\nafter\n"}, "security_diff"),
+		({"list_override": "src/example.py\nextra.py\n"}, "paths_inconsistent"),
+		({"patch_override": "[NO_PR_DIFF_AVAILABLE]\n"}, "diff_inconsistent_or_large"),
+		({"patch_override": "alter_context"}, "diff_inconsistent_or_large"),
+		({"moved_head": True}, "head_moved"),
+	):
+		result = _run_pass2_decision_harness(**kwargs)
+		assert result["decision"] == expected, (kwargs, result)
+		assert result["bundle_inputs"] == ""
+		assert result["statuses"] == ""
+		assert result["consensus"] == ""
+
+
+def test_pass2_skip_publication_failure_leaves_no_partial_review_success() -> None:
+	result = _run_pass2_decision_harness(publish_failure=True)
+	assert result["decision"] == "skip"
+	assert result["publish_failed"] is True
+	assert result["bundle_inputs"] == result["statuses"] == result["consensus"] == ""
+
+
 def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides() -> None:
 	reviewer_models = _workflow_reviewer_models()
 	lite_diff = textwrap.dedent(
@@ -4970,6 +5150,112 @@ def _run_reviewer_loop_guard_function(function_names: list[str], script_body: st
 		check=False,
 		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
 	)
+
+
+def _run_shared_pr_state_workers(runtime_dir: Path, workers: int = 1) -> subprocess.CompletedProcess[str]:
+	reviewers_text = _reviewers_text()
+	definitions = []
+	for function_name in ("reviewer_pr_state_lookup", "reviewer_shared_pr_state"):
+		match = re.search(rf"(?ms)^{function_name}\(\) \{{\n.*?^\}}\n", reviewers_text)
+		assert match, function_name
+		definitions.append(match.group(0))
+	script = "\n".join(definitions) + """
+gh_retry() { "$@"; }
+gh() {
+	printf 'call\\n' >> "${MOCK_PR_CALLS}"
+	if [ -f "${MOCK_PR_FAILURE}" ]; then return 1; fi
+	cat "${MOCK_PR_STATE}"
+}
+for ((worker_idx=0; worker_idx<MOCK_PR_WORKERS; worker_idx++)); do
+	reviewer_shared_pr_state &
+done
+wait
+"""
+	return subprocess.run(
+		["bash", "-c", "set -euo pipefail\n" + script],
+		text=True,
+		capture_output=True,
+		check=False,
+		env={
+			**os.environ,
+			"RUNTIME_DIR": str(runtime_dir),
+			"REPOSITORY": "owner/repo",
+			"PR_NUMBER": "123",
+			"MOCK_PR_CALLS": str(runtime_dir / "calls.txt"),
+			"MOCK_PR_STATE": str(runtime_dir / "state.txt"),
+			"MOCK_PR_FAILURE": str(runtime_dir / "failure"),
+			"MOCK_PR_WORKERS": str(workers),
+		},
+	)
+
+
+def test_reviewer_pr_state_poll_shares_fresh_result_and_refreshes_expired_cache(tmp_path: Path) -> None:
+	state_file = tmp_path / "state.txt"
+	calls_file = tmp_path / "calls.txt"
+	cache_file = tmp_path / "reviewer_pr_state_observation.txt"
+	state_file.write_text("open\n", encoding="utf-8")
+	first = _run_shared_pr_state_workers(tmp_path, workers=8)
+	assert first.returncode == 0, first.stderr
+	assert first.stdout.splitlines() == ["open"] * 8
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 1
+
+	# A fresh open does not mask a closure forever; the next expired refresh
+	# detects it and all concurrent workers see the same closed observation.
+	state_file.write_text("closed\n", encoding="utf-8")
+	fresh = _run_shared_pr_state_workers(tmp_path, workers=4)
+	assert fresh.returncode == 0, fresh.stderr
+	assert fresh.stdout.splitlines() == ["open"] * 4
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 1
+	cache_file.write_text(f"owner/repo|123|open|{int(time.time()) - 31}\n", encoding="utf-8")
+	expired = _run_shared_pr_state_workers(tmp_path, workers=8)
+	assert expired.returncode == 0, expired.stderr
+	assert expired.stdout.splitlines() == ["closed"] * 8
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 2
+	assert "|closed|" in cache_file.read_text(encoding="utf-8")
+	watchdog = _reviewers_text()
+	assert 'pr_state="$(reviewer_shared_pr_state)"' in watchdog
+	assert "printf 'pr_closed_api' > \"${wd_reason_file}\"" in watchdog
+	assert 'touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"' in watchdog
+	assert 'echo "PR_CLOSED=true" >> "$GITHUB_ENV"' in watchdog
+
+
+def test_reviewer_pr_state_poll_falls_back_on_invalid_cache_api_and_lock(tmp_path: Path) -> None:
+	state_file = tmp_path / "state.txt"
+	calls_file = tmp_path / "calls.txt"
+	cache_file = tmp_path / "reviewer_pr_state_observation.txt"
+	state_file.write_text("merged\n", encoding="utf-8")
+	for bad_record in ("corrupt\n", f"owner/other|123|open|{int(time.time())}\n", f"owner/repo|123|open|{int(time.time()) + 60}\n"):
+		cache_file.write_text(bad_record, encoding="utf-8")
+		result = _run_shared_pr_state_workers(tmp_path)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.strip() == "merged"
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 3
+
+	cache_file.write_text(f"owner/repo|123|closed|{int(time.time()) - 60}\n", encoding="utf-8")
+	(tmp_path / "failure").touch()
+	failed = _run_shared_pr_state_workers(tmp_path)
+	assert failed.returncode == 0, failed.stderr
+	assert failed.stdout.strip() == "open"
+	assert "|closed|" in cache_file.read_text(encoding="utf-8"), "an API failure must not publish open"
+	(tmp_path / "failure").unlink()
+	closed = _run_shared_pr_state_workers(tmp_path)
+	assert closed.returncode == 0, closed.stderr
+	assert closed.stdout.strip() == "merged"
+
+	cache_file.unlink()
+	state_file.write_text("bogus\n", encoding="utf-8")
+	invalid_response = _run_shared_pr_state_workers(tmp_path)
+	assert invalid_response.returncode == 0, invalid_response.stderr
+	assert invalid_response.stdout.strip() == "open"
+	assert not cache_file.exists()
+	state_file.write_text("merged\n", encoding="utf-8")
+	(tmp_path / "reviewer_pr_state_observation.lock").unlink()
+	(tmp_path / "reviewer_pr_state_observation.lock").mkdir()
+	lock_failed = _run_shared_pr_state_workers(tmp_path)
+	assert lock_failed.returncode == 0, lock_failed.stderr
+	assert lock_failed.stdout.strip() == "merged"
+	assert not cache_file.exists()
+	assert len(calls_file.read_text(encoding="utf-8").splitlines()) == 7
 
 
 def _reviewer_tool_use_event(tool: str, tool_input: dict[str, object]) -> str:
@@ -7312,6 +7598,10 @@ def _run_auto_merge_helper_with_fake_gh(
 	expected_head_sha: str,
 	head_ref: str = "ai/issue-42",
 	forward_merge_auto_setting: str = "true",
+	check_runs_response: dict[str, object] | None = None,
+	live_head_sha: str | None = None,
+	e2e_smoke: bool = False,
+	enable_auto_merge_setting: str = "true",
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
 	"""Run scripts/review_enable_auto_merge.sh with a fake ``gh`` on PATH.
 
@@ -7323,6 +7613,10 @@ def _run_auto_merge_helper_with_fake_gh(
 	bin_dir.mkdir(parents=True, exist_ok=True)
 	calls_path = tmp / "gh_calls.jsonl"
 	github_output_path = tmp / "github_output.txt"
+	if check_runs_response is None:
+		check_runs_response = {"json": [{"total_count": 1, "check_runs": [
+			{"id": 1, "head_sha": expected_head_sha, "status": "completed", "conclusion": "success"},
+		]}]}
 	fake_gh = bin_dir / "gh"
 	fake_gh.write_text(
 		textwrap.dedent(
@@ -7335,11 +7629,15 @@ def _run_auto_merge_helper_with_fake_gh(
 			if args[:1] == ["api"]:
 			    path = next(a for a in args[1:] if not a.startswith("-"))
 			    if "/labels" in path:
-			        sys.stdout.write("")
+			        sys.stdout.write("e2e-smoke-test\\n" if {e2e_smoke!r} else "")
 			        sys.exit(0)
 			    if path.endswith("/pulls/42"):
-			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "body": ""}}))
+			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {(live_head_sha if live_head_sha is not None else expected_head_sha)!r}}}, "body": ""}}))
 			        sys.exit(0)
+			    if "/check-runs" in path:
+			        response = {check_runs_response!r}
+			        sys.stdout.write(json.dumps(response.get("json", [])) if "json" in response else response.get("stdout", ""))
+			        sys.exit(response.get("exit_code", 0))
 			    sys.stderr.write("unhandled gh api path: %r\\n" % (path,))
 			    sys.exit(1)
 			if args[:2] == ["pr", "merge"]:
@@ -7357,13 +7655,15 @@ def _run_auto_merge_helper_with_fake_gh(
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			"GITHUB_REPOSITORY": "test-owner/test-repo",
 			"PR_NUMBER": "42",
-			"ENABLE_AUTO_MERGE": "true",
+			"ENABLE_AUTO_MERGE": enable_auto_merge_setting,
 			"FORWARD_MERGE_FALLBACK_AUTO_MERGE": forward_merge_auto_setting,
 			"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
 			"INITIAL_HEAD_SHA": expected_head_sha,
 			"GH_TOKEN": "fake-token",
 			"GITHUB_ENV": str(github_output_path),
 			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"GITHUB_RUN_ID": "777",
+			"RUNNER_TEMP": str(tmp),
 		}
 	)
 	proc = subprocess.run(
@@ -7394,6 +7694,7 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
 			"AUTO_MERGE_READY_LABELS_ALLOWED=true",
 		]
+		assert len([c for c in calls if any("/check-runs" in arg for arg in c)]) == 1, calls
 
 	# The explicit forward-merge opt-out is manual-merge mode, not a review refusal.
 	with tempfile.TemporaryDirectory() as tmp_str:
@@ -7409,6 +7710,7 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
 			"AUTO_MERGE_READY_LABELS_ALLOWED=true",
 		]
+		assert not [c for c in calls if any("/check-runs" in arg for arg in c)], calls
 
 	# Forward-merge fallback PRs keep the merge-commit path, now head-bound.
 	with tempfile.TemporaryDirectory() as tmp_str:
@@ -7424,6 +7726,7 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
 			"AUTO_MERGE_READY_LABELS_ALLOWED=true",
 		]
+		assert len([c for c in calls if any("/check-runs" in arg for arg in c)]) == 1, calls
 
 	# A moved-head rejection leaves the label permission false.
 	with tempfile.TemporaryDirectory() as tmp_str:
@@ -7447,6 +7750,68 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
 				"AUTO_MERGE_READY_LABELS_ALLOWED=false"
 			]
+
+
+def test_auto_merge_helper_gates_both_enrolments_on_fresh_checks() -> None:
+	sha = "5e5f148079b569f2fb248b4cb99eca23883ad452"
+	green = {"id": 4, "head_sha": sha, "status": "completed", "conclusion": "success"}
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(
+			Path(tmp_str), expected_head_sha=sha, check_runs_response={"json": [{"total_count": 2, "check_runs": [
+				green,
+				{"id": 5, "head_sha": sha, "status": "in_progress", "conclusion": None,
+					"app": {"slug": "github-actions"},
+					"details_url": "https://github.com/test-owner/test-repo/actions/runs/777/job/5"},
+			]}]},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert len([c for c in calls if c[:2] == ["pr", "merge"]]) == 1, calls
+		assert len([c for c in calls if any("/check-runs" in arg for arg in c)]) == 1, calls
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"AUTO_MERGE_READY_LABELS_ALLOWED=false", "AUTO_MERGE_READY_LABELS_ALLOWED=true",
+		]
+	responses = [
+		{"json": [{"total_count": 2, "check_runs": [green, {"id": 5, "head_sha": sha, "status": "queued"}]}]},
+		{"json": [{"total_count": 1, "check_runs": [{**green, "conclusion": "failure"}]}]},
+		{"exit_code": 1},
+		{"json": [{"total_count": 2, "check_runs": [green]}]},
+		{"json": [{"total_count": 1, "check_runs": [{**green, "head_sha": "f" * 40}]}]},
+		{"json": []},
+	]
+	for head_ref in ("ai/issue-42", "auto/forward-merge-stable-20260916"):
+		for response in responses:
+			with tempfile.TemporaryDirectory() as tmp_str:
+				tmp = Path(tmp_str)
+				proc, calls = _run_auto_merge_helper_with_fake_gh(
+					tmp, expected_head_sha=sha, head_ref=head_ref, check_runs_response=response,
+				)
+				assert proc.returncode == 0, proc.stderr
+				assert not [c for c in calls if c[:2] == ["pr", "merge"]], (head_ref, response, calls)
+				assert len([c for c in calls if any("/check-runs" in arg for arg in c)]) == 1, calls
+				assert (tmp / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+					"AUTO_MERGE_READY_LABELS_ALLOWED=false",
+				]
+				assert "fresh green check-run snapshot" in proc.stdout, proc.stdout
+
+	# The metadata read rejects a moved head before the collector is invoked.
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(
+			Path(tmp_str), expected_head_sha=sha, live_head_sha="f" * 40,
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert not [c for c in calls if c[:2] == ["pr", "merge"] or any("/check-runs" in arg for arg in c)]
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
+		]
+
+	for options in ({"e2e_smoke": True}, {"head_ref": "orchestrator/project-6031"},
+		{"head_ref": "auto/forward-merge-stable-20260916", "forward_merge_auto_setting": "false"},
+		{"enable_auto_merge_setting": "false"}):
+		with tempfile.TemporaryDirectory() as tmp_str:
+			proc, calls = _run_auto_merge_helper_with_fake_gh(Path(tmp_str), expected_head_sha=sha, **options)
+			assert proc.returncode == 0, proc.stderr
+			assert not [c for c in calls if any("/check-runs" in arg for arg in c)], (options, calls)
+			assert not [c for c in calls if c[:2] == ["pr", "merge"]], (options, calls)
 
 
 def test_identical_failure_fingerprint_cap_gate_wiring() -> None:

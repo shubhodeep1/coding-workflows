@@ -682,9 +682,10 @@ a new value, add it to the appropriate overrides file with a
   session and restores them afterwards. Every git subprocess a test spawns
   therefore resolves its repository from `cwd`, or from variables the test
   sets itself.
-- Why: implement.yml, review_autofix.yml, and validate.yml export `GIT_DIR` /
-  `GIT_WORK_TREE` into `$GITHUB_ENV` ("Activate workspace shell context"), and
-  the codex editor inherits them when it runs `pytest`. A scratch-repo test
+- Why: review_autofix.yml and validate.yml export `GIT_DIR` / `GIT_WORK_TREE`
+  into `$GITHUB_ENV`; implement.yml exports them through its `BASH_ENV` hook
+  for Bash steps, including the codex editor's `pytest`, and clears the hook
+  after cleanup so checkout post-actions do not inherit the pin. A scratch-repo test
   that only set `cwd` was rebound to the live checkout: during the implement
   run for issue #4092, `tests/test_assemble_changelog.py` produced commit
   `37c72a5` ("base", author `test <test@example.invalid>`) on `ai/issue-4092`,
@@ -1801,6 +1802,7 @@ and shipped:
 - `VALIDATION_DISCOVERY_SKIPPED_BUDGET`
 - `VALIDATION_DISCOVERY_DRY_RUN`
 - `REVIEWER_RISK_TIER`
+- `REVIEW_PASS_DECISION_V1`
 - `REVIEWER_FILTER_SKIP`
 - `REVIEWER_FAILBACK`
 - `REVIEWER_FAILBACK_UNMAPPED`
@@ -1997,6 +1999,7 @@ LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_DISABLED
 LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_BUDGET
 LOG_PREFIX.name=VALIDATION_DISCOVERY_DRY_RUN
 LOG_PREFIX.name=REVIEWER_RISK_TIER
+LOG_PREFIX.name=REVIEW_PASS_DECISION_V1
 LOG_PREFIX.name=REVIEWER_FILTER_SKIP
 LOG_PREFIX.name=REVIEWER_FAILBACK
 LOG_PREFIX.name=REVIEWER_FAILBACK_UNMAPPED

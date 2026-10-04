@@ -211,6 +211,9 @@ def _run_baseline_resolver(
 	ref_payload: object | None = None,
 	ref_object_sha: str | None = None,
 	cached_issue_body: str | None = None,
+	inherited_issue_body: str | None = None,
+	issue_body_file_available: bool = True,
+	missing_issue_body_file_path: str | None = None,
 	repo: str = "owner/repo",
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict[str, object]]:
 	script = _extract_run_script("Resolve trusted prior PR baseline branch")
@@ -239,11 +242,12 @@ def _run_baseline_resolver(
 		)
 		output_file = tmp / "github_output.txt"
 		issue_body_file = tmp / "issue_body.txt"
-		if cached_issue_body is not None:
-			issue_body_file.write_text(cached_issue_body, encoding="utf-8")
+		if issue_body_file_available:
+			issue_body_file.write_text(cached_issue_body if cached_issue_body is not None else issue_body, encoding="utf-8")
 
 		env = os.environ.copy()
 		env.pop("ISSUE_BODY_FILE", None)
+		env.pop("ISSUE_BODY", None)
 		env.update(
 			{
 				"PYTHONDONTWRITEBYTECODE": "1",
@@ -252,13 +256,16 @@ def _run_baseline_resolver(
 				"GITHUB_OUTPUT": str(output_file),
 				"GITHUB_REPOSITORY": repo,
 				"GH_TOKEN": "test-token",
-				"ISSUE_BODY": issue_body,
 				"ISSUE_AUTHOR_ASSOCIATION": issue_author_association,
 				"REISSUE_PRESERVE_BASELINE_ENABLED": feature_enabled,
 			}
 		)
-		if cached_issue_body is not None:
+		if issue_body_file_available:
 			env["ISSUE_BODY_FILE"] = str(issue_body_file)
+		elif missing_issue_body_file_path is not None:
+			env["ISSUE_BODY_FILE"] = missing_issue_body_file_path
+		if inherited_issue_body is not None:
+			env["ISSUE_BODY"] = inherited_issue_body
 
 		result = _run_shell_script(script, cwd=tmp, env=env)
 		outputs = _parse_github_output(output_file)
@@ -275,12 +282,13 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	log_step = _step_block_text("Log checkout ref")
 
 	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}" in workflow
-	assert "ISSUE_BODY: ${{ github.event.issue.body || '' }}" in resolver_step
+	assert "ISSUE_BODY:" not in resolver_step
 	assert "ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}" in resolver_step
 	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}" in resolver_step
 	assert "ISSUE_BODY_FILE" in resolver_script
 	assert "except (OSError, UnicodeDecodeError):" in resolver_script
-	assert "ISSUE_BODY_FILE could not be read; falling back to event body" in resolver_script
+	assert "ISSUE_BODY_FILE unavailable; using resolved checkout ref" in resolver_script
+	assert 'os.environ.get("ISSUE_BODY"' not in resolver_script
 	assert 're.fullmatch(r"ai/reissue-baseline/pr-(\\d+)-([0-9a-f]{12})-\\d+-\\d+", branch)' in resolver_script
 	assert "issue author association is not trusted for review-blocked baseline reuse" in resolver_script
 	assert "review-blocked reissue metadata footer does not contain exactly one prior_pr_baseline_branch entry" in resolver_script
@@ -333,11 +341,12 @@ def test_resolver_prefers_cached_issue_body_file_when_event_body_is_empty() -> N
 	]
 
 
-def test_resolver_prefers_cached_issue_body_file_over_nonempty_event_body() -> None:
+def test_resolver_uses_file_instead_of_inherited_issue_body() -> None:
 	result, outputs, state = _run_baseline_resolver(
 		"Inline body without trusted footer metadata.\n",
 		feature_enabled="true",
 		cached_issue_body=_valid_issue_body(),
+		inherited_issue_body="Inline body without trusted footer metadata.\n",
 	)
 
 	assert result.returncode == 0, result.stderr
@@ -348,7 +357,19 @@ def test_resolver_prefers_cached_issue_body_file_over_nonempty_event_body() -> N
 	]
 
 
-def test_resolver_falls_back_to_event_body_when_cached_issue_body_file_is_not_utf8() -> None:
+def test_resolver_does_not_fall_back_to_inherited_body_when_file_has_no_footer() -> None:
+	result, outputs, state = _run_baseline_resolver(
+		"File body without trusted footer metadata.\n",
+		feature_enabled="true",
+		inherited_issue_body=_valid_issue_body(),
+	)
+	assert result.returncode == 0, result.stderr
+	assert outputs == {"branch": "", "status": "metadata-missing"}
+	assert state["calls"] == []
+	assert "review-blocked reissue metadata header is missing" in result.stdout
+
+
+def test_resolver_ignores_invalid_utf8_body_file_without_github_lookup() -> None:
 	script = _extract_run_script("Resolve trusted prior PR baseline branch")
 	with tempfile.TemporaryDirectory() as tmpdir:
 		tmp = Path(tmpdir)
@@ -381,7 +402,6 @@ def test_resolver_falls_back_to_event_body_when_cached_issue_body_file_is_not_ut
 				"GITHUB_OUTPUT": str(output_file),
 				"GITHUB_REPOSITORY": "owner/repo",
 				"GH_TOKEN": "test-token",
-				"ISSUE_BODY": _valid_issue_body(),
 				"ISSUE_BODY_FILE": str(issue_body_file),
 				"ISSUE_AUTHOR_ASSOCIATION": "OWNER",
 				"REISSUE_PRESERVE_BASELINE_ENABLED": "true",
@@ -393,12 +413,10 @@ def test_resolver_falls_back_to_event_body_when_cached_issue_body_file_is_not_ut
 		state = json.loads(state_file.read_text(encoding="utf-8"))
 
 	assert result.returncode == 0, result.stderr
-	assert outputs == {"branch": VALID_BRANCH, "sha": VALID_HEAD_OID, "status": "accepted"}
-	assert state["calls"] == [
-		["pr", "view", VALID_PR_NUMBER, "--repo", "owner/repo", "--json", "state,headRefOid"],
-		["api", f"repos/owner/repo/git/matching-refs/heads/{VALID_BRANCH}"],
-	]
-	assert "ISSUE_BODY_FILE could not be read; falling back to event body" in result.stdout
+	assert outputs == {"branch": "", "status": "metadata-missing"}
+	assert state["calls"] == []
+	assert "ISSUE_BODY_FILE unavailable; using resolved checkout ref" in result.stdout
+	assert _valid_issue_body() not in result.stdout + result.stderr
 
 
 def test_resolver_ignores_inherited_issue_body_file_when_cached_body_not_requested() -> None:
@@ -409,8 +427,9 @@ def test_resolver_ignores_inherited_issue_body_file_when_cached_body_not_request
 		os.environ["ISSUE_BODY_FILE"] = str(inherited_issue_body_file)
 		try:
 			result, outputs, state = _run_baseline_resolver(
-				"Inline body without trusted footer metadata.\n",
+				_valid_issue_body(),
 				feature_enabled="true",
+				issue_body_file_available=False,
 			)
 		finally:
 			if previous_issue_body_file is None:
@@ -421,7 +440,19 @@ def test_resolver_ignores_inherited_issue_body_file_when_cached_body_not_request
 	assert result.returncode == 0, result.stderr
 	assert outputs == {"branch": "", "status": "metadata-missing"}
 	assert state["calls"] == []
-	assert "review-blocked reissue metadata header is missing" in result.stdout
+	assert "ISSUE_BODY_FILE unavailable; using resolved checkout ref" in result.stdout
+
+
+def test_resolver_rejects_missing_and_unreadable_body_file_without_github_lookup() -> None:
+	for file_path in (None, "missing.txt"):
+		result, outputs, state = _run_baseline_resolver(
+			_valid_issue_body(), feature_enabled="true", issue_body_file_available=False,
+			missing_issue_body_file_path=file_path,
+		)
+		assert result.returncode == 0, result.stderr
+		assert outputs == {"branch": "", "status": "metadata-missing"}
+		assert state["calls"] == []
+		assert "ISSUE_BODY_FILE unavailable; using resolved checkout ref" in result.stdout
 
 
 def test_resolver_accepts_blank_lines_in_metadata_footer() -> None:

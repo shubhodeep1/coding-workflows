@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -159,6 +161,23 @@ def _readme_wrapper_example(template_name: str) -> dict:
 	return yaml.safe_load(raw_example)
 
 
+def _assert_readme_predicate_matches(job_name: str, template_name: str, predicate: str) -> None:
+	expected = _canonical_predicate(job_name)
+	actual = " ".join(predicate.split())
+	if actual == expected:
+		return
+	first_difference = next(
+		(index for index in range(min(len(expected), len(actual))) if expected[index] != actual[index]),
+		min(len(expected), len(actual)),
+	)
+	raise AssertionError(
+		f"README {template_name}.yml jobs.{job_name}.if predicate drifted from the reusable workflow: "
+		f"first differing normalized position={first_difference}; "
+		f"expected length={len(expected)} sha256={hashlib.sha256(expected.encode('utf-8')).hexdigest()}; "
+		f"actual length={len(actual)} sha256={hashlib.sha256(actual.encode('utf-8')).hexdigest()}"
+	)
+
+
 def test_readme_core_wrapper_examples_carry_reusable_predicates() -> None:
 	# README's "Create wrapper workflows" section is what a consumer hand-copies
 	# when it does not install workflow-templates/ verbatim. An example without
@@ -169,11 +188,36 @@ def test_readme_core_wrapper_examples_carry_reusable_predicates() -> None:
 		example = _readme_wrapper_example(template_name)
 		predicate = example["jobs"][job_name].get("if")
 		assert isinstance(predicate, str), f"README {template_name}.yml example lacks jobs.{job_name}.if"
-		assert " ".join(predicate.split()) == _canonical_predicate(job_name), (
-			f"README {template_name}.yml example predicate drifted from the reusable workflow"
-		)
+		_assert_readme_predicate_matches(job_name, template_name, predicate)
 		expected_uses = f"shubhodeep1/coding-workflows/.github/workflows/{PHASE_WORKFLOWS[job_name][0].rsplit('/', 1)[1]}@<40-character-release-sha>"
 		assert example["jobs"][job_name]["uses"] == expected_uses
+
+
+def test_readme_predicate_mismatch_diagnostics_are_bounded() -> None:
+	job_name, template_name = "clarify", "ai-clarify"
+	expected = _canonical_predicate(job_name)
+	for altered in (expected.replace("github.event_name", "github.event_namx", 1), expected + " extra"):
+		with patch(
+			f"{__name__}._readme_wrapper_example",
+			return_value={"jobs": {job_name: {"if": altered}}},
+		):
+			try:
+				test_readme_core_wrapper_examples_carry_reusable_predicates()
+			except AssertionError as exc:
+				message = str(exc)
+			else:
+				raise AssertionError("Expected altered README predicate to fail")
+		actual = " ".join(altered.split())
+		first_difference = next(
+			(index for index in range(min(len(expected), len(actual))) if expected[index] != actual[index]),
+			min(len(expected), len(actual)),
+		)
+		assert f"README {template_name}.yml jobs.{job_name}.if" in message
+		assert f"first differing normalized position={first_difference}" in message
+		assert f"expected length={len(expected)} sha256={hashlib.sha256(expected.encode('utf-8')).hexdigest()}" in message
+		assert f"actual length={len(actual)} sha256={hashlib.sha256(actual.encode('utf-8')).hexdigest()}" in message
+		assert expected not in message
+		assert altered not in message
 
 
 def main() -> int:

@@ -110,6 +110,7 @@ def test_backoff_large_attempt_clamps_before_overflow() -> None:
 def _scripted_run_git(
 	push_codes: list[int],
 	*,
+	diff_code: int = 1,
 	fetch_codes: list[int] | None = None,
 	show_ref_codes: list[int] | None = None,
 	rebase_codes: list[int] | None = None,
@@ -140,7 +141,7 @@ def _scripted_run_git(
 		if op == "ls-remote":
 			return _FakeProc(returncode=0, stdout="")
 		if op == "diff":
-			return _FakeProc(returncode=1)  # staged changes present
+			return _FakeProc(returncode=diff_code)
 		if op == "rev-parse":
 			return _FakeProc(returncode=0, stdout="0123456789abcdef\n")
 		if op == "fetch":
@@ -174,6 +175,8 @@ def _run_persist(
 	push_codes: list[int],
 	push_retries: int,
 	*,
+	timings: dict[str, int] | None = None,
+	diff_code: int = 1,
 	fetch_codes: list[int] | None = None,
 	show_ref_codes: list[int] | None = None,
 	rebase_codes: list[int] | None = None,
@@ -211,6 +214,7 @@ def _run_persist(
 		original_backoff = ai_memory_lib._push_retry_backoff_seconds
 		ai_memory_lib._run_git = _scripted_run_git(
 			push_codes,
+			diff_code=diff_code,
 			fetch_codes=fetch_codes,
 			show_ref_codes=show_ref_codes,
 			rebase_codes=rebase_codes,
@@ -232,6 +236,7 @@ def _run_persist(
 				push_retries=push_retries,
 				commit_message="ai-memory: test claim",
 				operation=_op,
+				timings=timings,
 			)
 			return result, backoff_attempts, call_log, None
 		except ai_memory_lib.MemoryGitError as exc:
@@ -257,6 +262,78 @@ def test_persist_memory_operation_backs_off_then_succeeds_on_retry() -> None:
 	assert result["push_attempts"] == 3, result
 	# One backoff per failed attempt (1 and 2); none after the success.
 	assert backoff_attempts == [1, 2], backoff_attempts
+
+
+def test_stage_timings_accumulate_actual_attempts_without_changing_results() -> None:
+	timings: dict[str, int] = {}
+	original_elapsed = ai_memory_lib._bounded_memory_elapsed_ms
+	ai_memory_lib._bounded_memory_elapsed_ms = lambda _start: 7
+	try:
+		result, backoff_attempts, call_log, exc = _run_persist([1, 1, 0], 3, timings=timings)
+	finally:
+		ai_memory_lib._bounded_memory_elapsed_ms = original_elapsed
+	assert exc is None
+	assert result is not None and result["push_attempts"] == 3
+	assert backoff_attempts == [1, 2]
+	assert timings == {
+		"clone_ms": 7,
+		"commit_ms": 7,
+		"push_ms": 21,
+		"retry_sleep_ms": 14,
+		"fetch_ms": 14,
+		"rebase_ms": 14,
+	}
+	assert [op for op, _args in call_log].count("push") == 3
+
+
+def test_stage_timings_omit_unexecuted_work_and_include_failed_fetch_rebase() -> None:
+	for options, expected_stages in (
+		({"diff_code": 0}, {"clone_ms"}),
+		({"fetch_codes": [1]}, {"clone_ms", "commit_ms", "push_ms", "retry_sleep_ms", "fetch_ms"}),
+		({"rebase_codes": [1]}, {"clone_ms", "commit_ms", "push_ms", "retry_sleep_ms", "fetch_ms", "rebase_ms"}),
+	):
+		timings: dict[str, int] = {}
+		result, backoffs, call_log, exc = _run_persist([1], 2, timings=timings, **options)
+		assert set(timings) == expected_stages
+		assert all(isinstance(value, int) and 0 <= value <= ai_memory_lib._MEMORY_TIMING_MAX_MS for value in timings.values())
+		if "diff_code" in options:
+			assert exc is None and result is not None and result["did_push"] is False
+			assert backoffs == []
+			assert not any(op in ("commit", "push") for op, _args in call_log)
+		else:
+			assert isinstance(exc, ai_memory_lib.MemoryGitError)
+			assert backoffs == [1]
+
+
+def test_stage_timings_include_exhausted_push_and_clamp_totals() -> None:
+	timings: dict[str, int] = {}
+	original_elapsed = ai_memory_lib._bounded_memory_elapsed_ms
+	ai_memory_lib._bounded_memory_elapsed_ms = lambda _start: ai_memory_lib._MEMORY_TIMING_MAX_MS
+	try:
+		result, backoffs, _calls, exc = _run_persist([1, 1], 2, timings=timings)
+	finally:
+		ai_memory_lib._bounded_memory_elapsed_ms = original_elapsed
+	assert result is None and isinstance(exc, ai_memory_lib.MemoryGitError)
+	assert backoffs == [1]
+	assert timings["push_ms"] == ai_memory_lib._MEMORY_TIMING_MAX_MS
+	assert timings["retry_sleep_ms"] == ai_memory_lib._MEMORY_TIMING_MAX_MS
+
+
+def test_stage_timings_include_failed_rebase_abort_without_retrying_push() -> None:
+	timings: dict[str, int] = {}
+	original_elapsed = ai_memory_lib._bounded_memory_elapsed_ms
+	ai_memory_lib._bounded_memory_elapsed_ms = lambda _start: 5
+	try:
+		result, backoffs, call_log, exc = _run_persist(
+			[1], 2, rebase_codes=[1], rebase_abort_codes=[1], timings=timings,
+		)
+	finally:
+		ai_memory_lib._bounded_memory_elapsed_ms = original_elapsed
+	assert result is None and isinstance(exc, ai_memory_lib.MemoryGitError)
+	assert "rebase --abort also failed" in str(exc)
+	assert timings["rebase_ms"] == 10
+	assert backoffs == [1]
+	assert [op for op, _args in call_log].count("push") == 1
 
 
 def test_persist_memory_operation_backs_off_every_attempt_before_raising() -> None:

@@ -68,7 +68,12 @@ jobs:
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p "${RUNTIME_DIR}"
+          mkdir -p -m 0700 "${RUNTIME_DIR}"
+          if [ -L "${RUNTIME_DIR}" ] || [ "$(stat -c %u "${RUNTIME_DIR}")" != "$(id -u)" ]; then
+            echo "::error::Unsafe poll runtime directory"
+            exit 1
+          fi
+          chmod 0700 "${RUNTIME_DIR}"
           {
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "STATE_FILE=${RUNTIME_DIR}/state.json"
@@ -584,12 +589,14 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: setup-uv
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        # Semble is now installed on first judge query in the poller. Keep
+        # these named steps for workflow compatibility, without eager work.
+        if: ${{ false }}
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: ${{ false }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -612,7 +619,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: ${{ false }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -660,6 +667,7 @@ jobs:
           source scripts/memory_helpers.sh || true
           memory_ensure_branch
           memory_record_run_event \
+            --poll-checkout-dir "${RUNTIME_DIR}/poll-memory-checkout" \
             --run-id "${GITHUB_RUN_ID}" \
             --workflow "orchestrate_poll" \
             --event-type "poll_started" \
@@ -951,6 +959,8 @@ jobs:
       - name: Record poll run end
         if: always()
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           if [ ! -f scripts/memory_helpers.sh ]; then
@@ -967,6 +977,7 @@ jobs:
           fi
 
           memory_record_run_event \
+            --poll-checkout-dir "${RUNTIME_DIR}/poll-memory-checkout" \
             --run-id "${GITHUB_RUN_ID}" \
             --workflow "orchestrate_poll" \
             --event-type "poll_completed" \
@@ -974,6 +985,17 @@ jobs:
             --message "Poll cycle completed with job status ${{ job.status }}" \
             --actor "${GITHUB_ACTOR}" \
             --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"job_status\":\"${{ job.status }}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work || 'false' }}\"}" || true
+
+      - name: Clean up poll memory checkout
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_dir="/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [ "${RUNTIME_DIR:-}" = "${expected_dir}" ] && [ -d "${expected_dir}" ] &&
+             [ ! -L "${expected_dir}" ] && [ "$(stat -c %u "${expected_dir}")" = "$(id -u)" ]; then
+            rm -rf -- "${expected_dir}/poll-memory-checkout"
+          fi
 
       - name: Notify Telegram on job failure
         if: failure()

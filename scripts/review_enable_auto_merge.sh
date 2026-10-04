@@ -190,6 +190,47 @@ if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_
 	exit 0
 fi
 
+fresh_merge_checks_ready()
+{
+	local merge_snapshot_dir merge_snapshot_ok="false"
+	local -a merge_snapshot_lines=()
+	if [ ! -f "${SCRIPT_DIR}/collect_pr_check_runs_context.py" ]; then
+		echo "::warning::Fresh check-run collector is unavailable for PR #${PR_NUMBER}; auto-merge withheld."
+		return 1
+	fi
+	if ! merge_snapshot_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/review-merge-checks.XXXXXX")"; then
+		echo "::warning::Could not create fresh check-run snapshot for PR #${PR_NUMBER}; auto-merge withheld."
+		return 1
+	fi
+	# The earlier reviewer payload may refer to a different head. Give the
+	# staged collector an isolated, reviewed-SHA-bound input and output.
+	if printf '{"head":{"sha":"%s"}}\n' "${INITIAL_HEAD_SHA}" > "${merge_snapshot_dir}/pr.json" \
+		&& PR_PAYLOAD_FILE="${merge_snapshot_dir}/pr.json" \
+			PR_CHECK_RUNS_CONTEXT_FILE="${merge_snapshot_dir}/checks.txt" \
+			CHECK_RUNS_WAIT_TIMEOUT_SECS=0 CHECK_RUNS_LOG_TAIL_BYTES=0 \
+			CHECK_RUNS_STRICT_MERGE_SNAPSHOT=true CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT=true \
+			SELF_RUN_ID="${GITHUB_RUN_ID:-}" PYTHONDONTWRITEBYTECODE=1 \
+			python3 "${SCRIPT_DIR}/collect_pr_check_runs_context.py" \
+		&& [ -s "${merge_snapshot_dir}/checks.txt" ]; then
+		mapfile -n 6 -t merge_snapshot_lines < "${merge_snapshot_dir}/checks.txt"
+		if [ "${merge_snapshot_lines[0]:-}" = "PR_CHECK_RUNS_CONTEXT" ] \
+			&& [ "${merge_snapshot_lines[1]:-}" = "head_sha: ${INITIAL_HEAD_SHA}" ] \
+			&& [ "${merge_snapshot_lines[2]:-}" = "collection_status: ready" ] \
+			&& [[ "${merge_snapshot_lines[3]:-}" =~ ^total_check_runs:\ [1-9][0-9]*$ ]] \
+			&& [ "${merge_snapshot_lines[4]:-}" = "failed_count: 0" ] \
+			&& [ "${merge_snapshot_lines[5]:-}" = "incomplete_count: 0" ]; then
+			merge_snapshot_ok="true"
+		fi
+	fi
+	rm -f "${merge_snapshot_dir}/pr.json" "${merge_snapshot_dir}/checks.txt"
+	rmdir "${merge_snapshot_dir}" 2>/dev/null || true
+	if [ "${merge_snapshot_ok}" != "true" ]; then
+		echo "::warning::PR #${PR_NUMBER} has no verified fresh green check-run snapshot for reviewed head ${INITIAL_HEAD_SHA}; auto-merge withheld."
+		return 1
+	fi
+	return 0
+}
+
 # Scoped opt-out for forward-merge fallback PRs opened by
 # forward-merge-stable-to-main.yml — these are routed AWAY from the
 # `--squash --auto` tail below. Head ref is hard-coded as
@@ -228,6 +269,9 @@ if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'
 	# repo var to any non-'true' value to fall back to the previous
 	# behaviour of leaving these PRs for a manual merge commit.
 	if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
+		if ! fresh_merge_checks_ready; then
+			exit 0
+		fi
 		echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}')..."
 		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=merge_commit"
 		if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
@@ -279,6 +323,9 @@ if [ "${_orch_is_integration_pr}" = "true" ]; then
 	exit 0
 fi
 
+if ! fresh_merge_checks_ready; then
+	exit 0
+fi
 echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
 echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=squash"
 if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
