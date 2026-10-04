@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:326-389, 477-485, 1323-1333; workflow-templates/.claude/hooks/pr_merge_status_guard.py:326-389, 477-485, 1323-1333 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The guard discards per-command `git -c remote.origin.url=...` overrides, so pushes using the literal remote `origin` can write to another repository without the foreign-destination confirmation.\n  WHY: Git applies the override at push time while the guard treats `origin` as trusted; severity was reported as BLOCKER by minimax and MAJOR by the other reviewers.\n- .claude/hooks/pr_merge_status_guard.py:1320-1323, 1399 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: A deletion or tag-only push to a foreign remote can add an empty string to `bulk_reasons`, producing a confirmation message with a leading comma.\n  WHY: The reviewers report that the empty string is included in the sorted union with `unverified_destinations`, making the message malformed even though confirmation is still requested.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"An explicit `--repo` or positional remote naming a different or unverified destination requests human confirmation instead of silently checking the checkout's origin.\"\n  expected_change_site: .claude/hooks/pr_merge_status_guard.py `_guarded_git_invocations` and `_push_targets`, plus its workflow-templates/ twin\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The last_run_diff and full PR diff add `target.remote` tracking for `--repo` and positional remotes but do not extend that tracking to `git -c remote.X.url=...` overrides; the `_evaluate_bash` foreign-remote check keys on `target.remote`; no test in tests/test_pr_merge_status_guard.py exercises `git -c remote.origin.url=...` push.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py; same in workflow-templates/.claude/hooks/pr_merge_status_guard.py | severity=MAJOR | confidence=5\n  PROBLEM: The guard consumes but does not record `git -c remote.origin.url=<URL>`, allowing pushes to a different repository through the trusted literal remote `origin` without confirmation.\n  WHY: Git applies the override at runtime, while the foreign-destination check sees `origin` and is bypassed.\n- .claude/hooks/pr_merge_status_guard.py | severity=NIT | confidence=4\n  PROBLEM: A deletion-only or tag-only push to a foreign remote can produce a confirmation message with a leading comma.\n  WHY: The empty `bulk` value is included in the sorted union with `unverified_destinations`, resulting in malformed message formatting.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py | severity=BLOCKER | confidence=5\n  PROBLEM: The guard discards `git -c remote.origin.url=...` overrides, allowing a push through `origin` to target another repository without confirmation.\n  WHY: The parser consumes and discards the override, then classifies the literal `origin` as trusted.\n- TASK_GAP\n  Requirement: \"An explicit `--repo` or positional remote naming a different or unverified destination requests human confirmation instead of silently checking the checkout's origin.\" (PR description, README \"Merged-PR guard\" section, agents.md \"Merged-PR guard\" section)\n  Expected change site: .claude/hooks/pr_merge_status_guard.py `_guarded_git_invocations` lines 368-389 (the `-c` handler that drops the value) and/or _push_targets lines 425-517 (the parser that derives `remote_value` from arguments only, never from `git -c` overrides), plus its workflow-templates/ twin.\n  Evidence of absence: The last_run_diff and full PR diff add `target.remote` tracking for `--repo` and positional remotes and route them through the foreign-remote confirmation; they do not extend the same tracking to `git -c remote.X.url=...` overrides, which `git push` accepts and applies per-invocation. The `_evaluate_bash` foreign-remote check at line 1323 keys on `target.remote`, which is empty for `git -c`-override pushes. No test in tests/test_pr_merge_status_guard.py exercises `git -c remote.origin.url=...` push (only one test mentions `remote.origin.url`, at line 1182, as part of a fixture description).\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py | severity=MAJOR | confidence=5\n  PROBLEM: A per-command `remote.origin.url` override is invisible to the guard, allowing pushes through `origin` to bypass foreign-destination verification.\n  WHY: Git sends the write to the overridden repository, while the guard treats the target as the checkout's `origin`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py | severity=MAJOR | confidence=4\n  PROBLEM: The guard does not retain `git -c` configuration overrides, so `remote.origin.url` can redirect a push without triggering confirmation.\n  WHY: `_push_targets` sees the literal `origin`, and the deletion path returns `[]` for that remote, while Git applies the override.\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py | severity=NIT | confidence=5\n  PROBLEM: A deletion or tag-only push to a foreign remote can add an empty string to `bulk_reasons`, producing a leading comma in the confirmation message.\n  WHY: The reviewers report that `set(bulk_reasons) | unverified_destinations` includes the empty string and sorts it first.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9d5f71f8bc52fc58ad5a085cd8eecab9ed97803a0a8270d49a974569eac970f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6187,
+    "run_id": "37240888802",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37240888802",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004232230_c7a124ca9c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6187,
+    "run_id": "37240888802"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T23:22:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
