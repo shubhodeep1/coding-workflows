@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:286 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: The plan workflow does not stage `claude_settings.json.tmpl`, so Claude settings rendering fails and every PLAN run falls back to Codex.\n  WHY: `claude_run` requires the unstaged template to render settings before invoking Claude; severity disagreement: deepseek_deepseek-v4-pro rated this BLOCKER, while z-ai_glm-5_2 rated it MAJOR.\n- tests/test_plan_codex_step_extraction.py:159-181 | severity=low | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The PLAN Claude tests use a stub `claude_run` and do not exercise the real settings-rendering path that fails when the template is unstaged.\n  WHY: The stub writes fixed output directly, so the tests cannot detect the missing-template fallback.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The Phase 5a plan must switch CLARIFY, CLARIFY_RESPOND, and PLAN roles to Claude by default; specifically, PLAN (`plan.yml` through `scripts/run_plan_codex.sh`) runs on Claude by default.\n  expected_change_site: `.github/workflows/plan.yml` staged-scripts list\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  EVIDENCE: `plan.yml` stages `ai_engine.sh` and `claude_engine.py` but omits `claude_settings.json.tmpl`, which `claude_engine.py` needs to render settings; the parallel clarify workflows stage the template, and without it PLAN falls back to Codex.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/plan.yml:Staged-scripts list | severity=critical | confidence=[5]\n  PROBLEM: `claude_settings.json.tmpl` is missing from the plan workflow's staged-scripts list, so Claude settings rendering fails and PLAN falls back to Codex.\n  WHY: `claude_run` needs the template to render settings, but it is not staged.\n- .github/workflows/orchestrate_clarify_respond.yml:Self-critique and revise step | severity=low | confidence=[4]\n  PROBLEM: The self-critique step resolves `CLARIFY_RESPOND_ENGINE` from the initial engine resolution rather than the answer step's potentially updated fallback value.\n  WHY: After the answer loop falls back to Codex, the self-critique step tries Claude again, potentially wasting an attempt before falling back within that call.\n- TASK_GAP\n  Requirement: The Phase 5a plan must switch CLARIFY, CLARIFY_RESPOND, and PLAN roles to Claude by default (from changelog fragment and PR description).\n  Expected change site: plan.yml \"Stage workflow support files\" step, scripts staging list\n  Evidence of absence: The plan.yml staging list adds ai_engine.sh and claude_engine.py but does not add claude_settings.json.tmpl, which claude_engine.py settings needs to render the Claude permission policy file before every claude -p invocation. The clarify and clarify-respond workflows stage claude_settings.json.tmpl; plan omits it. Compare plan.yml line ~287 (after: \"...write_guard.sh ai_engine.sh claude_engine.py; do\") with clarify.yml line ~225 (after: \"...orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do\").\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: BLOCKER\n- .github/workflows/plan.yml | HARDENING_SUGGESTION\n  Location: \"Stage workflow support files\" step, fetched-scripts for-loop\n  Issue: No test verifies the plan staging list contains every file claude_run needs (ai_engine.sh does not test the claude_settings.json.tmpl dependency end-to-end because the mock defines claude_run without exercising _ai_engine_py settings)\n  Suggested minimal fix: Add claude_settings.json.tmpl to the plan staging list (\".write_guard.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl; do\"). Also add a staging assertion to tests/test_plan_clarify_blocked_output.py (or a new test in test_plan_codex_step_extraction.py) that verifies the plan workflow stages the settings template.\n  Estimated lines changed: 3\n  HARDENING_RISK_SCORE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/plan.yml:286 | severity=high | confidence=[4]\n  PROBLEM: The plan workflow does not stage `claude_settings.json.tmpl`, so PLAN on Claude always fails settings rendering and falls back to Codex.\n  WHY: The real `claude_run` requires the template next to `claude_engine.py`; the plan workflow does not copy it into the staged scripts directory.\n- tests/test_plan_codex_step_extraction.py:159-181 | severity=low | confidence=[4]\n  PROBLEM: The PLAN Claude tests use a stand-in `claude_run` and never exercise the real `ai_engine.sh::claude_run` \u2192 `_ai_engine_py settings` path.\n  WHY: The mock bypasses the missing-template failure, leaving the PLAN Claude path defect invisible to the suite.\n- TASK_GAP\n  Requirement: \"PLAN (`plan.yml` through `scripts/run_plan_codex.sh`)\" runs on Claude by default (README.md:1860-1862, changelog.d/6118 line 4, agents.md:613).\n  Expected change site: `.github/workflows/plan.yml` line 286 staged-scripts list must include `claude_settings.json.tmpl` so `claude_run`'s `_ai_engine_py settings` can render the P5 permission policy.\n  Evidence of absence: the `for f in ...` loop at plan.yml:286 ends with `ai_engine.sh claude_engine.py` and does not list `claude_settings.json.tmpl`, while the parallel cutovers in clarify.yml:224 and orchestrate_clarify_respond.yml:287 both list it. Without it, `claude_engine.py:cmd_settings` cannot read the template at `SCRIPT_DIR/claude_settings.json.tmpl`, `claude_run` returns 75, and PLAN always falls back to codex \u2014 the cutover is inert.\n  ISSUE_CONFIDENCE: 4\n  SEVERITY: MAJOR\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bcbdeed6f33a1005053f4ad5361cd8704e8a49f9b17c9567aae3d430e0b53be8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37207007034",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37207007034",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004141221_a7aa1abfea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37207007034"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T14:12:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
