@@ -1927,8 +1927,8 @@ on Claude (`claude_run`, or the clarify sandbox's Claude branch). When Claude
 cannot start (no CLI, no credential, clarify image build failure or every
 account gated: exit `75`, logged
 `AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call.
-For `SECURITY_AUDIT`, the codex binary is checked only when that fallback is
-needed; a missing binary still fails with `codex-preflight` on the fallback path.
+For `SECURITY_AUDIT`, the Codex config and binary are checked only when that
+fallback is needed; missing prerequisites still fail with `codex-preflight`.
 `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
 Implementation attempts on Claude honor the same `CODEX_THREAD_REUSE_TIMEOUT_SECS`

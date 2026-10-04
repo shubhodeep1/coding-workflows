@@ -1102,32 +1102,44 @@ def test_security_audit_missing_codex_reports_sanitized_context() -> None:
 	assert final_state.get("codex_calls", []) == []
 
 
-def test_security_audit_codex_preflight_only_on_fallback(tmp_path: Path) -> None:
+def test_security_audit_codex_preflight_only_on_fallback() -> None:
 	text = SCRIPT_PATH.read_text(encoding="utf-8")
-	start = text.index("security_audit_claude_rc=75\n")
+	start = text.index('security_audit_require_file "codex-preflight" "${RENDERED_PROMPT_FILE}"\n')
 	end = text.index('if [ "${security_audit_claude_rc}" -ne 75 ]; then', start)
-	engine_dir = tmp_path / "scripts"
-	engine_dir.mkdir()
-	(engine_dir / "ai_engine.sh").write_text(
-		'claude_run_selected() { [ "${MOCK_CLAUDE_EXIT:-0}" = 75 ] && return 75; printf "[]\\n" > "$3"; }\n',
-		encoding="utf-8",
-	)
-	(tmp_path / "prompt.txt").write_text("audit\n", encoding="utf-8")
-	script = (
-		'command() { if [ "$1" = -v ] && [ "$2" = codex ]; then return 1; fi; builtin command "$@"; }\n'
-		'security_audit_emit_failure() { echo "phase=$1 path=$2" >&2; }\n'
-		'SECURITY_AUDIT_SUPPORT_DIR=.\nRENDERED_PROMPT_FILE=prompt.txt\nCODEX_OUTPUT_FILE=out.txt\n'
-		'CODEX_ERROR_FILE=err.txt\nWORKFLOW_EDITOR_MODEL=test\n' + text[start:end]
-	)
-	for mode, expected_status in (("0", 0), ("75", 1)):
-		proc = subprocess.run(["bash", "-c", script], cwd=tmp_path,
-			env={**os.environ, "AI_ENGINE_RESOLVED_SECURITY_AUDIT": "claude", "MOCK_CLAUDE_EXIT": mode},
-			capture_output=True, text=True, check=False)
-		assert proc.returncode == expected_status, proc.stderr
-		if mode == "0":
-			assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "[]\n"
-		else:
-			assert "phase=codex-preflight path=codex" in proc.stderr
+	with tempfile.TemporaryDirectory(prefix="security-audit-engine-") as temporary_dir:
+		tmp_path = Path(temporary_dir)
+		engine_dir = tmp_path / "scripts"
+		engine_dir.mkdir()
+		(engine_dir / "ai_engine.sh").write_text(
+			'claude_run_selected() { [ "${MOCK_CLAUDE_EXIT:-0}" = 75 ] && return 75; printf "[]\\n" > "$3"; }\n',
+			encoding="utf-8",
+		)
+		(tmp_path / "prompt.txt").write_text("audit\n", encoding="utf-8")
+		codex_dir = tmp_path / "codex-home"
+		codex_dir.mkdir()
+		(codex_dir / "config.toml").write_text("", encoding="utf-8")
+		script = (
+			'set -e\n'
+			'command() { if [ "$1" = -v ] && [ "$2" = codex ]; then return 1; fi; builtin command "$@"; }\n'
+			'security_audit_emit_failure() { echo "phase=$1 path=$2" >&2; }\n'
+			'security_audit_require_file() { [ -f "$2" ]; }\n'
+			'security_audit_require_directory() { [ -d "$2" ]; }\n'
+			'security_audit_require_writable_destination() { :; }\n'
+			'SECURITY_AUDIT_SUPPORT_DIR=.\nRENDERED_PROMPT_FILE=prompt.txt\nCODEX_OUTPUT_FILE=out.txt\n'
+			'CODEX_ERROR_FILE=err.txt\nWORKFLOW_EDITOR_MODEL=test\n' + text[start:end]
+		)
+		for mode, config_available, expected_status in (("0", False, 0), ("75", False, 1), ("75", True, 1)):
+			proc = subprocess.run(["bash", "-c", script], cwd=tmp_path,
+				env={**os.environ, "AI_ENGINE_RESOLVED_SECURITY_AUDIT": "claude", "MOCK_CLAUDE_EXIT": mode,
+					"CODEX_HOME": str(codex_dir if config_available else tmp_path / "missing-codex-home")},
+				capture_output=True, text=True, check=False)
+			assert proc.returncode == expected_status, proc.stderr
+			if mode == "0":
+				assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "[]\n"
+			elif config_available:
+				assert "phase=codex-preflight path=codex" in proc.stderr
+			else:
+				assert "phase=codex-preflight path=codex" not in proc.stderr
 
 
 def test_security_audit_redacts_credential_shaped_path_context() -> None:
