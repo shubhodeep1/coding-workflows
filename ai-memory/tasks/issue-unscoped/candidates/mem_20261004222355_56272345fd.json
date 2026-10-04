@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The required template-parity assertion fails because the root and template copies of `audit-plans.md` are not byte-identical.\n  WHY: `tests-hooks-and-orchestrator` fails this test, causing the aggregate `lint` check to fail and blocking the PR from merging.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CI must pass; the PR check-runs show `tests-hooks-and-orchestrator` failed because the `audit-plans.md` template-parity test found differing copies, causing the aggregate `lint` check to fail.\n  expected_change_site: `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: Neither file appears in the PR changed-files list or LAST RUN CHANGED FILES; the files differ at line 1; the CI log confirms `test_template_parity` failed; the CI log_tail shows the parity test failing with diff output; the LAST RUN DIFF does not touch either file; the CI log_tail shows the parity test failing with a diff between the two copies.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nRequirement: The PR description states CI passes (\"ruff, actionlint, shellcheck and inventory parity are clean, and the workflow size guard passes\") and claims the isolation test files are now wired into ci.yml. The CI run on the PR head (sha e176393) shows tests-hooks-and-orchestrator failed, which cascades to the aggregate lint check failing.\n\nExpected change site: .claude/commands/audit-plans.md \u2014 the root copy must be byte-identical to workflow-templates/.claude/commands/audit-plans.md to satisfy the test_template_parity assertion at tests/test_audit_plans_command.py:30.\n\nEvidence of absence: Neither .claude/commands/audit-plans.md nor workflow-templates/.claude/commands/audit-plans.md appears in the PR changed-files list or LAST RUN CHANGED FILES. The files differ at line 1: the root copy says \"/implement-plan-claude projects (in-progress docs/implement-plan/<slug>.md logs and their claude/implement-plan-* PRs)\" while the template says \"legacy /implement-plan-claude projects still in flight (in-progress docs/implement-plan/<slug>.md logs and their claude/implement-plan-* PRs). New /implement-plan-claude invocations dispatch the orchestrator rather than creating in-session projects.\" The CI log confirms test_template_parity failed (1 failed, 8 passed in tests-hooks-and-orchestrator), which in turn failed the aggregate lint check.\n\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_audit_plans_command.py:29-30 | severity=BLOCKER | confidence=5\n  PROBLEM: The required template-parity assertion fails on the PR head. The CI log reports differences between the root and template copies of `audit-plans.md`.\n  WHY: `tests-hooks-and-orchestrator` fails this test, causing the aggregate `lint` check to fail. Neither command file is in the PR changed-files list or the last-run diff, so the mismatch remains uncorrected.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nRequirement: CI must pass \u2014 the PR check-runs show `tests-hooks-and-orchestrator` failed with 1 test failure (`tests/test_audit_plans_command.py::test_template_parity`), which also fails the aggregate `lint` check.\nExpected change site: `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md` \u2014 the test at `tests/test_audit_plans_command.py:29-30` asserts these files are byte-identical, but they differ (the root copy says \"in-session\" / \"AI orchestrator\" while the template says \"Claude-engine orchestrator hand-off\" / \"default-engine hand-off\" at lines 103, 126-127).\nEvidence of absence: The CI log_tail shows the parity test failing with diff output. Neither file appears in the PR changed-files list, and the LAST RUN DIFF does not touch either file. The editor has documented this as BLOCKED because `.claude/commands/` files are excluded from the editor checkout, making them uneditable in this sandbox. However, the PR cannot merge until this parity is restored.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_audit_plans_command.py:29-30 | severity=BLOCKER | confidence=5\n  PROBLEM: The root `.claude/commands/audit-plans.md` and the template `workflow-templates/.claude/commands/audit-plans.md` are not byte-identical. They differ at lines 103, 126, and 127: the root copy says `/implement-plan-claude (in-session) or /implement-plan-ai (AI orchestrator)` and `in-flight /implement-plan-claude`, while the template copy says `/implement-plan-claude (Claude-engine orchestrator hand-off) or /implement-plan-ai (default-engine hand-off)` and `in-flight legacy /implement-plan-claude`. The template was updated when main's Phase 5a (#6206) merged, but the root copy was never synced.\n  WHY: `tests-hooks-and-orchestrator` CI job fails with `1 failed, 8 passed`, which causes the aggregate `lint` required check to fail. The PR cannot merge while this test fails.\n=== END FINDINGS FROM z-ai_glm-5_2",
+  "fingerprint": "68988c5026a4fc9026737b65dfd15be680f2614582461ef1c07d74c3598e2c06",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6187,
+    "run_id": "37238189443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37238189443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004222355_56272345fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6187,
+    "run_id": "37238189443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T22:23:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
