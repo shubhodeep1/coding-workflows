@@ -446,8 +446,8 @@ jobs:
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
              [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-retarget-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
-            echo "::warning::Unverified optional retarget helper checkout; continuing without it."
-            exit 0
+            echo "::error::Unverified retarget helper checkout."
+            exit 1
           fi
           echo "RETARGET_HELPER_VERIFIED=true" >> "$GITHUB_ENV"
 
@@ -947,7 +947,9 @@ jobs:
               marker_base = fields.get("base_ref", "")
               if marker_base and marker_base != base_ref:
                   continue
-              if not marker_base and base_updated_at and str(comment.get("created_at") or "") < base_updated_at:
+              # A legacy marker has no base identity; a PR update timestamp
+              # cannot prove whether it was posted before a base change.
+              if not marker_base:
                   continue
               author_login = str(comment.get("author_login") or "").strip().lower()
               if not marker_author_login or author_login != marker_author_login:
@@ -3239,7 +3241,6 @@ jobs:
           import os
           import shutil
           import sys
-          from datetime import datetime
           from pathlib import Path
 
 
@@ -3336,16 +3337,10 @@ jobs:
                   marker_base = payload.get("base_ref")
                   if marker_base and marker_base != current_base_ref:
                       continue
-                  if not marker_base and current_base_retargeted:
+                  # Cache restoration can change mtime, and PR updated_at is
+                  # not a base-change timestamp. Legacy state is unverifiable.
+                  if not marker_base:
                       continue
-                  if not marker_base and current_base_updated_at:
-                      try:
-                          base_timestamp = datetime.fromisoformat(current_base_updated_at.replace("Z", "+00:00")).timestamp()
-                          marker_timestamp = marker_path.stat().st_mtime
-                      except (ValueError, OSError):
-                          continue
-                      if marker_timestamp < base_timestamp:
-                          continue
                   resume_round = sanitize_round(payload.get("resume_round"))
                   try:
                       marker_mtime_ns = marker_path.stat().st_mtime_ns

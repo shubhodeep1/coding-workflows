@@ -11,7 +11,7 @@ Port P6 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md` (Phase 8
 | API calls per hop otherwise | 2 reads, plus 1 `PATCH` when a PR is retargeted |
 | New log prefix | `RETARGET_MERGED_BASE` |
 
-What this means for operators: a fix-up issue or PR that would have landed on a branch nobody merges any more lands on the live base instead. Deleted merged branches also resolve to their former base; transient ref lookup failures keep the original branch. After a PR base changes, review runs against the new base rather than trusting earlier skip or resume state. Set `RETARGET_MERGED_BASE_ENABLED=false` to turn both paths off.
+What this means for operators: a fix-up issue or PR that would have landed on a branch nobody merges any more lands on the live base instead. Deleted merged branches also resolve to their former base; transient ref lookup failures keep the original branch. After a PR base changes, review runs against the new base rather than trusting earlier skip or resume state; legacy partial markers without a base reference cannot suppress review. A missing optional helper checkout skips retargeting with a warning, while an identity mismatch fails the gate. Set `RETARGET_MERGED_BASE_ENABLED=false` to turn both paths off.
 
 ### For contributors
 

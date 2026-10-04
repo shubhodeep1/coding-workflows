@@ -49,7 +49,7 @@ retarget_urlencode()
 retarget_lookup_merged()
 {
 	local repo="$1" branch="$2"
-	local owner="${repo%%/*}" head_query merged_json number base head_sha tip
+	local owner="${repo%%/*}" head_query merged_json number base head_sha tip tip_error_file tip_error
 	head_query="$(retarget_urlencode "${owner}:${branch}")" || return 1
 	if ! merged_json="$(gh api "repos/${repo}/pulls?state=closed&head=${head_query}&per_page=20" \
 		--jq '[.[] | select(.merged_at != null)] | sort_by(.merged_at) | last // empty | {number, base: .base.ref, head_sha: .head.sha}' 2>/dev/null)"; then
@@ -60,13 +60,17 @@ retarget_lookup_merged()
 	base="$(printf '%s' "${merged_json}" | jq -r '.base // empty')"
 	head_sha="$(printf '%s' "${merged_json}" | jq -r '.head_sha // empty')"
 	[[ "${number}" =~ ^[0-9]+$ ]] && [ -n "${base}" ] && [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 0
-	if ! tip="$(gh api "repos/${repo}/git/ref/heads/$(retarget_urlencode "${branch}")" --jq '.object.sha // ""' 2>&1)"; then
+	tip_error_file="$(mktemp)" || return 1
+	if ! tip="$(gh api "repos/${repo}/git/ref/heads/$(retarget_urlencode "${branch}")" --jq '.object.sha // ""' 2>"${tip_error_file}")"; then
 		# A confirmed deleted ref cannot have been reused; other API errors
 		# must not authorize retargeting from an unverified branch tip.
-		[[ "${tip}" == *"(HTTP 404)"* ]] || return 1
+		tip_error="$(<"${tip_error_file}")"
+		rm -f "${tip_error_file}"
+		[[ "${tip_error}" == *"(HTTP 404)"* ]] || return 1
 		printf '%s %s\n' "${number}" "${base}"
 		return 0
 	fi
+	rm -f "${tip_error_file}"
 	[ "${tip}" = "${head_sha}" ] || return 0
 	printf '%s %s\n' "${number}" "${base}"
 }

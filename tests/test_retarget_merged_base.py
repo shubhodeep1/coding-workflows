@@ -63,6 +63,8 @@ if "/git/ref/heads/" in path:
 	if tip is None:
 		print(fixture.get("ref_error", "gh: Not Found (HTTP 404)"), file=sys.stderr)
 		sys.exit(1)
+	if fixture.get("tip_warning"):
+		print("gh: warning on successful ref read", file=sys.stderr)
 	print(tip)
 	sys.exit(0)
 sys.exit(2)
@@ -108,6 +110,12 @@ def test_a_reused_branch_is_not_retargeted(tmp_path: Path) -> None:
 	fixture = {"merged": {"stack/a": _merged(7, "main", SHA_A)}, "tips": {"stack/a": SHA_B}}
 	result, _ = _run(tmp_path, fixture, "resolve", "o/r", "stack/a", "main")
 	assert result.stdout.strip() == "stack/a"
+
+
+def test_successful_ref_read_ignores_gh_stderr(tmp_path: Path) -> None:
+	fixture = {"merged": {"stack/a": _merged(7, "main", SHA_A)}, "tips": {"stack/a": SHA_A}, "tip_warning": True}
+	result, _ = _run(tmp_path, fixture, "resolve", "o/r", "stack/a", "main")
+	assert result.returncode == 0 and result.stdout.strip() == "main"
 
 
 def test_deleted_merged_branch_resolves_to_base_but_other_ref_errors_do_not(tmp_path: Path) -> None:
@@ -201,8 +209,8 @@ def test_retargeted_gate_never_skips_on_stale_mergeability_or_terminal_marker(tm
 	assert "reason=base_retargeted" in result.stdout
 	assert sum(call[:3] == ["api", "-X", "PATCH"] for call in [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]) == 1
 
-	# A subsequent dispatch on the same head must not accept a legacy marker
-	# created before the base PATCH, even though this run did not change HEAD.
+	# A subsequent dispatch on the same head cannot attribute a legacy marker
+	# to the new base; PR updated_at is not evidence of a base change.
 	gate_fixture["pr"]["base"]["ref"] = "main"
 	gate_fixture["pr"]["additions"] = 400
 	gate_fixture["pr"]["deletions"] = 50
@@ -212,7 +220,7 @@ def test_retargeted_gate_never_skips_on_stale_mergeability_or_terminal_marker(tm
 	result = subprocess.run(["bash", "-c", gate], env=env, cwd=work, capture_output=True, text=True, check=False)
 	outputs = dict(line.split("=", 1) for line in output_file.read_text(encoding="utf-8").splitlines() if "=" in line)
 	assert result.returncode == 0, result.stderr
-	assert outputs["skip_reason"] == "terminal_same_head"
+	assert outputs["should_run"] == "true" and outputs["deterministic_skip"] == "false"
 	gate_fixture["pr"]["updated_at"] = "2026-09-22T08:02:00Z"
 	fixture_file.write_text(json.dumps(gate_fixture), encoding="utf-8")
 	output_file.write_text("", encoding="utf-8")
@@ -221,6 +229,58 @@ def test_retargeted_gate_never_skips_on_stale_mergeability_or_terminal_marker(tm
 	assert result.returncode == 0, result.stderr
 	assert outputs["base_retargeted"] == "false" and outputs["should_run"] == "true"
 	assert outputs["deterministic_skip"] == "false" and "reason=terminal_same_head" not in result.stdout
+	# Base-bound markers remain valid after unrelated PR activity.
+	gate_fixture["comments"][0]["body"] = gate_fixture["comments"][0]["body"].replace(
+		f"head_sha={SHA_B}\n", f"head_sha={SHA_B}\nbase_ref=main\n")
+	gate_fixture["pr"]["updated_at"] = "2026-09-22T08:03:00Z"
+	fixture_file.write_text(json.dumps(gate_fixture), encoding="utf-8")
+	output_file.write_text("", encoding="utf-8")
+	result = subprocess.run(["bash", "-c", gate], env=env, cwd=work, capture_output=True, text=True, check=False)
+	outputs = dict(line.split("=", 1) for line in output_file.read_text(encoding="utf-8").splitlines() if "=" in line)
+	assert result.returncode == 0, result.stderr
+	assert outputs["skip_reason"] == "terminal_same_head"
+
+
+def test_resume_state_rejects_unbound_legacy_marker_even_with_new_mtime(tmp_path: Path) -> None:
+	marker_root = tmp_path / ".ai" / "review_runtime" / "pr-42"
+	marker_root.mkdir(parents=True)
+	legacy_dir = marker_root / "round-2"
+	legacy_dir.mkdir()
+	legacy_path = legacy_dir / "partial_finalize.json"
+	legacy_path.write_text(json.dumps({"head_sha": SHA_B, "resume_round": 2,
+		"resume_state": "round_budget_exhausted", "resume_should_continue": False}), encoding="utf-8")
+	os.utime(legacy_path, (2000000000, 2000000000))
+	restore = _steps(REVIEW, "codex-agent")["Restore same-head partial resume state"]["run"]
+	script = restore.split("python3 - <<'PY' > \"${resume_env_file}\"\n", 1)[1].split("\nPY\n", 1)[0]
+	env = dict(os.environ, CURRENT_HEAD_SHA=SHA_B, CURRENT_BASE_REF="main", CURRENT_BASE_RETARGETED="false",
+		CURRENT_BASE_UPDATED_AT="2026-09-22T08:03:00Z", PR_NUMBER="42")
+	result = subprocess.run(["python3", "-c", script], env=env, cwd=tmp_path, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert "AUTOFIX_RESUME_RESTORED=false" in result.stdout
+	bound_dir = marker_root / "round-1"
+	bound_dir.mkdir()
+	(bound_dir / "partial_finalize.json").write_text(json.dumps({"head_sha": SHA_B, "base_ref": "main",
+		"resume_round": 1, "resume_state": "resumable", "resume_should_continue": True}), encoding="utf-8")
+	result = subprocess.run(["python3", "-c", script], env=env, cwd=tmp_path, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert "AUTOFIX_RESUME_RESTORED=true" in result.stdout
+	assert "AUTOFIX_RESUME_ROUND=1" in result.stdout
+	assert "AUTOFIX_RESUME_TERMINAL=false" in result.stdout
+
+
+def test_verified_retarget_helper_identity_mismatch_fails_gate(tmp_path: Path) -> None:
+	verify = _steps(REVIEW, "gate")["Verify retarget helper identity"]["run"].replace(
+		"${{ steps.checkout_retarget_helper.outcome }}", "success")
+	helper = tmp_path / ".codex-retarget-src" / "scripts" / SCRIPT.name
+	helper.parent.mkdir(parents=True)
+	helper.write_text("#!/bin/sh\n", encoding="utf-8")
+	env_file = tmp_path / "env"
+	env = dict(os.environ, WORKFLOW_REPOSITORY="shubhodeep1/coding-workflows",
+		WORKFLOW_REF="refs/heads/main", WORKFLOW_SHA="not-a-verified-sha", GITHUB_ENV=str(env_file))
+	result = subprocess.run(["bash", "-c", verify], env=env, cwd=tmp_path, capture_output=True, text=True)
+	assert result.returncode != 0
+	assert "::error::Unverified retarget helper checkout." in result.stdout
+	assert not env_file.exists()
 
 
 def _steps(path: Path, job: str) -> dict[str, dict]:
