@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:457-460 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: The `tests-hooks-and-orchestrator` check fails with 5 test failures, causing the aggregate `lint` check to fail.\n  WHY: The failing test command exits nonzero and blocks the PR from achieving green CI; qwen_qwen3_7-plus and z-ai_glm-5_2 report that this is a pre-existing base-branch issue not introduced by this PR.\n- .github/workflows/review_autofix.yml:904, 3315-3316 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `GATE_BASE_UPDATED_AT`, `CURRENT_BASE_UPDATED_AT`, and `CURRENT_BASE_RETARGETED` are extracted into Python locals but never used by marker validation or resume restoration.\n  WHY: These dead extractions do not change runtime behavior, but can mislead maintainers into thinking the values participate in base-change detection.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description \u00a7\"Docs and registration\" lists \"README variable rows, agents.md log prefix, docs/INVENTORY.md, a ci.yml step, and changelog.d/6118-phase-8d-retarget-merged-base.md.\" The PR description \u00a7\"Tests\" says \"New: tests/test_retarget_merged_base.py (10 tests).\"\n  expected_change_site: tests/test_retarget_merged_base.py\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The diff ships 15 test functions, not the 10 the description counts; this is over-delivery, not under-delivery, so the requirement is met with extra coverage.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/ci.yml:lines 457-460 | severity=BLOCKER | confidence=5\n  PROBLEM: Check-run tests-hooks-and-orchestrator failed with 5 test failures in tests/test_pr_merge_status_guard.py, which causes the aggregate lint check-run to fail on commit 15dc8305c5421cc4a580599edf969a66f7584934.\n  WHY: The failing test suite in tests-hooks-and-orchestrator causes the step and job to exit with a non-zero code, which in turn causes the aggregate required check-run lint to fail, preventing the PR from achieving green CI status required for merge.\n- .github/workflows/review_autofix.yml:lines 904 and 3315-3316 | PROBLEM: Unused environment variable extractions GATE_BASE_UPDATED_AT, CURRENT_BASE_UPDATED_AT, and CURRENT_BASE_RETARGETED in Python heredoc blocks after marker validation was refactored to verify base_ref directly. WHY: The suggestion is to remove the dead assignments from the heredocs to keep state parsing clean and avoid dead variables.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:line 904 (gate parser heredoc) and lines 3315-3316 (restore-same-head-resume heredoc) | severity=NIT | confidence=3\n  PROBLEM: Three environment variables are extracted into Python locals that the heredoc bodies never reference.\n  WHY: The dead state is harmless at runtime, but it is a maintenance trap: a future reader will assume the parsed updated_at participates in base-change detection, and the unkeyed current_base_retargeted looks like it should gate resume even though the gate-level pr_base_retargeted != \"true\" check (line 857) already does that. Either the comparison belongs in the heredoc or the dead assignments should go. Suggested cleanup also drops the corresponding env-var plumbing on lines 893, 295 and 1582, 2387, 3232, and 3233.\n- Requirement: PR description \u00a7\"Docs and registration\" lists \"README variable rows, agents.md log prefix, docs/INVENTORY.md, a ci.yml step, and changelog.d/6118-phase-8d-retarget-merged-base.md.\" The PR description \u00a7\"Tests\" says \"New: tests/test_retarget_merged_base.py (10 tests).\"\n  Expected change site: tests/test_retarget_merged_base.py\n  Evidence of absence: The diff ships 15 test functions, not the 10 the description counts. This is over-delivery, not under-delivery, so the requirement is met with extra coverage.\n  ISSUE_CONFIDENCE: 2\n  SEVERITY: NIT\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:457-460 | severity=BLOCKER | confidence=5\n  PROBLEM: The current `tests-hooks-and-orchestrator` check fails: its test run reports 5 failed tests and 171 passed.\n  WHY: The test command exits nonzero, which fails `tests-hooks-and-orchestrator` and causes the aggregate `lint` check to fail. The supplied CI log does not identify the individual failing tests.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:lines 904, 3315-3316 | severity=NIT | confidence=4\n  PROBLEM: Environment variables GATE_BASE_UPDATED_AT, CURRENT_BASE_UPDATED_AT, and CURRENT_BASE_RETARGETED are extracted but never used in the marker validation logic.\n  WHY: No runtime failure; these are unused variable extractions that add dead code. The validation logic checks marker_base but never references the updated_at or retargeted variables after extraction.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c2202c2c684ebd710fb1de3c7567088d287676e247b434b28b0384c2ba870ffc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6185,
+    "run_id": "37197051433",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37197051433",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004112735_ef6bfd1097",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6185,
+    "run_id": "37197051433"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T11:27:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
