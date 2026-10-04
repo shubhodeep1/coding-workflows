@@ -803,6 +803,7 @@ def test_internal_clarify_skips_source_repo_tracker_issues() -> None:
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking')" in content
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit')" in content
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:retro')" in content
+	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step')" in content
 
 
 def test_clarify_skips_consumer_tracker_issues() -> None:

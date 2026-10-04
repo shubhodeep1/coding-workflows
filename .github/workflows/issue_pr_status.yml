@@ -834,6 +834,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
           LINKED_ISSUE: ${{ needs.sync-issue-status.outputs.linked_issue }}

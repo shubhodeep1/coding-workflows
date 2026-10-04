@@ -557,13 +557,13 @@ lesson_event_json_for_stall() {
 # run_project_activation_verify: activation verification at project
 # completion (port P4, docs/plans/replace-claude-sessions-with-cli-engine-plan.md
 # Phase 8c). Called right after emit_orchestrator_completion_lessons on every
-# completion path. Runs scripts/activation_verify.sh in `project` mode against
-# a detached worktree of the default branch, once per project: the verdict
+# completion path and, for recent partial verdicts, on subsequent ticks.
+# Runs scripts/activation_verify.sh in `project` mode against
+# a detached worktree of the default branch; a terminal verdict
 # comment on the tracking issue carries
 # <!-- ai:activation:v1 verdict=... source=project-<n> -->, and COMMENTS
-# (already fetched for this tracking issue) is checked against the cached
-# per-tick GH_PAT login (one identity read only when a marker is present).
-# Gated by ACTIVATION_VERIFY_ENABLED (default true); every
+# (already fetched for this tracking issue) is checked for it, so the guard
+# costs no API call. Gated by ACTIVATION_VERIFY_ENABLED (default true); every
 # failure is logged and ignored, never failing the poll.
 run_project_activation_verify() {
   local verify_default verify_dir
@@ -574,12 +574,12 @@ run_project_activation_verify() {
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=support_missing"
     return 0
   fi
-  if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "source=project-${TRACKING_NUM} -->" \
-    'any(.[]?; (.body // "") | contains("<!-- ai:activation:v1 ") and contains($src))' >/dev/null 2>&1; then
-    unblock_trusted_login >/dev/null
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
+    return 0
   fi
-  if [ -n "${UNBLOCK_TRUSTED_LOGIN:-}" ] && printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "source=project-${TRACKING_NUM} -->" --arg login "${UNBLOCK_TRUSTED_LOGIN}" \
-    'any(.[]?; (.user.login // "") == $login and ((.body // "") | contains("<!-- ai:activation:v1 ") and contains($src)))' >/dev/null 2>&1; then
+  if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" \
+    '[.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | (.body // "" | sub("[[:space:]]+$"; "")) | (endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->") or endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->"))] | any' >/dev/null 2>&1; then
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=already_verified"
     return 0
   fi
@@ -590,23 +590,31 @@ run_project_activation_verify() {
     verify_default="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
   fi
   [ -n "${verify_default}" ] || verify_default="main"
-  verify_dir="${RUNTIME_DIR:-/tmp}/activation-verify-project-${TRACKING_NUM}"
-  rm -rf "${verify_dir}"
+  if ! verify_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/activation-verify-project-${TRACKING_NUM}-XXXXXX")"; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=worktree_failed"
+    return 0
+  fi
   if ! git fetch --quiet origin "${verify_default}" 2>/dev/null \
     || ! git worktree add --quiet --detach "${verify_dir}" FETCH_HEAD 2>/dev/null; then
+    rmdir "${verify_dir}" 2>/dev/null || true
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=worktree_failed"
     return 0
   fi
   ACTIVATION_VERIFY_TIMEOUT_SECS="${ACTIVATION_VERIFY_TIMEOUT_SECS:-900}" \
   SUPPORT_DIR="${PWD}" \
   TARGET_DIR="${verify_dir}" \
-  RUNTIME_DIR="${RUNTIME_DIR:-/tmp}/activation-verify-${TRACKING_NUM}" \
+  RUNTIME_DIR="${verify_dir}-runtime" \
   REPOSITORY="${GITHUB_REPOSITORY}" \
+  TRACKING_NUM="${TRACKING_NUM}" \
   PROJECT_TITLE="$(jq -r '.project_title // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
   PROJECT_BODY="$(jq -r '.project_body_snapshot // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
   FINAL_PR="$(jq -r '.final_merge_pr // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
+  PROJECT_FILES_JSON="$(jq -c '[.waves[]?.issues[]?.files_touched[]? | select(type == "string")] | unique' "${STATE_FILE}" 2>/dev/null || echo '[]')" \
     bash scripts/activation_verify.sh project || true
-  git worktree remove --force "${verify_dir}" >/dev/null 2>&1 || rm -rf "${verify_dir}"
+  git worktree remove --force "${verify_dir}" >/dev/null 2>&1 \
+    || echo "::warning::Activation worktree cleanup failed for project #${TRACKING_NUM}."
+  rm -rf -- "${verify_dir}-runtime" \
+    || echo "::warning::Activation runtime cleanup failed for project #${TRACKING_NUM}."
   return 0
 }
 
@@ -19806,6 +19814,19 @@ The poller will resume processing on the next cycle."
 
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     handle_comprehensive_release_callback_if_needed "${PROJECT_STATUS}" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+    # Retry only a trusted, comment-backed partial verdict while its first
+    # occurrence is recent. Failed writes without a marker never start an
+    # unbounded expensive verification loop on completed projects.
+    if [ "${PROJECT_STATUS}" = "complete" ] && [ "${COMMENTS_FETCH_OK:-false}" = "true" ] &&
+      printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" '
+        [.[]? | select((.user.login // "") == "github-actions[bot]" or
+          ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+          | select((.body // "" | sub("[[:space:]]+$"; "")) | endswith("<!-- ai:activation:v1 partial=true source=" + $src + " -->"))
+          | .created_at | fromdateiso8601? | select(. != null)] as $partials
+        | ($partials | length) > 0 and ($partials | length) < 3 and (now - ($partials | min)) < 1800
+      ' >/dev/null 2>&1; then
+      run_project_activation_verify
+    fi
     if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
       if completion_status_comment_failed_state_observation; then
         _completion_status_failed_observation_rc=0

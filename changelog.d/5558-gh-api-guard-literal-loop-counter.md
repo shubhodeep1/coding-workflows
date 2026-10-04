@@ -1,0 +1,6 @@
+<!-- changelog: security -->
+- **The `gh api` permission guard approves literal-ID read loops again, and asks again on shell-rewrite hazards inside loops.** Since #6127, a loop such as `for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done` prompted for permission, because the unquoted-expansion check also caught the loop counter.
+
+#6176 and #6175 fixed the counter in the consumer copy, `workflow-templates/.claude/hooks/gh_api_write_guard.py`. That copy also stopped asking on ANSI-C quoting, `#` comments and brace expansion in any command that starts with a loop. As a result, `for r in 1; do gh api -X GET repos/o/r/issues/1 -F{'q=1','x=@/etc/passwd'}; done` got no decision from the hook, though Bash expands it into a file-backed field. This change restores the hazard ask for every command, and makes `.claude/hooks/gh_api_write_guard.py`, the hook this repository's own sessions run, identical to that copy. An unquoted `gh api` expansion still asks unless the whole command passes the read-loop validator. Counter rebinding, other expansions, and hazards inside a loop prompt.
+
+What this means for operators: sessions in coding-workflows stop pausing on the read loops that CLAUDE.md §23.H allows. Consumer repos never receive the loop-hazard gap on the next `@stable` sync.
