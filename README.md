@@ -1989,8 +1989,17 @@ never rewritten.
 **Tool profiles.** Roles whose codex call is read-only today (`CLARIFY`,
 `CLARIFY_RESPOND`, `SECURITY_JUDGE`, `SECURITY_AUDIT`, `WORKFLOW_HEAL`) run with
 `Read`, `Grep`, `Glob` and a fixed list of read-only `git` / `gh` commands in
-`dontAsk` mode; every other role runs `bypassPermissions`, where the P5 deny
-rules still apply, with the tools `Read`, `Grep`, `Glob`, `Bash`, `Edit`,
+`dontAsk` mode (no `git grep` shell allowance). Their model processes receive
+no GitHub, Telegram, OpenRouter or Actions OIDC/runtime credentials; `gh api`
+is permitted only when the hook explicitly approves a GET request to a relative
+REST endpoint on `github.com` (absolute URLs are denied, including inside echo
+substitutions). `gh` uses an empty per-run config directory and clears `GH_HOST`
+so a saved runner login or host override cannot restore access.
+Private-repository GitHub reads by the model are unavailable until a separately
+provisioned read-only identity is safely wired
+into the job; the job's write-capable token is never reused. Every other role
+runs `bypassPermissions`, where the P5 deny rules still apply, with the tools
+`Read`, `Grep`, `Glob`, `Bash`, `Edit`,
 `Write`, `WebFetch` and `WebSearch` (the review editor's sandbox included).
 The CLI's `default` tool set is not used: it loads about 35 tools, and their
 descriptions alone push a no-op start-up past the 25,000-token context gate
