@@ -7,12 +7,12 @@
 - How it runs: on demand — every job with a Claude role calls `.github/actions/claude-pool-token`, which POSTs a GitHub OIDC token to `https://claude-pool-broker.shubhodeep.workers.dev/v1/pool`; the pool secret is refreshed by `claude-workers` `claude-pool-key-sync.yml` (cron hourly at :23, push to main, workflow_dispatch)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-04
-- Last note: Runbook built after Phase 4 reached main; Step 1 emitted.
+- Last note: Step 2 first attempt failed (zsh `read -p`); CF_BROKER_DEPLOY_TOKEN currently holds an empty `:` value; corrective Step 2 emitted.
 
 ## Runbook
-1. [ ] Prereqs: Homebrew, gh, Node, `gh auth login`, read claude-workers secret names
+1. [x] Prereqs: Homebrew, gh, Node, `gh auth login`, read claude-workers secret names   — done 2026-10-04: `gh api user` = shubhodeep1; claude-workers secrets = CLAUDE_POOL_TOKEN_FUNTOKEN1, CLAUDE_POOL_TOKEN_FUNTOKEN2, GH_PAT
 2. [ ] Cloudflare API token (Workers Scripts: Edit, ft.games account) → `CF_BROKER_DEPLOY_TOKEN` secret in shubhodeep1/claude-workers
-3. [ ] `CLAUDE_POOL_TOKEN_<NAME>` secret per pool account in shubhodeep1/claude-workers (drop TEST1/TEST2 if not members)
+3. [x] `CLAUDE_POOL_TOKEN_<NAME>` secret per pool account in shubhodeep1/claude-workers (drop TEST1/TEST2 if not members)   — skipped 2026-10-04: already satisfied, FUNTOKEN1 and FUNTOKEN2 present (set ~1 day earlier), no TEST1/TEST2
 4. [ ] Merge shubhodeep1/claude-workers#2 (push to main runs the first key sync)
 5. [ ] Verify key sync: run green with N accounts; Worker secret `CLAUDE_POOL_TOKENS` present
 6. [ ] Dispatch `claude-engine-smoke.yml` on main; verify `CLAUDE_POOL available=true accounts=N` and probe lines in both legs
@@ -33,3 +33,6 @@
   so a green run alone is not proof; Step 6 checks the `CLAUDE_POOL available=true` log line.
 - Slug carries `-phase-4` so later phases of the same plan get their own log.
 - No `/implement-plan-claude` progress log exists for this plan, so there are no auto-decisions to review.
+- Step 1 output showed `CF_BROKER_DEPLOY_TOKEN` is not set yet, so Step 2 is needed.
+- Step 2 attempt 1 (2026-10-04): the operator's shell is zsh, where `read -p` means coprocess, so both values were empty; `curl` returned `"success":false` and `CF_BROKER_DEPLOY_TOKEN` was saved as `:`. Harmless until the key sync is merged (Step 4); the corrective step overwrites it.
+- Log pushes continue on `claude/determined-pascal-kvyrbg-2`, `-3`, … (operator answer Q1: A, 2026-10-04): the first branch's PR #6186 merged and its ruleset blocks non-fast-forward pushes and deletion.
