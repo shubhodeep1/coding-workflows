@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the cross-stage evidence cache be made safe for pull-request runs?\nChoices:\nA) Remove the evidence cache restore and save steps from `clarify.yml`, `plan.yml` and `implement.yml`. Each stage fetches its evidence fresh in its own trusted run, which costs about 15 more API calls per stage, and only for `ai:workflow-heal` issues. Update the \"reused across stages through actions/cache\" wording in `agents.md` to match. (RECOMMENDED)\nB) Keep the cache, but only for evidence from this repo's own runs, which anyone with read access can already see. Before saving, remove cross-repo run folders and any consumer-derived files, so the next stage fetches those again.\nC) Keep caching the whole folder, but encrypt it before saving and decrypt it after restoring, using a key from a secret that pull-request jobs don't get (for example, derived from `GH_PAT`). The restore must fail closed if the key is missing.\nQ2: What should happen to the `heal-evidence-*` cache entries that already exist and stay readable until GitHub evicts them (7 days after their last access)?\nChoices:\nA) In the same PR, the existing evidence gate step makes a best-effort pass: one listing call for keys starting with `heal-evidence-`, then deletes whatever it finds. It runs only for eligible heal issues and fails open. (RECOMMENDED)\nB) Delete nothing. Once nothing restores these entries, GitHub's 7-day eviction removes them, and the changelog fragment records the exposure window.\n---\nActions taken: read the evidence cache gate, restore, collect and save steps in `clarify.yml` (lines 823-886), found the matching steps in `plan.yml` and `implement.yml`, and checked how `scripts/workflow_failure_heal_evidence.py` reuses cached runs and labels cross-repo runs.\nAssumptions: the fix PR targets the `Integration branch: claude/heal-evidence-bundle` named in the issue body. All three stages are in scope, not just the `clarify.yml:885` line the finding cites.\nMissing context: I didn't confirm whether any consumer repos registered in the intake are private. The fix above is the safe choice either way.",
+  "fingerprint": "c27dca7d051294333842238abff93d7d36113dac49e9fc624ee5457bf3578e73",
+  "lineage": {
+    "issue_number": 6247,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37243832903",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37243832903",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261004233551_2fdf1a9ce2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6247,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37243832903"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6247 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-04T23:35:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
