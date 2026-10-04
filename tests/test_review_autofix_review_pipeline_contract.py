@@ -8127,9 +8127,9 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		host = root / "host"
 		source = root / "isolated" / "source"
 		source.mkdir(parents=True)
-		for subdir in ("workflows", "actions"):
+		for subdir in ("workflows", "actions", "ai"):
 			(host / ".github" / subdir).mkdir(parents=True)
-			(host / ".github" / subdir / "example.yml").write_text("before\n")
+			(host / ".github" / subdir / ("claude_engine.json" if subdir == "ai" else "example.yml")).write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
 		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
@@ -8141,12 +8141,14 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert run("snapshot").returncode == 0
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
+		(source / ".github/ai/claude_engine.json").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
-		(source / ".github/ai").mkdir()
-		(source / ".github/ai/untrusted.yml").write_text("untrusted\n")
+		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
+		(source / ".github/untrusted").mkdir()
+		(source / ".github/untrusted/result.yml").write_text("untrusted\n")
 		assert run("transfer").returncode != 0
-		assert not (host / ".github/ai/untrusted.yml").exists()
+		assert not (host / ".github/untrusted/result.yml").exists()
 
 
 def test_review_isolation_transfers_into_active_work_tree() -> None:

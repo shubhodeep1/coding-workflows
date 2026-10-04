@@ -2253,7 +2253,9 @@ credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
 `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
-it back afterwards.
+it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
+file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
+and reports that path instead of overwriting the new content.
 
 ## Project Orchestrator
 

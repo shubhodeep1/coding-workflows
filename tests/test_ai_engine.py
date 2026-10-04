@@ -51,6 +51,9 @@ if token.startswith("TOK_AUTH"):
 if token.startswith("TOK_CRASH"):
 	print("boom", file=sys.stderr)
 	sys.exit(3)
+if token.startswith("TOK_WRITE_MD"):
+	with open("CLAUDE.md", "w", encoding="utf-8") as handle:
+		handle.write("new instructions\n")
 emit({"type": "result", "subtype": "success", "is_error": False, "result": "done", "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 2}})
 '''
 
@@ -336,6 +339,20 @@ def test_hide_claude_md_moves_it_aside_and_restores_it(sandbox: dict) -> None:
 	assert _rc(result) == 0, result.stderr
 	assert _calls(sandbox)[0]["claude_md_visible"] is False
 	assert (sandbox["work"] / "CLAUDE.md").read_text(encoding="utf-8") == "checkout CLAUDE.md\n"
+
+
+def test_hide_claude_md_does_not_overwrite_new_file(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_WRITE_MD")
+	support = sandbox["tmp"] / "support"
+	(support / ".github" / "ai").mkdir(parents=True)
+	(support / ".github" / "ai" / "claude_engine.json").write_text('{"hide_claude_md": true}', encoding="utf-8")
+	result = _claude_run(sandbox, SUPPORT_ROOT_DIR=str(support))
+	assert _rc(result) == 0, result.stderr
+	assert (sandbox["work"] / "CLAUDE.md").read_text(encoding="utf-8") == "new instructions\n"
+	backup_paths = list(sandbox["work"].glob("CLAUDE.md.original.*"))
+	assert len(backup_paths) == 1
+	assert backup_paths[0].read_text(encoding="utf-8") == "checkout CLAUDE.md\n"
+	assert "original preserved at" in result.stderr
 
 
 def test_claude_md_stays_by_default(sandbox: dict) -> None:
