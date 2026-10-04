@@ -594,6 +594,70 @@ lesson_event_json_for_stall() {
 # (phase orchestrator_completion, kind project_retrospective). Record ids are
 # deterministic, so a repeated completion tick writes nothing new. Honors
 # AI_MEMORY_ENABLED / LESSONS_LEARNED_ENABLED; fail-open; no GitHub API calls.
+# run_project_activation_verify: activation verification at project
+# completion (port P4, docs/plans/replace-claude-sessions-with-cli-engine-plan.md
+# Phase 8c). Called right after emit_orchestrator_completion_lessons on every
+# completion path and, for recent partial verdicts, on subsequent ticks.
+# Runs scripts/activation_verify.sh in `project` mode against
+# a detached worktree of the default branch; a terminal verdict
+# comment on the tracking issue carries
+# <!-- ai:activation:v1 verdict=... source=project-<n> -->, and COMMENTS
+# (already fetched for this tracking issue) is checked for it, so the guard
+# costs no API call. Gated by ACTIVATION_VERIFY_ENABLED (default true); every
+# failure is logged and ignored, never failing the poll.
+run_project_activation_verify() {
+  local verify_default verify_dir
+  if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ] || ! [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if [ ! -f scripts/activation_verify.sh ] || [ ! -f prompts/mode-activation-verify.txt ]; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=support_missing"
+    return 0
+  fi
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
+    return 0
+  fi
+  if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" \
+    '[.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | (.body // "" | sub("[[:space:]]+$"; "")) | (endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->") or endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->"))] | any' >/dev/null 2>&1; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=already_verified"
+    return 0
+  fi
+  verify_default="${FINAL_DEFAULT_BRANCH:-${DEFAULT_BRANCH_TRACKING:-}}"
+  if [ -z "${verify_default}" ]; then
+    # `|| true`: under the poller's `set -euo pipefail` a failing command
+    # substitution in an assignment would end the whole tick.
+    verify_default="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+  fi
+  [ -n "${verify_default}" ] || verify_default="main"
+  if ! verify_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/activation-verify-project-${TRACKING_NUM}-XXXXXX")"; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=worktree_failed"
+    return 0
+  fi
+  if ! git fetch --quiet origin "${verify_default}" 2>/dev/null \
+    || ! git worktree add --quiet --detach "${verify_dir}" FETCH_HEAD 2>/dev/null; then
+    rmdir "${verify_dir}" 2>/dev/null || true
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=worktree_failed"
+    return 0
+  fi
+  ACTIVATION_VERIFY_TIMEOUT_SECS="${ACTIVATION_VERIFY_TIMEOUT_SECS:-900}" \
+  SUPPORT_DIR="${PWD}" \
+  TARGET_DIR="${verify_dir}" \
+  RUNTIME_DIR="${verify_dir}-runtime" \
+  REPOSITORY="${GITHUB_REPOSITORY}" \
+  TRACKING_NUM="${TRACKING_NUM}" \
+  PROJECT_TITLE="$(jq -r '.project_title // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
+  PROJECT_BODY="$(jq -r '.project_body_snapshot // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
+  FINAL_PR="$(jq -r '.final_merge_pr // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
+  PROJECT_FILES_JSON="$(jq -c '[.waves[]?.issues[]?.files_touched[]? | select(type == "string")] | unique' "${STATE_FILE}" 2>/dev/null || echo '[]')" \
+    bash scripts/activation_verify.sh project || true
+  git worktree remove --force "${verify_dir}" >/dev/null 2>&1 \
+    || echo "::warning::Activation worktree cleanup failed for project #${TRACKING_NUM}."
+  rm -rf -- "${verify_dir}-runtime" \
+    || echo "::warning::Activation runtime cleanup failed for project #${TRACKING_NUM}."
+  return 0
+}
+
 emit_orchestrator_completion_lessons() {
   local telemetry_json=""
 
@@ -12096,6 +12160,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
   emit_orchestrator_completion_lessons
+  run_project_activation_verify
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "complete" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validated"
@@ -18680,6 +18745,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
           security_pass_file_deferred_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
           post_state_comment || true
           emit_orchestrator_completion_lessons
+          run_project_activation_verify
           handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
           set_tracking_phase_label "ai:merged"
           post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
@@ -18778,6 +18844,7 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
     emit_orchestrator_completion_lessons
+    run_project_activation_verify
     handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:merged"
     post_tracking_comment "Project completed successfully. Issue kept open for manual review."
@@ -19487,6 +19554,19 @@ The poller will resume processing on the next cycle."
 
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     handle_comprehensive_release_callback_if_needed "${PROJECT_STATUS}" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+    # Retry only a trusted, comment-backed partial verdict while its first
+    # occurrence is recent. Failed writes without a marker never start an
+    # unbounded expensive verification loop on completed projects.
+    if [ "${PROJECT_STATUS}" = "complete" ] && [ "${COMMENTS_FETCH_OK:-false}" = "true" ] &&
+      printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" '
+        [.[]? | select((.user.login // "") == "github-actions[bot]" or
+          ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+          | select((.body // "" | sub("[[:space:]]+$"; "")) | endswith("<!-- ai:activation:v1 partial=true source=" + $src + " -->"))
+          | .created_at | fromdateiso8601? | select(. != null)] as $partials
+        | ($partials | length) > 0 and ($partials | length) < 3 and (now - ($partials | min)) < 1800
+      ' >/dev/null 2>&1; then
+      run_project_activation_verify
+    fi
     if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
       if completion_status_comment_failed_state_observation; then
         _completion_status_failed_observation_rc=0
@@ -23110,6 +23190,7 @@ PRs to revert: ${REVERT_COUNT}"
         jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
         emit_orchestrator_completion_lessons
+        run_project_activation_verify
         handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
 
         set_tracking_phase_label "ai:merged"
