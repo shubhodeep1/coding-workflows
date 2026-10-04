@@ -19,6 +19,11 @@ on:
         required: false
         type: string
         default: ""
+      engine:
+        description: "Optional model engine for every role of the project: claude, codex, or empty for the repository default."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -34,4 +39,5 @@ jobs:
       project_description: ${{ inputs.project_description }}
       tracking_labels: ${{ inputs.tracking_labels }}
       tracking_comment: ${{ inputs.tracking_comment }}
+      engine: ${{ inputs.engine }}
     secrets: inherit

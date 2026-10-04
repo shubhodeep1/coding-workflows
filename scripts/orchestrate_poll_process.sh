@@ -5353,6 +5353,21 @@ Security-pass fix issue #${issue_number} ended in \`ai:implementation-failed\` a
 # plus reissue guidance, bounded by MAX_SECURITY_PASS_FIX_REISSUES.
 #
 # Always returns 0; the caller continues the tracking-issue loop.
+# engine_label_create_args [labels_json] — the engine label (plan Phase 6, D2)
+# a new project issue or PR inherits, as `--label` / `<name>` lines for
+# `mapfile`. Reads the tracking issue's cached TRACKING_LABELS (or the given
+# label-name JSON list); ai:codex wins over ai:engine-claude. No API call.
+engine_label_create_args()
+{
+  local labels_json="${1:-${TRACKING_LABELS:-[]}}"
+  local engine_label
+  engine_label="$(printf '%s' "${labels_json}" | jq -r 'if (type == "array") then (map(if type == "object" then .name else . end) | if index("ai:codex") then "ai:codex" elif index("ai:engine-claude") then "ai:engine-claude" else "" end) else "" end' 2>/dev/null || true)"
+  if [ -n "${engine_label}" ]; then
+    printf '%s\n%s\n' "--label" "${engine_label}"
+  fi
+  return 0
+}
+
 security_pass_handle_failed_fix_issue() {
   local issue_number="$1"
   local comments_json="$2"
@@ -5534,7 +5549,8 @@ REISSUE_EOF
     # the whole pass on a transient API error.
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
-    new_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    new_issue_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
       --title "${issue_title}" \
       --body "${new_body}" \
       --label "ai:clarification" \
@@ -5703,7 +5719,8 @@ PY
   else
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
-    issue_url="$(gh_retry gh issue create \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    issue_url="$(gh_retry gh issue create "${_engine_label_args[@]}" \
       --repo "${GITHUB_REPOSITORY}" \
       --title "[security-pass] Project #${TRACKING_NUM} fix cycle $((completed_cycles + 1))" \
       --body-file "${issue_body_file}" \
@@ -6034,7 +6051,8 @@ PY
   ensure_label_exists "ai:security"
   # Do not retry this non-idempotent mutation. If GitHub accepts the create but
   # the response is lost, the marker search above reconciles it next poll.
-  issue_url="$(gh issue create \
+  mapfile -t _engine_label_args < <(engine_label_create_args)
+  issue_url="$(gh issue create "${_engine_label_args[@]}" \
     --repo "${GITHUB_REPOSITORY}" \
     --title "${title}" \
     --body-file "${body_file}" \
@@ -7443,7 +7461,8 @@ create_judge_fixup_issues_from_verdict() {
 
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
-          FIX_URL="$(gh_retry gh issue create \
+          mapfile -t _engine_label_args < <(engine_label_create_args)
+          FIX_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${FIX_TITLE}" \
             --body "${FULL_FIX_BODY}" \
@@ -7956,7 +7975,8 @@ ensure_eager_final_pr() {
 
   if [ -z "${discovered}" ]; then
     local pr_url
-    pr_url="$(gh_retry gh pr create \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    pr_url="$(gh_retry gh pr create "${_engine_label_args[@]}" \
       --repo "${GITHUB_REPOSITORY}" \
       --draft \
       --base "${default_branch}" \
@@ -14119,7 +14139,8 @@ REISSUE_EOF
       local new_url new_url_clean new_num
       ensure_label_exists "ai:clarification"
       ensure_label_exists "ai:orchestrator-managed"
-      new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+      mapfile -t _engine_label_args < <(engine_label_create_args)
+      new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
         --label "ai:clarification" \
@@ -16873,7 +16894,8 @@ ${orig_body}
 REISSUE_EOF
 )"
         ensure_label_exists "ai:clarification"
-        new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+        mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
+        new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
@@ -19757,7 +19779,8 @@ The poller will resume processing on the next cycle."
 
       ensure_label_exists "ai:clarification"
       ensure_label_exists "ai:orchestrator-managed"
-      NEW_URL="$(gh_retry gh issue create \
+      mapfile -t _engine_label_args < <(engine_label_create_args)
+      NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
         --repo "${GITHUB_REPOSITORY}" \
         --title "${DEF_TITLE}" \
         --body "${FULL_BODY}" \
@@ -21398,7 +21421,8 @@ ${FOLLOWUP_GUARD_REASON}"
                       RB_FOLLOWUP_REFUSED="true"
                       REVIEW_BLOCKED_STATE_CHANGED=true
                     else
-                      FOLLOWUP_PR_URL="$(gh_retry gh pr create \
+                      mapfile -t _engine_label_args < <(engine_label_create_args)
+                      FOLLOWUP_PR_URL="$(gh_retry gh pr create "${_engine_label_args[@]}" \
                       --repo "${GITHUB_REPOSITORY}" \
                       --base "${BASE_REF}" \
                       --head "${FOLLOWUP_BRANCH}" \
@@ -21650,7 +21674,8 @@ ${RB_FIX_DESC}
               # merged but the deferred gap has no durable tracking.
               FOLLOWUP_URL=""
               FOLLOWUP_NUM=""
-              if FOLLOWUP_URL="$(gh_retry gh issue create \
+              mapfile -t _engine_label_args < <(engine_label_create_args)
+              if FOLLOWUP_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
                   --repo "${GITHUB_REPOSITORY}" \
                   --title "${FOLLOWUP_TITLE}" \
                   --body "${FULL_FOLLOWUP_BODY}" \
@@ -21718,7 +21743,8 @@ ${RB_FIX_DESC}
 
             ensure_label_exists "ai:clarification"
             ensure_label_exists "ai:orchestrator-managed"
-            NEW_URL="$(gh_retry gh issue create \
+            mapfile -t _engine_label_args < <(engine_label_create_args)
+            NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${NEW_ISSUE_TITLE}" \
               --body "${FULL_NEW_BODY}" \
@@ -22136,7 +22162,8 @@ REISSUE_EOF
 
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
-    NEW_ISSUE_URL="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    NEW_ISSUE_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
       --title "${IF_TITLE}" \
       --body "${NEW_BODY}" \
       --label "ai:clarification" \
@@ -23228,7 +23255,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
                 git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
                 if git revert --no-edit "${MERGE_SHA}"; then
                   git push -u origin "${REVERT_BRANCH}"
-                  gh_retry gh pr create \
+                  mapfile -t _engine_label_args < <(engine_label_create_args)
+                  gh_retry gh pr create "${_engine_label_args[@]}" \
                     --repo "${GITHUB_REPOSITORY}" \
                     --title "Revert PR #${PR_TO_REVERT} (orchestrator auto-recovery)" \
                     --body "Automated revert of PR #${PR_TO_REVERT} by orchestrator judge.
@@ -23315,7 +23343,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
 
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
-          NEW_URL="$(gh_retry gh issue create \
+          mapfile -t _engine_label_args < <(engine_label_create_args)
+          NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${NEW_TITLE}" \
             --body "${FULL_NEW_BODY}" \
@@ -23554,7 +23583,8 @@ ${_gate_violations:-(no violation lines parsed — see workflow run log for the 
 
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
-          NEW_URL="$(gh_retry gh issue create \
+          mapfile -t _engine_label_args < <(engine_label_create_args)
+          NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${DEF_TITLE}" \
             --body "${FULL_BODY}" \
