@@ -24,6 +24,10 @@ evidence to a folder the agents read:
     ``INDEX.md`` summarises it for the prompt; ``manifest.json`` lists files.
 
 API budget (CLAUDE.md §15), per ``collect`` call:
+  * intake provenance: 1 cached ``GET /user`` and 1 batched GraphQL query
+    for the heal issue and up to 20 occurrence comments;
+  * cross-repo run identity: reuse the head-SHA timeline listing, falling
+    back to 1 run GET per selected cross-repo run not in that listing;
   * runs already in the out dir from an earlier stage (actions/cache) are
     reused; each new run costs 1 jobs call + 1 job-log call per selected job
     (at most ``--max-jobs``) + 1 artifact list + at most 2 artifact
@@ -81,6 +85,8 @@ MAX_LINEAGE_COMPARES = 5
 MAX_ARTIFACT_DOWNLOADS = 2
 MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 MAX_ARTIFACT_MEMBERS = 40
+MAX_PROVENANCE_COMMENTS = 20
+_NODE_ID_RE = re.compile(r"^[A-Za-z0-9_=-]{1,100}$")
 
 # The review workflow's job is "codex-agent" (consumer wrapper) or
 # "review / codex-agent" (internal). A review/autofix failure usually ends
@@ -359,6 +365,16 @@ class GitHub:
 		self.calls = 0
 		self.no_escape_flag = False
 		self.last_unknown_flag = False
+		self._viewer_login: str | None = None
+
+	def viewer_login(self) -> str:
+		if self._viewer_login is None:
+			# Intake creates the issue and occurrence comments with GH_PAT; collect
+			# uses that same token. The existing issue/comments REST reads and
+			# lineage GraphQL query cannot identify the token's account.
+			viewer = self.json("user")
+			self._viewer_login = viewer.get("login", "") if isinstance(viewer, dict) and isinstance(viewer.get("login"), str) else ""
+		return self._viewer_login
 
 	def _run(self, args: list[str]) -> bytes | None:
 		self.last_unknown_flag = False
@@ -518,6 +534,18 @@ def _body_field(body: str, label: str) -> str:
 	return match.group("value").strip() if match else ""
 
 
+def _occurrence_context(text: str) -> dict[str, str]:
+	match = re.search(r"- \*\*Source (?:pull request|issue):\*\* [^\n]*\(([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)\)", text)
+	repo, number = match.group(1, 2) if match else (_body_field(text, "Source repository"), "")
+	sha = _body_field(text, "Head SHA").lower()
+	return {
+		"source_repo": repo if heal.is_valid_repo_slug(repo) else "",
+		"source_number": number,
+		"head_sha": sha if heal.is_valid_sha(sha) else "",
+		"head_branch": _body_field(text, "Failed on branch"),
+	}
+
+
 def heal_context(issue: dict[str, Any]) -> dict[str, Any]:
 	"""Facts the intake wrote into the heal issue body (trusted author only)."""
 	body = issue.get("body") or ""
@@ -540,7 +568,10 @@ def heal_context(issue: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
-def trusted_run_refs(issue: dict[str, Any], comments: Iterable[Any], *, allowed_repos: Iterable[str], limit: int) -> list[dict[str, str]]:
+def trusted_run_refs(
+	issue: dict[str, Any], comments: Iterable[Any], *, allowed_repos: Iterable[str], limit: int,
+	include_body: bool = True, verified_comment_ids: set[int] | None = None, include_disallowed: bool = False,
+) -> list[dict[str, str]]:
 	"""Run links from the issue body and its occurrence comments, newest last.
 
 	Only the heal issue's own author may add runs through an occurrence
@@ -550,30 +581,37 @@ def trusted_run_refs(issue: dict[str, Any], comments: Iterable[Any], *, allowed_
 	"""
 	allowed = {repo for repo in allowed_repos if heal.is_valid_repo_slug(repo)}
 	author = ((issue.get("user") or {}) if isinstance(issue.get("user"), dict) else {}).get("login")
-	texts: list[str] = []
+	texts: list[tuple[str, str, dict[str, str]]] = []
 	body = issue.get("body") or ""
 	ctx = heal_context(issue)
-	for token in (ctx.get("runs_marker") or "").split(","):
-		repo, _, run_id = token.partition(":")
-		if heal.is_valid_repo_slug(repo) and run_id.isdigit():
-			texts.append(f"https://github.com/{repo}/actions/runs/{run_id}")
-	texts.extend(match.group("url") for match in _HEAL_RUN_LINE_RE.finditer(body))
+	if include_body:
+		body_ctx = {key: ctx.get(key, "") for key in ("source_repo", "source_number", "head_sha", "head_branch")}
+		for token in (ctx.get("runs_marker") or "").split(","):
+			repo, _, run_id = token.partition(":")
+			if heal.is_valid_repo_slug(repo) and run_id.isdigit():
+				texts.append((f"https://github.com/{repo}/actions/runs/{run_id}", "body", body_ctx))
+		texts.extend((match.group("url"), "body", body_ctx) for match in _HEAL_RUN_LINE_RE.finditer(body))
 	for comment in comments or []:
 		if not isinstance(comment, dict):
 			continue
+		comment_id = comment.get("id")
+		if verified_comment_ids is not None and (not isinstance(comment_id, int) or comment_id not in verified_comment_ids):
+			continue
 		comment_author = (comment.get("user") or {}).get("login") if isinstance(comment.get("user"), dict) else None
 		text = comment.get("body") or ""
+		if not isinstance(text, str):
+			continue
 		if not author or comment_author != author or _OCCURRENCE_MARKER not in text:
 			continue
-		texts.extend(match.group("url") for match in _HEAL_RUN_LINE_RE.finditer(text))
+		texts.extend((match.group("url"), f"comment:{comment_id}", _occurrence_context(text)) for match in _HEAL_RUN_LINE_RE.finditer(text))
 	seen: dict[tuple[str, str], dict[str, str]] = {}
-	for text in texts:
+	for text, origin, facts in texts:
 		for match in heal._RUN_URL_RE.finditer(text):
 			repo, run_id = match.group("repo"), match.group("run_id")
-			if repo not in allowed:
+			if repo not in allowed and not include_disallowed:
 				continue
 			seen.pop((repo, run_id), None)
-			seen[(repo, run_id)] = {"repo": repo, "run_id": run_id, "url": f"https://github.com/{repo}/actions/runs/{run_id}"}
+			seen[(repo, run_id)] = {"repo": repo, "run_id": run_id, "url": f"https://github.com/{repo}/actions/runs/{run_id}", "origin": origin, **facts}
 	return list(seen.values())[-limit:]
 
 
@@ -589,6 +627,21 @@ def select_jobs(jobs: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
 		return failed[:limit]
 	focus = [job for job in jobs if FOCUS_JOB_RE.search(job.get("name") or "")]
 	return focus[:limit]
+
+
+def _intake_only_content(node: Any, login: str) -> bool:
+	if not isinstance(node, dict) or not isinstance(node.get("author"), dict) or node["author"].get("login") != login:
+		return False
+	if "lastEditedAt" not in node or "editor" not in node:
+		return False
+	if node.get("lastEditedAt") is not None and (not isinstance(node.get("editor"), dict) or node["editor"].get("login") != login):
+		return False
+	edits = node.get("userContentEdits")
+	if not isinstance(edits, dict) or type(edits.get("totalCount")) is not int or not isinstance(edits.get("nodes"), list):
+		return False
+	if edits["totalCount"] != len(edits["nodes"]) or edits["totalCount"] > 100:
+		return False
+	return all(isinstance(edit, dict) and isinstance(edit.get("editor"), dict) and edit["editor"].get("login") == login for edit in edits["nodes"])
 
 
 def _failing_step(job: dict[str, Any]) -> str:
@@ -665,6 +718,7 @@ class Collector:
 		self.openrouter_status = openrouter_status or (lambda: {"available": False, "reason": "not_checked"})
 		self.skipped: list[dict[str, str]] = []
 		self.low_rate = False
+		self._timeline_index: dict[str, dict[str, Any]] = {}
 
 	# -- helpers --------------------------------------------------------------
 
@@ -690,6 +744,83 @@ class Collector:
 			return json.loads(path.read_text(encoding="utf-8"))
 		except (OSError, ValueError):
 			return None
+
+	def _verify_provenance(self, issue: dict[str, Any], comments: list[Any], issue_repo: str) -> dict[str, Any]:
+		result: dict[str, Any] = {"body": False, "comment_ids": set(), "reason": "intake_identity_unavailable"}
+		login = self.gh.viewer_login()
+		if not login:
+			log("provenance outcome=unverified reason=intake_identity_unavailable comments_verified=0/0")
+			return result
+		issue_author = issue.get("user")
+		if not isinstance(issue_author, dict) or issue_author.get("login") != login:
+			result["reason"] = "issue_not_authored_by_intake"
+			log("provenance outcome=unverified reason=issue_not_authored_by_intake comments_verified=0/0")
+			return result
+		issue_number = issue.get("number")
+		if not heal.is_valid_repo_slug(issue_repo) or isinstance(issue_number, bool) or not str(issue_number).isdigit() or int(issue_number) <= 0:
+			result["reason"] = "issue_identity_invalid"
+			log("provenance outcome=unverified reason=issue_identity_invalid comments_verified=0/0")
+			return result
+		owner, name = issue_repo.split("/", 1)
+		candidates = [
+			comment for comment in comments
+			if isinstance(comment, dict) and isinstance(comment.get("user"), dict)
+			and comment["user"].get("login") == login and isinstance(comment.get("body"), str)
+			and _OCCURRENCE_MARKER in comment["body"]
+		]
+		candidates = candidates[-MAX_PROVENANCE_COMMENTS:]
+		valid = [comment for comment in candidates if isinstance(comment.get("id"), int) and isinstance(comment.get("node_id"), str) and _NODE_ID_RE.fullmatch(comment["node_id"])]
+		fields = "author { login } lastEditedAt editor { login } userContentEdits(first: 100) { totalCount nodes { editor { login } } }"
+		query = f'query {{ issue: repository(owner: "{owner}", name: "{name}") {{ issue(number: {int(issue["number"])}) {{ {fields} }} }}'
+		if valid:
+			query += " comments: nodes(ids: " + json.dumps([comment["node_id"] for comment in valid]) + ") { ... on IssueComment { databaseId " + fields + " } }"
+		query += " }"
+		# Existing issue/comment REST reads lack edit history; lineage GraphQL
+		# queries closing PRs, not the issue's or comments' edit history.
+		response = self.gh.graphql(query)
+		data = response.get("data") if isinstance(response, dict) and not response.get("errors") else None
+		issue_node = (data.get("issue") or {}).get("issue") if isinstance(data, dict) and isinstance(data.get("issue"), dict) else None
+		if not _intake_only_content(issue_node, login):
+			result["reason"] = "issue_edited_by_other" if issue_node is not None else "issue_provenance_unavailable"
+		else:
+			result["body"] = True
+			result["reason"] = "verified"
+			if valid and isinstance(data.get("comments"), list):
+				by_id = {node.get("databaseId"): node for node in data["comments"] if isinstance(node, dict) and isinstance(node.get("databaseId"), int)}
+				for comment in valid:
+					if _intake_only_content(by_id.get(comment["id"]), login):
+						result["comment_ids"].add(comment["id"])
+		log(f"provenance outcome={'verified' if result['body'] else 'unverified'} reason={result['reason']} comments_verified={len(result['comment_ids'])}/{len(candidates)}")
+		return result
+
+	def _verify_run(self, ref: dict[str, str], issue_repo: str) -> tuple[bool, str]:
+		if ref["repo"] == issue_repo:
+			return True, "verified"
+		if ref["source_repo"] != ref["repo"]:
+			return False, "run_no_verified_context"
+		sha = ref["head_sha"] if heal.is_valid_sha(ref["head_sha"]) else ""
+		branch = ref["head_branch"] if heal.is_valid_branch(ref["head_branch"]) else ""
+		pr_number = int(ref["source_number"]) if ref["source_number"].isdigit() and len(ref["source_number"]) <= 12 and int(ref["source_number"]) > 0 else None
+		if not sha or (not branch and pr_number is None):
+			return False, "run_no_verified_context"
+		run = self._timeline_index.get(ref["run_id"])
+		if run is None:
+			# The existing head-SHA timeline was checked first; only a miss
+			# needs a dedicated run GET (e.g. default-branch dispatches).
+			run = self.gh.json(f"repos/{ref['repo']}/actions/runs/{ref['run_id']}")
+		if not isinstance(run, dict) or str(run.get("id")) != ref["run_id"]:
+			return False, "run_metadata_unavailable"
+		repository = run.get("repository")
+		if not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str) or repository["full_name"].lower() != ref["repo"].lower():
+			return False, "run_repo_mismatch"
+		pulls = run.get("pull_requests")
+		pr_linked = pr_number is not None and isinstance(pulls, list) and any(isinstance(pr, dict) and pr.get("number") == pr_number for pr in pulls)
+		pr_named = pr_number is not None and any(f"[pr:{pr_number}]" in (run.get(key) or "") for key in ("display_title", "name") if isinstance(run.get(key), str))
+		head_matches = sha and isinstance(run.get("head_sha"), str) and run["head_sha"].lower() == sha
+		branch_matches = branch and run.get("head_branch") == branch
+		if head_matches and (branch_matches or pr_linked or pr_named):
+			return True, "verified"
+		return False, "run_head_mismatch"
 
 	# -- runs -----------------------------------------------------------------
 
@@ -913,6 +1044,7 @@ class Collector:
 		if not isinstance(runs, list):
 			self._skip("timeline", "runs_unavailable")
 			return []
+		self._timeline_index = {str(run["id"]): run for run in runs if isinstance(run, dict) and isinstance(run.get("id"), int)}
 		return [
 			{
 				"id": run.get("id"),
@@ -934,6 +1066,8 @@ class Collector:
 		ctx = heal_context(issue)
 		# The source marker is editable issue prose. Never let it widen GH_PAT
 		# access beyond this repo and the intake's registered consumer set.
+		# Include other repos only in the skipped index; this does not authorize reads.
+		candidate_refs = trusted_run_refs(issue, comments, allowed_repos=[issue_repo, ctx["source_repo"]], limit=self.max_runs, include_disallowed=True)
 		registered_repos = _load_json_lenient(os.environ.get("WORKFLOW_HEAL_CONSUMER_REGISTRY") or ".github/ai/consumer_repos.json")
 		if ctx["source_repo"] != issue_repo and (
 			not isinstance(registered_repos, list) or ctx["source_repo"] not in registered_repos
@@ -941,16 +1075,45 @@ class Collector:
 			self._skip("source_repo", "not_registered")
 			ctx["source_repo"] = ""
 			ctx["source_number"] = ""
+		provenance_check = self._verify_provenance(issue, comments, issue_repo)
+		if not provenance_check["body"]:
+			self._skip("run_provenance", provenance_check["reason"])
+			if ctx["source_repo"] != issue_repo:
+				self._skip("source_repo", "provenance_unverified")
+				ctx["source_repo"] = ""
+				ctx["source_number"] = ""
+				ctx["head_sha"] = ""
 		rate = self.gh.rate_limit()
 		remaining = ((rate.get("core") or {}).get("remaining")) if rate else None
 		if isinstance(remaining, int) and remaining < self.min_rate:
 			self.low_rate = True
 			log(f"rate_limit_low remaining={remaining} min={self.min_rate}")
+		timeline = self.timeline(ctx)
 		allowed = [issue_repo] + ([ctx["source_repo"]] if ctx.get("source_repo") else [])
-		refs = trusted_run_refs(issue, comments, allowed_repos=allowed, limit=self.max_runs)
+		refs = trusted_run_refs(issue, comments, allowed_repos=allowed, limit=self.max_runs, include_body=provenance_check["body"], verified_comment_ids=provenance_check["comment_ids"])
+		verified_run_keys = {(ref["repo"], ref["run_id"]) for ref in refs}
+		for candidate_ref in candidate_refs:
+			if (candidate_ref["repo"], candidate_ref["run_id"]) not in verified_run_keys:
+				reason = "unverified_intake_provenance"
+				if candidate_ref["repo"] != issue_repo and (
+					not isinstance(registered_repos, list) or candidate_ref["repo"] not in registered_repos
+				):
+					reason = "not_registered"
+				elif candidate_ref["repo"] not in allowed and provenance_check["body"] and (
+					candidate_ref["origin"] == "body" or
+					candidate_ref["origin"] in {f"comment:{verified_comment_id}" for verified_comment_id in provenance_check["comment_ids"]}
+				):
+					reason = "unverified_run_no_verified_context"
+				self._skip(f"run:{candidate_ref['repo']}:{candidate_ref['run_id']}", reason)
 		if not refs:
 			self._skip("runs", "no_trusted_run_links")
-		runs = [self.collect_run(ref) for ref in refs]
+		runs = []
+		for ref in refs:
+			verified, reason = self._verify_run(ref, issue_repo)
+			if not verified:
+				self._skip(f"run:{ref['repo']}:{ref['run_id']}", f"unverified_{reason}")
+				continue
+			runs.append(self.collect_run(ref))
 		keep_dirs = {run.get("dir") for run in runs}
 		runs_root = self.out / "runs"
 		if runs_root.is_dir():
@@ -961,7 +1124,6 @@ class Collector:
 					child.rmdir()
 		provenance = self.provenance(ctx)
 		lineage = self.lineage(issue_repo, ctx, issue.get("number"))
-		timeline = self.timeline(ctx)
 		environment = {"github_rate_limit": rate, "openrouter_key": self.openrouter_status()}
 		self._write_json("provenance.json", provenance)
 		self._write_json("lineage.json", lineage)
@@ -994,6 +1156,7 @@ class Collector:
 		(self.out / "INDEX.md").write_text(_clip_bytes(redact_secrets(index), INDEX_MAX_BYTES), encoding="utf-8")
 		manifest = {
 			"schema": "workflow_failure_heal_evidence.v1",
+			"run_provenance": {"status": "verified" if provenance_check["body"] else "unverified", "reason": provenance_check["reason"]},
 			"generated_at": _now_iso(),
 			"issue": issue.get("number"),
 			"api_calls": self.gh.calls,
