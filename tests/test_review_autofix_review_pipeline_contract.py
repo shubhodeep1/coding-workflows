@@ -8206,20 +8206,20 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert run("snapshot").returncode == 0
 		assert not (source / ".github/ai/WORKFLOW.md").exists()
 		assert (source / ".claude/hooks/gh_api_write_guard.py").exists()
-		assert (source / ".claude/hooks/pr_merge_status_guard.py").exists()
+		assert not (source / ".claude/hooks/pr_merge_status_guard.py").exists()
 		assert not (source / ".claude/hooks/other.py").exists()
 		assert (source / "scripts/claude_settings.json.tmpl").exists()
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
 		(source / ".github/ai/claude_engine.json").write_text("after\n")
 		(source / ".claude/hooks/gh_api_write_guard.py").write_text("after\n")
-		(source / ".claude/hooks/pr_merge_status_guard.py").write_text("after\n")
+		(source / ".claude/hooks/pr_merge_status_guard.py").write_text("untrusted\n")
 		(source / "scripts/claude_settings.json.tmpl").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
 		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
 		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
-		assert (host / ".claude/hooks/pr_merge_status_guard.py").read_text() == "after\n"
+		assert (host / ".claude/hooks/pr_merge_status_guard.py").read_text() == "before\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
 		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0

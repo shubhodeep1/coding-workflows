@@ -1005,13 +1005,14 @@ def test_template_copies_are_identical() -> None:
 
 
 def test_review_editor_can_transfer_guard_without_opening_other_claude_hooks() -> None:
+	# Historical test name kept for discovery; safety hook transfer is now denied.
 	spec = importlib.util.spec_from_file_location(
 		"review_untrusted_workspace", REPO_ROOT / "scripts" / "review_untrusted_workspace.py"
 	)
 	assert spec is not None and spec.loader is not None
 	workspace_guard = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(workspace_guard)
-	assert workspace_guard.allowed(".claude/hooks/pr_merge_status_guard.py")
+	assert not workspace_guard.allowed(".claude/hooks/pr_merge_status_guard.py")
 	assert not workspace_guard.allowed(".claude/hooks/unrelated.py")
 
 
