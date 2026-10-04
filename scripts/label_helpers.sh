@@ -75,6 +75,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:workflow-heal-escalated"]="b60205"
 	["ai:operator-step"]="fbca04"
 	["ai:codex"]="0e8a16"
+	["ai:engine-claude"]="d4c5f9"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -132,6 +133,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:workflow-heal-escalated"]="Workflow failure heal chain hit the lineage cap; needs human attention"
 	["ai:operator-step"]="Steps only a person can take; the pipeline continues and the gated work stays off until they are done"
 	["ai:codex"]="Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
+	["ai:engine-claude"]="Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'

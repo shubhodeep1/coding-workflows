@@ -216,6 +216,10 @@
     "ai:codex": {
       "color": "0e8a16",
       "description": "Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
+    },
+    "ai:engine-claude": {
+      "color": "d4c5f9",
+      "description": "Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
     }
   },
   "phase_groups": [

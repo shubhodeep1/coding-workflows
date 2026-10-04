@@ -88,9 +88,9 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 			("issue_comment", "created", "User", "NONE", "outsider", False, "open", False, False),
 		]
 		for event_name, event_action, user_type, association, login, orchestrator, state, skip, fast_path in cases:
-			# The fetched issue carries its number and repository_url; the
-			# security dependency check (issue #4934) verifies both.
-			payload = {"number": 123, "repository_url": "https://api.github.com/repos/o/r", "state": state, "user": {"type": user_type, "login": login}, "labels": [], "author_association": association}
+			# number + repository_url as the real issue meta carries them: the
+			# security-dependency check holds an issue whose identity it cannot verify.
+			payload = {"number": 123, "repository_url": "https://api.github.com/repos/owner/repo", "state": state, "user": {"type": user_type, "login": login}, "labels": [], "author_association": association}
 			if orchestrator:
 				payload["labels"] = [{"name": "ai:orchestrator-managed"}]
 			meta_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -106,9 +106,11 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 				"COMMENT_BODY": "/reclarify" if event_name == "issue_comment" else "",
 				"RUN_ID": "1",
 				"ISSUE_NUMBER": "123",
+				# The step env sets it from vars.AI_ISSUE_IMPLEMENTER (empty when unset).
+				"AI_ISSUE_IMPLEMENTER": "",
 			})
-			# Actions substitutes the expression before bash runs the step.
-			script = step["run"].replace("${{ github.repository }}", "o/r")
+			# Actions substitutes ${{ github.repository }} before bash runs the step.
+			script = step["run"].replace("${{ github.repository }}", "owner/repo")
 			result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True, cwd=REPO_ROOT)
 			outputs = output_path.read_text(encoding="utf-8")
 			assert f"skip_codex={str(skip).lower()}" in outputs, result.stdout

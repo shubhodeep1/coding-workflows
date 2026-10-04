@@ -1848,6 +1848,119 @@ OpenCode is currently installed only by `.github/workflows/opencode-live-smoke.y
 The smoke defaults `OPENCODE_VERSION` to `1.18.23`. `CODEX_VERSION` remains independently pinned at `v0.114.0` and continues to select the runtime for all production workflow paths; the smoke does not change existing runtime routing or prompt-cache behavior.
 -->
 
+## Claude engine
+
+The Actions pipelines can run a model role on the Claude Code CLI
+(`claude -p`) instead of codex or OpenCode
+(`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). The plumbing
+is in place but **inert**: every role's code default is `codex`, no call site
+uses it yet, and the role cutovers switch the defaults one group at a time.
+
+| Piece | What it does |
+|---|---|
+| `.github/ai/claude_engine.json` | Pinned CLI version (`cli_version`), deployed token broker URL, OIDC audience, usage gate (`0.9`), probe model, and per-role `engine` / `claude_model` / `profile` defaults. Read only from the trusted support checkout; a missing file means every role on codex. |
+| `scripts/ai_engine.sh` | Sourced by call sites. `ai_engine_for_role <ROLE>` prints `codex` or `claude` and logs `AI_ENGINE_SELECTED role= engine= model= effort= source=`. `claude_run <ROLE> <prompt> <out> <workdir> [session_id]` runs the CLI and writes the final answer to `<out>`, the file the codex path writes. |
+| `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
+| `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
+| `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. |
+| `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
+| `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
+
+**Which engine a role uses**, first match wins: the work item's labels
+(`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),
+`AI_ENGINE_<ROLE>`, `AI_ENGINE`, then the role's default in
+`claude_engine.json`. Values are `codex` or `claude`; anything else is
+ignored with a warning. Role names: `CLARIFY`, `CLARIFY_RESPOND`, `PLAN`,
+`IMPLEMENT`, `IMPLEMENT_REPAIR`, `IMPLEMENT_DIAGNOSE`, `ORCHESTRATE`,
+`WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE`,
+`UNBLOCK_JUDGE`, `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER`,
+`RB_JUDGE`, `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`,
+`SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `ACTIVATION_VERIFY`,
+`LOG_ANALYSIS`, `LOG_AUDIT`, `LOG_SUMMARY`, `RETRO`, `MATERIALITY`,
+`SUMMARISER`, `BEHAVIOURAL_SMOKE`. The six reviewer slots have no engine
+switch.
+
+**How the label spreads.** `ai-orchestrate.yml` takes an optional `engine`
+input (`claude` or `codex`; empty leaves the project unlabelled), and the
+orchestrator puts the matching label (`ai:engine-claude` or `ai:codex`) on
+the tracking issue and the wave-1 issues it creates. The poller copies the
+tracking issue's engine label onto every issue and PR it creates later, and
+`implement.yml` copies an issue's engine label onto its PR. The separate
+role cutovers must pass work-item labels into engine selection; today the
+labels do not select a production engine. When both labels are
+present, `ai:codex` is copied. `/implement-plan-claude` dispatches with
+`engine=claude`; against a wrapper that has no `engine` input yet it
+dispatches without it and labels the tracking issue instead. Wave-1 issues
+created before that later label write do not inherit it. If `implement.yml`
+reuses an existing open PR after a create race, it also applies the issue's
+engine label before reporting that PR; a label-write failure stops the run.
+
+**Model and effort.** A role keeps its existing model variable when the value
+starts with `claude-`; otherwise it uses Opus 5.5 (`claude-opus-5-5`), or
+Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`, `RETRO`, `MATERIALITY`,
+`SUMMARISER` and `BEHAVIOURAL_SMOKE`. The role's existing reasoning value is
+the effort, with `none` / `minimal` mapped to `low`. Codex model variables are
+never rewritten.
+
+**Tool profiles.** Roles whose codex call is read-only today (`CLARIFY`,
+`CLARIFY_RESPOND`, `SECURITY_JUDGE`, `SECURITY_AUDIT`, `WORKFLOW_HEAL`) run with
+`Read`, `Grep`, `Glob` and a fixed list of read-only `git` / `gh` commands in
+`dontAsk` mode; every other role runs `bypassPermissions`, where the P5 deny
+rules still apply.
+
+**Accounts and fallback.** `claude_run` reads the account pool the token step
+writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
+`order` file, best account first, and one `0600` file per account under
+`tokens/`). A usage-limited or rejected account moves the run to the next one.
+When no CLI, policy, instructions file or account is usable, it logs
+`AI_ENGINE_FALLBACK role= reason=`, sends at most one Telegram note per job,
+and returns `75`; the caller then runs its codex path unchanged. A crash
+returns non-zero and follows the role's existing retry rules; a timeout
+returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
+which only adds `engine=claude` to its log lines, and every success prints the
+stream-json `result` usage line that `scripts/cost_audit.py` totals under
+"Claude engine usage".
+
+**Context gate.** `--bare` is not used because it never reads OAuth
+credentials. The smoke run checks that a no-op run starts below 25,000 input
+tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
+visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
+`claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
+it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
+file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
+and reports that path instead of overwriting the new content.
+
+**Token broker.** The account tokens never live in coding-workflows or in a
+consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in
+`shubhodeep1/claude-workers`, whose hourly `claude-pool-key-sync.yml` copies
+them into the `CLAUDE_POOL_TOKENS` secret of the `claude-pool-broker`
+Cloudflare Worker (`https://claude-pool-broker.shubhodeep.workers.dev`,
+source `tools/claude-pool-broker/`). A job that hosts a Claude role runs
+`.github/actions/claude-pool-token` once, after `install-claude`:
+
+1. it requests the job's GitHub OIDC token (audience
+   `coding-workflows-claude-pool`), so the job needs `id-token: write`;
+2. the broker checks the token's signature, issuer, audience, expiry and age
+   (at most 10 minutes), that `repository_owner` is `shubhodeep1`, that the
+   repository is coding-workflows or listed in
+   `.github/ai/consumer_repos.json` (fetched from `main`, cached 10 minutes),
+   and that `job_workflow_ref` is a coding-workflows workflow, then returns
+   the pool; anything else is `403` with a reason code;
+3. the action masks every token, probes each account with Haiku 4.5, and
+   writes the accounts under the `0.9` gate, least used first, to
+   `$RUNNER_TEMP/claude-pool`; its post step deletes them.
+
+Its outputs are `available` (`true`/`false`), `reason`, `accounts` and
+`pool_dir`; it never fails the job. `available=false` (no broker URL, no
+`id-token: write`, a refusal, every account gated) means every Claude role in
+the job runs codex (D1). The `ai-*.yml` wrapper templates and the
+`internal-*.yml` callers of the Claude-hosting reusable workflows grant
+`id-token: write`; consumers whose sync is stale fall back to codex until
+their next `@stable` sync.
+The token action accepts only the deployed broker URL in Actions jobs and
+only removes pool directories immediately under `$RUNNER_TEMP`; a rejected
+URL or unsafe directory returns `available=false` without minting an OIDC token.
+
 ## Project Orchestrator
 
 The orchestrator enables complex, multi-issue projects from a single prompt. It decomposes a project description into a dependency-aware DAG of GitHub issues, dispatches them through the existing AI pipeline in waves, and uses a judge to validate results between waves.
