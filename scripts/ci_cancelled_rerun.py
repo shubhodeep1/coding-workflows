@@ -3,10 +3,12 @@
 
 Input: CI_CANCELLED_PR_SNAPSHOT (the sweep's JSON array); output: one
 CI_CANCELLED_RERUN decision per PR. Fail closed on incomplete evidence.
-At most four repository-wide CI run-list GETs per tick: one completed
-(`status=completed&per_page=100`) and one each for queued, in_progress,
-and pending. There are no per-PR run reads. The sweep's existing cache
-contains *review* workflow runs, not CI runs, so it cannot answer this query.
+At most four repository-wide CI run-list GETs per tick: one bounded completed
+window (`status=completed&per_page=100`) and one each for queued, in_progress,
+and pending, plus one paginated open-PR listing immediately before posting.
+There are no per-PR reads. The sweep's earlier PR snapshot cannot prove a
+head is still current after the review-dispatch loop, and its run cache
+contains *review* workflow runs, not CI runs.
 Eligible runs get one rerun-failed-jobs POST, with no retry or full-rerun
 fallback. The bounded completed window cannot establish an absolute
 once-per-head cap if an older, distinct run ID has fallen out of view.
@@ -58,9 +60,10 @@ def list_runs(repo: str, status: str) -> list[dict]:
 	count = payload.get("total_count")
 	if not isinstance(runs, list) or type(count) is not int or count < 0:
 		raise ValueError("invalid_listing")
-	# A full page, even with an apparently complete count, offers no room
-	# for an in-flight run to have entered the list during the API read.
-	if count != len(runs) or len(runs) >= 100:
+	# Completed history is deliberately bounded; active runs must be complete
+	# or we cannot establish that no other run for the head is still running.
+	if len(runs) > 100 or count < len(runs) or (status != "completed" and (count != len(runs) or len(runs) == 100)) \
+			or (status == "completed" and len(runs) < 100 and count != len(runs)):
 		raise ValueError("listing_truncated")
 	for run in runs:
 		if not isinstance(run, dict) or not positive_number(run.get("id")) \
@@ -79,22 +82,64 @@ def list_runs(repo: str, status: str) -> list[dict]:
 				raise ValueError("invalid_listing") from exc
 			if created_at.tzinfo is None:
 				raise ValueError("invalid_listing")
-		for association in run["pull_requests"]:
-			if not isinstance(association, dict) or not positive_number(association.get("number")) \
-					or not isinstance(association.get("head"), dict) \
-					or not isinstance(association["head"].get("sha"), str) \
-					or not SHA_PATTERN.fullmatch(association["head"]["sha"]):
-				raise ValueError("invalid_listing")
 	return runs
 
 
 def associated(run: dict, pr_number: int, sha: str) -> bool:
 	return run["event"] == "pull_request" and any(
-		item.get("number") == pr_number
+		isinstance(item, dict) and positive_number(item.get("number")) and item["number"] == pr_number
 		and isinstance(item.get("head"), dict)
 		and item["head"].get("sha") == sha
 		for item in run["pull_requests"]
 	)
+
+
+def current_pr_heads(repo: str) -> dict[int, str]:
+	# The sweep's earlier /pulls listing predates review dispatch; its
+	# review-run cache has no live PR heads. Refresh once for all PRs,
+	# not per PR; a failed/partial page cannot authorize a rerun.
+	result = subprocess.run(
+		["gh", "api", "--paginate", "--slurp", "-X", "GET",
+			f"repos/{repo}/pulls?state=open&per_page=100"],
+		capture_output=True, text=True, timeout=30, check=False,
+	)
+	if result.returncode != 0:
+		raise ValueError("api_unavailable")
+	try:
+		pages = json.loads(result.stdout)
+	except ValueError as exc:
+		raise ValueError("invalid_pr_listing") from exc
+	if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+		raise ValueError("invalid_pr_listing")
+	heads: dict[int, str] = {}
+	for page in pages:
+		for item in page:
+			if not isinstance(item, dict) or not positive_number(item.get("number")) \
+					or not isinstance(item.get("head"), dict) \
+					or not isinstance(item["head"].get("sha"), str) \
+					or not SHA_PATTERN.fullmatch(item["head"]["sha"]) \
+					or type(item.get("draft")) is not bool or item["number"] in heads:
+				raise ValueError("invalid_pr_listing")
+			if not item["draft"]:
+				heads[item["number"]] = item["head"]["sha"]
+	return heads
+
+
+def skip_ai_body(body: str) -> bool:
+	fence = ""
+	for line in body.splitlines():
+		line = line.removesuffix("\r")
+		if fence:
+			closing = re.fullmatch(r" {0,3}(`{3,}|~{3,})[ \t]*", line)
+			if closing and closing[1][0] == fence[0] and len(closing[1]) >= len(fence):
+				fence = ""
+			continue
+		opened = re.match(r"[ \t]*(`{3,}|~{3,})", line)
+		if opened:
+			fence = opened[1]
+		elif re.fullmatch(r" {0,3}\[skip ai\][ \t]*", line):
+			return True
+	return False
 
 
 def rerun_failed_jobs(repo: str, run_id: int) -> bool:
@@ -129,7 +174,7 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 		if head_filter and head_filter not in ref:
 			decision(number, sha, None, "skip", "filtered")
 			continue
-		if "[skip ai]" in pr["title"] + " " + pr["body"]:
+		if "[skip ai]" in pr["title"] or skip_ai_body(pr["body"]):
 			decision(number, sha, None, "skip", "skip_ai")
 			continue
 		if not enabled:
@@ -146,6 +191,7 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 		# No CI listing is shared with the review-family active-run cache.
 		completed = list_runs(repo, "completed")
 		active = [run for status in ACTIVE_STATUSES for run in list_runs(repo, status)]
+		current_heads = {} if dry_run else current_pr_heads(repo)
 	except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
 		reason = str(exc) if isinstance(exc, ValueError) else "api_unavailable"
 		for pr in eligible:
@@ -155,6 +201,16 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 	processed_heads: set[str] = set()
 	for pr in eligible:
 		number, sha = pr["number"], pr["head_sha"]
+		if not dry_run and current_heads.get(number) != sha:
+			decision(number, sha, None, "skip", "superseded_head")
+			continue
+		if any(isinstance(item, dict) and positive_number(item.get("number")) and item["number"] == number
+				and (not isinstance(item.get("head"), dict)
+					or not isinstance(item["head"].get("sha"), str)
+					or not SHA_PATTERN.fullmatch(item["head"]["sha"]))
+				for run in completed if run["event"] == "pull_request" for item in run["pull_requests"]):
+			decision(number, sha, None, "skip", "invalid_association")
+			continue
 		if sha in processed_heads:
 			decision(number, sha, None, "skip", "shared_head")
 			continue
@@ -169,13 +225,17 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 			datetime.fromisoformat(run["created_at"].replace("Z", "+00:00")).timestamp(), run["id"]
 		))
 		run_id = newest["id"]
-		if any(run["run_attempt"] > 1 and any(item["head"]["sha"] == sha
+		if any(run["run_attempt"] > 1 and any(isinstance(item, dict)
+				and isinstance(item.get("head"), dict) and item["head"].get("sha") == sha
 				for item in run["pull_requests"]) for run in completed):
 			decision(number, sha, run_id, "skip", "already_retried")
 		elif newest["conclusion"] not in ("cancelled", "startup_failure"):
 			decision(number, sha, run_id, "skip", "other_conclusion")
-		elif any(associated(run, number, sha) or run["head_sha"] == sha
-				or (run["event"] == "pull_request" and run.get("head_branch") == pr["head_ref"])
+		elif any(associated(run, number, sha)
+				or (run["event"] == "push" and run["head_sha"] == sha
+					and run.get("head_branch") == pr["head_ref"])
+				or (run["event"] == "pull_request" and not run["pull_requests"]
+					and run.get("head_branch") == pr["head_ref"])
 				for run in active):
 			decision(number, sha, run_id, "skip", "active_run")
 		elif dry_run:

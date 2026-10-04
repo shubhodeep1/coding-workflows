@@ -39,6 +39,7 @@ def exercise(prs=None, completed=None, active=None, enabled=True, dry_run=False,
 	active = [] if active is None else active
 	output = io.StringIO()
 	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: completed if status == "completed" else active) as listing, \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={item["number"]: item["head_sha"] for item in prs if isinstance(item, dict) and type(item.get("number")) is int}), \
 		mock.patch.object(HELPER, "rerun_failed_jobs", return_value=True) as post, contextlib.redirect_stdout(output):
 		HELPER.process(prs, HELPER.SOURCE_REPO, enabled, dry_run, head_filter)
 	return output.getvalue().splitlines(), listing, post
@@ -90,10 +91,53 @@ def test_active_run_without_association_on_same_branch_blocks():
 	post.assert_not_called()
 
 
+def test_unrelated_active_run_on_same_sha_or_branch_does_not_block():
+	active = run(status="queued", event="push", head_sha=SHA, head_branch="main", pull_requests=[])
+	lines, _, post = exercise(active=[active])
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+	active = run(status="queued", event="push", head_sha=OLD_SHA, head_branch="topic", pull_requests=[])
+	lines, _, post = exercise(active=[active])
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+	active = run(status="queued", number=12, head_branch="topic")
+	lines, _, post = exercise(active=[active])
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+
+
+def test_push_run_on_current_pr_branch_and_sha_blocks():
+	active = run(status="queued", event="push", head_sha=SHA, head_branch="topic", pull_requests=[])
+	lines, _, post = exercise(active=[active])
+	assert "reason=active_run" in lines[0]
+	post.assert_not_called()
+
+
 def test_switch_off_makes_no_ci_reads():
 	lines, listing, post = exercise(enabled=False)
 	assert "reason=disabled" in lines[0]
 	listing.assert_not_called()
+	post.assert_not_called()
+
+
+def test_head_advanced_after_snapshot_skips_rerun():
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run()] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: OLD_SHA}) as fresh, \
+		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "")
+	assert "action=skip reason=superseded_head" in output.getvalue()
+	fresh.assert_called_once_with(HELPER.SOURCE_REPO)
+	post.assert_not_called()
+
+
+def test_unavailable_live_pr_listing_fails_closed():
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run()] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", side_effect=ValueError("invalid_pr_listing")), \
+		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "")
+	assert "action=skip reason=invalid_pr_listing" in output.getvalue()
 	post.assert_not_called()
 
 
@@ -163,9 +207,11 @@ def test_listings_are_fixed_count_with_no_pr_lookup():
 		return mock.Mock(returncode=0, stdout=json.dumps({"total_count": len(rows), "workflow_runs": rows}))
 
 	with mock.patch.object(HELPER.subprocess, "run", side_effect=fake_gh) as gh, \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: SHA}) as fresh, \
 		mock.patch.object(HELPER, "rerun_failed_jobs", return_value=True) as post, contextlib.redirect_stdout(io.StringIO()):
 		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "")
 	assert gh.call_count == 4
+	fresh.assert_called_once_with(HELPER.SOURCE_REPO)
 	post.assert_called_once()
 
 
@@ -186,13 +232,58 @@ def test_prior_retry_on_shared_head_blocks_another_pr():
 	{"total_count": 101, "workflow_runs": []},
 	{"total_count": 1, "workflow_runs": []},
 	{"total_count": 1, "workflow_runs": [{"id": "unsafe"}]},
-	{"total_count": 1, "workflow_runs": [run(pull_requests=[{"number": True, "head": {"sha": SHA}}])]},
-	{"total_count": 100, "workflow_runs": [run()] * 100},
+	{"total_count": 99, "workflow_runs": [run()] * 100},
 ])
 def test_malformed_or_truncated_listing_cannot_authorize_post(payload):
 	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))):
 		with pytest.raises(ValueError):
 			HELPER.list_runs(HELPER.SOURCE_REPO, "completed")
+
+
+def test_full_completed_page_is_valid_but_full_active_page_is_not():
+	payload = {"total_count": 253, "workflow_runs": [run(run_id=index + 1) for index in range(100)]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))):
+		assert len(HELPER.list_runs(HELPER.SOURCE_REPO, "completed")) == 100
+		with pytest.raises(ValueError, match="listing_truncated"):
+			HELPER.list_runs(HELPER.SOURCE_REPO, "queued")
+
+
+def test_invalid_unrelated_association_does_not_block_valid_candidate():
+	unrelated = run(number=12, run_id=120, pull_requests=[{"number": 12, "head": {"sha": None}}])
+	response = {"total_count": 2, "workflow_runs": [run(), unrelated]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(response))):
+		listed = HELPER.list_runs(HELPER.SOURCE_REPO, "completed")
+	lines, _, post = exercise(completed=listed)
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+	lines, _, post = exercise(prs=[pr(number=12)], completed=listed)
+	assert "reason=invalid_association" in lines[0]
+	post.assert_not_called()
+
+
+def test_live_pr_listing_is_batched_and_must_be_valid():
+	payload = [[{"number": 11, "draft": False, "head": {"sha": SHA}},
+		{"number": 12, "draft": True, "head": {"sha": OLD_SHA}}], []]
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))) as gh:
+		assert HELPER.current_pr_heads(HELPER.SOURCE_REPO) == {11: SHA}
+		assert gh.call_args.args[0][-1].endswith("/pulls?state=open&per_page=100")
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="[]")):
+		with pytest.raises(ValueError, match="invalid_pr_listing"):
+			HELPER.current_pr_heads(HELPER.SOURCE_REPO)
+
+
+@pytest.mark.parametrize("body,skipped", [
+	("Intro\n[skip ai]\n", True),
+	("Add [skip ai] to the title to opt out.", False),
+	("```\n[skip ai]\n```", False),
+	("````md\n```\n[skip ai]\n````", False),
+	("~~~md\n[skip ai]\n~~~\n[skip ai]", True),
+])
+def test_body_opt_out_uses_standalone_unfenced_marker(body, skipped):
+	lines, _, post = exercise(prs=[pr(body=body)])
+	assert ("reason=skip_ai" in lines[0]) is skipped
+	if skipped:
+		post.assert_not_called()
 
 
 def test_refused_post_has_no_full_rerun_fallback():
@@ -213,6 +304,7 @@ def test_only_http_201_counts_as_successful_post():
 def test_post_refusal_is_logged_as_skip():
 	output = io.StringIO()
 	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run(conclusion="startup_failure")] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: SHA}), \
 		mock.patch.object(HELPER, "rerun_failed_jobs", return_value=False) as post, contextlib.redirect_stdout(output):
 		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "")
 	assert "action=skip reason=rerun_refused" in output.getvalue()
@@ -223,7 +315,7 @@ def test_workflow_trusted_checkout_snapshot_and_permissions():
 	text = (ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
 	assert "head_sha: .head.sha" in text
 	assert '"${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"' in text
-	assert "ref: ${{ github.event.repository.default_branch }}" in text
+	assert "ref: ${{ github.event.repository.default_branch || github.ref_name }}" in text
 	assert "persist-credentials: false" in text
 	assert "python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py" in text
 	assert "actions: write" in text
