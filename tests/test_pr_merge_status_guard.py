@@ -27,7 +27,7 @@ TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "setting
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
 
-if not GUARD_PATH.is_file():
+if TEMPLATE_GUARD_PATH.is_file():
 	GUARD_PATH = TEMPLATE_GUARD_PATH
 if not SETTINGS_PATH.is_file():
 	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
