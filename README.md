@@ -1224,6 +1224,9 @@ Review-blocked follow-up and existing-PR pushes use one-shot Git credentials;
 the poller does not write `GH_TOKEN` into shared worktree Git configuration.
 If the integration judge cannot publish a resolution, the poller warns and
 rechecks mergeability on the next tick instead of failing the project immediately.
+The merged-PR push guard checks `origin` as before. A push selecting a different
+repository with `--repo` or a positional remote asks for confirmation rather
+than treating the checkout's origin PR history as proof that the push is safe.
 
 ### Workflow file size limit
 

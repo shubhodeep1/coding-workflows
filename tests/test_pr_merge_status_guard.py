@@ -923,6 +923,41 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	assert lookups == ["feature/x"]
 
 
+@pytest.mark.parametrize("command", [
+	"git push --repo=https://github.com/other/repo HEAD:feature/x",
+	"git push --rep https://github.com/other/repo HEAD:feature/x",
+	"git push https://github.com/other/repo HEAD:feature/x",
+	"git push --repo=upstream HEAD:feature/x",
+	"git push --repo=https://github.com/other/repo --signed=if-asked HEAD:feature/x",
+	"git push --repo=https://x-access-token:private@github.com/other/repo HEAD:feature/x",
+])
+def test_push_to_unverified_repository_requires_confirmation(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not query origin for another repository"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	output = capsys.readouterr().out
+	decision = json.loads(output.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "private" not in output
+
+
+def test_explicit_origin_url_still_checks_origin_pr(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	lookups: list[tuple[str, str]] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append((slug, branch))
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push --repo=https://github.com/o/r.git HEAD:feature/x"}})
+	assert code == 2 and "Branch `feature/x`" in message
+	assert lookups == [("o/r", "feature/x")]
+
+
 def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	worktree = repo.parent / "other"

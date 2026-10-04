@@ -177,9 +177,42 @@ def test_broker_rejects_a_model_outside_the_allow_list(chain) -> None:
 
 def test_broker_rejects_client_authorization(chain) -> None:
 	# A caller on the socket cannot bring its own credential.
+	for _ in range(20):
+		connection = relay.UnixHTTPConnection(chain["socket"])
+		body = json.dumps({"model": MODEL}).encode()
+		connection.request("POST", "/v1/messages", body, {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+		assert connection.getresponse().status == 400
+		connection.close()
+	assert _Upstream.seen == []
+
+
+def test_broker_rejects_large_unauthorized_body_without_broken_pipe(chain) -> None:
 	connection = relay.UnixHTTPConnection(chain["socket"])
-	body = json.dumps({"model": MODEL}).encode()
+	body = json.dumps({"model": MODEL, "padding": "x" * 262144}).encode()
 	connection.request("POST", "/v1/messages", body, {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	assert connection.getresponse().status == 400
+	connection.close()
+	assert _Upstream.seen == []
+
+
+def test_early_rejection_does_not_wait_indefinitely_for_missing_body(chain) -> None:
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "100000")
+	connection.endheaders()
+	assert connection.getresponse().status == 400
+	connection.close()
+	assert _Upstream.seen == []
+
+
+def test_oversized_content_length_is_rejected_without_integer_conversion(chain) -> None:
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", "9" * 5000)
+	connection.endheaders()
 	assert connection.getresponse().status == 400
 	connection.close()
 	assert _Upstream.seen == []

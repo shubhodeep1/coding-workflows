@@ -613,6 +613,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `tests/test_codex_agent_isolation_contract.py` fails when `claude -p` is
   started outside a container entrypoint; the token step's fixed-prompt usage
   probe (`scripts/claude_pool_token.sh`) is the one listed exception.
+- **Merged-PR guard.** Both `.claude/hooks/pr_merge_status_guard.py` and its
+  `workflow-templates/` copy check origin PR history only for pushes to origin.
+  An explicit `--repo` or positional remote naming a different or unverified
+  destination requests human confirmation instead of silently checking the
+  checkout's origin. Remote URLs are never printed in the prompt (they may
+  contain credentials).
 - **No MCP tools inside.** Serena (and any other MCP server) is not configured
   in the container, so isolated prompts carry no Serena hints. Semble results
   are rendered into prompts on the host and are unaffected.

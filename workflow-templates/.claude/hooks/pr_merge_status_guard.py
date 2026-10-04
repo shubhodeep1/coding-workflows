@@ -189,6 +189,7 @@ class _GuardTarget(NamedTuple):
 	reaches_remote: bool
 	warning: str = ""
 	bulk: str = ""
+	remote: str = ""
 
 
 class LookupUnavailable(Exception):
@@ -427,6 +428,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		return [_GuardTarget(invocation.cwd, {}, "", "HEAD", True, invocation.warning)]
 	positionals: list[str] = []
 	remote_provided = False
+	remote_value = ""
 	bulk = ""
 	delete = False
 	tags = False
@@ -454,11 +456,14 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			index += 1
 			if index >= len(arguments):
 				uncertain = True
+			elif remote_provided and word in ("--repo", "--rep"):
+				remote_value = arguments[index]
 		elif re.fullmatch(r"-[ufnqv]*d[ufnqv]*", word):
 			delete = True
 		elif word.startswith(("--push-option=", "--push-o=", "--pu=", "--repo=", "--rep=", "--receive-pack=", "--rece=", "--exec=", "--e=", "--force-with-lease=")) or (word.startswith("-o") and word != "-o"):
 			if word.startswith(("--repo=", "--rep=")):
 				remote_provided = True
+				remote_value = word.split("=", 1)[1]
 		elif word.startswith("-"):
 			if word not in _PUSH_BOOLEAN_OPTIONS and not re.fullmatch(r"-[ufnqv]+", word):
 				uncertain = True
@@ -467,14 +472,18 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		index += 1
 	if delete and not uncertain:
 		return []  # Deletes do not strand new commits on a branch.
+	if remote_provided and not remote_value:
+		uncertain = True
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
-			"could not resolve git push options; checking the current branch instead")]
+			"could not resolve git push options; checking the current branch instead", remote=remote_value)]
+	if not remote_provided and positionals:
+		remote_value = positionals[0]
 	refspecs = positionals if remote_provided else positionals[1:]
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk)]
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value)]
 	targets: list[_GuardTarget] = []
 	for refspec in refspecs:
 		refspec = refspec.removeprefix("+")
@@ -496,9 +505,9 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			continue
 		if branch is None:
 			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; checking the current branch instead"))
+				"could not resolve git push refspec; checking the current branch instead", remote=remote_value))
 			continue
-		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True, remote=remote_value))
 	if bulk:
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk))
 	return targets
@@ -1296,6 +1305,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	unverified_destinations: set[str] = set()
 	for invocation in _guarded_git_invocations(command, checkout):
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
@@ -1306,6 +1316,15 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				bulk_reasons.append(target.bulk)
 			if target.warning:
 				_warn(target.warning)
+			if target.remote and target.remote != "origin":
+				with _git_environment(target.environment):
+					checkout_slug = repo_slug(target.cwd)
+				push_slug = extract_repo_slug(target.remote)
+				if not checkout_slug or push_slug != checkout_slug:
+					# Git may push to a different repository; its PR history and
+					# default branch cannot be inferred from this checkout's origin.
+					unverified_destinations.add(push_slug or "an unverified remote")
+					continue
 			if target.tip != "HEAD":
 				with _git_environment(target.environment):
 					code, resolved_source_sha, _ = _run(
@@ -1371,10 +1390,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
-	if bulk_reasons:
+	if bulk_reasons or unverified_destinations:
 		_request_confirmation(
-			"Bulk git push may write more branches than the current branch: "
-			+ ", ".join(sorted(set(bulk_reasons)))
+			"Git push may write outside the checked repository or branch: "
+			+ ", ".join(sorted(set(bulk_reasons) | unverified_destinations))
 		)
 	return 0, ""
 

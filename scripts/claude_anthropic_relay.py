@@ -29,6 +29,7 @@ import socketserver
 import ssl
 import stat
 import sys
+import time
 
 MAX_BODY = 32 * 1024 * 1024
 UPSTREAM_HOST = "api.anthropic.com"
@@ -99,7 +100,22 @@ class Relay(http.server.BaseHTTPRequestHandler):
 	def log_message(self, *_args):
 		pass
 
-	def _reject(self, status):
+	def _reject(self, status, drain_body=False):
+		if drain_body:
+			length = self.headers.get("Content-Length", "")
+			if (not self.headers.get("Transfer-Encoding") and length.isascii() and length.isdecimal()
+				and len(length) <= 10 and 0 < int(length) <= MAX_BODY):
+				remaining = int(length)
+				deadline = time.monotonic() + 1
+				try:
+					while remaining > 0 and time.monotonic() < deadline:
+						self.connection.settimeout(max(0.01, deadline - time.monotonic()))
+						chunk = self.rfile.read(min(remaining, 65536))
+						if not chunk:
+							break
+						remaining -= len(chunk)
+				except OSError:
+					pass  # Malformed/slow clients still get a bounded rejection.
 		self.send_error(status, "Request rejected")
 		self.close_connection = True
 
@@ -122,12 +138,13 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json"
 			or not length.isascii()
 			or not length.isdecimal()
+			or len(length) > 10
 			or not 0 < int(length) <= MAX_BODY
 		):
-			return self._reject(400)
+			return self._reject(400, drain_body=True)
 		headers = forwarded_request_headers(self.headers)
 		if headers is None:
-			return self._reject(400)
+			return self._reject(400, drain_body=True)
 		body = self.rfile.read(int(length))
 		if len(body) != int(length):
 			return self._reject(400)
