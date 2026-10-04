@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_dependency.py:34-35 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `SECURITY_DEPENDENCY_RE` is case-sensitive while `SECURITY_DEPENDENCY_LINE_RE` is case-insensitive, so a lowercase dependency line passes the pre-filter but fails extraction and triggers a `ValueError`.\n  WHY: The runtime path is not hit in practice because `security-audit.sh` writes the canonical `- Depends on: #N` format.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/security_dependency.py:34-35 | severity=NIT | confidence=3\n  PROBLEM: SECURITY_DEPENDENCY_RE uses (?m) without case-insensitive flag, while SECURITY_DEPENDENCY_LINE_RE uses (?mi). The search/count at line 59 is case-insensitive, but the extraction at line 66 is case-sensitive. A `- depends on: #N` (lowercase) line would match the search, produce a non-empty `findall` result at line 63, but produce zero matches at line 66, triggering \"invalid or repeated security dependency\" (ValueError).\n  WHY: security-audit.sh writes the dependency line in the canonical `- Depends on: #N` format, so this path is not hit in practice. The case-insensitive search exists only as a pre-filter to skip the ai:security label check for issues with no dependency line at all.\n- Requirement: \"The `claude-fixer-auto-merge` job id is kept but never runs, in case a required check names it.\" (from changelog.d/6118)\n  Expected change site: .github/workflows/review_autofix.yml claude-fixer-auto-merge job\n  Evidence of absence: The job exists at review_autofix.yml:1984-1991 with `if: ${{ needs.gate.outputs.skip_reason == 'claude_fixer_auto_merge_retired' }}`. The gate never emits this skip_reason value, so the job will always be skipped. This satisfies the requirement \u2014 the job id is retained for consumers with required checks that name it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Phase 2 retire the session-based Claude automation (per changelog fragment and plan doc). All session-based Claude automation is removed: queue, intake, pickup, Claude-fixer hand-off, Claude route in clarify, ai:claude skip gates.\n  Expected change site: Multiple files across .github/, scripts/, .claude/\n  Evidence of absence: Verified across all 184 changed files. All Claude-session machinery is gone: claude-issue-intake.yml, claude-issue-queue-watchdog.yml, claude-issue-dispatch.md, claude-issue-pickup.md, fix-claude-pr.md; scripts/claude_issue_handoff.sh, scripts/claude_issue_intake.sh, scripts/claude_issue_route.py, scripts/claude_pr_sweep.py, scripts/claude_session_janitor.py; .claude/scripts/check_in_status.py, .claude/scripts/claude_fix_claim.py, .claude/scripts/permission_prompts.py, .claude/scripts/dispatch_workflow.py, .claude/scripts/edit_comment.py, .claude/hooks/pr_check_in_reminder.py, .claude/hooks/permission_prompt_logger.py; review_autofix_step_claude_fixer_handoff.sh; and related tests. The clarify route step no longer has any Claude routing. CLAUDE.md \u00a723.I, \u00a726, \u00a728 are retired stubs. The label contract has retired_labels. Consumer cleanup is wired through update_workflows.yml and retired_files.txt. The no-session-automation guard test (test_no_session_automation.py) prevents reintroduction.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "db2156064ecd794c173996b9e16949d29d5f5b2a934d28cb0f5190869c85f7e2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37177635943",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37177635943",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004045713_9bc6cfed9f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37177635943"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-04T04:57:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
