@@ -47,6 +47,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
+- `.github/workflows/claude-engine-smoke.yml` — GitHub Actions workflow: Claude engine smoke (dispatch-only self-test of the Claude engine plumbing).
 - `.github/workflows/claude-issue-intake.yml` — GitHub Actions workflow: Claude Issue Intake.
 - `.github/workflows/claude-issue-queue-watchdog.yml` — GitHub Actions workflow: Claude Issue Queue Watchdog.
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
@@ -97,6 +98,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 ## Scripts
 
 - `scripts/ai_context_utils.py` — Python helper for ai context utils.
+- `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` (`claude_run`), and fall back to codex (D1).
 - `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
 - `scripts/ai_memory.py` — CLI for AI memory operations used by GitHub workflows.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
@@ -122,11 +124,14 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
 - `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
 - `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
+- `scripts/claude_anthropic_relay.py` — Host-side Anthropic relay and in-container bridge that keep the Claude OAuth token out of sandboxed runs.
+- `scripts/claude_engine.py` — Claude engine decisions: role resolution, the P5 settings, transcript extraction and classification, probe parsing, account order.
 - `scripts/claude_issue_handoff.sh` — Claim a standalone issue routed to Claude and send its `claude-issue` repository_dispatch to coding-workflows.
 - `scripts/claude_issue_intake.sh` — Validate one `claude-issue` payload and queue it as an `ai:claude-issue-queue` issue for the Claude issue pickup.
 - `scripts/claude_issue_queue_watchdog.sh` — Flag queued Claude issues the pickup left open past `CLAUDE_ISSUE_QUEUE_STALE_HOURS` and send one Telegram alert.
 - `scripts/claude_issue_route.py` — Route standalone issues to the Claude issue implementer or the Codex pipeline, and build/validate the handoff payload.
 - `scripts/claude_pr_sweep.py` — Catch-all sweep: queue a fresh Claude fixer (`/fix-claude-pr`) for `claude/*` PRs whose fix is overdue with no live claim.
+- `scripts/claude_settings.json.tmpl` — P5 permission policy template rendered into the Claude engine's `--settings` file.
 - `scripts/claude_session_janitor.py` — Stale session sweep: name the finished fixer, issue-start, and report sessions the Claude issue pickup archives (CLAUDE.md §26.I).
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
@@ -246,7 +251,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
 - `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
-- `scripts/smoke_review_dispatch.sh` — Sourced helpers that find and verify the E2E smoke gate's default-branch review dispatch runs.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-6-luna, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
