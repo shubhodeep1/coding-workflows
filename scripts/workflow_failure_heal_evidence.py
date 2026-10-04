@@ -563,7 +563,7 @@ def trusted_run_refs(issue: dict[str, Any], comments: Iterable[Any], *, allowed_
 			continue
 		comment_author = (comment.get("user") or {}).get("login") if isinstance(comment.get("user"), dict) else None
 		text = comment.get("body") or ""
-		if comment_author != author or _OCCURRENCE_MARKER not in text:
+		if not author or comment_author != author or _OCCURRENCE_MARKER not in text:
 			continue
 		texts.extend(match.group("url") for match in _HEAL_RUN_LINE_RE.finditer(text))
 	seen: dict[tuple[str, str], dict[str, str]] = {}

@@ -198,6 +198,15 @@ def test_run_refs_come_only_from_trusted_sources() -> None:
 	assert [ref["run_id"] for ref in ev.trusted_run_refs(_issue(), comments, allowed_repos=[REPO], limit=2)] == ["222", "666"]
 
 
+def test_occurrence_comment_requires_a_known_issue_author() -> None:
+	issue = _issue(user={"type": "User"})
+	comment = {
+		"body": f"<!-- workflow-failure-heal:occurrence -->\n- **Failed run:** https://github.com/{REPO}/actions/runs/222",
+		"user": {},
+	}
+	assert [ref["run_id"] for ref in ev.trusted_run_refs(issue, [comment], allowed_repos=[REPO], limit=3)] == ["111"]
+
+
 def test_edited_source_marker_cannot_fetch_unregistered_repository(tmp_path: Path, monkeypatch) -> None:
 	registry = tmp_path / "consumers.json"
 	registry.write_text(json.dumps(["acme/registered"]))
