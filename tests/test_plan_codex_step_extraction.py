@@ -41,8 +41,11 @@ def _inline_prompt(runner_text: str) -> str:
 def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	step = _workflow_step(workflow_text, "Run Codex planning")
+	stage_step = _workflow_step(workflow_text, "Stage workflow support files")
 
 	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in workflow_text
+	assert "ai_engine.sh claude_engine.py claude_settings.json.tmpl; do" in stage_step
+	assert (REPO_ROOT / "scripts" / "claude_settings.json.tmpl").is_file()
 	assert "if: env.SKIP_PLAN != 'true'" in step
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
 	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in step
