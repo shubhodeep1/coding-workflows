@@ -2350,6 +2350,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/check_failure_triage.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
+.github/workflows/claude-engine-smoke.yml
 .github/workflows/claude-issue-intake.yml
 .github/workflows/claude-issue-queue-watchdog.yml
 .github/workflows/comprehensive-test-and-release.yml
