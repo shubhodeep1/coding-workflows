@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which mechanism should enforce read-only for Claude verdict passes?\nChoices:\nA) Remove `Bash` from the `read` profile: tools become `Read,Grep,Glob` only and the `Bash(...)` entries are dropped from `READ_PROFILE_ALLOW`. Also make the `RB_JUDGE` verdict call actually resolve to the `read` profile, either by honouring a narrow-only `AI_ENGINE_READ_ONLY` or something equivalent. Verdict agents rely on the PR diff and context already in the prompt. (RECOMMENDED)\nB) Keep `Bash` in the read profile, but run the `RB_JUDGE` verdict pass inside an OS-enforced read-only, network-isolated container, following the pattern of `scripts/clarify_isolated_run.sh`. Also fix the `AI_ENGINE_READ_ONLY` wiring.\nC) Both A and B: remove `Bash` from the read profile and also containerise the `RB_JUDGE` verdict pass.\nQ2: How wide should the fix be?\nChoices:\nA) Harden the shared `read` profile, so every read role on Claude gets the change, plus the `RB_JUDGE` verdict pass. This closes the same hole for `SECURITY_JUDGE`, `SECURITY_AUDIT` and `WORKFLOW_HEAL`, which run on the host. (RECOMMENDED)\nB) Fix only the `RB_JUDGE` verdict pass with a new, stricter profile, and leave the existing `read` profile and the other read roles unchanged. Their exposure would be tracked as a separate follow-up.\n**Note:** Q1:B (containerise) combined with Q2:A would mean building container isolation for every host-side read role. That is a much larger change. Pick Q1:A or Q1:C with Q2:A unless that larger scope is intended.",
+  "fingerprint": "9f9f08a440fb0332ed4e1ead1d5d9ae19479d9bf7a96e533539b9a5f96a52863",
+  "lineage": {
+    "issue_number": 6238,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37241229624",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37241229624",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261004225340_39a739056e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6238,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37241229624"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6238 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-04T22:53:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
