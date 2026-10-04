@@ -31,18 +31,6 @@ def git_env(manifest):
 		"GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
 
 
-def host_git_env(host, manifest):
-	# Listing the host's files is the one place GIT_DIR may apply: the review
-	# job's work tree is a copy without its own .git (#6055). It never reaches
-	# the synthetic repository, which keeps git_env.
-	env = git_env(manifest)
-	git_dir = os.environ.get("GIT_DIR", "")
-	if git_dir and not (host / ".git").exists():
-		env["GIT_DIR"] = os.path.abspath(git_dir)
-		env["GIT_WORK_TREE"] = str(host)
-	return env
-
-
 def allowed(name):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
@@ -117,12 +105,18 @@ def enumerate_workspace(root):
 			yield name, data, mode
 
 
-def snapshot(host, workspace, manifest):
+def snapshot(host, workspace, manifest, host_git_dir=None):
 	paths = set()
 	env = git_env(manifest)
-	host_env = host_git_env(host, manifest)
-	for cmd in (["git", "ls-files", "-z"], ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
-		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=host_env).split(b"\0") if p)
+	# A per-PR workspace has no .git of its own: list it through the checkout's
+	# Git database, exactly as the commit step sees it (issues #4580, #6055).
+	git = ["git"]
+	if host_git_dir is not None:
+		if not host_git_dir.is_dir():
+			raise ValueError("host git dir missing")
+		git += ["--git-dir", str(host_git_dir), "--work-tree", str(host)]
+	for cmd in (git + ["ls-files", "-z"], git + ["ls-files", "--others", "--exclude-standard", "-z"]):
+		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p)
 	baseline = {}
 	total = 0
 	for name in sorted(paths):
@@ -216,12 +210,13 @@ def refresh(host, workspace, manifest):
 
 
 def main():
-	if len(sys.argv) != 5 or sys.argv[1] not in ("snapshot", "refresh", "transfer"):
+	# snapshot alone takes an optional fifth argument: the host Git dir.
+	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
 		raise SystemExit(2)
-	host, workspace, manifest = map(Path, sys.argv[2:])
+	host, workspace, manifest = map(Path, sys.argv[2:5])
 	try:
 		if sys.argv[1] == "snapshot":
-			snapshot(host, workspace, manifest)
+			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None)
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
 		else:

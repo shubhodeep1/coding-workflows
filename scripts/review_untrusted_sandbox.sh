@@ -5,12 +5,7 @@ set -euo pipefail
 action="${1:-}"
 support="${SUPPORT_SCRIPTS_DIR:-scripts}"
 root="${REVIEW_SANDBOX_ROOT:-}"
-# The review job works in a per-run copy (WORKSPACE_PATH) with GIT_WORK_TREE
-# pointing at it and GIT_DIR at ${GITHUB_WORKSPACE}/.git. Snapshot from and
-# transfer into that work tree, the one the editor's diff check and the
-# commit step read: a transfer into GITHUB_WORKSPACE lost every edit (#6055).
-workspace="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-[ -n "${workspace}" ] || workspace="${GITHUB_WORKSPACE:-$PWD}"
+workspace="${GITHUB_WORKSPACE:-$PWD}"
 case "${action}" in prepare|run|cleanup) ;; *) exit 2 ;; esac
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Review isolation requires Docker and Python' >&2; exit 1; }
 [ -f "${support}/review_untrusted_workspace.py" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/review_sandbox/Dockerfile" ] || { echo '::error::Review isolation support missing' >&2; exit 1; }
@@ -23,7 +18,23 @@ if [ "${action}" = prepare ]; then
 	trap 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${dep_container}" >/dev/null 2>&1 || true; rm -rf -- "${root}"' EXIT
 	mkdir -m 0700 "${root}/socket" "${root}/home"
 	mkdir -m 0755 "${root}/source"
-	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json"
+	# The editor step works in the per-PR workspace: review_autofix.yml's
+	# "Activate workspace shell context" cds every later step into
+	# WORKSPACE_PATH and points GIT_WORK_TREE at it, while GITHUB_WORKSPACE
+	# keeps only the Git database. Snapshot and transfer the tree the commit
+	# step reads, or every validated edit lands where nothing commits it
+	# (issues #4580, #6055). workspace_init.sh creates it only under
+	# ${RUNNER_TEMP}/workspaces; without one the checkout stays the target.
+	snapshot_git_dir=()
+	if [ -n "${WORKSPACE_PATH:-}" ]; then
+		workspace_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/workspaces" 2>/dev/null || echo /invalid)"
+		workspace="$(realpath -e -- "${WORKSPACE_PATH}" 2>/dev/null || echo /invalid)"
+		checkout_git_dir="$(realpath -e -- "${GITHUB_WORKSPACE:-/invalid}/.git" 2>/dev/null || echo /invalid)"
+		[ -d "${workspace}" ] && [[ "${workspace}" != *$'\n'* ]] && [ "$(dirname -- "${workspace}")" = "${workspace_root}" ] && [ -d "${checkout_git_dir}" ] || { echo '::error::Review workspace path rejected' >&2; exit 1; }
+		snapshot_git_dir=("${checkout_git_dir}")
+	fi
+	printf '%s\n' "${workspace}" > "${root}/workspace"
+	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
 	image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
@@ -103,6 +114,10 @@ if [ "${action}" = cleanup ]; then
 	rm -rf -- "${root}"
 	exit 0
 fi
+# Transfer only into the workspace prepare validated and recorded.
+[ -f "${root}/workspace" ] || { echo '::error::Review sandbox not prepared' >&2; exit 1; }
+workspace="$(< "${root}/workspace")"
+[ -d "${workspace}" ] || { echo '::error::Review workspace path rejected' >&2; exit 1; }
 
 [ "$#" -eq 6 ] || exit 2
 prompt="$2"

@@ -8157,16 +8157,18 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 	to it and GIT_DIR to ${GITHUB_WORKSPACE}/.git. The sandbox used to
 	snapshot from and transfer into GITHUB_WORKSPACE, so every editor edit
 	reached a directory git no longer looked at and the run ended in
-	editor_changes_lost. Docker is stubbed; the stub editor edits /source.
+	editor_changes_lost. Prepare validates WORKSPACE_PATH (it must sit
+	directly under ${RUNNER_TEMP}/workspaces) and records it for run.
+	Docker is stubbed; the stub editor edits /source.
 	"""
 	with tempfile.TemporaryDirectory(prefix="review-iso-") as td:
 		root = Path(td)
 		checkout = root / "checkout"
 		work_tree = root / "workspaces" / "run"
-		runner_temp = root / "rt"
+		runner_temp = root
 		runtime_dir = root / "runtime"
 		stub_bin = root / "bin"
-		for path in (checkout / "scripts", work_tree / "scripts", runner_temp, runtime_dir, stub_bin):
+		for path in (checkout / "scripts", work_tree / "scripts", runtime_dir, stub_bin):
 			path.mkdir(parents=True)
 		(checkout / "scripts/app.py").write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(checkout)], env=_git_clean_env(), check=True)
@@ -8204,6 +8206,7 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 			"PATH": f"{stub_bin}:{os.environ['PATH']}",
 			"GIT_DIR": str(checkout / ".git"),
 			"GIT_WORK_TREE": str(work_tree),
+			"WORKSPACE_PATH": str(work_tree),
 			"GITHUB_WORKSPACE": str(checkout),
 			"GITHUB_ENV": str(github_env),
 			"RUNNER_TEMP": str(runner_temp),
@@ -8213,6 +8216,15 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 			"PYTHONDONTWRITEBYTECODE": "1",
 		})
 		sandbox = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+		# A workspace outside ${RUNNER_TEMP}/workspaces is never a transfer target.
+		stray = root / "stray"
+		stray.mkdir()
+		rejected = subprocess.run(
+			["bash", sandbox, "prepare"], cwd=work_tree, env={**env, "WORKSPACE_PATH": str(stray)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert rejected.returncode != 0 and "Review workspace path rejected" in rejected.stderr
+		github_env.write_text("")
 		prepared = subprocess.run(["bash", sandbox, "prepare"], cwd=work_tree, env=env, capture_output=True, text=True, timeout=120)
 		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
 		sandbox_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
