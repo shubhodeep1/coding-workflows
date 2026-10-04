@@ -116,6 +116,7 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
+_FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", "<>", ">&", "<&", "<<", "<<<"})
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -265,7 +266,9 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			redirect_target = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			if segment and segment[-1].isdigit():
+			# Bash &> and &>> take no fd prefix (#6249); keep adjacent digits as
+			# arguments for these and unknown redirects so push refspecs are checked.
+			if token in _FD_PREFIX_REDIRECT_OPERATORS and segment and segment[-1].isdigit():
 				# Only an unquoted digit immediately attached to a redirect is an fd.
 				redirect_start = lexer.instream.tell() - len(token)
 				if command[redirect_start:redirect_start + len(token)] != token:
