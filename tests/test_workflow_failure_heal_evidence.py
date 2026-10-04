@@ -122,6 +122,15 @@ def test_slice_respects_the_byte_budget_and_keeps_errors_first() -> None:
 	assert "##[error]Editor claimed changes but no commit was produced." in sliced
 
 
+def test_tail_clip_keeps_utf8_boundaries_and_tiny_limits() -> None:
+	assert ev._clip_bytes("abc", 0, keep="tail") == ""
+	assert len(ev._clip_bytes("abc", 1, keep="tail").encode()) == 1
+	limit = len("\n[... truncated ...]\n".encode()) + 2
+	tail = ev._clip_bytes("a" * limit + "éz", limit, keep="tail")
+	assert tail == "\n[... truncated ...]\nz"
+	assert len(tail.encode()) <= limit
+
+
 def test_slice_without_errors_or_steps_still_returns_the_tail() -> None:
 	text = "\n".join(f"{_ts(1)} line {i}" for i in range(500))
 	sliced = ev.slice_job_log(text)
@@ -242,6 +251,21 @@ def test_written_evidence_redacts_credential_shaped_strings(tmp_path: Path) -> N
 	collector = _collector(tmp_path, FakeGh())
 	collector._write("x.txt", text)
 	assert "ghp_" not in (tmp_path / "evidence" / "x.txt").read_text()
+	collector._write_json("meta.json", {"title": text})
+	assert "ghp_" not in (tmp_path / "evidence" / "meta.json").read_text()
+	assert "[REDACTED]" in (tmp_path / "evidence" / "meta.json").read_text()
+	assert "ghp_" not in ev._safe_name("ghp_" + "z" * 36)
+	(tmp_path / "evidence" / "INDEX.md").write_text(text)
+	assert "ghp_" not in ev.render_prompt_section(str(tmp_path / "evidence"))
+
+
+def test_collection_redacts_metadata_in_index_and_manifest(tmp_path: Path) -> None:
+	fake = FakeGh()
+	fake.routes[f"repos/{REPO}/actions/runs/111/jobs?per_page=100"]["jobs"][0]["workflow_name"] = "ghp_" + "q" * 36
+	fake.routes[f"repos/{REPO}/issues?labels=ai:workflow-heal&state=all&per_page=100&page=1"][1]["title"] = "ghp_" + "t" * 36
+	_collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	for rel in ("INDEX.md", "lineage.json", "manifest.json", f"runs/{REPO.replace('/', '__')}__111/meta.json"):
+		assert "ghp_" not in (tmp_path / "evidence" / rel).read_text()
 
 
 def test_reviewer_logs_keep_only_status_and_stderr_members() -> None:
@@ -266,6 +290,22 @@ def test_artifact_extraction_is_allowlisted_and_traversal_safe() -> None:
 	assert "\x1b" not in out["previous_reviews__editor_attempt_1.err"]
 	assert len(out["summariser_pass1.log"].encode()) <= 1000
 	assert ev.extract_artifact_texts(b"not a zip", max_file_bytes=1000) == []
+
+
+def test_artifact_extraction_limits_cumulative_decompression(monkeypatch) -> None:
+	monkeypatch.setattr(ev, "MAX_ARTIFACT_BYTES", 8)
+	blob = _zip({"a.err": b"a" * 6, "b.err": b"b" * 6})
+	assert dict(ev.extract_artifact_texts(blob, max_file_bytes=100)) == {"a.err": "a" * 6}
+
+
+def test_index_does_not_report_unmerged_prior_fix_as_merged() -> None:
+	index = ev.render_index(
+		display_root="/evidence", issue_number=1, ctx={}, runs=[], provenance={},
+		lineage=[{"number": 2, "prs": [{"number": 3, "state": "CLOSED", "merged": False, "base": "main"}]}],
+		timeline=[], environment={}, skipped=[], api_calls=0, default_branch="main",
+	)
+	assert "PR #3 CLOSED, targeting `main` (not merged)" in index
+	assert "PR #3 CLOSED, merged into" not in index
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +404,17 @@ def test_collect_builds_the_bundle_and_index(tmp_path: Path) -> None:
 	# PR, compare, issue list, GraphQL, lineage compare, timeline.
 	assert manifest["api_calls"] == len([p for p in fake.paths if p != "rate_limit"])
 	assert manifest["api_calls"] <= 20
+
+
+def test_artifact_download_limit_records_skipped_artifacts(tmp_path: Path) -> None:
+	fake = FakeGh()
+	artifacts = fake.routes[f"repos/{REPO}/actions/runs/111/artifacts?per_page=100"]["artifacts"]
+	for artifact_id in (503, 504):
+		artifacts.append({"id": artifact_id, "name": f"reviewer-logs-{artifact_id}-1", "expired": False, "size_in_bytes": 100})
+		fake.routes[f"repos/{REPO}/actions/artifacts/{artifact_id}/zip"] = _zip({"status_x.txt": b"ok"})
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert {"part": "artifact:reviewer-logs-504-1", "reason": "download_limit"} in manifest["skipped"]
+	assert f"repos/{REPO}/actions/artifacts/504/zip" not in fake.paths
 
 
 def test_a_later_stage_reuses_completed_runs(tmp_path: Path) -> None:
@@ -580,6 +631,16 @@ def test_each_heal_stage_collects_evidence_before_its_agent(workflow: str, agent
 	assert "uses: actions/cache/save@v4" in _step(text, "Save workflow-heal evidence cache")
 	assert "workflow_failure_heal_evidence.py eligible" in _step(text, "Gate workflow-heal evidence")
 	assert len(text.encode("utf-8")) < 480_000  # CLAUDE.md §27
+
+
+def test_clarify_fetches_recent_occurrences_without_changing_its_prompt_window() -> None:
+	text = (WORKFLOWS / "clarify.yml").read_text(encoding="utf-8")
+	assert "comments?sort=created&direction=asc&per_page=50" in _step(text, "Fetch issue comments")
+	collect = _step(text, "Collect workflow-heal evidence")
+	assert "length >= 50" in collect
+	assert "gh_retry gh api --paginate --slurp" in collect
+	assert 'evidence_comments_file="${ISSUE_COMMENTS_FILE}"' in collect
+	assert '--comments-json "${evidence_comments_file}"' in collect
 
 
 def test_prompts_append_the_evidence_section() -> None:

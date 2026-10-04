@@ -1731,7 +1731,10 @@ through `clarify → plan → implement → review`.
   (`GET /rate_limit` is free). Every part fails open: what could not be
   fetched is listed under `skipped` and the stage carries on. Log prefix
   `WORKFLOW_HEAL_EVIDENCE` (`collected issue=… runs=… reused=… api_calls=…
-  skipped=… rate_limit_low=…`).
+  skipped=… rate_limit_low=…`). Clarify keeps its oldest-50-comment prompt
+  context; when that page is full, evidence collection fetches the complete
+  comment history once more so newer occurrence-run links are not missed. If
+  that read fails, evidence collection falls back to the first 50 comments.
 - **"Already fixed?" context:** the prompt also carries (1) the branch
   progress since the failing code, from one REST compare call
   (`compare/<sha>...<branch>`: a release run or a review/autofix run in this

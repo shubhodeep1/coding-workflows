@@ -1510,17 +1510,18 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
 		)
-	if _unquoted_gh_api_expansion(stripped_command):
-		return DECISION_ASK, (
-			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
-			"a new flag or command. Quote the expanded word or run it with explicit arguments."
-		)
-
 	writes = [description for kind, description in results if kind == KIND_WRITE]
 	if writes:
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): not a read or a §23.B routine write: " + "; ".join(writes) + "."
 			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
+		)
+	# The literal-ID loop validator owns its variable expansions. Non-vetted
+	# read loops remain undecided; only expansions outside loops ask here.
+	if _unquoted_gh_api_expansion(stripped_command) and not _LOOP_HEADER_RE.match(command):
+		return DECISION_ASK, (
+			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
+			"a new flag or command. Quote the expanded word or run it with explicit arguments."
 		)
 	if invocations and _is_approvable_command(command):
 		summary = "; ".join(f"{kind} call {description}" for kind, description in results)
