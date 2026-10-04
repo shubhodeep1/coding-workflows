@@ -1346,6 +1346,40 @@ def test_preflight_destructive_guard_fails_without_touching_the_real_index() -> 
 		assert cached == "", "preflight guard must not dirty the real git index when it rejects"
 
 
+def test_preflight_bulk_override_cannot_approve_workflow_deletions() -> None:
+	script = _render_github_expressions(_extract_run_script("Preflight destructive-commit guard"))
+	for directory, protected in ((".github/workflows", True), ("src", False)):
+		with tempfile.TemporaryDirectory(prefix="test_preflight_bulk_override_") as td:
+			repo_dir = Path(td)
+			_bootstrap_git_repo(repo_dir)
+			deletion_dir = repo_dir / directory
+			deletion_dir.mkdir(parents=True)
+			paths = [f"{directory}/file{i}.{'yml' if protected else 'py'}" for i in range(4)]
+			for path in paths:
+				(repo_dir / path).write_text("test\n", encoding="utf-8")
+			_git(["git", "add", directory], cwd=repo_dir)
+			_git(["git", "commit", "-m", "add files"], cwd=repo_dir)
+			for path in paths:
+				(repo_dir / path).unlink()
+			github_output = repo_dir / "github_output.txt"
+			proc = _run_shell_script(script, cwd=repo_dir, env={
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ALLOW_WORKFLOW_EDITS": "true",
+				"ALLOW_BULK_DELETE": "false",
+				"UNBLOCK_BULK_DELETE_OVERRIDE": "true",
+				"UNBLOCK_BULK_DELETE_PATHS": json.dumps(paths),
+				"ENFORCE_FILES_TOUCHED": "false",
+			})
+			if protected:
+				assert proc.returncode != 0, proc.stdout + proc.stderr
+				assert "destructive_commit_blocked=bulk-delete" in github_output.read_text(encoding="utf-8")
+				assert "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths" in proc.stdout
+			else:
+				assert proc.returncode == 0, proc.stdout + proc.stderr
+				assert "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=4" in proc.stdout
+
+
 def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_commit_manifest_guard_") as td:
 		tmp_path = Path(td)

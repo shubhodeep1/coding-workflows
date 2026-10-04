@@ -31,7 +31,8 @@ Rules enforced here:
     issue, and its paths never include `.github/workflows/**`, `.claude/**` or
     `scripts/**` in shubhodeep1/coding-workflows; for the destructive latch no
     path may be a canonical workflow source (CANONICAL_SOURCE_RE, the list
-    scripts/implement_commit_changes.sh guards), in any repository;
+    scripts/implement_commit_changes.sh guards), or under `.github/`,
+    `.claude/` or `workflow-templates/`, in any repository;
   - `auto_answer` and `override_guard` are offered only for an issue, never for
     a pull request or a project;
   - `reissue` is never offered for a whole project;
@@ -124,6 +125,9 @@ OVERRIDES = ("bulk_delete",)
 CANONICAL_SOURCE_RE = re.compile(
 	r"^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)"
 )
+# Both implement deletion guards keep their protected-path grep in step with
+# this destructive-override denylist (including case-insensitive matches).
+PROTECTED_AUTOMATION_OVERRIDE_RE = re.compile(r"^(\.github|\.claude|workflow-templates)(/|$)", re.IGNORECASE)
 NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed", "validate-failed", "harness-broken")
 
 MAX_ROUNDS_PER_ITEM = 2
@@ -421,6 +425,8 @@ def validate(verdict: object, decision: object, repo: str) -> dict:
 			for path in cleaned:
 				if CANONICAL_SOURCE_RE.match(path):
 					raise UsageError(f"override_guard never allows deleting the canonical workflow source {path!r}")
+				if PROTECTED_AUTOMATION_OVERRIDE_RE.match(path):
+					raise UsageError(f"override_guard never allows bulk-deleting the protected automation path {path!r}")
 			normalised["override"] = "bulk_delete"
 		normalised["paths"] = cleaned
 	if name == "operator_step":
