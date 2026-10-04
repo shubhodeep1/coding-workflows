@@ -87,7 +87,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
 | `UNBLOCK_JUDGE_FIXUP_WAIT_HOURS` | No | `72` | unblock_judge | How long the judge waits for the fix-up issue of a `descope` or `operator_step` verdict to merge before it decides again. |
-| `UNBLOCK_JUDGE_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | unblock_judge | Model for the UNBLOCK_JUDGE role (codex path; the Claude path follows `.github/ai/claude_engine.json`). |
+| `UNBLOCK_JUDGE_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | unblock_judge | Model for the UNBLOCK_JUDGE role (Codex runs in a network-isolated container with a host-side provider broker; the Claude path follows `.github/ai/claude_engine.json`). |
 | `THINKING_LEVEL_UNBLOCK_JUDGE` | No | `high` | unblock_judge | Reasoning effort for the unblock judge. |
 | `JUDGE_OUTPUT_FAILURE_MAX` | No | `3` | orchestrate_poll | Consecutive project-judge runs with no usable output (the model failed, or its output did not parse) before the project fails with `ai:blocked` for the unblock judge. Reset by the next parsed verdict. Must be a positive integer; invalid values fall back to `3`. |
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
@@ -2625,9 +2625,10 @@ and resolver chains, a failed project) now goes to the unblock judge
   issue, never for `.github/workflows/**`, `.claude/**` or `scripts/**` in
   this repository and never for deleting a canonical workflow source;
   `accept_with_followup` never for a failed security pass or validation. The
-  model's output is validated before anything happens. The model runs without
-  GitHub or Telegram credentials; its OpenRouter key is redacted from parsed
-  verdicts before GitHub writes. Claude uses the read-only tool profile.
+  model's output is validated before anything happens. Codex runs in a
+  network-isolated container with the OpenRouter key held by a host-side broker;
+  literal or encoded credentials in verdicts are rejected before GitHub writes.
+  Isolation failures do not fall back to host Codex. Claude uses the read-only tool profile.
   A failed ledger-history read skips action for that run. The item verdict
   is recorded before action; a failed project marker is repaired if the item
   remains blocked for a later run.

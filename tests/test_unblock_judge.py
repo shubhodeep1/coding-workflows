@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -579,15 +580,93 @@ def test_judge_records_the_verdict_first_then_acts(tmp_path: Path) -> None:
 	assert state["comments"][-1]["body"] == "/answer pin the version"
 
 
-def test_judge_redacts_model_key_before_recording_or_acting(tmp_path: Path) -> None:
+def test_judge_rejects_model_key_before_recording_or_acting(tmp_path: Path) -> None:
 	secret = "test-openrouter-secret-value"
-	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": secret, "instructions": f"pin {secret}"}, OPENROUTER_API_KEY=secret)
+	for configured in (secret, f" {secret}\n"):
+		result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": secret, "instructions": f"pin {secret}"}, OPENROUTER_API_KEY=configured)
+		assert "reason=verdict_secret_rejected" in result.stdout, result.stderr
+		assert len(state["comments"]) == 1
+		assert "reason=invalid_verdict" in state["comments"][0]["body"]
+		assert secret not in state["comments"][0]["body"]
+		assert "<!-- ai:unblock:v1" not in state["comments"][0]["body"]
+		assert state["labels_removed"] == [] and state["created"] == []
+
+
+def _encoded_key_variants(secret: str) -> list[str]:
+	key_bytes = secret.encode("utf-8")
+	variants = [secret[::-1], key_bytes.hex(), base64.b32encode(key_bytes).decode("ascii").rstrip("="), urllib.parse.quote(secret, safe=""),
+		" -_".join(secret)]
+	for shift in range(3):
+		for encoder in (base64.b64encode, base64.urlsafe_b64encode):
+			encoded = encoder(b"\0" * shift + key_bytes).decode("ascii")
+			if shift == 0:
+				variants.extend((encoded, encoded.rstrip("=")))
+			else:
+				variants.append(encoded[4:(len(encoded.rstrip("=")) // 4) * 4])
+	return variants
+
+
+@pytest.mark.parametrize("variant_index", range(13))
+def test_judge_rejects_encoded_model_key(tmp_path: Path, variant_index: int) -> None:
+	secret = "Sample/key:with_%32-'aB!d?~~"
+	variant = _encoded_key_variants(secret)[variant_index]
+	assert len(variant) >= 16
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": variant}, OPENROUTER_API_KEY=secret)
+	assert "reason=verdict_secret_rejected" in result.stdout, (variant_index, result.stderr)
+	assert len(state["comments"]) == 1 and variant not in state["comments"][0]["body"]
+	assert "ai:unblock:v1" not in state["comments"][0]["body"]
+	assert not state["labels_removed"]
+
+
+@pytest.mark.parametrize("secret", ("sk-or-v1-" + "f" * 64, "sk-or-" + "Xy_" * 8))
+def test_judge_rejects_generic_provider_key_without_configured_key(tmp_path: Path, secret: str) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": secret, "instructions": "retry"}, OPENROUTER_API_KEY="")
+	assert "reason=verdict_secret_rejected" in result.stdout
+	assert len(state["comments"]) == 1 and secret not in state["comments"][0]["body"]
+
+
+def test_judge_clean_verdict_with_key_is_acted_on(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "flaky step", "instructions": "pin the version"}, OPENROUTER_API_KEY="test-openrouter-secret-value")
 	assert "outcome=acted" in result.stdout, result.stderr
-	assert all(secret not in comment["body"] for comment in state["comments"])
-	assert any("[redacted]" in comment["body"] for comment in state["comments"])
-	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": secret, "instructions": f"pin {secret}"}, OPENROUTER_API_KEY=f" {secret}\n")
-	assert "outcome=acted" in result.stdout, result.stderr
-	assert all(secret not in comment["body"] for comment in state["comments"])
+	assert len(state["comments"]) == 3 and state["comments"][-1]["body"] == "/answer pin the version"
+
+
+def test_codex_judge_uses_only_isolated_runner() -> None:
+	text = JUDGE.read_text(encoding="utf-8")
+	assert 'bash "${SUPPORT_DIR}/scripts/clarify_isolated_run.sh" "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/codex.err" codex UNBLOCK_JUDGE' in text
+	assert 'CLARIFY_ISOLATION_SUPPORT_DIR="${SUPPORT_DIR}/scripts"' in text
+	assert 'CLARIFY_ISOLATION_TIMEOUT_SECS="${UNBLOCK_JUDGE_TIMEOUT_SECS:-1500}"' in text
+	assert "write_codex_config.sh" not in text
+	assert "codex --ask-for-approval" not in text
+
+
+def test_isolation_failure_never_runs_host_codex(tmp_path: Path) -> None:
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	(support / "prompts").mkdir()
+	for name in ("unblock_ledger.py", "unblock_actions.py"):
+		(support / "scripts" / name).symlink_to(ROOT / "scripts" / name)
+	(support / "prompts" / "mode-judge-unblock.txt").symlink_to(ROOT / "prompts" / "mode-judge-unblock.txt")
+	(support / "scripts" / "clarify_isolated_run.sh").write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	shim = bin_dir / "codex"
+	shim.write_text('printf "called" > "${FAKE_CODEX_MARKER}"\n', encoding="utf-8")
+	shim.chmod(0o755)
+	marker = tmp_path / "codex_called"
+	result, state = _judge(tmp_path, ISSUE, SUPPORT_DIR=str(support), TARGET_DIR=str(tmp_path),
+		FAKE_CODEX_MARKER=str(marker))
+	assert "reason=isolation_failed rc=1" in result.stdout, result.stderr
+	assert len(state["comments"]) == 1 and "reason=invalid_verdict" in state["comments"][0]["body"]
+	assert "ai:unblock:v1" not in state["comments"][0]["body"]
+	assert not marker.exists()
+
+
+def test_invalid_judge_model_config_posts_only_a_fixed_wait(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, UNBLOCK_JUDGE_MODEL="invalid slug")
+	assert "reason=invalid_model_config" in result.stdout
+	assert len(state["comments"]) == 1 and "reason=invalid_verdict" in state["comments"][0]["body"]
+	assert not state["labels_removed"]
 
 
 def test_project_marker_failure_does_not_lose_the_recorded_action(tmp_path: Path) -> None:
