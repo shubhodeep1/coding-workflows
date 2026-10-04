@@ -100,8 +100,9 @@ sandbox_parent="$(realpath -e -- "${RUNNER_TEMP:-${TMPDIR:-/tmp}}")"
 # mounted at the same absolute path inside the container.
 valid_path()
 {
-	[[ "$1" =~ ^/[A-Za-z0-9._@+/-]+$ ]] && [[ "$1" != *"/../"* ]] && [[ "$1" != *"/.." ]]
+	[[ "$1" =~ ^/[A-Za-z0-9._@+/-]+$ ]] && [[ "$1" != *,* ]] && [[ "$1" != *"/../"* ]] && [[ "$1" != *"/.." ]]
 }
+[ -d "${sandbox_parent}" ] && valid_path "${sandbox_parent}" || fail "sandbox parent path rejected: ${sandbox_parent}"
 
 # Only a root this helper created may be reused or removed: a direct child
 # of the runner temp directory, named codex-isolated-*, holding the marker.
@@ -216,7 +217,7 @@ if [ "${action}" = prepare ]; then
 			--pids-limit 512 --memory 6g --cpus "$(cpu_limit 4)" \
 			--mount "type=bind,src=${root}/work,dst=${workdir}" \
 			--mount "type=bind,src=${root}/venv,dst=/opt/codex-venv" \
-			--env HOME=/tmp/agent-home --workdir "${workdir}" "${image}" /bin/bash -c '
+			--env HOME=/tmp/agent-home --env PYTHONDONTWRITEBYTECODE=1 --workdir "${workdir}" "${image}" /bin/bash -c '
 				set -u
 				install_failed=false
 				python3 -m venv --system-site-packages /opt/codex-venv || exit 1
@@ -363,6 +364,7 @@ for include in "${includes[@]}"; do
 done
 
 image="$(build_image)"
+rm -f -- "${root}/socket/provider.sock"
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" PYTHONDONTWRITEBYTECODE=1 \
 	"${python_bin}" "${support_dir}/clarify_openrouter_broker.py" broker "${root}/socket/provider.sock" &
 broker_pid=$!
@@ -389,7 +391,7 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm -i --init \
 	--security-opt no-new-privileges "${limits[@]}" \
 	--tmpfs /home/agent:rw,nosuid,nodev,size=512m,mode=1777 \
 	"${mounts[@]}" \
-	--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex \
+	--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex --env PYTHONDONTWRITEBYTECODE=1 \
 	--env CODEX_ISOLATED_PROXY_KEY=isolated-placeholder \
 	--env "CODEX_ISOLATED_MODEL=${model}" --env "CODEX_ISOLATED_REASONING=${reasoning}" \
 	--env "CODEX_ISOLATED_WEB_SEARCH=${web_search}" --env "CODEX_ISOLATED_WORKDIR=${workdir}" \

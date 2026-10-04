@@ -151,6 +151,8 @@ def test_implement_runs_privileged_helpers_from_the_trusted_copy():
 	repair = step_block(text, "Attempt post-Codex syntax repair")
 	assert 'CODEX_ISOLATED_ROOT="${CODEX_ISOLATED_IMPLEMENT_ROOT:-}"' in repair
 	assert "CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}" in text
+	cleanup = step_block(text, "Cleanup temporary artifacts")
+	assert 'cleanup --root "${CODEX_ISOLATED_IMPLEMENT_ROOT}"' in cleanup
 
 
 def test_isolated_runs_carry_no_serena_hints():
@@ -198,6 +200,10 @@ def test_poller_file_editing_judges_use_worktrees_and_trusted_push():
 	assert "Do NOT run git commit, git push or any" in text
 	assert '_integration_judge_commit_and_push "${judge_wt}"' in text
 	assert 'python3 "${ORCH_FINGERPRINT_VERIFIER}" "${fp_file}"' in text
+	assert 'return "${judge_push_rc}"' in text
+	assert 'if ! jq -ce' in text
+	assert '"$(wc -c < "${fp_file}" 2>/dev/null || echo 0)" -gt 3' in text
+	assert 'git -C "${wt}" add -A -- .' in text
 
 
 def test_review_blocked_fix_writer_runs_in_the_review_sandbox():

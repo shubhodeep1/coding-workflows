@@ -8508,9 +8508,15 @@ invoke_judge_for_integration_conflict() {
     _integration_judge_remove_worktree "${judge_wt}"
     return 1
   fi
+  local merge_rc=0
   git -C "${judge_wt}" -c user.name="codex-bot" -c user.email="codex@users.noreply.github.com" \
-    merge --no-ff --no-commit "refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || true
+    merge --no-ff --no-commit "refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || merge_rc=$?
   judge_conflicts="$(git -C "${judge_wt}" diff --name-only --diff-filter=U 2>/dev/null || true)"
+  if [ "${merge_rc}" -ne 0 ] && [ -z "${judge_conflicts}" ]; then
+    echo "::warning::[integration-heal] Merge failed without conflicts for PR #${final_pr}; refusing an unmerged judge worktree."
+    _integration_judge_remove_worktree "${judge_wt}"
+    return 1
+  fi
 
   local prompt_file
   local output_file
@@ -8656,10 +8662,11 @@ invoke_judge_for_integration_conflict() {
     return 1
   fi
   echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-  _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" || true
+  local judge_push_rc=0
+  _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" || judge_push_rc=$?
   rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
   _integration_judge_remove_worktree "${judge_wt}"
-  return 0
+  return "${judge_push_rc}"
 }
 
 # _integration_judge_remove_worktree <path> — drop a judge worktree and
@@ -8686,7 +8693,10 @@ _integration_judge_commit_and_push() {
   local default_branch="$4"
   local fp_file fp_exit=0
 
-  git -C "${wt}" add -u -- . >/dev/null 2>&1 || true
+  if ! git -C "${wt}" add -A -- . >/dev/null 2>&1; then
+    echo "::warning::[integration-heal] Could not stage the judge resolution for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
   if [ -n "$(git -C "${wt}" diff --name-only --diff-filter=U 2>/dev/null)" ]; then
     echo "::warning::[integration-heal] Judge left unmerged paths for PR #${final_pr}; nothing pushed."
     return 1
@@ -8696,8 +8706,13 @@ _integration_judge_commit_and_push() {
     return 1
   fi
   fp_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_fp.XXXXXX")"
-  jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${fp_file}" 2>/dev/null || printf '{}' > "${fp_file}"
-  if [ "$(wc -c < "${fp_file}" 2>/dev/null || echo 0)" -gt 2 ]; then
+  if ! jq -ce '(.merged_issue_fingerprints // {}) | if type == "object" then . else error("invalid fingerprints") end' "${STATE_FILE}" > "${fp_file}" 2>/dev/null; then
+    rm -f "${fp_file}"
+    echo "::warning::[integration-heal] Fingerprint state unavailable for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  # jq -c writes a trailing newline: an empty object is three bytes.
+  if [ "$(wc -c < "${fp_file}" 2>/dev/null || echo 0)" -gt 3 ]; then
     if [ -z "${ORCH_FINGERPRINT_VERIFIER}" ]; then
       fp_exit=2
       echo "::warning::[integration-heal] Fingerprint verifier unavailable; refusing to push an unverified judge resolution."

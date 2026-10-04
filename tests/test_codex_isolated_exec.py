@@ -235,6 +235,22 @@ def test_missing_openrouter_key_fails_closed(sandbox):
 	assert codex_records(sandbox) == []
 
 
+def test_comma_in_workdir_is_rejected_before_docker_mount(sandbox):
+	unsafe = sandbox["repo"] / "comma,path"
+	unsafe.mkdir()
+	proc = run_helper(sandbox, "run", "--mode", "read-only", "--workdir", str(unsafe), *CODEX_ARGS)
+	assert proc.returncode == 1 and "workdir path rejected" in proc.stderr
+	assert not docker_runs(sandbox["docker_log"])
+
+
+def test_comma_in_runner_temp_is_rejected_before_docker_mount(sandbox):
+	unsafe = sandbox["runner_temp"] / "comma,path"
+	unsafe.mkdir()
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS, env_extra={"RUNNER_TEMP": str(unsafe)})
+	assert proc.returncode == 1 and "sandbox parent path rejected" in proc.stderr
+	assert not docker_runs(sandbox["docker_log"])
+
+
 def test_include_is_mounted_read_only_at_its_own_path(sandbox):
 	write_fake_codex(sandbox)
 	runtime = sandbox["runner_temp"] / "runtime"

@@ -97,11 +97,12 @@ def test_seed_git_copies_objects_but_no_config_or_credentials(repo, tmp_path):
 	assert TOKEN not in config
 	assert "extraheader" not in config and "remote" not in config
 	assert not list((dest / ".git").rglob("FETCH_HEAD"))
-	# The synthetic HEAD is the host HEAD tree, so status shows the snapshot
-	# delta (secrets and the oversized file were never copied).
+	# Neither the worktree nor the synthetic HEAD may expose excluded blobs.
 	status = git(dest, "status", "--porcelain")
-	assert " D .env" in status and " D big.bin" in status
-	assert "src/app.py" not in status
+	assert status == ""
+	for hidden in (".env", "deploy.pem", "big.bin"):
+		assert subprocess.run(["git", "show", f"HEAD:{hidden}"], cwd=dest, capture_output=True).returncode != 0
+	assert git(dest, "show", "HEAD:src/app.py") == "print('app')\n"
 
 
 def snapshot_ws(repo, tmp_path):
@@ -114,11 +115,26 @@ def snapshot_ws(repo, tmp_path):
 def test_workspace_snapshot_excludes_git_and_keeps_symlinks(repo, tmp_path):
 	dest, manifest = snapshot_ws(repo, tmp_path)
 	assert not (dest / ".git").exists()
+	assert not (dest / ".env").exists() and not (dest / "deploy.pem").exists()
 	assert (dest / "link").is_symlink() and os.readlink(dest / "link") == "/etc/passwd"
 	assert (dest / "untracked.txt").exists()
 	entries = json.loads(manifest.read_text())["entries"]
 	assert entries["link"] == ["l", "/etc/passwd"]
 	assert not any(name == ".git" or name.startswith(".git/") for name in entries)
+	assert ".env" not in entries and "deploy.pem" not in entries
+
+
+def test_workspace_snapshot_and_transfer_exclude_nested_credentials(repo, tmp_path):
+	(repo / "secrets").mkdir()
+	(repo / "secrets" / "token.txt").write_text("sensitive\n")
+	dest, manifest = snapshot_ws(repo, tmp_path)
+	assert not (dest / "secrets").exists()
+	(dest / ".env").write_text("injected\n")
+	(dest / "src" / "app.py").write_text("changed\n")
+	run("transfer", repo, dest, manifest)
+	assert (repo / ".env").read_text() == "SECRET=1\n"
+	assert (repo / "secrets" / "token.txt").read_text() == "sensitive\n"
+	assert (repo / "src" / "app.py").read_text() == "changed\n"
 
 
 def test_workspace_snapshot_skips_worktree_git_file(repo, tmp_path):
@@ -202,6 +218,63 @@ def test_transfer_handles_directory_replaced_by_file(repo, tmp_path):
 	assert (repo / "frontend").read_text() == "now a file\n"
 
 
+def test_transfer_rejects_host_only_file_before_deleting_directory(repo, tmp_path):
+	dest, manifest = snapshot_ws(repo, tmp_path)
+	(dest / "frontend" / "index.ts").unlink()
+	(dest / "frontend").rmdir()
+	(dest / "frontend").write_text("replacement\n")
+	(repo / "frontend" / "host-only.txt").write_text("keep\n")
+	proc = run("transfer", repo, dest, manifest, check=False)
+	assert proc.returncode == 1
+	assert (repo / "frontend" / "index.ts").read_text() == "export {}\n"
+	assert (repo / "frontend" / "host-only.txt").read_text() == "keep\n"
+
+
+def test_transfer_rolls_back_prior_writes_and_deletes_on_late_failure(repo, tmp_path, monkeypatch):
+	sys.path.insert(0, str(MODULE.parent))
+	import codex_isolated_workspace as module
+
+	dest, manifest = snapshot_ws(repo, tmp_path)
+	(dest / "frontend" / "index.ts").unlink()
+	(dest / "src" / "app.py").write_text("changed\n")
+	(dest / "src" / "new.py").write_text("new\n")
+	real_replace = module.os.replace
+
+	def fail_new_file(source, target):
+		if str(target).endswith("/src/new.py"):
+			raise OSError("simulated late write failure")
+		return real_replace(source, target)
+
+	monkeypatch.setattr(module.os, "replace", fail_new_file)
+	with pytest.raises(OSError):
+		module.transfer(repo, dest, manifest)
+	assert (repo / "frontend" / "index.ts").read_text() == "export {}\n"
+	assert (repo / "src" / "app.py").read_text() == "print('app')\n"
+	assert not (repo / "src" / "new.py").exists()
+
+
+def test_transfer_restores_file_replaced_by_directory_on_failure(repo, tmp_path, monkeypatch):
+	sys.path.insert(0, str(MODULE.parent))
+	import codex_isolated_workspace as module
+
+	dest, manifest = snapshot_ws(repo, tmp_path)
+	(dest / "run.sh").unlink()
+	(dest / "run.sh").mkdir()
+	(dest / "run.sh" / "new.py").write_text("new\n")
+	real_replace = module.os.replace
+
+	def fail_new_file(source, target):
+		if str(target).endswith("/run.sh/new.py"):
+			raise OSError("simulated late write failure")
+		return real_replace(source, target)
+
+	monkeypatch.setattr(module.os, "replace", fail_new_file)
+	with pytest.raises(OSError):
+		module.transfer(repo, dest, manifest)
+	assert (repo / "run.sh").read_text() == "#!/bin/sh\necho run\n"
+	assert (repo / "run.sh").is_file()
+
+
 def test_prep_roots_are_kept_and_never_transferred(repo, tmp_path):
 	dest, manifest = snapshot_ws(repo, tmp_path)
 	(dest / "node_modules" / "pkg").mkdir(parents=True)
@@ -237,6 +310,9 @@ def test_copy_include_copies_regular_files_only(tmp_path):
 	(src / "sub").mkdir(parents=True)
 	(src / "sub" / "a.txt").write_text("a\n")
 	(src / ".git").write_text("gitdir: /x\n")
+	(src / "secrets").mkdir()
+	(src / "secrets" / "token.txt").write_text("secret\n")
+	(src / ".env").write_text("secret\n")
 	os.symlink("/etc/passwd", src / "sub" / "link")
 	target = tmp_path / "out" / "runtime"
 	run("copy-include", src, target)

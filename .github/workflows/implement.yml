@@ -5662,6 +5662,9 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          if [ -n "${CODEX_ISOLATED_IMPLEMENT_ROOT:-}" ]; then
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/codex_isolated_exec.sh" cleanup --root "${CODEX_ISOLATED_IMPLEMENT_ROOT}" || echo "::warning::CODEX_ISOLATION sandbox cleanup failed"
+          fi
           rm -rf "${GITHUB_WORKSPACE}/.codex-workflow-src-main"
           if [[ "${RUNTIME_DIR:-}" =~ ^/tmp/codex-implement-[0-9]+$ ]]; then
             rm -rf "${RUNTIME_DIR}"

@@ -525,14 +525,17 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
 - **Modes.** `read-only`: a copy of the tracked regular files (all top-level
   directories; symlinks, `.git`, `.env*`, `secrets`, `credentials` and key
   files skipped; files over 2 MiB skipped and logged; 50,000 files / 512 MiB
-  cap) mounted read-only. `workspace`: a copy of the whole directory except
-  `.git` (symlinks kept as symlinks); afterwards every changed regular file is
-  written back atomically with mode 0644/0755 and removed files are deleted
+  cap) mounted read-only. `workspace`: a copy of the directory excluding
+  `.git`, `.env*`, credential directories and key files (allowed symlinks kept
+  as symlinks); afterwards every changed regular file is written back with
+  mode 0644/0755 and removed files are deleted
   (also after a failed or interrupted attempt). A new or changed symlink, a
   special file, or a host path that changed since the snapshot rejects the
-  whole transfer before the first host write
+  whole transfer before the first host write. Replacements and backups are
+  staged first and a write failure rolls back changed paths
   (`scripts/codex_isolated_workspace.py`). Both modes get a credential-free
-  synthetic `.git` whose `HEAD` is the host `HEAD` tree.
+  synthetic `.git` whose `HEAD` contains only allowed blobs from the host's
+  `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job in a credential-free container that does have
   network (`npm ci --ignore-scripts`, `pip install` into `/opt/codex-venv`).
@@ -567,7 +570,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   host, and there is no switch that turns isolation off. A stall-guard
   `SIGKILL` can leave a container behind; the next run on the same sandbox
   root removes it by label, and an orphan without its broker has no model
-  access. Log prefix: `CODEX_ISOLATION`.
+  access. Implement's final cleanup removes its persistent sandbox root;
+  a failed cleanup warns. Log prefix: `CODEX_ISOLATION`.
 
 ## Workflow file size limit
 
@@ -1446,6 +1450,7 @@ caller continues without injection and the helper emits only
 `NAG_REMINDER_LOAD_FAIL` when the prompt fragment is missing, unreadable, or
 missing the requested phase key.
 
+LOG_PREFIX.name=CODEX_ISOLATION
 LOG_PREFIX.name=LABEL_REPAIR
 LOG_PREFIX.name=LABEL_REPAIR_DIFF
 LOG_PREFIX.name=LABEL_SYNC_CREATED

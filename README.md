@@ -1184,8 +1184,8 @@ forwards one fixed endpoint for one model.
 | --- | --- |
 | Container | `--network none --read-only --cap-drop ALL --security-opt no-new-privileges`, runner UID, no runner env |
 | Image | built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after) |
-| Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap |
-| Workspace write-back | changed regular files only (mode 0644/0755); symlinks, special files or a host file changed meanwhile reject the whole transfer |
+| Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap; synthetic Git contains only allowed HEAD blobs |
+| Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
 | Implement dependencies | installed once per job in a credential-free networked container; never copied back |
 
 What this means for operators: runners need Docker (GitHub-hosted
@@ -1197,7 +1197,8 @@ run; dependencies the repository declares are preinstalled, and it marks any
 other validation UNVERIFIED. Serena (and any MCP server) is not available
 inside the container, so isolated prompts carry no Serena hints; Semble
 results are rendered on the host and are unaffected. Workspace `after_run`
-hooks run from the copy taken before the editor. Details, including the
+hooks run from the copy taken before the editor. The persistent implement
+sandbox is removed by the job's final cleanup step. Details, including the
 trusted-copy rule for scripts the job runs after an agent wrote files, are in
 `agents.md` under "Isolated Codex agents".
 
