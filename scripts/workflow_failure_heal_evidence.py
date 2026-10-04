@@ -570,7 +570,7 @@ def heal_context(issue: dict[str, Any]) -> dict[str, Any]:
 
 def trusted_run_refs(
 	issue: dict[str, Any], comments: Iterable[Any], *, allowed_repos: Iterable[str], limit: int,
-	include_body: bool = True, verified_comment_ids: set[int] | None = None,
+	include_body: bool = True, verified_comment_ids: set[int] | None = None, include_disallowed: bool = False,
 ) -> list[dict[str, str]]:
 	"""Run links from the issue body and its occurrence comments, newest last.
 
@@ -608,7 +608,7 @@ def trusted_run_refs(
 	for text, origin, facts in texts:
 		for match in heal._RUN_URL_RE.finditer(text):
 			repo, run_id = match.group("repo"), match.group("run_id")
-			if repo not in allowed:
+			if repo not in allowed and not include_disallowed:
 				continue
 			seen.pop((repo, run_id), None)
 			seen[(repo, run_id)] = {"repo": repo, "run_id": run_id, "url": f"https://github.com/{repo}/actions/runs/{run_id}", "origin": origin, **facts}
@@ -801,7 +801,7 @@ class Collector:
 		sha = ref["head_sha"] if heal.is_valid_sha(ref["head_sha"]) else ""
 		branch = ref["head_branch"] if heal.is_valid_branch(ref["head_branch"]) else ""
 		pr_number = int(ref["source_number"]) if ref["source_number"].isdigit() and len(ref["source_number"]) <= 12 and int(ref["source_number"]) > 0 else None
-		if not sha and pr_number is None:
+		if not sha or (not branch and pr_number is None):
 			return False, "run_no_verified_context"
 		run = self._timeline_index.get(ref["run_id"])
 		if run is None:
@@ -818,7 +818,7 @@ class Collector:
 		pr_named = pr_number is not None and any(f"[pr:{pr_number}]" in (run.get(key) or "") for key in ("display_title", "name") if isinstance(run.get(key), str))
 		head_matches = sha and isinstance(run.get("head_sha"), str) and run["head_sha"].lower() == sha
 		branch_matches = branch and run.get("head_branch") == branch
-		if head_matches and ((not branch and pr_number is None) or branch_matches or pr_linked or pr_named):
+		if head_matches and (branch_matches or pr_linked or pr_named):
 			return True, "verified"
 		return False, "run_head_mismatch"
 
@@ -1066,9 +1066,8 @@ class Collector:
 		ctx = heal_context(issue)
 		# The source marker is editable issue prose. Never let it widen GH_PAT
 		# access beyond this repo and the intake's registered consumer set.
-		# Parse source-linked runs only for the skipped index before the registry
-		# gate removes an unregistered source; this does not authorize any reads.
-		candidate_refs = trusted_run_refs(issue, comments, allowed_repos=[issue_repo, ctx["source_repo"]], limit=self.max_runs)
+		# Include other repos only in the skipped index; this does not authorize reads.
+		candidate_refs = trusted_run_refs(issue, comments, allowed_repos=[issue_repo, ctx["source_repo"]], limit=self.max_runs, include_disallowed=True)
 		registered_repos = _load_json_lenient(os.environ.get("WORKFLOW_HEAL_CONSUMER_REGISTRY") or ".github/ai/consumer_repos.json")
 		if ctx["source_repo"] != issue_repo and (
 			not isinstance(registered_repos, list) or ctx["source_repo"] not in registered_repos
@@ -1100,6 +1099,11 @@ class Collector:
 					not isinstance(registered_repos, list) or candidate_ref["repo"] not in registered_repos
 				):
 					reason = "not_registered"
+				elif candidate_ref["repo"] not in allowed and provenance_check["body"] and (
+					candidate_ref["origin"] == "body" or
+					candidate_ref["origin"] in {f"comment:{verified_comment_id}" for verified_comment_id in provenance_check["comment_ids"]}
+				):
+					reason = "unverified_run_no_verified_context"
 				self._skip(f"run:{candidate_ref['repo']}:{candidate_ref['run_id']}", reason)
 		if not refs:
 			self._skip("runs", "no_trusted_run_links")

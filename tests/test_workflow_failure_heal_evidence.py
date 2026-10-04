@@ -225,6 +225,31 @@ def test_edited_source_marker_cannot_fetch_unregistered_repository(tmp_path: Pat
 	assert "no_trusted_run_links" in {item["reason"] for item in manifest["skipped"]}
 
 
+@pytest.mark.parametrize("third_repo, reason", [
+	("acme/another", "unverified_run_no_verified_context"),
+	("private/other", "not_registered"),
+])
+def test_other_repository_run_is_recorded_without_fetch(tmp_path: Path, monkeypatch, third_repo: str, reason: str) -> None:
+	registry = tmp_path / "consumers.json"
+	registry.write_text(json.dumps(["acme/registered", "acme/another"]))
+	monkeypatch.setenv("WORKFLOW_HEAL_CONSUMER_REGISTRY", str(registry))
+	issue = _issue(body=_issue()["body"].replace(REPO, "acme/registered"))
+	comment = _occurrence(222)
+	comment["body"] = comment["body"].replace(REPO, third_repo)
+	fake = FakeGh()
+	fake.routes[f"repos/acme/registered/actions/runs?head_sha={HEAD_SHA}&per_page=30"] = {"workflow_runs": [
+		{"id": 111, "repository": {"full_name": "acme/registered"}, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"},
+	]}
+	fake.routes["repos/acme/registered/actions/runs/111/jobs?per_page=100"] = fake.routes[f"repos/{REPO}/actions/runs/111/jobs?per_page=100"]
+	fake.routes["repos/acme/registered/actions/jobs/11/logs"] = _review_log()
+	fake.routes["repos/acme/registered/actions/runs/111/artifacts?per_page=100"] = {"artifacts": []}
+	manifest = _collector(tmp_path, fake).collect(issue, [comment], issue_repo=REPO)
+	assert {"part": f"run:{third_repo}:222", "reason": reason} in manifest["skipped"]
+	assert f"run:{third_repo}:222: {reason}" in (tmp_path / "evidence/INDEX.md").read_text()
+	assert not any(f"repos/{third_repo}/" in path for path in fake.paths)
+	assert "repos/acme/registered/actions/jobs/11/logs" in fake.paths
+
+
 def test_registered_consumer_source_remains_readable(tmp_path: Path, monkeypatch) -> None:
 	registry = tmp_path / "consumers.json"
 	registry.write_text(json.dumps(["acme/registered"]))
@@ -658,6 +683,21 @@ def test_pr_linked_run_requires_reported_head(tmp_path: Path) -> None:
 	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_head_mismatch")
 	fake.routes["repos/acme/registered/actions/runs/111"]["head_sha"] = HEAD_SHA
 	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (True, "verified")
+
+
+@pytest.mark.parametrize("reported_sha", ["", "not-a-sha"])
+def test_cross_repo_missing_head_skips_metadata_fetch(tmp_path: Path, reported_sha: str) -> None:
+	fake = FakeGh()
+	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "6133", "head_sha": reported_sha, "head_branch": "ai/issue-5144"}
+	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_no_verified_context")
+	assert fake.paths == []
+
+
+def test_cross_repo_head_without_branch_or_pr_is_not_enough(tmp_path: Path) -> None:
+	fake = FakeGh()
+	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "", "head_sha": HEAD_SHA, "head_branch": ""}
+	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_no_verified_context")
+	assert fake.paths == []
 
 
 def test_cross_repo_run_without_repository_metadata_is_rejected(tmp_path: Path) -> None:
