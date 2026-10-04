@@ -1217,6 +1217,7 @@ and shipped:
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
+- `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. If result publication fails, report skips review re-dispatch so it cannot run without the marker.)
 - `ACTIVATION_VERIFY` (`scripts/activation_verify.sh`: `mode=pr|project item= verdict=LIVE|DORMANT code_gaps= operator_gaps= outcome=posted|skip reason=`)
 - `JUDGE_INTERIM_PASS_OK`
 - `JUDGE_INTERIM_PASS_FAIL`
@@ -1419,6 +1420,7 @@ LOG_PREFIX.name=AI_ENGINE_FALLBACK
 LOG_PREFIX.name=CLAUDE_POOL
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL
+LOG_PREFIX.name=SINGLE_ISSUE_SECURITY_PASS
 LOG_PREFIX.name=ACTIVATION_VERIFY
 LOG_PREFIX.name=JUDGE_INTERIM_PASS_OK
 LOG_PREFIX.name=JUDGE_INTERIM_PASS_FAIL
@@ -1735,6 +1737,8 @@ depend on it.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `true` | When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure retains the documented fail-open path. Disabling the flag restores the pre-pass review-gate and deterministic-skip merge behavior. Only a sole verified automation follow-up is exempt; see `README.md` for dispatch and failure modes. |
+| `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | A pending single-issue audit holds auto-merge until its marker is this many hours old; the next review run re-dispatches. Invalid or non-positive values fall back to `6`. Only a sole verified automation-linked issue skips the pass; multiple linked issues are audited. When `GH_PAT` is absent, both gate and reporter trust only `github-actions[bot]` markers. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` consolidated security-fix issue per fix cycle before the pass terminalizes as `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 

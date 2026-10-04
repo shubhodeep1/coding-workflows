@@ -577,9 +577,9 @@ FAKE_AI_ENGINE = r'''claude_run()
 {
 	local role="$1" prompt="$2" out="$3" workdir="$4" sid="$5"
 	python3 - "$role" "$prompt" "$workdir" "$sid" <<'PY' >> "${FAKE_CLAUDE_LOG}"
-import json, sys
+import json, os, sys
 role, prompt, workdir, sid = sys.argv[1:5]
-print(json.dumps({"role": role, "prompt": open(prompt, encoding="utf-8").read(), "workdir": workdir, "session": sid}))
+print(json.dumps({"role": role, "prompt": open(prompt, encoding="utf-8").read(), "workdir": workdir, "session": sid, "effort": os.environ.get("AI_ENGINE_EFFORT_HINT", "")}))
 PY
 	case "${FAKE_CLAUDE_SCENARIO}" in
 		success)
@@ -590,6 +590,9 @@ PY
 		unavailable)
 			echo "AI_ENGINE_FALLBACK role=${role} reason=no_credential" >&2
 			return 75
+			;;
+		slow)
+			sleep 3
 			;;
 		*)
 			return 1
@@ -681,6 +684,38 @@ def test_claude_unavailable_runs_the_unchanged_codex_path() -> None:
 		assert [entry["mode"] for entry in _read_fake_codex_log(env)] == ["exec"]
 
 
+def test_claude_repair_uses_the_repair_effort_hint() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		env, helper = _claude_env(Path(td), "success")
+		env["CODEX_THREAD_REUSE_ENGINE_ROLE"] = "IMPLEMENT_REPAIR"
+		proc, _ = _run_claude_direct(env, helper, prompt_text="repair\n", extra={"AI_ENGINE_EFFORT_HINT": "medium", "MODEL_REASONING_EFFORT": "low"})
+		assert proc.returncode == 0, proc.stderr
+		assert _claude_calls(env)[0]["effort"] == "medium"
+
+
+def test_claude_unavailable_drops_session_and_stays_on_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		tmp_path = Path(td)
+		env, helper = _claude_env(tmp_path, "unavailable")
+		_run_claude_direct(env, helper, prompt_text="first prompt\n")
+		assert not list((tmp_path / "runtime").rglob("claude-implement.session"))
+		_run_claude_direct(env, helper, prompt_text="second prompt\n")
+		assert len(_claude_calls(env)) == 1
+		assert list((tmp_path / "runtime").rglob("claude-implement.unavailable"))
+
+
+def test_claude_attempt_obeys_wall_clock_timeout() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		tmp_path = Path(td)
+		env, helper = _claude_env(tmp_path, "slow")
+		proc, _ = _run_claude_direct(
+			env, helper, prompt_text="prompt\n", extra={"CODEX_THREAD_REUSE_TIMEOUT_SECS": "1"}
+		)
+		assert proc.returncode == 124, proc.stderr
+		assert not list((tmp_path / "runtime").rglob("claude-implement.session"))
+		assert _read_fake_codex_log(env) == []
+
+
 def test_claude_crash_returns_its_status_and_drops_the_session() -> None:
 	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
 		tmp_path = Path(td)
@@ -709,11 +744,14 @@ def test_implement_workflow_passes_each_role_its_engine() -> None:
 	text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
 	assert 'CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \\\n              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \\' in text
 	assert 'CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \\\n              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \\' in text
+	assert 'CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \\\n              AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \\' in text
 	assert 'for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE; do' in text
 	assert 'echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"' in text
 	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.ai_engine.outputs.any_claude == 'true'" in text
 	fetch_script_list = text.split("for f in ", 1)[1].split("; do", 1)[0]
-	assert "ai_engine.sh claude_engine.py claude_settings.json.tmpl" in fetch_script_list
+	assert "ai_engine.sh claude_engine.py" in fetch_script_list
+	assert 'install -m 0644 "${src}" scripts/claude_settings.json.tmpl' in text
+	assert '_staged_support_installed_paths+=(scripts/claude_settings.json.tmpl)' in text
 
 
 def main() -> int:
@@ -738,6 +776,9 @@ def main() -> int:
 	test_validate_workflow_contains_thread_reuse_bootstrap()
 	test_claude_engine_runs_claude_and_resumes_its_session()
 	test_claude_unavailable_runs_the_unchanged_codex_path()
+	test_claude_repair_uses_the_repair_effort_hint()
+	test_claude_unavailable_drops_session_and_stays_on_codex()
+	test_claude_attempt_obeys_wall_clock_timeout()
 	test_claude_crash_returns_its_status_and_drops_the_session()
 	test_codex_engine_never_touches_claude()
 	test_implement_workflow_passes_each_role_its_engine()

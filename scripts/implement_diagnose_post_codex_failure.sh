@@ -674,8 +674,9 @@ if [ "${AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE:-codex}" = "claude" ]; then
     # shellcheck source=ai_engine.sh
     source "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/ai_engine.sh"
     diagnose_rc=0
-    AI_ENGINE_MODEL_HINT="${DIAGNOSE_MODEL}" AI_ENGINE_EFFORT_HINT="${AI_ENGINE_EFFORT_HINT:-${MODEL_REASONING_EFFORT:-}}" \
-      claude_run IMPLEMENT_DIAGNOSE "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "${PWD}" \
+    AI_ENGINE_MODEL_HINT="${DIAGNOSE_MODEL}" AI_ENGINE_EFFORT_HINT="${DIAGNOSE_REASONING}" \
+      timeout --signal=TERM --kill-after=5s "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s bash -c 'source "$1"; shift; claude_run "$@"' _ "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/ai_engine.sh" \
+      IMPLEMENT_DIAGNOSE "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "${PWD}" \
       2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2) || diagnose_rc=$?
   else
     echo "AI_ENGINE_FALLBACK role=IMPLEMENT_DIAGNOSE reason=support_missing" >&2

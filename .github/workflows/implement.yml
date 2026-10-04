@@ -1024,7 +1024,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1039,6 +1039,18 @@ jobs:
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
             # see the persistence note above the loop.
           done
+
+          src=".codex-workflow-src/scripts/claude_settings.json.tmpl"
+          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/claude_settings.json.tmpl" ]; then
+            src=".codex-workflow-src-main/scripts/claude_settings.json.tmpl"
+          fi
+          if [ ! -f "${src}" ]; then
+            echo "::error::Missing required Claude settings template in ${wf_source}@${SCRIPT_REF}"
+            exit 1
+          fi
+          install -m 0644 "${src}" scripts/claude_settings.json.tmpl
+          _fetched_scripts+=(claude_settings.json.tmpl)
+          _staged_support_installed_paths+=(scripts/claude_settings.json.tmpl)
 
           # The guard rejection handler runs after implement_commit_changes.sh,
           # whose fetched-manifest cleanup can remove repository support files.
@@ -4027,6 +4039,7 @@ jobs:
             if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
+              AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${REPAIR_PROMPT_FILE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement_repair" \
