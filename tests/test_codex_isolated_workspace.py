@@ -81,7 +81,12 @@ def test_readonly_snapshot_takes_tracked_files_only_and_skips_secrets(repo, tmp_
 
 
 def test_credential_paths_are_absent_from_snapshots_and_synthetic_git(repo, tmp_path):
-	hidden = (".npmrc", ".netrc", ".pypirc", ".ssh/id_ed25519", ".config/gh/hosts.yml", "client_secret.json")
+	hidden = (
+		".npmrc", ".netrc", ".pypirc", ".ssh/id_ed25519", ".config/gh/hosts.yml",
+		"client_secret.json", "secrets.json", "credentials.yaml", "secrets.yml",
+		"credentials.toml", "credentials.ini", "aws_credentials", "aws_credentials.json",
+		"client-secret.json", "client-secret.yaml",
+	)
 	for name in hidden:
 		path = repo / name
 		path.parent.mkdir(parents=True, exist_ok=True)
