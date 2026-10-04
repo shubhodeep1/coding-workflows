@@ -188,7 +188,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the first 300 characters of the API error. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. An autofix report with no failed job reads the review job
-    (`codex-agent`), whose run concludes success, and the diagnosis prompt
+    (`codex-agent`, including `codex-agent (claude-branch-review)`), whose run
+    concludes success, and the diagnosis prompt
     gets step-sliced logs (`scripts/workflow_failure_heal_evidence.py
     slice-log`: step table, ±80 lines around each `##[error]`, the failing
     step's env, the working-tree / summary groups); the fingerprint still uses

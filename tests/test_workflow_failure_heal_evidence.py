@@ -250,6 +250,8 @@ def test_select_jobs_falls_back_to_the_review_job_when_nothing_failed() -> None:
 	assert [job["id"] for job in ev.select_jobs(jobs, 3)] == [3]
 	assert ev.select_jobs([{"id": 9, "name": "codex-agent", "conclusion": "skipped"}], 3)[0]["id"] == 9
 	assert ev.select_jobs([{"id": 9, "name": "build", "conclusion": "success"}], 3) == []
+	assert [job["id"] for job in ev.select_jobs([{"id": 10, "name": "review / codex-agent (claude-branch-review)", "conclusion": "success"}], 3)] == [10]
+	assert ev.select_jobs([{"id": 11, "name": "review / codex-agent-other", "conclusion": "success"}], 3) == []
 
 
 def test_lenient_json_reads_paginated_concatenated_arrays(tmp_path: Path) -> None:
@@ -460,6 +462,17 @@ def test_lineage_skips_malformed_issue_numbers(tmp_path: Path) -> None:
 	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
 	assert manifest["files"]
 	assert [item["number"] for item in json.loads((tmp_path / "evidence" / "lineage.json").read_text())] == [4477]
+
+
+def test_lineage_deduplicates_issues_across_pages(tmp_path: Path) -> None:
+	fake = FakeGh()
+	first_page = fake.routes[f"repos/{REPO}/issues?labels=ai:workflow-heal&state=all&per_page=100&page=1"]
+	first_page.extend({"number": n, "author_association": "NONE"} for n in range(1000, 1097))
+	fake.routes[f"repos/{REPO}/issues?labels=ai:workflow-heal&state=all&per_page=100&page=2"] = [dict(first_page[1])]
+	_collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	lineage = json.loads((tmp_path / "evidence" / "lineage.json").read_text())
+	assert [item["number"] for item in lineage] == [4477]
+	assert len([path for path in fake.paths if path == "graphql"]) == 1
 
 
 def test_artifact_download_limit_records_skipped_artifacts(tmp_path: Path) -> None:

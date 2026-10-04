@@ -267,7 +267,7 @@ while IFS=$'\t' read -r run_id run_url; do
 	done < <(jq -r --arg focus "$([ "${SOURCE_KIND}" = "autofix_failure" ] && echo 1 || true)" '
 		(.jobs | map(select((.conclusion // "") | IN("failure","timed_out","cancelled")))) as $failed
 		| (if ($failed | length) > 0 then $failed
-			elif $focus == "1" then (.jobs | map(select((.name // "") | test("(^|/\\s*)codex-agent$"))))
+			elif $focus == "1" then (.jobs | map(select((.name // "") | test("(^|/\\s*)codex-agent(\\s*\\([^)]*\\))?$"))))
 			else [] end)
 		| .[]
 		| [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // "")]
@@ -690,7 +690,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		# whitespace, so an empty failing step (a review job that did not
 		# fail) collapsed and shifted every later field one column left.
 		while IFS=$'\x1f' read -r run_url job_name workflow_name failing_step log_file sliced_file; do
-			echo "--- run ${run_url} | workflow: ${workflow_name} | job: ${job_name} | failing step: ${failing_step:-none (review job)} ---"
+			echo "--- run ${run_url} | workflow: ${workflow_name} | job: ${job_name} | failing step: ${failing_step:-none} ---"
 			if [ -n "${sliced_file}" ] && [ -s "${sliced_file}" ]; then
 				cat "${sliced_file}"
 			else

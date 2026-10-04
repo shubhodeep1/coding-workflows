@@ -1044,7 +1044,9 @@ def test_other_bash_guards_stay_wired(path):
 
 
 def test_template_parity():
-	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
+	assert TEMPLATE_GUARD_PATH.is_file()
+	if GUARD_PATH != TEMPLATE_GUARD_PATH:
+		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(encoding="utf-8")
 
 

@@ -1009,7 +1009,9 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 
 def test_template_copies_are_identical() -> None:
 	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
-	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
+	assert TEMPLATE_GUARD_PATH.is_file()
+	if GUARD_PATH != TEMPLATE_GUARD_PATH:
+		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
 		encoding="utf-8"
 	)

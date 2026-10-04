@@ -1362,7 +1362,8 @@ through `clarify → plan → implement → review`.
   fingerprint still comes from the filtered log, so existing lineages keep
   their fingerprints. A review/autofix report usually comes from a run that
   **concluded success** (the failure is recorded by a marker), so when no job
-  failed the intake reads the review job (`codex-agent`) instead of reading
+  failed the intake reads the review job (`codex-agent`, including its
+  `codex-agent (claude-branch-review)` variant) instead of reading
   nothing (`runs=0`, issue #6055). The issue body records the failing runs as
   `<!-- workflow-failure-heal:runs=<repo>:<id>,… -->`.
 - **Evidence for clarify, plan and implement:** the heal pipeline's agents

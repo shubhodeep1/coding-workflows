@@ -6,7 +6,7 @@ The heal pipeline's agents cannot open GitHub Actions logs: the web UI needs a s
 | The numbers that matter | Value |
 | --- | --- |
 | Heal issues surveyed | 51 (49 closed, 2 open) |
-| Reports the intake read with no log (`runs=0`) | 8, now read through the review job |
+| Reports the intake read with no log (`runs=0`) | 8, now read through the review job (including its claude-branch-review variant) |
 | Evidence folder cap | 400 KB in total, 60 KB per file |
 | GitHub REST calls | about 20 for the first stage, about 5 for later stages |
 | Optional parts skipped below | 500 remaining core calls |

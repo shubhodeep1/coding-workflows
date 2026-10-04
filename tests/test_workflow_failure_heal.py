@@ -1818,7 +1818,7 @@ def test_intake_reads_the_review_job_when_the_review_run_did_not_fail() -> None:
 	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"])
 	state["jobs"]["500"] = [
 		{"id": 9000, "name": "review / gate", "workflow_name": "AI Review", "conclusion": "success", "steps": []},
-		{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "success", "steps": [{"number": 1, "name": "Apply fixes with editor model", "conclusion": "success", "started_at": "2026-09-23T13:51:00Z", "completed_at": "2026-09-23T13:52:00Z"}]},
+		{"id": 9001, "name": "review / codex-agent (claude-branch-review)", "workflow_name": "AI Review", "conclusion": "success", "steps": [{"number": 1, "name": "Apply fixes with editor model", "conclusion": "success", "started_at": "2026-09-23T13:51:00Z", "completed_at": "2026-09-23T13:52:00Z"}]},
 	]
 	state["job_logs"]["9001"] = (
 		"2026-09-23T13:51:01.000Z ##[group]Run bash scripts/review_apply_fixes.sh\n"
@@ -1834,7 +1834,7 @@ def test_intake_reads_the_review_job_when_the_review_run_did_not_fail() -> None:
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "runs=1" in result.stdout
 	# The diagnosis prompt carries the step-sliced log, not just the filtered one.
-	assert "job: review / codex-agent | failing step: none (review job)" in prompt
+	assert "job: review / codex-agent (claude-branch-review) | failing step: none" in prompt
 	assert "## Env of the step that raised the first error" in prompt
 	assert "GIT_WORK_TREE: /home/runner/work/_temp/workspaces/4174-500-1" in prompt
 	assert "Working tree state (checkpoint=commit_step_start)" in prompt
@@ -1843,6 +1843,15 @@ def test_intake_reads_the_review_job_when_the_review_run_did_not_fail() -> None:
 	created = state_after["issues_created"][0]
 	assert f"- **Failed run:** https://github.com/{SELF_REPO}/actions/runs/500" in created["body"]
 	assert f"<!-- workflow-failure-heal:runs={SELF_REPO}:500 -->" in created["body"]
+
+
+def test_intake_does_not_label_a_failed_job_without_a_failing_step_as_a_review_job() -> None:
+	state = _gate_state()
+	state["jobs"]["500"][0]["steps"] = []
+	result, _state_after, prompt = _run_intake(_gate_run_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "job: e2e-smoke-test | failing step: none" in prompt
+	assert "none (review job)" not in prompt
 
 
 def _stage_autofix_report(tmp: Path, *, comments: list[dict], flags: dict[str, str], summary_line: str | None = RUN_SUMMARY_LINE) -> tuple[Path, Path, dict[str, str]]:

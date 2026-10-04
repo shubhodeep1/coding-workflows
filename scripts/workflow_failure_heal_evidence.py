@@ -86,7 +86,7 @@ MAX_ARTIFACT_MEMBERS = 40
 # "review / codex-agent" (internal). A review/autofix failure usually ends
 # with that job concluding success, so a run with no failed job falls back
 # to it instead of yielding no logs at all (issue #6055: runs=0).
-FOCUS_JOB_RE = re.compile(r"(?:^|/\s*)codex-agent$")
+FOCUS_JOB_RE = re.compile(r"(?:^|/\s*)codex-agent(?:\s*\([^)]*\))?$")
 ARTIFACT_NAME_RE = re.compile(r"^(?:codex-review-autofix-failure-logs|reviewer-logs)-[0-9]+-[0-9]+$")
 ARTIFACT_MEMBER_SUFFIXES = (".txt", ".log", ".err", ".json", ".md")
 # Which members of each artifact are diagnostic. reviewer-logs also carries
@@ -832,12 +832,15 @@ class Collector:
 			if len(data) < 100:
 				break
 		related = []
+		seen_lineage_issue_numbers: set[str] = set()
 		for item in issues:
 			if not str(item.get("number", "")).isdigit() or str(item.get("number")) == str(own_number) or not _is_trusted_author(item):
 				continue
 			markers = heal.parse_heal_markers(item.get("body"))
-			if (root and markers.get("root") == root) or (source and markers.get("source") == source):
+			lineage_issue_number = str(item["number"])
+			if lineage_issue_number not in seen_lineage_issue_numbers and ((root and markers.get("root") == root) or (source and markers.get("source") == source)):
 				related.append(item)
+				seen_lineage_issue_numbers.add(lineage_issue_number)
 		related = related[:10]
 		if not related:
 			return []
