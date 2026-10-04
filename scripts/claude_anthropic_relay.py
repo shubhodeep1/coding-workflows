@@ -101,7 +101,10 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		pass
 
 	def _reject(self, status):
-		self.send_error(status, "Request rejected")
+		try:
+			self.send_error(status, "Request rejected")
+		except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+			pass  # The peer is gone; there is no error response left to deliver.
 		self.close_connection = True
 
 	def do_POST(self):
@@ -142,10 +145,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 				except OSError:
 					pass
 				self.connection.settimeout(5)
-			try:
-				return self._reject(400)
-			except OSError:
-				return  # The client disconnected before it could receive the rejection.
+			return self._reject(400)
 		body = self.rfile.read(int(length))
 		if len(body) != int(length):
 			return self._reject(400)
@@ -182,10 +182,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		except (OSError, http.client.HTTPException):
 			# Do not echo upstream diagnostics: they can include provider data.
 			if not headers_sent and not self.wfile.closed:
-				try:
-					self._reject(502)
-				except OSError:
-					pass
+				self._reject(502)
 		finally:
 			if connection is not None:
 				connection.close()

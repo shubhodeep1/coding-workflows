@@ -14,6 +14,7 @@ import http.server
 import importlib.util
 import json
 import os
+import socket
 import threading
 from pathlib import Path
 
@@ -212,10 +213,10 @@ def test_broker_rejection_does_not_wait_for_an_unfinished_body(chain, monkeypatc
 
 
 def test_broker_rejection_ignores_peer_reset_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-	def reset_on_write(_handler, _status):
+	def reset_on_write(_handler, _status, _message):
 		raise ConnectionResetError("peer disconnected")
 
-	monkeypatch.setattr(relay.Relay, "_reject", reset_on_write)
+	monkeypatch.setattr(relay.Relay, "send_error", reset_on_write)
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
 	with pytest.raises(http.client.RemoteDisconnected):
@@ -226,12 +227,36 @@ def test_broker_rejection_ignores_peer_reset_during_response(chain, monkeypatch:
 
 
 def test_broker_rejection_ignores_peer_abort_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-	def abort_on_write(_handler, _status):
+	def abort_on_write(_handler, _status, _message):
 		raise ConnectionAbortedError("peer disconnected")
 
-	monkeypatch.setattr(relay.Relay, "_reject", abort_on_write)
+	monkeypatch.setattr(relay.Relay, "send_error", abort_on_write)
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
+	assert _Upstream.seen == []
+
+
+@pytest.mark.parametrize("payload, extra_length", [
+	(b"not-json", 0),
+	(b'{"model":"claude-other-9"}', 0),
+	(b'{"model":"claude-opus-5-5"}', 10),
+])
+def test_broker_late_rejections_ignore_peer_disconnect(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, payload: bytes, extra_length: int) -> None:
+	def abort_on_write(_handler, _status, _message):
+		raise ConnectionAbortedError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "send_error", abort_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", str(len(payload) + extra_length))
+	connection.endheaders()
+	connection.send(payload)
+	connection.sock.shutdown(socket.SHUT_WR)
 	with pytest.raises(http.client.RemoteDisconnected):
 		connection.getresponse()
 	connection.close()
