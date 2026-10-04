@@ -221,6 +221,18 @@ def test_destructive_override_refuses_canonical_sources_everywhere() -> None:
 	assert "override" not in scope
 
 
+@pytest.mark.parametrize("path", [
+	".github/workflows/ci.yml", ".github/actions/x/action.yml", ".claude/settings.json",
+	"workflow-templates/ai-review.yml", ".GitHub/workflows/x.yml", ".github",
+])
+def test_destructive_override_refuses_protected_automation_in_consumer_repos(path: str) -> None:
+	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
+	with pytest.raises(ledger.UsageError, match="protected automation path"):
+		ledger.validate(verdict, _decide("destructive-blocked"), "acme/app")
+	# A consumer may still need a scope override to edit its own automation.
+	assert ledger.validate(verdict, _decide("scope-blocked"), "o/consumer")["paths"] == [path]
+
+
 def test_override_marker_round_trips_and_is_counted() -> None:
 	line = ledger.marker(7, "destructive-blocked", FP, "override_guard", 1, "bulk_delete")
 	assert line.endswith("round=1 override=bulk_delete -->")
