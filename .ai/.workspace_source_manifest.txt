@@ -208,6 +208,8 @@ changelog.d/6118-phase-8d-retarget-merged-base.md
 changelog.d/6181-review-transfer-failure-evidence.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
+changelog.d/6224-unblock-override-protected-paths.md
+changelog.d/6225-unblock-judge-broker-isolation.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md

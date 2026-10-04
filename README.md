@@ -2622,8 +2622,9 @@ and resolver chains, a failed project) now goes to the unblock judge
 - **Hard limits** (`scripts/unblock_ledger.py`). A verdict is never repeated
   for the same failure fingerprint; at most 2 rounds per item and 6 per
   project; `override_guard` only for the scope and destructive latches on an
-  issue, never for `.github/workflows/**`, `.claude/**` or `scripts/**` in
-  this repository and never for deleting a canonical workflow source;
+  issue, never for `.github/**`, `.claude/**` or `workflow-templates/**` in
+  any repository, nor for `scripts/**` in this repository, and never for
+  deleting a canonical workflow source;
   `accept_with_followup` never for a failed security pass or validation. The
   model's output is validated before anything happens. Codex runs in a
   network-isolated container with the OpenRouter key held by a host-side broker;

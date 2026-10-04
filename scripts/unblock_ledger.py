@@ -28,11 +28,11 @@ Rules enforced here:
     per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
     round with the item still blocked, the only outcome is the terminal close;
   - `override_guard` exists only for the scope and destructive latches on an
-    issue, and its paths never include `.github/workflows/**`, `.claude/**` or
-    `scripts/**` in shubhodeep1/coding-workflows; for the destructive latch no
-    path may be a canonical workflow source (CANONICAL_SOURCE_RE, the list
-    scripts/implement_commit_changes.sh guards), or under `.github/`,
-    `.claude/` or `workflow-templates/`, in any repository;
+    issue, and its paths never include `.github/`, `.claude/` or
+    `workflow-templates/` (case-insensitive) in any repository, or `scripts/`
+    in shubhodeep1/coding-workflows; for the destructive latch no path may be
+    a canonical workflow source (CANONICAL_SOURCE_RE, the list
+    scripts/implement_commit_changes.sh guards);
   - `auto_answer` and `override_guard` are offered only for an issue, never for
     a pull request or a project;
   - `reissue` is never offered for a whole project;
@@ -125,8 +125,8 @@ OVERRIDES = ("bulk_delete",)
 CANONICAL_SOURCE_RE = re.compile(
 	r"^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)"
 )
-# Both implement deletion guards keep their protected-path grep in step with
-# this destructive-override denylist (including case-insensitive matches).
+# Every override_guard verdict uses this denylist (including case-insensitive
+# matches). Both implement deletion guards keep their protected-path grep in step.
 PROTECTED_AUTOMATION_OVERRIDE_RE = re.compile(r"^(\.github|\.claude|workflow-templates)(/|$)", re.IGNORECASE)
 NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed", "validate-failed", "harness-broken")
 
@@ -417,6 +417,9 @@ def validate(verdict: object, decision: object, repo: str) -> dict:
 		if len(paths) > MAX_OVERRIDE_PATHS:
 			raise UsageError(f"override_guard allows at most {MAX_OVERRIDE_PATHS} paths")
 		cleaned = sorted({_clean_path(path) for path in paths})
+		for path in cleaned:
+			if PROTECTED_AUTOMATION_OVERRIDE_RE.match(path):
+				raise UsageError(f"override_guard never covers the protected automation path {path!r}")
 		if repo.lower() == SOURCE_REPO:
 			for path in cleaned:
 				if any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in FORBIDDEN_OVERRIDE_PREFIXES):
@@ -425,6 +428,7 @@ def validate(verdict: object, decision: object, repo: str) -> dict:
 			for path in cleaned:
 				if CANONICAL_SOURCE_RE.match(path):
 					raise UsageError(f"override_guard never allows deleting the canonical workflow source {path!r}")
+				# Also covered above; keep the destructive-latch guard explicit.
 				if PROTECTED_AUTOMATION_OVERRIDE_RE.match(path):
 					raise UsageError(f"override_guard never allows bulk-deleting the protected automation path {path!r}")
 			normalised["override"] = "bulk_delete"
