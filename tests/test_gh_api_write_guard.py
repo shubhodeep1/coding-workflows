@@ -33,6 +33,8 @@ SEED_REPO_COMMAND = REPO_ROOT / ".claude" / "commands" / "seed-repo.md"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 # The source repo retired these session assets; consumers still use the templates.
+if not GUARD_PATH.is_file():
+	GUARD_PATH = TEMPLATE_GUARD_PATH
 if not SETTINGS_PATH.is_file():
 	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
 if not SEED_REPO_COMMAND.is_file():

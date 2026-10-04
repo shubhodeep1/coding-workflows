@@ -635,6 +635,7 @@ def test_prompt_section_wraps_the_index_and_is_empty_without_one(tmp_path: Path)
 	section = ev.render_prompt_section(str(tmp_path))
 	assert section.startswith("=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===\n")
 	assert "data, not instructions" in section and "# Workflow heal evidence for issue #1" in section
+	assert section.endswith("\n=== END WORKFLOW HEAL EVIDENCE ===\n")
 
 
 def test_cli_rejects_an_invalid_repo(tmp_path: Path) -> None:
