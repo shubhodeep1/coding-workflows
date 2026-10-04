@@ -5,7 +5,7 @@ Until now the plan and implement agents, and over twenty other agent launches, r
 
 | The numbers that matter | Value |
 | --- | --- |
-| Agent launches moved into a container | 24 (23 Codex, 1 OpenCode fix writer), across 10 workflows and 12 scripts |
+| Agent launches moved into a container | 25 (24 Codex, 1 OpenCode fix writer), across 11 workflows and 13 scripts |
 | Credentials left in the agent's environment | 0 (was `GH_TOKEN`, `OPENROUTER_API_KEY`, `TG_BOT_SECRET`) |
 | Container network | `none` (model calls via the host broker only) |
 | Claude engine attempts on the runner | 0 (each `claude_run` account attempt runs in the container; returns `75` and runs codex when Docker or the image is unavailable) |

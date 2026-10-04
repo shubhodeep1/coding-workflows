@@ -576,7 +576,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   bootstrap, the orchestrate decomposer, the poller's wave / stall /
   security-pass / review-blocked / integration-conflict judges, the four
   workflow-log-analysis passes and the consumer retro fan-out, check-failure
-  triage, the security audit, and the workflow failure heal intake.
+  triage, the security audit, the workflow failure heal intake, and the
+  activation verifier (`scripts/activation_verify.sh`).
   `tests/test_codex_agent_isolation_contract.py` fails when a direct `codex`
   launch appears anywhere else (clarify keeps its own
   `scripts/clarify_isolated_run.sh`).

@@ -1184,8 +1184,8 @@ network-isolated Docker container (`scripts/codex_isolated_exec.sh`), the same
 way clarify already did. That covers plan, implement (attempts, post-Codex
 repair, diagnose and the PR issue summary), validate, the validation discovery
 bootstrap, the orchestrator's decomposer and judges, workflow log analysis and
-the retro fan-out, check-failure triage, the security audit and the workflow
-failure heal intake. A prompt injection in an issue, comment, PR diff or log
+the retro fan-out, check-failure triage, the security audit, the workflow
+failure heal intake and the activation verifier. A prompt injection in an issue, comment, PR diff or log
 can no longer read `GH_PAT`, the OpenRouter key, the Telegram secrets or the
 checkout's `.git`: none of them is inside the container, the container has no
 network, and model calls go through a host-side broker that holds the key and

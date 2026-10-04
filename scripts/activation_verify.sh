@@ -230,7 +230,13 @@ activation_main()
 			activation_log "mode=${mode} item=${item} outcome=skip reason=codex_config_failed"
 			return 0
 		fi
-		(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" codex --ask-for-approval never -c model_verbosity=low exec \
+		# The context carries untrusted text, so the verifier runs in the
+		# credential-free, network-isolated container (read-only snapshot of the
+		# target's tracked files): no GH_TOKEN, no OpenRouter key and no .git
+		# reach it; model calls go through the host-side broker.
+		(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
+			bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
+			--ask-for-approval never -c model_verbosity=low exec \
 			--skip-git-repo-check --model "${model}" --sandbox read-only < "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/activation_codex.err") || true
 	fi
 	if ! activation_normalise_verdict "${output_file}" > "${verdict_file}" 2>/dev/null || [ ! -s "${verdict_file}" ]; then
