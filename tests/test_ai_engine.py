@@ -362,11 +362,12 @@ def test_claude_md_stays_by_default(sandbox: dict) -> None:
 
 
 def test_last_run_dir_holds_the_transcripts(sandbox: dict) -> None:
-	_accounts(sandbox, A="TOK_LIMIT", B="TOK_OK")
+	_accounts(sandbox, Z="TOK_LIMIT", A="TOK_OK")
 	result = _claude_run(sandbox)
 	run_dir = Path(next(line[8:] for line in result.stdout.splitlines() if line.startswith("RUN_DIR=")))
 	assert (run_dir / "transcript-A.jsonl").exists()
-	assert (run_dir / "transcript-B.jsonl").exists()
+	assert (run_dir / "transcript-Z.jsonl").exists()
+	assert (run_dir / "successful-transcript.jsonl").resolve() == run_dir / "transcript-A.jsonl"
 
 
 # --- wrappers: the --engine label ------------------------------------------------------
