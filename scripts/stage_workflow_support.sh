@@ -99,6 +99,12 @@ install -m 0644 ".codex-workflow-src/scripts/review_sandbox/Dockerfile" "${SUPPO
   echo "::error::Required trusted review sandbox Dockerfile is missing from verified support commit ${SCRIPT_REF}." >&2
   exit 1
 }
+if [ -f ".codex-workflow-src/scripts/clarify_sandbox/Dockerfile" ]; then
+  mkdir -p "${SUPPORT_SCRIPTS_DIR}/clarify_sandbox"
+  install -m 0644 ".codex-workflow-src/scripts/clarify_sandbox/Dockerfile" "${SUPPORT_SCRIPTS_DIR}/clarify_sandbox/Dockerfile"
+else
+  echo "::warning::Optional clarify sandbox Dockerfile missing from verified support commit ${SCRIPT_REF}; isolated read-profile Claude will fall back."
+fi
 for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then

@@ -2009,6 +2009,9 @@ in `claude-engine-smoke.yml`.
 writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
 `order` file, best account first, and one `0600` file per account under
 `tokens/`). A usage-limited or rejected account moves the run to the next one.
+Read-profile calls run in a `--network none` container with a placeholder
+token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token.
+If isolation cannot start, `AI_ENGINE_FALLBACK reason=isolation_*` returns 75.
 When no CLI, policy, instructions file or account is usable, it logs
 `AI_ENGINE_FALLBACK role= reason=`, sends at most one Telegram note per job,
 and returns `75`; the caller then runs its codex path unchanged. A crash
@@ -2022,10 +2025,12 @@ stream-json `result` usage line that `scripts/cost_audit.py` totals under
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
-`claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
+For write profiles, `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
 it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
 file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
 and reports that path instead of overwriting the new content.
+For read profiles it overlays an empty file only inside the container, leaving
+the host checkout untouched.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in

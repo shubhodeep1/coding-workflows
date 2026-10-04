@@ -684,9 +684,15 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 heal_claude_rc=75
 if [ -f scripts/ai_engine.sh ]; then
 	heal_claude_rc=0
+	# The diagnosis prompt cites these checked-out sources outside the main workdir.
+	heal_read_paths=()
+	[ ! -d "${HEAL_SOURCE_DIR:-}" ] || heal_read_paths+=("${HEAL_SOURCE_DIR}")
+	[ ! -d "${HEAL_BRANCH_TIP_DIR:-}" ] || heal_read_paths+=("${HEAL_BRANCH_TIP_DIR}")
+	heal_isolated_paths="$(IFS=:; echo "${heal_read_paths[*]}")"
 	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
 	env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \
 		AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
+		AI_ENGINE_ISOLATED_READ_PATHS="${heal_isolated_paths}" \
 		bash -c 'source "$1" && claude_run_selected WORKFLOW_HEAL "$2" "$3" "$4"' _ \
 		scripts/ai_engine.sh "${PROMPT_FILE}" "${DIAG_FILE}" "${PWD}" \
 		2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || heal_claude_rc=$?
