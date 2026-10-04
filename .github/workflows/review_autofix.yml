@@ -4753,13 +4753,16 @@ jobs:
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.
-          # On Claude (AI_ENGINE_RESOLVED_REVIEW_EDITOR) the image also gets
-          # the pinned Claude Code CLI. If that image cannot be prepared the
-          # editor falls back to OpenCode (plan D1) instead of failing the job.
-          if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then
+          # Both the editor and consolidator share the prepared sandbox.
+          if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ] || [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]; then
             if ! bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare claude; then
-              echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=sandbox_prepare_failed"
-              echo "AI_ENGINE_RESOLVED_REVIEW_EDITOR=codex" >> "$GITHUB_ENV"
+              for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR; do
+                resolved="AI_ENGINE_RESOLVED_${role}"
+                if [ "${!resolved:-codex}" = "claude" ]; then
+                  echo "AI_ENGINE_FALLBACK role=${role} reason=sandbox_prepare_failed"
+                  echo "${resolved}=codex" >> "$GITHUB_ENV"
+                fi
+              done
               bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
             fi
           else

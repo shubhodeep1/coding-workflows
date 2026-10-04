@@ -84,6 +84,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `CLAUDE_FIXER_ENABLED` (default `true`) is the switch for the Claude
    engine of the review write roles: `false` keeps the editor, consolidator,
    conflict resolver and review-blocked judge on OpenCode. The
+   three PR-derived Claude review roles run through the editor's network-isolated
+   sandbox and credential-free relay: the consolidator uses its prepared
+   read-only snapshot, and the judge and resolver prepare fresh snapshots
+   without installing dependencies. Host `claude_run` refuses all four review
+   roles; unavailable sandbox support falls back to OpenCode, never host Claude.
+   The judge verdict uses read access; its fix and the resolver use write access
+   with validated transfer back to the workspace. The
    `claude-fixer-auto-merge` job id is kept but never runs.
    `[claude-intervention]` and `[claude-merge-resolve]` commits on older PR
    heads still end the counted run, like `[judge-fix]` and
