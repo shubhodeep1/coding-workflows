@@ -1877,6 +1877,17 @@ ignored with a warning. Role names: `CLARIFY`, `CLARIFY_RESPOND`, `PLAN`,
 `SUMMARISER`, `BEHAVIOURAL_SMOKE`. The six reviewer slots have no engine
 switch.
 
+**How the label spreads.** `ai-orchestrate.yml` takes an optional `engine`
+input (`claude` or `codex`; empty leaves the project unlabelled), and the
+orchestrator puts the matching label (`ai:engine-claude` or `ai:codex`) on
+the tracking issue and the wave-1 issues it creates. The poller copies the
+tracking issue's engine label onto every issue and PR it creates later, and
+`implement.yml` copies an issue's engine label onto its PR, so every role of
+the project reads the same label from its own event payload. When both labels
+are present, `ai:codex` is copied. `/implement-plan-claude` dispatches with
+`engine=claude`; against a wrapper that has no `engine` input yet it
+dispatches without it and labels the tracking issue instead.
+
 **Model and effort.** A role keeps its existing model variable when the value
 starts with `claude-`; otherwise it uses Opus 5.5 (`claude-opus-5-5`), or
 Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`, `RETRO`, `MATERIALITY`,

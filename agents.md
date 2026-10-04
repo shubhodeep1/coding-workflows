@@ -1196,6 +1196,8 @@ and shipped:
 - `AI_ENGINE_SELECTED` (`scripts/ai_engine.sh`: `role= engine= model= effort= source=`)
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
+- `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
+- `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
 - `JUDGE_INTERIM_PASS_OK`
 - `JUDGE_INTERIM_PASS_FAIL`
 - `JUDGE_INTERIM_PRIORS_MERGED`
@@ -1392,6 +1394,8 @@ LOG_PREFIX.name=WORKFLOW_SCENARIO_TRACE_PARSE_FAIL
 LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
 LOG_PREFIX.name=CLAUDE_POOL
+LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
+LOG_PREFIX.name=AI_ENGINE_PR_LABEL
 LOG_PREFIX.name=JUDGE_INTERIM_PASS_OK
 LOG_PREFIX.name=JUDGE_INTERIM_PASS_FAIL
 LOG_PREFIX.name=JUDGE_INTERIM_PRIORS_MERGED
