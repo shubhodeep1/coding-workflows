@@ -5,13 +5,27 @@
   "entry_id": "processed_command_6213_5982779275_approved",
   "issue_number": 6213,
   "metadata": {
+    "branch": "ai/issue-6213",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "README.md",
+      "agents.md",
+      "changelog.d/6213-single-issue-security-pass-dispatch-failure-holds.md",
+      "scripts/review_single_issue_security_pass.sh",
+      "tests/test_single_issue_security_pass.py"
+    ],
+    "issue_number": 6213,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6213",
+    "pr_number": 6214,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6214",
+    "run_attempt": "1",
+    "run_id": "37222256419",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37222256419"
   },
   "run_attempt": 1,
   "run_id": "37222256419",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-04T17:56:32Z",
+  "status": "completed",
+  "timestamp": "2026-10-04T18:10:48Z",
   "workflow": "implement"
 }
