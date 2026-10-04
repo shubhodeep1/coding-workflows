@@ -88,7 +88,9 @@ class SweepDispatchRefContract(unittest.TestCase):
 	def test_dispatch_never_passes_a_ref(self) -> None:
 		self.assertNotIn("--ref", self._dispatch_block())
 		self.assertNotIn('dispatch_args+=(--ref "${head_ref}")', self.text)
-		sweep_job = self.text[self.text.index("  sweep:\n"):self.text.index("  claude-pr-catch-all:\n")]
+		# The sweep job is the workflow's last job since the claude-pr-catch-all
+		# job was retired (replace-claude-sessions plan, Phase 2).
+		sweep_job = self.text[self.text.index("  sweep:\n"):]
 		self.assertNotIn('--ref "', sweep_job)
 
 	def test_dispatch_carries_only_pr_number_and_edit_flag(self) -> None:
