@@ -177,7 +177,11 @@ def _rc(result: subprocess.CompletedProcess) -> int:
 
 
 def test_for_role_defaults_to_codex_and_logs(sandbox: dict) -> None:
-	result = _bash(sandbox, "ai_engine_for_role IMPLEMENT")
+	# The code defaults (an empty config), not the checked-in role cutovers.
+	support = sandbox["tmp"] / "support"
+	(support / ".github" / "ai").mkdir(parents=True)
+	(support / ".github" / "ai" / "claude_engine.json").write_text("{}", encoding="utf-8")
+	result = _bash(sandbox, "ai_engine_for_role IMPLEMENT", SUPPORT_ROOT_DIR=str(support))
 	assert result.returncode == 0, result.stderr
 	assert result.stdout.strip() == "codex"
 	assert "AI_ENGINE_SELECTED role=IMPLEMENT engine=codex model=claude-opus-5-5 effort=high source=default" in result.stderr

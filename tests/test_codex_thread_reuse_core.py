@@ -571,6 +571,188 @@ def test_validate_workflow_contains_thread_reuse_bootstrap() -> None:
 	assert '"prompts/mode-validate-self-heal-continuation.txt"' in text
 	assert '"prompts/contracts/mode-validate-self-heal-continuation.yml"' in text
 
+# --- Phase 5b: the Claude engine branch of direct-run ---------------------------
+
+FAKE_AI_ENGINE = r'''claude_run()
+{
+	local role="$1" prompt="$2" out="$3" workdir="$4" sid="$5"
+	python3 - "$role" "$prompt" "$workdir" "$sid" <<'PY' >> "${FAKE_CLAUDE_LOG}"
+import json, os, sys
+role, prompt, workdir, sid = sys.argv[1:5]
+print(json.dumps({"role": role, "prompt": open(prompt, encoding="utf-8").read(), "workdir": workdir, "session": sid, "effort": os.environ.get("AI_ENGINE_EFFORT_HINT", "")}))
+PY
+	case "${FAKE_CLAUDE_SCENARIO}" in
+		success)
+			mkdir -p "${HOME}/.claude/projects/x"
+			: > "${HOME}/.claude/projects/x/${sid}.jsonl"
+			printf 'claude output\n' > "${out}"
+			;;
+		unavailable)
+			echo "AI_ENGINE_FALLBACK role=${role} reason=no_credential" >&2
+			return 75
+			;;
+		slow)
+			sleep 3
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+'''
+
+
+def _claude_env(tmp_path: Path, scenario: str) -> tuple[dict[str, str], Path]:
+	env = _helper_env(tmp_path)
+	scripts = tmp_path / "scripts"
+	scripts.mkdir(exist_ok=True)
+	(scripts / HELPER.name).write_text(HELPER.read_text(encoding="utf-8"), encoding="utf-8")
+	(scripts / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
+	home = tmp_path / "home"
+	home.mkdir(exist_ok=True)
+	env.update(
+		{
+			"HOME": str(home),
+			"FAKE_CLAUDE_LOG": str(tmp_path / "fake_claude_log.jsonl"),
+			"FAKE_CLAUDE_SCENARIO": scenario,
+			"CODEX_THREAD_REUSE_ENGINE": "claude",
+			"CODEX_THREAD_REUSE_ENGINE_ROLE": "IMPLEMENT",
+		}
+	)
+	return env, scripts / HELPER.name
+
+
+def _run_claude_direct(env: dict[str, str], helper: Path, *, prompt_text: str, extra: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], str]:
+	runtime_dir = Path(env["CODEX_THREAD_REUSE_RUNTIME_DIR"])
+	prompt_file = runtime_dir / "implement.prompt.txt"
+	output_file = runtime_dir / "implement.output.txt"
+	prompt_file.write_text(prompt_text, encoding="utf-8")
+	cmd_env = env.copy()
+	cmd_env.update(
+		{
+			"CODEX_THREAD_REUSE_STATE_KEY": "implement",
+			"CODEX_THREAD_REUSE_PROMPT_FILE": str(prompt_file),
+			"CODEX_THREAD_REUSE_OUTPUT_FILE": str(output_file),
+			"CODEX_THREAD_REUSE_PHASE": "implement",
+			"CODEX_THREAD_REUSE_MODEL": "openai/gpt-5.4",
+		}
+	)
+	cmd_env.update(extra or {})
+	proc = subprocess.run(["bash", str(helper), "direct-run"], cwd=str(helper.parent.parent), env=cmd_env, capture_output=True, text=True, check=False)
+	output_text = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
+	return proc, output_text
+
+
+def _claude_calls(env: dict[str, str]) -> list[dict[str, str]]:
+	path = Path(env["FAKE_CLAUDE_LOG"])
+	return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+
+def test_claude_engine_runs_claude_and_resumes_its_session() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		tmp_path = Path(td)
+		env, helper = _claude_env(tmp_path, "success")
+		continuation = tmp_path / "continuation.txt"
+		continuation.write_text("CONTINUE: fix the remaining errors\n", encoding="utf-8")
+		extra = {
+			"CODEX_THREAD_REUSE_CONTINUATION_FILE": str(continuation),
+			"CODEX_THREAD_REUSE_TRANSFORM_MODE": "replace-prefix",
+			"CODEX_THREAD_REUSE_MARKER_START": "=== DIAG ===",
+		}
+		first, output = _run_claude_direct(env, helper, prompt_text="full prompt\n=== DIAG ===\nerr 1\n", extra=extra)
+		assert first.returncode == 0, first.stderr
+		assert output == "claude output\n"
+		second, _ = _run_claude_direct(env, helper, prompt_text="full prompt\n=== DIAG ===\nerr 2\n", extra=extra)
+		assert second.returncode == 0, second.stderr
+		calls = _claude_calls(env)
+		assert [call["role"] for call in calls] == ["IMPLEMENT", "IMPLEMENT"]
+		assert calls[0]["session"] == calls[1]["session"]
+		assert calls[0]["workdir"] == str(tmp_path)
+		assert calls[0]["prompt"].startswith("full prompt")
+		assert calls[1]["prompt"].startswith("CONTINUE: fix the remaining errors")
+		assert "err 2" in calls[1]["prompt"]
+		assert _read_fake_codex_log(env) == []
+
+
+def test_claude_unavailable_runs_the_unchanged_codex_path() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		env, helper = _claude_env(Path(td), "unavailable")
+		proc, _ = _run_claude_direct(env, helper, prompt_text="prompt\n")
+		assert proc.returncode == 0, proc.stderr
+		assert "AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential" in proc.stderr
+		assert len(_claude_calls(env)) == 1
+		assert [entry["mode"] for entry in _read_fake_codex_log(env)] == ["exec"]
+
+
+def test_claude_repair_uses_the_repair_effort_hint() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		env, helper = _claude_env(Path(td), "success")
+		env["CODEX_THREAD_REUSE_ENGINE_ROLE"] = "IMPLEMENT_REPAIR"
+		proc, _ = _run_claude_direct(env, helper, prompt_text="repair\n", extra={"AI_ENGINE_EFFORT_HINT": "medium", "MODEL_REASONING_EFFORT": "low"})
+		assert proc.returncode == 0, proc.stderr
+		assert _claude_calls(env)[0]["effort"] == "medium"
+
+
+def test_claude_unavailable_drops_session_and_stays_on_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		tmp_path = Path(td)
+		env, helper = _claude_env(tmp_path, "unavailable")
+		_run_claude_direct(env, helper, prompt_text="first prompt\n")
+		assert not list((tmp_path / "runtime").rglob("claude-implement.session"))
+		_run_claude_direct(env, helper, prompt_text="second prompt\n")
+		assert len(_claude_calls(env)) == 1
+		assert list((tmp_path / "runtime").rglob("claude-implement.unavailable"))
+
+
+def test_claude_attempt_obeys_wall_clock_timeout() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		tmp_path = Path(td)
+		env, helper = _claude_env(tmp_path, "slow")
+		proc, _ = _run_claude_direct(
+			env, helper, prompt_text="prompt\n", extra={"CODEX_THREAD_REUSE_TIMEOUT_SECS": "1"}
+		)
+		assert proc.returncode == 124, proc.stderr
+		assert not list((tmp_path / "runtime").rglob("claude-implement.session"))
+		assert _read_fake_codex_log(env) == []
+
+
+def test_claude_crash_returns_its_status_and_drops_the_session() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		tmp_path = Path(td)
+		env, helper = _claude_env(tmp_path, "crash")
+		proc, _ = _run_claude_direct(env, helper, prompt_text="prompt\n")
+		assert proc.returncode == 1
+		assert _read_fake_codex_log(env) == []
+		assert not list((tmp_path / "runtime").rglob("claude-implement.session"))
+		env["FAKE_CLAUDE_SCENARIO"] = "success"
+		_run_claude_direct(env, helper, prompt_text="prompt\n")
+		first, second = _claude_calls(env)
+		assert first["session"] != second["session"]
+
+
+def test_codex_engine_never_touches_claude() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		env, helper = _claude_env(Path(td), "success")
+		env["CODEX_THREAD_REUSE_ENGINE"] = "codex"
+		proc, _ = _run_claude_direct(env, helper, prompt_text="prompt\n")
+		assert proc.returncode == 0, proc.stderr
+		assert _claude_calls(env) == []
+		assert [entry["mode"] for entry in _read_fake_codex_log(env)] == ["exec"]
+
+
+def test_implement_workflow_passes_each_role_its_engine() -> None:
+	text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	assert 'CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \\\n              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \\' in text
+	assert 'CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \\\n              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \\' in text
+	assert 'CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \\\n              AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \\' in text
+	assert 'for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE; do' in text
+	assert 'echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"' in text
+	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.ai_engine.outputs.any_claude == 'true'" in text
+	fetch_script_list = text.split("for f in ", 1)[1].split("; do", 1)[0]
+	assert "ai_engine.sh claude_engine.py" in fetch_script_list
+	assert 'install -m 0644 "${src}" scripts/claude_settings.json.tmpl' in text
+	assert '_staged_support_installed_paths+=(scripts/claude_settings.json.tmpl)' in text
+
 
 def main() -> int:
 	test_probe_supported_and_unsupported()
@@ -592,6 +774,14 @@ def main() -> int:
 	test_implement_workflow_contains_thread_reuse_wiring()
 	test_validate_process_contains_thread_reuse_wiring()
 	test_validate_workflow_contains_thread_reuse_bootstrap()
+	test_claude_engine_runs_claude_and_resumes_its_session()
+	test_claude_unavailable_runs_the_unchanged_codex_path()
+	test_claude_repair_uses_the_repair_effort_hint()
+	test_claude_unavailable_drops_session_and_stays_on_codex()
+	test_claude_attempt_obeys_wall_clock_timeout()
+	test_claude_crash_returns_its_status_and_drops_the_session()
+	test_codex_engine_never_touches_claude()
+	test_implement_workflow_passes_each_role_its_engine()
 	return 0
 
 
