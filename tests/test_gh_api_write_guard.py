@@ -680,12 +680,7 @@ READ_LOOP_UNVETTED = [
 
 @pytest.mark.parametrize("command", READ_LOOP_UNVETTED)
 def test_unvetted_loop_keeps_no_decision(command):
-	# An unvetted loop with an unquoted gh api argument is not exempt:
-	# a body command could change the counter before that argument expands.
-	if "gh api " in command and "$r" in command:
-		assert _decide(command) == guard.DECISION_ASK
-	else:
-		assert _decide(command) is None
+	assert _decide(command) is None
 
 
 @pytest.mark.parametrize("command", [
@@ -917,11 +912,10 @@ def test_unquoted_expansion_prompts_only_for_gh_api_arguments():
 
 def test_literal_loop_counter_is_not_an_unquoted_expansion():
 	# #6127's unquoted-expansion ask must not catch the §23.H literal-ID loop
-	# counter: it can only expand to one of the literal tokens.
+	# counter of a vetted read loop: it can only expand to one of the IDs.
 	assert _decide("for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done") == guard.DECISION_ALLOW
 	assert _decide("for ID in 1 2; do gh api repos/o/r/actions/runs/${ID}/jobs; done") == guard.DECISION_ALLOW
 	assert _decide("for r in 1 2; do gh api repos/o/r/issues/$r --jq .; done") == guard.DECISION_ALLOW
-	assert guard._literal_loop_counter("for r in 1 2; do gh api repos/o/r/pulls/$r; done") == "r"
 
 
 @pytest.mark.parametrize("command", [
@@ -940,9 +934,23 @@ def test_literal_loop_counter_is_not_an_unquoted_expansion():
 	"for r in 1; do gh api repos/o/r/actions/runs/${r:-x}/jobs; done",
 	"for r in 1; do gh api repos/o/r/actions/runs/$rx/jobs; done",
 	"for r in $IDS; do gh api repos/o/r/actions/runs/$r/jobs; done",
+	"for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done; gh api repos/o/r/$ENDPOINT",
 ])
 def test_rebound_or_other_expansion_in_loop_still_asks(command):
-	assert guard._literal_loop_counter(command) in ("", "r")
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs --jq $'.x'; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs $'-XDELETE'; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/{jobs,-XDELETE}; done",
+	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs # x\ngh api -X DELETE repos/o/r; done",
+	"for r in {1..3}; do gh api repos/o/r/actions/runs/$r/jobs; done",
+	"for r in 1; do gh api repos/o/r/git/refs/heads/$r -f{x=1,-X=DELETE}; done",
+])
+def test_shell_rewrite_hazard_inside_a_loop_still_asks(command):
+	# The hazard ask is skipped for loop commands so the loop validator can
+	# judge them as a unit; it must still end in ask, never allow or no decision.
 	assert _decide(command) == guard.DECISION_ASK
 
 

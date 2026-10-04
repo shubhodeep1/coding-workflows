@@ -890,57 +890,13 @@ def _shell_rewrite_hazard(command: str) -> str:
 	return ""
 
 
-_REBIND_WORD_RE = re.compile(r"(?:^|[\s;&|(])(?:read|declare|typeset|export|local|readonly|let|eval|mapfile|readarray|unset|source|for)(?=[\s;&|)]|$)")
-_SAFE_COUNTER_EXPANSION_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
-
-
-def _literal_loop_counter(command: str) -> str:
-	"""The counter of a `for VAR in <literal IDs>; do` command that nothing rebinds.
-
-	Its value can only be one of the literal tokens (letters, digits, `.`,
-	`_`, `-`, never a leading `-`), so an unquoted `$VAR` / `${VAR}` cannot
-	word-split into a new gh api flag. Returns "" when the command opens with
-	no such loop, the header is not one the read-loop rule accepts, or the
-	body could assign the counter (`VAR=`, `read`, `declare`, `printf -v`,
-	`eval`, a nested `for`, ...).
-	"""
-	header = _LOOP_HEADER_RE.match(command)
-	if not header:
-		return ""
-	var, loop_tokens = header.group(1), header.group(2).split()
-	upper_var = var.upper()
-	if (
-		not _LOOP_VAR_RE.match(var) or "proxy" in var.lower()
-		or upper_var in _LOOP_ENV_NAMES or upper_var.endswith("_PROXY")
-		or upper_var.startswith(_LOOP_ENV_PREFIXES)
-		or not all(_LOOP_TOKEN_RE.match(token) for token in loop_tokens)
-	):
-		return ""
-	body = command[header.end():]
-	if _REBIND_WORD_RE.search(body) or re.search(r"(?:^|[^A-Za-z0-9_])" + re.escape(var) + r"\+?=", body) or "printf -v" in body:
-		return ""
-	# Only the vetted read-loop grammar can prove that no other body command
-	# (including shell builtins or future assignment forms) changes the counter.
-	try:
-		loop_invocations = gh_api_invocations(shell_segments(command))
-		loop_results = [classify(parse_gh_api_args(args), command, lambda: "") for args in loop_invocations]
-	except (ValueError, Unreadable):
-		return ""
-	if not _is_approvable_read_loop(command, loop_results):
-		return ""
-	return var
-
-
 def _unquoted_gh_api_expansion(command: str) -> bool:
 	"""Find words Bash could split into extra gh api arguments after expansion.
 
 	Keep quote state on the raw command: shlex removes it before the gh
 	argument parser runs. Only words belonging to a direct call count; an
-	expansion in a neighbouring echo/loop is not a gh api argument. The
-	counter of a literal-ID read loop (`_literal_loop_counter`) is exempt:
-	it expands only to a literal token, which is the §23.H loop allowance.
+	expansion in a neighbouring echo/loop is not a gh api argument.
 	"""
-	safe_counter = _literal_loop_counter(command)
 	segments: list[list[tuple[str, bool]]] = []
 	words: list[tuple[str, bool]] = []
 	word = ""
@@ -975,13 +931,6 @@ def _unquoted_gh_api_expansion(command: str) -> bool:
 				segments.append(words)
 				words = []
 		else:
-			if quote is None and character == "$" and safe_counter:
-				counter = _SAFE_COUNTER_EXPANSION_RE.match(command, position)
-				if counter and (counter.group(1) or counter.group(2)) == safe_counter:
-					word += counter.group(0)
-					in_word = True
-					position = counter.end()
-					continue
 			word += character
 			in_word = True
 			if quote is None and character in "$`":
@@ -1564,8 +1513,7 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
 		)
-	# Check every loop: _literal_loop_counter exempts only counters in vetted read loops.
-	if _unquoted_gh_api_expansion(stripped_command):
+	if _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results):
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."
