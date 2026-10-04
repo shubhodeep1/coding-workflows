@@ -177,7 +177,8 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}"
 		# The marker survives a killed/incomplete transfer. The editor wrapper
 		# fails the step instead of treating a partial host edit as a retry.
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
-		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json"; then
+		# Only the trusted transfer helper writes this attempt-scoped diagnostic.
+		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json" 2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"; then
 			rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"
 		else
 			rc=1
