@@ -133,6 +133,7 @@ state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
 state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
 state.setdefault("codex_calls", []).append(sys.argv[1:])
 state.setdefault("codex_stdin", []).append(sys.stdin.read())
+state.setdefault("codex_mounts", []).append(json.loads(os.environ.get("FAKE_CONTAINER_MOUNTS", "[]")))
 state_path.write_text(json.dumps(state), encoding="utf-8")
 sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", "[]"))
 if os.environ.get("MOCK_CODEX_ECHO_PROMPT") == "1":
@@ -277,6 +278,20 @@ def _git_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
 	_git("commit", "-q", "-m", "second commit")
 	head_sha = _git("rev-parse", "HEAD")
 	return repo_dir, first_sha, head_sha
+
+
+def _oversized_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
+	repo_dir, _first_sha, base_sha = _git_fixture_repo(base_dir)
+	(repo_dir / "large.py").write_bytes(b"x = 1\n" * 400000)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update({
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+	})
+	subprocess.run(["git", "add", "large.py"], cwd=repo_dir, env=git_env, check=True)
+	subprocess.run(["git", "commit", "-qm", "large file"], cwd=repo_dir, env=git_env, check=True)
+	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=git_env, text=True).strip()
+	return repo_dir, base_sha, head_sha
 
 
 def _iso_utc_for_current_week(*, day_offset: int) -> str:
@@ -2010,6 +2025,74 @@ def test_security_audit_findings_json_empty_explicit_range_stays_narrow() -> Non
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert payload["findings"] == []
 	assert payload["counts"]["suppressed_out_of_scope"] == 1
+
+
+def test_security_audit_chunks_scoped_oversized_file_and_reports_coverage() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _oversized_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		proc, state = _run_security_audit({}, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "Read EVERY chunk of EVERY listed file" in state["codex_stdin"][0]
+		assert "large.py (" in state["codex_stdin"][0]
+		assert "Cite the original repository path" in state["codex_stdin"][0]
+		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in state["codex_mounts"][0])
+		payload = json.loads(state["security_audit_findings_output"])
+		assert payload["schema_version"] == "security_audit_findings.v1"
+		assert payload["findings"] == [] and payload["counts"]["kept"] == 0
+		assert payload["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+
+
+def test_security_audit_oversized_cap_fails_before_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-cap-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _oversized_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		proc, state = _run_security_audit({}, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		})
+		assert proc.returncode != 0
+		assert "phase=oversized-scope" in proc.stderr
+		assert not state.get("codex_calls") and not output_path.exists()
+
+
+def test_security_audit_full_scan_reports_unscoped_oversized_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-") as td:
+		repo_dir, _base_sha, head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "Coverage note: 1 tracked files over 2 MiB" in result["issue_comment_bodies"][0]
+		assert "large.py" in result["issue_comment_bodies"][0]
+		assert any(head_sha in body for body in result["issue_edit_bodies"])
+
+
+def test_security_audit_no_oversized_file_has_no_tracker_coverage_lines() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-no-oversized-") as td:
+		repo_dir, _first_sha, _head_sha = _git_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "Coverage note:" not in result["issue_comment_bodies"][0]
+		assert "Oversized scoped files" not in result["issue_comment_bodies"][0]
 
 
 def test_security_audit_findings_json_preflight_failures_are_side_effect_free() -> None:

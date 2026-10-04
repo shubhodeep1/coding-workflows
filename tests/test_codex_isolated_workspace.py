@@ -12,6 +12,7 @@ all-or-nothing.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -137,6 +138,67 @@ def test_readonly_snapshot_limits_fail_closed(repo, tmp_path, monkeypatch):
 	monkeypatch.setattr(module, "MAX_READONLY_FILES", 1)
 	with pytest.raises(module.Rejected):
 		module.snapshot_readonly(repo, tmp_path / "copy")
+
+
+def test_export_oversized_chunks_only_scoped_safe_tracked_files(repo, tmp_path):
+	data = (b"line one\n" * 300000) + b"last line"
+	(repo / "large.txt").write_bytes(data)
+	(repo / "unscoped.txt").write_bytes(b"x" * len(data))
+	(repo / "secret.json").write_bytes(data)
+	(repo / "CLAUDE.md").write_bytes(data)
+	os.symlink(repo / "large.txt", repo / "large-link.txt")
+	git(repo, "add", "large.txt", "unscoped.txt", "secret.json", "CLAUDE.md", "large-link.txt")
+	scope = tmp_path / "scope.txt"
+	scope.write_text("large.txt\nsecret.json\nCLAUDE.md\nlarge-link.txt\nsrc/app.py\n")
+	dest = tmp_path / "export"
+	proc = run("export-oversized", repo, scope, dest, len(data), len(data), hide="CLAUDE.md")
+	assert "scoped=1" in proc.stderr and "unscoped=2" in proc.stderr
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert [item["path"] for item in manifest["unscoped_oversized"]] == ["big.bin", "unscoped.txt"]
+	assert manifest["unscoped_oversized_count"] == 2
+	assert len(manifest["scoped"]) == 1
+	item = manifest["scoped"][0]
+	assert item["path"] == "large.txt" and item["sha256"] == hashlib.sha256(data).hexdigest()
+	assert b"".join((dest / chunk["file"]).read_bytes() for chunk in item["chunks"]) == data
+	assert all(chunk["bytes"] <= 1024 * 1024 for chunk in item["chunks"])
+	assert all(left["end_line"] + 1 == right["start_line"] for left, right in zip(item["chunks"], item["chunks"][1:]))
+	assert tree(dest) == sorted([chunk["file"] for chunk in item["chunks"]] + ["manifest.json"])
+
+
+@pytest.mark.parametrize("file_cap,total_cap", [
+	("1048576", "67108864"), ("16777216", "1048576"), ("0", "67108864"), ("invalid", "67108864"),
+])
+def test_export_oversized_rejects_caps_before_writing(repo, tmp_path, file_cap, total_cap):
+	(repo / "large.txt").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+	git(repo, "add", "large.txt")
+	scope = tmp_path / "scope.txt"
+	scope.write_text("large.txt\n")
+	dest = tmp_path / "export"
+	proc = run("export-oversized", repo, scope, dest, file_cap, total_cap, check=False)
+	assert proc.returncode == 1 and "CODEX_ISOLATION export-oversized rejected" in proc.stderr
+	assert not dest.exists()
+
+
+def test_export_oversized_hard_cuts_single_long_line(repo, tmp_path):
+	data = b"a" * (2 * 1024 * 1024 + 10)
+	(repo / "large.bin").write_bytes(data)
+	git(repo, "add", "large.bin")
+	scope = tmp_path / "scope.txt"
+	scope.write_text("large.bin\n")
+	dest = tmp_path / "export"
+	run("export-oversized", repo, scope, dest, len(data), len(data))
+	chunks = json.loads((dest / "manifest.json").read_text())["scoped"][0]["chunks"]
+	assert [chunk["bytes"] for chunk in chunks] == [1024 * 1024, 1024 * 1024, 10]
+	assert all(chunk["start_line"] == chunk["end_line"] == 1 for chunk in chunks)
+
+
+def test_export_oversized_rejects_unrepresentable_scope_path(repo, tmp_path):
+	scope = tmp_path / "scope.txt"
+	scope.write_text('"large\\nfile.py"\n')
+	dest = tmp_path / "export"
+	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, check=False)
+	assert proc.returncode == 1 and "unrepresentable oversized scope path" in proc.stderr
+	assert not dest.exists()
 
 
 def test_seed_git_copies_objects_but_no_config_or_credentials(repo, tmp_path):

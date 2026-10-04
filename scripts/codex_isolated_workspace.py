@@ -16,6 +16,11 @@ Subcommands:
       at MAX_READONLY_FILES / MAX_READONLY_TOTAL (exceeding fails closed).
       Falls back to walking HOST when it is not a git work tree.
 
+  export-oversized HOST SCOPE_FILE DEST MAX_FILE_BYTES MAX_TOTAL_BYTES
+      Export scoped files omitted by snapshot-readonly as bounded chunks,
+      using its same credential and hidden-path filters. Filtered files are
+      never exported; unscoped oversized files are listed for coverage only.
+
   snapshot-workspace HOST DEST MANIFEST
       Copy HOST except credential-looking paths and `.git` into DEST, keeping
       allowed symlinks as symlinks (never dereferenced), and record the copy in
@@ -270,6 +275,90 @@ def snapshot_readonly(host, dest):
 			raise Rejected(f"read-only snapshot limit exceeded (files={count} bytes={total})")
 		copy_regular(node, dest.joinpath(*PurePosixPath(name).parts), info, MAX_READONLY_FILE)
 	log(f"snapshot mode=read-only source={source} files={count} bytes={total} skipped_large={skipped_large} skipped_other={skipped_other}")
+
+
+def export_oversized(host, scope_file, dest, max_file, max_total):
+	try:
+		file_cap, total_cap = int(str(max_file)), min(int(str(max_total)), MAX_INCLUDE_TOTAL)
+	except ValueError as exc:
+		raise Rejected("invalid oversized export cap") from exc
+	if file_cap <= 0 or total_cap <= 0:
+		raise Rejected("invalid oversized export cap")
+	scope = {name for name in scope_file.read_text(encoding="utf-8").splitlines() if name}
+	# git diff --name-only quotes paths containing newlines or non-ASCII
+	# characters. Such a display name cannot be matched to ls-files -z;
+	# refusing it is safer than declaring an omitted scoped file clean.
+	if any(not safe_name(name) or name.startswith('"') for name in scope):
+		raise Rejected("unrepresentable oversized scope path")
+	names = tracked_paths(host)
+	if names is None:
+		names = list(walk_paths(host))
+	scoped = []
+	unscoped = []
+	total = 0
+	for name in sorted(set(names)):
+		if not readonly_allowed(name):
+			continue
+		try:
+			node = walk_no_follow(host, name)
+			info = node.lstat()
+		except (FileNotFoundError, NotADirectoryError, Rejected):
+			continue
+		if not stat.S_ISREG(info.st_mode) or info.st_mode & (stat.S_ISUID | stat.S_ISGID) or info.st_size <= MAX_READONLY_FILE:
+			continue
+		if name not in scope:
+			unscoped.append({"path": name, "size": info.st_size})
+			continue
+		if info.st_size > file_cap:
+			raise Rejected(f"scoped oversized file exceeds cap (path={name} size={info.st_size} cap={file_cap})")
+		total += info.st_size
+		if total > total_cap:
+			raise Rejected(f"scoped oversized total exceeds cap (path={name} size={total} cap={total_cap})")
+		scoped.append((name, node, info))
+
+	remove_node(dest)
+	dest.mkdir(parents=True)
+	exported = []
+	chunk_count = 0
+	for number, (name, node, info) in enumerate(scoped, 1):
+		folder = f"f{number:03d}"
+		(dest / folder).mkdir()
+		fd = os.open(node, os.O_RDONLY | os.O_NOFOLLOW)
+		digest = hashlib.sha256()
+		chunks = []
+		line = 1
+		size = 0
+		with os.fdopen(fd, "rb") as handle:
+			opened = os.fstat(handle.fileno())
+			if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+				raise Rejected("oversized file changed during export")
+			while data := handle.read(CHUNK):
+				cut = data.rfind(b"\n") + 1
+				if cut >= CHUNK // 2 and cut < len(data):
+					handle.seek(cut - len(data), os.SEEK_CUR)
+					data = data[:cut]
+				part = f"{folder}/part-{len(chunks) + 1:04d}.txt"
+				(dest / part).write_bytes(data)
+				os.chmod(dest / part, 0o644)
+				digest.update(data)
+				size += len(data)
+				newlines = data.count(b"\n")
+				chunks.append({
+					"file": part, "start_line": line,
+					"end_line": line + newlines - int(data.endswith(b"\n")), "bytes": len(data),
+				})
+				line += newlines
+				chunk_count += 1
+			closed = os.fstat(handle.fileno())
+			if size != info.st_size or closed.st_size != info.st_size or (closed.st_dev, closed.st_ino) != (info.st_dev, info.st_ino):
+				raise Rejected("oversized file changed during export")
+		exported.append({"path": name, "size": size, "sha256": digest.hexdigest(), "dir": folder, "chunks": chunks})
+	(dest / "manifest.json").write_text(json.dumps({
+		"schema_version": "oversized_readonly_export.v1", "threshold_bytes": MAX_READONLY_FILE,
+		"chunk_bytes": CHUNK, "scoped": exported, "unscoped_oversized": unscoped[:50],
+		"unscoped_oversized_count": len(unscoped),
+	}), encoding="utf-8")
+	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)}")
 
 
 def load_manifest(manifest):
@@ -689,7 +778,7 @@ def copy_include(source, target):
 
 def main():
 	command = sys.argv[1] if len(sys.argv) > 1 else ""
-	arity = {"snapshot-readonly": 2, "snapshot-workspace": 3, "prep-finalize": 3, "transfer": 3, "seed-git": 2, "copy-include": 2}
+	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "transfer": 3, "seed-git": 2, "copy-include": 2}
 	if command not in arity or len(sys.argv) != arity[command] + 2:
 		print("usage: codex_isolated_workspace.py <snapshot-readonly|snapshot-workspace|prep-finalize|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
 		raise SystemExit(2)
@@ -699,6 +788,8 @@ def main():
 		HIDDEN_NAMES = hidden_names()
 		if command == "snapshot-readonly":
 			snapshot_readonly(*args)
+		elif command == "export-oversized":
+			export_oversized(*args)
 		elif command == "snapshot-workspace":
 			snapshot_workspace(*args)
 		elif command == "prep-finalize":
