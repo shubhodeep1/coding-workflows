@@ -7977,6 +7977,7 @@ def main() -> int:
 	test_review_isolation_wiring_and_model_relay()
 	test_review_isolation_workspace_transfer_and_hostile_paths()
 	test_review_isolation_traverses_only_allowed_github_directories()
+	test_review_isolation_transfers_into_active_work_tree()
 	test_review_relay_accepts_only_configured_chat_model()
 	test_review_relay_main_preserves_invoked_mode()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
@@ -8146,6 +8147,108 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(source / ".github/ai/untrusted.yml").write_text("untrusted\n")
 		assert run("transfer").returncode != 0
 		assert not (host / ".github/ai/untrusted.yml").exists()
+
+
+def test_review_isolation_transfers_into_active_work_tree() -> None:
+	"""Editor edits land in the work tree the job's git commands read (#6055).
+
+	"Activate workspace shell context" moves every later step into a per-run
+	copy (WORKSPACE_PATH) that has no .git of its own, with GIT_WORK_TREE set
+	to it and GIT_DIR to ${GITHUB_WORKSPACE}/.git. The sandbox used to
+	snapshot from and transfer into GITHUB_WORKSPACE, so every editor edit
+	reached a directory git no longer looked at and the run ended in
+	editor_changes_lost. Prepare validates WORKSPACE_PATH (it must sit
+	directly under ${RUNNER_TEMP}/workspaces) and records it for run.
+	Docker is stubbed; the stub editor edits /source.
+	"""
+	with tempfile.TemporaryDirectory(prefix="review-iso-") as td:
+		root = Path(td)
+		checkout = root / "checkout"
+		work_tree = root / "workspaces" / "run"
+		runner_temp = root
+		runtime_dir = root / "runtime"
+		stub_bin = root / "bin"
+		for path in (checkout / "scripts", work_tree / "scripts", runtime_dir, stub_bin):
+			path.mkdir(parents=True)
+		(checkout / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(checkout)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=checkout, env=_git_clean_env(), check=True)
+		subprocess.run(
+			["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "base"],
+			cwd=checkout, env=_git_clean_env(), check=True,
+		)
+		(work_tree / "scripts/app.py").write_text("before\n")
+		docker_stub = stub_bin / "docker"
+		docker_stub.write_text(textwrap.dedent("""\
+			#!/usr/bin/env bash
+			case "$1" in
+				build) echo "sha256:$(printf '0%.0s' $(seq 1 64))"; exit 0 ;;
+				rm) exit 0 ;;
+			esac
+			source_dir=""
+			editor=false
+			for arg in "$@"; do
+				case "${arg}" in
+					type=bind,src=*,dst=/source) source_dir="${arg#type=bind,src=}"; source_dir="${source_dir%,dst=/source}" ;;
+					review-editor-*) editor=true ;;
+				esac
+			done
+			if [ "${editor}" = true ]; then
+				printf 'after\\n' > "${source_dir}/scripts/app.py"
+				echo "Changes made:"
+			fi
+			exit 0
+			"""))
+		docker_stub.chmod(0o755)
+		github_env = root / "github_env"
+		github_env.write_text("")
+		env = _git_clean_env({
+			"PATH": f"{stub_bin}:{os.environ['PATH']}",
+			"GIT_DIR": str(checkout / ".git"),
+			"GIT_WORK_TREE": str(work_tree),
+			"WORKSPACE_PATH": str(work_tree),
+			"GITHUB_WORKSPACE": str(checkout),
+			"GITHUB_ENV": str(github_env),
+			"RUNNER_TEMP": str(runner_temp),
+			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"OPENROUTER_API_KEY": "test-only-key",
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		sandbox = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+		# A workspace outside ${RUNNER_TEMP}/workspaces is never a transfer target.
+		stray = root / "stray"
+		stray.mkdir()
+		rejected = subprocess.run(
+			["bash", sandbox, "prepare"], cwd=work_tree, env={**env, "WORKSPACE_PATH": str(stray)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert rejected.returncode != 0 and "Review workspace path rejected" in rejected.stderr
+		github_env.write_text("")
+		prepared = subprocess.run(["bash", sandbox, "prepare"], cwd=work_tree, env=env, capture_output=True, text=True, timeout=120)
+		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+		sandbox_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		prompt = root / "prompt.txt"
+		prompt.write_text("fix it\n")
+		config = root / "config.json"
+		config.write_text(json.dumps({
+			"model": "openrouter/openai/gpt-6-sol",
+			"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}},
+		}))
+		ran = subprocess.run(
+			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config)],
+			cwd=work_tree, env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root}, capture_output=True, text=True, timeout=120,
+		)
+		assert ran.returncode == 0, ran.stdout + ran.stderr
+		assert not (runtime_dir / "review_sandbox_transfer_failed").exists()
+		assert (work_tree / "scripts/app.py").read_text() == "after\n"
+		assert (checkout / "scripts/app.py").read_text() == "before\n"
+		changed = subprocess.run(
+			["git", "diff", "--name-only", "HEAD"], cwd=work_tree,
+			env={**_git_clean_env(), "GIT_DIR": str(checkout / ".git"), "GIT_WORK_TREE": str(work_tree)},
+			capture_output=True, text=True, check=True,
+		)
+		assert changed.stdout.split() == ["scripts/app.py"]
 
 
 def test_review_relay_accepts_only_configured_chat_model() -> None:
