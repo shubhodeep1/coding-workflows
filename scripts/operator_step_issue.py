@@ -79,14 +79,35 @@ def _clean(value: object, limit: int = MAX_FIELD) -> str:
 	return text.strip()[:limit]
 
 
-def _gh(args: list[str]) -> str:
+def _gh(args: list[str], *, allow_existing_label: bool = False) -> str:
 	try:
 		result = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
 	except OSError as exc:
 		raise ApiError(f"gh {args[0] if args else ''} failed: {exc}") from exc
 	if result.returncode != 0:
+		if allow_existing_label and re.search(r"\blabel\b[^\r\n]*\balready[ _-]*exists\b|\balready_exists\b", result.stderr, re.IGNORECASE):
+			return ""
 		raise ApiError(f"gh {' '.join(args[:2])} failed: {result.stderr.strip()[:300]}")
 	return result.stdout
+
+
+def _ensure_operator_label(repo: str) -> None:
+	# Read metadata from the same trusted support checkout as this writer, not the target repo.
+	contract_path = Path(__file__).resolve().parent.parent / ".github/ai/label_contract.v1.json"
+	try:
+		registration = json.loads(contract_path.read_text(encoding="utf-8"))["labels"][LABEL]
+	except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+		raise ApiError("operator-step label registration unavailable") from exc
+	if not isinstance(registration, dict):
+		raise ApiError("invalid operator-step label registration")
+	color = registration.get("color")
+	description = registration.get("description")
+	if (not isinstance(color, str) or not re.fullmatch(r"[0-9a-fA-F]{6}", color)
+		or not isinstance(description, str) or not description or len(description) > 100
+		or not description.isprintable()):
+		raise ApiError("invalid operator-step label registration")
+	_gh(["label", "create", LABEL, "--repo", repo, "--color", color,
+		"--description", description], allow_existing_label=True)
 
 
 def _trusted(issue: dict) -> bool:
@@ -208,6 +229,7 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(duplicate_issue['number'])}", "-f", "state=closed"])
 		else:
 			body = render_body([(key, entry)])
+			_ensure_operator_label(repo)
 			try:
 				created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={TITLE}", "-f", f"body={body}", "-f", f"labels[]={LABEL}"]) or "{}")
 			except ValueError as exc:
