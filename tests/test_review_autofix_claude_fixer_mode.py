@@ -83,9 +83,11 @@ def test_handoff_machinery_is_gone():
 		"review_autofix_step_claude_fixer_handoff.sh",
 		"Hand review round to Claude session",
 		"Label Claude-fixer PR review-blocked",
-		"ai:claude-fixer-",
 	):
 		assert needle not in text, needle
+	# The only ai:claude-fixer-* marker left is the review-skipped notice for
+	# claude/* PRs (issue #4985), which is not part of the hand-off.
+	assert set(re.findall(r"ai:claude-fixer-[a-z-]+", text)) <= {"ai:claude-fixer-review-skipped"}
 	assert "ai:claude-fixer-handoff" not in expanded_review_autofix_text()
 	assert not (REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_handoff.sh").exists()
 	outputs = WORKFLOW["jobs"]["gate"]["outputs"]
