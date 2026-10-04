@@ -123,8 +123,8 @@ jobs:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       # The UNBLOCK_JUDGE role runs codex unless the engine policy selects
-      # Claude (scripts/ai_engine.sh); without a credential claude_run falls
-      # back to codex (plan D1), so these two steps never fail the job.
+      # Claude (scripts/ai_engine.sh); the isolated Claude runner falls back
+      # to isolated codex without a credential, so these steps never fail the job.
       - name: Install Claude Code CLI
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude
