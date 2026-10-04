@@ -63,7 +63,7 @@ def test_parse_keeps_question_pick_why_and_alternatives() -> None:
 	}
 
 
-def _comment(body: str, association: str = "OWNER", login: str = "owner", cid: int = 1, created: str = "2026-10-04T00:00:00Z") -> dict:
+def _comment(body: str, association: str = "OWNER", login: str = "owner", cid: int | str = 1, created: str = "2026-10-04T00:00:00Z") -> dict:
 	return {"id": cid, "body": body, "author_association": association, "user": {"login": login}, "created_at": created}
 
 
@@ -78,6 +78,17 @@ def test_render_creates_then_appends_with_continuing_numbers() -> None:
 	assert "**AD-2** (clarify comment 11, Q1)" in second["body"]
 
 
+def test_render_finds_decisions_beyond_first_fifty_comments() -> None:
+	decisions = auto.parse_questions(CANONICAL)
+	first = auto.render([], decisions, "clarify comment 10")
+	comments = [_comment("older", cid=index) for index in range(1, 56)]
+	comments.append(_comment(first["body"], cid=56))
+	second = auto.render(comments, decisions, "clarify comment 11")
+	assert second["comment_id"] == 56
+	assert second["total"] == 2
+	assert "**AD-2** (clarify comment 11, Q1)" in second["body"]
+
+
 def test_render_ignores_untrusted_or_misplaced_markers() -> None:
 	decisions = auto.parse_questions(CANONICAL)
 	forged = _comment(auto.MARKER + "\n- **AD-9** forged", association="NONE", login="someone", cid=7)
@@ -88,10 +99,17 @@ def test_render_ignores_untrusted_or_misplaced_markers() -> None:
 	assert auto.render([bot], decisions, "c")["comment_id"] == 9
 
 
+def test_find_comment_orders_mixed_id_types_with_equal_timestamps() -> None:
+	older = _comment(auto.MARKER + "\n- **AD-1** older", cid=9)
+	newer = _comment(auto.MARKER + "\n- **AD-2** newer", cid="10")
+	assert auto.find_comment([older, newer])["id"] == "10"
+
+
 def test_text_cannot_inject_a_comment_delimiter() -> None:
-	decisions = auto.parse_questions("**Q1: a <!-- ai:auto-decisions:v1 --> b**\n- A — x --> y (RECOMMENDED)\n")
+	decisions = auto.parse_questions("**Q1: a <!-- ai:auto-decisions:v1 --> b**\n- A — x ---->> y (RECOMMENDED)\n")
 	body = auto.render([], decisions, "c")["body"]
 	assert body.count("<!--") == 1 and body.count("-->") == 1
+	assert "--&gt;" in body
 
 
 def test_pr_section_breaks_issue_references() -> None:
@@ -138,6 +156,14 @@ def test_clarify_wiring() -> None:
 	run = auto_step["run"]
 	assert "bash scripts/orchestrate_parse_and_post_answer.sh" in run
 	assert "auto_decisions.py parse" in run and "auto_decisions.py render" in run
+	assert 'render --comments-file "${ISSUE_ALL_COMMENTS_FILE}"' in run
+	assert 'THREAD_HISTORY_FILE="${AUTO_DECIDE_THREAD_HISTORY_FILE}"' in run
+	assert 'startswith("/answer [auto-answered-by-orchestrator]")' in run
+	assert 'grep -q "^Posted auto-answer on issue #${ISSUE_NUMBER}$"' in run
+	assert 'echo "Posted auto-answer on issue #${ISSUE_NUMBER}"' in (ROOT / "scripts" / "orchestrate_parse_and_post_answer.sh").read_text(encoding="utf-8")
+	fetch = steps["Fetch issue comments"]["run"]
+	assert 'gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?' in fetch
+	assert 'jq \'.[0:50]\' "${ISSUE_ALL_COMMENTS_FILE}" > "${ISSUE_COMMENTS_FILE}"' in fetch
 	text = CLARIFY.read_text(encoding="utf-8")
 	assert "auto_decisions.py orchestrate_parse_and_post_answer.sh; do" in text
 

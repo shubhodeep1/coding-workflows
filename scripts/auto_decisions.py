@@ -91,7 +91,7 @@ def _read_json(path: str, flag: str) -> object:
 def _clean(text: str) -> str:
 	"""One line, no markdown emphasis or HTML comment delimiters, bounded."""
 	text = " ".join(text.replace("**", "").split())
-	text = text.replace("<!--", "").replace("-->", "")
+	text = text.replace("<", "&lt;").replace(">", "&gt;")
 	return text[:MAX_FIELD]
 
 
@@ -164,9 +164,9 @@ def find_comment(comments: object) -> dict | None:
 		body = str(comment.get("body") or "")
 		if body.split("\n", 1)[0].strip() != MARKER:
 			continue
-		if found is None or (str(comment.get("created_at") or ""), comment.get("id") or 0) >= (
+		if found is None or (str(comment.get("created_at") or ""), int(comment.get("id") or 0)) >= (
 			str(found.get("created_at") or ""),
-			found.get("id") or 0,
+			int(found.get("id") or 0),
 		):
 			found = comment
 	return found
