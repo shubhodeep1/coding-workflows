@@ -1866,8 +1866,9 @@ to `codex`.
 engine for the role. Only when it is `claude` do "Install Claude Code CLI" and
 "Resolve Claude credential" (the account pool) run. The model call then runs
 on Claude (`claude_run`, or the clarify sandbox's Claude branch). When Claude
-cannot start (no CLI, no credential, every account gated: exit `75`, logged
-`AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call, and
+cannot start (no CLI, no credential, clarify image build failure or every
+account gated: exit `75`, logged `AI_ENGINE_FALLBACK`), the same attempt runs
+the unchanged codex call, and
 the rest of the job stays on codex. `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
 

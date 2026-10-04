@@ -847,13 +847,14 @@ jobs:
               exit 1
             fi
           done
+          echo "engine=${CLARIFY_RESPOND_ENGINE}" >> "$GITHUB_OUTPUT"
 
       - name: Self-critique pass for non-letter decisions
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
-          CLARIFY_RESPOND_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
+          CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
 
