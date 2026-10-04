@@ -942,6 +942,41 @@ def test_push_to_unverified_repository_requires_confirmation(merged_branch_repo,
 	assert "private" not in output
 
 
+@pytest.mark.parametrize("command", [
+	"git -c remote.origin.url=https://github.com/other/repo push origin --delete feature/x",
+	"git -c remote.origin.pushurl=https://github.com/other/repo push origin :feature/x",
+	"git -c url.https://github.com/other/repo.insteadOf=https://github.com/o/r push origin HEAD:feature/x",
+	"git -cremote.origin.url=https://github.com/other/repo push origin --tags",
+	"git --config-env=remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
+	"git --config-env remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
+	"git -c user.name=bot push origin HEAD:feature/x",
+])
+def test_per_command_config_push_asks_without_using_origin_prs(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("overridden push must not query origin"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	output = capsys.readouterr().out
+	decision = json.loads(output.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "other/repo" not in output  # URLs may carry credentials; never print config values.
+
+
+def test_per_command_config_commit_keeps_the_merged_pr_check(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+
+	def listing(slug, branch, cwd):
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git -c user.name=bot commit -m x"}})
+	assert code == 2 and "Branch `feature/x`" in message
+
+
 def test_matching_refspec_on_unverified_remote_does_not_check_origin(merged_branch_repo, monkeypatch, capsys) -> None:
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not query origin for another repository"))

@@ -1227,6 +1227,8 @@ rechecks mergeability on the next tick instead of failing the project immediatel
 The merged-PR push guard checks `origin` as before. A push selecting a different
 repository with `--repo` or a positional remote asks for confirmation rather
 than treating the checkout's origin PR history as proof that the push is safe.
+Pushes with per-command Git configuration (`git -c` or `--config-env`) also ask:
+an override can redirect `origin`, so the guard does not use its stored PR history.
 
 ### Workflow file size limit
 

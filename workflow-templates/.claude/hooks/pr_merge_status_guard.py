@@ -111,7 +111,7 @@ VERDICT_UNAVAILABLE = "unavailable"
 # `--opt=value`. Needed so `git -C /repo commit` resolves to `commit` rather
 # than to the path.
 GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
-	{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
+	{"-C", "-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
 )
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
@@ -179,6 +179,7 @@ class _GitInvocation(NamedTuple):
 	subcommand: str
 	arguments: list[str]
 	warning: str = ""
+	config_override: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -365,6 +366,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		index += 1
 		git_cwd = working_directory
 		uncertain = git_cwd is None
+		config_override = False
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
 			value = None
@@ -376,8 +378,13 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				index += 1
 			elif option.startswith("-C") and option != "-C":
 				value = option[2:]
+			elif option.startswith("-c") and option != "-c":
+				value = option[2:]
 			elif option.startswith(("--git-dir=", "--work-tree=")):
 				value = option.split("=", 1)[1]
+			if option in ("-c", "--config-env") or option.startswith(("-c", "--config-env=")):
+				# Git configuration can rewrite the push destination without changing origin's stored URL.
+				config_override = True
 			if value is not None:
 				if option.startswith("-C"):
 					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
@@ -402,6 +409,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
 			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
+			config_override,
 		))
 	return invocations
 
@@ -1311,6 +1319,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	bulk_reasons: list[str] = []
 	unverified_destinations: set[str] = set()
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "push" and invocation.config_override:
+			unverified_destinations.add("per-command Git configuration may redirect the push")
+			continue  # Origin's PR history cannot authorize a push with overridden configuration.
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
