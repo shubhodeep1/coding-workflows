@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How far should this fix go?\nChoices:\nA) Remove credentials only: drop `GH_TOKEN`, `GH_PAT`, Telegram and other non-model secrets from the editor's environment at both implement editor launches (main loop and syntax repair). The editor keeps the network access the model needs. Pin this with a contract test. (RECOMMENDED)\nB) A, plus a new network-isolated, credential-free container for the implement editor when heal evidence is present (like `clarify_isolated_run.sh`, with a host-side model broker). This is much larger and touches Claude and Codex engine launch and the transfer back of edits.\nC) B, applied to every implement run, not only heal-evidence runs.\nQ2: How should the evidence reach the editor?\nChoices:\nA) Keep the raw sliced logs and artifact files, already marked UNTRUSTED, and rely on Q1's credential removal and the write restrictions in Q4 as the safeguard. The full error context stays available for diagnosis.\nB) Add a structured, allowlisted diagnostics file and put it in the prompt: step table, exit codes, the error-signature line, crash file and line, run IDs and SHAs. The raw log slices stay on disk for reference but are no longer pointed at from the prompt. (RECOMMENDED)\nC) Structured diagnostics only: the editor never gets the raw log slices or artifacts. This is safest, but heal fixes lose the surrounding log lines they often need.\nQ3: Which other stages that get heal evidence should change in the same PR?\nChoices:\nA) Implement only (main editor and syntax-repair editor), as the finding cites.\nB) Implement, plus the plan stage (`scripts/run_plan_codex.sh`), which gets the same evidence block. Clarify is already sandboxed. (RECOMMENDED)\nC) B, plus implement-diagnose (`scripts/implement_diagnose_post_codex_failure.sh`).\nQ4: What should \"issue-scoped write restrictions\" mean for heal-evidence runs?\nChoices:\nA) No change. Rely on the existing `files_touched` scope guard (`ENFORCE_FILES_TOUCHED`) and `.github/ai/write_guards.v1.json`, which skip the check when the issue has no `files_touched` allowlist.\nB) When heal evidence was put in the prompt, fail closed if the issue or plan has no `files_touched` allowlist, and turn off the `ALLOW_OUT_OF_SCOPE_FILES` override for that run. (RECOMMENDED)\n**Note:** with B, heal issues whose plan leaves out a files list will stop at the scope guard instead of committing.\nC) B, and also block heal-evidence runs from editing `.github/workflows/**` unless those paths are named in the allowlist.",
+  "fingerprint": "20ec9f3c2beb8f8857554dd84683cb968ae626eabaf2fa35fba1fbe42d1f7aa3",
+  "lineage": {
+    "issue_number": 6221,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37230426354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37230426354",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261004200944_337140f910",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6221,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37230426354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6221 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-04T20:09:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
