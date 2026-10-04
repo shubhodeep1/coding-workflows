@@ -860,19 +860,11 @@ jobs:
         run: |
           set -euo pipefail
           evidence_dir="${RUNNER_TEMP}/heal-evidence"
-          evidence_comments_file="${ISSUE_COMMENTS_FILE:-}"
-          # Clarify's prompt uses the oldest 50 comments, but heal evidence
-          # needs later occurrence links too. The optional semantic-cache
-          # history is rendered text, not JSON; fetch all only at that limit.
-          if [ -s "${evidence_comments_file}" ] && jq -e 'type == "array" and length >= 50' "${evidence_comments_file}" >/dev/null; then
-            source scripts/gh_helpers.sh 2>/dev/null || true
-            type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-            evidence_comments_file="${RUNNER_TEMP}/heal-evidence-comments.json"
-            if ! gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
-              | jq -e 'add // []' > "${evidence_comments_file}"; then
-              echo "::warning::Heal evidence could not fetch recent issue comments; using the first 50"
-              evidence_comments_file="${ISSUE_COMMENTS_FILE}"
-            fi
+          # Fetch issue comments already saved the complete paginated snapshot;
+          # the first 50 are only for the clarify prompt.
+          evidence_comments_file="${ISSUE_ALL_COMMENTS_FILE:-${ISSUE_COMMENTS_FILE:-}}"
+          if [ ! -s "${evidence_comments_file}" ]; then
+            evidence_comments_file="${ISSUE_COMMENTS_FILE:-}"
           fi
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py collect \
             --repo "${GITHUB_REPOSITORY}" \

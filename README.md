@@ -1394,9 +1394,10 @@ through `clarify → plan → implement → review`.
   fetched is listed under `skipped` and the stage carries on. Log prefix
   `WORKFLOW_HEAL_EVIDENCE` (`collected issue=… runs=… reused=… api_calls=…
   skipped=… rate_limit_low=…`). Clarify keeps its oldest-50-comment prompt
-  context; when that page is full, evidence collection fetches the complete
-  comment history once more so newer occurrence-run links are not missed. If
-  that read fails, evidence collection falls back to the first 50 comments.
+  context; evidence collection reuses the complete paginated comment snapshot
+  already fetched for auto-decisions, so newer occurrence-run links are not
+  missed without another API call. If that snapshot is unavailable, it falls
+  back to the first 50 comments.
   The editable `source=` marker cannot direct `GH_PAT` reads outside this repo
   and `.github/ai/consumer_repos.json` (or `WORKFLOW_HEAL_CONSUMER_REGISTRY`);
   if that registry is unavailable, cross-repository evidence is skipped.

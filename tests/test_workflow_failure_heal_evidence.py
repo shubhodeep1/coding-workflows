@@ -682,11 +682,13 @@ def test_each_heal_stage_collects_evidence_before_its_agent(workflow: str, agent
 
 def test_clarify_fetches_recent_occurrences_without_changing_its_prompt_window() -> None:
 	text = (WORKFLOWS / "clarify.yml").read_text(encoding="utf-8")
-	assert "comments?sort=created&direction=asc&per_page=50" in _step(text, "Fetch issue comments")
+	fetch = _step(text, "Fetch issue comments")
+	assert "comments?sort=created&direction=asc&per_page=100" in fetch
+	assert "${ISSUE_ALL_COMMENTS_FILE}" in fetch and "jq '.[0:50]'" in fetch
 	collect = _step(text, "Collect workflow-heal evidence")
-	assert "length >= 50" in collect
-	assert "gh_retry gh api --paginate --slurp" in collect
-	assert 'evidence_comments_file="${ISSUE_COMMENTS_FILE}"' in collect
+	assert 'evidence_comments_file="${ISSUE_ALL_COMMENTS_FILE:-${ISSUE_COMMENTS_FILE:-}}"' in collect
+	assert 'evidence_comments_file="${ISSUE_COMMENTS_FILE:-}"' in collect
+	assert "gh api" not in collect
 	assert '--comments-json "${evidence_comments_file}"' in collect
 
 
