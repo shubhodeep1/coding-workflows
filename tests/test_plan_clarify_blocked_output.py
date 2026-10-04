@@ -533,6 +533,9 @@ def test_engine_steps_resolve_the_role_and_guard_the_credential() -> None:
 		assert resolve < install < credential < names.index(model_step), workflow
 		run = steps[resolve]["run"]
 		assert f'engine="$(ai_engine_for_role {role} || echo codex)"' in run, workflow
+		metadata_file = "ISSUE_PAYLOAD_FILE" if role == "CLARIFY_RESPOND" else "ISSUE_META_FILE"
+		assert f'AI_ENGINE_LABELS="$(jq -c \'[.labels[]?.name]\' "${{{metadata_file}}}")"' in run, workflow
+		assert "export AI_ENGINE_LABELS" in run, workflow
 		assert steps[resolve]["env"][f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}", workflow
 		for index in (install, credential):
 			assert "steps.ai_engine.outputs.engine == 'claude'" in steps[index]["if"], workflow
