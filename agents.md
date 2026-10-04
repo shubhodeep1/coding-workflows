@@ -594,8 +594,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `read-only` mode, write profiles in `workspace` mode. The rendered settings,
   the `gh_api_write_guard.py` hook and the instructions are copied to
   `/support/settings.json`, `/support/guard.py` and `/support/instructions.md`.
-  `$RUNNER_TEMP/claude-isolated-home` is mounted as `~/.claude` so
-  `--resume` finds the session. `hide_claude_md` sets
+  `$RUNNER_TEMP/claude-isolated-home` (`ai_engine_claude_home`) is mounted as
+  `~/.claude` so `--resume` finds the session; `codex_thread_reuse.sh` looks
+  there for a resumable session before sending the continuation prompt. A
+  write role in a job that prepared a workspace sandbox (implement:
+  `CODEX_ISOLATED_ROOT` with `CODEX_ISOLATED_MODE=workspace`) runs in it, so
+  Claude implement attempts get the preinstalled dependencies too. `hide_claude_md` sets
   `CODEX_ISOLATED_HIDE=CLAUDE.md`: the top-level `CLAUDE.md` is left out of
   the copy and the synthetic `.git`, and the write-back never creates or
   changes it (`CODEX_ISOLATION transfer ignored=CLAUDE.md reason=hidden`).

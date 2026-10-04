@@ -659,7 +659,13 @@ codex_thread_reuse_claude_direct_run()
 		claude_session_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 		printf '%s\n' "${claude_session_id}" > "${id_file}"
 	fi
-	if [ -n "${continuation_file}" ] && compgen -G "${HOME}/.claude/projects/*/${claude_session_id}.jsonl" >/dev/null; then
+	# claude_run keeps the isolated CLI's sessions outside the container
+	# (ai_engine_claude_home); a resumable session gets the continuation prompt.
+	local claude_session_store="${HOME}/.claude"
+	if declare -F ai_engine_claude_home >/dev/null 2>&1; then
+		claude_session_store="$(ai_engine_claude_home)"
+	fi
+	if [ -n "${continuation_file}" ] && compgen -G "${claude_session_store}/projects/*/${claude_session_id}.jsonl" >/dev/null; then
 		claude_prompt="$(mktemp /tmp/codex_thread_reuse_claude_prompt.XXXXXX)"
 		if codex_thread_reuse_transform_prompt \
 			"${transform_mode}" \

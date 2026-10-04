@@ -531,3 +531,30 @@ def test_engine_label_is_added_to_stall_lines(tmp_path: Path) -> None:
 	)
 	observed = [line for line in result.stderr.splitlines() if line.startswith("codex_stall_observed")]
 	assert observed and all(line.endswith(" engine=claude") for line in observed)
+
+
+def test_claude_home_helper_names_the_isolated_session_store(sandbox: dict) -> None:
+	result = _bash(sandbox, "ai_engine_claude_home")
+	assert result.stdout.strip() == f"{sandbox['runner_temp']}/claude-isolated-home"
+
+
+def test_write_role_reuses_the_prepared_implement_sandbox(sandbox: dict) -> None:
+	# implement prepares one workspace sandbox (dependencies preinstalled);
+	# a Claude write role in that job runs in it, as the codex attempts do.
+	_accounts(sandbox, A="TOK_OK")
+	prepare = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "codex_isolated_exec.sh"), "prepare", "--workdir", str(sandbox["work"])],
+		capture_output=True, text=True, env=sandbox["env"], timeout=120, check=False,
+	)
+	assert prepare.returncode == 0, prepare.stderr
+	root = prepare.stdout.strip()
+	result = _claude_run(sandbox, "IMPLEMENT", CODEX_ISOLATED_ROOT=root, CODEX_ISOLATED_MODE="workspace")
+	assert _rc(result) == 0, result.stderr
+	run = docker_runs(sandbox["bin"].parent / "fake-docker.jsonl")[-1]
+	assert f"coding-workflows.codex-isolated.root={root}" in run["argv"]
+	assert Path(root).is_dir(), "the persistent root outlives the attempt"
+	# A read profile never reuses it.
+	result = _claude_run(sandbox, "SECURITY_AUDIT", CODEX_ISOLATED_ROOT=root, CODEX_ISOLATED_MODE="workspace")
+	assert _rc(result) == 0, result.stderr
+	run = docker_runs(sandbox["bin"].parent / "fake-docker.jsonl")[-1]
+	assert f"coding-workflows.codex-isolated.root={root}" not in run["argv"]

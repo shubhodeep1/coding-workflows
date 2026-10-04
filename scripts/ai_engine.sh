@@ -23,6 +23,9 @@
 #       Telegram note per job (plan D1). The caller then runs codex.
 #   ai_engine_pool_dir
 #       The account pool directory (CLAUDE_ENGINE_POOL_DIR below).
+#   ai_engine_claude_home
+#       The isolated CLI's session store ($RUNNER_TEMP/claude-isolated-home),
+#       where a resumable session's <id>.jsonl lives.
 #   ai_engine_accounts
 #       The usable account names, best first: each line of `order` that is a
 #       valid name and has a regular, non-empty `tokens/<NAME>` file.
@@ -137,6 +140,13 @@ ai_engine_fallback()
 		fi
 	) 2>/dev/null || true
 	return 0
+}
+
+ai_engine_claude_home()
+{
+	# The isolated CLI's ~/.claude (session store), kept across claude_run
+	# calls in a job; callers that look for a resumable session use it.
+	printf '%s\n' "${RUNNER_TEMP:-/tmp}/claude-isolated-home"
 }
 
 ai_engine_pool_dir()
@@ -266,7 +276,8 @@ claude_run()
 	esac
 	# The CLI's session store (~/.claude) lives outside the container so a
 	# later claude_run in the same job can resume the session (answer Q18 A).
-	local claude_home="${RUNNER_TEMP:-/tmp}/claude-isolated-home"
+	local claude_home
+	claude_home="$(ai_engine_claude_home)"
 	local -a isolation_args=(run --engine claude --mode "${isolation_mode}" --workdir "${workdir}"
 		--claude-models "${model},${probe_model}" --claude-cli-version "${cli_version}"
 		--claude-settings "${run_dir}/claude-settings.json" --claude-guard-hook "${guard_hook}"
@@ -274,6 +285,12 @@ claude_run()
 	# The container copy leaves CLAUDE.md out and never writes one back; the
 	# host file is never moved (answer Q19 A).
 	[ "${hide_claude_md}" = "true" ] && isolation_args+=(--hide-claude-md)
+	# Implement prepares one workspace sandbox per job with the project's
+	# dependencies preinstalled (codex_isolated_exec.sh prepare --deps); a
+	# write role in that job reuses it, as the codex attempts do.
+	if [ "${isolation_mode}" = "workspace" ] && [ -n "${CODEX_ISOLATED_ROOT:-}" ] && [ "${CODEX_ISOLATED_MODE:-}" = "workspace" ]; then
+		isolation_args+=(--root "${CODEX_ISOLATED_ROOT}")
+	fi
 
 	local rc=0
 	(
