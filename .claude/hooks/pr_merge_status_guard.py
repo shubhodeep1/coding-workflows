@@ -350,6 +350,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			working_directory = None
 		index = 0
 		environment: dict[str, str] = {}
+		config_override = False
 		# Bash append assignments are prefixes too; keep the following git visible.
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
@@ -358,6 +359,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
+			if name.startswith("GIT_CONFIG_"):
+				config_override = True
 			if name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 			index += 1
@@ -366,7 +369,6 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		index += 1
 		git_cwd = working_directory
 		uncertain = git_cwd is None
-		config_override = False
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
 			value = None

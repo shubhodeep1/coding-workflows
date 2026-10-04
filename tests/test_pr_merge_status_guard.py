@@ -962,6 +962,23 @@ def test_per_command_config_push_asks_without_using_origin_prs(merged_branch_rep
 	assert "other/repo" not in output  # URLs may carry credentials; never print config values.
 
 
+@pytest.mark.parametrize("command", [
+	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin HEAD:feature/x",
+	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin --tags",
+	"GIT_CONFIG_PARAMETERS='remote.origin.url=https://github.com/other/repo' git push origin HEAD:feature/x",
+	"GIT_CONFIG_GLOBAL=/tmp/other-config git push origin :feature/x",
+	"GIT_CONFIG_COUNT+=1 git push origin HEAD:feature/x",
+])
+def test_environment_config_push_asks_without_using_origin_prs(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("overridden push must not query origin"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "other/repo" not in json.dumps(decision)
+
+
 def test_per_command_config_commit_keeps_the_merged_pr_check(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
