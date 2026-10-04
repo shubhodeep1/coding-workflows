@@ -358,6 +358,8 @@ jobs:
 
           echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
 
+      # Use the 30-minute sweep rather than the hourly Claude catch-all: it
+      # already snapshots every open non-draft PR, including non-Claude PRs.
       # The sweep itself needs no checkout. Fetch only the default-branch
       # helper: a PR head must never supply code for an Actions write.
       - name: Check out trusted CI recovery helper

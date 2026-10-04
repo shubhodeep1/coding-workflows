@@ -223,16 +223,18 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 		# created_at orders distinct run IDs; run_attempt belongs to an ID,
 		# not the head. A visible retry on *any* ID blocks another POST.
 		newest = max((run for run in completed if associated(run, number, sha)
-			or (run["event"] == "push" and run["head_sha"] == sha)), key=lambda run: (
+			or (run["event"] == "push" and run["head_sha"] == sha
+				and run.get("head_branch") == pr["head_ref"])), key=lambda run: (
 			datetime.fromisoformat(run["created_at"].replace("Z", "+00:00")).timestamp(), run["id"]
 		))
 		run_id = newest["id"]
 		if any(run["run_attempt"] > 1 and (run["event"] == "push" and run["head_sha"] == sha
-				or any(isinstance(item, dict) and isinstance(item.get("head"), dict)
+				and run.get("head_branch") == pr["head_ref"]
+				or run["event"] == "pull_request" and any(isinstance(item, dict) and isinstance(item.get("head"), dict)
 					and item["head"].get("sha") == sha for item in run["pull_requests"]))
 				for run in completed):
 			decision(number, sha, run_id, "skip", "already_retried")
-		elif newest["event"] == "push":
+		elif newest["event"] == "push" and newest.get("head_branch") != pr["head_ref"]:
 			decision(number, sha, run_id, "skip", "push_run")
 		elif newest["conclusion"] not in ("cancelled", "startup_failure"):
 			decision(number, sha, run_id, "skip", "other_conclusion")
