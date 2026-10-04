@@ -235,6 +235,12 @@ loops with unquoted `gh api` arguments still prompt; the two hooks must stay
 byte-identical (`tests/test_gh_api_write_guard.py`). Shell-rewrite hazards
 inside a loop prompt even when the loop counter is not expanded.
 
+Claude's read-profile Bash tool uses `scripts/claude_engine.py read-guard` to
+reject shell control syntax and write-capable git options, including abbreviated
+`--output` and `git grep -O`. The security audit also strips credentials from
+its model call and fingerprints the trusted `scripts/` tree before running its
+single-issue reporter; a mismatch fails closed without executing that script.
+
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
 pass that output to action inputs or through step-local environment variables,
@@ -1371,6 +1377,7 @@ and shipped:
 - `MODEL_CATALOG_BACKFILL`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `SECURITY_AUDIT_SUPPORT_INTEGRITY`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1573,6 +1580,7 @@ LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=SECURITY_AUDIT_SUPPORT_INTEGRITY
 
 ---
 

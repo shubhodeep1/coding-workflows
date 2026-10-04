@@ -99,7 +99,7 @@ def test_renderer_refuses_credentials_in_env() -> None:
 
 def test_profiles() -> None:
 	assert _render(profile="write")["permissions"]["allow"] == []
-	allow = _render(profile="read")["permissions"]["allow"]
+	allow = _render(profile="read", read_guard_hook="/support/scripts/claude_engine.py")["permissions"]["allow"]
 	assert {"Read", "Grep", "Glob"} <= set(allow)
 	assert all(rule.startswith(("Read", "Grep", "Glob", "Bash(git ", "Bash(gh ")) for rule in allow)
 	assert not any("merge" in rule or "push" in rule for rule in allow)
