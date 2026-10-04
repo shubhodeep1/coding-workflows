@@ -218,7 +218,7 @@ def test_non_code_changes_do_not_start_a_cycle() -> None:
 
 def test_claude_md_and_dot_claude_count_as_code() -> None:
 	# workflow-templates/.claude/ is the tree consumers receive on the @stable sync.
-	for path in ("CLAUDE.md", "workflow-templates/CLAUDE.md", ".claude/commands/investigate-issue.md", "workflow-templates/.claude/commands/fix-claude-pr.md"):
+	for path in ("CLAUDE.md", "workflow-templates/CLAUDE.md", ".claude/commands/investigate-issue.md", "workflow-templates/.claude/commands/investigate-issue.md"):
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare([path, "docs/x.md"])}, "gate_runs_sequence": GATE_SUCCESS})
 		assert "reason=no_code_changes" not in proc.stdout, path

@@ -1719,6 +1719,9 @@ if ! [[ "${STALL_THRESHOLD_MINUTES}" =~ ^[0-9]+$ ]] || [ "${STALL_THRESHOLD_MINU
   echo "::warning::STALL_THRESHOLD_MINUTES must be a positive integer; defaulting to 120"
   STALL_THRESHOLD_MINUTES="120"
 fi
+# Strip leading zeros: bash arithmetic reads "0120" as octal and fails on
+# "08", while `[ -lt ]` reads both as decimal.
+STALL_THRESHOLD_MINUTES="$(( 10#${STALL_THRESHOLD_MINUTES} ))"
 
 # Review-run freshness window for the in-flight / zombie guards.
 #
@@ -1746,6 +1749,8 @@ if ! [[ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" =~ ^[0-9]+$ ]] || [ "${REVIEW_RUN_MA
   echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES must be a positive integer; defaulting to 250"
   REVIEW_RUN_MAX_RUNTIME_MINUTES="250"
 fi
+# Decimal, as for STALL_THRESHOLD_MINUTES above.
+REVIEW_RUN_MAX_RUNTIME_MINUTES="$(( 10#${REVIEW_RUN_MAX_RUNTIME_MINUTES} ))"
 if [ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" -lt "${STALL_THRESHOLD_MINUTES}" ]; then
   echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES (${REVIEW_RUN_MAX_RUNTIME_MINUTES}) is below STALL_THRESHOLD_MINUTES (${STALL_THRESHOLD_MINUTES}); raising it to the stall threshold so review runs are never treated as zombies sooner than other runs."
   REVIEW_RUN_MAX_RUNTIME_MINUTES="${STALL_THRESHOLD_MINUTES}"
@@ -5348,6 +5353,21 @@ Security-pass fix issue #${issue_number} ended in \`ai:implementation-failed\` a
 # plus reissue guidance, bounded by MAX_SECURITY_PASS_FIX_REISSUES.
 #
 # Always returns 0; the caller continues the tracking-issue loop.
+# engine_label_create_args [labels_json] — the engine label (plan Phase 6, D2)
+# a new project issue or PR inherits, as `--label` / `<name>` lines for
+# `mapfile`. Reads the tracking issue's cached TRACKING_LABELS (or the given
+# label-name JSON list); ai:codex wins over ai:engine-claude. No API call.
+engine_label_create_args()
+{
+  local labels_json="${1:-${TRACKING_LABELS:-[]}}"
+  local engine_label
+  engine_label="$(printf '%s' "${labels_json}" | jq -r 'if (type == "array") then (map(if type == "object" then .name else . end) | if index("ai:codex") then "ai:codex" elif index("ai:engine-claude") then "ai:engine-claude" else "" end) else "" end' 2>/dev/null || true)"
+  if [ -n "${engine_label}" ]; then
+    printf '%s\n%s\n' "--label" "${engine_label}"
+  fi
+  return 0
+}
+
 security_pass_handle_failed_fix_issue() {
   local issue_number="$1"
   local comments_json="$2"
@@ -5529,7 +5549,8 @@ REISSUE_EOF
     # the whole pass on a transient API error.
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
-    new_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    new_issue_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
       --title "${issue_title}" \
       --body "${new_body}" \
       --label "ai:clarification" \
@@ -5698,7 +5719,8 @@ PY
   else
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
-    issue_url="$(gh_retry gh issue create \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    issue_url="$(gh_retry gh issue create "${_engine_label_args[@]}" \
       --repo "${GITHUB_REPOSITORY}" \
       --title "[security-pass] Project #${TRACKING_NUM} fix cycle $((completed_cycles + 1))" \
       --body-file "${issue_body_file}" \
@@ -6029,7 +6051,8 @@ PY
   ensure_label_exists "ai:security"
   # Do not retry this non-idempotent mutation. If GitHub accepts the create but
   # the response is lost, the marker search above reconciles it next poll.
-  issue_url="$(gh issue create \
+  mapfile -t _engine_label_args < <(engine_label_create_args)
+  issue_url="$(gh issue create "${_engine_label_args[@]}" \
     --repo "${GITHUB_REPOSITORY}" \
     --title "${title}" \
     --body-file "${body_file}" \
@@ -7438,7 +7461,8 @@ create_judge_fixup_issues_from_verdict() {
 
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
-          FIX_URL="$(gh_retry gh issue create \
+          mapfile -t _engine_label_args < <(engine_label_create_args)
+          FIX_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${FIX_TITLE}" \
             --body "${FULL_FIX_BODY}" \
@@ -7951,7 +7975,8 @@ ensure_eager_final_pr() {
 
   if [ -z "${discovered}" ]; then
     local pr_url
-    pr_url="$(gh_retry gh pr create \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    pr_url="$(gh_retry gh pr create "${_engine_label_args[@]}" \
       --repo "${GITHUB_REPOSITORY}" \
       --draft \
       --base "${default_branch}" \
@@ -12570,8 +12595,9 @@ prime_phase_concurrency_snapshot() {
 # cannot observe an in_progress/queued run.  This therefore issues a single
 # branch-scoped `gh run list` (server-side --branch filter, so it is NOT subject
 # to the global 50-item listing cap the cached blob is) rather than the 3-call
-# per-workflow loop, keeping the added cost to one REST request on the rare
-# recovery-push path.
+# per-workflow loop, keeping the branch listing's cost to one REST request on
+# the rare recovery-push path (the PR-named lookup below adds its own paged
+# calls only when $2 is given and the branch listing matched nothing).
 #
 # Args: $1 = head branch.  Echoes the databaseId of the freshest matching
 # in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
@@ -12590,10 +12616,30 @@ prime_phase_concurrency_snapshot() {
 # proceeds) — no worse than the pre-fix behaviour, and the cached scan's own
 # path-based match still covers that case whenever the cache itself hits (in
 # which case this fallback is never reached).  Fails open (echoes nothing) on any
-# gh/jq/date error so a transient API failure never blocks recovery.
+# gh/jq/date error in the branch listing so a transient API failure never blocks
+# recovery; the PR-named lookup below does not (issue #4927).
+#
+# Optional $2 = PR number (issue #4701).  A review run dispatched from the
+# default branch has the default branch as its head, so the branch listing
+# never returns it.  When the listing matched no fresh review run and $2 is
+# a valid PR number, one more lookup (_pr_named_review_dispatch_runs; its
+# header documents the per-page call budget) checks
+# the workflow_dispatch runs named for that PR, with the same status and
+# freshness filters, and echoes the freshest match's databaseId.  One-argument
+# callers keep the branch-only behaviour and make no extra call.
+#
+# When that PR-named listing is incomplete (issue #4927: a page failed, or
+# more runs than it could read), the helper echoes the sentinel
+# `listing-incomplete` instead of a run id and logs
+# outcome=pr_named_listing_incomplete.  Both push sites treat any non-empty
+# result as "skip the empty-commit push", so a listing that cannot prove the
+# absence of a live review run never authorises the push; the next poll
+# cycle retries.  The branch listing above keeps its fail-open contract: it
+# is scoped to the PR's own branch, so unrelated dispatches cannot crowd it.
 _direct_inflight_review_run_on_branch()
 {
 	local _di_branch="$1"
+	local _di_pr="${2:-}"
 	local _di_now_epoch _di_stall_secs _di_runs_json
 	[ -n "${_di_branch}" ] || return 0
 	_di_now_epoch="$(date +%s 2>/dev/null || echo "")"
@@ -12605,12 +12651,14 @@ _direct_inflight_review_run_on_branch()
 	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
 	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
 	# Diagnostics (CLAUDE.md §8): this helper is the last guard before the
-	# destructive empty-commit push and fails open on any error.  Poller
+	# destructive empty-commit push.  The branch listing fails open on any
+	# error; the PR-named lookup below fails closed with the
+	# `listing-incomplete` sentinel (issue #4927).  Poller
 	# run 35230465327 (tele-funtoken-msg-scoring#4367) pushed onto a
 	# branch whose review run 35226455269 was live, with no trace of why
 	# both the cached scan and this listing came back empty.  Report the
 	# listing outcome on stderr (stdout is the return value) so the next
-	# miss is attributable; the fail-open contract itself is unchanged.
+	# miss is attributable; logging does not change either contract.
 	local _di_rc=0 _di_runs_total="invalid" _di_runs_live="invalid" _di_match=""
 	_di_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 		--branch "${_di_branch}" \
@@ -12643,6 +12691,31 @@ _direct_inflight_review_run_on_branch()
 			| select(($now - $start_epoch) < $threshold)
 		  ] | (.[0].databaseId // empty)
 	' 2>/dev/null || echo "")"
+	if [ -z "${_di_match}" ] && [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
+		local _di_pr_named_json="" _di_pr_named_rc=0
+		_di_pr_named_json="$(_pr_named_review_dispatch_runs "${_di_pr}")" || _di_pr_named_rc=$?
+		if [ "${_di_pr_named_rc}" -ne 0 ]; then
+			echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} pr=${_di_pr} rc=${_di_pr_named_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=pr_named_listing_incomplete" >&2
+			printf '%s\n' "listing-incomplete"
+			return 0
+		fi
+		_di_match="$(printf '%s' "${_di_pr_named_json}" | jq -r \
+			--argjson now "${_di_now_epoch}" \
+			--argjson threshold "${_di_stall_secs}" '
+			(if type == "array" then . else [] end)
+			| [ .[]?
+				| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+				| ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
+				| (if $ts != ""
+				   then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
+				   else $now end) as $start_epoch
+				| select(($now - $start_epoch) < $threshold)
+			  ] | (.[0].databaseId // empty)
+		' 2>/dev/null || echo "")"
+		if [ -n "${_di_match}" ]; then
+			echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} pr=${_di_pr} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=1 outcome=pr_named_review_run" >&2
+		fi
+	fi
 	if [ -z "${_di_match}" ]; then
 		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=no_fresh_review_run" >&2
 		return 0
@@ -13748,15 +13821,29 @@ STALL_EOF
           # already-dispatched/active (rc=2) as success.
           local _rtr_failed_conclusion=""
           local _rtr_failed_wf=""
+          # Newest createdAt among the completed head-branch runs seen, so a
+          # PR-named failure (below) that a later head-branch run already
+          # superseded is not acted on.
+          local _rtr_newest_completed_at=""
           for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
-            local _rtr_wf_conclusion
-            _rtr_wf_conclusion="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+            local _rtr_wf_row _rtr_wf_conclusion _rtr_wf_created_at
+            _rtr_wf_row="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
               --workflow "${wf_candidate}" \
               --branch "${head_ref}" \
               --limit 1 \
-              --json status,conclusion \
-              --jq '[.[] | select(.status == "completed")] | .[0].conclusion // empty' \
+              --json status,conclusion,createdAt \
+              --jq '[.[] | select(.status == "completed")] | .[0] // empty | "\(.conclusion // "")\t\(.createdAt // "")"' \
               2>/dev/null || echo "")"
+            if [[ "${_rtr_wf_row}" == *$'\t'* ]]; then
+              _rtr_wf_conclusion="${_rtr_wf_row%%$'\t'*}"
+              _rtr_wf_created_at="${_rtr_wf_row#*$'\t'}"
+            else
+              _rtr_wf_conclusion="${_rtr_wf_row}"
+              _rtr_wf_created_at=""
+            fi
+            if [ -n "${_rtr_wf_created_at}" ] && [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+              _rtr_newest_completed_at="${_rtr_wf_created_at}"
+            fi
             case "${_rtr_wf_conclusion}" in
               failure|cancelled|timed_out)
                 _rtr_failed_conclusion="${_rtr_wf_conclusion}"
@@ -13765,6 +13852,53 @@ STALL_EOF
                 ;;
             esac
           done
+          # Default-branch dispatches (issue #4701): a review run that
+          # _dispatch_review_for_conflicts or the sweep dispatched is named
+          # for the PR and has the default branch as its head, so the
+          # branch lookups above never see it. When they found no failed
+          # run, look at the newest PR-named dispatch run (one paged lookup,
+          # §15; see _pr_named_review_dispatch_runs for its call budget):
+          # it counts when it completed with a failure and is newer than
+          # every completed head-branch run seen. A missing createdAt counts
+          # as older, so this path only adds a redispatch when the failure
+          # is definitely the newest run.
+          # An incomplete listing (issue #4927) can neither show the newest
+          # PR-named run nor rule out a live one, so this cycle neither
+          # redispatches nor pushes; the next poll cycle retries.
+          # The lookback is the review budget plus one stall threshold, not
+          # the in-flight guards' REVIEW_RUN_MAX_RUNTIME_MINUTES: a review run
+          # that hit the codex-agent job's 240-minute timeout ends only
+          # minutes before it would leave that window, so a later poll cycle
+          # would miss the failure and push an empty commit instead of
+          # redispatching. Both terms are positive decimal integers by now:
+          # the startup block validates them, strips leading zeros, and
+          # floors REVIEW_RUN_MAX_RUNTIME_MINUTES at STALL_THRESHOLD_MINUTES.
+          if [ -z "${_rtr_failed_conclusion}" ]; then
+            local _rtr_pr_named_row _rtr_pr_named_conclusion _rtr_pr_named_created_at
+            local _rtr_pr_named_json="" _rtr_pr_named_rc=0
+            local _rtr_pr_named_lookback_min=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES ))
+            _rtr_pr_named_json="$(_pr_named_review_dispatch_runs "${pr_num}" "${_rtr_pr_named_lookback_min}")" || _rtr_pr_named_rc=$?
+            if [ "${_rtr_pr_named_rc}" -ne 0 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (PR-named lookup); skipping redispatch and empty-commit push this cycle, the next poll cycle retries."
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+              return 1
+            fi
+            _rtr_pr_named_row="$(printf '%s' "${_rtr_pr_named_json}" \
+              | jq -r '.[0] // empty | select(.status == "completed") | "\(.conclusion // "")\t\(.createdAt // "")"' \
+              2>/dev/null || echo "")"
+            if [[ "${_rtr_pr_named_row}" == *$'\t'* ]]; then
+              _rtr_pr_named_conclusion="${_rtr_pr_named_row%%$'\t'*}"
+              _rtr_pr_named_created_at="${_rtr_pr_named_row#*$'\t'}"
+              case "${_rtr_pr_named_conclusion}" in
+                failure|cancelled|timed_out)
+                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+                    _rtr_failed_conclusion="${_rtr_pr_named_conclusion}"
+                    _rtr_failed_wf="review run dispatched for PR #${pr_num}"
+                  fi
+                  ;;
+              esac
+            fi
+          fi
           if [ -n "${_rtr_failed_conclusion}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
             local _rtr_dispatch_rc=0
@@ -13836,6 +13970,7 @@ STALL_EOF
             _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
               --arg br "${head_ref}" \
               --arg sha "${_rtr_head_sha}" \
+              --arg pr "${pr_num}" \
               --argjson now "${_rtr_now_epoch}" \
               --argjson threshold "${_rtr_stall_secs}" '
               [.workflow_runs[]?
@@ -13843,6 +13978,11 @@ STALL_EOF
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                   # A default-branch dispatch (issues #4618, #4701) is named
+                   # for its PR; its head_branch is the default branch.
+                   or ($pr != "" and (.event // "") == "workflow_dispatch"
+                       and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                            or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -13877,7 +14017,12 @@ STALL_EOF
           # Before the destructive empty-commit push, confirm against an
           # authoritative branch-scoped run listing; a false negative here
           # discards a full in-flight review pass (RC1 of the #11/#12 incident).
-          _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+          _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
+          if [ "${_rtr_direct_inflight_id}" = "listing-incomplete" ]; then
+            echo "  Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (direct check); cannot rule out an in-flight review run on ${head_ref}, skipping empty-commit push. The next poll cycle retries."
+            STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            return 1
+          fi
           if [ -n "${_rtr_direct_inflight_id}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
@@ -13994,7 +14139,8 @@ REISSUE_EOF
       local new_url new_url_clean new_num
       ensure_label_exists "ai:clarification"
       ensure_label_exists "ai:orchestrator-managed"
-      new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+      mapfile -t _engine_label_args < <(engine_label_create_args)
+      new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
         --label "ai:clarification" \
@@ -14274,7 +14420,12 @@ invoke_stall_judge() {
   local workflows_json
   local workflow_outcomes
   workflows_json="$(_load_actions_runs_cached)"
-  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" '
+  # A review run dispatched from the default branch (issues #4618, #4701)
+  # has the default branch as head_branch/head_sha, so it is matched by
+  # the run name the review wrappers give a workflow_dispatch run for its
+  # PR instead. The cached blob carries event and display_title, so this
+  # adds no API call (§15).
+  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" '
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
                or (.name // "") == "Internal Review"
@@ -14284,7 +14435,11 @@ invoke_stall_judge() {
                or (.path // "" | endswith("ai-review.yml"))
                or (.path // "" | endswith("internal-review.yml"))
                or (.path // "" | endswith("review_autofix.yml")))
-      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha))
+      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
+               or ($pr != ""
+                   and (.event // "") == "workflow_dispatch"
+                   and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                        or (.display_title // "") == ("AI Review [pr:" + $pr + "]"))))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -14747,6 +14902,7 @@ _fetch_candidate_issue_details_graphql() {
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
           state
+          body
           labels(first: 50) { nodes { name } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -14798,6 +14954,7 @@ _fetch_candidate_issue_details_graphql() {
           key: (.value.number | tostring),
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
+            body: .value.body,
             labels: [(.value.labels.nodes // [])[]?.name],
             comments_available: ((.value.comments.nodes? | type) == "array"),
             comments: [(.value.comments.nodes // [])[]? | {
@@ -15786,6 +15943,9 @@ run_standalone_stall_recovery() {
   local _standalone_staged_support_latch_rc
   local _standalone_staged_support_cache_available
   local _standalone_staged_support_comments_unavailable
+  local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
+  local _security_dependency_verdict
+  local _security_dependency_status
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
@@ -15823,14 +15983,54 @@ run_standalone_stall_recovery() {
       continue
     fi
 
-    # Claude-claimed issues (ai:claude without an ai:codex switch) are driven
-    # by the Claude issue flow's own check-in chain; re-issuing a Codex phase
-    # here would start a competing implementation.
-    if echo "${labels_json}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null 2>&1; then
-      echo "STALL_SKIP issue=${issue_num} reason=claude_routed action=none"
+    # A generated security follow-up waits for the previous same-file fix.
+    # The candidate batch already carries body/labels/comments; only an
+    # uncached target or declared prerequisite requires an issue read.
+    if ! printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" '.[$n].body | type == "string"' >/dev/null 2>&1; then
+      if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${_security_dependency_issue_file}" 2>/dev/null; then
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_target_unavailable action=none"
+        continue
+      fi
+    else
+      printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" --arg repo "${GITHUB_REPOSITORY}" '
+        .[$n] | {number: ($n | tonumber), body, labels,
+          repository_url: ("https://api.github.com/repos/" + $repo)}' > "${_security_dependency_issue_file}"
+    fi
+    _security_dependency_verdict="$(python3 scripts/security_dependency.py security-dependency \
+      --issue-json "${_security_dependency_issue_file}" --repo "${GITHUB_REPOSITORY}" \
+      --issue-number "${issue_num}" 2>/dev/null || echo '{"status":"held"}')"
+    _security_dependency_status="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.status // "held"' 2>/dev/null || echo held)"
+    if [ "${_security_dependency_status}" = "held" ]; then
+      case "$(printf '%s' "${_security_dependency_verdict}" | jq -r '.reason // empty' 2>/dev/null)" in
+        'dependency open') _security_dependency_status="open" ;;
+        'dependency closed without ai:merged') _security_dependency_status="closed_without_ai_merged" ;;
+        *) _security_dependency_status="unverified" ;;
+      esac
+      echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=${_security_dependency_status} action=none"
       continue
     fi
-
+    if [ "${_security_dependency_status}" = "ready" ]; then
+      # An unavailable or full comment window cannot prove the release
+      # marker absent. Fetch complete history only on that rare path.
+      if [ "${_standalone_staged_support_cache_available}" != "true" ] || [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -ge 100 ]; then
+        if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_comments_unavailable action=none"
+          continue
+        fi
+      fi
+      if ! printf '%s' "${comments_json}" | jq -e --arg marker "<!-- ai:security-dependency-released:${issue_num} -->" '
+        any(.[]; ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+          and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="/reclarify
+<!-- ai:security-dependency-released:${issue_num} -->" >/dev/null; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_released action=reclarify"
+        else
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed action=none"
+        fi
+        continue
+      fi
+    fi
     # Resolve both values through the shared Python predicates in one call so
     # the standalone path cannot drift from managed stall detection.  Safe
     # defaults first: under `set -euo pipefail` an empty read (python
@@ -16475,6 +16675,7 @@ STALL_EOF
 			  _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
 			    --arg br "${head_ref}" \
                 --arg sha "${head_sha}" \
+                --arg pr "${pr_num}" \
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
                 [.workflow_runs[]?
@@ -16482,6 +16683,11 @@ STALL_EOF
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                     # A default-branch dispatch (issues #4618, #4701) is named
+                     # for its PR; its head_branch is the default branch.
+                     or ($pr != "" and (.event // "") == "workflow_dispatch"
+                         and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                              or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -16512,11 +16718,14 @@ STALL_EOF
             # cache-miss path so the steady state adds zero API calls.
             _std_rtr_direct_inflight_id=""
             if [ -z "${_std_rtr_inflight_id}" ]; then
-              _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+              _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
             fi
 			if [ -n "${_std_rtr_inflight_id}" ]; then
 			  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${REVIEW_RUN_MAX_RUNTIME_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
 			  STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+			elif [ "${_std_rtr_direct_inflight_id}" = "listing-incomplete" ]; then
+              echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (direct check); cannot rule out an in-flight review run on ${head_ref}, skipping empty-commit push. The next poll cycle retries."
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
@@ -16676,7 +16885,8 @@ ${orig_body}
 REISSUE_EOF
 )"
         ensure_label_exists "ai:clarification"
-        new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+        mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
+        new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
@@ -17262,14 +17472,17 @@ _CONFLICT_DISPATCH_TRACKER="${TMPDIR:-/tmp}/.conflict_dispatch_$$"
 # dispatch, so every poll cycle re-dispatched — each new run replaced
 # the pending predecessor and re-fired the conflict Telegram warning.
 #
-# Default-branch dispatches: review_autofix_sweep.yml dispatches from the
-# default branch (issue #4618), so the guard also counts active
-# internal-review.yml workflow_dispatch runs named
-# "Internal: AI Review & Autofix [pr:<pr_number>]" (one extra call, only
-# when the head-branch lookups found nothing).
+# Default-branch dispatches: review_autofix_sweep.yml (issue #4618),
+# _dispatch_review_for_conflicts and the merge train (issue #4701) dispatch
+# from the default branch, so the guard also counts active workflow_dispatch
+# runs named for the PR (_pr_named_review_dispatch_runs: one paged lookup,
+# whose header documents its call budget, only when the head-branch lookups
+# found nothing).
 #
 # Usage: _has_active_autofix_run <pr_number> <head_ref>
-# Returns 0 if an active run exists (skip dispatch), 1 otherwise.
+# Returns 0 if an active run exists, or if the PR-named listing is
+# incomplete and so cannot rule one out (issue #4927) (skip dispatch);
+# 1 otherwise.
 _has_active_autofix_run()
 {
 	local pr_number="$1"
@@ -17291,30 +17504,218 @@ _has_active_autofix_run()
 		fi
 	done
 
-	# review_autofix_sweep.yml dispatches internal-review.yml from the
-	# default branch (issue #4618), so its runs never match the
-	# head-branch lookups above. internal-review.yml names each dispatched
-	# run "Internal: AI Review & Autofix [pr:<N>]"; match that exact name
-	# on workflow_dispatch runs. One extra call, issued only when the
-	# head-branch lookups found nothing (§15: they filter by --branch and
-	# cannot return a default-branch run). A repo without
-	# internal-review.yml gets a non-retryable error and counts 0.
+	# Review runs dispatched from the default branch (the sweep since issue
+	# #4618, _dispatch_review_for_conflicts and the merge train since issue
+	# #4701) never match the head-branch lookups above: they filter by
+	# --branch and cannot return a default-branch run. The review wrappers
+	# name each dispatched run for its PR; _pr_named_review_dispatch_runs
+	# matches those names in this repo and in consumer repos. One extra
+	# lookup, issued only when the head-branch lookups found nothing (§15).
+	# An incomplete listing (issue #4927) cannot prove that no review run is
+	# active, so it counts as one: the dispatch is skipped and the next poll
+	# cycle retries.
 	if [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
-		local pr_named_active
-		pr_named_active="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
-			--workflow internal-review.yml \
-			--event workflow_dispatch \
-			--limit 100 \
-			--json status,displayTitle \
-			--jq "[.[] | select(.status == \"in_progress\" or .status == \"queued\" or .status == \"pending\") | select(.displayTitle == \"Internal: AI Review & Autofix [pr:${pr_number}]\")] | length" \
+		local pr_named_active pr_named_json="" pr_named_rc=0
+		pr_named_json="$(_pr_named_review_dispatch_runs "${pr_number}")" || pr_named_rc=$?
+		if [ "${pr_named_rc}" -ne 0 ]; then
+			echo "  ${log_prefix} Review dispatch run listing incomplete (PR-named lookup); treating a review run as possibly active. Skipping; the next poll cycle retries."
+			return 0
+		fi
+		pr_named_active="$(printf '%s' "${pr_named_json}" \
+			| jq -r '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
 			2>/dev/null || echo "0")"
 		if [ "${pr_named_active:-0}" -gt 0 ] 2>/dev/null; then
-			echo "  ${log_prefix} Active autofix run found (workflow=internal-review.yml, dispatched for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
+			echo "  ${log_prefix} Active autofix run found (workflow_dispatch run named for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
 			return 0
 		fi
 	fi
 
 	return 1
+}
+
+# ---------------------------------------------------------------
+# Helper: list the review dispatch runs named for one PR
+# ---------------------------------------------------------------
+# A review run dispatched from the default branch has head_branch (and
+# head_sha) of the default branch, so no head-branch lookup can see it.
+# The review wrappers name every workflow_dispatch run for its PR:
+#   internal-review.yml (this repo):  "Internal: AI Review & Autofix [pr:<N>]"
+#   ai-review.yml (consumer repos):   "AI Review [pr:<N>]"
+# A workflow_dispatch run's name is evaluated from the dispatched ref's
+# workflow file, which is always the default branch now (issues #4618,
+# #4701), never from PR text, so an exact match on the name identifies
+# the PR.
+#
+# Listing (security, issue #4927): only the two wrappers' own
+# workflow_dispatch runs are read, page by page, back to the review-run
+# window. The previous single page of the newest 100 workflow_dispatch runs
+# of every workflow covered under 3.5 hours in coding-workflows (153
+# internal-review.yml dispatches in 5 hours, 2026-09-29), so a burst of
+# unrelated dispatches could push a live review run off it; the stall
+# recovery then pushed an empty commit under that run and discarded it.
+#
+# Input:     $1 = PR number. Anything but ^[1-9][0-9]*$ prints [] with no call.
+#            $2 = optional lookback in minutes (default and fallback for
+#            anything but ^[1-9][0-9]*$: REVIEW_RUN_MAX_RUNTIME_MINUTES,
+#            itself replaced by 250 when it is not ^[1-9][0-9]*$).
+#            The in-flight guards keep the default, which is the poller's
+#            own active-run window. The failed-autofix redispatch passes
+#            REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES: a run
+#            that used its whole 240-minute job budget and then failed would
+#            otherwise leave the default window minutes after it ended.
+# Output:    one JSON array on stdout, newest first, of the matching runs:
+#            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt}]
+# Returns:   0 = the listing is complete: an empty array means no run named
+#            for the PR was created inside the window.
+#            1 = the listing is incomplete. Stdout still carries the matches
+#            read so far, but a missing run proves nothing: callers skip
+#            their dispatch or empty-commit push, and the next poll cycle
+#            retries.
+# API calls: for each wrapper (internal-review.yml, ai-review.yml), one
+#            `GET actions/workflows/<wrapper>/runs?event=workflow_dispatch&created=>=<cutoff>&per_page=100&page=<p>`
+#            per page, where <cutoff> is now minus the lookback ($2, else
+#            REVIEW_RUN_MAX_RUNTIME_MINUTES, default 250; older active review
+#            runs are zombies to the poller).
+#            Pages continue until the distinct runs read reach the listing's
+#            total_count, at most 10 pages (GitHub serves at most 1,000
+#            results for a filtered run listing). A wrapper this repo does
+#            not have answers 404 on its first page and counts as complete
+#            and empty. In coding-workflows that is 3 calls (two
+#            internal-review.yml pages, one ai-review.yml 404), and 4 with the
+#            redispatch's 370-minute lookback (measured 2026-09-29). REST only;
+#            callers issue it only after their head-branch lookups found
+#            nothing (§15).
+# Incomplete: a page that failed after gh_retry (other than that first-page
+#            404), a malformed page, a cutoff that cannot be computed, a
+#            short page before total_count was reached (the listing shifted
+#            while it was read), or more runs than 10 pages hold. Each is
+#            logged once on stderr (CLAUDE.md §8):
+#            PR_NAMED_REVIEW_RUNS pr=<N> outcome=incomplete reason=<cutoff_unavailable|page_failed|malformed_page|listing_shifted|truncated|filter_failed> wrapper=<file> page=<p> read=<n> total=<n>
+#
+# Usage: _pr_named_review_dispatch_runs <pr_number> [lookback_minutes]
+_pr_named_review_dispatch_runs()
+{
+	local pr_number="$1"
+	local _pnr_window_min="${2:-}"
+	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min="${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}"
+	# The env fallback gets the same check: anything but a positive integer
+	# (0, negative, non-numeric, a leading zero) becomes the 250 default.
+	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min=250
+	local _pnr_max_pages=10
+	local _pnr_now="" _pnr_cutoff="" _pnr_err_file="" _pnr_reason=""
+	local _pnr_wrapper="" _pnr_page=0 _pnr_page_json="" _pnr_page_rc=0 _pnr_page_len=0
+	local _pnr_total=0 _pnr_read=0 _pnr_wrapper_runs='[]' _pnr_runs='[]' _pnr_matches=""
+	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		printf '[]\n'
+		return 0
+	fi
+	_pnr_now="$(date +%s 2>/dev/null || echo "")"
+	if [[ "${_pnr_now}" =~ ^[0-9]+$ ]]; then
+		_pnr_cutoff="$(jq -nr --argjson t "$(( _pnr_now - _pnr_window_min * 60 ))" '$t | todate' 2>/dev/null || echo "")"
+	fi
+	if ! [[ "${_pnr_cutoff}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		echo "PR_NAMED_REVIEW_RUNS pr=${pr_number} outcome=incomplete reason=cutoff_unavailable wrapper=none page=0 read=0 total=0" >&2
+		printf '[]\n'
+		return 1
+	fi
+	# When this mktemp fails, the 404 check below cannot run and a failed
+	# first page counts as page_failed (incomplete), even for an absent
+	# wrapper. That is the intended result, not a lost 404: gh_retry
+	# (scripts/gh_helpers.sh, a required bootstrap script of the poller)
+	# makes its own mktemp in the same TMPDIR and, when that fails, returns 1
+	# without running gh, so no response was read and the listing is unknown.
+	_pnr_err_file="$(mktemp "${TMPDIR:-/tmp}/pr_named_review_runs.XXXXXX" 2>/dev/null || echo "")"
+	for _pnr_wrapper in internal-review.yml ai-review.yml; do
+		_pnr_page=1
+		_pnr_total=0
+		_pnr_read=0
+		_pnr_wrapper_runs='[]'
+		while :; do
+			if [ "${_pnr_page}" -gt "${_pnr_max_pages}" ]; then
+				_pnr_reason="truncated"
+				break 2
+			fi
+			_pnr_page_rc=0
+			# Not a pipe: gh applies --jq itself, so a failed call is this
+			# command's exit status. The printf | jq pipes below run under
+			# the script-wide `set -euo pipefail` (top of this file), which
+			# this function and its command substitutions inherit.
+			_pnr_page_json="$(gh_retry gh api -X GET \
+				"repos/${GITHUB_REPOSITORY}/actions/workflows/${_pnr_wrapper}/runs?event=workflow_dispatch&created=>=${_pnr_cutoff}&per_page=100&page=${_pnr_page}" \
+				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {databaseId: .id, event: .event, status: .status, conclusion: .conclusion, displayTitle: .display_title, createdAt: .created_at, startedAt: .run_started_at}]}' \
+				2>"${_pnr_err_file:-/dev/null}")" || _pnr_page_rc=$?
+			if [ "${_pnr_page_rc}" -ne 0 ]; then
+				# A wrapper this repo does not have: complete and empty.
+				if [ "${_pnr_page}" -eq 1 ] && [ -n "${_pnr_err_file}" ] \
+					&& grep -q 'HTTP 404' "${_pnr_err_file}" 2>/dev/null; then
+					break
+				fi
+				if [ -n "${_pnr_err_file}" ]; then
+					cat "${_pnr_err_file}" >&2 2>/dev/null || true
+				fi
+				_pnr_reason="page_failed"
+				break 2
+			fi
+			if ! printf '%s' "${_pnr_page_json}" \
+				| jq -e '(.total_count | type == "number" and . >= 0) and (.workflow_runs | type == "array")' >/dev/null 2>&1; then
+				_pnr_reason="malformed_page"
+				break 2
+			fi
+			# Accumulate through stdin, never --argjson: 1,000 runs exceed
+			# the kernel's single-argument limit (MAX_ARG_STRLEN, 128 KiB).
+			if ! _pnr_total="$(printf '%s' "${_pnr_page_json}" | jq -r '.total_count | floor' 2>/dev/null)" \
+				|| ! _pnr_page_len="$(printf '%s' "${_pnr_page_json}" | jq -r '.workflow_runs | length' 2>/dev/null)" \
+				|| ! _pnr_wrapper_runs="$(printf '%s\n%s\n' "${_pnr_wrapper_runs}" "${_pnr_page_json}" \
+					| jq -cs '(.[0] + .[1].workflow_runs) | unique_by(.databaseId)' 2>/dev/null)" \
+				|| ! _pnr_read="$(printf '%s' "${_pnr_wrapper_runs}" | jq -r 'length' 2>/dev/null)" \
+				|| ! [[ "${_pnr_total}" =~ ^[0-9]+$ && "${_pnr_page_len}" =~ ^[0-9]+$ && "${_pnr_read}" =~ ^[0-9]+$ ]]; then
+				_pnr_wrapper_runs='[]'
+				_pnr_reason="malformed_page"
+				break 2
+			fi
+			if [ "${_pnr_read}" -ge "${_pnr_total}" ]; then
+				break
+			fi
+			if [ "${_pnr_page_len}" -lt 100 ]; then
+				_pnr_reason="listing_shifted"
+				break 2
+			fi
+			_pnr_page=$(( _pnr_page + 1 ))
+		done
+		if ! _pnr_runs="$(printf '%s\n%s\n' "${_pnr_runs}" "${_pnr_wrapper_runs}" | jq -cs '.[0] + .[1]' 2>/dev/null)"; then
+			_pnr_runs='[]'
+			_pnr_wrapper_runs='[]'
+			_pnr_reason="filter_failed"
+			break
+		fi
+	done
+	if [ -n "${_pnr_err_file}" ]; then
+		rm -f "${_pnr_err_file}" 2>/dev/null || true
+	fi
+	# An incomplete listing still prints the matches it read (the wrapper
+	# it stopped in included); callers do not act on them.
+	if [ -n "${_pnr_reason}" ]; then
+		_pnr_runs="$(printf '%s\n%s\n' "${_pnr_runs}" "${_pnr_wrapper_runs}" | jq -cs '.[0] + .[1]' 2>/dev/null)" \
+			|| _pnr_runs='[]'
+	fi
+	_pnr_matches="$(printf '%s' "${_pnr_runs}" | jq -c --arg pr "${pr_number}" '
+		(if type == "array" then . else [] end)
+		| [ .[]? | select(type == "object") ]
+		| unique_by(.databaseId)
+		| [ .[]
+			| select((.event // "workflow_dispatch") == "workflow_dispatch")
+			| select((.displayTitle // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+				or (.displayTitle // "") == ("AI Review [pr:" + $pr + "]"))
+		  ]
+		| sort_by(.createdAt // "")
+		| reverse
+	' 2>/dev/null)" || { _pnr_matches="[]"; [ -n "${_pnr_reason}" ] || _pnr_reason="filter_failed"; }
+	printf '%s\n' "${_pnr_matches:-[]}"
+	if [ -n "${_pnr_reason}" ]; then
+		echo "PR_NAMED_REVIEW_RUNS pr=${pr_number} outcome=incomplete reason=${_pnr_reason} wrapper=${_pnr_wrapper} page=${_pnr_page} read=${_pnr_read} total=${_pnr_total}" >&2
+		return 1
+	fi
+	return 0
 }
 
 # Helper: Dispatch review workflow for merge conflict resolution
@@ -17325,17 +17726,33 @@ _has_active_autofix_run()
 # runner with a clean checkout — more reliable than the shared
 # orchestrator environment.
 #
-# workflow_dispatch resolves from the target ref (the PR branch),
-# which always exists, bypassing the unbuildable merge-ref problem
-# that affects pull_request synchronize events.
+# workflow_dispatch needs no merge ref, bypassing the unbuildable
+# merge-ref problem that affects pull_request synchronize events.
+#
+# Dispatch ref (security, issue #4701): the dispatch always runs the
+# default branch's workflow file and passes only a validated PR number.
+# Dispatching `--ref <head_ref>` ran the PR branch's own unmerged copy of
+# the review workflow with `secrets: inherit` and write permissions, the
+# same finding issue #4618 fixed in review_autofix_sweep.yml.
+# review_autofix.yml checks out the PR head from the PR's metadata either
+# way, and its concurrency group is keyed by PR number, not by ref. The
+# dispatched run is named for its PR, which is how _has_active_autofix_run
+# still sees it (the PR #3895 duplicate-dispatch loop stays closed).
 #
 # Usage: _dispatch_review_for_conflicts <pr_number> <head_ref>
-# Returns: 0 = dispatched, 1 = dispatch failed, 2 = skipped (active run exists).
+# Returns: 0 = dispatched, 1 = dispatch failed or invalid PR number,
+#          2 = skipped (active run exists).
 _dispatch_review_for_conflicts()
 {
 	local pr_number="$1"
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+
+	# The PR number is the only PR data the dispatch carries (issue #4701).
+	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "::warning::${log_prefix} invalid pr_number; skipping review dispatch (head_ref=${head_ref})."
+		return 1
+	fi
 
 	# Guard 1: skip if already dispatched in this poll cycle.
 	# Multiple code paths (ready-to-merge loop, in-progress loop,
@@ -17366,13 +17783,15 @@ _dispatch_review_for_conflicts()
 	# edits even when the repo variable allows them. See
 	# review_autofix.yml:51 and internal-review.yml:15.
 	local allow_workflow_edits_flag="${ALLOW_WORKFLOW_EDITS:-true}"
+	# No --ref: the run executes the default branch's workflow file (issue
+	# #4701). review_autofix.yml is the last resort and has no PR run name,
+	# so only the wrapper dispatches are visible to the PR-named lookups.
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
 		if gh_retry gh workflow run "${wf_candidate}" \
 			--repo "${GITHUB_REPOSITORY}" \
-			--ref "${head_ref}" \
 			-f pr_number="${pr_number}" \
 			-f allow_workflow_edits="${allow_workflow_edits_flag}" 2>/dev/null; then
-			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
+			echo "  ${log_prefix} Dispatched ${wf_candidate} from the default branch for head ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
 			# Record in cycle-local tracker to prevent duplicate dispatches
 			echo "${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 			return 0
@@ -19351,7 +19770,8 @@ The poller will resume processing on the next cycle."
 
       ensure_label_exists "ai:clarification"
       ensure_label_exists "ai:orchestrator-managed"
-      NEW_URL="$(gh_retry gh issue create \
+      mapfile -t _engine_label_args < <(engine_label_create_args)
+      NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
         --repo "${GITHUB_REPOSITORY}" \
         --title "${DEF_TITLE}" \
         --body "${FULL_BODY}" \
@@ -20992,7 +21412,8 @@ ${FOLLOWUP_GUARD_REASON}"
                       RB_FOLLOWUP_REFUSED="true"
                       REVIEW_BLOCKED_STATE_CHANGED=true
                     else
-                      FOLLOWUP_PR_URL="$(gh_retry gh pr create \
+                      mapfile -t _engine_label_args < <(engine_label_create_args)
+                      FOLLOWUP_PR_URL="$(gh_retry gh pr create "${_engine_label_args[@]}" \
                       --repo "${GITHUB_REPOSITORY}" \
                       --base "${BASE_REF}" \
                       --head "${FOLLOWUP_BRANCH}" \
@@ -21244,7 +21665,8 @@ ${RB_FIX_DESC}
               # merged but the deferred gap has no durable tracking.
               FOLLOWUP_URL=""
               FOLLOWUP_NUM=""
-              if FOLLOWUP_URL="$(gh_retry gh issue create \
+              mapfile -t _engine_label_args < <(engine_label_create_args)
+              if FOLLOWUP_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
                   --repo "${GITHUB_REPOSITORY}" \
                   --title "${FOLLOWUP_TITLE}" \
                   --body "${FULL_FOLLOWUP_BODY}" \
@@ -21312,7 +21734,8 @@ ${RB_FIX_DESC}
 
             ensure_label_exists "ai:clarification"
             ensure_label_exists "ai:orchestrator-managed"
-            NEW_URL="$(gh_retry gh issue create \
+            mapfile -t _engine_label_args < <(engine_label_create_args)
+            NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${NEW_ISSUE_TITLE}" \
               --body "${FULL_NEW_BODY}" \
@@ -21730,7 +22153,8 @@ REISSUE_EOF
 
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
-    NEW_ISSUE_URL="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    NEW_ISSUE_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
       --title "${IF_TITLE}" \
       --body "${NEW_BODY}" \
       --label "ai:clarification" \
@@ -22822,7 +23246,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
                 git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
                 if git revert --no-edit "${MERGE_SHA}"; then
                   git push -u origin "${REVERT_BRANCH}"
-                  gh_retry gh pr create \
+                  mapfile -t _engine_label_args < <(engine_label_create_args)
+                  gh_retry gh pr create "${_engine_label_args[@]}" \
                     --repo "${GITHUB_REPOSITORY}" \
                     --title "Revert PR #${PR_TO_REVERT} (orchestrator auto-recovery)" \
                     --body "Automated revert of PR #${PR_TO_REVERT} by orchestrator judge.
@@ -22909,7 +23334,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
 
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
-          NEW_URL="$(gh_retry gh issue create \
+          mapfile -t _engine_label_args < <(engine_label_create_args)
+          NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${NEW_TITLE}" \
             --body "${FULL_NEW_BODY}" \
@@ -23148,7 +23574,8 @@ ${_gate_violations:-(no violation lines parsed — see workflow run log for the 
 
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
-          NEW_URL="$(gh_retry gh issue create \
+          mapfile -t _engine_label_args < <(engine_label_create_args)
+          NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${DEF_TITLE}" \
             --body "${FULL_BODY}" \
@@ -23298,16 +23725,6 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 	if _linked_pr_is_merge_queued "${S_PR_JSON}"; then
 		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
-		continue
-	fi
-
-	# A draft claude/* PR (an /implement-plan-claude project integration PR)
-	# is synced with its base by its own chain at final merge, and
-	# Claude-fixer mode owns claude/* conflicts (CLAUDE.md §26.H). An
-	# update-branch push or review dispatch here only burns runs and posts a
-	# conflict alert on every tick. Uses the PR object fetched above.
-	if [[ "${S_HEAD_REF}" == claude/* ]] && [ "$(echo "${S_PR_JSON}" | jq -r '.draft // false')" = "true" ]; then
-		echo "  PR #${S_PR} is a draft claude/* PR; its own chain resolves conflicts. Skipping standalone conflict recovery."
 		continue
 	fi
 

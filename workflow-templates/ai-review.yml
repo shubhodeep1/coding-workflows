@@ -2,6 +2,14 @@
 # automatically when upstream templates change. To opt out of auto-updates,
 # set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 name: AI Review
+# Dispatched runs carry their PR in the run name. The orchestrator poller and
+# the merge train dispatch this workflow from the default branch only
+# (issue #4701: never an unmerged head ref), so a dispatched run's
+# head_branch no longer identifies the PR; the poller's active-run lookups
+# match this exact name instead. Every other event gets an empty expression,
+# which GitHub replaces with its event-specific default (PR title / commit
+# message).
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('AI Review [pr:{0}]', inputs.pr_number) || '' }}"
 on:
   # ready_for_review is included so that converting a draft PR to a
   # non-draft re-fires the review gate. This is the unlock path for
@@ -22,7 +30,7 @@ on:
         default: false
         type: boolean
       claude_fixer_converged_head:
-        description: "Claude-fixer mode (/implement-plan-claude PRs): head SHA the Claude session found nothing left to fix on; enables auto-merge after the review workflow verifies it"
+        description: "Deprecated; ignored. Accepted so an old dispatcher that still sends it does not fail (the Claude-fixer hand-off was retired)"
         required: false
         default: ""
         type: string
@@ -30,6 +38,8 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 jobs:
   review:
     if: ${{ github.event.action != 'closed' || github.event.pull_request.merged == true }}
@@ -43,5 +53,4 @@ jobs:
       pr_title: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.title) || '' }}
       pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
-      claude_fixer_converged_head: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.claude_fixer_converged_head || '' }}
     secrets: inherit
