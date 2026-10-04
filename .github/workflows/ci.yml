@@ -492,6 +492,16 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_skip.py
 
+      - name: Security dependency hold tests (issue 4934)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py
+
+      - name: Skip-AI marker rule and gate skip notice tests (issue 4985)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_skip_ai_marker_rule.py
+
       - name: CLAUDE.md section numbering guard (§6 identifiers)
         run: |
           set -euo pipefail
@@ -1077,6 +1087,8 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_dispatch_active_run_visibility.py
+          # Issue #4701: default-branch review dispatches and PR-named run lookups.
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_dispatch_default_branch.py
 
       - name: Workflow log collector coverage gate
         run: |

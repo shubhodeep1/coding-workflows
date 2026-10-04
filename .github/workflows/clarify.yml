@@ -221,7 +221,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -408,6 +408,7 @@ jobs:
       - name: Decide clarify route
         id: clarify_route
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
@@ -460,8 +461,24 @@ jobs:
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
           fi
 
+          # Hold a generated security follow-up before any label or automatic
+          # /answer write until the issue it depends on has merged (issue
+          # #4934). The target is already fetched; only a dependent issue
+          # costs one additional issue read (scripts/security_dependency.py).
+          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"dependency check failed"}')"
+          if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
+            SKIP_CODEX="true"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
+            # Retain the issue in the scheduled standalone poller's existing
+            # candidate set; it releases this label once the fix merges.
+            source scripts/gh_helpers.sh
+            if ! gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
+              echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
+              exit 1
+            fi
+          fi
           # Only a verified orchestrator fast path may post its automatic /answer.
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && \
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
             echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
           else

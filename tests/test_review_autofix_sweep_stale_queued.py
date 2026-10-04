@@ -224,6 +224,43 @@ class SweepPrKeyedDispatchTest(unittest.TestCase):
 		)
 		self.assertEqual(out["active"], {"pr:5": 2, "claude/x": 1})
 
+	def test_named_dispatch_run_without_a_head_branch_is_keyed_by_pr(self) -> None:
+		"""Issue #4928: GitHub can report head_branch=null on a
+		workflow_dispatch run. The PR key still identifies it, so it must
+		keep suppressing a duplicate dispatch for that PR."""
+		null_head = self.dispatch_run(12, "4928", head_branch=None)
+		missing_head = self.dispatch_run(13, "4929", status="queued")
+		del missing_head["head_branch"]
+		empty_head = self.dispatch_run(14, "4930", status="pending", head_branch="")
+		out = self.run_reduce([null_head, missing_head, empty_head], cutoff_epoch(120))
+		self.assertEqual(out["active"], {"pr:4928": 1, "pr:4929": 1, "pr:4930": 1})
+		self.assertEqual(out["stale"], [])
+
+	def test_wedged_named_dispatch_run_without_a_head_branch_is_logged_under_its_pr(self) -> None:
+		out = self.run_reduce(
+			[self.dispatch_run(15, "4928", head_branch=None, status="queued", created_at=iso(-660))],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+		stale_key, stale_run_id, _ = out["stale"][0].split("\t")
+		self.assertEqual(stale_key, "pr:4928")
+		self.assertEqual(stale_run_id, "15")
+
+	def test_run_without_a_head_branch_or_pr_key_is_still_dropped(self) -> None:
+		"""Only a verified PR key rescues a run with no head branch."""
+		out = self.run_reduce(
+			[
+				{"id": 16, "head_branch": None, "event": "workflow_dispatch", "display_title": "Internal: AI Review & Autofix", "status": "queued", "created_at": iso(-5)},
+				self.dispatch_run(17, "0", head_branch=None),
+				self.dispatch_run(18, "12x", head_branch=None),
+				self.dispatch_run(19, "7", head_branch=None, event="pull_request"),
+				{"id": 20, "head_branch": None, "event": "workflow_dispatch", "status": "pending"},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+		self.assertEqual(out["stale"], [])
+
 
 class SweepWorkflowContractTest(unittest.TestCase):
 	def setUp(self) -> None:

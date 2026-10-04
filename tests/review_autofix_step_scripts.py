@@ -37,6 +37,8 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Detect merge conflicts": ("review_autofix_step_detect_merge_conflicts.sh", "error"),
 	"Post partial finalize comment and persist runtime marker": ("review_autofix_step_partial_finalize.sh", "warning"),
 	"Append review pipeline iteration summary": ("review_autofix_step_iteration_summary.sh", "warning"),
+	"Re-trigger review via workflow_dispatch": ("review_autofix_step_post_commit_retrigger.sh", "error"),
+	"Re-dispatch review on editor-changes-lost": ("review_autofix_step_changes_lost_redispatch.sh", "error"),
 }
 
 _WRAPPER_START_RE = re.compile(

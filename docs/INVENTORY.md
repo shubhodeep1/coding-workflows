@@ -196,11 +196,13 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
+- `scripts/review_autofix_step_changes_lost_redispatch.sh` — body of the review_autofix.yml "Re-dispatch review on editor-changes-lost" step (sourced by the step): re-dispatches one review run per head from the default branch, bounded by `autofix_changes_lost_head_retry_consumed` (issue #4898).
 - `scripts/review_autofix_step_detect_merge_conflicts.sh` — body of the review_autofix.yml "Detect merge conflicts" step (sourced by the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
 - `scripts/review_autofix_step_editor_uncommitted_changes.sh` — body of the review_autofix.yml "Detect editor-claimed-but-uncommitted changes" step (sourced by the step).
 - `scripts/review_autofix_step_iteration_summary.sh` — body of the review_autofix.yml "Append review pipeline iteration summary" step (sourced by the step; skips with a warning when the script cannot be found).
 - `scripts/review_autofix_step_merge_topology_gate.sh` — body of the review_autofix.yml "Pre-review deterministic merge-topology gate" step (sourced by the step).
 - `scripts/review_autofix_step_partial_finalize.sh` — body of the review_autofix.yml "Post partial finalize comment and persist runtime marker" step (sourced by the step; skips with a warning when the script cannot be found).
+- `scripts/review_autofix_step_post_commit_retrigger.sh` — body of the review_autofix.yml "Re-trigger review via workflow_dispatch" step (sourced by the step): after an autofix or merge-resolve push, dispatches the next review run from the default branch, PR-named wrappers first (issue #4898).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
@@ -230,6 +232,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/semantic_cache.py` — Semantic cache helper for clarify-phase workflows.
 - `scripts/security_audit.sh` — security_audit.sh — Run the default-branch OWASP Top 10 + STRIDE security audit.
 - `scripts/security_audit_fp_exclusions.json` — JSON asset for editable security-audit false-positive exclusions.
+- `scripts/security_dependency.py` — Hold a generated security follow-up until the issue it depends on has merged (issue #4934).
 - `scripts/security_pass_skip.py` — Decide whether the security pass skips a follow-up issue (verified-trust rules, #4623).
 - `scripts/semble_helpers.sh` — semble_helpers.sh — shared, sourceable Semble query helpers.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.

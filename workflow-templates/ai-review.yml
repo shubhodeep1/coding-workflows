@@ -2,6 +2,14 @@
 # automatically when upstream templates change. To opt out of auto-updates,
 # set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 name: AI Review
+# Dispatched runs carry their PR in the run name. The orchestrator poller and
+# the merge train dispatch this workflow from the default branch only
+# (issue #4701: never an unmerged head ref), so a dispatched run's
+# head_branch no longer identifies the PR; the poller's active-run lookups
+# match this exact name instead. Every other event gets an empty expression,
+# which GitHub replaces with its event-specific default (PR title / commit
+# message).
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('AI Review [pr:{0}]', inputs.pr_number) || '' }}"
 on:
   # ready_for_review is included so that converting a draft PR to a
   # non-draft re-fires the review gate. This is the unlock path for
