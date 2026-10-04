@@ -929,8 +929,12 @@ case "${CLASSIFICATION}" in
 			log "support_ref_branch support_ref=${SUPPORT_REF:-none} branch=${SUPPORT_BRANCH:-unknown} target_branch_source=${TARGET_BRANCH_SOURCE}"
 		fi
 		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
-			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
-				log "warn source_pr_branch_missing branch=${TARGET_BRANCH}; falling back to ${TARGET_BRANCH_DEFAULT}"
+			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ] || [ "${TARGET_BRANCH_SOURCE}" = "support_ref" ]; then
+				if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
+					log "warn source_pr_branch_missing branch=${TARGET_BRANCH}; falling back to ${TARGET_BRANCH_DEFAULT}"
+				else
+					log "warn support_ref_branch_missing branch=${TARGET_BRANCH}; falling back to ${TARGET_BRANCH_DEFAULT}"
+				fi
 				TARGET_BRANCH="${TARGET_BRANCH_DEFAULT}"
 				TARGET_BRANCH_SOURCE="default"
 				if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then

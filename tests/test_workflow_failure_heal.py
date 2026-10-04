@@ -1776,6 +1776,19 @@ def test_intake_self_repo_autofix_failure_targets_the_support_ref_branch() -> No
 	assert outcome and "as a hotfix on `main`" in outcome[0]["body"]
 
 
+def test_intake_missing_support_ref_branch_falls_back_to_stable() -> None:
+	state = _self_repo_autofix_state(["stable", "ai/issue-4173"])
+	state["compare"] = {"status": "behind", "ahead_by": 0, "behind_by": 3, "commits": [], "files": []}
+	state["compare_by_path"] = {f"repos/{SELF_REPO}/compare/stable...{SHA_A}": {"status": "ahead"}}
+	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(script_ref=SHA_A), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "warn support_ref_branch_missing branch=main; falling back to stable" in result.stdout
+	assert "target_branch_source=default" in result.stdout
+
+
 def test_intake_prefers_stable_when_support_sha_is_on_both_branches() -> None:
 	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"])
 	state["compare"] = {"status": "behind", "ahead_by": 0, "behind_by": 3, "commits": [], "files": []}

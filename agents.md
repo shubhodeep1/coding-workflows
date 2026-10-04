@@ -128,7 +128,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `Target branch: stable`, or, for a review/autofix failure from a PR in
     this repo, the branch its support scripts came from: `main` or `stable`
     by one compare call each (prefer `stable` when both contain the SHA,
-    since its hotfix is forwarded to `main`), the PR's head branch only when `script_ref` is
+    since its hotfix is forwarded to `main`), falling back to `stable` if the
+    resolved support branch disappears; the PR's head branch only when `script_ref` is
     the PR's own head SHA, else `stable` (`target_branch_source=support_ref`);
     `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only;

@@ -1433,7 +1433,9 @@ through `clarify → plan → implement → review`.
   one compare call each against `stable` then `main` (`behind`/`identical`
   means the branch contains it). When both contain the SHA, it targets
   `stable`, whose hotfix is forwarded to `main`; it logs `support_ref_branch support_ref=…
-  branch=…`; when it cannot tell, the issue keeps `stable`. Only when
+  branch=…`; when it cannot tell, the issue keeps `stable`. If the resolved
+  support branch is no longer available, it falls back to `stable` when that
+  branch exists. Only when
   `script_ref` is the PR's own head SHA, so the run executed the PR's own
   workflow code, does the issue target the PR's head branch (a `stable`
   hotfix could not unblock the PR); when that branch no longer exists it falls
