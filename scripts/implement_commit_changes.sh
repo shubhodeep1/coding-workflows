@@ -401,7 +401,7 @@ if [ -n "${deleted_staged}" ]; then
   canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
     | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
     || true)"
-  unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)/' || true)"
+  unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)(/|$)' || true)"
   total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
   if ! [[ "${total_deletions}" =~ ^[0-9]+$ ]]; then
     echo "::warning::Non-numeric staged deletion count '${total_deletions}'; forcing fail-closed bulk-delete handling."

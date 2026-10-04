@@ -3443,7 +3443,7 @@ jobs:
             canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
               | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
               || true)"
-            unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)/' || true)"
+            unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)(/|$)' || true)"
             total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
             # Count non-.md deletions to decide whether the lenient
             # markdown-only threshold applies. Case-insensitive match so
