@@ -1,18 +1,15 @@
 """Contract for the intentional skip-AI marker rule and the gate's skip notice (issue #4985).
 
-One rule, three copies: `has_skip_ai_marker` in `.claude/scripts/check_in_status.py`
-(also used by `scripts/claude_pr_sweep.py`; loaded here from its
-`workflow-templates/.claude/` twin, which `tests/test_check_in_status.py` holds
-equal to it), and the `SKIP_AI_BODY_AWK` program in
-the review gate (`.github/workflows/review_autofix.yml`) and in
-`.github/workflows/review_autofix_sweep.yml`. Every copy must answer the same case
-table. The gate's end-of-step skip log and its one-comment-per-head notice for
+One rule, two copies: the `SKIP_AI_BODY_AWK` program in the review gate
+(`.github/workflows/review_autofix.yml`) and in
+`.github/workflows/review_autofix_sweep.yml`. Both must answer the same case
+table. (A third, Python copy lived in the retired `.claude/scripts/check_in_status.py`.)
+The gate's end-of-step skip log and its one-comment-per-head notice for
 `claude/*` PRs are executed in bash against a fake `gh`.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import re
@@ -27,10 +24,8 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 GATE_WF = ROOT / ".github" / "workflows" / "review_autofix.yml"
 SWEEP_WF = ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
-_spec = importlib.util.spec_from_file_location("check_in_status",
-	ROOT / "workflow-templates" / ".claude" / "scripts" / "check_in_status.py")
-checker = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(checker)
+# The notice's machine-readable marker (one per skipped claude/* head).
+REVIEW_SKIPPED_MARKER_RE = re.compile(r"<!-- ai:claude-fixer-review-skipped:v1 reason=(skip_ai_marker|draft_or_skip_ai) head=[0-9a-f]{40} -->")
 
 HEAD = "d" * 40
 AWK_LINE_RE = re.compile(r"^[ ]*SKIP_AI_BODY_AWK='([^']*)'$", re.MULTILINE)
@@ -90,23 +85,13 @@ def test_both_workflows_carry_the_same_awk_program():
 
 
 @pytest.mark.parametrize("title, body, skipped", CASES)
-def test_python_rule(title, body, skipped):
-	assert checker.has_skip_ai_marker(title, body) is skipped
-
-
-@pytest.mark.parametrize("title, body, skipped", CASES)
-def test_workflow_rule_matches_the_python_rule(title, body, skipped):
+def test_workflow_rule_matches_the_case_table(title, body, skipped):
 	program = next(iter(_awk_programs().values()))
 	# The exact condition both workflows use: title glob, then the body through awk.
 	script = 'if [[ "$T" == *"[skip ai]"* ]] || printf \'%s\\n\' "$B" | awk "$P"; then echo skip; else echo run; fi'
 	result = subprocess.run(["bash", "-c", "set -euo pipefail; " + script], capture_output=True, text=True,
 		env={"PATH": os.environ["PATH"], "T": title, "B": body, "P": program}, check=True)
 	assert result.stdout.strip() == ("skip" if skipped else "run")
-
-
-def test_non_string_input_counts_as_empty():
-	assert checker.has_skip_ai_marker(None, None) is False
-	assert checker.has_skip_ai_marker(5, ["[skip ai]"]) is False
 
 
 def test_the_old_substring_checks_are_gone():
@@ -118,11 +103,9 @@ def test_the_old_substring_checks_are_gone():
 	assert "grep -Fq '[skip ai]'" not in sweep
 	assert '[[ "${pr_title}" == *"[skip ai]"* ]]' in sweep
 	assert '|| printf \'%s\\n\' "${pr_body}" | awk "${SKIP_AI_BODY_AWK}"; then' in sweep
-	sweep_script = (ROOT / "scripts" / "claude_pr_sweep.py").read_text(encoding="utf-8")
-	assert 'if check_in_status.has_skip_ai_marker(pr.get("title"), pr.get("body")):' in sweep_script
 	# §6: the reason names stay.
 	assert 'SKIP_REASON="skip_ai_marker"' in gate and 'SKIP_REASON="draft_or_skip_ai"' in gate
-	assert "reason=skip_ai_marker" in sweep and "reason=skip_ai_marker" in sweep_script
+	assert "reason=skip_ai_marker" in sweep
 
 
 def test_the_gate_input_descriptions_state_the_rule():
@@ -155,7 +138,7 @@ def _notice_block() -> str:
 def _fetch_helper() -> str:
 	script = _gate_script()
 	start = script.index('gate_marker_fetch_state="pending"')
-	end = script.index("# True (exit 0) when a workflow-issued Claude hand-off")
+	end = script.index("# ----- Terminal same-head skip (workflow_dispatch only) -----")
 	return script[start:end]
 
 
@@ -164,17 +147,18 @@ def test_every_skip_is_logged_before_the_outputs():
 	assert 'if [ "${SHOULD_RUN}" != "true" ] && [ "${GATE_SKIP_RECORDED}" != "true" ]; then\n  echo "AUTOFIX_GATE_SKIP reason=${SKIP_REASON:-unknown} pr=${PR_NUMBER:-none} head_sha=${pr_head_sha_gate:-${PR_HEAD_SHA:-unknown}}"' in block
 	script = _gate_script()
 	assert script.index("# Say why (issue #4985") > script.index('[ "${CLAUDE_BRANCH_REVIEW}" = "true" ] && [ "${DETERMINISTIC_SKIP}" = "true" ]')
-	assert script.count('GATE_SKIP_RECORDED="true"') == 3
+	# The Claude-fixer awaiting-session skip that set it a third time was retired.
+	assert script.count('GATE_SKIP_RECORDED="true"') == 2
 
 
-def test_the_notice_marker_is_the_one_the_checker_reads():
+def test_the_notice_marker_is_machine_readable():
 	block = _notice_block()
 	marker = 'echo "<!-- ai:claude-fixer-review-skipped:v1 reason=${SKIP_REASON} head=${pr_head_sha_gate} -->"'
 	assert marker in block
 	rendered = f"<!-- ai:claude-fixer-review-skipped:v1 reason=skip_ai_marker head={HEAD} -->"
-	assert checker.REVIEW_SKIPPED_MARKER_RE.fullmatch(rendered)
-	# The existing gate comment fetch returns it (its filter keeps `<!-- ai:claude-fixer-` comments).
-	assert 'contains("<!-- ai:claude-fixer-")' in _fetch_helper()
+	assert REVIEW_SKIPPED_MARKER_RE.fullmatch(rendered)
+	# The existing gate comment fetch returns it, so the notice is deduped per head.
+	assert 'contains("<!-- ai:claude-fixer-review-skipped:")' in _fetch_helper()
 	assert "exit 1" not in block and "ai:review-skipped\"" not in block
 
 
@@ -229,7 +213,7 @@ def test_a_marker_skip_on_a_claude_pr_posts_one_notice(tmp_path):
 	assert posted.startswith("## Review skipped: `skip_ai_marker`\n")
 	assert "https://github.com/o/r/actions/runs/99" in posted and "pr_number=7" in posted
 	assert posted.rstrip("\n").endswith(f"<!-- ai:claude-fixer-review-skipped:v1 reason=skip_ai_marker head={HEAD} -->")
-	assert checker._head_has_review_trace([{"user": {"login": "workflow-bot"}, "body": posted}], HEAD, "workflow-bot")
+	assert REVIEW_SKIPPED_MARKER_RE.search(posted)
 
 
 def test_the_notice_is_posted_once_per_head(tmp_path):

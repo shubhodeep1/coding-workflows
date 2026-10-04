@@ -8492,11 +8492,17 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		host = root / "host"
 		source = root / "isolated" / "source"
 		source.mkdir(parents=True)
-		for subdir in ("workflows", "actions"):
+		for subdir in ("workflows", "actions", "ai"):
 			(host / ".github" / subdir).mkdir(parents=True)
-			(host / ".github" / subdir / "example.yml").write_text("before\n")
+			(host / ".github" / subdir / ("claude_engine.json" if subdir == "ai" else "example.yml")).write_text("before\n")
+		(host / ".github/ai/WORKFLOW.md").write_text("operator config\n")
+		(host / ".claude/hooks").mkdir(parents=True)
+		(host / ".claude/hooks/gh_api_write_guard.py").write_text("before\n")
+		(host / ".claude/hooks/other.py").write_text("operator hook\n")
+		(host / "scripts").mkdir()
+		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
-		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github", ".claude", "scripts"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
@@ -8504,14 +8510,28 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 				capture_output=True, text=True, check=False,
 			)
 		assert run("snapshot").returncode == 0
+		assert not (source / ".github/ai/WORKFLOW.md").exists()
+		assert (source / ".claude/hooks/gh_api_write_guard.py").exists()
+		assert not (source / ".claude/hooks/other.py").exists()
+		assert (source / "scripts/claude_settings.json.tmpl").exists()
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
+		(source / ".github/ai/claude_engine.json").write_text("after\n")
+		(source / ".claude/hooks/gh_api_write_guard.py").write_text("after\n")
+		(source / "scripts/claude_settings.json.tmpl").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
-		(source / ".github/ai").mkdir()
-		(source / ".github/ai/untrusted.yml").write_text("untrusted\n")
+		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
+		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
+		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".github/ai/WORKFLOW.md").read_text() == "operator config\n"
+		(source / ".github/ai/WORKFLOW.md").unlink()
+		(source / ".github/untrusted").mkdir()
+		(source / ".github/untrusted/result.yml").write_text("untrusted\n")
 		assert run("transfer").returncode != 0
-		assert not (host / ".github/ai/untrusted.yml").exists()
+		assert not (host / ".github/untrusted/result.yml").exists()
 
 
 def test_review_isolation_transfers_into_active_work_tree() -> None:
