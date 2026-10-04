@@ -1,6 +1,6 @@
 {
   "cli_version": "2.1.289",
-  "broker_url": "",
+  "broker_url": "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool",
   "oidc_audience": "coding-workflows-claude-pool",
   "gate_utilization": 0.9,
   "probe_model": "claude-haiku-4-5-20251001",

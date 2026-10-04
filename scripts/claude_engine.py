@@ -103,7 +103,10 @@ LABEL_ENGINE_CLAUDE = "ai:engine-claude"
 
 MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,79}$")
 CLI_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?$")
+# https only; plain http is accepted for loopback alone (local stub brokers in tests).
+URL_RE = re.compile(
+	r"^(?:https://[A-Za-z0-9.-]+|http://(?:127\.0\.0\.1|localhost))(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?$"
+)
 AUDIENCE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 

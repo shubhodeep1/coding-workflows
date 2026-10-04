@@ -5,8 +5,8 @@ name: Claude engine smoke
 # It never runs on a schedule or a push, starts no pipeline, and writes
 # nothing to GitHub. One leg per tool profile (write, read):
 #   - offline: settings rendering (P5) and transcript classification;
-#   - without a credential: assert `available=false` and that claude_run
-#     returns 75 with AI_ENGINE_FALLBACK (D1);
+#   - without a credential (the broker refused or is unconfigured, every
+#     account is gated): claude_run returns 75 with AI_ENGINE_FALLBACK (D1);
 #   - with a credential: the context gate (start-up tokens < 25,000 and a
 #     CLAUDE.md marker the model cannot see), the P5 denials (write leg), and
 #     the relay gate through the sandboxed clarify (read leg) and review
@@ -17,6 +17,8 @@ on:
 
 permissions:
   contents: read
+  # The job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 concurrency:
   group: claude-engine-smoke
@@ -71,20 +73,9 @@ jobs:
 
       - name: Resolve credential
         id: credential
-        # Phase 4 replaces this step with .github/actions/claude-pool-token,
-        # which writes ${RUNNER_TEMP}/claude-pool/{order,tokens/<NAME>}.
-        run: |
-          set -euo pipefail
-          broker_url="$(python3 scripts/claude_engine.py config --key broker_url)"
-          if [ -z "${broker_url}" ]; then
-            echo "available=false" >> "${GITHUB_OUTPUT}"
-            echo "reason=broker_not_configured" >> "${GITHUB_OUTPUT}"
-            echo "CLAUDE_POOL available=false reason=broker_not_configured"
-          else
-            echo "available=false" >> "${GITHUB_OUTPUT}"
-            echo "reason=token_step_missing" >> "${GITHUB_OUTPUT}"
-            echo "CLAUDE_POOL available=false reason=token_step_missing"
-          fi
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
 
       - name: Assert codex fallback without a credential (D1)
         if: steps.credential.outputs.available != 'true'

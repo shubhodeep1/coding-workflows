@@ -502,6 +502,23 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_anthropic_relay.py
 
+      - name: Claude pool token action tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
+
+      - name: Set up Node 22 for the claude-pool-broker Worker tests
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: claude-pool-broker Worker tests (vitest)
+        working-directory: tools/claude-pool-broker
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx vitest run
+
       - name: PR status check-in reminder hook tests (CLAUDE.md §26)
         run: |
           set -euo pipefail

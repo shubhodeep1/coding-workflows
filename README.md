@@ -2255,6 +2255,34 @@ visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
 `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
 it back afterwards.
 
+**Token broker.** The account tokens never live in coding-workflows or in a
+consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in
+`shubhodeep1/claude-workers`, whose hourly `claude-pool-key-sync.yml` copies
+them into the `CLAUDE_POOL_TOKENS` secret of the `claude-pool-broker`
+Cloudflare Worker (`https://claude-pool-broker.shubhodeep.workers.dev`,
+source `tools/claude-pool-broker/`). A job that hosts a Claude role runs
+`.github/actions/claude-pool-token` once, after `install-claude`:
+
+1. it requests the job's GitHub OIDC token (audience
+   `coding-workflows-claude-pool`), so the job needs `id-token: write`;
+2. the broker checks the token's signature, issuer, audience, expiry and age
+   (at most 10 minutes), that `repository_owner` is `shubhodeep1`, that the
+   repository is coding-workflows or listed in
+   `.github/ai/consumer_repos.json` (fetched from `main`, cached 10 minutes),
+   and that `job_workflow_ref` is a coding-workflows workflow, then returns
+   the pool; anything else is `403` with a reason code;
+3. the action masks every token, probes each account with Haiku 4.5, and
+   writes the accounts under the `0.9` gate, least used first, to
+   `$RUNNER_TEMP/claude-pool`; its post step deletes them.
+
+Its outputs are `available` (`true`/`false`), `reason`, `accounts` and
+`pool_dir`; it never fails the job. `available=false` (no broker URL, no
+`id-token: write`, a refusal, every account gated) means every Claude role in
+the job runs codex (D1). The `ai-*.yml` wrapper templates and the
+`internal-*.yml` callers of the Claude-hosting reusable workflows grant
+`id-token: write`; consumers whose sync is stale fall back to codex until
+their next `@stable` sync.
+
 ## Project Orchestrator
 
 The orchestrator enables complex, multi-issue projects from a single prompt. It decomposes a project description into a dependency-aware DAG of GitHub issues, dispatches them through the existing AI pipeline in waves, and uses a judge to validate results between waves.

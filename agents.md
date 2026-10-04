@@ -2149,9 +2149,7 @@ repos carry the same section in their root `AGENTS.md`.
 
 | Resource | Type | ID / name | Credential | Notes |
 |---|---|---|---|---|
-
-_None recorded yet — this repo is workflow tooling and serves none of the
-covered sites (funtoken.io, ft.games, 5m.fun) itself._
+| claude-pool-broker | worker | `claude-pool-broker` (`https://claude-pool-broker.shubhodeep.workers.dev`, workers.dev only) | FT_GAMES_CF | Claude engine token broker (plan Phase 4). Source `tools/claude-pool-broker/`; deployed by the session with `wrangler deploy` (§24.C). Secret `CLAUDE_POOL_TOKENS` is written only by `shubhodeep1/claude-workers` `claude-pool-key-sync.yml`. |
 
 ## Reference
 

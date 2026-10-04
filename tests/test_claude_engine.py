@@ -62,16 +62,33 @@ def test_checked_in_config_is_valid_and_inert() -> None:
 	assert set(config["role_defaults"]) == set(ce.ROLES)
 	# Phase 3 is inert: no role defaults to Claude yet.
 	assert {fields["engine"] for fields in config["role_defaults"].values()} == {"codex"}
-	assert config["broker_url"] == ""
+	assert config["broker_url"] == "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool"
 	assert config["gate_utilization"] == 0.9
 	assert config["probe_model"] == "claude-haiku-4-5-20251001"
 	assert config["oidc_audience"] == "coding-workflows-claude-pool"
 
 
 def test_checked_in_config_matches_code_defaults() -> None:
+	# Only the broker URL differs: a missing config file means no broker.
 	raw = json.loads(CONFIG.read_text(encoding="utf-8"))
 	config, _ = ce.normalize_config(raw)
-	assert config == ce.DEFAULT_CONFIG
+	assert {**config, "broker_url": ""} == ce.DEFAULT_CONFIG
+
+
+@pytest.mark.parametrize(
+	"url, ok",
+	[
+		("https://claude-pool-broker.shubhodeep.workers.dev/v1/pool", True),
+		("http://127.0.0.1:8080/v1/pool", True),
+		("http://localhost/v1/pool", True),
+		("http://claude-pool-broker.example/v1/pool", False),
+		("https://evil.example/v1/pool?x=1", False),
+		("ftp://x/y", False),
+	],
+)
+def test_broker_url_must_be_https_or_loopback(url: str, ok: bool) -> None:
+	_, invalid = ce.normalize_config({"broker_url": url})
+	assert ("broker_url" not in invalid) is ok
 
 
 def test_utility_roles_use_sonnet_and_the_rest_opus() -> None:

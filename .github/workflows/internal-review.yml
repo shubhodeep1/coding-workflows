@@ -38,6 +38,8 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 # De-duplicate review runs on the same branch. A push to claude/** and
 # a pull_request:opened/synchronize event for the same head ref can both
