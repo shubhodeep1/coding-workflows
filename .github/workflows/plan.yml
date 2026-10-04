@@ -296,6 +296,17 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          src=".codex-workflow-src/scripts/claude_settings.json.tmpl"
+          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/claude_settings.json.tmpl" ]; then
+            src=".codex-workflow-src-main/scripts/claude_settings.json.tmpl"
+          fi
+          if [ ! -f "${src}" ]; then
+            echo "::error::Missing required Claude settings template in ${wf_source}@${SCRIPT_REF}"
+            exit 1
+          fi
+          install -m 0644 "${src}" scripts/claude_settings.json.tmpl
+          _fetched_scripts+=(claude_settings.json.tmpl)
+
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
           # #3043 refactor.  main ships a self-contained bash render_prompt.sh

@@ -43,6 +43,7 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	step = _workflow_step(workflow_text, "Run Codex planning")
 
 	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in workflow_text
+	assert 'install -m 0644 "${src}" scripts/claude_settings.json.tmpl' in workflow_text
 	assert "if: env.SKIP_PLAN != 'true'" in step
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
 	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in step
