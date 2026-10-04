@@ -265,16 +265,19 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
+			previous_token_end = -1
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
 			# A bare digit immediately adjacent to the redirect is an fd, not
 			# a push refspec. A separated or quoted digit is a real argument.
 			if (segment and segment[-1].isascii() and segment[-1].isdigit()
+				and previous_token_end >= len(segment[-1])
 				and command[previous_token_end - len(segment[-1]):previous_token_end] == segment[-1]
 				and command[previous_token_end - len(segment[-1]) - 1:previous_token_end - len(segment[-1])] not in ("\\", "'", '"')
 				and command[previous_token_end:previous_token_end + 1] in "<>"):
 				segment.pop()
 			redirect_target = True
+			previous_token_end = -1
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
@@ -1182,8 +1185,9 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 
 	Used when the guard cannot prove the branch is safe: the API is
 	unreachable and git history is inconclusive, or ancestry cannot be
-	verified for a remote-only push. The human confirms the PR is still open;
-	a denial sends the reason back to Claude.
+	verified for a remote-only push, or a push refspec cannot be resolved.
+	The human verifies the actual destination and source; a denial sends the
+	reason back to Claude.
 	"""
 	# The prompt is read by a human: `reason` carries the full transport
 	# error for the log, `prompt_reason` a one-paragraph version for the prompt.
@@ -1196,10 +1200,11 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 					"hookEventName": "PreToolUse",
 					"permissionDecision": "ask",
 					"permissionDecisionReason": (
-						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
-						f"pull request for this branch is still open. If it has merged, "
-						f"deny — the branch must be rebuilt from the default branch and "
-						f"a new PR opened."
+						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only after "
+						f"verifying the actual push destination and source tip do not stack "
+						f"on a branch whose PR has already merged without an open PR. "
+						f"Otherwise deny, rebuild the branch from the default branch, "
+						f"and open a new PR."
 					),
 				},
 			}

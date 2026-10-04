@@ -202,8 +202,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fix reached `main`, runs on the failing head, rate limit / OpenRouter key
     status; 400 KB, reused across stages through actions/cache). Cross-repo
     reads require the source repo in the intake's consumer registry; missing
-    registry data skips them. Clarify mounts the folder read-only at
-    `/evidence` and points its prompt at the index. Plan and implement receive
+    registry data skips them. Run references also require intake-account-only
+    authorship and edit history for the heal issue and occurrence comments;
+    cross-repo runs additionally require matching run metadata (repo, reported
+    head SHA, and PR or head branch). Unverifiable runs are skipped before
+    log/artifact reads, including when a cached run is restored; rejected intake-origin
+    references are listed with reasons under `Skipped` in `INDEX.md`. The
+    folder is mounted read-only at `/evidence` in the clarify sandbox, and
+    the prompt points to its index
+    (`=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`). Plan and implement receive
     only the bounded `diagnostics.json` structured prompt section; raw job and
     artifact files are not linked in those prompts. Their editor launches
     scrub GitHub/Telegram credentials and temporarily hide checkout git auth.

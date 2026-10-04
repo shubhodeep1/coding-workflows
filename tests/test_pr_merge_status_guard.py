@@ -948,6 +948,7 @@ def test_unresolved_push_destination_requests_confirmation(merged_branch_repo, c
 	assert any(
 		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
 		and "unresolved git push destination" in item.get("systemMessage", "")
+		and "actual push destination and source tip" in item.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
 		for item in map(json.loads, capsys.readouterr().out.splitlines())
 	)
 
@@ -961,6 +962,7 @@ def test_unresolved_push_source_requests_confirmation(merged_branch_repo, capsys
 	assert any(
 		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
 		and "unresolved git push source" in item.get("systemMessage", "")
+		and "actual push destination and source tip" in item.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
 		for item in map(json.loads, capsys.readouterr().out.splitlines())
 	)
 
@@ -981,6 +983,29 @@ def test_numeric_push_refspec_before_redirect_is_not_lost(merged_branch_repo, mo
 		"tool_input": {"command": "git push origin 2 > /dev/null"}})
 	assert code == 2, message
 	assert "Branch `2`" in message
+	assert lookups == ["2"]
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin 2 2>&1 >/tmp/out",
+	"git push origin 2 2>/tmp/err >/tmp/out",
+])
+def test_numeric_push_refspec_survives_multiple_redirects(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "2", "feature/x")
+	_git(repo, "checkout", "main")
+	assert guard._shell_segments_with_operators(command) == [("", ["git", "push", "origin", "2"])]
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "2" else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
 	assert lookups == ["2"]
 
 
@@ -1342,7 +1367,7 @@ def test_history_fallback_push_asks_when_inconclusive(merge_commit_repo) -> None
 	decision = _ask_decision(proc)
 	assert decision is not None, proc.stdout
 	assert "inconclusive" in decision["systemMessage"]
-	assert "still open" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "actual push destination and source tip" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_history_fallback_commit_warns_when_inconclusive(merge_commit_repo) -> None:
