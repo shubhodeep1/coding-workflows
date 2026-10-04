@@ -8220,6 +8220,14 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
 		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		(source / ".claude/commands").mkdir()
+		(source / ".claude/commands/audit-plans.md").write_text("untrusted\n")
+		result = run("transfer")
+		assert result.returncode != 0
+		assert "reason=unsafe_directory" in result.stderr
+		assert (host / ".claude/commands/audit-plans.md").read_text() == "operator command\n"
+		(source / ".claude/commands/audit-plans.md").unlink()
+		(source / ".claude/commands").rmdir()
 		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/ai/WORKFLOW.md").read_text() == "operator config\n"
