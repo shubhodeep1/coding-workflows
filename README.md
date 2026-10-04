@@ -1859,8 +1859,11 @@ The Actions pipelines can run a model role on the Claude Code CLI
 cutovers switch the defaults one group at a time. **On Claude today:**
 `CLARIFY` (`clarify.yml`), `CLARIFY_RESPOND` (`orchestrate_clarify_respond.yml`:
 the answer, the self-critique and the revision) and `PLAN` (`plan.yml` through
-`scripts/run_plan_codex.sh`), since Phase 5a. Every other role still defaults
-to `codex`.
+`scripts/run_plan_codex.sh`), since Phase 5a; `IMPLEMENT`, `IMPLEMENT_REPAIR`
+(`implement.yml` through `scripts/codex_thread_reuse.sh`, which resumes the
+role's Claude session across attempts the way it resumes a codex thread) and
+`IMPLEMENT_DIAGNOSE` (`scripts/implement_diagnose_post_codex_failure.sh`),
+since Phase 5b. Every other role still defaults to `codex`.
 
 **How a cut-over role runs.** The job's "Resolve AI engine" step picks the
 engine for the role. Only when it is `claude` do "Install Claude Code CLI" and
