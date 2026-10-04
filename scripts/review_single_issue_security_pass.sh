@@ -58,8 +58,13 @@ single_pass_log()
 
 single_pass_output()
 {
-	if [ -n "${GITHUB_OUTPUT:-}" ]; then
-		echo "hold=$1" >> "${GITHUB_OUTPUT}"
+	if [ -z "${GITHUB_OUTPUT:-}" ]; then
+		echo "::error::GITHUB_OUTPUT is unset; cannot record the security-pass decision." >&2
+		exit 1
+	fi
+	if ! printf 'hold=%s\n' "$1" >> "${GITHUB_OUTPUT}"; then
+		echo "::error::Could not record the security-pass decision; failing closed." >&2
+		exit 1
 	fi
 }
 

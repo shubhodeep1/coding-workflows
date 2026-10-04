@@ -152,6 +152,15 @@ def test_pipeline_identity_failure_holds_instead_of_authorizing(tmp_path: Path) 
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
+@pytest.mark.parametrize("output_path", ["", "directory"])
+def test_unwritable_hold_output_fails_the_gate(tmp_path: Path, output_path: str) -> None:
+	output_destination = str(tmp_path) if output_path else ""
+	result, calls, output = _run(tmp_path, "gate", env={"GITHUB_OUTPUT": output_destination, "FAKE_GH_FAIL": "identity"})
+	assert result.returncode != 0 and output == ""
+	assert "::error::" in result.stderr
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
 def test_installation_token_accepts_only_its_bot_marker(tmp_path: Path) -> None:
 	comments = [_comment(_marker("clean", HEAD, 1), login="owner"), _comment(_marker("findings", HEAD, 1), login="github-actions[bot]", comment_id=2)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={
@@ -341,10 +350,13 @@ def test_audit_wiring() -> None:
 	triggers = workflow.get("on", workflow.get(True))
 	assert "pr_number" in triggers["workflow_dispatch"]["inputs"] and "pr_number" in triggers["workflow_call"]["inputs"]
 	steps = _steps(AUDIT, "security-audit")
+	resolve = steps["Resolve audit target"]
 	report = steps["Report single-issue security pass"]
 	assert report["if"] == "always() && inputs.pr_number != '' && env.AUDIT_DATA_SHA != ''"
 	assert "review_single_issue_security_pass.sh\" report" in report["run"]
 	assert "^security-audit: .*skipping" not in report["run"]
+	assert 'echo "AUDIT_DEFAULT_BRANCH=${AUDIT_DEFAULT_BRANCH}"' in resolve["run"]
+	assert report["env"]["DEFAULT_BRANCH"] == "${{ env.AUDIT_DEFAULT_BRANCH }}"
 	assert report["env"]["SECURITY_PASS_AUDIT_BRANCH"] == "${{ env.AUDIT_BRANCH }}"
 	assert report["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
 	assert workflow["permissions"]["actions"] == "write"

@@ -68,7 +68,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `.cts`, and `.mts` alongside other source extensions for snapshot and
    validated transfer. For Claude engine fixes it also admits only
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
-   and `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
+   `.claude/hooks/pr_merge_status_guard.py`, and
+   `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
    `.claude/` files remain excluded from snapshot and transfer. Its
    isolation helpers must already exist in the verified workflow support
    commit; a PR's own copies are review data,
@@ -1720,7 +1721,7 @@ depend on it.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. |
-| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `true` | When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. Disabling it restores the pre-pass review-gate and deterministic-skip merge behavior. Only a sole verified automation follow-up is exempt; see `README.md` for dispatch and failure modes. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `true` | When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure retains the documented fail-open path. Disabling the flag restores the pre-pass review-gate and deterministic-skip merge behavior. Only a sole verified automation follow-up is exempt; see `README.md` for dispatch and failure modes. |
 | `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | A pending single-issue audit holds auto-merge until its marker is this many hours old; the next review run re-dispatches. Invalid or non-positive values fall back to `6`. Only a sole verified automation-linked issue skips the pass; multiple linked issues are audited. When `GH_PAT` is absent, both gate and reporter trust only `github-actions[bot]` markers. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` consolidated security-fix issue per fix cycle before the pass terminalizes as `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
