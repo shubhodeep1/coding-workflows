@@ -24,18 +24,19 @@ extract_prefixed_line()
 
 assert_review_autofix_dispatch_mirrors()
 {
-	# The retrigger and editor-changes-lost bodies moved into sourced step
-	# scripts (issue #4898); their echo callsites count with the workflow's.
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${REPO_ROOT}/.github/workflows/review_autofix.yml" \
-		"${REPO_ROOT}/scripts/review_autofix_step_post_commit_retrigger.sh" \
-		"${REPO_ROOT}/scripts/review_autofix_step_changes_lost_redispatch.sh" <<'PY'
+	PYTHONDONTWRITEBYTECODE=1 python3 - "${REPO_ROOT}" <<'PY'
 from pathlib import Path
 import sys
 
+# review_autofix.yml moved its large run: bodies into
+# scripts/review_autofix_step_<slug>.sh (CLAUDE.md §27), so the dispatch
+# echoes live in those step scripts too; check every file.
+root = Path(sys.argv[1])
+paths = [root / ".github/workflows/review_autofix.yml", *sorted((root / "scripts").glob("review_autofix_step_*.sh"))]
 prefixes = ("AUTOFIX_DISPATCH_SKIPPED", "AUTOFIX_DISPATCH_ISSUED")
 seen = {prefix: 0 for prefix in prefixes}
 
-for path in (Path(arg) for arg in sys.argv[1:]):
+for path in paths:
 	lines = path.read_text(encoding="utf-8").splitlines()
 	for index, line in enumerate(lines):
 		for prefix in prefixes:
