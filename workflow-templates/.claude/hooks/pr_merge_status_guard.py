@@ -266,7 +266,13 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
 			if segment and segment[-1].isdigit():
-				segment.pop()
+				# Only an unquoted digit immediately attached to a redirect is an fd.
+				redirect_start = lexer.instream.tell() - len(token)
+				if command[redirect_start:redirect_start + len(token)] != token:
+					redirect_start -= 1  # shlex may read one character ahead.
+				fd_start = redirect_start - len(segment[-1])
+				if fd_start >= 0 and command[fd_start:redirect_start] == segment[-1] and (fd_start == 0 or command[fd_start - 1] not in "'\"\\"):
+					segment.pop()
 			redirect_target = True
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):

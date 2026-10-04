@@ -731,6 +731,19 @@ def test_e2e_guards_push_as_well_as_commit(merged_branch_repo) -> None:
 	assert proc.returncode == 2, proc.stdout + proc.stderr
 
 
+def test_numeric_branch_before_spaced_redirect_remains_a_refspec(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "123", "feature/x")
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [dict(MERGED_PR, headRefOid=merged_sha)])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin 123 > /dev/null"}})
+	assert code == 2 and "Branch `123`" in message
+
+
 def _worktree_pr_stub(stub_bin: Path, merged_sha: str) -> None:
 	"""Answer one open branch and one merged branch from the same REST listing."""
 	merged = _merged_pr_payload(merged_sha)
