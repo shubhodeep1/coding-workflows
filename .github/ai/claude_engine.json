@@ -17,17 +17,17 @@
   ],
   "role_defaults": {
     "CLARIFY": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "read"
     },
     "CLARIFY_RESPOND": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "read"
     },
     "PLAN": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },

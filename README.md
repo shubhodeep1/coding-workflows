@@ -1872,9 +1872,22 @@ The smoke defaults `OPENCODE_VERSION` to `1.18.23`. `CODEX_VERSION` remains inde
 
 The Actions pipelines can run a model role on the Claude Code CLI
 (`claude -p`) instead of codex or OpenCode
-(`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). The plumbing
-is in place but **inert**: every role's code default is `codex`, no call site
-uses it yet, and the role cutovers switch the defaults one group at a time.
+(`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). The role
+cutovers switch the defaults one group at a time. **On Claude today:**
+`CLARIFY` (`clarify.yml`), `CLARIFY_RESPOND` (`orchestrate_clarify_respond.yml`:
+the answer, the self-critique and the revision) and `PLAN` (`plan.yml` through
+`scripts/run_plan_codex.sh`), since Phase 5a. Every other role still defaults
+to `codex`.
+
+**How a cut-over role runs.** The job's "Resolve AI engine" step picks the
+engine for the role. Only when it is `claude` do "Install Claude Code CLI" and
+"Resolve Claude credential" (the account pool) run. The model call then runs
+on Claude (`claude_run`, or the clarify sandbox's Claude branch). When Claude
+cannot start (no CLI, no credential, clarify image build failure or every
+account gated: exit `75`, logged `AI_ENGINE_FALLBACK`), the same attempt runs
+the unchanged codex call, and
+the rest of the job stays on codex. `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
+the issue) puts a role back on codex without a code change.
 
 | Piece | What it does |
 |---|---|
@@ -1905,10 +1918,10 @@ input (`claude` or `codex`; empty leaves the project unlabelled), and the
 orchestrator puts the matching label (`ai:engine-claude` or `ai:codex`) on
 the tracking issue and the wave-1 issues it creates. The poller copies the
 tracking issue's engine label onto every issue and PR it creates later, and
-`implement.yml` copies an issue's engine label onto its PR. The separate
-role cutovers must pass work-item labels into engine selection; today the
-labels do not select a production engine. When both labels are
-present, `ai:codex` is copied. `/implement-plan-claude` dispatches with
+`implement.yml` copies an issue's engine label onto its PR. Clarify,
+clarify-respond and plan resolve the engine from the issue's fetched labels;
+roles not yet cut over still run on codex. When both labels are present,
+`ai:codex` is copied. `/implement-plan-claude` dispatches with
 `engine=claude`; against a wrapper that has no `engine` input yet it
 dispatches without it and labels the tracking issue instead. Wave-1 issues
 created before that later label write do not inherit it. If `implement.yml`

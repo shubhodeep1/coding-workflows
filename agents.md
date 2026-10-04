@@ -22,7 +22,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    a `Q1`/`Q2` batch.
 2. **clarify-respond** (`orchestrate_clarify_respond.yml`) — answer the
    clarifier's questions on behalf of an orchestrator-managed issue.
-   Both clarification workflows run Codex through `scripts/clarify_isolated_run.sh`
+   Both clarification workflows run the selected Claude or Codex engine through
+   `scripts/clarify_isolated_run.sh`
    in a read-only, network-isolated container with a host-side model broker.
    They stage the helper and Dockerfile from the support ref (main fallback);
    isolation failures never fall back to host Codex. GitHub-side fetching,
@@ -610,8 +611,8 @@ a new value, add it to the appropriate overrides file with a
 
 | Phase | Default model | Default reasoning | Verbosity | Engine · Claude role |
 |---|---|---|---|---|
-| clarify, clarify-respond | `openai/gpt-6-sol` | `high` (smoke: `low` — `clarify.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | codex · `CLARIFY`, `CLARIFY_RESPOND` |
-| plan | `openai/gpt-6-sol` | `high` (smoke: `low` — `plan.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | codex · `PLAN` |
+| clarify, clarify-respond | `openai/gpt-6-sol` | `high` (smoke: `low` — `clarify.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | Claude (Opus 5.5; codex fallback) · `CLARIFY`, `CLARIFY_RESPOND` |
+| plan | `openai/gpt-6-sol` | `high` (smoke: `low` — `plan.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | Claude (Opus 5.5; codex fallback) · `PLAN` |
 | orchestrate (decompose), judge | `openai/gpt-6-sol` | `high` | `low` | codex · `ORCHESTRATE`, `WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE` |
 | implement (main editor) | `openai/gpt-6-sol` | `high` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | `low` | codex · `IMPLEMENT` |
 | implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` | codex · `IMPLEMENT_REPAIR` |
@@ -632,8 +633,10 @@ a new value, add it to the appropriate overrides file with a
 
 The **Engine · Claude role** column names today's engine and the role name
 `scripts/ai_engine.sh` resolves for that row (README "Claude engine").
-Every role's code default in `.github/ai/claude_engine.json` is `codex`
-until its cutover; `AI_ENGINE_<ROLE>`, `AI_ENGINE` or the `ai:engine-claude`
+Every role's default in `.github/ai/claude_engine.json` is `codex`
+until its cutover (Phase 5a moved `CLARIFY`, `CLARIFY_RESPOND` and `PLAN`
+to `claude`; a missing config file still means codex for every role);
+`AI_ENGINE_<ROLE>`, `AI_ENGINE` or the `ai:engine-claude`
 / `ai:codex` labels select it per run. On Claude a role uses its existing
 model variable only when that value starts with `claude-`, else Opus 5.5
 (`claude-opus-5-5`), or Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`,
