@@ -1318,6 +1318,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				bulk_reasons.append(target.bulk)
 			if target.warning:
 				_warn(target.warning)
+			if target.bulk == "unresolved git push destination":
+				# The checked-out branch is not the requested destination.
+				continue
 			if target.tip != "HEAD":
 				with _git_environment(target.environment):
 					code, resolved_source_sha, _ = _run(
@@ -1325,9 +1328,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						target.cwd, _GIT_TIMEOUT_SECONDS,
 					)
 				if code != 0:
-					_warn("could not resolve git push source; checking the session checkout instead")
 					bulk_reasons.append("unresolved git push source")
-					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+					continue
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):

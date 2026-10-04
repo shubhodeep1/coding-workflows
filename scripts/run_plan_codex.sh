@@ -275,7 +275,7 @@ if [ "${PLAN_ENGINE}" = "claude" ]; then
 fi
 
 max_attempts=3
-trap 'bash scripts/editor_git_credentials.sh restore || true' EXIT
+trap 'bash scripts/editor_git_credentials.sh restore' EXIT
 for attempt in $(seq 1 "${max_attempts}"); do
   echo "Codex planning attempt ${attempt}/${max_attempts} (engine ${PLAN_ENGINE})..."
   # Capacity-fallback: on the final attempt switch the editor model
@@ -292,7 +292,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
   fi
   plan_rc=0
-  bash scripts/editor_git_credentials.sh hide || true
+  bash scripts/editor_git_credentials.sh hide
   if [ "${PLAN_ENGINE}" = "claude" ]; then
     ( unset GH_TOKEN GH_PAT GITHUB_TOKEN TG_BOT_SECRET TG_CHAT_ID TG_ADMIN_CHAT_ID ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
       AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
@@ -305,7 +305,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
   if [ "${PLAN_ENGINE}" != "claude" ]; then
     env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
   fi
-  bash scripts/editor_git_credentials.sh restore || true
+  bash scripts/editor_git_credentials.sh restore
   if [ "${plan_rc}" -eq 0 ]; then
     if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"

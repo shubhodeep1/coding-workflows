@@ -2727,7 +2727,7 @@ jobs:
             # shellcheck source=/dev/null
             source scripts/codex_thread_reuse.sh
 
-            trap 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore || true' EXIT
+            trap 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore' EXIT
 
             for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
@@ -2875,7 +2875,7 @@ jobs:
             # unsynced integration branch checks out an older conftest.py, so
             # the workflow side has to hold on its own.
             # heal-evidence-privileged-prompt-injection: scrub child credentials.
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide || true
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \
@@ -2886,14 +2886,14 @@ jobs:
               CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
               CODEX_THREAD_REUSE_LOG_FILE="${attempt_log_file}" \
               CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE="${RUNTIME_DIR}/codex_log.txt" \
-            CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
-            CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
-            CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
+              CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
+              CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
+              CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
               env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
 
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore || true
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -4145,7 +4145,7 @@ jobs:
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
             # Same ledger scrub as the implementation launch above.
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide || true
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide
             if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
@@ -4257,7 +4257,6 @@ jobs:
 
       - name: Restore git credentials after syntax repair
         if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore

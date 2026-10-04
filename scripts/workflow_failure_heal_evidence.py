@@ -1424,7 +1424,7 @@ def render_structured_prompt_section(evidence_dir: str) -> str:
 							lines.append(f"Step {step['number']}: {_diagnostic_text(step.get('name'), 80)}; {_safe_conclusion(step.get('conclusion'))}")
 				diag = job.get("diagnostics") if isinstance(job.get("diagnostics"), dict) else {}
 				codes = diag.get("exit_codes")
-				lines.append("Exit codes: " + (", ".join(str(n) for n in codes[:10] if type(n) is int and 0 <= n <= 999) if isinstance(codes, list) else "unavailable"))
+				lines.append("Exit codes: " + ((", ".join(str(n) for n in codes[:10] if type(n) is int and 0 <= n <= 999) or "unavailable") if isinstance(codes, list) else "unavailable"))
 				lines.append(f"Error signature: {_diagnostic_text(diag.get('error_signature'), 240)}")
 				path = diag.get("crash_file")
 				lines.append(f"Crash file: {path if heal.is_valid_repo_path(path) else 'unavailable'}")

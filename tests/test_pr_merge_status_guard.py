@@ -967,6 +967,19 @@ def test_unresolved_push_source_requests_confirmation(merged_branch_repo, capsys
 	)
 
 
+@pytest.mark.parametrize("command", ['git push origin "$TARGET"', 'git push origin "$SOURCE":feature/x'])
+def test_unresolved_push_does_not_block_on_checked_out_merged_branch(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [dict(MERGED_PR, headRefOid=merged_sha)])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 0, message
+	assert any(item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
+		for item in map(json.loads, capsys.readouterr().out.splitlines()))
+
+
 def test_numeric_push_refspec_before_redirect_is_not_lost(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")

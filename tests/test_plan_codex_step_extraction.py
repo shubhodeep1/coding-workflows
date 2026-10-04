@@ -109,6 +109,9 @@ def _run_runner(
 	(scripts_dir / PLAN_RUNNER.name).write_text(
 		PLAN_RUNNER.read_text(encoding="utf-8"), encoding="utf-8"
 	)
+	(scripts_dir / "editor_git_credentials.sh").write_text(
+		(REPO_ROOT / "scripts" / "editor_git_credentials.sh").read_text(encoding="utf-8"), encoding="utf-8"
+	)
 	_write_executable(
 		scripts_dir / "render_prompt.sh",
 		"""#!/usr/bin/env bash

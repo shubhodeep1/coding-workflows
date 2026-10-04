@@ -214,6 +214,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     only the bounded `diagnostics.json` structured prompt section; raw job and
     artifact files are not linked in those prompts. Their editor launches
     scrub GitHub/Telegram credentials and temporarily hide checkout git auth.
+    Hiding/restoring git auth fails the editor step on error; restoration
+    verifies the workflow repository identity, not merely the GitHub host.
     Heal-evidence implement runs pin the issue/plan scope allowlist before the
     editor; preflight and commit ignore scope bypass variables and block empty
     allowlists. This is not a same-uid process isolation boundary.
@@ -259,7 +261,8 @@ checks an adjacent unquoted numeric token before `>` as a file descriptor
 (`git push origin 2>/dev/null` still checks the current branch); a separated
 or quoted number is a push refspec (`git push origin 2 > /dev/null` checks
 branch `2`). An unresolved push destination or source prompts for confirmation
-after the checkout check, because the actual pushed branch or tip may differ.
+without substituting the checked-out branch for the unknown target; independently
+resolved refspecs are still checked and blocked when they stack on merged history.
 
 The `gh api` permission guard in `.claude/hooks/gh_api_write_guard.py` and
 its `workflow-templates/` twin exempts an unquoted literal-ID loop counter
