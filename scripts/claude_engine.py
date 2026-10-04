@@ -152,7 +152,8 @@ USAGE_LIMIT_TEXT_RE = re.compile(
 TIMEOUT_EXIT_CODES = (124, 137)
 
 # Read-only roles may run these commands and nothing else in Bash. Plain
-# `gh api` reads are allowed only when the guard explicitly approves them.
+# `gh api` reads require explicit guard approval, and ai_engine.sh strips the
+# write-capable runner credentials before the Claude child starts.
 READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Read",
 	"Grep",

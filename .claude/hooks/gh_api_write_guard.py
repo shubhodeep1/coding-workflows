@@ -652,7 +652,7 @@ def parse_gh_api_args(args: list[str]) -> dict:
 	Raises Unreadable on an unknown flag, a missing value, or anything other
 	than exactly one endpoint.
 	"""
-	parsed = {"method": None, "endpoints": [], "fields": [], "headers": [], "input": None}
+	parsed = {"method": None, "endpoints": [], "fields": [], "headers": [], "input": None, "hostname": None}
 	index = 0
 	options_done = False
 	while index < len(args):
@@ -690,6 +690,8 @@ def parse_gh_api_args(args: list[str]) -> dict:
 			parsed["headers"].append(value)
 		elif role == "input":
 			parsed["input"] = value
+		elif role == "hostname":
+			parsed["hostname"] = value
 		elif role == "jq" and _JQ_CLI_OPTION_RE.match(value):
 			raise MalformedJq(value)
 	if len(parsed["endpoints"]) != 1:
@@ -1463,7 +1465,9 @@ def evaluate(payload: dict, read_only: bool = False) -> tuple[str | None, str]:
 					outer_results.append(classify(parse_gh_api_args(args), rewritten, lambda: ""))
 				except Unreadable:
 					break
-			if len(outer_results) == len(outer_invocations) and all(kind == KIND_READ for kind, _ in outer_results):
+			if len(outer_results) == len(outer_invocations) and all(kind == KIND_READ for kind, _ in outer_results) and (
+				not read_only or all(kind == KIND_READ and description.startswith("GET ") for kind, description in echo_results)
+			):
 				if _is_approvable_command(rewritten, allow_echo_only=True) or _is_approvable_read_loop(rewritten, outer_results):
 					return DECISION_ALLOW, "gh api guard (CLAUDE.md §23.H): echo of a read-only gh api substitution."
 	try:
@@ -1495,7 +1499,16 @@ def evaluate(payload: dict, read_only: bool = False) -> tuple[str | None, str]:
 	malformed_jq_values: list[str] = []
 	for args in invocations:
 		try:
-			results.append(classify(parse_gh_api_args(args), command, repo_slug_lookup))
+			parsed = parse_gh_api_args(args)
+			# Interactive reads include HEAD and GraphQL; read roles admit REST GET only.
+			if read_only and (
+				parsed["method"] != "GET"
+				or parsed["endpoints"][0].lstrip("/").split("?", 1)[0] == "graphql"
+				or parsed["hostname"] not in (None, "github.com")
+			):
+				results.append((KIND_WRITE, "read-only role permits only GET requests to REST endpoints on github.com"))
+			else:
+				results.append(classify(parsed, command, repo_slug_lookup))
 		except MalformedJq as exc:
 			malformed_jq_values.append(exc.value)
 		except Unreadable as exc:
@@ -1544,6 +1557,8 @@ def evaluate(payload: dict, read_only: bool = False) -> tuple[str | None, str]:
 	if invocations and _is_approvable_read_loop(command, results):
 		summary = "; ".join(f"{kind} call {description}" for kind, description in results)
 		return DECISION_ALLOW, f"gh api guard (CLAUDE.md §23.H): for loop over literal IDs whose body only reads: {summary}."
+	if read_only and invocations:
+		return DECISION_DENY, "read-only role: gh api requires an explicitly approved GET command."
 	return None, ""
 
 

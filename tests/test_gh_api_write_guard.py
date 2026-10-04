@@ -985,6 +985,10 @@ def test_hook_process_emits_ask_json_for_a_write():
 	"gh api repos/{owner}/{repo}/issues/5/labels -f 'labels[]=x'",
 	"gh api repos/{owner}/{repo}/actions/workflows/ai-review.yml/dispatches -f ref=main",
 	"gh api graphql -f query='mutation { addStar(input:{starrableId:\"x\"}) { clientMutationId } }'",
+	"gh api graphql -f query='{ viewer { login } }'",
+	"gh api -X GET graphql -f query='{ viewer { login } }'",
+	"gh api -X HEAD repos/o/r/pulls/1",
+	"gh api --hostname example.com repos/o/r/pulls/1",
 	"echo ok; gh api repos/{owner}/{repo}/issues/5/comments -f body=hi",
 ])
 def test_read_only_denies_writes_including_routine_writes(command):
@@ -1002,6 +1006,15 @@ def test_read_only_denies_writes_including_routine_writes(command):
 ])
 def test_read_only_keeps_approved_reads(command):
 	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}, read_only=True)[0] == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	"git status; gh api repos/o/r/pulls/1",
+	"git diff && gh api repos/o/r/pulls/1",
+	'echo "$(gh api -X HEAD repos/o/r/pulls/1)"',
+])
+def test_read_only_denies_unapproved_or_non_get_reads(command):
+	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}, read_only=True)[0] == guard.DECISION_DENY
 
 
 @pytest.mark.parametrize("command", [
