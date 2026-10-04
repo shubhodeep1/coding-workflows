@@ -321,7 +321,10 @@ jobs:
         id: support_integrity
         run: |
           set -euo pipefail
-          find "${GITHUB_WORKSPACE}/scripts" -type f -exec chmod a-w {} +
+          find "${GITHUB_WORKSPACE}" \
+            -path "${GITHUB_WORKSPACE}/.git" -prune -o \
+            -path "${GITHUB_WORKSPACE}/audit-data" -prune -o \
+            -exec chmod a-w {} +
           manifest="$(cd "${GITHUB_WORKSPACE}" && find scripts -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum)"
           if [ -z "${manifest}" ]; then
             echo "::error::Security audit support scripts manifest is empty."

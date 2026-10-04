@@ -736,7 +736,10 @@ def test_audit_support_integrity_is_checked_before_running_reporter() -> None:
 	assert names.index("Record audit support integrity") + 1 == names.index("Run security audit")
 	record = _audit_workflow_step("Record audit support integrity")
 	assert record["id"] == "support_integrity"
-	assert 'find "${GITHUB_WORKSPACE}/scripts" -type f -exec chmod a-w {} +' in record["run"]
+	assert 'find "${GITHUB_WORKSPACE}" \\\n' in record["run"]
+	assert '-path "${GITHUB_WORKSPACE}/.git" -prune -o \\\n' in record["run"]
+	assert '-path "${GITHUB_WORKSPACE}/audit-data" -prune -o \\\n' in record["run"]
+	assert '-exec chmod a-w {} +' in record["run"]
 	assert 'echo "support_scripts_sha256=${support_scripts_sha256}" >> "$GITHUB_OUTPUT"' in record["run"]
 	report = _audit_workflow_step("Report single-issue security pass")
 	assert report["env"]["SUPPORT_SCRIPTS_SHA256"] == "${{ steps.support_integrity.outputs.support_scripts_sha256 }}"

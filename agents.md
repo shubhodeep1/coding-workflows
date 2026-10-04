@@ -240,6 +240,8 @@ reject shell control syntax and write-capable git options, including abbreviated
 `--output` and `git grep -O`. The security audit also strips credentials from
 its model call and fingerprints the trusted `scripts/` tree before running its
 single-issue reporter; a mismatch fails closed without executing that script.
+The merged-PR push guard preserves whitespace-separated numeric refspecs before
+output redirects; only attached numeric file-descriptor prefixes are removed.
 
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
