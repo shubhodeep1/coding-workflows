@@ -38,8 +38,10 @@
 # a command at the start of any tracking-issue comment line.
 #
 # Never fails its caller: every problem is logged and the exit code is 0.
-# API budget (CLAUDE.md §15): the linked-issue read in `pr` mode, one comment,
-# at most one issue create, and the operator-step writer's two calls.
+# API budget (CLAUDE.md §15): in `pr` mode, one linked-issue read and one
+# paginated PR-files lookup (the status job cannot share its issue snapshot);
+# when code gaps exist, one source-key search before creating the fix issue;
+# one comment, at most one fix-issue create, and the operator-step writer's calls.
 # Log: ACTIVATION_VERIFY mode= item= verdict= code_gaps= operator_gaps= outcome= reason=
 set -uo pipefail
 
@@ -47,6 +49,8 @@ ACTIVATION_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUPPORT_DIR="${SUPPORT_DIR:-$(cd "${ACTIVATION_SELF_DIR}/.." && pwd)}"
 RUNTIME_DIR="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}/activation-verify}"
 mkdir -p "${RUNTIME_DIR}"
+# shellcheck source=/dev/null
+source "${SUPPORT_DIR}/scripts/gh_helpers.sh"
 
 activation_log()
 {
@@ -72,11 +76,13 @@ if not isinstance(match, dict) or match.get("verdict") not in ("LIVE", "DORMANT"
 	sys.exit(1)
 def clean(value, limit):
 	text = value if isinstance(value, str) else ""
-	return " ".join(text.replace("<!--", "").replace("-->", "").split())[:limit]
+	return " ".join("".join(ch for ch in text.replace("<!--", "").replace("-->", "") if ord(ch) >= 32 and ord(ch) != 127).split())[:limit]
 gaps = []
-for gap in (match.get("gaps") or [])[:20]:
+if not isinstance(match.get("gaps"), list) or len(match["gaps"]) > 20:
+	sys.exit(1)
+for gap in match["gaps"]:
 	if not isinstance(gap, dict) or gap.get("kind") not in ("code", "operator"):
-		continue
+		sys.exit(1)
 	gaps.append({
 		"kind": gap["kind"],
 		"title": clean(gap.get("title"), 200) or "Activation gap",
@@ -97,12 +103,17 @@ activation_main()
 {
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
+	local activation_files_json activation_files_response activation_existing_fix
 	if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
 		activation_log "mode=${mode} outcome=skip reason=disabled"
 		return 0
 	fi
-	if [ -z "${REPOSITORY:-}" ] || [ ! -d "${TARGET_DIR:-}" ]; then
-		activation_log "mode=${mode} outcome=skip reason=missing_input"
+	if [ -z "${REPOSITORY:-}" ]; then
+		activation_log "mode=${mode} outcome=skip reason=missing_repository"
+		return 0
+	fi
+	if [ ! -d "${TARGET_DIR:-}" ]; then
+		activation_log "mode=${mode} outcome=skip reason=target_dir_unavailable"
 		return 0
 	fi
 	context_file="${RUNTIME_DIR}/activation_context.json"
@@ -118,18 +129,29 @@ activation_main()
 			target_issue="${PR_NUMBER}"
 			local linked_json="{}"
 			if [[ "${LINKED_ISSUE:-}" =~ ^[0-9]+$ ]]; then
-				linked_json="$(gh api "repos/${REPOSITORY}/issues/${LINKED_ISSUE}" --jq '{number, title, body: ((.body // "")[0:6000])}' 2>/dev/null || echo '{}')"
+				linked_json="$(gh_retry gh api "repos/${REPOSITORY}/issues/${LINKED_ISSUE}" --jq '{number, title, body: ((.body // "")[0:6000]), user, author_association}' 2>/dev/null || echo '{}')"
 				printf '%s' "${linked_json}" | jq -e 'type == "object"' >/dev/null 2>&1 || linked_json="{}"
-				if printf '%s' "${linked_json}" | jq -e '(.body // "") | test("<!-- ai:activation-fix:v1")' >/dev/null 2>&1; then
+				if printf '%s' "${linked_json}" | jq -e '((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) and ((.body // "") | split("\n")[0] | test("^<!-- ai:activation-fix:v1 source=(pr|project)-[0-9]+ -->$"))' >/dev/null 2>&1; then
 					activation_log "mode=pr item=${item} outcome=skip reason=activation_fix_merge"
 					return 0
 				fi
 				target_issue="${LINKED_ISSUE}"
 			fi
+			activation_files_json=""
+			if activation_files_response="$(gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" 2>/dev/null)"; then
+				activation_files_json="$(printf '%s' "${activation_files_response}" | jq -c 'if type == "array" and all(.[]; type == "array") then [.[][] | .filename] | if length > 0 and length < 3000 and all(.[]; type == "string") then . else empty end else empty end' 2>/dev/null)"
+			fi
+			if [ -z "${activation_files_json}" ]; then
+				echo "::warning::Activation PR files are unavailable or incomplete for #${PR_NUMBER}; using the merge commit diff."
+				if ! activation_files_json="$(git -C "${TARGET_DIR}" diff --name-only "${MERGE_SHA:-HEAD}^1" "${MERGE_SHA:-HEAD}" 2>/dev/null | jq -Rsc 'split("\n") | map(select(length > 0))')"; then
+					echo "::warning::Activation merge diff is unavailable for #${PR_NUMBER}; continuing with an empty changed-file list."
+					activation_files_json='[]'
+				fi
+			fi
 			jq -n --arg pr "${PR_NUMBER}" --arg sha "${MERGE_SHA:-}" --arg title "${PR_TITLE:-}" --arg body "${PR_BODY:-}" \
 				--argjson linked "${linked_json}" \
-				--arg files "$(git -C "${TARGET_DIR}" diff --name-only "${MERGE_SHA:-HEAD}^1" "${MERGE_SHA:-HEAD}" 2>/dev/null | head -n 200)" \
-				'{kind: "merged pull request", pull_request: ($pr | tonumber), merge_commit: $sha, title: $title, body: ($body[0:6000]), linked_issue: $linked, changed_files: ($files | split("\n") | map(select(length > 0)))}' \
+				--argjson files "${activation_files_json}" \
+				'{kind: "merged pull request", pull_request: ($pr | tonumber), merge_commit: $sha, title: $title, body: ($body[0:6000]), linked_issue: $linked, changed_files: $files}' \
 				> "${context_file}" 2>/dev/null || echo '{}' > "${context_file}"
 			;;
 		project)
@@ -167,7 +189,8 @@ activation_main()
 	else
 		model="${ACTIVATION_VERIFY_MODEL:-${WORKFLOW_EDITOR_MODEL:-openai/gpt-6-sol}}"
 		reasoning="${ACTIVATION_VERIFY_REASONING:-high}"
-		if ! bash "${SUPPORT_DIR}/scripts/write_codex_config.sh" --model "${model}" --reasoning "${reasoning}" >/dev/null 2>&1; then
+		if ! bash "${SUPPORT_DIR}/scripts/write_codex_config.sh" --model "${model}" --reasoning "${reasoning}" \
+			--catalog-path "${SUPPORT_DIR}/scripts/codex_model_catalog.json" --project-path "${TARGET_DIR}" >/dev/null 2>&1; then
 			activation_log "mode=${mode} item=${item} outcome=skip reason=codex_config_failed"
 			return 0
 		fi
@@ -183,14 +206,30 @@ activation_main()
 	operator_gaps="$(jq '[.gaps[] | select(.kind == "operator")] | length' "${verdict_file}")"
 
 	if [ "${code_gaps}" -gt 0 ]; then
-		fix_body="$(jq -r --arg key "${key}" --arg label "${item_label}" '
-			"<!-- ai:activation-fix:v1 source=" + $key + " -->\n"
-			+ "## Activation gaps\n\nActivation verification of " + $label
-			+ " found these gaps that code in this repository can close. Close each one with the smallest change; do not change unrelated behaviour.\n\n"
-			+ ([.gaps[] | select(.kind == "code") | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
-		' "${verdict_file}")"
-		if ! gh api "repos/${REPOSITORY}/issues" -f title="Activation gaps after ${item_label}" -f body="${fix_body}" >/dev/null 2>&1; then
-			echo "::warning::Could not open the activation-fix issue for ${key}."
+		# Neither the linked-issue read nor the PR-files call can detect a fix issue
+		# from an earlier run whose verdict comment failed.
+		if ! activation_existing_fix="$(gh_retry gh api "search/issues?q=repo%3A${REPOSITORY}%20in%3Abody%20%22ai%3Aactivation-fix%3Av1%20source%3D${key}%22&per_page=100" 2>/dev/null)" \
+			|| ! printf '%s' "${activation_existing_fix}" | jq -e \
+			'(.items | type) == "array" and (.total_count | type) == "number" and .total_count <= 100' >/dev/null 2>&1; then
+			activation_log "mode=${mode} item=${item} outcome=skip reason=fix_lookup_failed"
+			return 0
+		fi
+		if printf '%s' "${activation_existing_fix}" | jq -e --arg marker "<!-- ai:activation-fix:v1 source=${key} -->" \
+			'[.items[] | select(.pull_request == null) | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | select((.body // "") | split("\n")[0] == $marker)] | length > 0' >/dev/null 2>&1; then
+			activation_log "mode=${mode} item=${item} outcome=fix_issue_reused"
+			# Continue with operator steps and the missing verdict comment.
+		else
+			fix_body="$(jq -r --arg key "${key}" --arg label "${item_label}" '
+				"<!-- ai:activation-fix:v1 source=" + $key + " -->\n"
+				+ "## Activation gaps\n\nActivation verification of " + $label
+				+ " found these gaps that code in this repository can close. Close each one with the smallest change; do not change unrelated behaviour.\n\n"
+				+ ([.gaps[] | select(.kind == "code") | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
+			' "${verdict_file}")"
+			if ! gh_retry gh api "repos/${REPOSITORY}/issues" -f title="Activation gaps after ${item_label}" -f body="${fix_body}" >/dev/null 2>&1; then
+				echo "::warning::Could not open the activation-fix issue for ${key}."
+				activation_log "mode=${mode} item=${item} outcome=skip reason=fix_issue_failed"
+				return 0
+			fi
 		fi
 	fi
 	if [ "${operator_gaps}" -gt 0 ]; then
@@ -198,7 +237,7 @@ activation_main()
 		jq '[.gaps[] | select(.kind == "operator") | {title, instructions: (.fix + (if .evidence != "" then "\nEvidence: " + .evidence else "" end)), dormant_until}]' "${verdict_file}" > "${steps_file}"
 		PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_DIR}/scripts/operator_step_issue.py" upsert --repo "${REPOSITORY}" --key "${key}" \
 			--source "Activation of ${item_label}" --steps-file "${steps_file}" >/dev/null 2>&1 \
-			|| echo "::warning::Could not update the ai:operator-step issue for ${key}."
+			|| { echo "::warning::Could not update the ai:operator-step issue for ${key}."; activation_log "mode=${mode} item=${item} outcome=skip reason=operator_issue_failed"; return 0; }
 	fi
 
 	comment_body="$(jq -r --arg key "${key}" '
@@ -207,8 +246,11 @@ activation_main()
 		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title] | join("\n")) + "\n\n" else "" end)
 		+ "<!-- ai:activation:v1 verdict=" + .verdict + " source=" + $key + " -->"
 	' "${verdict_file}")"
-	gh api "repos/${REPOSITORY}/issues/${target_issue}/comments" -f body="${comment_body}" >/dev/null 2>&1 \
-		|| echo "::warning::Could not post the activation verdict on #${target_issue}."
+	if ! gh_retry gh api "repos/${REPOSITORY}/issues/${target_issue}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
+		echo "::warning::Could not post the activation verdict on #${target_issue}."
+		activation_log "mode=${mode} item=${item} outcome=skip reason=verdict_comment_failed"
+		return 0
+	fi
 
 	if [ -f "${SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
 		# shellcheck source=/dev/null

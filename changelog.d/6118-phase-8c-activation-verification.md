@@ -15,4 +15,4 @@ What this means for operators: watch the `ai:operator-step` issue. It lists, per
 
 ### For contributors
 
-`scripts/operator_step_issue.py upsert` is the only writer of the `ai:operator-step` issue (one keyed section per source, replaced in place; the unblock judge's `operator_step` verdict reuses it). A merge that closes an activation-fix issue is not verified again, so fixes never loop. `tests/test_activation_verify.py` runs in its own `ci.yml` step.
+`scripts/operator_step_issue.py upsert` is the only writer of the `ai:operator-step` issue (one keyed section per source, replaced in place; the unblock judge's `operator_step` verdict reuses it). Its bounded read-back reconciliation merges duplicate trusted trackers and closes duplicates so concurrent activation runs converge without losing an entry. A merge that closes an activation-fix issue is not verified again, so fixes never loop. `tests/test_activation_verify.py` runs in its own `ci.yml` step.

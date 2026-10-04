@@ -573,8 +573,12 @@ run_project_activation_verify() {
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=support_missing"
     return 0
   fi
-  if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "source=project-${TRACKING_NUM} -->" \
-    '[.[]? | (.body // "") | select(contains("<!-- ai:activation:v1 ") and contains($src))] | length > 0' >/dev/null 2>&1; then
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
+    return 0
+  fi
+  if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" \
+    '[.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | (.body // "") | (endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->") or endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->"))] | any' >/dev/null 2>&1; then
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=already_verified"
     return 0
   fi
@@ -585,23 +589,28 @@ run_project_activation_verify() {
     verify_default="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
   fi
   [ -n "${verify_default}" ] || verify_default="main"
-  verify_dir="${RUNTIME_DIR:-/tmp}/activation-verify-project-${TRACKING_NUM}"
-  rm -rf "${verify_dir}"
+  if ! verify_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/activation-verify-project-${TRACKING_NUM}-XXXXXX")"; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=worktree_failed"
+    return 0
+  fi
   if ! git fetch --quiet origin "${verify_default}" 2>/dev/null \
     || ! git worktree add --quiet --detach "${verify_dir}" FETCH_HEAD 2>/dev/null; then
+    rmdir "${verify_dir}" 2>/dev/null || true
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=worktree_failed"
     return 0
   fi
   ACTIVATION_VERIFY_TIMEOUT_SECS="${ACTIVATION_VERIFY_TIMEOUT_SECS:-900}" \
   SUPPORT_DIR="${PWD}" \
   TARGET_DIR="${verify_dir}" \
-  RUNTIME_DIR="${RUNTIME_DIR:-/tmp}/activation-verify-${TRACKING_NUM}" \
+  RUNTIME_DIR="${verify_dir}-runtime" \
   REPOSITORY="${GITHUB_REPOSITORY}" \
+  TRACKING_NUM="${TRACKING_NUM}" \
   PROJECT_TITLE="$(jq -r '.project_title // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
   PROJECT_BODY="$(jq -r '.project_body_snapshot // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
   FINAL_PR="$(jq -r '.final_merge_pr // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
     bash scripts/activation_verify.sh project || true
-  git worktree remove --force "${verify_dir}" >/dev/null 2>&1 || rm -rf "${verify_dir}"
+  git worktree remove --force "${verify_dir}" >/dev/null 2>&1 \
+    || echo "::warning::Activation worktree cleanup failed for project #${TRACKING_NUM}."
   return 0
 }
 

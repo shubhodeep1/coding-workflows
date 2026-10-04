@@ -36,7 +36,7 @@ def done(out=""):
 	if out:
 		print(out)
 	sys.exit(0)
-endpoint = next((a for a in args[1:] if a.startswith("repos/")), "")
+endpoint = next((a for a in args[1:] if a.startswith(("repos/", "search/"))), "")
 fields = {}
 for i, a in enumerate(args):
 	if a == "-f":
@@ -44,16 +44,37 @@ for i, a in enumerate(args):
 		fields.setdefault(k, v)
 if "issues?labels=ai:operator-step" in endpoint:
 	done(json.dumps(state.get("operator_issues", [])))
+if endpoint.endswith("/files?per_page=100"):
+	done(json.dumps([[{"filename": "README.md"}]]))
+if endpoint.startswith("search/issues?"):
+	done(json.dumps(state.get("fix_search", {"total_count": 0, "items": []})))
 if "-X" in args and "PATCH" in args:
-	state["patched"] = {"endpoint": endpoint, "body": fields.get("body", "")}
+	issue_number = int(endpoint.rsplit("/", 1)[-1])
+	if fields.get("state") == "closed":
+		state["closed"].append(issue_number)
+		state["operator_issues"] = [issue for issue in state["operator_issues"] if issue["number"] != issue_number]
+	else:
+		state["patched"] = {"endpoint": endpoint, "body": fields.get("body", "")}
+		for issue in state["operator_issues"]:
+			if issue["number"] == issue_number:
+				issue["body"] = fields.get("body", "")
 	done("{}")
 if endpoint.endswith("/comments"):
 	state["comments"].append({"endpoint": endpoint, "body": fields.get("body", "")})
 	done("{}")
 if endpoint == "repos/o/r/issues" and "title" in fields:
+	if os.environ.get("FAKE_GH_FAIL_CREATE") == "1":
+		sys.exit(1)
 	state["created"].append(fields)
-	done(json.dumps({"number": 900 + len(state["created"]), "html_url": "u"}))
+	created = {"number": 900 + len(state["created"]), "html_url": "u"}
+	if fields.get("title") == "Operator steps waiting":
+		state["operator_issues"].append({**created, "body": fields.get("body", ""), "author_association": "OWNER", "user": {"login": "o"}})
+	done(json.dumps(created))
 if endpoint.startswith("repos/o/r/issues/"):
+	issue_number = int(endpoint.rsplit("/", 1)[-1])
+	for issue in state["operator_issues"]:
+		if issue["number"] == issue_number:
+			done(json.dumps(issue))
 	done(json.dumps(state.get("linked", {})))
 done("")
 '''
@@ -66,7 +87,7 @@ def _setup(tmp_path: Path, **state) -> tuple[dict, Path]:
 	gh.write_text(FAKE_GH, encoding="utf-8")
 	gh.chmod(0o755)
 	state_file = tmp_path / "state.json"
-	base = {"calls": [], "comments": [], "created": [], "operator_issues": [], "linked": {}}
+	base = {"calls": [], "comments": [], "created": [], "closed": [], "operator_issues": [], "linked": {}}
 	base.update(state)
 	state_file.write_text(json.dumps(base), encoding="utf-8")
 	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_STATE=str(state_file), PYTHONDONTWRITEBYTECODE="1")
@@ -75,10 +96,11 @@ def _setup(tmp_path: Path, **state) -> tuple[dict, Path]:
 	return env, state_file
 
 
-def _verify(tmp_path: Path, verdict: dict | str, linked: dict | None = None, env_extra: dict | None = None):
+def _verify(tmp_path: Path, verdict: dict | str, linked: dict | None = None, env_extra: dict | None = None, mode: str = "pr", fix_search: dict | None = None):
 	target = tmp_path / "target"
 	target.mkdir(exist_ok=True)
-	env, state_file = _setup(tmp_path, linked=linked or {"number": 7, "title": "t", "body": "spec"})
+	env, state_file = _setup(tmp_path, linked=linked or {"number": 7, "title": "t", "body": "spec", "author_association": "OWNER"},
+		fix_search=fix_search or {"total_count": 0, "items": []})
 	env.update(
 		REPOSITORY="o/r",
 		PR_NUMBER="42",
@@ -92,7 +114,7 @@ def _verify(tmp_path: Path, verdict: dict | str, linked: dict | None = None, env
 		MOCK_ACTIVATION_VERIFY_JSON=verdict if isinstance(verdict, str) else json.dumps(verdict),
 	)
 	env.update(env_extra or {})
-	result = subprocess.run(["bash", str(VERIFY), "pr"], capture_output=True, text=True, env=env, check=False)
+	result = subprocess.run(["bash", str(VERIFY), mode], capture_output=True, text=True, env=env, check=False)
 	return result, json.loads(state_file.read_text(encoding="utf-8"))
 
 
@@ -130,12 +152,45 @@ def test_live_verdict_only_posts_the_marker(tmp_path: Path) -> None:
 
 
 def test_merge_of_an_activation_fix_is_not_verified_again(tmp_path: Path) -> None:
-	linked = {"number": 7, "title": "t", "body": "<!-- ai:activation-fix:v1 source=pr-41 -->\nfix"}
+	linked = {"number": 7, "title": "t", "body": "<!-- ai:activation-fix:v1 source=pr-41 -->\nfix", "author_association": "OWNER"}
 	result, state = _verify(tmp_path, DORMANT, linked=linked)
 	assert "reason=activation_fix_merge" in result.stdout and state["comments"] == []
 
 
-@pytest.mark.parametrize("verdict", ["not json", json.dumps({"verdict": "MAYBE"})])
+def test_untrusted_or_quoted_fix_marker_does_not_skip(tmp_path: Path) -> None:
+	linked = {"number": 7, "body": "See <!-- ai:activation-fix:v1 source=pr-41 -->", "author_association": "NONE"}
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Running.", "gaps": []}, linked=linked)
+	assert "reason=activation_fix_merge" not in result.stdout
+	assert len(state["comments"]) == 1
+
+
+def test_project_mode_posts_verdict_to_tracking_issue(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "cron", "summary": "Running.", "gaps": []},
+		env_extra={"TRACKING_NUM": "77"}, mode="project")
+	assert "mode=project item=77 verdict=LIVE" in result.stdout
+	assert state["comments"][-1]["endpoint"] == "repos/o/r/issues/77/comments"
+	assert state["comments"][-1]["body"].endswith("source=project-77 -->")
+
+
+def test_failed_fix_issue_does_not_mark_verification_complete(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_CREATE": "1"})
+	assert "reason=fix_issue_failed" in result.stdout
+	assert state["comments"] == []
+
+
+def test_existing_fix_issue_is_reused_before_posting_missing_verdict(tmp_path: Path) -> None:
+	fix_search = {"total_count": 1, "items": [{"body": "<!-- ai:activation-fix:v1 source=pr-42 -->\nwork", "author_association": "OWNER"}]}
+	result, state = _verify(tmp_path, DORMANT, fix_search=fix_search)
+	assert "outcome=fix_issue_reused" in result.stdout
+	assert len(state["created"]) == 1  # Only the operator-step issue.
+	assert state["comments"][-1]["body"].endswith("source=pr-42 -->")
+
+
+@pytest.mark.parametrize("verdict", [
+	"not json",
+	json.dumps({"verdict": "MAYBE"}),
+	json.dumps({"verdict": "DORMANT", "gaps": [{"kind": "unknown", "title": "Unhandled gap"}]}),
+])
 def test_invalid_verdict_changes_nothing(tmp_path: Path, verdict: str) -> None:
 	result, state = _verify(tmp_path, verdict)
 	assert "reason=invalid_verdict" in result.stdout and state["comments"] == [] and state["created"] == []
@@ -144,6 +199,15 @@ def test_invalid_verdict_changes_nothing(tmp_path: Path, verdict: str) -> None:
 def test_disabled_does_nothing(tmp_path: Path) -> None:
 	result, state = _verify(tmp_path, DORMANT, env_extra={"ACTIVATION_VERIFY_ENABLED": "false"})
 	assert "reason=disabled" in result.stdout and state["calls"] == []
+
+
+@pytest.mark.parametrize(("env_extra", "reason"), [
+	({"REPOSITORY": ""}, "missing_repository"),
+	({"TARGET_DIR": "/does/not/exist"}, "target_dir_unavailable"),
+])
+def test_missing_common_input_names_the_failed_precondition(tmp_path: Path, env_extra: dict, reason: str) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra=env_extra)
+	assert f"reason={reason}" in result.stdout and state["calls"] == []
 
 
 def test_verdict_text_cannot_forge_a_marker(tmp_path: Path) -> None:
@@ -179,6 +243,22 @@ def test_writer_replaces_its_own_entry_and_keeps_others(tmp_path: Path) -> None:
 	assert state["created"] == []
 
 
+def test_writer_reconciles_duplicate_trackers_without_losing_entries(tmp_path: Path) -> None:
+	first = writer.render_body([("pr-1", writer.render_entry("pr-1", "one", [{"title": "A", "instructions": "x"}]))])
+	second = writer.render_body([("pr-2", writer.render_entry("pr-2", "two", [{"title": "B", "instructions": "y"}]))])
+	env, state_file = _setup(tmp_path, operator_issues=[_issue(first, number=5), _issue(second, number=6)])
+	steps = tmp_path / "steps.json"
+	steps.write_text(json.dumps([{"title": "C", "instructions": "z"}]), encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(WRITER), "upsert", "--repo", "o/r", "--key", "pr-3", "--source", "three", "--steps-file", str(steps)],
+		capture_output=True, text=True, env=env, check=False,
+	)
+	assert result.returncode == 0, result.stdout
+	state = json.loads(state_file.read_text(encoding="utf-8"))
+	assert state["closed"] == [6]
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1", "pr-2", "pr-3"]
+
+
 def test_writer_trims_oldest_entries_to_fit() -> None:
 	big = "x" * 30000
 	entries = [(f"pr-{n}", writer.render_entry(f"pr-{n}", "s", [{"title": "t", "instructions": big}])) for n in range(4)]
@@ -187,10 +267,16 @@ def test_writer_trims_oldest_entries_to_fit() -> None:
 	assert [key for key, _ in writer.parse_entries(body)][-1] == "pr-3"
 
 
+def test_writer_refuses_to_split_last_entry() -> None:
+	with pytest.raises(writer.UsageError, match="entry exceeds"):
+		writer.render_body([("pr-1", "x" * writer.MAX_BODY)])
+
+
 def test_writer_refuses_bad_keys_and_ignores_untrusted_issues() -> None:
 	with pytest.raises(writer.UsageError):
 		writer.upsert("o/r", "Bad Key", "s", [{"title": "t"}])
 	assert writer.find_issue([_issue(writer.MARKER, association="NONE")]) is None
+	assert writer.find_issue([dict(_issue(writer.MARKER, association="NONE"), user={"login": "external[bot]"})]) is None
 	assert writer.find_issue([_issue("no marker")]) is None
 
 
@@ -214,6 +300,9 @@ def test_poller_runs_it_on_every_completion_path() -> None:
 	assert len(calls) == 4
 	for i in calls:
 		assert lines[i + 1].strip() == "run_project_activation_verify"
+	assert 'TRACKING_NUM="${TRACKING_NUM}" \\' in text
+	assert 'COMMENTS_FETCH_OK:-false' in text
+	assert 'activation-verify-project-${TRACKING_NUM}-XXXXXX' in text
 	poll = POLL.read_text(encoding="utf-8")
 	assert "for activation_asset in scripts/activation_verify.sh scripts/operator_step_issue.py prompts/mode-activation-verify.txt prompts/_templates/mode-activation-verify.txt; do" in poll
 	assert "ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}" in poll

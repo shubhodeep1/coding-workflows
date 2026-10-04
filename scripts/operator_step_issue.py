@@ -27,8 +27,9 @@ Usage:
 Output is one JSON line: `issue`, `url`, `created`, `entries`. Exit 0 on
 success, 1 on bad arguments, 2 when a GitHub call failed.
 
-GitHub API budget (CLAUDE.md §15): one list of open `ai:operator-step` issues,
-then one update or one create.
+GitHub API budget (CLAUDE.md §15): each bounded reconciliation attempt lists
+open `ai:operator-step` issues, performs one canonical update or create, then
+lists again to verify the source entry survived a concurrent writer.
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 MAX_BODY = 60000
 MAX_STEPS = 20
 MAX_FIELD = 2000
+MAX_UPSERT_ATTEMPTS = 3
 INTRO = (
 	"The pipeline found steps only a person can take. The work they belong to keeps running "
 	"where it can and stays off where it must until each step is done. Tick a step when you "
@@ -75,7 +77,10 @@ def _clean(value: object, limit: int = MAX_FIELD) -> str:
 
 
 def _gh(args: list[str]) -> str:
-	result = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+	try:
+		result = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+	except OSError as exc:
+		raise ApiError(f"gh {args[0] if args else ''} failed: {exc}") from exc
 	if result.returncode != 0:
 		raise ApiError(f"gh {' '.join(args[:2])} failed: {result.stderr.strip()[:300]}")
 	return result.stdout
@@ -84,13 +89,19 @@ def _gh(args: list[str]) -> str:
 def _trusted(issue: dict) -> bool:
 	user = issue.get("user") if isinstance(issue.get("user"), dict) else {}
 	login = str(user.get("login") or "")
-	return login.endswith("[bot]") or issue.get("author_association") in TRUSTED_ASSOCIATIONS
+	return login == "github-actions[bot]" or issue.get("author_association") in TRUSTED_ASSOCIATIONS
 
 
 def find_issue(issues: object) -> dict | None:
 	"""The oldest open, trusted issue whose body starts with the marker."""
+	candidates = find_issues(issues)
+	return candidates[0] if candidates else None
+
+
+def find_issues(issues: object) -> list[dict]:
+	"""All open, trusted tracker issues in issue-number order."""
 	if not isinstance(issues, list):
-		return None
+		return []
 	candidates = [
 		issue
 		for issue in issues
@@ -99,7 +110,7 @@ def find_issue(issues: object) -> dict | None:
 		and _trusted(issue)
 		and str(issue.get("body") or "").split("\n", 1)[0].strip() == MARKER
 	]
-	return min(candidates, key=lambda issue: int(issue.get("number") or 0)) if candidates else None
+	return sorted(candidates, key=lambda issue: int(issue.get("number") or 0))
 
 
 def parse_entries(body: str) -> list[tuple[str, str]]:
@@ -133,8 +144,10 @@ def render_body(entries: list[tuple[str, str]]) -> str:
 	kept = list(entries)
 	while True:
 		body = "\n\n".join(parts + [text for _, text in kept]) + "\n"
-		if len(body) <= MAX_BODY or len(kept) <= 1:
-			return body[:MAX_BODY]
+		if len(body.encode("utf-8")) <= MAX_BODY:
+			return body
+		if len(kept) <= 1:
+			raise UsageError("operator-step entry exceeds the issue body limit")
 		kept.pop(0)
 
 
@@ -145,7 +158,9 @@ def load_steps(path: str) -> list[dict]:
 		raise UsageError(f"cannot read --steps-file {path}: {exc}") from exc
 	if not isinstance(steps, list) or not steps or not all(isinstance(step, dict) for step in steps):
 		raise UsageError("--steps-file must hold a non-empty JSON array of objects")
-	return steps[:MAX_STEPS]
+	if len(steps) > MAX_STEPS:
+		raise UsageError(f"--steps-file exceeds {MAX_STEPS} operator steps")
+	return steps
 
 
 def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
@@ -153,25 +168,54 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
 	if not KEY_RE.match(key):
 		raise UsageError(f"--key must be lower-case letters, digits and '-', got {key!r}")
-	listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
-	try:
-		issues = json.loads(listing or "[]")
-	except ValueError as exc:
-		raise ApiError(f"unreadable issue list: {exc}") from exc
-	existing = find_issue(issues)
 	entry = render_entry(key, source, steps)
-	entries = parse_entries(str(existing.get("body") or "")) if existing else []
-	if any(entry_key == key for entry_key, _ in entries):
-		entries = [(entry_key, entry if entry_key == key else text) for entry_key, text in entries]
-	else:
-		entries.append((key, entry))
-	body = render_body(entries)
-	if existing:
-		number = int(existing["number"])
-		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", f"body={body}"])
-		return {"issue": number, "url": existing.get("html_url", ""), "created": False, "entries": len(parse_entries(body))}
-	created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={TITLE}", "-f", f"body={body}", "-f", f"labels[]={LABEL}"]) or "{}")
-	return {"issue": created.get("number"), "url": created.get("html_url", ""), "created": True, "entries": len(parse_entries(body))}
+	created_number: int | None = None
+	for _upsert_attempt in range(MAX_UPSERT_ATTEMPTS):
+		listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
+		try:
+			issues = json.loads(listing or "[]")
+		except ValueError as exc:
+			raise ApiError(f"unreadable issue list: {exc}") from exc
+		candidates = find_issues(issues)
+		if candidates:
+			existing = candidates[0]
+			entries: list[tuple[str, str]] = []
+			for candidate_issue in candidates:
+				for entry_key, entry_text in parse_entries(str(candidate_issue.get("body") or "")):
+					entries = [(seen_key, entry_text if seen_key == entry_key else seen_text) for seen_key, seen_text in entries]
+					if not any(seen_key == entry_key for seen_key, _ in entries):
+						entries.append((entry_key, entry_text))
+			entries = [(entry_key, entry if entry_key == key else entry_text) for entry_key, entry_text in entries]
+			if not any(entry_key == key for entry_key, _ in entries):
+				entries.append((key, entry))
+			body = render_body(entries)
+			number = int(existing["number"])
+			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", f"body={body}"])
+			for duplicate_issue in candidates[1:]:
+				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(duplicate_issue['number'])}", "-f", "state=closed"])
+		else:
+			body = render_body([(key, entry)])
+			try:
+				created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={TITLE}", "-f", f"body={body}", "-f", f"labels[]={LABEL}"]) or "{}")
+			except ValueError as exc:
+				raise ApiError(f"unreadable created issue: {exc}") from exc
+			created_number = int(created.get("number") or 0) or None
+
+		try:
+			verification = json.loads(_gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"]) or "[]")
+		except ValueError as exc:
+			raise ApiError(f"unreadable verification issue list: {exc}") from exc
+		verified_issue = find_issue(verification)
+		if verified_issue:
+			verified_entries = dict(parse_entries(str(verified_issue.get("body") or "")))
+			if verified_entries.get(key) == entry and len(find_issues(verification)) == 1:
+				return {
+					"issue": int(verified_issue["number"]),
+					"url": verified_issue.get("html_url", ""),
+					"created": created_number == int(verified_issue["number"]),
+					"entries": len(verified_entries),
+				}
+	raise ApiError(f"operator-step upsert did not converge after {MAX_UPSERT_ATTEMPTS} attempts")
 
 
 def main(argv: list[str] | None = None) -> int:

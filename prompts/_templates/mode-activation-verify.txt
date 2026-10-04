@@ -13,6 +13,7 @@ Read the files the merged change touched and the workflows, scripts and document
 - Consumer propagation: a `workflow-templates/` or `.claude/` change reaches consumer repositories only on the next `@stable` release and sync.
 
 Classify every gap:
+- Group related defects into at most 20 gaps without omitting a blocking defect; the result is rejected rather than silently truncated if this limit is exceeded.
 - `code`: the gate is a file in this repository the pipeline can change (a missing or mis-wired workflow, a wrong input, secret or permission name, an impossible `if:`, a missing documentation, contract or registry entry).
 - `operator`: the gate is a repository setting or a release action a person must perform (set a variable, add a secret, flip a default, tag a release, start something). Give the exact steps. When the code can be finished so it stays safely off until the operator acts, say so in `dormant_until`.
 
