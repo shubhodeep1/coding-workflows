@@ -260,6 +260,8 @@ model=""
 for ((i = 0; i < ${#codex_args[@]}; i++)); do
 	if [ "${codex_args[$i]}" = "--model" ] && [ $((i + 1)) -lt "${#codex_args[@]}" ]; then
 		model="${codex_args[$((i + 1))]}"
+	elif [[ "${codex_args[$i]}" == --model=* ]]; then
+		model="${codex_args[$i]#--model=}"
 	fi
 done
 [[ "${model}" =~ ^[a-zA-Z0-9/_.:-]+$ ]] || fail "codex arguments must name a valid --model"

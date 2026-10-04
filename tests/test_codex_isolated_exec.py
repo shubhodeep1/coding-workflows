@@ -186,6 +186,13 @@ def test_codex_exit_status_passes_through(sandbox):
 	assert proc.returncode == 3
 
 
+def test_model_equals_form_is_forwarded_to_isolated_codex(sandbox):
+	write_fake_codex(sandbox)
+	proc = run_helper(sandbox, "run", "--mode", "read-only", "--", "exec", "--model=openai/gpt-5.4")
+	assert proc.returncode == 0, proc.stderr
+	assert codex_records(sandbox)[0]["argv"][-1] == "--model=openai/gpt-5.4"
+
+
 def test_workspace_run_copies_agent_edits_back(sandbox):
 	write_fake_codex(sandbox, action="edit")
 	proc = run_helper(sandbox, "run", "--mode", "workspace", *CODEX_ARGS)

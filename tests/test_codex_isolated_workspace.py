@@ -85,7 +85,7 @@ def test_credential_paths_are_absent_from_snapshots_and_synthetic_git(repo, tmp_
 		".npmrc", ".netrc", ".pypirc", ".ssh/id_ed25519", ".config/gh/hosts.yml",
 		"client_secret.json", "secrets.json", "credentials.yaml", "secrets.yml",
 		"credentials.toml", "credentials.ini", "aws_credentials", "aws_credentials.json",
-		"client-secret.json", "client-secret.yaml",
+		"client-secret.json", "client-secret.yaml", "secret.json", "credentials.txt",
 	)
 	for name in hidden:
 		path = repo / name
@@ -105,7 +105,10 @@ def test_credential_paths_are_absent_from_snapshots_and_synthetic_git(repo, tmp_
 
 
 def test_source_files_about_secrets_remain_editable(repo, tmp_path):
-	paths = ("src/secret_manager.py", "src/credential_provider.py", "tests/test_secrets.py")
+	paths = (
+		"src/secret_manager.py", "src/credential_provider.py", "tests/test_secrets.py",
+		"src/secret.py", "src/secrets.py", "src/credentials.ts", "src/credential.go",
+	)
 	for name in paths:
 		path = repo / name
 		path.parent.mkdir(parents=True, exist_ok=True)
