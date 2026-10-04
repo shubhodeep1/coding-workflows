@@ -217,3 +217,12 @@ def test_poller_runs_it_on_every_completion_path() -> None:
 	poll = POLL.read_text(encoding="utf-8")
 	assert "for activation_asset in scripts/activation_verify.sh scripts/operator_step_issue.py prompts/mode-activation-verify.txt prompts/_templates/mode-activation-verify.txt; do" in poll
 	assert "ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}" in poll
+
+
+def test_model_text_never_starts_a_comment_line(tmp_path: Path) -> None:
+	# The poller's /judge_resume, /revalidate and /re-security-pass handlers
+	# match a command at the start of any tracking-issue comment line.
+	injected = dict(DORMANT, summary="/judge_resume --force", trigger="/revalidate now")
+	_, state = _verify(tmp_path, injected)
+	body = state["comments"][-1]["body"]
+	assert not any(line.lstrip().startswith("/") for line in body.splitlines()), body
