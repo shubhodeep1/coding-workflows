@@ -372,6 +372,7 @@ jobs:
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
+            echo "ISSUE_ALL_COMMENTS_FILE=${RUNTIME_DIR}/issue_all_comments.json"
             echo "ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/issue_context.txt"
             echo "THREAD_HISTORY_FILE=${RUNTIME_DIR}/thread_history.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
@@ -525,13 +526,17 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          # Keep clarify prompt context bounded to preserve historical behavior.
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+          # Reuse the full comment snapshot for auto-decisions and the backup
+          # loop guard; only the first 50 enter the clarify prompt.
+          gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" > "${RUNTIME_DIR}/issue_comment_pages.json"
+          jq -e 'if type == "array" and all(.[]; type == "array") then add // [] else error("invalid comment pages") end' \
+            "${RUNTIME_DIR}/issue_comment_pages.json" > "${ISSUE_ALL_COMMENTS_FILE}"
+          jq '.[0:50]' "${ISSUE_ALL_COMMENTS_FILE}" > "${ISSUE_COMMENTS_FILE}"
 
           # Build full thread history only when semantic cache is enabled.
           if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
-            if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
-              | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+            if ! jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' \
+              "${ISSUE_ALL_COMMENTS_FILE}" > "${THREAD_HISTORY_FILE}"; then
               echo "::warning::Semantic cache thread-history fetch failed; forcing cache bypass for this run (fail-open)"
               MAX_CHARS="${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}"
               if [[ "${MAX_CHARS}" =~ ^[0-9]+$ ]]; then
@@ -1282,9 +1287,16 @@ jobs:
           fi
           AUTO_DECIDE_ANSWERS_FILE="${RUNTIME_DIR}/auto_decide_answers.txt"
           jq -r '.answers' "${AUTO_DECIDE_FILE}" > "${AUTO_DECIDE_ANSWERS_FILE}"
+          AUTO_DECIDE_THREAD_HISTORY_FILE="${RUNTIME_DIR}/auto_decide_thread_history.txt"
+          if ! jq -r '.[] | select((.body // "") | startswith("/answer [auto-answered-by-orchestrator]")) | .body' \
+            "${ISSUE_ALL_COMMENTS_FILE}" > "${AUTO_DECIDE_THREAD_HISTORY_FILE}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=comment_history_unavailable"
+            exit 0
+          fi
           AUTO_DECIDE_POST_LOG="${RUNTIME_DIR}/auto_decide_post.log"
           if ! CODEX_OUTPUT_FILE="${AUTO_DECIDE_ANSWERS_FILE}" \
             CLARIFICATION_COMMENT_ID="${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" \
+            THREAD_HISTORY_FILE="${AUTO_DECIDE_THREAD_HISTORY_FILE}" \
             ISSUE_TITLE="${ISSUE_TITLE:-}" \
             bash scripts/orchestrate_parse_and_post_answer.sh 2>&1 | tee "${AUTO_DECIDE_POST_LOG}"; then
             echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=failed reason=answer_poster_failed"
@@ -1295,7 +1307,7 @@ jobs:
             exit 0
           fi
           AUTO_DECIDE_RENDER_FILE="${RUNTIME_DIR}/auto_decisions_comment.json"
-          if ! python3 scripts/auto_decisions.py render --comments-file "${ISSUE_COMMENTS_FILE}" \
+          if ! python3 scripts/auto_decisions.py render --comments-file "${ISSUE_ALL_COMMENTS_FILE}" \
             --decisions-file "${AUTO_DECIDE_FILE}" \
             --source "clarify comment ${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" > "${AUTO_DECIDE_RENDER_FILE}"; then
             echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered reason=ad_render_failed decisions=${AUTO_DECIDE_COUNT}"

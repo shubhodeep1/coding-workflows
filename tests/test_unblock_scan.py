@@ -136,7 +136,7 @@ def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 
 def test_poller_runs_the_scan_once_per_tick_after_the_project_loop() -> None:
 	lines = POLLER.read_text(encoding="utf-8").splitlines()
-	top_level = [i for i, line in enumerate(lines) if line == "run_unblock_scan"]
+	top_level = [i for i, line in enumerate(lines) if line.startswith("run_unblock_scan || echo ")]
 	assert len(top_level) == 1
 	release = lines.index("release_staged_support_needs_human_latches")
 	sweep = lines.index("close_merged_issues_sweep")

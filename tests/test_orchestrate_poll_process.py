@@ -335,9 +335,12 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 		if "gh_retry gh api" in line and '"search/issues"' in line
 	]
 
-	assert len(parameterized_search_calls) == 5
+	assert len(parameterized_search_calls) == 6
 	assert all("--method GET" in call for call in parameterized_search_calls)
 	assert sum("--paginate" in call for call in parameterized_search_calls) == 3
+	# The unblock scan's one search per tick (plan Phase 7): sorted, one page.
+	assert '-f q="repo:${GITHUB_REPOSITORY} is:open label:${labels_q}"' in poller_source_text
+	assert "-f sort=updated -f order=asc -f per_page=30" in poller_source_text
 
 	# Preserve the advisory reconciliation search and the two marker-search
 	# fallbacks, including their paginated aggregation.
@@ -5989,6 +5992,10 @@ def test_security_pass_advisory_followup_reconciles_remote_marker_before_create(
 			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
 				_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"))
 			),
+			# The search count below is the advisory reconciliation's; the
+			# tick-level unblock scan's own search is covered by
+			# tests/test_unblock_scan.py.
+			"UNBLOCK_JUDGE_ENABLED": "false",
 		},
 	)
 

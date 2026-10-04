@@ -580,7 +580,9 @@ run_project_activation_verify() {
   fi
   verify_default="${FINAL_DEFAULT_BRANCH:-${DEFAULT_BRANCH_TRACKING:-}}"
   if [ -z "${verify_default}" ]; then
-    verify_default="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+    # `|| true`: under the poller's `set -euo pipefail` a failing command
+    # substitution in an assignment would end the whole tick.
+    verify_default="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
   fi
   [ -n "${verify_default}" ] || verify_default="main"
   verify_dir="${RUNTIME_DIR:-/tmp}/activation-verify-project-${TRACKING_NUM}"
@@ -15767,12 +15769,13 @@ handle_unblock_judge_project_hooks() {
          body: ($lines[2:] | join("\n"))}]' 2>/dev/null || echo '[]')"
   count="$(printf '%s' "${requests}" | jq 'length' 2>/dev/null || echo 0)"
   for ((idx = 0; idx < count; idx++)); do
-    request="$(printf '%s' "${requests}" | jq -c ".[${idx}]")"
-    req_item="$(jq -r '.item' <<< "${request}")"
-    req_id="$(jq -r '.id' <<< "${request}")"
-    req_title="$(jq -r '.title' <<< "${request}")"
-    req_body="$(jq -r '.body' <<< "${request}")"
-    if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}")" ]; then
+    request="$(printf '%s' "${requests}" | jq -c ".[${idx}]" 2>/dev/null || true)"
+    req_item="$(jq -r '.item // ""' <<< "${request}" 2>/dev/null || true)"
+    req_id="$(jq -r '.id // ""' <<< "${request}" 2>/dev/null || true)"
+    req_title="$(jq -r '.title // ""' <<< "${request}" 2>/dev/null || true)"
+    req_body="$(jq -r '.body // ""' <<< "${request}" 2>/dev/null || true)"
+    [[ "${req_item}" =~ ^[0-9]+$ ]] && [ -n "${req_id}" ] || continue
+    if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
       continue
     fi
     [ -n "${req_title}" ] || req_title="Unblock fix-up for #${req_item}"
@@ -15878,12 +15881,14 @@ run_unblock_scan() {
     echo "UNBLOCK_SCAN outcome=skip reason=disabled"
     return 0
   fi
-  if [ ! -f scripts/unblock_scan.py ] || [ ! -f scripts/unblock_ledger.py ]; then
+  # Optional helpers, staged by orchestrate_poll.yml when the support
+  # checkout has them: a missing file skips the scan, never the tick.
+  if ! { [ -f scripts/unblock_scan.py ] && [ -f scripts/unblock_ledger.py ]; }; then
     echo "UNBLOCK_SCAN outcome=skip reason=support_missing"
     return 0
   fi
   mkdir -p "${work_dir}"
-  labels_q="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py labels | jq -r '.labels | map("\"" + . + "\"") | join(",")')"
+  labels_q="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py labels 2>/dev/null | jq -r '.labels | map("\"" + . + "\"") | join(",")' 2>/dev/null || true)"
   if [ -z "${labels_q}" ]; then
     echo "UNBLOCK_SCAN outcome=skip reason=labels_unavailable"
     return 0
@@ -15898,8 +15903,9 @@ run_unblock_scan() {
   printf '%s' "${search_items}" > "${work_dir}/search.json"
   sort -u "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null | jq -R 'select(test("^[0-9]+$")) | tonumber' | jq -s '.' > "${work_dir}/failed_projects.json" 2>/dev/null \
     || echo '[]' > "${work_dir}/failed_projects.json"
-  numbers_json="$(jq -c --slurpfile failed "${work_dir}/failed_projects.json" '([.[].number] + $failed[0]) | unique | .[:30]' "${work_dir}/search.json")"
-  count="$(printf '%s' "${numbers_json}" | jq 'length')"
+  numbers_json="$(jq -c --slurpfile failed "${work_dir}/failed_projects.json" '([.[].number] + $failed[0]) | unique | .[:30]' "${work_dir}/search.json" 2>/dev/null || echo '[]')"
+  count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  [[ "${count}" =~ ^[0-9]+$ ]] || count=0
   if [ "${count}" -eq 0 ]; then
     echo "UNBLOCK_SCAN candidates=0 dispatched=0 outcome=idle"
     return 0
@@ -15910,7 +15916,8 @@ run_unblock_scan() {
   fi
   fragment=""
   for ((i = 0; i < count; i++)); do
-    n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]")"
+    n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]" 2>/dev/null || true)"
+    [[ "${n}" =~ ^[0-9]+$ ]] || continue
     fragment+=$'\n'"    i${n}: issueOrPullRequest(number: ${n}) {
       ... on Issue {
         timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
@@ -24000,7 +24007,8 @@ run_standalone_stall_recovery
 
 release_staged_support_needs_human_latches
 
-run_unblock_scan
+# Never ends the tick: a failure inside is logged and the sweeps below run.
+run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
 
 close_merged_issues_sweep
 
