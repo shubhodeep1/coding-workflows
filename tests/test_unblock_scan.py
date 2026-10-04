@@ -61,7 +61,8 @@ def test_picks_items_blocked_long_enough_and_classifies_them() -> None:
 	]
 	details = {"1": _details("ai:blocked", 2), "2": _details("ai:needs-human", 3), "3": _details("ai:validation-failed", 1)}
 	result = _select(search, details)
-	assert result["dispatch"] == [{"item": 2, "kind": "pr"}, {"item": 1, "kind": "issue"}, {"item": 3, "kind": "project"}]
+	assert result["dispatch"] == [{"item": 2, "kind": "pr"}]
+	assert result["skipped"]["over_tick_cap"] == 2
 
 
 def test_age_comes_from_the_label_event_not_the_last_update() -> None:
@@ -91,8 +92,15 @@ def test_running_or_recent_judge_runs_hold_the_item() -> None:
 		{"display_title": "Something else #3", "status": "queued", "created_at": _iso(0.1)},
 	]
 	result = _select(search, details, runs)
-	assert result["dispatch"] == [{"item": 3, "kind": "issue"}]
-	assert result["skipped"] == {"judge_running": 2}
+	assert result["dispatch"] == []
+	assert result["skipped"] == {"judge_running": 3}
+	# A cancelled pending run is not active; once the running job completes,
+	# only its own item stays within the recent-run cooldown.
+	runs[0]["status"] = "completed"
+	runs[0]["created_at"] = _iso(2)
+	runs[1]["status"] = "cancelled"
+	assert _select(search, details, runs)["dispatch"] == [{"item": 1, "kind": "issue"}]
+	assert _select([search[1]], {"2": details["2"]}, runs)["dispatch"] == [{"item": 2, "kind": "issue"}]
 
 
 def test_failed_projects_without_a_label_are_judged_and_the_cap_holds() -> None:
@@ -102,8 +110,8 @@ def test_failed_projects_without_a_label_are_judged_and_the_cap_holds() -> None:
 	details["40"] = {"labeled": [], "comments": [state]}
 	result = _select(search, details, failed=[40], limit=5)
 	assert result["dispatch"][0] == {"item": 40, "kind": "project"}
-	assert len(result["dispatch"]) == 5
-	assert result["skipped"]["over_tick_cap"] == 3
+	assert len(result["dispatch"]) == 1
+	assert result["skipped"]["over_tick_cap"] == 7
 	# With no label event and no trusted state comment the age is unknown:
 	# the project is held, never guessed old.
 	details["40"] = {"labeled": [], "comments": [dict(state, login="someone")]}
@@ -193,3 +201,10 @@ def test_bulk_override_never_covers_canonical_deletions(path: str) -> None:
 	assert 'if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&' in text
 	assert '--argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}"' in text
 	assert '[ "${unblock_bulk_override_applies}" != "true" ]; then' in text
+
+
+def test_bulk_override_spend_and_judge_log_reference_extract_scalar_captures() -> None:
+	implement = (ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	assert 'scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->") | .[0]' in implement
+	judge = (ROOT / "scripts/unblock_judge.sh").read_text(encoding="utf-8")
+	assert 'scan("/actions/runs/([0-9]+)") | .[0]' in judge

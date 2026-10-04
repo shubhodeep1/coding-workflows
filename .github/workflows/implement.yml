@@ -1876,7 +1876,7 @@ jobs:
           fi
           override_comment_id="$(jq -r --arg login "${pipeline_login}" --arg issue "${ISSUE_NUMBER}" '
             [.[] | select((.user.login // "") == $login)] as $mine
-            | ([$mine[] | (.body // "") | scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->")]) as $used
+            | ([$mine[] | (.body // "") | scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->") | .[0]]) as $used
             | [$mine[]
                 | select(((.body // "") | split("\n") | map(select(test("\\S"))) | last // "")
                     | test("^<!-- ai:unblock:v1 item=" + $issue + " stop=destructive-blocked fingerprint=[0-9a-f]{12} verdict=override_guard round=[1-9][0-9]* override=bulk_delete -->$"))

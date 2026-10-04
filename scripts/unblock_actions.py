@@ -263,10 +263,10 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
 		if ctx["kind"] == "pr":
+			# PR body lineage is author-controlled; never route its reissue
+			# into an unverified project or reapprove an issue the close event closes.
+			ops.append({"op": "create_issue", "title": title, "body": body, "labels": [], "wait_on": None})
 			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": True})
-			if ctx["linked_issue"]:
-				ops.append({"op": "comment", "issue": ctx["linked_issue"], "body": f"Re-issued after #{item}: {verdict['instructions']}"})
-				ops += _approve(ctx["linked_issue"], [], "")
 		elif ctx["tracking"]:
 			ops.append(
 				{

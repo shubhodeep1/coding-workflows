@@ -35,9 +35,12 @@ An item is picked when all hold:
   - its newest trusted unblock marker (`<!-- ai:unblock:v1 ` or
     `<!-- ai:unblock-wait:v1 `, as the comment's last non-empty line, by
     --trusted-login) is older than --marker-hours, or there is none;
-  - no judge run for it is queued or in progress, and none started in the
-    last --inflight-minutes.
-Oldest block first, at most --max. Output: one JSON line
+  - no judge run for it is queued or in progress, and no non-cancelled run
+    started in the last --inflight-minutes.
+Oldest block first, at most one dispatch while the shared operator-step
+writer concurrency group is in use. --max=0 disables dispatch; larger values
+are capped at one. An active judge holds the queue until it finishes.
+Output: one JSON line
 `{"dispatch": [{"item", "kind"}], "skipped": {<reason>: <count>}}`, where kind
 is `project` (label ai:orchestrator-tracking), `pr` or `issue`.
 
@@ -145,6 +148,8 @@ def _busy_items(runs: object, now: dt.datetime, inflight: dt.timedelta) -> set[i
 		if not match:
 			continue
 		created = _time(run.get("created_at"))
+		if run.get("status") in ("cancelled", "skipped"):
+			continue
 		if run.get("status") in ACTIVE_RUN_STATES or (created and now - created < inflight):
 			busy.add(int(match.group(1)))
 	return busy
@@ -225,9 +230,19 @@ def select(
 			kind = "issue"
 		candidates.append((since, number, kind))
 	candidates.sort()
-	chosen = candidates[:limit]
-	if len(candidates) > limit:
-		skipped["over_tick_cap"] = len(candidates) - limit
+	# GitHub Actions keeps only one pending run per concurrency group. Dispatching
+	# a second judge would replace (cancel) the first pending run.
+	active_judge = any(
+		isinstance(run, dict)
+		and RUN_NAME_RE.match(str(run.get("display_title") or run.get("name") or ""))
+		and run.get("status") in ACTIVE_RUN_STATES
+		for run in (runs if isinstance(runs, list) else [])
+	)
+	effective_limit = 0 if active_judge else min(limit, 1)
+	chosen = candidates[:effective_limit]
+	if len(candidates) > effective_limit:
+		reason = "judge_running" if active_judge else "over_tick_cap"
+		skipped[reason] = skipped.get(reason, 0) + len(candidates) - effective_limit
 	return {"dispatch": [{"item": number, "kind": kind} for _, number, kind in chosen], "skipped": skipped}
 
 

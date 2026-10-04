@@ -286,6 +286,18 @@ def test_pr_retry_clears_the_label_and_dispatches_review() -> None:
 	assert {"op": "dispatch_review", "pr": 7} in ops
 
 
+def test_pr_reissue_creates_replacement_before_closing_source() -> None:
+	standalone = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx("pr", linked_issue=31))
+	assert [op["op"] for op in standalone] == ["create_issue", "close"]
+	assert "correct spec" in standalone[0]["body"]
+	assert all(op.get("issue") != 31 for op in standalone)
+	unlinked = actions.plan(_verdict("reissue", instructions="new start"), _ctx("pr"))
+	assert [op["op"] for op in unlinked] == ["create_issue", "close"]
+	managed = actions.plan(_verdict("reissue", instructions="new start"), _ctx("pr", tracking=40))
+	assert [op["op"] for op in managed] == ["create_issue", "close"]
+	assert all(op.get("issue") != 40 for op in managed)
+
+
 def test_scope_override_extends_files_touched_and_reapproves() -> None:
 	ops = actions.plan(_verdict("override_guard", paths=["src/a.py"]), _ctx(stop="scope-blocked", has_plan=True))
 	assert ops[0] == {"op": "edit_files_touched", "issue": 7, "paths": ["src/a.py"]}
@@ -370,6 +382,9 @@ if endpoint == "user":
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 f = fields()
 if method == "POST" and endpoint.endswith("/comments"):
+	if os.environ.get("FAKE_GH_FAIL_PROJECT_RECORD") and endpoint == "repos/o/r/issues/40/comments" and f.get("body", "").startswith("Unblock judge verdict"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_RESUME") and f.get("body", "").startswith("/answer"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
@@ -388,6 +403,9 @@ if method == "PATCH":
 	state["patched"].append([endpoint, f])
 	done("{}")
 if method == "POST" and endpoint.endswith("/issues"):
+	if os.environ.get("FAKE_GH_FAIL_CREATE"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	state["created"].append(f)
 	done("901" if jq else json.dumps({"number": 901}))
 if endpoint.endswith("/comments?per_page=100"):
@@ -395,6 +413,9 @@ if endpoint.endswith("/comments?per_page=100"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	done(json.dumps(state["item_comments"]))
+if endpoint.startswith("repos/o/r/pulls/"):
+	number = endpoint.rsplit("/", 1)[1]
+	done(json.dumps({"number": int(number), "base": {"ref": os.environ.get("FAKE_GH_PR_BASE", "main")}, "head": {"sha": "a" * 40}}))
 if endpoint.startswith("repos/o/r/issues/"):
 	number = endpoint.rsplit("/", 1)[1]
 	issue = state["issues"].get(number, {})
@@ -442,6 +463,38 @@ def test_judge_records_the_verdict_first_then_acts(tmp_path: Path) -> None:
 	assert record.splitlines()[-1].startswith("<!-- ai:unblock:v1 item=7 stop=blocked fingerprint=")
 	assert record.splitlines()[-1].endswith("verdict=retry_budget round=1 -->")
 	assert state["comments"][-1]["body"] == "/answer pin the version"
+
+
+def test_project_marker_failure_does_not_lose_the_recorded_action(tmp_path: Path) -> None:
+	child = dict(ISSUE, body="- Tracking issue: #40")
+	result, state = _judge(tmp_path, child, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "pin the version"}, FAKE_GH_FAIL_PROJECT_RECORD="1")
+	assert result.returncode == 0
+	assert state["comments"][0]["body"].endswith("round=1 -->")
+	assert any(comment["body"] == "/answer pin the version" for comment in state["comments"])
+	assert "op=project_record outcome=failed" in result.stdout
+
+
+def test_reissue_does_not_close_pr_when_issue_creation_fails(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"}, FAKE_GH_FAIL_CREATE="1")
+	assert result.returncode == 0
+	assert "op=create_issue outcome=failed" in result.stdout
+	assert "reason=prerequisite_failed" in result.stdout
+	assert not any(endpoint == "repos/o/r/pulls/7" for endpoint, _ in state["patched"])
+
+
+def test_pr_project_fixup_uses_verified_base_not_body_tracking_number(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"}, body="- Tracking issue: #99")
+	verdict = {"verdict": "descope", "reason": "r", "instructions": "drop the broken part"}
+	result, state = _judge(tmp_path, pr, verdict=verdict)
+	assert result.returncode == 0, result.stderr
+	assert len(state["created"]) == 1
+	assert all(comment["endpoint"] != "repos/o/r/issues/99/comments" for comment in state["comments"])
+	result, state = _judge(tmp_path, pr, verdict=verdict, FAKE_GH_PR_BASE="orchestrator/project-40")
+	assert result.returncode == 0, result.stderr
+	assert state["created"] == []
+	assert any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
+	assert all(comment["endpoint"] != "repos/o/r/issues/99/comments" for comment in state["comments"])
 
 
 def test_judge_refuses_a_verdict_outside_the_menu(tmp_path: Path) -> None:

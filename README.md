@@ -82,7 +82,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ACTIVATION_VERIFY_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | issue_pr_status, orchestrate_poll | Model for the activation verifier. |
 | `THINKING_LEVEL_ACTIVATION_VERIFY` | No | `high` | issue_pr_status, orchestrate_poll | Reasoning effort for the activation verifier. |
 | `UNBLOCK_JUDGE_ENABLED` | No | `true` | orchestrate_poll, unblock_judge | Unblock judge (Phase 7 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`, see [Unblock judge](#unblock-judge)). `false` stops the poller's unblock scan, the judge runs, and the poller's fix-up adoption; items then wait for a person as before. |
-| `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK` | No | `5` | orchestrate_poll | Most `unblock_judge_dispatch.yml` runs the scan starts per poll tick, oldest block first. |
+| `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK` | No | `5` | orchestrate_poll | Legacy upper bound for unblock dispatch. While judge and activation runs share the operator-step writer concurrency group, the scan sends only one judge at a time (even if this is higher), oldest block first, to avoid replacing a pending run. Set `0` to disable dispatch. |
 | `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES` | No | `30` | orchestrate_poll | How long an item must carry its block label (or a project must have been failed) before the scan sends it to the judge. |
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
@@ -345,8 +345,9 @@ At minimum, create these three core wrappers. Each job carries the same `if:` pr
 reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"). `ai-clarify`
 automatically triages newly opened issues only when the original author is a GitHub `User` with
 `author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR`, or the exact `github-actions[bot]`
-identity with type `Bot`. Issues labelled `ai:orchestrator-tracking`, `ai:security-audit`, or
-`ai:retro` remain excluded. A trusted maintainer can start clarification on an outside issue with
+identity with type `Bot`. Issues labelled `ai:orchestrator-tracking`, `ai:security-audit`,
+`ai:retro`, or `ai:operator-step` remain excluded. A trusted maintainer can start clarification
+on an outside issue with
 `/reclarify` and continue planning with `/answer`, but must explicitly post `/approved` after
 reviewing the plan: an outside author's issue is never auto-approved. The `/reclarify` route accepts
 only comments from a user whose `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`. The `/answer` route in `ai-plan` and the
@@ -369,7 +370,7 @@ permissions:
 jobs:
   clarify:
     if: >-
-      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable
     secrets: inherit
@@ -2581,7 +2582,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   `unblock_judge_dispatch.yml` runs. `scripts/unblock_scan.py` picks items
   blocked for at least `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES`, with no trusted
   `ai:unblock` marker younger than `UNBLOCK_JUDGE_RETRY_HOURS` and no judge
-  running, oldest first, at most `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK`.
+  running, oldest first, at most one while the shared writer concurrency
+  group is in use. The scan waits for an active judge rather than cancelling
+  its pending successor; `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK=0` disables dispatch.
   Failed projects are added from the poller's own state.
 - **Judge.** `unblock_judge_dispatch.yml` (from `workflow-templates/` in a
   consumer) calls `.github/workflows/unblock_judge.yml`, which runs
@@ -2599,7 +2602,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   `accept_with_followup` never for a failed security pass or validation. The
   model's output is validated before anything happens. The model runs without
   GitHub or Telegram credentials; Claude uses the read-only tool profile.
-  A failed ledger-history read or project marker write skips action for that run.
+  A failed ledger-history read skips action for that run. The item verdict
+  is recorded before action; a failed project marker is repaired if the item
+  remains blocked for a later run.
 - **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
   then carried out with the existing commands: on a tracking issue
   `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on
@@ -2610,6 +2615,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   is closed with `ai:merged`, the next judge run posts the resume command.
   A failed fix-up lookup or resume write leaves the wait marker pending for
   another run; closing a fix-up without a merge does not resume its parent.
+  A PR `reissue` creates a standalone replacement before closing the PR;
+  PR project fix-ups and verdict history use the GitHub-reported
+  `orchestrator/project-<n>` base, never an unverified project number in PR text.
   `operator_step` also
   writes the `ai:operator-step` issue and sends a Telegram WARNING.
   Activation-verifier and unblock-judge jobs share a repository-scoped

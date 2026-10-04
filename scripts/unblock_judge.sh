@@ -38,8 +38,8 @@
 # comments (paginated), the tracking issue's comments for a project's item,
 # at most one linked-issue read, one fix-up read while waiting, the run log
 # and diff for evidence, one verdict comment (two for a project's item) and
-# the planned operations (at most about six writes). If a project marker was
-# lost after the item marker landed, reconciliation posts it before deciding.
+# the planned operations (at most about six writes). A failed project marker
+# is reconciled if the item stays blocked; actuation used the item ledger.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 set -uo pipefail
 
@@ -128,8 +128,8 @@ PY
 }
 
 # Runs the operations of unblock_actions.py output, in order. A failed
-# operation is logged and the rest still run, except a failed close must not
-# add the terminal label to an open item.
+# operation is logged and the rest still run, except a failed prerequisite
+# must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
 	local ops_file="$1" count idx op issue number created body label close_failed="false" ops_failed="false"
@@ -168,6 +168,7 @@ unblock_run_ops()
 				done < <(jq -r ".ops[${idx}].labels[]" "${ops_file}")
 				created="$(gh api "repos/${REPOSITORY}/issues" "${create_args[@]}" --jq '.number' 2>/dev/null || true)"
 				if ! [[ "${created}" =~ ^[0-9]+$ ]]; then
+					ops_failed="true"
 					unblock_log "item=${ITEM} op=create_issue outcome=failed"
 					continue
 				fi
@@ -245,12 +246,16 @@ PY
 				fi
 				;;
 			close)
+				if [ "${ops_failed}" = "true" ]; then
+					unblock_log "item=${ITEM} op=close issue=${issue} outcome=skip reason=prerequisite_failed"
+					continue
+				fi
 				if [ "$(jq -r ".ops[${idx}].pr" "${ops_file}")" = "true" ]; then
 					gh api -X PATCH "repos/${REPOSITORY}/pulls/${issue}" -f state=closed >/dev/null 2>&1 \
-						|| { close_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
+						|| { close_failed="true"; ops_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
 				else
 					gh api -X PATCH "repos/${REPOSITORY}/issues/${issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
-						|| { close_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
+						|| { close_failed="true"; ops_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
 				fi
 				;;
 			dispatch_review)
@@ -348,19 +353,26 @@ unblock_main()
 	fi
 
 	# The project an item belongs to, and a PR's linked issue.
-	local tracking="" linked="" body_text
+	local tracking="" linked="" body_text pr_json="" head_sha=""
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "project" ]; then
 		tracking="${ITEM}"
-	else
+	elif [ "${ITEM_KIND}" = "issue" ]; then
 		tracking="$(printf '%s\n' "${body_text}" | sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*\(\*\*\)\{0,1\}Tracking issue:\(\*\*\)\{0,1\}[[:space:]]*#\([0-9][0-9]*\)[[:space:]]*$/\3/p' | head -n1)"
 	fi
 	if [ "${ITEM_KIND}" = "pr" ]; then
-		linked="$(printf '%s\n' "${body_text}" | grep -oiE '\b(refs|closes|close|closed|fixes|fix|fixed|resolves|resolve|resolved)[[:space:]]+#[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
-		if [ -z "${tracking}" ] && [[ "${linked}" =~ ^[0-9]+$ ]]; then
-			tracking="$(gh api "repos/${REPOSITORY}/issues/${linked}" --jq '.body // ""' 2>/dev/null \
-				| sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*\(\*\*\)\{0,1\}Tracking issue:\(\*\*\)\{0,1\}[[:space:]]*#\([0-9][0-9]*\)[[:space:]]*$/\3/p' | head -n1)"
+		# PR body references are untrusted; only its GitHub-reported base can
+		# bind a fix-up and its verdict ledger to an orchestrator project.
+		pr_json="$(gh api "repos/${REPOSITORY}/pulls/${ITEM}" 2>/dev/null || true)"
+		if ! jq -e --argjson item "${ITEM}" '.number == $item and (.base.ref | type == "string")' <<< "${pr_json}" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} outcome=skip reason=pr_unreadable"
+			return 0
 		fi
+		if [[ "$(jq -r '.base.ref' <<< "${pr_json}")" =~ ^orchestrator/project-([1-9][0-9]*)$ ]]; then
+			tracking="${BASH_REMATCH[1]}"
+		fi
+		head_sha="$(jq -r '.head.sha // ""' <<< "${pr_json}")"
+		linked="$(printf '%s\n' "${body_text}" | grep -oiE '\b(refs|closes|close|closed|fixes|fix|fixed|resolves|resolve|resolved)[[:space:]]+#[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
 	fi
 
 	if ! stop_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" stop --labels-json "$(cat "${RUNTIME_DIR}/labels.json")")"; then
@@ -428,9 +440,7 @@ unblock_main()
 
 	# Evidence and fingerprint.
 	echo '[]' > "${RUNTIME_DIR}/failing_checks.json"
-	local head_sha=""
 	if [ "${ITEM_KIND}" = "pr" ]; then
-		head_sha="$(gh api "repos/${REPOSITORY}/pulls/${ITEM}" --jq '.head.sha' 2>/dev/null || true)"
 		if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
 			gh api "repos/${REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" \
 				--jq '[.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | .name]' \
@@ -528,14 +538,6 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=record_failed"
 		return 0
 	fi
-	if [[ "${tracking}" =~ ^[0-9]+$ ]] && [ "${tracking}" != "${ITEM}" ]; then
-		if ! gh api "repos/${REPOSITORY}/issues/${tracking}/comments" -f body="Unblock judge verdict on #${ITEM}: \`${verdict_name}\`.
-
-${marker_line}" >/dev/null 2>&1; then
-			unblock_log "item=${ITEM} op=project_record outcome=failed"
-			return 0
-		fi
-	fi
 	ops_file="${RUNTIME_DIR}/ops.json"
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" plan --verdict-file "${RUNTIME_DIR}/verdict.json" \
 		--context-file "${RUNTIME_DIR}/context.json" > "${ops_file}"; then
@@ -546,6 +548,14 @@ ${marker_line}" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=actuation_failed"
 		return 0
 	fi
+	if [[ "${tracking}" =~ ^[0-9]+$ ]] && [ "${tracking}" != "${ITEM}" ]; then
+		if ! gh api "repos/${REPOSITORY}/issues/${tracking}/comments" -f body="Unblock judge verdict on #${ITEM}: \`${verdict_name}\`.
+
+${marker_line}" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} op=project_record outcome=failed"
+			return 0
+		fi
+	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=acted"
 }
 
@@ -555,7 +565,7 @@ ${marker_line}" >/dev/null 2>&1; then
 unblock_ask_model()
 {
 	local prompt_file="${RUNTIME_DIR}/prompt.txt" output_file="${RUNTIME_DIR}/model_output.txt" run_id model reasoning engine rc
-	run_id="$(jq -r '[.[] | (.body // "") | scan("/actions/runs/([0-9]+)")] | last // empty' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true)"
+	run_id="$(jq -r '[.[] | (.body // "") | scan("/actions/runs/([0-9]+)") | .[0]] | last // empty' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true)"
 	: > "${RUNTIME_DIR}/run_log_tail.txt"
 	if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
 		gh run view "${run_id}" -R "${REPOSITORY}" --log-failed 2>/dev/null | tail -n 400 | tail -c 120000 > "${RUNTIME_DIR}/run_log_tail.txt" || true
