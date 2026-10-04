@@ -82,6 +82,17 @@ def test_recent_trusted_marker_holds_the_item_and_forged_ones_do_not() -> None:
 	assert _select([_item(1, ["ai:blocked"])], {"1": _details("ai:blocked", 8, [old])})["dispatch"] == [{"item": 1, "kind": "issue"}]
 
 
+def test_incomplete_comment_window_cannot_prove_six_hour_cooldown() -> None:
+	search = [_item(1, ["ai:blocked"])]
+	info = _details("ai:blocked", 8, [{"login": BOT, "body": "newer comment", "created_at": _iso(2)}])
+	info["history_incomplete"] = True
+	assert _select(search, {"1": info})["skipped"] == {"unverified_marker_history": 1}
+	info["comments"] = []
+	assert _select(search, {"1": info})["skipped"] == {"unverified_marker_history": 1}
+	info["comments"].append({"login": BOT, "body": "older comment", "created_at": _iso(7)})
+	assert _select(search, {"1": info})["dispatch"] == [{"item": 1, "kind": "issue"}]
+
+
 def test_running_or_recent_judge_runs_hold_the_item() -> None:
 	search = [_item(1, ["ai:blocked"]), _item(2, ["ai:blocked"]), _item(3, ["ai:blocked"])]
 	details = {str(n): _details("ai:blocked", 5) for n in (1, 2, 3)}

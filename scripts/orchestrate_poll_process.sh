@@ -15948,11 +15948,11 @@ run_unblock_scan() {
     fragment+=$'\n'"    i${n}: issueOrPullRequest(number: ${n}) {
       ... on Issue {
         timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
-        comments(last: 30) { nodes { body createdAt updatedAt author { login } } }
+        comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
       }
       ... on PullRequest {
         timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
-        comments(last: 30) { nodes { body createdAt updatedAt author { login } } }
+        comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
       }
     }"
   done
@@ -15969,7 +15969,8 @@ run_unblock_scan() {
     (.data.repository // {}) | to_entries
     | map(select(.value != null) | {key: (.key | ltrimstr("i")), value: {
         labeled: [.value.timelineItems.nodes[]? | select(.label != null) | {label: .label.name, created_at: .createdAt}],
-        comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}]
+        comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}],
+        history_incomplete: ((.value.comments.totalCount | type) != "number" or (.value.comments.nodes | type) != "array" or .value.comments.totalCount > (.value.comments.nodes | length))
       }})
     | from_entries' 2>/dev/null || echo '{}')"
   printf '%s' "${details}" > "${work_dir}/details.json"

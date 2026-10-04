@@ -268,6 +268,9 @@ def test_operator_step_writer_preserves_newer_same_key_comments(monkeypatch: pyt
 	assert not any("PATCH" in args or "DELETE" in args for args in calls)
 	writer.upsert("o/r", "pr-7", "PR #7", [{"title": "New", "instructions": "step B"}])
 	assert len(comments) == 2  # No duplicate when the latest entry is identical.
+	comments[-1]["body"] = comments[-1]["body"].replace("\n", "\r\n") + "\r\n"
+	writer.upsert("o/r", "pr-7", "PR #7", [{"title": "New", "instructions": "step B"}])
+	assert len(comments) == 2  # GitHub may return a CRLF-normalized comment body.
 
 
 def test_fingerprint_evidence_keeps_http_status_codes(tmp_path: Path) -> None:
@@ -574,6 +577,14 @@ def test_judge_records_the_verdict_first_then_acts(tmp_path: Path) -> None:
 	assert record.splitlines()[-1].startswith("<!-- ai:unblock:v1 item=7 stop=blocked fingerprint=")
 	assert record.splitlines()[-1].endswith("verdict=retry_budget round=1 -->")
 	assert state["comments"][-1]["body"] == "/answer pin the version"
+
+
+def test_judge_redacts_model_key_before_recording_or_acting(tmp_path: Path) -> None:
+	secret = "test-openrouter-secret-value"
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": secret, "instructions": f"pin {secret}"}, OPENROUTER_API_KEY=secret)
+	assert "outcome=acted" in result.stdout, result.stderr
+	assert all(secret not in comment["body"] for comment in state["comments"])
+	assert any("[redacted]" in comment["body"] for comment in state["comments"])
 
 
 def test_project_marker_failure_does_not_lose_the_recorded_action(tmp_path: Path) -> None:

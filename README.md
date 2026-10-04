@@ -2603,7 +2603,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   judge; `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK=0` disables dispatch.
   Failed projects are added from the poller's own state and take priority in
   the 30-item details batch. When more than 30 projects have failed, that
-  batch rotates each five-minute tick so none is permanently left out.
+  batch rotates each five-minute tick so none is permanently left out. A
+  truncated comment window that cannot cover the six-hour marker cooldown
+  defers dispatch rather than risk an early repeat.
 - **Judge.** `unblock_judge_dispatch.yml` (from `workflow-templates/` in a
   consumer) calls `.github/workflows/unblock_judge.yml`, which runs
   `scripts/unblock_judge.sh` with the UNBLOCK_JUDGE role
@@ -2619,7 +2621,8 @@ and resolver chains, a failed project) now goes to the unblock judge
   this repository and never for deleting a canonical workflow source;
   `accept_with_followup` never for a failed security pass or validation. The
   model's output is validated before anything happens. The model runs without
-  GitHub or Telegram credentials; Claude uses the read-only tool profile.
+  GitHub or Telegram credentials; its OpenRouter key is redacted from parsed
+  verdicts before GitHub writes. Claude uses the read-only tool profile.
   A failed ledger-history read skips action for that run. The item verdict
   is recorded before action; a failed project marker is repaired if the item
   remains blocked for a later run.

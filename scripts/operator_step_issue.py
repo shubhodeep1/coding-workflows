@@ -227,9 +227,12 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 		comments = load_entry_comments(repo, number)
 		marker = f"<!-- ai:operator-step:entry key={key} -->"
 		matches = sorted(
-			(comment for comment in comments if (comment.get("user") or {}).get("login") == trusted_login
-			 and str(comment.get("body") or "").split("\n", 1)[0].strip() == marker
-			 and isinstance(comment.get("id"), int)),
+			(
+				comment for comment in comments
+				if (comment.get("user") or {}).get("login") == trusted_login
+				and str(comment.get("body") or "").split("\n", 1)[0].strip() == marker
+				and isinstance(comment.get("id"), int)
+			),
 			key=lambda comment: comment["id"],
 		)
 		legacy = dict(parse_entries(str(existing.get("body") or "")))
@@ -239,7 +242,7 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 			for entry_match in [ENTRY_RE.match(str(comment.get("body") or "").split("\n", 1)[0].strip())]
 			if entry_match
 		}
-		if (matches[-1]["body"] if matches else legacy.get(key)) != entry:
+		if (matches[-1]["body"] if matches else legacy.get(key, "")).replace("\r\n", "\n").rstrip() != entry:
 			_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={entry}"])
 		# Never patch the oldest comment with a proposal from a stale listing:
 		# a later writer's higher-id comment would otherwise be lost.

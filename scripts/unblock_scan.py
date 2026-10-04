@@ -34,7 +34,8 @@ An item is picked when all hold:
     poller posts when the project fails; else `updated_at`);
   - its newest trusted unblock marker (`<!-- ai:unblock:v1 ` or
     `<!-- ai:unblock-wait:v1 `, as the comment's last non-empty line, by
-    --trusted-login) is older than --marker-hours, or there is none;
+    --trusted-login) is older than --marker-hours, or there is none; a
+    truncated comment window must cover the entire cooldown interval;
   - no judge run for it is queued or in progress, and no non-cancelled run
     started in the last --inflight-minutes.
 Oldest block first, at most one dispatch per tick. --max=0 disables dispatch;
@@ -222,6 +223,11 @@ def select(
 		if marker and now - marker < marker_age:
 			skip("recent_verdict")
 			continue
+		if info.get("history_incomplete"):
+			comment_times = [_time(comment.get("created_at")) for comment in info.get("comments") or [] if isinstance(comment, dict)]
+			if not comment_times or any(when is None for when in comment_times) or min(comment_times) > now - marker_age:
+				skip("unverified_marker_history")
+				continue
 		if TRACKING_LABEL in labels or number in failed:
 			kind = "project"
 		elif item.get("pull_request"):

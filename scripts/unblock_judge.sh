@@ -677,15 +677,24 @@ unblock_ask_model()
 		fi
 	fi
 	if ! unblock_py - "${output_file}" > "${RUNTIME_DIR}/verdict_raw.json" <<'PY'
-import json, re, sys
+import json, os, re, sys
 raw = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+api_key = os.environ.get("OPENROUTER_API_KEY", "")
+def redact_verdict_value(value):
+	if isinstance(value, str):
+		return value.replace(api_key, "[redacted]") if api_key else value
+	if isinstance(value, list):
+		return [redact_verdict_value(item) for item in value]
+	if isinstance(value, dict):
+		return {key: redact_verdict_value(item) for key, item in value.items()}
+	return value
 for start in [m.start() for m in re.finditer(r"\{", raw)]:
 	try:
 		value = json.JSONDecoder().raw_decode(raw[start:])[0]
 	except ValueError:
 		continue
 	if isinstance(value, dict) and "verdict" in value:
-		print(json.dumps(value))
+		print(json.dumps(redact_verdict_value(value)))
 		sys.exit(0)
 sys.exit(1)
 PY
