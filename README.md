@@ -1855,7 +1855,7 @@ uses it yet, and the role cutovers switch the defaults one group at a time.
 
 | Piece | What it does |
 |---|---|
-| `.github/ai/claude_engine.json` | Pinned CLI version (`cli_version`), token broker URL (empty until the broker ships), OIDC audience, usage gate (`0.9`), probe model, and per-role `engine` / `claude_model` / `profile` defaults. Read only from the trusted support checkout; a missing file means every role on codex. |
+| `.github/ai/claude_engine.json` | Pinned CLI version (`cli_version`), deployed token broker URL, OIDC audience, usage gate (`0.9`), probe model, and per-role `engine` / `claude_model` / `profile` defaults. Read only from the trusted support checkout; a missing file means every role on codex. |
 | `scripts/ai_engine.sh` | Sourced by call sites. `ai_engine_for_role <ROLE>` prints `codex` or `claude` and logs `AI_ENGINE_SELECTED role= engine= model= effort= source=`. `claude_run <ROLE> <prompt> <out> <workdir> [session_id]` runs the CLI and writes the final answer to `<out>`, the file the codex path writes. |
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
@@ -1954,6 +1954,9 @@ the job runs codex (D1). The `ai-*.yml` wrapper templates and the
 `internal-*.yml` callers of the Claude-hosting reusable workflows grant
 `id-token: write`; consumers whose sync is stale fall back to codex until
 their next `@stable` sync.
+The token action accepts only the deployed broker URL in Actions jobs and
+only removes pool directories immediately under `$RUNNER_TEMP`; a rejected
+URL or unsafe directory returns `available=false` without minting an OIDC token.
 
 ## Project Orchestrator
 

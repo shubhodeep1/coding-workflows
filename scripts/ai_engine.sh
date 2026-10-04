@@ -292,6 +292,7 @@ claude_run()
 			case "${outcome}" in
 				success)
 					_ai_engine_py extract --transcript "${transcript}" --out "${out_file}" >&2 || exit 1
+					ln -s -- "transcript-${name}.jsonl" "${run_dir}/successful-transcript.jsonl" || exit 1
 					exit 0
 					;;
 				usage_limit|auth_failed)

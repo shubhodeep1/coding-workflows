@@ -290,7 +290,7 @@ export function createHandler(deps: Deps)
 
 	async function authorize(claims: Record<string, unknown>): Promise<string>
 	{
-		if (claims.repository_owner !== OWNER) {
+		if (typeof claims.repository_owner !== "string" || claims.repository_owner.toLowerCase() !== OWNER) {
 			throw new Refusal(403, "wrong_owner");
 		}
 		const repository = claims.repository;
@@ -300,12 +300,14 @@ export function createHandler(deps: Deps)
 		if (!repository.toLowerCase().startsWith(`${OWNER}/`)) {
 			throw new Refusal(403, "wrong_owner");
 		}
-		const repos = await loadRegistry();
-		if (!repos.has(repository.toLowerCase())) {
-			throw new Refusal(403, "repo_not_allowed");
+		if (repository.toLowerCase() !== SELF_REPO.toLowerCase()) {
+			const repos = await loadRegistry();
+			if (!repos.has(repository.toLowerCase())) {
+				throw new Refusal(403, "repo_not_allowed");
+			}
 		}
 		const workflowRef = claims.job_workflow_ref;
-		if (typeof workflowRef !== "string" || !workflowRef.startsWith(WORKFLOW_PREFIX)) {
+		if (typeof workflowRef !== "string" || !workflowRef.toLowerCase().startsWith(WORKFLOW_PREFIX)) {
 			throw new Refusal(403, "wrong_workflow");
 		}
 		return repository;
@@ -323,7 +325,7 @@ export function createHandler(deps: Deps)
 		let repository = "";
 		try {
 			const authorization = request.headers.get("authorization") || "";
-			const match = /^Bearer ([A-Za-z0-9_.-]+)$/.exec(authorization);
+			const match = /^Bearer[ \t]+([A-Za-z0-9_.-]+)$/i.exec(authorization);
 			if (!match) {
 				throw new Refusal(403, "missing_token");
 			}
