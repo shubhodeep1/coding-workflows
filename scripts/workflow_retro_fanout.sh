@@ -34,7 +34,7 @@ if ! retro_fanout_flag_enabled "${WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED}"; then
 fi
 
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-if [ -z "${GH_TOKEN:-}" ]; then
+if [ "${1:-publish}" = publish ] && [ -z "${GH_TOKEN:-}" ]; then
 	echo "retro-fanout: GH_TOKEN is empty; skipping consumer fan-out because cross-repo GH_PAT is unavailable."
 	exit 0
 fi
@@ -43,6 +43,9 @@ WORKFLOW_LOG_REPORT_FILE="${WORKFLOW_LOG_REPORT_FILE:-${REPO_ROOT}/workflow_log_
 CONSUMER_REPOS_FILE="${CONSUMER_REPOS_FILE:-${REPO_ROOT}/.github/ai/consumer_repos.json}"
 WORKFLOW_RETRO_MODEL="${WORKFLOW_RETRO_MODEL:-openai/gpt-6-luna}"
 WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY="${WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY:-true}"
+FANOUT_MODE="${1:-publish}"
+case "${FANOUT_MODE}" in generate|publish) ;; *) echo '::error::Invalid retro fan-out mode' >&2; exit 1 ;; esac
+FANOUT_RESULTS_DIR="${FANOUT_RESULTS_DIR:-${REPO_ROOT}/.ai/retro-fanout-results}"
 MAX_CODEX_ATTEMPTS="${MAX_CODEX_ATTEMPTS:-3}"
 CODEX_RETRY_BACKOFF_BASE_SECS="${CODEX_RETRY_BACKOFF_BASE_SECS:-10}"
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
@@ -83,6 +86,9 @@ REQUIRED_RETRO_HEADINGS=(
 
 FANOUT_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workflow-retro-fanout.XXXXXX")"
 trap 'rm -rf "${FANOUT_RUNTIME_DIR}"' EXIT
+if [ "${FANOUT_MODE}" = generate ]; then
+	mkdir -p "${FANOUT_RESULTS_DIR}"
+fi
 
 mapfile -t FANOUT_REPOS < <(jq -r '.[]' "${CONSUMER_REPOS_FILE}" 2>/dev/null | sort -u)
 if [ "${#FANOUT_REPOS[@]}" -eq 0 ]; then
@@ -116,11 +122,18 @@ consumer_retro_enabled() {
 
 run_consumer_retro() {
 	local target_repo="$1"
-	local safe_slug="${target_repo//\//__}"
+	local safe_slug
+	safe_slug="${target_repo//\//__}-$(printf '%s' "${target_repo}" | sha256sum | cut -c1-12)"
 	local ctx_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-context.md"
 	local json_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-context.json"
+	if [ "${FANOUT_MODE}" = publish ]; then
+		json_file="${FANOUT_RESULTS_DIR}/${safe_slug}-context.json"
+	fi
 	local prompt_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-prompt.txt"
 	local body_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-retro.md"
+	if [ "${FANOUT_MODE}" = publish ]; then
+		body_file="${FANOUT_RESULTS_DIR}/${safe_slug}-retro.md"
+	fi
 	local comment_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-comment.md"
 	local comment_payload="${FANOUT_RUNTIME_DIR}/${safe_slug}-comment-payload.json"
 	local tracker_body_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-tracker-body.md"
@@ -128,12 +141,23 @@ run_consumer_retro() {
 	local selection_env="${FANOUT_RUNTIME_DIR}/${safe_slug}-selection.env"
 	local comments_json="${FANOUT_RUNTIME_DIR}/${safe_slug}-comments.json"
 
-	python3 "${SCRIPT_DIR}/workflow_retro.py" \
-		--report "${WORKFLOW_LOG_REPORT_FILE}" \
-		--output "${ctx_file}" \
-		--json-output "${json_file}" \
-		--repo "${target_repo}" \
-		--repo-root "${GITHUB_WORKSPACE:-${REPO_ROOT}}" >/dev/null || return 1
+	if [ "${FANOUT_MODE}" = generate ]; then
+		python3 "${SCRIPT_DIR}/workflow_retro.py" \
+			--report "${WORKFLOW_LOG_REPORT_FILE}" \
+			--output "${ctx_file}" \
+			--json-output "${json_file}" \
+			--repo "${target_repo}" \
+			--repo-root "${GITHUB_WORKSPACE:-${REPO_ROOT}}" >/dev/null || return 1
+		install -m 0600 "${json_file}" "${FANOUT_RESULTS_DIR}/${safe_slug}-context.json"
+	else
+		# Reuse the context built by the model job: re-querying merged PRs
+		# here costs a second set of GitHub reads and can change the window.
+		if [ -L "${FANOUT_RESULTS_DIR}" ] || [ -L "${json_file}" ] || [ ! -s "${json_file}" ] || [ "$(wc -c < "${json_file}")" -gt 2097152 ] \
+			|| ! jq -e --arg repo "${target_repo}" '.schema_version == "workflow_retro.v1" and .repository == $repo and (.has_activity | type == "boolean") and (.summary | type == "object") and (.window.week_label | strings | test("^[0-9]{4}-W[0-9]{2}$")) and (.window.since | strings | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' "${json_file}" >/dev/null 2>&1; then
+			echo '::error::Missing or invalid consumer retro context artifact' >&2
+			return 1
+		fi
+	fi
 
 	local week_label window_since has_activity
 	week_label="$(jq -r '.window.week_label' "${json_file}")"
@@ -149,7 +173,32 @@ run_consumer_retro() {
 		echo "WORKFLOW_RETRO_FANOUT_V1: repo=${target_repo} week=${week_label} status=skipped_no_activity"
 		return 0
 	fi
+	if [ "${FANOUT_MODE}" = publish ]; then
+		# Downloaded model output is data, never shell source. The issue list
+		# and label mutations below are performed only in this publisher.
+		if [ -L "${FANOUT_RESULTS_DIR}" ] || [ -L "${body_file}" ] || [ ! -f "${body_file}" ] || [ "$(wc -c < "${body_file}")" -gt 2097152 ] || [ ! -s "${body_file}" ]; then
+			echo '::error::Missing or invalid consumer retro artifact' >&2
+			return 1
+		fi
+		if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}" <<'PY'
+from pathlib import Path
+import sys
 
+body = Path(sys.argv[1]).read_text(encoding="utf-8")
+if "\x00" in body:
+	raise SystemExit(1)
+PY
+		then
+			echo '::error::Invalid consumer retro encoding' >&2
+			return 1
+		fi
+		if [ "$(head -n1 "${body_file}")" != '## Weekly Retro' ]; then
+			echo '::error::Invalid consumer retro heading' >&2
+			return 1
+		fi
+	fi
+
+	if [ "${FANOUT_MODE}" = generate ]; then
 	local rendered_prompt
 	rendered_prompt="$(bash "${SCRIPT_DIR}/render_prompt.sh" "${REPO_ROOT}/prompts/mode-workflow-analysis.txt")" || return 1
 	{
@@ -170,10 +219,8 @@ run_consumer_retro() {
 			sanitize_codex_prompt_file "${prompt_file}"
 		fi
 		set +e
-		bash "${SCRIPT_DIR}/codex_heartbeat.sh" \
-			--phase workflow_weekly_retro \
-			--stdout-file "${body_file}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${prompt_file}"
+		MODEL_EDITOR="${WORKFLOW_RETRO_MODEL}" MODEL_REASONING_EFFORT="${WORKFLOW_RETRO_REASONING:-medium}" \
+			bash "${SCRIPT_DIR}/clarify_isolated_run.sh" "${prompt_file}" "${body_file}" "${FANOUT_RUNTIME_DIR}/model.log" codex WORKFLOW_CONSUMER_RETRO
 		codex_exit=$?
 		set -e
 		if [ "${codex_exit}" -eq 0 ] && grep -q '[^[:space:]]' "${body_file}"; then
@@ -198,6 +245,11 @@ run_consumer_retro() {
 		fi
 		previous_heading_line="${heading_line}"
 	done
+	# Each consumer file is keyed by a validated roster slug, not model text.
+	install -m 0600 "${body_file}" "${FANOUT_RESULTS_DIR}/${safe_slug}-retro.md"
+	echo "WORKFLOW_RETRO_FANOUT_V1: repo=${target_repo} week=${week_label} status=generated"
+	return 0
+	fi
 
 	# `run_consumer_retro` is invoked via `if ! run_consumer_retro ...`; in bash,
 	# that suppresses `set -e` inside the function body, so an unguarded failure
@@ -326,7 +378,7 @@ PY
 }
 
 for fanout_repo in "${FANOUT_REPOS[@]}"; do
-	if ! [[ "${fanout_repo}" =~ ^[^/]+/[^/]+$ ]]; then
+	if ! [[ "${fanout_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 		echo "::warning::retro-fanout: skipping invalid repository entry: ${fanout_repo}"
 		continue
 	fi
@@ -334,6 +386,9 @@ for fanout_repo in "${FANOUT_REPOS[@]}"; do
 		# The source repo's retro is posted by the dedicated job steps.
 		continue
 	fi
+	# The generator uses its read-only job token; a consumer variable that
+	# cannot be read there fails open, while the publisher rechecks with GH_PAT
+	# before any write. The model container never receives either token.
 	if ! consumer_retro_enabled "${fanout_repo}"; then
 		echo "WORKFLOW_RETRO_FANOUT_V1: repo=${fanout_repo} status=skipped_disabled"
 		continue

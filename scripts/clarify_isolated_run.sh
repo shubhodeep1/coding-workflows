@@ -9,8 +9,14 @@ log_file="${3:?log file required}"
 # Optional engine (scripts/ai_engine.sh) and role; the default is the codex path.
 engine="${4:-codex}"
 engine_role="${5:-CLARIFY}"
+analysis_logs="${6:-}"
+analysis_profile=false
+case "${engine_role}" in
+	WORKFLOW_LOG_ANALYSIS|WORKFLOW_DEEP_AUDIT|WORKFLOW_API_REDUNDANCY|WORKFLOW_WEEKLY_RETRO|WORKFLOW_CONSUMER_RETRO) analysis_profile=true ;;
+esac
 case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
-[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND)$ ]] || [ "${analysis_profile}" = true ] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[ "${analysis_profile}" != true ] || [ "${engine}" = codex ] || { echo '::error::Analysis requires the isolated Codex profile' >&2; exit 1; }
 version="${CLARIFY_CODEX_VERSION:-v0.114.0}"
 [[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid Codex version' >&2; exit 1; }
 [[ "${MODEL_EDITOR:-}" =~ ^[a-zA-Z0-9/_.-]+$ ]] || { echo '::error::Invalid model slug' >&2; exit 1; }
@@ -22,6 +28,35 @@ else
 fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 1; }
 [ -f scripts/clarify_sandbox/Dockerfile ] && [ -f scripts/clarify_openrouter_broker.py ] && [ -f scripts/write_codex_config.sh ] && [ -f scripts/codex_model_catalog.json ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
+
+if [ "${analysis_profile}" = true ]; then
+	# Only a regular, bounded prompt may be mounted. The log tree is copied,
+	# never bind-mounted from the credential-bearing checkout.
+	PYTHONDONTWRITEBYTECODE=1 python3 - "${prompt_file}" "${analysis_logs}" <<'PY'
+import pathlib
+import stat
+import sys
+
+prompt = pathlib.Path(sys.argv[1])
+logs = sys.argv[2]
+if not stat.S_ISREG(prompt.lstat().st_mode) or not 0 < prompt.stat().st_size <= 8 * 1024 * 1024:
+	raise SystemExit("invalid analysis prompt")
+if logs:
+	root = pathlib.Path(logs)
+	if not stat.S_ISDIR(root.lstat().st_mode):
+		raise SystemExit("invalid analysis logs directory")
+	count = size = 0
+	for path in root.rglob("*"):
+		info = path.lstat()
+		if path.is_symlink() or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+			raise SystemExit("unsafe analysis log entry")
+		if stat.S_ISREG(info.st_mode):
+			count += 1
+			size += info.st_size
+			if count > 5000 or size > 64 * 1024 * 1024:
+				raise SystemExit("analysis logs exceed limit")
+PY
+fi
 
 # The runner-owned temporary root contains no credentials. Its socket child is
 # traversable by the container's matching non-root UID, not by other users.
@@ -39,6 +74,45 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -m 0700 "${run_root}/socket"
 mkdir -m 0755 "${run_root}/source" "${run_root}/results"
+if [ "${analysis_profile}" = true ] && [ -n "${analysis_logs}" ]; then
+	mkdir -m 0755 "${run_root}/logs"
+	PYTHONDONTWRITEBYTECODE=1 python3 - "${analysis_logs}" "${run_root}/logs" <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+source = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2])
+count = size = 0
+for path in source.rglob("*"):
+	info = path.lstat()
+	if path.is_symlink():
+		raise SystemExit("unsafe analysis log entry")
+	target = dest / path.relative_to(source)
+	if stat.S_ISDIR(info.st_mode):
+		target.mkdir(mode=0o755)
+	elif stat.S_ISREG(info.st_mode):
+		if target.suffix not in (".log", ".json", ".txt"):
+			raise SystemExit("unsupported analysis log file")
+		count += 1
+		size += info.st_size
+		if count > 5000 or size > 64 * 1024 * 1024:
+			raise SystemExit("analysis logs exceed limit")
+		fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+		with os.fdopen(fd, "rb") as input_file, target.open("xb") as output_file:
+			opened = os.fstat(input_file.fileno())
+			if (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size) or opened.st_size > 64 * 1024 * 1024:
+				raise SystemExit("analysis log changed")
+			data = input_file.read(opened.st_size + 1)
+			if len(data) != info.st_size:
+				raise SystemExit("analysis log changed")
+			output_file.write(data)
+		os.chmod(target, 0o644)
+	else:
+		raise SystemExit("unsafe analysis log entry")
+PY
+fi
 
 # Include only regular, tracked source files with safe path classes. Never
 # follow a symlink (including parent directories); do not include .git,
@@ -218,6 +292,11 @@ for _ in $(seq 1 50); do
 done
 [ -S "${run_root}/socket/provider.sock" ] || { echo '::error::Clarify broker unavailable' >&2; exit 1; }
 
+analysis_mount=()
+if [ "${analysis_profile}" = true ] && [ -n "${analysis_logs}" ]; then
+	analysis_mount=(--mount "type=bind,src=${run_root}/logs,dst=/logs,readonly")
+fi
+
 env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
 	--name "${container_name}" --user "$(id -u):$(id -g)" \
 	--network none --read-only --cap-drop ALL --security-opt no-new-privileges \
@@ -228,6 +307,7 @@ env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
 	--mount "type=bind,src=${run_root}/socket,dst=/socket,readonly" \
 	--mount "type=bind,src=$(realpath scripts/clarify_openrouter_broker.py),dst=/bridge.py,readonly" \
 	--mount "type=bind,src=${run_root}/results,dst=/results" \
+	"${analysis_mount[@]}" \
 	--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex \
 	--env CLARIFY_PROXY_KEY=isolated-placeholder \
 	--env "CLARIFY_MODEL=${MODEL_EDITOR}" --env "CLARIFY_REASONING=${MODEL_REASONING_EFFORT}" \
@@ -243,8 +323,27 @@ env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
 		python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
 		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${CLARIFY_MODEL:-openai/gpt-6-sol}" --sandbox read-only < /prompt > /results/output 2> /results/stderr
 	' || {
-		[ ! -f "${run_root}/results/stderr" ] || tee -a "${log_file}" < "${run_root}/results/stderr" >&2
+		if [ "${analysis_profile}" = true ]; then
+			echo '::error::Isolated analysis failed (details suppressed)' >&2
+		else
+			[ ! -f "${run_root}/results/stderr" ] || tee -a "${log_file}" < "${run_root}/results/stderr" >&2
+		fi
 		exit 1
 	}
+if [ "${analysis_profile}" = true ]; then
+	PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/results/output" <<'PY'
+import pathlib
+import stat
+import sys
+
+output = pathlib.Path(sys.argv[1])
+info = output.lstat()
+if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 2 * 1024 * 1024:
+	raise SystemExit("invalid analysis output")
+output.read_text(encoding="utf-8")
+PY
+fi
 install -m 0600 "${run_root}/results/output" "${output_file}"
-tee -a "${log_file}" < "${run_root}/results/stderr" >&2
+if [ "${analysis_profile}" != true ]; then
+	tee -a "${log_file}" < "${run_root}/results/stderr" >&2
+fi

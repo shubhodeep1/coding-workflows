@@ -3,7 +3,13 @@
 
 from __future__ import annotations
 
+import re
+import os
+import subprocess
+import tempfile
 from pathlib import Path
+
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -36,17 +42,79 @@ def test_issue_context_failure_marker_and_label_contract_present() -> None:
 	assert "without tracking issue context" in wf
 
 
-def test_codex_jobs_use_heartbeat_wrapper() -> None:
+def test_all_analysis_agents_are_isolated_from_publishers() -> None:
 	wf = _workflow_text()
-	assert wf.count("bash scripts/codex_heartbeat.sh") == 4
-	assert "--phase workflow_log_analysis" in wf
-	assert "--phase workflow_deep_audit" in wf
-	assert "--phase workflow_api_redundancy" in wf
-	assert "--phase workflow_weekly_retro" in wf
-	assert "2> >(tee -a /tmp/workflow-analysis-codex.log >&2)" in wf
-	assert "2> >(tee -a /tmp/workflow-audit-codex.log >&2)" in wf
-	assert "2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)" in wf
-	assert "2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)" in wf
+	assert "--sandbox danger-full-access" not in wf
+	assert "bash scripts/codex_heartbeat.sh" not in wf
+	for job, role in (
+		("weekly-retro", "WORKFLOW_WEEKLY_RETRO"),
+		("analyze-commit-notify", "WORKFLOW_LOG_ANALYSIS"),
+		("deep-audit", "WORKFLOW_DEEP_AUDIT"),
+		("api-redundancy", "WORKFLOW_API_REDUNDANCY"),
+	):
+		model = wf.split(f"  {job}-model:\n", 1)[1].split(f"  {job}:\n", 1)[0]
+		publisher = re.split(r"\n  [a-z-]+:\n", wf.split(f"  {job}:\n", 1)[1], maxsplit=1)[0]
+		assert "contents: read" in model and "actions: read" in model
+		assert "persist-credentials: false" in model
+		assert f"codex {role}" in model
+		assert "gh issue comment" not in model
+		assert "secrets.GH_PAT" not in model
+		assert "secrets.TG_BOT_SECRET" not in model
+		assert "git push " not in model
+		assert "git commit " not in model
+		assert "bash scripts/clarify_isolated_run.sh" not in publisher
+		assert "Missing isolated model result" in publisher
+		assert "Invalid isolated model result size or type" in publisher
+		assert "Missing or misordered model result heading" in publisher
+		assert "if ! validate_result; then" in publisher
+	assert "bash scripts/workflow_retro_fanout.sh generate" in wf
+	assert "bash scripts/workflow_retro_fanout.sh publish" in wf
+
+
+def test_publisher_rejects_missing_oversized_malformed_and_traversal_results() -> None:
+	jobs = yaml.safe_load(_workflow_text())["jobs"]
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		result = root / "workflow-model-result.md"
+		report_headings = (
+			"Executive Summary", "Speed Optimizations", "Cost Optimizations",
+			"Reliability Improvements", "AI Memory Health", "GH API Call Audit",
+			"Prompt Cache & Memory System", "Orchestrator Health",
+			"Pipeline Flow Bottlenecks", "Per-Repo Breakdown", "Metrics Appendix",
+		)
+		for kind, body in (
+			("retro", "\n".join(("## Weekly Retro", "### What Worked", "### Failure Modes", "### Next Week Recommendation", "### Metrics Snapshot"))),
+			("analysis", "\n".join(f"## {heading}" for heading in report_headings)),
+			("audit", "\n".join(("## Deep Audit — Workflows & Scripts (2026-10-04)", "### Section 1: Bug & Correctness Sweep", "### Section 2: GitHub API Call Redundancy Audit", "### Section 3: Code Duplication & Modularization Opportunities", "### Section 4: Expression Size Limit Risk Assessment", "### Section 5: Cross-Cutting Concerns", "### Section 6: Summary & Severity Matrix", "#### 6A. Findings Summary Table", "#### 6B. Estimated Remediation Scope"))),
+			("api", "\n".join(("## API Call Consolidation & Dead-Call Analysis (2026-10-04)", "### Safety Tag Legend", "### Consolidation Candidates (MERGE-###)", "### Redundant Re-Fetch (REUSE-###)", "### Dead Calls (DEAD-API-###)", "### Cross-References to Deep Audit Section", "### Summary Counts", "### Implement-Stage Handoff"))),
+		):
+			job = {"retro": "weekly-retro", "analysis": "analyze-commit-notify", "audit": "deep-audit", "api": "api-redundancy"}[kind]
+			publisher = next(step["run"] for step in jobs[job]["steps"] if step.get("id") == {"retro": "retro", "analysis": "analyze", "audit": "audit", "api": "api_redundancy"}[kind])
+			# Execute the exact publisher validator, without publisher write credentials.
+			validator = "validate_result() {\n" + publisher.split("validate_result() {\n", 1)[1].split("}\nif ! validate_result; then", 1)[0] + "}\nvalidate_result\n"
+			env = os.environ.copy()
+			for pinned_key in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE"):
+				env.pop(pinned_key, None)
+			env.update(MODEL_RESULT=str(result), MODEL_KIND=kind, REPORT_FILE="analysis/workflow-optimization-2026-10-04.md" if kind != "retro" else "")
+			def run_validator() -> subprocess.CompletedProcess[str]:
+				return subprocess.run(["bash", "-c", validator], env=env, capture_output=True, text=True)
+
+			result.unlink(missing_ok=True)
+			assert run_validator().returncode != 0, kind
+			result.write_text(body, encoding="utf-8")
+			assert run_validator().returncode == 0, (kind, run_validator().stderr)
+			result.write_text(body.replace("### What Worked", "### Wrong") if kind == "retro" else "## Wrong\n", encoding="utf-8")
+			assert run_validator().returncode != 0, kind
+			result.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+			assert run_validator().returncode != 0, kind
+			result.unlink()
+			result.symlink_to(root / "missing")
+			assert run_validator().returncode != 0, kind
+			result.unlink()
+			if kind != "retro":
+				result.write_text(body, encoding="utf-8")
+				env["REPORT_FILE"] = "analysis/../scripts/gh_helpers.sh"
+				assert run_validator().returncode != 0, kind
 
 
 def test_weekly_retro_path_is_schedule_gated_and_default_on() -> None:
@@ -67,6 +135,7 @@ def test_weekly_retro_path_is_schedule_gated_and_default_on() -> None:
 	assert "retro_skip_if_no_activity_normalized=\"$(printf '%s' \"${WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY:-true}\" | tr '[:upper:]' '[:lower:]')\"" in wf
 	assert "[[ \"${retro_skip_if_no_activity_normalized}\" =~ ^(1|true|yes|on)$ ]]" in wf
 	assert "if: steps.retro_context.outputs.retro_gate == 'run'" in wf
+	assert "if: needs.weekly-retro-model.outputs.retro_gate == 'run'" in wf
 	assert "WORKFLOW_RETRO_SKIP_V1:" in wf
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in wf
 	assert 'REPO_REGISTRY_PATH=".github/ai/consumer_repos.json"' in wf
@@ -146,7 +215,7 @@ def test_semble_wiring_is_consistent_across_four_codex_jobs() -> None:
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
-	test_codex_jobs_use_heartbeat_wrapper()
+	test_all_analysis_agents_are_isolated_from_publishers()
 	test_weekly_retro_path_is_schedule_gated_and_default_on()
 	test_scenario_trace_renderer_is_flag_gated_and_local_only()
 	test_semble_wiring_is_consistent_across_four_codex_jobs()

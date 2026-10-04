@@ -811,6 +811,17 @@ committing the corresponding file:
 
 ## Workflow scenario traces
 
+Workflow-log analysis, deep audit, API redundancy, weekly retro, and consumer
+retros now run their model passes in read-only Docker containers behind the
+host-side fixed-destination OpenRouter broker. The `*-model` jobs have read-only
+GitHub permissions and checkouts without persisted credentials; the original
+job IDs are publishers and accept only bounded, heading-validated model-result
+artifacts before committing reports, posting tracker comments, or notifying.
+The weekly consumer fan-out generates narratives in the model job and publishes
+them separately from the scheduled publisher. A missing or malformed artifact
+fails closed; there is no host Codex fallback. The collection job still admits
+CI logs from forks, which remain untrusted data throughout the model pass.
+
 - Flag: `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` (default `false`).
 - Renderer: `scripts/render_scenario_trace.py` runs downstream of
   `workflow_log_collector.v2` inside `.github/workflows/workflow-log-analysis.yml`.

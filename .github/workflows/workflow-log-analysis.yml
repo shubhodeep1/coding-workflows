@@ -201,70 +201,32 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  weekly-retro:
+  weekly-retro-model:
     needs: collect-logs
     if: ${{ github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     timeout-minutes: 45
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+    outputs:
+      retro_gate: ${{ steps.retro_context.outputs.retro_gate }}
+      week_label: ${{ steps.retro_context.outputs.week_label }}
+      window_since: ${{ steps.retro_context.outputs.window_since }}
+      context_result: ${{ steps.retro_context.outcome }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
-      - name: Cache Codex CLI
-        id: cache-codex
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.tool_cache }}/codex
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
-
-      - name: Install Codex CLI
-        if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
-        with:
-          codex_version: ${{ env.CODEX_VERSION }}
-
-      - name: Persist Codex CLI to tool cache
-        if: steps.cache-codex.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          NPM_GLOBAL_ROOT="$(npm root -g)"
-          mkdir -p "${{ runner.tool_cache }}/codex"
-          [ -d "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" ] || {
-            echo "::error::Codex platform package @openai/codex-linux-x64 missing after install"
-            exit 1
-          }
-          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
-          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
-
-      - name: Restore Codex CLI from cache
-        if: steps.cache-codex.outputs.cache-hit == 'true'
-        run: |
-          set -euo pipefail
-          NPM_GLOBAL_ROOT="$(npm root -g)"
-          NPM_GLOBAL_PREFIX="$(npm prefix -g)"
-          mkdir -p "${NPM_GLOBAL_ROOT}/@openai" "${NPM_GLOBAL_PREFIX}/bin"
-          rm -rf "${NPM_GLOBAL_ROOT}/@openai/codex" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
-          cp -r "${{ runner.tool_cache }}/codex/package" "${NPM_GLOBAL_ROOT}/@openai/codex"
-          cp -r "${{ runner.tool_cache }}/codex/codex-linux-x64" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
-          ln -sf "${NPM_GLOBAL_ROOT}/@openai/codex/bin/codex.js" "${NPM_GLOBAL_PREFIX}/bin/codex"
-          codex --version
-
-      - name: Create Codex config
-        run: |
-          set -euo pipefail
-          bash scripts/write_codex_config.sh \
-            --model "${WORKFLOW_RETRO_MODEL}" \
-            --reasoning "${WORKFLOW_RETRO_REASONING}"
-          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Setup uv (Semble)
         if: env.SEMBLE_ENABLED == 'true'
@@ -303,7 +265,7 @@ jobs:
       - name: Build weekly retro context
         id: retro_context
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -340,7 +302,7 @@ jobs:
         if: steps.retro_context.outputs.retro_gate == 'run'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -351,7 +313,7 @@ jobs:
 
           source scripts/gh_helpers.sh 2>/dev/null || true
 
-          RETRO_BODY_FILE="${RUNNER_TEMP:-/tmp}/workflow-weekly-retro.md"
+          RETRO_BODY_FILE="${RUNNER_TEMP:-/tmp}/workflow-model-result.md"
           CODEX_PROMPT_FILE="$(mktemp)"
           trap 'rm -f "${CODEX_PROMPT_FILE}"' EXIT
 
@@ -395,10 +357,8 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_weekly_retro \
-              --stdout-file "${RETRO_BODY_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
+            MODEL_EDITOR="${WORKFLOW_RETRO_MODEL}" MODEL_REASONING_EFFORT="${WORKFLOW_RETRO_REASONING}" \
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${RETRO_BODY_FILE}" "${RUNNER_TEMP}/workflow-model.log" codex WORKFLOW_WEEKLY_RETRO
             RETRO_EXIT=$?
             set -e
             if [ "${RETRO_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${RETRO_BODY_FILE}"; then
@@ -419,7 +379,6 @@ jobs:
 
           if ! head -n1 "${RETRO_BODY_FILE}" | grep -qx '## Weekly Retro'; then
             echo "::error::Weekly retro Codex output did not start with the required '## Weekly Retro' heading."
-            head -n5 "${RETRO_BODY_FILE}" >&2 || true
             exit 1
           fi
 
@@ -447,19 +406,151 @@ jobs:
           echo "retro_status=completed" >> "$GITHUB_OUTPUT"
           echo "retro_body_file=${RETRO_BODY_FILE}" >> "$GITHUB_OUTPUT"
 
+      - name: Generate isolated consumer retros
+        if: ${{ !cancelled() && steps.retro_context.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED: ${{ vars.WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED || 'true' }}
+          MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
+          CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
+        run: bash scripts/workflow_retro_fanout.sh generate
+      - name: Upload consumer retro results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workflow-consumer-retros
+          path: .ai/retro-fanout-results/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload isolated weekly-retro result
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workflow-weekly-retro
+          path: ${{ runner.temp }}/workflow-model-result.md
+          if-no-files-found: ignore
+          retention-days: 7
+
+  weekly-retro:
+    needs: [collect-logs, weekly-retro-model]
+    if: ${{ always() && needs.collect-logs.result == 'success' && github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download workflow log report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-log-report
+          path: .
+
+      - name: Download isolated consumer retros
+        if: needs.weekly-retro-model.outputs.context_result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-consumer-retros
+          path: .ai/retro-fanout-results
+      - name: Download isolated weekly-retro result
+        if: needs.weekly-retro-model.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-weekly-retro
+          path: ${{ runner.temp }}/isolated-result
+      - name: Validate and stage isolated weekly-retro result
+        id: retro
+        if: needs.weekly-retro-model.outputs.retro_gate == 'run'
+        env:
+          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          MODEL_RESULT="${RUNNER_TEMP}/isolated-result/workflow-model-result.md"
+          MODEL_KIND="retro"
+          REPORT_FILE=""
+          if [ "${{ needs.weekly-retro-model.result }}" != success ]; then
+            echo '::error::Isolated model job failed; refusing publication.'
+            exit 1
+          fi
+          validate_result() {
+          python3 - "${MODEL_RESULT}" "${MODEL_KIND}" "${REPORT_FILE:-}" <<'PYVALIDATE'
+          import pathlib
+          import re
+          import stat
+          import sys
+
+          result = pathlib.Path(sys.argv[1])
+          kind = sys.argv[2]
+          report = sys.argv[3]
+          if result.is_symlink() or not result.exists():
+              raise SystemExit("Missing isolated model result")
+          info = result.lstat()
+          if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 2 * 1024 * 1024:
+              raise SystemExit("Invalid isolated model result size or type")
+          content = result.read_text(encoding="utf-8")
+          if "\x00" in content:
+              raise SystemExit("Invalid model result")
+          if kind != "retro" and (not re.fullmatch(r"analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2}(?:-[0-9]+)?\.md", report) or pathlib.Path(report).is_symlink() or pathlib.Path(report).parent.is_symlink()):
+              raise SystemExit("Invalid analysis report path")
+          headings = {
+              "retro": ["## Weekly Retro", "### What Worked", "### Failure Modes", "### Next Week Recommendation", "### Metrics Snapshot"],
+              "analysis": ["## Executive Summary", "## Speed Optimizations", "## Cost Optimizations", "## Reliability Improvements", "## AI Memory Health", "## GH API Call Audit", "## Prompt Cache & Memory System", "## Orchestrator Health", "## Pipeline Flow Bottlenecks", "## Per-Repo Breakdown", "## Metrics Appendix"],
+              "audit": ["### Section 1: Bug & Correctness Sweep", "### Section 2: GitHub API Call Redundancy Audit", "### Section 3: Code Duplication & Modularization Opportunities", "### Section 4: Expression Size Limit Risk Assessment", "### Section 5: Cross-Cutting Concerns", "### Section 6: Summary & Severity Matrix", "#### 6A. Findings Summary Table", "#### 6B. Estimated Remediation Scope"],
+              "api": ["### Safety Tag Legend", "### Consolidation Candidates (MERGE-###)", "### Redundant Re-Fetch (REUSE-###)", "### Dead Calls (DEAD-API-###)", "### Cross-References to Deep Audit Section", "### Summary Counts", "### Implement-Stage Handoff"],
+          }[kind]
+          first_line = content.splitlines()[0]
+          if kind == "retro" and first_line != "## Weekly Retro":
+              raise SystemExit("Invalid retro heading")
+          if kind == "audit" and not re.fullmatch(r"## Deep Audit — Workflows & Scripts \([0-9]{4}-[0-9]{2}-[0-9]{2}\)", first_line):
+              raise SystemExit("Invalid deep audit heading")
+          if kind == "api" and not re.fullmatch(r"## API Call Consolidation & Dead-Call Analysis \([0-9]{4}-[0-9]{2}-[0-9]{2}\)", first_line):
+              raise SystemExit("Invalid API redundancy heading")
+          lines = content.splitlines()
+          offset = -1
+          for heading in headings:
+              try:
+                  offset = lines.index(heading, offset + 1)
+              except ValueError:
+                  raise SystemExit("Missing or misordered model result heading") from None
+          PYVALIDATE
+          }
+          if ! validate_result; then
+            exit 1
+          fi
+          echo "retro_status=completed" >> "$GITHUB_OUTPUT"
+          echo "retro_body_file=${MODEL_RESULT}" >> "$GITHUB_OUTPUT"
       - name: Upsert weekly retro tracker comment
         id: post_retro
         if: steps.retro.outputs.retro_status == 'completed'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           RETRO_BODY_FILE: ${{ steps.retro.outputs.retro_body_file }}
-          RETRO_WEEK_LABEL: ${{ steps.retro_context.outputs.week_label }}
-          RETRO_WINDOW_SINCE: ${{ steps.retro_context.outputs.window_since }}
+          RETRO_WEEK_LABEL: ${{ needs.weekly-retro-model.outputs.week_label }}
+          RETRO_WINDOW_SINCE: ${{ needs.weekly-retro-model.outputs.window_since }}
         run: |
           set -euo pipefail
 
           if [ ! -s "${RETRO_BODY_FILE}" ]; then
             echo "::error::Weekly retro body file missing: ${RETRO_BODY_FILE}"
+            exit 1
+          fi
+          if [[ ! "${RETRO_WEEK_LABEL}" =~ ^[0-9]{4}-W[0-9]{2}$ ]] || \
+             [[ ! "${RETRO_WINDOW_SINCE}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            echo '::error::Invalid weekly retro window metadata.'
             exit 1
           fi
 
@@ -602,17 +693,16 @@ jobs:
         # independent of source-repo activity. The collect-logs artifact
         # already contains every consumer repo's runs, so per-consumer retros
         # are posted centrally from here via GH_PAT (§14 repo scope).
-        if: ${{ !cancelled() && steps.retro_context.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.weekly-retro-model.outputs.context_result == 'success' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PYTHONDONTWRITEBYTECODE: "1"
           WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED: ${{ vars.WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED || 'true' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
         run: |
           set -euo pipefail
-          bash scripts/workflow_retro_fanout.sh
+          bash scripts/workflow_retro_fanout.sh publish
 
       - name: Send Telegram notification
         if: always()
@@ -634,7 +724,7 @@ jobs:
 
           # A no-activity week is a silent skip (WORKFLOW_RETRO_SKIP_V1 in the
           # run log is the trace) — not a failure worth a Telegram alert.
-          if [ "${{ steps.retro_context.outputs.retro_gate || '' }}" = "skip_no_activity" ]; then
+          if [ "${{ needs.weekly-retro-model.outputs.retro_gate || '' }}" = "skip_no_activity" ]; then
             echo "Weekly retro skipped for a no-activity week — no Telegram notification."
             exit 0
           fi
@@ -655,10 +745,13 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_msg "${MSG}" "${ALERT_LEVEL}" >/dev/null
 
-  analyze-commit-notify:
+  analyze-commit-notify-model:
     needs: collect-logs
     if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     # Run #25558885206 cancelled at 30m 14s on this job (Codex pass alone
     # ran ~26m 31s — start 13:47:06, ##[error]The operation was canceled
     # 14:13:38). Successful neighbours took only 9–13m (e.g. 25548339583
@@ -681,87 +774,21 @@ jobs:
     #      now totals up to 250m. Bump those caps if/when this worst
     #      case becomes observable in those callers.
     timeout-minutes: 60
-    outputs:
-      # commit_report may rename REPORT_FILE on a concurrent-write
-      # collision; downstream jobs (deep-audit, api-redundancy) must see
-      # the post-rename path, so prefer commit_report's output and fall
-      # back to analyze.outputs.report_file when commit_report did not run.
-      report_file: ${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file }}
-      analysis_status: ${{ steps.analyze.outputs.analysis_status }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+    outputs:
+      report_file: ${{ steps.analyze.outputs.report_file }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GH_PAT || github.token }}
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
-      - name: Cache Codex CLI
-        id: cache-codex
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.tool_cache }}/codex
-          # -v2: previous cache only stored @openai/codex (no platform binary),
-          # so cache hits restored a stub-only install and Codex crashed at
-          # startup with "Missing optional dependency @openai/codex-linux-x64".
-          # Bump invalidates the broken entries; persist+restore below now
-          # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
-
-      - name: Install Codex CLI
-        if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
-        with:
-          codex_version: ${{ env.CODEX_VERSION }}
-
-      - name: Persist Codex CLI to tool cache
-        if: steps.cache-codex.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          NPM_GLOBAL_ROOT="$(npm root -g)"
-          mkdir -p "${{ runner.tool_cache }}/codex"
-          [ -d "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" ] || {
-            echo "::error::Codex platform package @openai/codex-linux-x64 missing after install"
-            exit 1
-          }
-          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
-          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
-
-      - name: Restore Codex CLI from cache
-        if: steps.cache-codex.outputs.cache-hit == 'true'
-        run: |
-          set -euo pipefail
-          NPM_GLOBAL_ROOT="$(npm root -g)"
-          NPM_GLOBAL_PREFIX="$(npm prefix -g)"
-          # Restore the cached directories directly into the global npm tree so
-          # the @openai/codex-linux-x64 alias name is preserved. npm install -g
-          # on the local paths re-reads package.json, and both cached
-          # directories report "name": "@openai/codex".
-          mkdir -p "${NPM_GLOBAL_ROOT}/@openai" "${NPM_GLOBAL_PREFIX}/bin"
-          rm -rf "${NPM_GLOBAL_ROOT}/@openai/codex" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
-          cp -r "${{ runner.tool_cache }}/codex/package" "${NPM_GLOBAL_ROOT}/@openai/codex"
-          cp -r "${{ runner.tool_cache }}/codex/codex-linux-x64" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
-          ln -sf "${NPM_GLOBAL_ROOT}/@openai/codex/bin/codex.js" "${NPM_GLOBAL_PREFIX}/bin/codex"
-          codex --version
-
-      - name: Create Codex config
-        env:
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
-        run: |
-          set -euo pipefail
-          # Centralised in scripts/write_codex_config.sh — see that
-          # script's header for the apply_patch / trust / elevation
-          # rationale.
-          bash scripts/write_codex_config.sh \
-            --model "${WORKFLOW_EDITOR_MODEL}" \
-            --reasoning xhigh
-          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Setup uv (Semble)
         if: env.SEMBLE_ENABLED == 'true'
@@ -836,7 +863,7 @@ jobs:
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ github.token }}
           WORKFLOW_LOG_SUMMARY_MODEL: ${{ vars.WORKFLOW_LOG_SUMMARY_MODEL || 'openai/gpt-6-luna' }}
           WORKFLOW_LOG_SUMMARY_MAX_RUNS: ${{ vars.WORKFLOW_LOG_SUMMARY_MAX_RUNS || '100' }}
           WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET: ${{ vars.WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET || '1500000' }}
@@ -876,43 +903,236 @@ jobs:
         id: analyze
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
-          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
           RUN_LOGS_DIR: ${{ steps.download_log_output.outputs.download-path }}
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
 
-          # Source sanitize_codex_prompt_file (best-effort) so the
-          # log-analysis prompt is UTF-8-clean before piping. Log
-          # excerpts pulled from CI can carry control bytes from
-          # downstream tool output that may include invalid UTF-8.
-          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          REPORT_DATE="$(date -u +%F)"
+          REPORT_DIR="analysis"
+          REPORT_BASE="${REPORT_DIR}/workflow-optimization-${REPORT_DATE}"
+          REPORT_FILE="${REPORT_BASE}.md"
+          if [ -f "${REPORT_FILE}" ]; then
+            REPORT_SUFFIX=2
+            while [ -f "${REPORT_BASE}-${REPORT_SUFFIX}.md" ]; do
+              REPORT_SUFFIX=$((REPORT_SUFFIX + 1))
+            done
+            REPORT_FILE="${REPORT_BASE}-${REPORT_SUFFIX}.md"
+          fi
+
+          ANALYSIS_CONTEXT_FILE=""
+          ANALYZE_EXIT=0
+          set +e
+          ANALYSIS_CONTEXT_FILE="$(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output "${REPORT_FILE}" --codex-mode)"
+          ANALYZE_EXIT=$?
+          set -e
+
+          if [ "${ANALYZE_EXIT}" -ne 0 ]; then
+            failure_summary="Analyzer failed to prepare Codex context with exit code ${ANALYZE_EXIT}."
+            echo "::error::${failure_summary}"
+            exit 1
+          fi
+          if [ -z "${ANALYSIS_CONTEXT_FILE}" ] || [ ! -f "${ANALYSIS_CONTEXT_FILE}" ]; then
+            failure_summary="Analyzer did not produce a valid Codex context file path."
+            echo "::error::${failure_summary}"
+            exit 1
+          fi
+
+          # Verify the full-log directory artifact arrived before assembling
+          # the prompt; without it Codex would fall back to the analysis
+          # context's quick-index views and miss the untruncated step logs
+          # that motivate the workflow-log-output artifact.
+          if [ -z "${RUN_LOGS_DIR:-}" ] || [ ! -d "${RUN_LOGS_DIR}" ]; then
+            echo "::warning::workflow-log-output artifact not present at '${RUN_LOGS_DIR:-<unset>}'; Codex will only see analysis_context.json."
+            RUN_LOGS_DIR=""
+          fi
+
+          # Build Semble prefetch (best-effort, fail-soft). Skipped silently
+          # when SEMBLE_ENABLED=false, install failed, or the index build
+          # failed — render_prompt.sh treats an empty SEMBLE_PREFETCH as a
+          # blank-line substitution, so a Semble miss never blocks the pass.
+          WLA_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              # `head -c 6000 | iconv -c` truncates by bytes then strips any
+              # incomplete trailing UTF-8 sequence so a multi-byte character
+              # split at the byte boundary doesn't garble the BM25 query.
+              wla_query_text="$(head -c 6000 "${ANALYSIS_CONTEXT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
+              if [ -n "${wla_query_text}" ]; then
+                WLA_SEMBLE_PREFETCH="$(semble_query_block "${wla_query_text}" 6 "Workflow Log Analysis Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
+          MODEL_OUTPUT_FILE="${RUNNER_TEMP:-/tmp}/workflow-model-result.md"
+          CODEX_PROMPT_FILE="$(mktemp)"
+          {
+            SEMBLE_PREFETCH="${WLA_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
+            echo
+            echo "=== ANALYSIS CONTEXT ==="
+            cat "${ANALYSIS_CONTEXT_FILE}"
+            if [ -n "${RUN_LOGS_DIR}" ]; then
+              echo
+              echo "=== FULL RUN LOGS DIRECTORY ==="
+              echo "Run-logs directory: /logs"
+              echo "Layout: summary.json (top-level metrics), errors/ (full logs of failed runs), slow/ (full logs of longest runs by repo+family), recent/ (full logs of most recent runs)."
+              echo "Each run subdirectory contains metadata.json plus untruncated step-NNN-<step>.log files. Read summary.json first, then drill into errors/, slow/, recent/ for evidence."
+            fi
+          } > "${CODEX_PROMPT_FILE}"
+
+          max_attempts="${MAX_CODEX_ATTEMPTS}"
+          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
+            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
+            max_attempts="3"
+          fi
+          codex_failure_mode=""
+          analyze_attempts_used=0
+          for attempt in $(seq 1 "${max_attempts}"); do
+            analyze_attempts_used="${attempt}"
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+            fi
+            set +e
+            MODEL_EDITOR="${WORKFLOW_EDITOR_MODEL}" MODEL_REASONING_EFFORT="xhigh" \
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${MODEL_OUTPUT_FILE}" "${RUNNER_TEMP}/workflow-model.log" codex WORKFLOW_LOG_ANALYSIS "${RUN_LOGS_DIR:-}"
+            ANALYZE_EXIT=$?
+            set -e
+            if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${MODEL_OUTPUT_FILE}"; then
+              codex_failure_mode=""
+              break
+            fi
+            if [ "${ANALYZE_EXIT}" -ne 0 ]; then
+              codex_failure_mode="codex_rc_nonzero"
+            else
+              codex_failure_mode="codex_empty_output"
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
+              sleep "${sleep_secs}"
+            else
+              if [ "${codex_failure_mode}" = "codex_empty_output" ]; then
+                failure_summary="Workflow log analysis Codex pass returned empty output after ${max_attempts} attempts."
+                echo "::error::${failure_summary}"
+                exit 1
+              fi
+              failure_summary="Workflow log analysis Codex pass failed after ${max_attempts} attempts with exit code ${ANALYZE_EXIT}."
+              echo "::error::${failure_summary}"
+              exit 1
+            fi
+          done
+
+          echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
+          echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
+
+      - name: Upload isolated analyze-commit-notify result
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workflow-log-analysis
+          path: ${{ runner.temp }}/workflow-model-result.md
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload summarized workflow log report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workflow-log-report-summarized
+          path: workflow_log_report.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  analyze-commit-notify:
+    needs: [collect-logs, analyze-commit-notify-model]
+    if: ${{ always() && needs.collect-logs.result == 'success' && github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    # Run #25558885206 cancelled at 30m 14s on this job (Codex pass alone
+    # ran ~26m 31s — start 13:47:06, ##[error]The operation was canceled
+    # 14:13:38). Successful neighbours took only 9–13m (e.g. 25548339583
+    # 11m 57s, 25470798500 12m 46s), so this run hit a slow Codex pass /
+    # retry under the 30m cap. Bumped 30 → 60m to mirror the api-redundancy
+    # 30 → 60m precedent (run #25115192726). When this is bumped again,
+    # also propagate the +Δ minutes through every caller that watches a
+    # dispatched run of this workflow:
+    #   1. test-and-mark-stable.yml's `orphan-workflows-test` →
+    #      `Dispatch & watch — workflow-log-analysis` step (in-script
+    #      DEADLINE in seconds, step timeout-minutes, and the job-level
+    #      timeout-minutes with its sum-of-DEADLINEs comment).
+    #   2. comprehensive-test-and-release.yml's
+    #      `phase2-collect-and-analyze-logs` (and the downstream
+    #      `phase3-...` job that reuses the same watcher pattern) —
+    #      both currently capped at `timeout-minutes: 120`. The watcher
+    #      is idle-based (INACTIVITY_LIMIT = phase_timeout * 60), so a
+    #      progressing run won't trigger the soft idle exit, but the
+    #      hard 120m job cap can still cancel a healthy run whose chain
+    #      now totals up to 250m. Bump those caps if/when this worst
+    #      case becomes observable in those callers.
+    timeout-minutes: 60
+    outputs:
+      # commit_report may rename REPORT_FILE on a concurrent-write
+      # collision; downstream jobs (deep-audit, api-redundancy) must see
+      # the post-rename path, so prefer commit_report's output and fall
+      # back to analyze.outputs.report_file when commit_report did not run.
+      report_file: ${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file }}
+      analysis_status: ${{ steps.analyze.outputs.analysis_status }}
+    env:
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download workflow log report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-log-report
+          path: .
+
+      - name: Download summarized workflow log report
+        if: needs.analyze-commit-notify-model.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-log-report-summarized
+          path: .
+
+      - name: Download isolated analyze-commit-notify result
+        if: needs.analyze-commit-notify-model.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-log-analysis
+          path: ${{ runner.temp }}/isolated-result
+      - name: Validate and stage isolated analyze-commit-notify result
+        id: analyze
+        env:
+          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
-
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
           if ! [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
             echo "::error::tracking_issue must be 0 or a positive integer."
             exit 1
           fi
-          if [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
-            TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
-          fi
-
-          if ! [[ "${MAX_CODEX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_CODEX_ATTEMPTS}" -lt 1 ]; then
-            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${MAX_CODEX_ATTEMPTS}); defaulting to 3."
-            MAX_CODEX_ATTEMPTS=3
-          fi
-          if ! [[ "${CODEX_RETRY_BACKOFF_BASE_SECS}" =~ ^[0-9]+$ ]] || [ "${CODEX_RETRY_BACKOFF_BASE_SECS}" -lt 1 ]; then
-            echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${CODEX_RETRY_BACKOFF_BASE_SECS}); defaulting to 10."
-            CODEX_RETRY_BACKOFF_BASE_SECS=10
-          fi
-
+          if [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"; fi
           emit_log_analysis_phase_failure() {
             local failed_step_name="$1"
             local failure_mode="$2"
@@ -1023,125 +1243,63 @@ jobs:
             exit "${codex_exit}"
           }
 
-          REPORT_DATE="$(date -u +%F)"
-          REPORT_DIR="analysis"
-          REPORT_BASE="${REPORT_DIR}/workflow-optimization-${REPORT_DATE}"
-          REPORT_FILE="${REPORT_BASE}.md"
-          if [ -f "${REPORT_FILE}" ]; then
-            REPORT_SUFFIX=2
-            while [ -f "${REPORT_BASE}-${REPORT_SUFFIX}.md" ]; do
-              REPORT_SUFFIX=$((REPORT_SUFFIX + 1))
-            done
-            REPORT_FILE="${REPORT_BASE}-${REPORT_SUFFIX}.md"
+          MODEL_RESULT="${RUNNER_TEMP}/isolated-result/workflow-model-result.md"
+          MODEL_KIND="analysis"
+          REPORT_FILE="${{ needs.analyze-commit-notify-model.outputs.report_file }}"
+          if [ "${{ needs.analyze-commit-notify-model.result }}" != success ]; then
+            emit_log_analysis_phase_failure "analysis_codex_pass" "codex_rc_nonzero" 1 "Isolated workflow log analysis failed."
+            echo '::error::Isolated model job failed; refusing publication.'
+            exit 1
           fi
+          validate_result() {
+          python3 - "${MODEL_RESULT}" "${MODEL_KIND}" "${REPORT_FILE:-}" <<'PYVALIDATE'
+          import pathlib
+          import re
+          import stat
+          import sys
 
-          ANALYSIS_CONTEXT_FILE=""
-          ANALYZE_EXIT=0
-          set +e
-          ANALYSIS_CONTEXT_FILE="$(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output "${REPORT_FILE}" --codex-mode)"
-          ANALYZE_EXIT=$?
-          set -e
-
-          if [ "${ANALYZE_EXIT}" -ne 0 ]; then
-            failure_summary="Analyzer failed to prepare Codex context with exit code ${ANALYZE_EXIT}."
-            echo "::error::${failure_summary}"
-            handle_log_analysis_codex_failure "analysis_prepare_context" "analyzer_failed" "1" "${ANALYZE_EXIT}" "${failure_summary}"
+          result = pathlib.Path(sys.argv[1])
+          kind = sys.argv[2]
+          report = sys.argv[3]
+          if result.is_symlink() or not result.exists():
+              raise SystemExit("Missing isolated model result")
+          info = result.lstat()
+          if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 2 * 1024 * 1024:
+              raise SystemExit("Invalid isolated model result size or type")
+          content = result.read_text(encoding="utf-8")
+          if "\x00" in content:
+              raise SystemExit("Invalid model result")
+          if kind != "retro" and (not re.fullmatch(r"analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2}(?:-[0-9]+)?\.md", report) or pathlib.Path(report).is_symlink() or pathlib.Path(report).parent.is_symlink()):
+              raise SystemExit("Invalid analysis report path")
+          headings = {
+              "retro": ["## Weekly Retro", "### What Worked", "### Failure Modes", "### Next Week Recommendation", "### Metrics Snapshot"],
+              "analysis": ["## Executive Summary", "## Speed Optimizations", "## Cost Optimizations", "## Reliability Improvements", "## AI Memory Health", "## GH API Call Audit", "## Prompt Cache & Memory System", "## Orchestrator Health", "## Pipeline Flow Bottlenecks", "## Per-Repo Breakdown", "## Metrics Appendix"],
+              "audit": ["### Section 1: Bug & Correctness Sweep", "### Section 2: GitHub API Call Redundancy Audit", "### Section 3: Code Duplication & Modularization Opportunities", "### Section 4: Expression Size Limit Risk Assessment", "### Section 5: Cross-Cutting Concerns", "### Section 6: Summary & Severity Matrix", "#### 6A. Findings Summary Table", "#### 6B. Estimated Remediation Scope"],
+              "api": ["### Safety Tag Legend", "### Consolidation Candidates (MERGE-###)", "### Redundant Re-Fetch (REUSE-###)", "### Dead Calls (DEAD-API-###)", "### Cross-References to Deep Audit Section", "### Summary Counts", "### Implement-Stage Handoff"],
+          }[kind]
+          first_line = content.splitlines()[0]
+          if kind == "retro" and first_line != "## Weekly Retro":
+              raise SystemExit("Invalid retro heading")
+          if kind == "audit" and not re.fullmatch(r"## Deep Audit — Workflows & Scripts \([0-9]{4}-[0-9]{2}-[0-9]{2}\)", first_line):
+              raise SystemExit("Invalid deep audit heading")
+          if kind == "api" and not re.fullmatch(r"## API Call Consolidation & Dead-Call Analysis \([0-9]{4}-[0-9]{2}-[0-9]{2}\)", first_line):
+              raise SystemExit("Invalid API redundancy heading")
+          lines = content.splitlines()
+          offset = -1
+          for heading in headings:
+              try:
+                  offset = lines.index(heading, offset + 1)
+              except ValueError:
+                  raise SystemExit("Missing or misordered model result heading") from None
+          PYVALIDATE
+          }
+          if ! validate_result; then
+            emit_log_analysis_phase_failure "analysis_codex_pass" "invalid_model_artifact" 1 "Isolated workflow log analysis result failed validation."
+            exit 1
           fi
-          if [ -z "${ANALYSIS_CONTEXT_FILE}" ] || [ ! -f "${ANALYSIS_CONTEXT_FILE}" ]; then
-            failure_summary="Analyzer did not produce a valid Codex context file path."
-            echo "::error::${failure_summary}"
-            handle_log_analysis_codex_failure "analysis_prepare_context" "missing_context_artifact" "1" 1 "${failure_summary}"
-          fi
-
-          # Verify the full-log directory artifact arrived before assembling
-          # the prompt; without it Codex would fall back to the analysis
-          # context's quick-index views and miss the untruncated step logs
-          # that motivate the workflow-log-output artifact.
-          if [ -z "${RUN_LOGS_DIR:-}" ] || [ ! -d "${RUN_LOGS_DIR}" ]; then
-            echo "::warning::workflow-log-output artifact not present at '${RUN_LOGS_DIR:-<unset>}'; Codex will only see analysis_context.json."
-            RUN_LOGS_DIR=""
-          fi
-
-          # Build Semble prefetch (best-effort, fail-soft). Skipped silently
-          # when SEMBLE_ENABLED=false, install failed, or the index build
-          # failed — render_prompt.sh treats an empty SEMBLE_PREFETCH as a
-          # blank-line substitution, so a Semble miss never blocks the pass.
-          WLA_SEMBLE_PREFETCH=""
-          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
-            # shellcheck disable=SC1091
-            source scripts/semble_helpers.sh || true
-            if type semble_query_block >/dev/null 2>&1; then
-              # `head -c 6000 | iconv -c` truncates by bytes then strips any
-              # incomplete trailing UTF-8 sequence so a multi-byte character
-              # split at the byte boundary doesn't garble the BM25 query.
-              wla_query_text="$(head -c 6000 "${ANALYSIS_CONTEXT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
-              if [ -n "${wla_query_text}" ]; then
-                WLA_SEMBLE_PREFETCH="$(semble_query_block "${wla_query_text}" 6 "Workflow Log Analysis Context" 2>/dev/null || true)"
-              fi
-            fi
-          fi
-
-          CODEX_PROMPT_FILE="$(mktemp)"
-          {
-            SEMBLE_PREFETCH="${WLA_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
-            echo
-            echo "=== ANALYSIS CONTEXT ==="
-            cat "${ANALYSIS_CONTEXT_FILE}"
-            if [ -n "${RUN_LOGS_DIR}" ]; then
-              echo
-              echo "=== FULL RUN LOGS DIRECTORY ==="
-              echo "Run-logs directory: ${RUN_LOGS_DIR}"
-              echo "Layout: summary.json (top-level metrics), errors/ (full logs of failed runs), slow/ (full logs of longest runs by repo+family), recent/ (full logs of most recent runs)."
-              echo "Each run subdirectory contains metadata.json plus untruncated step-NNN-<step>.log files. Read summary.json first, then drill into errors/, slow/, recent/ for evidence."
-            fi
-          } > "${CODEX_PROMPT_FILE}"
-
-          max_attempts="${MAX_CODEX_ATTEMPTS}"
-          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
-            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
-            max_attempts="3"
-          fi
-          codex_failure_mode=""
-          analyze_attempts_used=0
-          for attempt in $(seq 1 "${max_attempts}"); do
-            analyze_attempts_used="${attempt}"
-            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
-            fi
-            set +e
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_log_analysis \
-              --stdout-file "${REPORT_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
-            ANALYZE_EXIT=$?
-            set -e
-            if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
-              codex_failure_mode=""
-              break
-            fi
-            if [ "${ANALYZE_EXIT}" -ne 0 ]; then
-              codex_failure_mode="codex_rc_nonzero"
-            else
-              codex_failure_mode="codex_empty_output"
-            fi
-            if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
-              sleep "${sleep_secs}"
-            else
-              if [ "${codex_failure_mode}" = "codex_empty_output" ]; then
-                failure_summary="Workflow log analysis Codex pass returned empty output after ${max_attempts} attempts."
-                echo "::error::${failure_summary}"
-                handle_log_analysis_codex_failure "analysis_codex_pass" "codex_empty_output" "${analyze_attempts_used}" 0 "${failure_summary}"
-              fi
-              failure_summary="Workflow log analysis Codex pass failed after ${max_attempts} attempts with exit code ${ANALYZE_EXIT}."
-              echo "::error::${failure_summary}"
-              handle_log_analysis_codex_failure "analysis_codex_pass" "codex_rc_nonzero" "${analyze_attempts_used}" "${ANALYZE_EXIT}" "${failure_summary}"
-            fi
-          done
-
+          install -m 0644 "${MODEL_RESULT}" "${REPORT_FILE}"
           echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
           echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
-
       - name: Render workflow scenario traces
         if: steps.analyze.outputs.analysis_status == 'completed' && env.WORKFLOW_LOG_SCENARIO_TRACE_ENABLED == 'true'
         env:
@@ -1353,10 +1511,13 @@ jobs:
           fi
           tg_send_msg "${MSG}" "${ALERT_LEVEL}" >/dev/null
 
-  deep-audit:
+  deep-audit-model:
     needs: analyze-commit-notify
     if: ${{ github.event_name != 'schedule' && success() && needs.analyze-commit-notify.outputs.analysis_status == 'completed' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     # Bumped 30 → 45 after run #25088541089 cancelled at 30m 16s — the
     # original 30m budget gave no headroom for LLM latency variance, and
     # `api-redundancy` was skipped (`needs: deep-audit`) when the timeout
@@ -1373,105 +1534,20 @@ jobs:
     # orphan-watcher step timeout (205 → 235m) and in-script DEADLINE
     # (12000 → 13800s) in test-and-mark-stable.yml.
     timeout-minutes: 75
-    outputs:
-      audit_status: ${{ steps.audit.outputs.audit_status }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GH_PAT || github.token }}
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.ref_name }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
-      - name: Cache Codex CLI
-        id: cache-codex
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.tool_cache }}/codex
-          # -v2: previous cache only stored @openai/codex (no platform binary),
-          # so cache hits restored a stub-only install and Codex crashed at
-          # startup with "Missing optional dependency @openai/codex-linux-x64".
-          # Bump invalidates the broken entries; persist+restore below now
-          # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
-
-      - name: Install Codex CLI
-        if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
-        with:
-          codex_version: ${{ env.CODEX_VERSION }}
-
-      - name: Persist Codex CLI to tool cache
-        if: steps.cache-codex.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          NPM_GLOBAL_ROOT="$(npm root -g)"
-          mkdir -p "${{ runner.tool_cache }}/codex"
-          [ -d "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" ] || {
-            echo "::error::Codex platform package @openai/codex-linux-x64 missing after install"
-            exit 1
-          }
-          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
-          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
-
-      - name: Restore Codex CLI from cache
-        if: steps.cache-codex.outputs.cache-hit == 'true'
-        run: |
-          set -euo pipefail
-          NPM_GLOBAL_ROOT="$(npm root -g)"
-          NPM_GLOBAL_PREFIX="$(npm prefix -g)"
-          # Restore the cached directories directly into the global npm tree so
-          # the @openai/codex-linux-x64 alias name is preserved. npm install -g
-          # on the local paths re-reads package.json, and both cached
-          # directories report "name": "@openai/codex".
-          mkdir -p "${NPM_GLOBAL_ROOT}/@openai" "${NPM_GLOBAL_PREFIX}/bin"
-          rm -rf "${NPM_GLOBAL_ROOT}/@openai/codex" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
-          cp -r "${{ runner.tool_cache }}/codex/package" "${NPM_GLOBAL_ROOT}/@openai/codex"
-          cp -r "${{ runner.tool_cache }}/codex/codex-linux-x64" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
-          ln -sf "${NPM_GLOBAL_ROOT}/@openai/codex/bin/codex.js" "${NPM_GLOBAL_PREFIX}/bin/codex"
-          codex --version
-
-      - name: Create Codex config
-        env:
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
-        run: |
-          set -euo pipefail
-          # Reasoning effort is hardcoded at "xhigh" and deliberately kept
-          # above the repo-wide gpt-6-sol `high` default for the audit pass.
-          # Historical context:
-          # run #25088541089 cancelled this job at 30m 16s on its prior
-          # 30m cap because xhigh over the audit's wide surface area
-          # (~30 workflow files + scripts/, plus the full report file
-          # concatenated as context) carries a meaningful latency tax —
-          # which is why the timeout was bumped from 30m → 45m. If audit
-          # passes start timing out again, lower this to `high` first.
-          # Codex config centralised in scripts/write_codex_config.sh —
-          # see that script's header for the apply_patch / trust /
-          # elevation rationale.
-          bash scripts/write_codex_config.sh \
-            --model "${WORKFLOW_EDITOR_MODEL}" \
-            --reasoning xhigh
-          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
-
-      - name: Sync latest report from target branch
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-        run: |
-          set -euo pipefail
-          if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
-            echo "::error::Deep audit requires a branch ref for report sync/push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
-            exit 1
-          fi
-          TARGET_BRANCH="${GITHUB_REF_NAME}"
-          git fetch origin "${TARGET_BRANCH}" --depth=1
-          git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
-          git pull --rebase origin "${TARGET_BRANCH}"
 
       - name: Setup uv (Semble)
         if: env.SEMBLE_ENABLED == 'true'
@@ -1525,32 +1601,211 @@ jobs:
         id: audit
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
-          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
 
-          # Source sanitize_codex_prompt_file (best-effort) so the
-          # deep-audit prompt is UTF-8-clean before piping.
-          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          if [ -z "${REPORT_FILE}" ]; then
+            echo "::error::Upstream job did not provide report_file."
+            exit 1
+          fi
+          if [ ! -f "${REPORT_FILE}" ]; then
+            echo "::error::Report file '${REPORT_FILE}' not found on target branch."
+            exit 1
+          fi
+
+          # Build Semble prefetch (best-effort, fail-soft).
+          AUDIT_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              # `head -c 6000 | iconv -c` truncates by bytes then strips any
+              # incomplete trailing UTF-8 sequence so a multi-byte character
+              # split at the byte boundary doesn't garble the BM25 query.
+              audit_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
+              if [ -n "${audit_query_text}" ]; then
+                AUDIT_SEMBLE_PREFETCH="$(semble_query_block "${audit_query_text}" 6 "Workflow Deep Audit Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
+          SECTION_FILE=""
+          CODEX_PROMPT_FILE=""
+          trap 'rm -f "${CODEX_PROMPT_FILE}"' EXIT
+          SECTION_FILE="${RUNNER_TEMP:-/tmp}/workflow-model-result.md"
+          CODEX_PROMPT_FILE="$(mktemp)"
+          {
+            SEMBLE_PREFETCH="${AUDIT_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
+            echo
+            echo "=== ANALYSIS CONTEXT ==="
+            echo "Report file path: ${REPORT_FILE}"
+            echo "Current UTC date: $(date -u +%F)"
+            echo "--- Begin current report contents ---"
+            cat "${REPORT_FILE}"
+            echo "--- End current report contents ---"
+          } > "${CODEX_PROMPT_FILE}"
+
+          max_attempts="${MAX_CODEX_ATTEMPTS}"
+          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
+            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
+            max_attempts="3"
+          fi
+
+          backoff_base="${CODEX_RETRY_BACKOFF_BASE_SECS}"
+          if ! [[ "${backoff_base}" =~ ^[0-9]+$ ]] || [ "${backoff_base}" -lt 1 ]; then
+            echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${backoff_base}); defaulting to 10."
+            backoff_base=10
+          fi
+
+          AUDIT_EXIT=0
+          for attempt in $(seq 1 "${max_attempts}"); do
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+            fi
+            set +e
+            MODEL_EDITOR="${WORKFLOW_EDITOR_MODEL}" MODEL_REASONING_EFFORT="xhigh" \
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${SECTION_FILE}" "${RUNNER_TEMP}/workflow-model.log" codex WORKFLOW_DEEP_AUDIT
+            AUDIT_EXIT=$?
+            set -e
+            if [ "${AUDIT_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
+              break
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((backoff_base * (2 ** (attempt - 1))))
+              sleep "${sleep_secs}"
+            else
+              if [ "${AUDIT_EXIT}" -eq 0 ]; then
+                failure_summary="Deep audit Codex returned empty output after ${max_attempts} attempts."
+                echo "::error::${failure_summary}"
+                exit 1
+              fi
+              failure_summary="Deep audit Codex failed after ${max_attempts} attempts with exit code ${AUDIT_EXIT}."
+              echo "::error::${failure_summary}"
+              exit "${AUDIT_EXIT}"
+            fi
+          done
+
+          if ! head -n1 "${SECTION_FILE}" | grep -qE '^## Deep Audit — Workflows & Scripts \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$'; then
+            echo "::error::Deep audit Codex output did not start with the required '## Deep Audit — Workflows & Scripts (YYYY-MM-DD)' heading."
+            exit 1
+          fi
+
+          required_headings=(
+            "### Section 1: Bug & Correctness Sweep"
+            "### Section 2: GitHub API Call Redundancy Audit"
+            "### Section 3: Code Duplication & Modularization Opportunities"
+            "### Section 4: Expression Size Limit Risk Assessment"
+            "### Section 5: Cross-Cutting Concerns"
+            "### Section 6: Summary & Severity Matrix"
+            "#### 6A. Findings Summary Table"
+            "#### 6B. Estimated Remediation Scope"
+          )
+          previous_heading_line=0
+          for heading in "${required_headings[@]}"; do
+            heading_line="$(grep -nFx "${heading}" "${SECTION_FILE}" | head -n1 | cut -d: -f1 || true)"
+            if [ -z "${heading_line}" ]; then
+              echo "::error::Deep audit Codex output is missing required heading: ${heading}"
+              exit 1
+            fi
+            if [ "${heading_line}" -le "${previous_heading_line}" ]; then
+              echo "::error::Deep audit Codex output has headings out of order at: ${heading}"
+              exit 1
+            fi
+            previous_heading_line="${heading_line}"
+          done
+
+
+          echo "audit_status=completed" >> "$GITHUB_OUTPUT"
+
+      - name: Upload isolated deep-audit result
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workflow-deep-audit
+          path: ${{ runner.temp }}/workflow-model-result.md
+          if-no-files-found: ignore
+          retention-days: 7
+
+  deep-audit:
+    needs: [analyze-commit-notify, deep-audit-model]
+    if: ${{ always() && github.event_name != 'schedule' && needs.analyze-commit-notify.result == 'success' && needs.analyze-commit-notify.outputs.analysis_status == 'completed' }}
+    runs-on: ubuntu-latest
+    # Bumped 30 → 45 after run #25088541089 cancelled at 30m 16s — the
+    # original 30m budget gave no headroom for LLM latency variance, and
+    # `api-redundancy` was skipped (`needs: deep-audit`) when the timeout
+    # tripped. 45m absorbs the observed margin and leaves room for slow
+    # codex calls without changing the watcher's overall ceiling beyond
+    # what test-and-mark-stable.yml already accommodates.
+    # Bumped 45 → 75 after run #25474659590 cancelled at 45m 16s on
+    # deep-audit. Recent successful single-attempt durations (jobs API)
+    # were 14–27m; in that run, codex attempt 1 ran ~24m and failed
+    # validation (empty stdout / non-zero exit), forcing a retry that
+    # was then killed by the 45m cap mid-attempt-2. 75m fits the full
+    # MAX_CODEX_ATTEMPTS=3 ladder at the observed worst-case ~25m per
+    # attempt plus the 10s/20s exponential backoff. Cascade bumped the
+    # orphan-watcher step timeout (205 → 235m) and in-script DEADLINE
+    # (12000 → 13800s) in test-and-mark-stable.yml.
+    timeout-minutes: 75
+    outputs:
+      audit_status: ${{ steps.audit.outputs.audit_status }}
+    env:
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Sync latest report from target branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
+            echo "::error::Deep audit requires a branch ref for report sync/push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
+            exit 1
+          fi
+          TARGET_BRANCH="${GITHUB_REF_NAME}"
+          git fetch origin "${TARGET_BRANCH}" --depth=1
+          git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
+          git pull --rebase origin "${TARGET_BRANCH}"
+
+      - name: Download isolated deep-audit result
+        if: needs.deep-audit-model.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-deep-audit
+          path: ${{ runner.temp }}/isolated-result
+      - name: Validate and stage isolated deep-audit result
+        id: audit
+        env:
+          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
-
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
           if ! [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
             echo "::error::tracking_issue must be 0 or a positive integer."
             exit 1
           fi
-          if [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
-            TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
-          fi
-
+          if [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"; fi
           emit_deep_audit_failure() {
             local failure_mode="$1"
             local attempt_count="$2"
@@ -1629,126 +1884,67 @@ jobs:
             gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
           }
 
-          if [ -z "${REPORT_FILE}" ]; then
-            echo "::error::Upstream job did not provide report_file."
+          MODEL_RESULT="${RUNNER_TEMP}/isolated-result/workflow-model-result.md"
+          MODEL_KIND="audit"
+          REPORT_FILE="${{ needs.analyze-commit-notify.outputs.report_file }}"
+          if [ "${{ needs.deep-audit-model.result }}" != success ]; then
+            emit_deep_audit_failure "codex_rc_nonzero" 1 "Isolated deep audit failed."
+            echo '::error::Isolated model job failed; refusing publication.'
             exit 1
           fi
-          if [ ! -f "${REPORT_FILE}" ]; then
-            echo "::error::Report file '${REPORT_FILE}' not found on target branch."
+          validate_result() {
+          python3 - "${MODEL_RESULT}" "${MODEL_KIND}" "${REPORT_FILE:-}" <<'PYVALIDATE'
+          import pathlib
+          import re
+          import stat
+          import sys
+
+          result = pathlib.Path(sys.argv[1])
+          kind = sys.argv[2]
+          report = sys.argv[3]
+          if result.is_symlink() or not result.exists():
+              raise SystemExit("Missing isolated model result")
+          info = result.lstat()
+          if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 2 * 1024 * 1024:
+              raise SystemExit("Invalid isolated model result size or type")
+          content = result.read_text(encoding="utf-8")
+          if "\x00" in content:
+              raise SystemExit("Invalid model result")
+          if kind != "retro" and (not re.fullmatch(r"analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2}(?:-[0-9]+)?\.md", report) or pathlib.Path(report).is_symlink() or pathlib.Path(report).parent.is_symlink()):
+              raise SystemExit("Invalid analysis report path")
+          headings = {
+              "retro": ["## Weekly Retro", "### What Worked", "### Failure Modes", "### Next Week Recommendation", "### Metrics Snapshot"],
+              "analysis": ["## Executive Summary", "## Speed Optimizations", "## Cost Optimizations", "## Reliability Improvements", "## AI Memory Health", "## GH API Call Audit", "## Prompt Cache & Memory System", "## Orchestrator Health", "## Pipeline Flow Bottlenecks", "## Per-Repo Breakdown", "## Metrics Appendix"],
+              "audit": ["### Section 1: Bug & Correctness Sweep", "### Section 2: GitHub API Call Redundancy Audit", "### Section 3: Code Duplication & Modularization Opportunities", "### Section 4: Expression Size Limit Risk Assessment", "### Section 5: Cross-Cutting Concerns", "### Section 6: Summary & Severity Matrix", "#### 6A. Findings Summary Table", "#### 6B. Estimated Remediation Scope"],
+              "api": ["### Safety Tag Legend", "### Consolidation Candidates (MERGE-###)", "### Redundant Re-Fetch (REUSE-###)", "### Dead Calls (DEAD-API-###)", "### Cross-References to Deep Audit Section", "### Summary Counts", "### Implement-Stage Handoff"],
+          }[kind]
+          first_line = content.splitlines()[0]
+          if kind == "retro" and first_line != "## Weekly Retro":
+              raise SystemExit("Invalid retro heading")
+          if kind == "audit" and not re.fullmatch(r"## Deep Audit — Workflows & Scripts \([0-9]{4}-[0-9]{2}-[0-9]{2}\)", first_line):
+              raise SystemExit("Invalid deep audit heading")
+          if kind == "api" and not re.fullmatch(r"## API Call Consolidation & Dead-Call Analysis \([0-9]{4}-[0-9]{2}-[0-9]{2}\)", first_line):
+              raise SystemExit("Invalid API redundancy heading")
+          lines = content.splitlines()
+          offset = -1
+          for heading in headings:
+              try:
+                  offset = lines.index(heading, offset + 1)
+              except ValueError:
+                  raise SystemExit("Missing or misordered model result heading") from None
+          PYVALIDATE
+          }
+          if ! validate_result; then
+            emit_deep_audit_failure "invalid_model_artifact" 1 "Isolated deep audit result failed validation."
             exit 1
           fi
-
-          # Build Semble prefetch (best-effort, fail-soft).
-          AUDIT_SEMBLE_PREFETCH=""
-          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
-            # shellcheck disable=SC1091
-            source scripts/semble_helpers.sh || true
-            if type semble_query_block >/dev/null 2>&1; then
-              # `head -c 6000 | iconv -c` truncates by bytes then strips any
-              # incomplete trailing UTF-8 sequence so a multi-byte character
-              # split at the byte boundary doesn't garble the BM25 query.
-              audit_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
-              if [ -n "${audit_query_text}" ]; then
-                AUDIT_SEMBLE_PREFETCH="$(semble_query_block "${audit_query_text}" 6 "Workflow Deep Audit Context" 2>/dev/null || true)"
-              fi
-            fi
-          fi
-
-          SECTION_FILE=""
-          CODEX_PROMPT_FILE=""
-          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
-          SECTION_FILE="$(mktemp)"
-          CODEX_PROMPT_FILE="$(mktemp)"
-          {
-            SEMBLE_PREFETCH="${AUDIT_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
-            echo
-            echo "=== ANALYSIS CONTEXT ==="
-            echo "Report file path: ${REPORT_FILE}"
-            echo "Current UTC date: $(date -u +%F)"
-            echo "--- Begin current report contents ---"
-            cat "${REPORT_FILE}"
-            echo "--- End current report contents ---"
-          } > "${CODEX_PROMPT_FILE}"
-
-          max_attempts="${MAX_CODEX_ATTEMPTS}"
-          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
-            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
-            max_attempts="3"
-          fi
-
-          backoff_base="${CODEX_RETRY_BACKOFF_BASE_SECS}"
-          if ! [[ "${backoff_base}" =~ ^[0-9]+$ ]] || [ "${backoff_base}" -lt 1 ]; then
-            echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${backoff_base}); defaulting to 10."
-            backoff_base=10
-          fi
-
-          AUDIT_EXIT=0
-          for attempt in $(seq 1 "${max_attempts}"); do
-            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
-            fi
-            set +e
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_deep_audit \
-              --stdout-file "${SECTION_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
-            AUDIT_EXIT=$?
-            set -e
-            if [ "${AUDIT_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
-              break
-            fi
-            if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((backoff_base * (2 ** (attempt - 1))))
-              sleep "${sleep_secs}"
-            else
-              if [ "${AUDIT_EXIT}" -eq 0 ]; then
-                failure_summary="Deep audit Codex returned empty output after ${max_attempts} attempts."
-                echo "::error::${failure_summary}"
-                emit_deep_audit_failure "codex_empty_output" "${max_attempts}" "${failure_summary}"
-                exit 1
-              fi
-              failure_summary="Deep audit Codex failed after ${max_attempts} attempts with exit code ${AUDIT_EXIT}."
-              echo "::error::${failure_summary}"
-              emit_deep_audit_failure "codex_rc_nonzero" "${max_attempts}" "${failure_summary}"
-              exit "${AUDIT_EXIT}"
-            fi
-          done
-
-          if ! head -n1 "${SECTION_FILE}" | grep -qE '^## Deep Audit — Workflows & Scripts \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$'; then
-            echo "::error::Deep audit Codex output did not start with the required '## Deep Audit — Workflows & Scripts (YYYY-MM-DD)' heading."
-            head -n5 "${SECTION_FILE}" >&2 || true
+          if [ ! -f "${REPORT_FILE}" ] || [ -L "${REPORT_FILE}" ]; then
+            echo '::error::Report missing from target branch.'
             exit 1
           fi
-
-          required_headings=(
-            "### Section 1: Bug & Correctness Sweep"
-            "### Section 2: GitHub API Call Redundancy Audit"
-            "### Section 3: Code Duplication & Modularization Opportunities"
-            "### Section 4: Expression Size Limit Risk Assessment"
-            "### Section 5: Cross-Cutting Concerns"
-            "### Section 6: Summary & Severity Matrix"
-            "#### 6A. Findings Summary Table"
-            "#### 6B. Estimated Remediation Scope"
-          )
-          previous_heading_line=0
-          for heading in "${required_headings[@]}"; do
-            heading_line="$(grep -nFx "${heading}" "${SECTION_FILE}" | head -n1 | cut -d: -f1 || true)"
-            if [ -z "${heading_line}" ]; then
-              echo "::error::Deep audit Codex output is missing required heading: ${heading}"
-              exit 1
-            fi
-            if [ "${heading_line}" -le "${previous_heading_line}" ]; then
-              echo "::error::Deep audit Codex output has headings out of order at: ${heading}"
-              exit 1
-            fi
-            previous_heading_line="${heading_line}"
-          done
-
           printf '\n' >> "${REPORT_FILE}"
-          cat "${SECTION_FILE}" >> "${REPORT_FILE}"
-
+          cat "${MODEL_RESULT}" >> "${REPORT_FILE}"
           echo "audit_status=completed" >> "$GITHUB_OUTPUT"
-
       - name: Commit and push deep audit section
         if: steps.audit.outputs.audit_status == 'completed'
         env:
@@ -1866,10 +2062,13 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_msg "${MSG}" "${ALERT_LEVEL}" >/dev/null
 
-  api-redundancy:
+  api-redundancy-model:
     needs: [analyze-commit-notify, deep-audit]
     if: ${{ github.event_name != 'schedule' && success() && needs.deep-audit.outputs.audit_status == 'completed' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     # Bumped 30 → 60 after run 25115192726 cancelled at 30m19s on this job
     # — Codex was still mid-analysis ("considering whether I can combine
     # findings from two separate call sites") when the 30m cap fired and
@@ -1885,97 +2084,20 @@ jobs:
     # step) still covers the new 90m cap with headroom. (Was
     # `orphan-workflows-test` before PR #2351 split this dispatch out.)
     timeout-minutes: 90
-    outputs:
-      api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GH_PAT || github.token }}
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.ref_name }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
-      - name: Cache Codex CLI
-        id: cache-codex
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.tool_cache }}/codex
-          # -v2: previous cache only stored @openai/codex (no platform binary),
-          # so cache hits restored a stub-only install and Codex crashed at
-          # startup with "Missing optional dependency @openai/codex-linux-x64".
-          # Bump invalidates the broken entries; persist+restore below now
-          # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
-
-      - name: Install Codex CLI
-        if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
-        with:
-          codex_version: ${{ env.CODEX_VERSION }}
-
-      - name: Persist Codex CLI to tool cache
-        if: steps.cache-codex.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          NPM_GLOBAL_ROOT="$(npm root -g)"
-          mkdir -p "${{ runner.tool_cache }}/codex"
-          [ -d "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" ] || {
-            echo "::error::Codex platform package @openai/codex-linux-x64 missing after install"
-            exit 1
-          }
-          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
-          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
-
-      - name: Restore Codex CLI from cache
-        if: steps.cache-codex.outputs.cache-hit == 'true'
-        run: |
-          set -euo pipefail
-          NPM_GLOBAL_ROOT="$(npm root -g)"
-          NPM_GLOBAL_PREFIX="$(npm prefix -g)"
-          # Restore the cached directories directly into the global npm tree so
-          # the @openai/codex-linux-x64 alias name is preserved. npm install -g
-          # on the local paths re-reads package.json, and both cached
-          # directories report "name": "@openai/codex".
-          mkdir -p "${NPM_GLOBAL_ROOT}/@openai" "${NPM_GLOBAL_PREFIX}/bin"
-          rm -rf "${NPM_GLOBAL_ROOT}/@openai/codex" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
-          cp -r "${{ runner.tool_cache }}/codex/package" "${NPM_GLOBAL_ROOT}/@openai/codex"
-          cp -r "${{ runner.tool_cache }}/codex/codex-linux-x64" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
-          ln -sf "${NPM_GLOBAL_ROOT}/@openai/codex/bin/codex.js" "${NPM_GLOBAL_PREFIX}/bin/codex"
-          codex --version
-
-      - name: Create Codex config
-        env:
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
-          THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || 'high' }}
-        run: |
-          set -euo pipefail
-          # Centralised in scripts/write_codex_config.sh — see that
-          # script's header for the apply_patch / trust / elevation
-          # rationale.
-          bash scripts/write_codex_config.sh \
-            --model "${WORKFLOW_EDITOR_MODEL}" \
-            --reasoning "${THINKING_LEVEL_ANALYSIS}"
-          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
-
-      - name: Sync latest report from target branch
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-        run: |
-          set -euo pipefail
-          if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
-            echo "::error::API redundancy pass requires a branch ref for report sync/push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
-            exit 1
-          fi
-          TARGET_BRANCH="${GITHUB_REF_NAME}"
-          git fetch origin "${TARGET_BRANCH}" --depth=1
-          git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
-          git pull --rebase origin "${TARGET_BRANCH}"
 
       - name: Setup uv (Semble)
         if: env.SEMBLE_ENABLED == 'true'
@@ -2029,32 +2151,208 @@ jobs:
         id: api_redundancy
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
-          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
 
-          # Source sanitize_codex_prompt_file (best-effort) so the
-          # API-redundancy prompt is UTF-8-clean before piping.
-          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          if [ -z "${REPORT_FILE}" ]; then
+            echo "::error::Upstream job did not provide report_file."
+            exit 1
+          fi
+          if [ ! -f "${REPORT_FILE}" ]; then
+            echo "::error::Report file '${REPORT_FILE}' not found on target branch."
+            exit 1
+          fi
+
+          # Build Semble prefetch (best-effort, fail-soft).
+          API_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              # `head -c 6000 | iconv -c` truncates by bytes then strips any
+              # incomplete trailing UTF-8 sequence so a multi-byte character
+              # split at the byte boundary doesn't garble the BM25 query.
+              api_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
+              if [ -n "${api_query_text}" ]; then
+                API_SEMBLE_PREFETCH="$(semble_query_block "${api_query_text}" 6 "Workflow API Redundancy Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
+          SECTION_FILE=""
+          CODEX_PROMPT_FILE=""
+          trap 'rm -f "${CODEX_PROMPT_FILE}"' EXIT
+          SECTION_FILE="${RUNNER_TEMP:-/tmp}/workflow-model-result.md"
+          CODEX_PROMPT_FILE="$(mktemp)"
+          {
+            SEMBLE_PREFETCH="${API_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
+            echo
+            echo "=== ANALYSIS CONTEXT ==="
+            echo "Report file path: ${REPORT_FILE}"
+            echo "Current UTC date: $(date -u +%F)"
+            echo "--- Begin current report contents (includes prior Deep Audit section) ---"
+            cat "${REPORT_FILE}"
+            echo "--- End current report contents ---"
+          } > "${CODEX_PROMPT_FILE}"
+
+          max_attempts="${MAX_CODEX_ATTEMPTS}"
+          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
+            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
+            max_attempts="3"
+          fi
+          backoff_base="${CODEX_RETRY_BACKOFF_BASE_SECS}"
+          if ! [[ "${backoff_base}" =~ ^[0-9]+$ ]] || [ "${backoff_base}" -lt 1 ]; then
+            echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${backoff_base}); defaulting to 10."
+            backoff_base=10
+          fi
+
+          API_EXIT=0
+          for attempt in $(seq 1 "${max_attempts}"); do
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+            fi
+            set +e
+            MODEL_EDITOR="${WORKFLOW_EDITOR_MODEL}" MODEL_REASONING_EFFORT="${THINKING_LEVEL_ANALYSIS:-high}" \
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${SECTION_FILE}" "${RUNNER_TEMP}/workflow-model.log" codex WORKFLOW_API_REDUNDANCY
+            API_EXIT=$?
+            set -e
+            if [ "${API_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
+              break
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((backoff_base * (2 ** (attempt - 1))))
+              sleep "${sleep_secs}"
+            else
+              if [ "${API_EXIT}" -eq 0 ]; then
+                failure_summary="API redundancy Codex returned empty output after ${max_attempts} attempts."
+                echo "::error::${failure_summary}"
+                exit 1
+              fi
+              failure_summary="API redundancy Codex failed after ${max_attempts} attempts with exit code ${API_EXIT}."
+              echo "::error::${failure_summary}"
+              exit "${API_EXIT}"
+            fi
+          done
+
+          if ! head -n1 "${SECTION_FILE}" | grep -qE '^## API Call Consolidation & Dead-Call Analysis \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$'; then
+            echo "::error::API redundancy Codex output did not start with the required '## API Call Consolidation & Dead-Call Analysis (YYYY-MM-DD)' heading."
+            exit 1
+          fi
+
+          required_headings=(
+            "### Safety Tag Legend"
+            "### Consolidation Candidates (MERGE-###)"
+            "### Redundant Re-Fetch (REUSE-###)"
+            "### Dead Calls (DEAD-API-###)"
+            "### Cross-References to Deep Audit Section"
+            "### Summary Counts"
+            "### Implement-Stage Handoff"
+          )
+          previous_heading_line=0
+          for heading in "${required_headings[@]}"; do
+            heading_line="$(grep -nFx "${heading}" "${SECTION_FILE}" | head -n1 | cut -d: -f1 || true)"
+            if [ -z "${heading_line}" ]; then
+              echo "::error::API redundancy Codex output is missing required heading: ${heading}"
+              exit 1
+            fi
+            if [ "${heading_line}" -le "${previous_heading_line}" ]; then
+              echo "::error::API redundancy Codex output has headings out of order at: ${heading}"
+              exit 1
+            fi
+            previous_heading_line="${heading_line}"
+          done
+
+
+          echo "api_redundancy_status=completed" >> "$GITHUB_OUTPUT"
+
+      - name: Upload isolated api-redundancy result
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: workflow-api-redundancy
+          path: ${{ runner.temp }}/workflow-model-result.md
+          if-no-files-found: ignore
+          retention-days: 7
+
+  api-redundancy:
+    needs: [analyze-commit-notify, deep-audit, api-redundancy-model]
+    if: ${{ always() && github.event_name != 'schedule' && needs.deep-audit.result == 'success' && needs.deep-audit.outputs.audit_status == 'completed' }}
+    runs-on: ubuntu-latest
+    # Bumped 30 → 60 after run 25115192726 cancelled at 30m19s on this job
+    # — Codex was still mid-analysis ("considering whether I can combine
+    # findings from two separate call sites") when the 30m cap fired and
+    # emitted `##[error]The operation was canceled.`. Bumped 60 → 90 after
+    # run 25200117236 cancelled at 60m 11s — Codex (gpt-5.4 reasoning
+    # effort xhigh) was still in the "Plan update … → Draft final markdown
+    # section" phase (had not started generating output) when the 60m cap
+    # fired. Audit-prompt input size has not grown materially since the
+    # 30 → 60 bump (report file 51 KB this run vs. 33–58 KB pre-bump);
+    # the structural cause is xhigh deliberation latency variance, which
+    # the 60m cap couldn't absorb. The workflow-log-analysis-test
+    # poller's outer DEADLINE in test-and-mark-stable.yml (dispatch
+    # step) still covers the new 90m cap with headroom. (Was
+    # `orphan-workflows-test` before PR #2351 split this dispatch out.)
+    timeout-minutes: 90
+    outputs:
+      api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
+    env:
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Sync latest report from target branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
+            echo "::error::API redundancy pass requires a branch ref for report sync/push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
+            exit 1
+          fi
+          TARGET_BRANCH="${GITHUB_REF_NAME}"
+          git fetch origin "${TARGET_BRANCH}" --depth=1
+          git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
+          git pull --rebase origin "${TARGET_BRANCH}"
+
+      - name: Download isolated api-redundancy result
+        if: needs.api-redundancy-model.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-api-redundancy
+          path: ${{ runner.temp }}/isolated-result
+      - name: Validate and stage isolated api-redundancy result
+        id: api_redundancy
+        env:
+          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
-
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
           if ! [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
             echo "::error::tracking_issue must be 0 or a positive integer."
             exit 1
           fi
-          if [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
-            TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
-          fi
-
+          if [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"; fi
           emit_api_redundancy_failure() {
             local failure_mode="$1"
             local attempt_count="$2"
@@ -2133,124 +2431,67 @@ jobs:
             gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
           }
 
-          if [ -z "${REPORT_FILE}" ]; then
-            echo "::error::Upstream job did not provide report_file."
+          MODEL_RESULT="${RUNNER_TEMP}/isolated-result/workflow-model-result.md"
+          MODEL_KIND="api"
+          REPORT_FILE="${{ needs.analyze-commit-notify.outputs.report_file }}"
+          if [ "${{ needs.api-redundancy-model.result }}" != success ]; then
+            emit_api_redundancy_failure "codex_rc_nonzero" 1 "Isolated API redundancy failed."
+            echo '::error::Isolated model job failed; refusing publication.'
             exit 1
           fi
-          if [ ! -f "${REPORT_FILE}" ]; then
-            echo "::error::Report file '${REPORT_FILE}' not found on target branch."
+          validate_result() {
+          python3 - "${MODEL_RESULT}" "${MODEL_KIND}" "${REPORT_FILE:-}" <<'PYVALIDATE'
+          import pathlib
+          import re
+          import stat
+          import sys
+
+          result = pathlib.Path(sys.argv[1])
+          kind = sys.argv[2]
+          report = sys.argv[3]
+          if result.is_symlink() or not result.exists():
+              raise SystemExit("Missing isolated model result")
+          info = result.lstat()
+          if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 2 * 1024 * 1024:
+              raise SystemExit("Invalid isolated model result size or type")
+          content = result.read_text(encoding="utf-8")
+          if "\x00" in content:
+              raise SystemExit("Invalid model result")
+          if kind != "retro" and (not re.fullmatch(r"analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2}(?:-[0-9]+)?\.md", report) or pathlib.Path(report).is_symlink() or pathlib.Path(report).parent.is_symlink()):
+              raise SystemExit("Invalid analysis report path")
+          headings = {
+              "retro": ["## Weekly Retro", "### What Worked", "### Failure Modes", "### Next Week Recommendation", "### Metrics Snapshot"],
+              "analysis": ["## Executive Summary", "## Speed Optimizations", "## Cost Optimizations", "## Reliability Improvements", "## AI Memory Health", "## GH API Call Audit", "## Prompt Cache & Memory System", "## Orchestrator Health", "## Pipeline Flow Bottlenecks", "## Per-Repo Breakdown", "## Metrics Appendix"],
+              "audit": ["### Section 1: Bug & Correctness Sweep", "### Section 2: GitHub API Call Redundancy Audit", "### Section 3: Code Duplication & Modularization Opportunities", "### Section 4: Expression Size Limit Risk Assessment", "### Section 5: Cross-Cutting Concerns", "### Section 6: Summary & Severity Matrix", "#### 6A. Findings Summary Table", "#### 6B. Estimated Remediation Scope"],
+              "api": ["### Safety Tag Legend", "### Consolidation Candidates (MERGE-###)", "### Redundant Re-Fetch (REUSE-###)", "### Dead Calls (DEAD-API-###)", "### Cross-References to Deep Audit Section", "### Summary Counts", "### Implement-Stage Handoff"],
+          }[kind]
+          first_line = content.splitlines()[0]
+          if kind == "retro" and first_line != "## Weekly Retro":
+              raise SystemExit("Invalid retro heading")
+          if kind == "audit" and not re.fullmatch(r"## Deep Audit — Workflows & Scripts \([0-9]{4}-[0-9]{2}-[0-9]{2}\)", first_line):
+              raise SystemExit("Invalid deep audit heading")
+          if kind == "api" and not re.fullmatch(r"## API Call Consolidation & Dead-Call Analysis \([0-9]{4}-[0-9]{2}-[0-9]{2}\)", first_line):
+              raise SystemExit("Invalid API redundancy heading")
+          lines = content.splitlines()
+          offset = -1
+          for heading in headings:
+              try:
+                  offset = lines.index(heading, offset + 1)
+              except ValueError:
+                  raise SystemExit("Missing or misordered model result heading") from None
+          PYVALIDATE
+          }
+          if ! validate_result; then
+            emit_api_redundancy_failure "invalid_model_artifact" 1 "Isolated API redundancy result failed validation."
             exit 1
           fi
-
-          # Build Semble prefetch (best-effort, fail-soft).
-          API_SEMBLE_PREFETCH=""
-          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
-            # shellcheck disable=SC1091
-            source scripts/semble_helpers.sh || true
-            if type semble_query_block >/dev/null 2>&1; then
-              # `head -c 6000 | iconv -c` truncates by bytes then strips any
-              # incomplete trailing UTF-8 sequence so a multi-byte character
-              # split at the byte boundary doesn't garble the BM25 query.
-              api_query_text="$(head -c 6000 "${REPORT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
-              if [ -n "${api_query_text}" ]; then
-                API_SEMBLE_PREFETCH="$(semble_query_block "${api_query_text}" 6 "Workflow API Redundancy Context" 2>/dev/null || true)"
-              fi
-            fi
-          fi
-
-          SECTION_FILE=""
-          CODEX_PROMPT_FILE=""
-          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
-          SECTION_FILE="$(mktemp)"
-          CODEX_PROMPT_FILE="$(mktemp)"
-          {
-            SEMBLE_PREFETCH="${API_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
-            echo
-            echo "=== ANALYSIS CONTEXT ==="
-            echo "Report file path: ${REPORT_FILE}"
-            echo "Current UTC date: $(date -u +%F)"
-            echo "--- Begin current report contents (includes prior Deep Audit section) ---"
-            cat "${REPORT_FILE}"
-            echo "--- End current report contents ---"
-          } > "${CODEX_PROMPT_FILE}"
-
-          max_attempts="${MAX_CODEX_ATTEMPTS}"
-          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
-            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
-            max_attempts="3"
-          fi
-          backoff_base="${CODEX_RETRY_BACKOFF_BASE_SECS}"
-          if ! [[ "${backoff_base}" =~ ^[0-9]+$ ]] || [ "${backoff_base}" -lt 1 ]; then
-            echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${backoff_base}); defaulting to 10."
-            backoff_base=10
-          fi
-
-          API_EXIT=0
-          for attempt in $(seq 1 "${max_attempts}"); do
-            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
-            fi
-            set +e
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_api_redundancy \
-              --stdout-file "${SECTION_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
-            API_EXIT=$?
-            set -e
-            if [ "${API_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
-              break
-            fi
-            if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((backoff_base * (2 ** (attempt - 1))))
-              sleep "${sleep_secs}"
-            else
-              if [ "${API_EXIT}" -eq 0 ]; then
-                failure_summary="API redundancy Codex returned empty output after ${max_attempts} attempts."
-                echo "::error::${failure_summary}"
-                emit_api_redundancy_failure "codex_empty_output" "${max_attempts}" "${failure_summary}"
-                exit 1
-              fi
-              failure_summary="API redundancy Codex failed after ${max_attempts} attempts with exit code ${API_EXIT}."
-              echo "::error::${failure_summary}"
-              emit_api_redundancy_failure "codex_rc_nonzero" "${max_attempts}" "${failure_summary}"
-              exit "${API_EXIT}"
-            fi
-          done
-
-          if ! head -n1 "${SECTION_FILE}" | grep -qE '^## API Call Consolidation & Dead-Call Analysis \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$'; then
-            echo "::error::API redundancy Codex output did not start with the required '## API Call Consolidation & Dead-Call Analysis (YYYY-MM-DD)' heading."
-            head -n5 "${SECTION_FILE}" >&2 || true
+          if [ ! -f "${REPORT_FILE}" ] || [ -L "${REPORT_FILE}" ]; then
+            echo '::error::Report missing from target branch.'
             exit 1
           fi
-
-          required_headings=(
-            "### Safety Tag Legend"
-            "### Consolidation Candidates (MERGE-###)"
-            "### Redundant Re-Fetch (REUSE-###)"
-            "### Dead Calls (DEAD-API-###)"
-            "### Cross-References to Deep Audit Section"
-            "### Summary Counts"
-            "### Implement-Stage Handoff"
-          )
-          previous_heading_line=0
-          for heading in "${required_headings[@]}"; do
-            heading_line="$(grep -nFx "${heading}" "${SECTION_FILE}" | head -n1 | cut -d: -f1 || true)"
-            if [ -z "${heading_line}" ]; then
-              echo "::error::API redundancy Codex output is missing required heading: ${heading}"
-              exit 1
-            fi
-            if [ "${heading_line}" -le "${previous_heading_line}" ]; then
-              echo "::error::API redundancy Codex output has headings out of order at: ${heading}"
-              exit 1
-            fi
-            previous_heading_line="${heading_line}"
-          done
-
           printf '\n' >> "${REPORT_FILE}"
-          cat "${SECTION_FILE}" >> "${REPORT_FILE}"
-
+          cat "${MODEL_RESULT}" >> "${REPORT_FILE}"
           echo "api_redundancy_status=completed" >> "$GITHUB_OUTPUT"
-
       - name: Commit and push API redundancy section
         if: steps.api_redundancy.outputs.api_redundancy_status == 'completed'
         env:

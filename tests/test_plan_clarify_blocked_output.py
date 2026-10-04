@@ -264,6 +264,23 @@ def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	assert 'CODEX_OUTPUT_FILE' in wf and 'codex_log.txt' in wf
 
 
+def test_workflow_analysis_uses_bounded_clarify_isolation_profile() -> None:
+	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
+	for role in (
+		"WORKFLOW_LOG_ANALYSIS", "WORKFLOW_DEEP_AUDIT",
+		"WORKFLOW_API_REDUNDANCY", "WORKFLOW_WEEKLY_RETRO", "WORKFLOW_CONSUMER_RETRO",
+	):
+		assert role in runner
+	assert "analysis_profile=false" in runner
+	assert '"${analysis_mount[@]}"' in runner
+	assert 'output.read_text(encoding="utf-8")' in runner
+	assert "info.st_size <= 2 * 1024 * 1024" in runner
+	assert "count > 5000 or size > 64 * 1024 * 1024" in runner
+	assert 'os.O_NOFOLLOW' in runner
+	assert "Isolated analysis failed (details suppressed)" in runner
+	assert 'if [ "${analysis_profile}" != true ]; then' in runner
+
+
 def test_clarify_broker_rejects_other_routes_and_streams_without_leaking_key() -> None:
 	spec = importlib.util.spec_from_file_location("clarify_broker", REPO_ROOT / "scripts" / "clarify_openrouter_broker.py")
 	assert spec and spec.loader
