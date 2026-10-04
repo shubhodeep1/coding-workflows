@@ -8060,6 +8060,7 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	assert 'review_untrusted_workspace.py" transfer' in helper
 	assert ': > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"' in helper
 	assert '2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"' in helper
+	assert helper.count('2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"') == 2
 	assert 'rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"' in helper
 	assert 'rm -f "${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"' in _apply_fixes_text()
 	assert 'if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then' in _apply_fixes_text()

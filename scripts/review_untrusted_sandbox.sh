@@ -247,7 +247,7 @@ if [ "${engine}" = claude ]; then
 	# Never transfer on a failed model invocation or a swapped host baseline.
 	if [ "${rc}" -eq 0 ]; then
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
-		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json"; then
+		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json" 2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"; then
 			rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"
 		else
 			rc=1

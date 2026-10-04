@@ -782,6 +782,17 @@ def test_git_dash_c_allows_detached_worktree_open_destination(merged_branch_repo
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_git_dir_allows_detached_worktree_open_destination(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "detached"
+	_git(repo, "worktree", "add", "--detach", str(worktree), "feature/x")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	proc = _run_hook(repo, stub_bin,
+		f"GIT_DIR={worktree}/.git GIT_WORK_TREE={worktree} git push origin HEAD:feature/open")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_commit_in_merged_worktree_is_not_judged_from_main_checkout(merged_branch_repo) -> None:
 	repo, stub_bin = merged_branch_repo
 	_git(repo, "checkout", "main")
@@ -832,9 +843,16 @@ def test_repeated_destination_uses_one_pr_listing(merged_branch_repo, monkeypatc
 def test_same_destination_different_sources_checks_each_tip(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
+	main_sha = _git(repo, "rev-parse", "main")
 	calls: list[str] = []
+	checked_tips: list[str] = []
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	original_blocking_pull_request = guard.blocking_pull_request
+	def check_tip(pull_requests, cwd, base, tip):
+		checked_tips.append(tip)
+		return original_blocking_pull_request(pull_requests, cwd, base, tip)
+	monkeypatch.setattr(guard, "blocking_pull_request", check_tip)
 	def listing(slug, branch, cwd):
 		calls.append(branch)
 		return [dict(MERGED_PR, headRefOid=merged_sha)]
@@ -844,6 +862,7 @@ def test_same_destination_different_sources_checks_each_tip(merged_branch_repo, 
 	assert code == 2
 	assert "Branch `feature/x`" in message
 	assert calls == ["feature/x"]
+	assert checked_tips == [main_sha, merged_sha]
 
 
 def test_cached_merged_pr_is_rechecked_once_for_repeated_targets(merged_branch_repo, monkeypatch) -> None:
@@ -877,6 +896,51 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 		f"false && cd {worktree}; git push origin HEAD:feature/open")
 	assert proc.returncode == 2, proc.stdout + proc.stderr
 	assert "could not resolve git command directory" in proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin HEAD",
+	"COUNT+=1 git push origin HEAD:feature/x",
+	"git push --repo origin HEAD:feature/x",
+	"git push --repo=origin HEAD:feature/x",
+	"git push origin HEAD~0:feature/x",
+	"git push origin HEAD:feature/x 2>&1",
+	"git push origin 2>/dev/null",
+])
+def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert lookups == ["feature/x"]
+
+
+def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=_git(repo, "rev-parse", "feature/x"))] if branch == "feature/x" else [OPEN_PR]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"cd {worktree} || exit 1; git push origin HEAD:feature/open"}})
+	assert code == 0, message
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"cd {worktree} || exit 1 && git push origin HEAD:feature/open"}})
+	assert code == 0, message
+	assert lookups == ["feature/open", "feature/open"]
 
 
 # ──────────────────────────────────────────────────────────────────
