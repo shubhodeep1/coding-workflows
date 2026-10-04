@@ -7,7 +7,7 @@
 - How it runs: on demand — every job with a Claude role calls `.github/actions/claude-pool-token`, which POSTs a GitHub OIDC token to `https://claude-pool-broker.shubhodeep.workers.dev/v1/pool`; the pool secret is refreshed by `claude-workers` `claude-pool-key-sync.yml` (cron hourly at :23, push to main, workflow_dispatch)
 - Status: BLOCKED
 - Last updated: 2026-10-04
-- Last note: BLOCKED at Step 6 by operator decision (Q2: B, 2026-10-04): wait for a fully green claude-engine-smoke run; the write leg fails the Phase 3 context gate (startup_input_tokens 29,369 vs < 25,000). Step 6b (Worker redeploy from main) awaits operator `go`.
+- Last note: BLOCKED at Step 6 by operator decision (Q2: B, 2026-10-04): wait for a fully green claude-engine-smoke run; the write leg fails the Phase 3 context gate (startup_input_tokens 29,369 vs < 25,000). Step 6b done.
 
 ## Runbook
 1. [x] Prereqs: Homebrew, gh, Node, `gh auth login`, read claude-workers secret names   — done 2026-10-04: `gh api user` = shubhodeep1; claude-workers secrets = CLAUDE_POOL_TOKEN_FUNTOKEN1, CLAUDE_POOL_TOKEN_FUNTOKEN2, GH_PAT
@@ -16,7 +16,7 @@
 4. [x] Merge shubhodeep1/claude-workers#2 (push to main runs the first key sync)   — done 2026-10-04: squash-merged; push run 37191352286 started
 5. [x] Verify key sync: run green with N accounts; Worker secret `CLAUDE_POOL_TOKENS` present   — done 2026-10-04: run 37191352286 success, log `CLAUDE_POOL key_sync status=ok accounts=2 names=FUNTOKEN1,FUNTOKEN2`; Worker secrets = [CLAUDE_POOL_TOKENS (secret_text)]
 6. [ ] Dispatch `claude-engine-smoke.yml` on main; verify `CLAUDE_POOL available=true accounts=N` and probe lines in both legs   — run 37191845530 (2026-10-04): broker part passed in both legs (`available=true reason=selected accounts=2`; probes FUNTOKEN1 five_hour=0.02 seven_day=0.21, FUNTOKEN2 five_hour=0.06 seven_day=0.21, status=allowed). Run failed: write leg Context gate `startup_input_tokens=29369` (limit 25,000; read leg 16,804); P5 denials and review-editor relay gate did not run. Held open until a fully green run (Q2: B).
-6b. [ ] Redeploy `claude-pool-broker` from main (#6175 review fixes merged at c04fd1b; live Worker still the 2026-10-04T03:30Z build). Validated: vitest 31/31, `wrangler deploy --dry-run` OK. Session executes on operator `go` (§24.C).
+6b. [x] Redeploy `claude-pool-broker` from main (#6175 review fixes merged at c04fd1b; live Worker still the 2026-10-04T03:30Z build). Validated: vitest 31/31, `wrangler deploy --dry-run` OK. Executed by the session on operator `go` (§24.C)   — done 2026-10-04: `wrangler deploy` from main f80f1bb, version 59a53cf2-1cfb-474b-84ba-8149b4219376; no token → 403 missing_token; lowercase `bearer abc` → 403 malformed_token (new regex); live code has `Bearer[ \t]+…/i`; secret `CLAUDE_POOL_TOKENS` kept; previous versions 40a13740 / 43b1be43 retained for rollback.
 7. [ ] Verify LIVE: an hourly scheduled key-sync run succeeds; `@stable` carries the `id-token: write` wrappers (automatic daily promotion)
 
 ## Notes
