@@ -178,8 +178,10 @@ def test_broker_rejects_a_model_outside_the_allow_list(chain) -> None:
 def test_broker_rejects_client_authorization(chain) -> None:
 	# A caller on the socket cannot bring its own credential.
 	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.timeout = 5
 	body = json.dumps({"model": MODEL}).encode()
-	connection.request("POST", "/v1/messages", body, {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	# The broker rejects on headers without reading the body; sending it races the close.
+	connection.request("POST", "/v1/messages", None, {"Content-Type": "application/json", "Content-Length": str(len(body)), "Authorization": "Bearer mine"})
 	assert connection.getresponse().status == 400
 	connection.close()
 	assert _Upstream.seen == []
