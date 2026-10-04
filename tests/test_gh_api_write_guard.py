@@ -947,10 +947,10 @@ def test_rebound_or_other_expansion_in_loop_still_asks(command):
 	"for r in 1; do gh api repos/o/r/actions/runs/$r/jobs # x\ngh api -X DELETE repos/o/r; done",
 	"for r in {1..3}; do gh api repos/o/r/actions/runs/$r/jobs; done",
 	"for r in 1; do gh api repos/o/r/git/refs/heads/$r -f{x=1,-X=DELETE}; done",
+	"for r in 1; do gh api -X GET repos/o/r/issues/1 -F{'q=1','x=@/etc/passwd'}; done",
 ])
 def test_shell_rewrite_hazard_inside_a_loop_still_asks(command):
-	# The hazard ask is skipped for loop commands so the loop validator can
-	# judge them as a unit; it must still end in ask, never allow or no decision.
+	# A loop need not expand its counter for shell rewriting to hide a file-backed field.
 	assert _decide(command) == guard.DECISION_ASK
 
 

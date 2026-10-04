@@ -111,6 +111,8 @@ def env(tmp_path: Path):
 	values.update(
 		{
 			"PATH": f"{fake_bin}:{os.environ['PATH']}",
+			# Most cases exercise the loopback broker outside Actions; the Actions-only rejection test overrides this.
+			"GITHUB_ACTIONS": "false",
 			"RUNNER_TEMP": str(runner_temp),
 			"GITHUB_OUTPUT": str(tmp_path / "output.txt"),
 			"CLAUDE_ENGINE_CONFIG": str(config),
