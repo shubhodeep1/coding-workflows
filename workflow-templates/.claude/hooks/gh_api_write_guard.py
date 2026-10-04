@@ -1505,9 +1505,8 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		)
 
 	hazard = _shell_rewrite_hazard(stripped_command)
-	# The literal-ID loop parser validates supported expansions and shell framing
-	# as one unit; unsupported loops remain undecided after write classification.
-	if hazard and not _LOOP_HEADER_RE.match(command):
+	# Only a fully validated literal-ID loop may bypass the shell-hazard check.
+	if hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)):
 		return DECISION_ASK, (
 			f"gh api guard (CLAUDE.md §23.H): the command uses {hazard}, which Bash expands or parses differently "
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
