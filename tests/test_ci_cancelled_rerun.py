@@ -91,6 +91,18 @@ def test_active_run_without_association_on_same_branch_blocks():
 	post.assert_not_called()
 
 
+@pytest.mark.parametrize("association", [
+	{"number": 11, "head": {"sha": None}},
+	{"number": 11, "head": {}},
+	{"number": 11},
+])
+def test_active_run_with_incomplete_candidate_association_blocks(association):
+	active = run(status="queued", pull_requests=[association])
+	lines, _, post = exercise(active=[active])
+	assert "reason=active_run" in lines[0]
+	post.assert_not_called()
+
+
 def test_unrelated_active_run_on_same_sha_or_branch_does_not_block():
 	active = run(status="queued", event="push", head_sha=SHA, head_branch="main", pull_requests=[])
 	lines, _, post = exercise(active=[active])
@@ -101,6 +113,10 @@ def test_unrelated_active_run_on_same_sha_or_branch_does_not_block():
 	assert "action=rerun" in lines[0]
 	post.assert_called_once()
 	active = run(status="queued", number=12, head_branch="topic")
+	lines, _, post = exercise(active=[active])
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+	active = run(status="queued", sha=OLD_SHA, head_branch="topic")
 	lines, _, post = exercise(active=[active])
 	assert "action=rerun" in lines[0]
 	post.assert_called_once()
@@ -246,6 +262,20 @@ def test_full_completed_page_is_valid_but_full_active_page_is_not():
 		assert len(HELPER.list_runs(HELPER.SOURCE_REPO, "completed")) == 100
 		with pytest.raises(ValueError, match="listing_truncated"):
 			HELPER.list_runs(HELPER.SOURCE_REPO, "queued")
+
+
+@pytest.mark.parametrize("path", [
+	".github/workflows/ci.yml",
+	".github/workflows/ci.yml@refs/heads/main",
+	".github/workflows/ci.yml@refs/pull/4713/merge",
+])
+def test_ci_run_path_accepts_ref_suffix(path):
+	response = {"total_count": 1, "workflow_runs": [run(path=path)]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(response))):
+		listed = HELPER.list_runs(HELPER.SOURCE_REPO, "completed")
+	lines, _, post = exercise(completed=listed)
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
 
 
 def test_invalid_unrelated_association_does_not_block_valid_candidate():

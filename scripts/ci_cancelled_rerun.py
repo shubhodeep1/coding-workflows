@@ -70,7 +70,8 @@ def list_runs(repo: str, status: str) -> list[dict]:
 				or run.get("status") != status or run.get("event") not in ("pull_request", "push") \
 				or not isinstance(run.get("head_sha"), str) or not SHA_PATTERN.fullmatch(run["head_sha"]) \
 				or not isinstance(run.get("pull_requests"), list) \
-				or run.get("path") != ".github/workflows/ci.yml":
+				or not isinstance(run.get("path"), str) \
+				or run["path"].split("@", 1)[0] != ".github/workflows/ci.yml":
 			raise ValueError("invalid_listing")
 		if status == "completed":
 			if not positive_number(run.get("run_attempt")) or not isinstance(run.get("conclusion"), str) \
@@ -234,6 +235,12 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 		elif any(associated(run, number, sha)
 				or (run["event"] == "push" and run["head_sha"] == sha
 					and run.get("head_branch") == pr["head_ref"])
+				or (run["event"] == "pull_request" and any(
+					isinstance(item, dict) and item.get("number") == number
+					and (not isinstance(item.get("head"), dict)
+						or not isinstance(item["head"].get("sha"), str)
+						or not SHA_PATTERN.fullmatch(item["head"]["sha"]))
+					for item in run["pull_requests"]))
 				or (run["event"] == "pull_request" and not run["pull_requests"]
 					and run.get("head_branch") == pr["head_ref"])
 				for run in active):
