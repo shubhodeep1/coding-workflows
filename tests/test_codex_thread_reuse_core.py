@@ -713,7 +713,7 @@ def test_implement_workflow_passes_each_role_its_engine() -> None:
 	assert 'echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"' in text
 	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.ai_engine.outputs.any_claude == 'true'" in text
 	fetch_script_list = text.split("for f in ", 1)[1].split("; do", 1)[0]
-	assert "ai_engine.sh claude_engine.py" in fetch_script_list
+	assert "ai_engine.sh claude_engine.py claude_settings.json.tmpl" in fetch_script_list
 
 
 def main() -> int:
