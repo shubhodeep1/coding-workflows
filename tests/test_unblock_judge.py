@@ -477,6 +477,13 @@ endpoint = next((a for a in args[1:] if a == "user" or a.startswith("repos/")), 
 jq = args[args.index("--jq") + 1] if "--jq" in args else ""
 if endpoint == "user":
 	done("pipeline-bot")
+if endpoint.startswith("repos/o/r/actions/runs/"):
+	run_id = endpoint.rsplit("/", 1)[1]
+	runs = json.loads(os.environ.get("FAKE_GH_RUNS", "{}"))
+	if os.environ.get("FAKE_GH_FAIL_RUNS") or run_id not in runs:
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	done(json.dumps(runs[run_id]))
 if os.environ.get("FAKE_GH_FAIL_OPERATOR") and endpoint.startswith("repos/o/r/issues?labels=ai:operator-step"):
 	json.dump(state, open(state_path, "w"))
 	sys.exit(1)
@@ -521,7 +528,7 @@ if endpoint.endswith("/comments?per_page=100"):
 	done(json.dumps(state["item_comments"]))
 if endpoint.startswith("repos/o/r/pulls/"):
 	number = endpoint.rsplit("/", 1)[1]
-	done(json.dumps({"number": int(number), "base": {"ref": os.environ.get("FAKE_GH_PR_BASE", "main")}, "head": {"sha": "a" * 40}}))
+	done(json.dumps({"number": int(number), "base": {"ref": os.environ.get("FAKE_GH_PR_BASE", "main")}, "head": {"sha": "a" * 40, "ref": os.environ.get("FAKE_GH_PR_HEAD_REF", "ai/issue-7")}}))
 if endpoint.startswith("repos/o/r/issues/"):
 	number = endpoint.rsplit("/", 1)[1]
 	issue = state["issues"].get(number, {})
@@ -559,6 +566,101 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 
 
 ISSUE = {"number": 7, "state": "open", "title": "Add cache", "body": "Do it", "labels": [{"name": "ai:blocked"}]}
+
+
+def _run_metadata(run_id: int, **changes) -> dict:
+	run = {
+		"id": run_id, "repository": {"full_name": "o/r"}, "head_repository": {"full_name": "o/r"},
+		"head_branch": "main", "head_sha": "b" * 40, "display_title": "Unrelated run", "event": "push",
+		"pull_requests": [],
+	}
+	run.update(changes)
+	return run
+
+
+def _run_calls(state: dict, command: str) -> list[list[str]]:
+	if command == "metadata":
+		return [call for call in state["calls"] if any(arg.startswith("repos/o/r/actions/runs/") for arg in call)]
+	return [call for call in state["calls"] if call[:2] == ["run", "view"]]
+
+
+def test_untrusted_run_link_never_causes_metadata_or_log_read(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment("See /actions/runs/111", "mallory")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"})
+	assert result.returncode == 0 and "op=run_log outcome=omitted reason=no_trusted_run candidates=0" in result.stdout
+	assert not _run_calls(state, "metadata") and not _run_calls(state, "view")
+
+
+def test_newer_untrusted_link_does_not_replace_bound_pipeline_link(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=[
+		_comment("Failure: /actions/runs/222"), _comment("See /actions/runs/111", "mallory"),
+	], verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		FAKE_GH_RUNS=json.dumps({"222": _run_metadata(222, event="issue_comment", display_title="Add cache")}))
+	assert "op=run_log outcome=attached run=222" in result.stdout, result.stderr
+	assert len(_run_calls(state, "metadata")) == 1
+	assert [call[2] for call in _run_calls(state, "view")] == ["222"]
+
+
+@pytest.mark.parametrize("run", [
+	_run_metadata(111),
+	_run_metadata(111, head_branch="ai/issue-7", head_repository={"full_name": "other/fork"}),
+	_run_metadata(111, head_branch="ai/issue-7", repository={"full_name": "other/repo"}),
+])
+def test_unrelated_or_fork_run_is_refused(tmp_path: Path, run: dict) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment("/actions/runs/111")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"}, FAKE_GH_RUNS=json.dumps({"111": run}))
+	assert "op=run_log outcome=omitted reason=run_unbound candidates=1" in result.stdout, result.stderr
+	assert len(_run_calls(state, "metadata")) == 1 and not _run_calls(state, "view")
+
+
+def test_unblock_verdict_comment_cannot_select_a_run(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment("/actions/runs/111\n<!-- ai:unblock:v1 item=7 -->")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"})
+	assert "reason=no_trusted_run candidates=0" in result.stdout
+	assert not _run_calls(state, "metadata") and not _run_calls(state, "view")
+
+
+@pytest.mark.parametrize("run", [
+	_run_metadata(111, head_sha="a" * 40),
+	_run_metadata(111, display_title="Internal: AI Review & Autofix [pr:7]"),
+	_run_metadata(111, head_branch="ai/issue-7"),
+	_run_metadata(111, pull_requests=[{"number": 7}]),
+])
+def test_pr_run_binds_to_head_or_number(tmp_path: Path, run: dict) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, comments=[_comment("/actions/runs/111")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"}, FAKE_GH_RUNS=json.dumps({"111": run}))
+	assert "op=run_log outcome=attached run=111" in result.stdout, result.stderr
+	assert [call[2] for call in _run_calls(state, "view")] == ["111"]
+
+
+def test_candidate_reads_are_capped_and_newest_first(tmp_path: Path) -> None:
+	comments = [_comment("/actions/runs/111 /actions/runs/222 /actions/runs/333 /actions/runs/444 /actions/runs/444")]
+	result, state = _judge(tmp_path, ISSUE, comments=comments,
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		FAKE_GH_RUNS=json.dumps({str(n): _run_metadata(n) for n in (111, 222, 333, 444)}))
+	assert "reason=run_unbound candidates=3" in result.stdout, result.stderr
+	assert [call[1] for call in _run_calls(state, "metadata")] == [
+		"repos/o/r/actions/runs/444", "repos/o/r/actions/runs/333", "repos/o/r/actions/runs/222",
+	]
+	assert not _run_calls(state, "view")
+
+
+def test_missing_run_metadata_leaves_log_out_but_judge_continues(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment("/actions/runs/111")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"}, FAKE_GH_FAIL_RUNS="1")
+	assert result.returncode == 0 and "reason=run_unreadable candidates=1" in result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert not _run_calls(state, "view")
+
+
+def test_project_named_run_is_bound(tmp_path: Path) -> None:
+	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, project, comments=[_comment("/actions/runs/111")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		FAKE_GH_RUNS=json.dumps({"111": _run_metadata(111, display_title="Validation [tracking:7]")}))
+	assert "op=run_log outcome=attached run=111" in result.stdout, result.stderr
+	assert [call[2] for call in _run_calls(state, "view")] == ["111"]
 
 
 def _project_comments_for_item(issue: int, validation_only: bool = False) -> str:
