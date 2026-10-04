@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How much of the recommendation should this fix cover?\nChoices:\nA) Only the hard deny: refuse protected automation paths in `override_guard` for `scope-blocked`, plus contract tests (RECOMMENDED)\nB) A, and also require every override path to appear in the scope guard's rejected-path list. That list would be parsed from the trusted pipeline-login scope-blocked comment, which needs a new structured marker in `implement_handle_guard_block.sh` and evidence plumbing in `unblock_judge.sh`\nC) B, and also check where the issue's existing `files_touched` scope came from (only scope written by a trusted author or the pipeline can be extended)\nQ2: Which repositories should the scope-override hard deny apply to?\nChoices:\nA) Every repository, the same as the existing destructive-latch deny-list (\"in any repository\") (RECOMMENDED)\nB) Only `shubhodeep1/coding-workflows`, the same as the existing `FORBIDDEN_OVERRIDE_PREFIXES` check; consumer repos keep today's behaviour\nQ3: Which paths should a scope override always refuse?\nChoices:\nA) `PROTECTED_AUTOMATION_OVERRIDE_RE` (`.github/`, `.claude/`, `workflow-templates/`, case-insensitive) in every covered repo, plus the existing source-repo-only `scripts/` prefix (RECOMMENDED)\nB) A, plus `CANONICAL_SOURCE_RE` (`agents.md`, `ai_pipeline.md`, `unattended_system_instructions.md`, `CLAUDE.md`, `prompts/`, `scripts/`, `.github/ai/`, `.github/scripts/`)\n**Note:** B together with Q2:A would also block overrides for ordinary `scripts/` and `prompts/` application code in consumer repos. Pick Q2:B if you want B, or the plan will need re-clarification.",
+  "fingerprint": "7ac95839ef21a559c9d03ed65debf56694c84fa794a235f8deed7c88b4237d06",
+  "lineage": {
+    "issue_number": 6233,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37240591047",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37240591047",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261004224220_6603c1ccfc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6233,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37240591047"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6233 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-04T22:42:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
