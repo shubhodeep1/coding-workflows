@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -284,6 +286,7 @@ def test_pr_retry_clears_the_label_and_dispatches_review() -> None:
 	ops = actions.plan(_verdict("retry_budget", instructions="x"), _ctx("pr", "needs-human"))
 	assert {"op": "remove_label", "issue": 7, "label": "ai:needs-human"} in ops
 	assert {"op": "dispatch_review", "pr": 7} in ops
+	assert [op["op"] for op in ops][-2:] == ["dispatch_review", "remove_label"]
 
 
 def test_pr_reissue_creates_replacement_before_closing_source() -> None:
@@ -371,6 +374,9 @@ def fields():
 			out.setdefault(k, v)
 	return out
 if args[:1] == ["workflow"]:
+	if os.environ.get("FAKE_GH_FAIL_DISPATCH"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	state["dispatched"].append(args)
 	done()
 if args[:1] == ["run"]:
@@ -379,6 +385,9 @@ endpoint = next((a for a in args[1:] if a == "user" or a.startswith("repos/")), 
 jq = args[args.index("--jq") + 1] if "--jq" in args else ""
 if endpoint == "user":
 	done("pipeline-bot")
+if os.environ.get("FAKE_GH_FAIL_OPERATOR") and endpoint.startswith("repos/o/r/issues?labels=ai:operator-step"):
+	json.dump(state, open(state_path, "w"))
+	sys.exit(1)
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 f = fields()
 if method == "POST" and endpoint.endswith("/comments"):
@@ -412,6 +421,8 @@ if endpoint.endswith("/comments?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_COMMENTS"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	if endpoint == "repos/o/r/issues/40/comments?per_page=100":
+		done(os.environ.get("FAKE_GH_PROJECT_COMMENTS", "[]"))
 	done(json.dumps(state["item_comments"]))
 if endpoint.startswith("repos/o/r/pulls/"):
 	number = endpoint.rsplit("/", 1)[1]
@@ -455,6 +466,24 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 ISSUE = {"number": 7, "state": "open", "title": "Add cache", "body": "Do it", "labels": [{"name": "ai:blocked"}]}
 
 
+def _project_comments_for_item(issue: int) -> str:
+	payload = json.dumps({"issue_number_map": {"issue-1": issue}}).encode("utf-8")
+	manifest = hashlib.sha256(payload).hexdigest()
+	body = f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={manifest} -->\n{base64.b64encode(payload).decode('ascii')}\nORCHESTRATOR_STATE_V2 -->"
+	return json.dumps([_comment(body)])
+
+
+def test_project_membership_fixture_uses_valid_state(tmp_path: Path) -> None:
+	comments = tmp_path / "project-comments.json"
+	comments.write_text(_project_comments_for_item(7), encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(ROOT / "scripts" / "orchestrate_state_v2.py"), "extract", "--comments-json", str(comments)],
+		capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0
+	assert json.loads(result.stdout)["issue_number_map"]["issue-1"] == 7
+
+
 def test_judge_records_the_verdict_first_then_acts(tmp_path: Path) -> None:
 	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "flaky step", "instructions": "pin the version"})
 	assert result.returncode == 0, result.stderr
@@ -466,8 +495,8 @@ def test_judge_records_the_verdict_first_then_acts(tmp_path: Path) -> None:
 
 
 def test_project_marker_failure_does_not_lose_the_recorded_action(tmp_path: Path) -> None:
-	child = dict(ISSUE, body="- Tracking issue: #40")
-	result, state = _judge(tmp_path, child, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "pin the version"}, FAKE_GH_FAIL_PROJECT_RECORD="1")
+	child = dict(ISSUE, body="- Tracking issue: #40", labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	result, state = _judge(tmp_path, child, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "pin the version"}, FAKE_GH_FAIL_PROJECT_RECORD="1", FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(7))
 	assert result.returncode == 0
 	assert state["comments"][0]["body"].endswith("round=1 -->")
 	assert any(comment["body"] == "/answer pin the version" for comment in state["comments"])
@@ -495,6 +524,38 @@ def test_pr_project_fixup_uses_verified_base_not_body_tracking_number(tmp_path: 
 	assert state["created"] == []
 	assert any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
 	assert all(comment["endpoint"] != "repos/o/r/issues/99/comments" for comment in state["comments"])
+
+
+def test_unmanaged_issue_cannot_route_fixup_to_claimed_project(tmp_path: Path) -> None:
+	child = dict(ISSUE, body="- Tracking issue: #40")
+	verdict = {"verdict": "descope", "reason": "r", "instructions": "drop the broken part"}
+	result, state = _judge(tmp_path, child, verdict=verdict)
+	assert result.returncode == 0, result.stderr
+	assert len(state["created"]) == 1
+	assert all(comment["endpoint"] != "repos/o/r/issues/40/comments" for comment in state["comments"])
+	managed = dict(child, labels=child["labels"] + [{"name": "ai:orchestrator-managed"}])
+	result, state = _judge(tmp_path, managed, verdict=verdict, FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(7))
+	assert result.returncode == 0, result.stderr
+	assert any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
+	result, state = _judge(tmp_path, managed, verdict=verdict, FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(99))
+	assert "reason=project_binding_unverified" in result.stdout
+	assert state["comments"] == [] and state["created"] == []
+
+
+def test_failed_review_dispatch_leaves_pr_block_label(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"}, labels=[{"name": "ai:needs-human"}])
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"}, FAKE_GH_FAIL_DISPATCH="1")
+	assert "op=dispatch_review pr=7 outcome=failed" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
+	assert state["labels_removed"] == []
+
+
+def test_failed_operator_step_does_not_send_success_notification(tmp_path: Path) -> None:
+	verdict = {"verdict": "operator_step", "reason": "r", "instructions": "gate it", "placeholder": "NIGHTLY_ENABLED", "operator_instructions": "set the secret"}
+	result, state = _judge(tmp_path, ISSUE, verdict=verdict, FAKE_GH_FAIL_OPERATOR="1")
+	assert "op=operator_step outcome=failed" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
+	assert state["created"]
 
 
 def test_judge_refuses_a_verdict_outside_the_menu(tmp_path: Path) -> None:

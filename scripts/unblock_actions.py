@@ -146,10 +146,9 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 		ops.append({"op": "comment", "issue": item, "body": "/judge_resume --reset-recovery"})
 		return ops
 	if kind == "pr":
-		ops = []
+		ops = [{"op": "dispatch_review", "pr": item}]
 		if label and label in ctx["labels"]:
 			ops.append({"op": "remove_label", "issue": item, "label": label})
-		ops.append({"op": "dispatch_review", "pr": item})
 		return ops
 	present = label if label in ctx["labels"] else ""
 	if stop in GUARD_STOPS or stop == "implement-diagnose-failed":

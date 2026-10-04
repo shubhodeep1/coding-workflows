@@ -2615,9 +2615,13 @@ and resolver chains, a failed project) now goes to the unblock judge
   is closed with `ai:merged`, the next judge run posts the resume command.
   A failed fix-up lookup or resume write leaves the wait marker pending for
   another run; closing a fix-up without a merge does not resume its parent.
-  A PR `reissue` creates a standalone replacement before closing the PR;
+  A failed review dispatch leaves the PR's block label in place for the next
+  scan. A failed scope edit cannot be followed by `/approved`. A PR `reissue`
+  creates a standalone replacement before closing the PR;
   PR project fix-ups and verdict history use the GitHub-reported
-  `orchestrator/project-<n>` base, never an unverified project number in PR text.
+  `orchestrator/project-<n>` base. Issue project fix-ups require the
+  `ai:orchestrator-managed` label and membership in the project's state;
+  missing or unverifiable state skips actuation until it can be confirmed.
   `operator_step` also
   writes the `ai:operator-step` issue and sends a Telegram WARNING.
   Activation-verifier and unblock-judge jobs share a repository-scoped

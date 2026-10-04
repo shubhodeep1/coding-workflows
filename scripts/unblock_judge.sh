@@ -49,6 +49,10 @@ TARGET_DIR="${TARGET_DIR:-${SUPPORT_DIR}}"
 RUNTIME_DIR="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}/unblock-judge}"
 mkdir -p "${RUNTIME_DIR}"
 UNBLOCK_SOURCE_REPO="shubhodeep1/coding-workflows"
+if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
+	# shellcheck source=/dev/null
+	source "${SUPPORT_DIR}/scripts/label_helpers.sh"
+fi
 
 unblock_log()
 {
@@ -137,6 +141,9 @@ unblock_run_ops()
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
 		issue="$(jq -r ".ops[${idx}].issue // empty" "${ops_file}")"
+		if [ "${ops_failed}" = "true" ] && [ "${op}" != "close" ] && [ "${op}" != "telegram" ]; then
+			continue
+		fi
 		case "${op}" in
 			comment)
 				body="$(jq -r ".ops[${idx}].body" "${ops_file}")"
@@ -217,8 +224,9 @@ else:
 PY
 				then
 					gh api -X PATCH "repos/${REPOSITORY}/issues/${issue}" -f body="$(cat "${RUNTIME_DIR}/item_body_new.txt")" >/dev/null 2>&1 \
-						|| unblock_log "item=${ITEM} op=edit_files_touched outcome=failed"
+						|| { ops_failed="true"; unblock_log "item=${ITEM} op=edit_files_touched outcome=failed"; }
 				else
+					ops_failed="true"
 					unblock_log "item=${ITEM} op=edit_files_touched outcome=failed"
 				fi
 				;;
@@ -227,7 +235,7 @@ PY
 				unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" upsert --repo "${REPOSITORY}" \
 					--key "$(jq -r ".ops[${idx}].key" "${ops_file}")" --source "$(jq -r ".ops[${idx}].source" "${ops_file}")" \
 					--steps-file "${RUNTIME_DIR}/operator_steps.json" >/dev/null 2>&1 \
-					|| unblock_log "item=${ITEM} op=operator_step outcome=failed"
+					|| { ops_failed="true"; unblock_log "item=${ITEM} op=operator_step outcome=failed"; }
 				;;
 			auto_decision)
 				jq -c "{decisions: [.ops[${idx}].decision]}" "${ops_file}" > "${RUNTIME_DIR}/decisions.json"
@@ -236,12 +244,13 @@ PY
 					body="$(jq -r '.body' "${RUNTIME_DIR}/ad.json")"
 					number="$(jq -r '.comment_id // empty' "${RUNTIME_DIR}/ad.json")"
 					if [[ "${number}" =~ ^[0-9]+$ ]]; then
-						unblock_patch_comment "${number}" "${body}" || unblock_log "item=${ITEM} op=auto_decision outcome=failed"
+						unblock_patch_comment "${number}" "${body}" || { ops_failed="true"; unblock_log "item=${ITEM} op=auto_decision outcome=failed"; }
 					else
 						gh api "repos/${REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null 2>&1 \
-							|| unblock_log "item=${ITEM} op=auto_decision outcome=failed"
+							|| { ops_failed="true"; unblock_log "item=${ITEM} op=auto_decision outcome=failed"; }
 					fi
 				else
+					ops_failed="true"
 					unblock_log "item=${ITEM} op=auto_decision outcome=failed"
 				fi
 				;;
@@ -266,7 +275,7 @@ PY
 					|| { ops_failed="true"; unblock_log "item=${ITEM} op=dispatch_review pr=${number} outcome=failed"; }
 				;;
 			telegram)
-				[ "${close_failed}" = "true" ] && continue
+				[ "${ops_failed}" = "true" ] && continue
 				unblock_tg "$(jq -r ".ops[${idx}].level" "${ops_file}")" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
 				;;
 			*)
@@ -357,7 +366,7 @@ unblock_main()
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "project" ]; then
 		tracking="${ITEM}"
-	elif [ "${ITEM_KIND}" = "issue" ]; then
+	elif [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:orchestrator-managed")' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
 		tracking="$(printf '%s\n' "${body_text}" | sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*\(\*\*\)\{0,1\}Tracking issue:\(\*\*\)\{0,1\}[[:space:]]*#\([0-9][0-9]*\)[[:space:]]*$/\3/p' | head -n1)"
 	fi
 	if [ "${ITEM_KIND}" = "pr" ]; then
@@ -465,6 +474,13 @@ unblock_main()
 				unblock_log "item=${ITEM} outcome=skip reason=project_comments_unavailable"
 				return 0
 			fi
+			if [ "${ITEM_KIND}" = "issue" ]; then
+				if ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
+					|| ! jq -e --argjson issue "${ITEM}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue)' "${RUNTIME_DIR}/project_binding.json" >/dev/null 2>&1; then
+					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified"
+					return 0
+				fi
+			fi
 			# Restore any item verdict whose project copy failed to post. Do not
 			# decide from an incomplete project-wide round ledger this run.
 			local missing_project_markers unblock_marker_entry
@@ -544,9 +560,9 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=plan_failed"
 		return 0
 	fi
+	local actuation_failed="false"
 	if ! unblock_run_ops "${ops_file}"; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=actuation_failed"
-		return 0
+		actuation_failed="true"
 	fi
 	if [[ "${tracking}" =~ ^[0-9]+$ ]] && [ "${tracking}" != "${ITEM}" ]; then
 		if ! gh api "repos/${REPOSITORY}/issues/${tracking}/comments" -f body="Unblock judge verdict on #${ITEM}: \`${verdict_name}\`.
@@ -555,6 +571,10 @@ ${marker_line}" >/dev/null 2>&1; then
 			unblock_log "item=${ITEM} op=project_record outcome=failed"
 			return 0
 		fi
+	fi
+	if [ "${actuation_failed}" = "true" ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=actuation_failed"
+		return 0
 	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=acted"
 }
