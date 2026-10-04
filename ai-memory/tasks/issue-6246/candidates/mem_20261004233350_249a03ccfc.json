@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should run IDs come from, since occurrence comments only have `- **Failed run:**` lines and no `runs=` marker?\nChoices:\nA. Read run IDs only from structured `<!-- \u2026runs=repo:id,\u2026 -->` markers. The intake also writes that marker into new occurrence comments (`compose_occurrence_comment`). Older occurrence comments without the marker add no runs, and no `**Failed run:**` text is ever parsed. (RECOMMENDED)\nB. Use structured markers where they exist. For older occurrence comments only, also accept `- **Failed run:**` lines that start a line and sit outside fenced or quoted blocks. Never scan the issue body for these lines.\nC. Keep text parsing everywhere, but only accept lines that start a line and sit outside fenced blocks, in both the body and comments. No intake change.\nQ2: How should a run in the heal issue's own repository be checked before its logs are fetched with GH_PAT?\nChoices:\nA. Apply the same checks as cross-repo runs: the run's `repository.full_name` must match, and its head SHA must match plus the branch or PR. Also require the run to have concluded as failed (or be the review run that `select_jobs` already handles). A run without that context is skipped and listed under `Skipped` in `INDEX.md`. (RECOMMENDED)\nB. Check repository and head SHA/branch/PR as in A, but don't check the conclusion.\nC. Check only that the run's repository and conclusion match. Same-repo runs with no head SHA or branch context are still collected.\n**Note:** C leaves part of the reported bypass open: a forged ID pointing at another failed run in the same repository would still be fetched.",
+  "fingerprint": "8186e1c0dc4ba9d296b4f6a4f65a4e35b3d05c875ed04d6553160c7c2a9dea41",
+  "lineage": {
+    "issue_number": 6246,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37243831859",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37243831859",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261004233350_249a03ccfc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6246,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37243831859"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6246 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-04T23:33:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
