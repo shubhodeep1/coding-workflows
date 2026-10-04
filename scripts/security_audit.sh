@@ -1303,7 +1303,10 @@ fi
 
 if [ "${security_audit_claude_rc}" -ne 75 ]; then
 	if [ "${security_audit_claude_rc}" -ne 0 ]; then
-		security_audit_emit_failure "claude-execution" "claude" "Claude exited nonzero" "unknown"
+		CODEX_TAIL_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-stderr-tail.txt"
+		CODEX_PROVIDER_CLASS="$(security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}" "${RENDERED_PROMPT_FILE}" "${CODEX_TAIL_FILE}")" || CODEX_PROVIDER_CLASS="unknown"
+		security_audit_emit_path_diagnostic "${CODEX_TAIL_FILE}" "sanitized-tail"
+		security_audit_emit_failure "claude-execution" "claude" "Claude exited nonzero" "${CODEX_PROVIDER_CLASS}"
 		exit "${security_audit_claude_rc}"
 	fi
 elif codex --ask-for-approval never \

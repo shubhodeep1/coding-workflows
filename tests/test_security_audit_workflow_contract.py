@@ -1142,6 +1142,11 @@ def test_security_audit_codex_preflight_only_on_fallback() -> None:
 				assert "phase=codex-preflight path=codex" not in proc.stderr
 
 
+def test_security_audit_claude_failure_only_reports_sanitized_stderr() -> None:
+	branch = SCRIPT_PATH.read_text(encoding="utf-8").split('if [ "${security_audit_claude_rc}" -ne 75 ]; then', 1)[1].split('elif codex --ask-for-approval never', 1)[0]
+	assert 'security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}"' in branch and '"sanitized-tail"' in branch
+
+
 def test_security_audit_redacts_credential_shaped_path_context() -> None:
 	credential_values = ("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890", "opaque-auth-value")
 	credential_context = f"{credential_values[0]}-Authorization: {credential_values[1]}"
