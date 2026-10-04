@@ -1191,6 +1191,10 @@ forwards one fixed endpoint for one model.
 | Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
 | Implement dependencies | installed once per job in a credential-free networked container; never copied back |
 
+Credential-store filenames such as `client_secret.json` remain excluded, but
+ordinary source modules such as `secret_manager.py` and `credential_provider.py`
+remain available to the agent for planned edits.
+
 What this means for operators: runners need Docker (GitHub-hosted
 `ubuntu-latest` has it). A missing Docker or a failed image build fails the
 step with `::error::CODEX_ISOLATION …`; Codex never falls back to running on

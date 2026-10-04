@@ -99,6 +99,25 @@ def test_credential_paths_are_absent_from_snapshots_and_synthetic_git(repo, tmp_
 			assert subprocess.run(["git", "show", f"HEAD:{name}"], cwd=copied, capture_output=True).returncode != 0
 
 
+def test_source_files_about_secrets_remain_editable(repo, tmp_path):
+	paths = ("src/secret_manager.py", "src/credential_provider.py", "tests/test_secrets.py")
+	for name in paths:
+		path = repo / name
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text("original\n")
+	git(repo, "add", "-A")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "add source")
+	readonly = tmp_path / "readonly"
+	workspace, manifest = snapshot_ws(repo, tmp_path)
+	run("snapshot-readonly", repo, readonly)
+	for name in paths:
+		assert (readonly / name).read_text() == "original\n"
+		(workspace / name).write_text("edited\n")
+	run("transfer", repo, workspace, manifest)
+	for name in paths:
+		assert (repo / name).read_text() == "edited\n"
+
+
 def test_readonly_snapshot_limits_fail_closed(repo, tmp_path, monkeypatch):
 	sys.path.insert(0, str(MODULE.parent))
 	import codex_isolated_workspace as module

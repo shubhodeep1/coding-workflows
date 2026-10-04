@@ -126,7 +126,8 @@ def readonly_allowed(name):
 	for part in PurePosixPath(name).parts:
 		lower = part.lower()
 		if (lower in READONLY_BAD_PARTS or lower.startswith(".env") or lower.endswith(SECRET_SUFFIXES)
-			or "secret" in lower or "credential" in lower):
+			or lower in ("secret", "credential") or lower.startswith(("secret.", "credential."))
+			or lower.endswith(("_secret.json", "_secrets.json", "_credential.json", "_credentials.json"))):
 			return False
 	return True
 

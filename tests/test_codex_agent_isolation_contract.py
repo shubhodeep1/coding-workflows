@@ -215,3 +215,14 @@ def test_review_blocked_fix_writer_runs_in_the_review_sandbox():
 	fix_block = text[text.index("rb_fix_opencode_cmd=("):]
 	fix_block = fix_block[: fix_block.index(")\n")]
 	assert "opencode_run_cmd" not in fix_block
+
+
+def test_review_sandbox_admits_the_merge_guard_for_ci_repairs():
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace", SCRIPTS / "review_untrusted_workspace.py")
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	assert module.allowed(".claude/hooks/pr_merge_status_guard.py")
+	assert not module.allowed(".claude/hooks/unrelated.py")
