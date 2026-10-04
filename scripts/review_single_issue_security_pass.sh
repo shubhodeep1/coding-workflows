@@ -175,7 +175,10 @@ single_pass_gate()
 		return 0
 	fi
 	if [ "${latest_status}" = "pending" ] && [ "${latest_head}" = "${head_sha}" ]; then
-		age_hours="$(python3 -c 'import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); print(int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//3600))' "${latest_created}" 2>/dev/null || echo 0)"
+		age_hours=0
+		if [ -n "${latest_created}" ]; then
+			age_hours="$(python3 -c 'import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); print(int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//3600))' "${latest_created}" 2>/dev/null || echo 0)"
+		fi
 		if [ "${age_hours}" -lt "${stale_hours}" ]; then
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=audit_pending cycle=${cycles_used}"
 			single_pass_output true
