@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6181,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6181\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6184\",\"pr_number\":6184,\"branch\":\"ai/issue-6181\",\"run_id\":\"37185812630\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37185812630\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"scripts/review_apply_fixes.sh\",\"scripts/review_untrusted_sandbox.sh\",\"scripts/review_untrusted_workspace.py\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "50d75a2a5fcff4f74338f3b391c26e249e84c4dc5df58fb6408ee535f189d887",
+  "lineage": {
+    "issue_number": 6181,
+    "parent_ids": [],
+    "pr_number": 6184,
+    "run_id": "37185812630",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37185812630",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6184"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261004074326_679f2aa097",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6181,
+    "level": "run",
+    "pr_number": 6184,
+    "run_id": "37185812630"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6181: https://github.com/shubhodeep1/coding-workflows/pull/6184",
+  "timestamps": {
+    "created_at": "2026-10-04T07:43:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
