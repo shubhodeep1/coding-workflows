@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:457-460 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `tests-hooks-and-orchestrator` check failed with 5 failed tests and 171 passed, and the supplied log excerpt does not identify the failures or connect them to a changed hunk.\n  WHY: The test command exits nonzero, causing this CI job and the aggregate `lint` check to fail; the failures need investigation before the required check can pass.\n- scripts/workflow_failure_heal_evidence.py:406-407 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_8-flash, qwen_qwen3_7-plus]\n  PROBLEM: `trusted_run_refs` can accept comments with missing authors when both `author` and `comment_author` are `None`.\n  WHY: Without verifying that `author` is truthy, the equality comparison passes when both issue and comment author logins are absent.\n- scripts/workflow_failure_heal_evidence.py:587-592 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: `_collect_artifacts` increments the download counter before attempting the fetch, so failed downloads consume slots in `MAX_ARTIFACT_DOWNLOADS`.\n  WHY: Two transient failures with `MAX_ARTIFACT_DOWNLOADS=2` can block all further artifact downloads for that run.\n- scripts/workflow_failure_heal_evidence.py:470-478 | severity=low | confidence=[2]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: `extract_artifact_texts` checks the `MAX_ARTIFACT_MEMBERS` limit before directory and path validation, so a directory entry at the cap can stop processing later allowlisted members.\n  WHY: Artifacts with directory entries interleaved after the cap can have allowlisted members silently omitted.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The same fallback fix is needed in `tests/test_pr_merge_status_guard.py` because the retired root `.claude/` directory causes test collection to fail.\n  expected_change_site: `tests/test_pr_merge_status_guard.py` near lines 23-32\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The PR diff adds a fallback for `test_gh_api_write_guard.py` (lines 35-39: `if not SETTINGS_PATH.is_file(): SETTINGS_PATH = TEMPLATE_SETTINGS_PATH`) but no equivalent fallback exists for `test_pr_merge_status_guard.py`; `GUARD_PATH = REPO_ROOT / \".claude\" / \"hooks\" / \"pr_merge_status_guard.py\"` (line 23) has no fallback, and the CI log tail shows `pr_merge_status_guard.py` code and \"5 failed, 171 passed in 6.73s\".\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/workflow_failure_heal_evidence.py:407 | PROBLEM: In `trusted_run_refs`, `author` can be `None` when the issue user is absent or lacks a login; a comment with a null or missing user then passes `comment_author != author` by coincidence.\n  WHY: Both values can be `None`, allowing the comparison to match without a verified author.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:457-460 | severity=BLOCKER | confidence=5\n  PROBLEM: The supplied check run reports `tests-hooks-and-orchestrator` failed, with 5 failed tests and 171 passed. The log excerpt does not identify the failing tests or connect them to a changed hunk.\n  WHY: The test command exits nonzero, causing this CI job to fail and the aggregate `lint` check to fail. The failing tests need investigation before the required check can pass.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_evidence.py:406 | severity=NIT | confidence=3\n  PROBLEM: The author comparison `comment_author != author` passes when both are None/empty, allowing comments without a verified author to add run references.\n  WHY: For an eligible issue, `_is_trusted_author` checks `author_association` but not `user.login`. An issue could have `author_association: \"OWNER\"` with no `user.login`, making `author` None. Comments with no `user.login` would then pass the equality check and their run links would be accepted.\n- scripts/workflow_failure_heal_evidence.py:587-592 | severity=NIT | confidence=4\n  PROBLEM: The download counter `downloads += 1` is incremented before the fetch attempt. A failed download consumes a slot in `MAX_ARTIFACT_DOWNLOADS`.\n  WHY: A transient network failure wastes a download slot that could otherwise be used for another artifact. With `MAX_ARTIFACT_DOWNLOADS=2`, two transient failures would block all further artifact downloads for that run.\n- scripts/workflow_failure_heal_evidence.py:470-478 | severity=NIT | confidence=2\n  PROBLEM: The `MAX_ARTIFACT_MEMBERS` break check occurs before directory and path validation. If the 41st zip entry is a directory (which would be skipped), the loop breaks and any subsequent allowlisted members are not processed.\n  WHY: Unusually structured artifacts with directory entries interleaved after the cap could cause allowlisted members to be silently omitted. The cap is 40, so this only affects artifacts with many entries.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The CI failure `tests-hooks-and-orchestrator` (5 failed, 171 passed) is a pre-existing failure on `main` caused by the retired root `.claude/` directory. The PR already fixed the analogous problem in `tests/test_gh_api_write_guard.py` by adding a fallback from `SETTINGS_PATH` to `TEMPLATE_SETTINGS_PATH` when the root file is absent (lines 32-43 of the PR diff). The same fix is needed in `tests/test_pr_merge_status_guard.py` which still references `GUARD_PATH = REPO_ROOT / \".claude\" / \"hooks\" / \"pr_merge_status_guard.py\"` (line 23) without a fallback, causing `FileNotFoundError` during test collection.\n  Expected change site: `tests/test_pr_merge_status_guard.py` near lines 23-32, where `GUARD_PATH` and `SETTINGS_PATH` are defined and the module is loaded.\n  Evidence of absence: The PR diff adds a fallback for `test_gh_api_write_guard.py` (lines 35-39: `if not SETTINGS_PATH.is_file(): SETTINGS_PATH = TEMPLATE_SETTINGS_PATH`) but no equivalent fallback exists for `test_pr_merge_status_guard.py`. The CI log tail shows `pr_merge_status_guard.py` code and \"5 failed, 171 passed in 6.73s\", confirming the test module fails to collect. This blocks the `lint` aggregate check and prevents merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b299ce5ff50bac5d6ffdc7a221044a93f10dc41b2cca9cba3dd11b28497997ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37199060651",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37199060651",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004120011_b738a45a1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37199060651"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T12:00:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
