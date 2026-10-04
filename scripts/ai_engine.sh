@@ -246,8 +246,14 @@ claude_run()
 		hidden=""
 		if [ "${hide_claude_md}" = "true" ] && [ -f "${workdir}/CLAUDE.md" ] && [ ! -L "${workdir}/CLAUDE.md" ]; then
 			hidden="${run_dir}/CLAUDE.md.hidden"
-			mv -- "${workdir}/CLAUDE.md" "${hidden}"
-			trap 'mv -- "${hidden}" "${workdir}/CLAUDE.md"' EXIT
+			mv -- "${workdir}/CLAUDE.md" "${hidden}" || exit 1
+			trap 'if [ -e "${workdir}/CLAUDE.md" ] || [ -L "${workdir}/CLAUDE.md" ]; then
+				if original_backup_path="$(mktemp "${workdir}/CLAUDE.md.original.XXXXXXXX")" && mv -- "${hidden}" "${original_backup_path}"; then
+					echo "::warning::claude_run: CLAUDE.md created while hidden; original preserved at ${original_backup_path}" >&2
+				else
+					echo "::error::claude_run: could not restore original CLAUDE.md; preserved at ${hidden}" >&2
+				fi
+			else mv -- "${hidden}" "${workdir}/CLAUDE.md"; fi' EXIT
 		fi
 		cd "${workdir}" || exit 1
 		for name in "${accounts[@]}"; do
