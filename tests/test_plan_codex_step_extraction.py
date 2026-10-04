@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from runpy import run_path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +54,22 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 		"          bash scripts/run_plan_codex.sh\n"
 	)
 	assert len(step.encode("utf-8")) < 2_000
+
+
+def test_workflow_reference_checker_accepts_claude_settings_template() -> None:
+	checker_ns = run_path(str(REPO_ROOT / "scripts" / "check_workflow_script_refs.py"))
+	extract_refs = checker_ns["extract_refs"]
+	for reference in (
+		"scripts/claude_settings.json.tmpl",
+		"${SUPPORT_SCRIPTS_DIR}/claude_settings.json.tmpl",
+		"for f in claude_settings.json.tmpl; do install scripts/${f}; done",
+	):
+		assert extract_refs(reference) == {"claude_settings.json.tmpl"}
+	result = subprocess.run(
+		["python3", "scripts/check_workflow_script_refs.py"],
+		cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0, result.stderr
 
 
 def test_extracted_prompt_matches_pre_extraction_bytes() -> None:
