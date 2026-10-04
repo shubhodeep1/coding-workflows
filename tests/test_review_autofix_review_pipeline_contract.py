@@ -626,6 +626,7 @@ def _run_restore_same_head_resume_step(
 		env=_git_clean_env({
 			"GITHUB_ENV": str(github_env_file),
 			"PR_NUMBER": pr_number,
+			"RETARGETED_BASE_REF": "main",
 			"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
 			"PREVIOUS_REVIEWS_DIR": str(effective_reviews_dir),
 			"RUNTIME_DIR": str(effective_runtime_dir),
@@ -2427,6 +2428,7 @@ def _run_restore_same_head_resume_harness(
 
 		for marker in markers:
 			payload = dict(marker)
+			payload.setdefault("base_ref", "main")
 			if payload.get("head_sha") == "__HEAD__":
 				payload["head_sha"] = head_sha
 			round_value = int(payload["resume_round"])
@@ -2546,6 +2548,7 @@ def _run_partial_finalize_step(
 			"GITHUB_ENV": str(github_env_file),
 			"GH_TOKEN": "test-token",
 			"PR_NUMBER": "123",
+			"RETARGETED_BASE_REF": "main",
 			"RUNTIME_DIR": str(runtime),
 			"PREVIOUS_REVIEWS_DIR": str(reviews),
 			"EDITOR_SUMMARY_FILE": str(editor_summary),
@@ -6454,6 +6457,8 @@ def test_review_partial_finalize_marker_sets_no_progress_terminal_state() -> Non
 		second = _run_partial_finalize_step(context, previous_env=first["github_env"])
 
 	assert first["github_env"]["AUTOFIX_RESUME_STATE"] == "resumable"
+	assert first["marker_payload"]["base_ref"] == "main"
+	assert "base_ref=main" in first["latest_comment"]
 	assert first["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "true"
 	assert second["github_env"]["AUTOFIX_RESUME_ROUND"] == "2"
 	assert second["github_env"]["AUTOFIX_RESUME_STATE"] == "no_progress"
