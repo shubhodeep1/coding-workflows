@@ -37,7 +37,7 @@ record = {
 	"api_key_env": "ANTHROPIC_API_KEY" in os.environ,
 	"gh_config_dir": os.environ.get("GH_CONFIG_DIR", ""),
 	"credentials": {key: key in os.environ for key in (
-		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_PAT",
+		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_PAT", "GH_HOST",
 		"TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "OPENROUTER_API_KEY",
 		"ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN",
 	)},
@@ -311,7 +311,7 @@ def test_read_role_command_line(sandbox: dict) -> None:
 def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: str, read_only: bool) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	credential_names = (
-		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_PAT",
+		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_PAT", "GH_HOST",
 		"TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "OPENROUTER_API_KEY",
 		"ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN",
 	)

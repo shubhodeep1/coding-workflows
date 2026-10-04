@@ -274,11 +274,11 @@ claude_run()
 		cd "${workdir}" || exit 1
 		credential_prefix=()
 		if [ "${profile}" = "read" ]; then
-			# An inherited gh login on disk must not replace the stripped job token.
+			# An inherited gh login or host override must not replace the stripped job token.
 			mkdir -m 0700 -- "${run_dir}/gh-read-config" || exit 1
 			# Keep the runner/stall guard environment intact; only the model and
 			# its child tools lose credentials. The Claude OAuth token is retained.
-			credential_prefix=(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN
+			credential_prefix=(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST
 				-u GH_PAT -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY
 				-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_RUNTIME_TOKEN
 				GH_CONFIG_DIR="${run_dir}/gh-read-config")

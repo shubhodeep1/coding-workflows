@@ -1260,7 +1260,7 @@ _ECHO_READ_HINT = (
 )
 
 
-def _approved_echo_read_command(command: str) -> tuple[str, list[tuple[str, str]]] | None:
+def _approved_echo_read_command(command: str, read_only: bool = False) -> tuple[str, list[tuple[str, str]]] | None:
 	"""Validate quoted echo substitutions and return their inert replacement.
 
 	Only a complete double-quoted substitution containing one REST read is
@@ -1328,6 +1328,8 @@ def _approved_echo_read_command(command: str) -> tuple[str, list[tuple[str, str]
 			try:
 				parsed = parse_gh_api_args(args)
 			except Unreadable:
+				return None
+			if read_only and not _read_only_get_allowed(parsed):
 				return None
 			endpoint = parsed["endpoints"][0].lstrip("/")
 			if parsed["method"] not in _READ_METHODS or endpoint.split("?", 1)[0] == "graphql":
@@ -1429,6 +1431,17 @@ def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 	return KIND_WRITE, description
 
 
+def _read_only_get_allowed(parsed: dict) -> bool:
+	endpoint = parsed["endpoints"][0]
+	return (
+		parsed["method"] == "GET"
+		and parsed["hostname"] in (None, "github.com")
+		and not endpoint.startswith("//")
+		and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", endpoint)
+		and endpoint.lstrip("/").split("?", 1)[0] != "graphql"
+	)
+
+
 def _read_only_result(decision: str, reason: str, read_only: bool) -> tuple[str, str]:
 	if read_only and decision == DECISION_ASK:
 		return DECISION_DENY, f"read-only role: gh api writes are denied ({reason})"
@@ -1455,14 +1468,18 @@ def evaluate(payload: dict, read_only: bool = False) -> tuple[str | None, str]:
 
 	stripped_command, heredocs = strip_heredoc_bodies(command)
 	if not heredocs:
-		approved_echo = _approved_echo_read_command(command)
+		approved_echo = _approved_echo_read_command(command, read_only=read_only)
 		if approved_echo is not None:
 			rewritten, echo_results = approved_echo
 			outer_invocations = gh_api_invocations(shell_segments(rewritten))
 			outer_results: list[tuple[str, str]] = []
 			for args in outer_invocations:
 				try:
-					outer_results.append(classify(parse_gh_api_args(args), rewritten, lambda: ""))
+					parsed = parse_gh_api_args(args)
+					outer_results.append(
+						(KIND_WRITE, "read-only role permits only GitHub REST GET requests")
+						if read_only and not _read_only_get_allowed(parsed) else classify(parsed, rewritten, lambda: "")
+					)
 				except Unreadable:
 					break
 			if len(outer_results) == len(outer_invocations) and all(kind == KIND_READ for kind, _ in outer_results) and (
@@ -1501,11 +1518,7 @@ def evaluate(payload: dict, read_only: bool = False) -> tuple[str | None, str]:
 		try:
 			parsed = parse_gh_api_args(args)
 			# Interactive reads include HEAD and GraphQL; read roles admit REST GET only.
-			if read_only and (
-				parsed["method"] != "GET"
-				or parsed["endpoints"][0].lstrip("/").split("?", 1)[0] == "graphql"
-				or parsed["hostname"] not in (None, "github.com")
-			):
+			if read_only and not _read_only_get_allowed(parsed):
 				results.append((KIND_WRITE, "read-only role permits only GET requests to REST endpoints on github.com"))
 			else:
 				results.append(classify(parsed, command, repo_slug_lookup))

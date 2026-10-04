@@ -1989,10 +1989,12 @@ never rewritten.
 `Read`, `Grep`, `Glob` and a fixed list of read-only `git` / `gh` commands in
 `dontAsk` mode (no `git grep` shell allowance). Their model processes receive
 no GitHub, Telegram, OpenRouter or Actions OIDC/runtime credentials; `gh api`
-is permitted only when the hook explicitly approves a GET request to a REST
-endpoint on `github.com`. `gh` uses an empty per-run config directory so a saved runner login
-cannot restore access. Private-repository GitHub reads by the model are
-unavailable until a separately provisioned read-only identity is safely wired
+is permitted only when the hook explicitly approves a GET request to a relative
+REST endpoint on `github.com` (absolute URLs are denied, including inside echo
+substitutions). `gh` uses an empty per-run config directory and clears `GH_HOST`
+so a saved runner login or host override cannot restore access.
+Private-repository GitHub reads by the model are unavailable until a separately
+provisioned read-only identity is safely wired
 into the job; the job's write-capable token is never reused. Every other role
 runs `bypassPermissions`, where the P5 deny rules still apply, with the tools
 `Read`, `Grep`, `Glob`, `Bash`, `Edit`,
