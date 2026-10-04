@@ -229,6 +229,11 @@ loops with unquoted `gh api` arguments still prompt; the two hooks must stay
 byte-identical (`tests/test_gh_api_write_guard.py`). Shell-rewrite hazards
 inside a loop prompt even when the loop counter is not expanded.
 
+The merged-PR guard in `.claude/hooks/pr_merge_status_guard.py` and its
+`workflow-templates/` twin distinguish numeric branch refspecs from adjacent
+unquoted file descriptors before checking push destinations. `2 > out` retains
+the branch `2`; `2>out` does not. The copies stay byte-identical.
+
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
 pass that output to action inputs or through step-local environment variables,

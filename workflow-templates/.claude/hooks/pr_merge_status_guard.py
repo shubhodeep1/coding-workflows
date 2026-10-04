@@ -260,13 +260,18 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
+	last_segment_word_end = 0
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
 			if segment and segment[-1].isdigit():
-				segment.pop()
+				fd_start = last_segment_word_end - len(segment[-1])
+				if (command[fd_start:last_segment_word_end] == segment[-1]
+					and command[last_segment_word_end:last_segment_word_end + len(token)] == token
+					and (fd_start == 0 or command[fd_start - 1] in " \t\r\n;&|<>()")):
+					segment.pop()
 			redirect_target = True
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
@@ -276,6 +281,10 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			operator = token
 		else:
 			segment.append(token)
+			# shlex may read one delimiter past the word before yielding it.
+			last_segment_word_end = lexer.instream.tell()
+			if last_segment_word_end and command[last_segment_word_end - 1] in lexer.whitespace + _SHELL_PUNCTUATION_CHARS:
+				last_segment_word_end -= 1
 	if segment:
 		result.append((operator, segment))
 	return result

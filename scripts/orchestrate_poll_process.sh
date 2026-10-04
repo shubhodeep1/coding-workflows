@@ -16018,7 +16018,10 @@ run_unblock_scan() {
           --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
           --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
           --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
-          --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")" || return 0
+          --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")" || {
+          echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=reselect_failed"
+          return 0
+        }
       fi
     else
       echo "UNBLOCK_SCAN item=${verify_item} outcome=skip reason=full_history_unavailable"

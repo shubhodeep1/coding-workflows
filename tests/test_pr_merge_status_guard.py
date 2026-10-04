@@ -92,6 +92,22 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 
 
 @pytest.mark.parametrize(
+	"command,expected_branch",
+	[
+		("git push origin 2 > /tmp/push.log", "2"),
+		('git push origin "2" > /tmp/push.log', "2"),
+		('git push origin "2"> /tmp/push.log', "2"),
+		("git push origin 2> /tmp/push.log", ""),
+		("git push origin \\2> /tmp/push.log", "2"),
+	],
+)
+def test_redirection_keeps_numeric_push_refspecs(command: str, expected_branch: str) -> None:
+	invocations = guard._guarded_git_invocations(command, str(REPO_ROOT))
+	assert len(invocations) == 1
+	assert guard._push_targets(invocations[0], str(REPO_ROOT))[0].branch == expected_branch
+
+
+@pytest.mark.parametrize(
 	"command",
 	[
 		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" -d @spec.json',
