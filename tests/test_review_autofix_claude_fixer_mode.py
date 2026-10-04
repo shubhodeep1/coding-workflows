@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Contract: the Claude-fixer hand-off in review_autofix.yml is retired.
+"""Contract: Claude-fixer mode is the Claude engine of the review write roles.
 
-PR-backed `claude/*` heads now take the normal review path like every other
-PR: reviewer panel, GPT editor, conflict resolver, review-blocked judge and
-auto-merge (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
-Phase 2). The `claude_fixer_converged_head` input stays declared and ignored
-because pinned consumer wrappers still pass it, `CLAUDE_FIXER_ENABLED` is read
-but unused until Phase 5c gives it its Claude-engine meaning, and the
-`claude-fixer-auto-merge` job id is kept but never runs. Phase 5c rewrites this
-file for the new Claude-engine review write roles.
+The session hand-off is retired (docs/plans/replace-claude-sessions-with-cli-
+engine-plan.md, Phase 2): PR-backed `claude/*` heads take the normal review
+path like every other PR. The `claude_fixer_converged_head` input stays
+declared and ignored because pinned consumer wrappers still pass it, and the
+`claude-fixer-auto-merge` job id is kept but never runs.
+
+Phase 5c (Q19/Q35) gives `CLAUDE_FIXER_ENABLED` (default `true`) its new
+meaning: the review editor, consolidator, conflict resolver and RB judge run
+through the Claude engine inside the review job, and `false` keeps all four
+on their unchanged OpenCode commands, ahead of the labels and AI_ENGINE.
 """
 
 from __future__ import annotations
@@ -352,3 +354,192 @@ def test_budget_skip_beside_a_hard_failure_reaches_the_summariser(tmp_path):
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stdout.strip().splitlines()[-1] == "3"
 	assert not request.exists()
+
+
+
+# ---- Phase 5c: Claude-fixer mode is the review write roles' Claude engine ----
+
+FIXER_ROLES = ("REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE")
+
+
+def _run_resolve_step(tmp: Path, **env_overrides: str) -> dict[str, str]:
+	step = AGENT_STEPS["Resolve AI engine"]
+	github_env = tmp / "github_env"
+	github_output = tmp / "github_output"
+	env = {
+		"PATH": os.environ.get("PATH", ""),
+		"HOME": str(tmp),
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		"GITHUB_ENV": str(github_env),
+		"GITHUB_OUTPUT": str(github_output),
+		"AI_ENGINE": "",
+		"CLAUDE_FIXER_ENABLED": "true",
+		**{f"AI_ENGINE_{role}": "" for role in FIXER_ROLES},
+		**env_overrides,
+	}
+	proc = subprocess.run(["bash", "-c", step["run"]], cwd=tmp, env=env, capture_output=True, text=True)
+	assert proc.returncode == 0, proc.stderr
+	values = {}
+	for path in (github_env, github_output):
+		for line in path.read_text(encoding="utf-8").splitlines():
+			key, _, value = line.partition("=")
+			values[key] = value
+	return values
+
+
+def test_resolve_step_wiring():
+	step = AGENT_STEPS["Resolve AI engine"]
+	assert step["id"] == "ai_engine"
+	assert step["env"]["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
+	for role in FIXER_ROLES:
+		assert step["env"][f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
+	names = list(AGENT_STEPS)
+	for name, uses in (
+		("Install Claude Code CLI", "./.codex-workflow-src/.github/actions/install-claude"),
+		("Resolve Claude credential", "./.codex-workflow-src/.github/actions/claude-pool-token"),
+	):
+		assert AGENT_STEPS[name]["uses"] == uses
+		assert AGENT_STEPS[name]["continue-on-error"] is True
+		assert AGENT_STEPS[name]["if"] == "env.PR_CLOSED != 'true' && steps.ai_engine.outputs.any_claude == 'true'"
+		assert names.index("Resolve AI engine") < names.index(name) < names.index("Install project dependencies (best-effort)")
+
+
+def test_fixer_mode_on_puts_the_four_roles_on_claude(tmp_path):
+	values = _run_resolve_step(tmp_path)
+	assert values["any_claude"] == "true"
+	for role in FIXER_ROLES:
+		assert values[f"AI_ENGINE_RESOLVED_{role}"] == "claude", role
+
+
+def test_fixer_mode_off_beats_ai_engine_and_role_variables(tmp_path):
+	values = _run_resolve_step(tmp_path, CLAUDE_FIXER_ENABLED="false", AI_ENGINE="claude", AI_ENGINE_RB_JUDGE="claude")
+	assert values["any_claude"] == "false"
+	for role in FIXER_ROLES:
+		assert values[f"AI_ENGINE_RESOLVED_{role}"] == "codex", role
+
+
+def test_a_role_variable_still_moves_one_role_to_codex(tmp_path):
+	values = _run_resolve_step(tmp_path, AI_ENGINE_CONFLICT_RESOLVER="codex")
+	assert values["AI_ENGINE_RESOLVED_CONFLICT_RESOLVER"] == "codex"
+	assert values["AI_ENGINE_RESOLVED_REVIEW_EDITOR"] == "claude"
+
+
+def test_missing_engine_keeps_every_role_on_codex(tmp_path):
+	values = _run_resolve_step(tmp_path, SUPPORT_SCRIPTS_DIR=str(tmp_path))
+	assert values["any_claude"] == "false"
+	assert {values[f"AI_ENGINE_RESOLVED_{role}"] for role in FIXER_ROLES} == {"codex"}
+
+
+def test_sandbox_prepare_follows_the_editor_engine_with_an_opencode_fallback():
+	run = AGENT_STEPS["Install project dependencies (best-effort)"]["run"]
+	assert 'review_untrusted_sandbox.sh" prepare claude; then' in run
+	assert 'echo "AI_ENGINE_RESOLVED_REVIEW_EDITOR=codex" >> "$GITHUB_ENV"' in run
+	assert run.count('bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare\n') == 2
+
+
+def test_engine_files_ride_the_optional_bootstrap():
+	text = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
+	line = next(l for l in text.splitlines() if l.startswith("OPTIONAL_BOOTSTRAP_SCRIPTS="))
+	for name in ("ai_engine.sh", "claude_engine.py", "claude_anthropic_relay.py", "claude_settings.json.tmpl"):
+		assert name in line.split("=", 1)[1].strip("\"").split(), name
+
+
+# Each review script: the Claude branch, the 75 gate, and the unchanged
+# OpenCode command after it (G4).
+REVIEW_SITES = {
+	"review_apply_fixes.sh": (
+		'if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then',
+		'[ "${editor_claude_rc}" -eq 75 ] || return "${editor_claude_rc}"',
+		'      -- "${editor_opencode_cmd[@]}" < "${prompt_file}" 2>"${stderr_target}"',
+	),
+	"review_consolidate.sh": (
+		'bash -c \'source "$1" && claude_run REVIEW_CONSOLIDATOR "$2" "$3" "$4"\'',
+		'elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then',
+		'			-- "${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}"; then',
+	),
+	"review_conflict_resolve.sh": (
+		'bash -c \'source "$1" && claude_run CONFLICT_RESOLVER "$2" "$3" "$4"\'',
+		'elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then',
+		'        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \\',
+	),
+	"review_rb_judge.sh": (
+		'review_rb_claude_run read "${RB_JUDGE_PROMPT}" "${RB_JUDGE_OUTPUT}" "${JUDGE_STDERR_FILE}" "${level}" || rb_judge_claude_rc=$?',
+		'elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then',
+		'      -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?',
+	),
+}
+
+
+def test_each_review_role_tries_claude_then_the_unchanged_opencode_command():
+	for script, (claude_call, gate, opencode_call) in REVIEW_SITES.items():
+		text = (REPO_ROOT / "scripts" / script).read_text(encoding="utf-8")
+		assert text.count(claude_call) == 1, script
+		start = text.index(claude_call)
+		gate_at = text.index(gate, start)
+		assert text.index(opencode_call, gate_at) > gate_at, script
+	rb = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	assert 'review_rb_claude_run write "${RB_FIX_PROMPT}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" "${JUDGE_EFFECTIVE_REASONING_EFFORT}" || rb_fix_claude_rc=$?' in rb
+
+
+FAKE_ENGINE = r"""
+claude_run() {
+  printf '%s|%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "$4" "${AI_ENGINE_READ_ONLY:-}" "${AI_ENGINE_EFFORT_HINT:-}" >> "${CALLS}"
+  case "${MODE}" in
+    success) printf 'verdict\n' > "$3"; return 0 ;;
+    unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
+    *) return 1 ;;
+  esac
+}
+"""
+
+
+def _rb_helper() -> str:
+	text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	match = re.search(r"^review_rb_claude_run\(\)\n\{\n.*?^\}\n", text, re.M | re.S)
+	assert match
+	return match.group(0)
+
+
+def _run_rb_helper(tmp: Path, *, engine: str, mode: str, access: str = "read", stage: bool = True):
+	scripts = tmp / "scripts"
+	scripts.mkdir()
+	if stage:
+		(scripts / "ai_engine.sh").write_text(FAKE_ENGINE, encoding="utf-8")
+	(tmp / "prompt.txt").write_text("judge\n", encoding="utf-8")
+	calls = tmp / "calls"
+	script = _rb_helper() + f'rc=0; review_rb_claude_run {access} prompt.txt out.txt err.txt high || rc=$?; echo "rc=$rc"\n'
+	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(scripts), RB_OPENCODE_WORKSPACE=str(tmp), MODEL_EDITOR="openai/gpt-6-sol",
+		AI_ENGINE_RESOLVED_RB_JUDGE=engine, MODE=mode, CALLS=str(calls))
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
+	return proc, (calls.read_text(encoding="utf-8") if calls.exists() else "")
+
+
+def test_rb_verdict_pass_runs_claude_read_only(tmp_path):
+	proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="success")
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert calls.splitlines() == [f"RB_JUDGE|prompt.txt|out.txt|{tmp_path}|true|high"]
+	assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "verdict\n"
+
+
+def test_rb_fix_pass_keeps_the_write_profile(tmp_path):
+	_proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="success", access="write")
+	assert calls.split("|")[4] == "false"
+
+
+def test_rb_helper_returns_75_off_claude_unavailable_or_unstaged(tmp_path):
+	for index, (engine, mode, stage) in enumerate((("codex", "success", True), ("claude", "unavailable", True), ("claude", "success", False))):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, _calls = _run_rb_helper(work, engine=engine, mode=mode, stage=stage)
+		assert "rc=75" in proc.stdout, (engine, mode, stage, proc.stderr)
+	crash = tmp_path / "crash"
+	crash.mkdir()
+	proc, _calls = _run_rb_helper(crash, engine="claude", mode="crash")
+	assert "rc=1" in proc.stdout
+
+
+def test_sandbox_reports_progress_while_claude_streams():
+	text = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'echo "CLAUDE_ENGINE progress role=REVIEW_EDITOR transcript_bytes=${size}" >&2' in text
+	assert 'while sleep "${REVIEW_SANDBOX_PROGRESS_SECS:-60}" </dev/null >/dev/null 2>&1; do' in text
+	assert text.count('kill "${progress_pid}"') == 2

@@ -240,6 +240,30 @@ run_editor_codex_attempt() {
     bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
   fi
 
+  # Claude engine (replace-claude-sessions plan Phase 5c): the workflow's
+  # "Resolve AI engine" step exports AI_ENGINE_RESOLVED_REVIEW_EDITOR
+  # (CLAUDE_FIXER_ENABLED=false keeps it on codex). On Claude the same
+  # sandbox runs the Claude Code CLI; exit 75 (Claude unavailable) runs the
+  # unchanged OpenCode command below. stderr_target is the heartbeat FIFO:
+  # hold it open across both runs so its reader does not see EOF in between.
+  if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then
+    local editor_claude_rc=0
+    exec 2>"${stderr_target}"
+    if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+      "${CODEX_STALL_GUARD_HELPER}" \
+        --phase review_apply_fixes \
+        --engine claude \
+        --stdout-file "${stdout_file}" \
+        --activity-file "${activity_file}" \
+        --status-file "${status_file}" \
+        -- "${editor_opencode_cmd[@]}" claude < "${prompt_file}" || editor_claude_rc=$?
+    else
+      "${editor_opencode_cmd[@]}" claude < "${prompt_file}" > "${stdout_file}" || editor_claude_rc=$?
+    fi
+    [ "${editor_claude_rc}" -eq 75 ] || return "${editor_claude_rc}"
+    echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=claude_unavailable action=opencode" >&2
+  fi
+
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     exec "${CODEX_STALL_GUARD_HELPER}" \
       --phase review_apply_fixes \

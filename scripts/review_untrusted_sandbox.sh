@@ -167,8 +167,10 @@ if [ "${engine}" = claude ]; then
 	container="review-editor-$$"
 	printf '%s\n' "${container}" > "${root}/active-container"
 	broker_pid=""
+	progress_pid=""
 	claude_finish()
 	{
+		[ -z "${progress_pid}" ] || { kill "${progress_pid}" 2>/dev/null || true; wait "${progress_pid}" 2>/dev/null || true; }
 		[ -z "${broker_pid}" ] || { kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; }
 		env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${container}" >/dev/null 2>&1 || true
 		rm -f -- "${root}/active-container" "${root}/socket/provider.sock"
@@ -192,6 +194,23 @@ if [ "${engine}" = claude ]; then
 			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
 			continue
 		fi
+		# The CLI streams to the transcript, not stderr, so the editor's idle
+		# watchdog (review_apply_fixes.sh, EDITOR_IDLE_TIMEOUT) would see no
+		# output. Report progress on stderr whenever the transcript grows; a
+		# run that stops producing output still trips the watchdog.
+		: > "${root}/transcript.jsonl"
+		(
+			last_size=0
+			# sleep holds no copy of stderr, so killing this subshell frees it.
+			while sleep "${REVIEW_SANDBOX_PROGRESS_SECS:-60}" </dev/null >/dev/null 2>&1; do
+				size="$(stat -c %s "${root}/transcript.jsonl" 2>/dev/null || echo 0)"
+				if [ "${size}" != "${last_size}" ]; then
+					echo "CLAUDE_ENGINE progress role=REVIEW_EDITOR transcript_bytes=${size}" >&2
+					last_size="${size}"
+				fi
+			done
+		) &
+		progress_pid=$!
 		# No host checkout, HOME, Docker socket, tokens or Git remote is mounted.
 		run_rc=0
 		env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}" \
@@ -225,6 +244,7 @@ if [ "${engine}" = claude ]; then
 					--tools Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch --permission-mode bypassPermissions \
 					--output-format stream-json --verbose < /prompt
 			' > "${root}/transcript.jsonl" || run_rc=$?
+		kill "${progress_pid}" 2>/dev/null || true; wait "${progress_pid}" 2>/dev/null || true; progress_pid=""
 		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
 		verdict="$(_ai_engine_py classify --transcript "${root}/transcript.jsonl" --exit-code "${run_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
 		outcome="$(_ai_engine_json_field "${verdict}" outcome)"

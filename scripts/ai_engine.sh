@@ -9,7 +9,8 @@
 #   ai_engine_for_role <role>
 #       Prints `codex` or `claude` and logs
 #       `AI_ENGINE_SELECTED role= engine= model= effort= source=` to stderr.
-#       Order: work-item labels in AI_ENGINE_LABELS (`ai:codex` beats
+#       Order: CLAUDE_FIXER_ENABLED=false for the four review write roles
+#       (codex, Phase 5c), work-item labels in AI_ENGINE_LABELS (`ai:codex` beats
 #       `ai:engine-claude`), AI_ENGINE_<ROLE>, AI_ENGINE, the code default.
 #   ai_engine_model <role> [model_hint]
 #   ai_engine_effort <role> [effort_hint]
@@ -40,12 +41,15 @@
 # Inputs (environment):
 #   AI_ENGINE_LABELS        work-item labels (comma/space list or JSON list)
 #   AI_ENGINE, AI_ENGINE_<ROLE>   `codex` | `claude`
+#   CLAUDE_FIXER_ENABLED    `false` keeps REVIEW_EDITOR, REVIEW_CONSOLIDATOR,
+#                           CONFLICT_RESOLVER and RB_JUDGE on codex (Q35)
 #   AI_ENGINE_MODEL_HINT, AI_ENGINE_EFFORT_HINT   claude_run's D3 hints
 #   CLAUDE_ENGINE_POOL_DIR  account pool written by the token step
 #                           (default ${RUNNER_TEMP}/claude-pool): `order`
 #                           lists account names, best first; `tokens/<NAME>`
 #                           holds each token (0600)
 #   ALLOW_WORKFLOW_EDITS    `true` lifts the .github/workflows deny rules (P5)
+#   AI_ENGINE_READ_ONLY     `true` runs a write role with the read profile
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
 #
 # The OAuth token reaches the CLI only through CLAUDE_CODE_OAUTH_TOKEN in a
@@ -201,6 +205,11 @@ claude_run()
 	model="$(_ai_engine_json_field "${resolved}" model)"
 	effort="$(_ai_engine_json_field "${resolved}" effort)"
 	profile="$(_ai_engine_json_field "${resolved}" profile)"
+	# AI_ENGINE_READ_ONLY=true narrows a write role to the read profile for
+	# one call (the review-blocked judge's verdict pass); it never widens one.
+	if [ "${AI_ENGINE_READ_ONLY:-false}" = "true" ]; then
+		profile="read"
+	fi
 	hide_claude_md="$(_ai_engine_py config --key hide_claude_md 2>/dev/null || echo false)"
 	if ! instructions="$(_ai_engine_instructions_file)"; then
 		ai_engine_fallback "${role}" instructions_missing

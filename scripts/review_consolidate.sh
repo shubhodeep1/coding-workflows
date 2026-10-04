@@ -602,7 +602,29 @@ if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 	sanitize_codex_prompt_file "${CONSOLIDATOR_PROMPT_FILE}"
 fi
 	emit_context_budget_warn_for_prompt "consolidator" "${CONSOLIDATOR_PROMPT_FILE}" "${REVIEW_CONSOLIDATOR_MODEL}"
-	if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+	# Claude engine (replace-claude-sessions plan Phase 5c): the workflow
+	# exports AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR (CLAUDE_FIXER_ENABLED=false
+	# keeps it on codex). On Claude, claude_run under the same timeout writes
+	# the answer to tmp_out; exit 75 (Claude unavailable) runs the unchanged
+	# OpenCode command below.
+	consolidator_claude_rc=75
+	consolidator_engine_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
+	if [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ] && [ -f "${consolidator_engine_sh}" ]; then
+		consolidator_claude_rc=0
+		# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+		AI_ENGINE_MODEL_HINT="${REVIEW_CONSOLIDATOR_MODEL}" AI_ENGINE_EFFORT_HINT="${REVIEW_CONSOLIDATOR_REASONING}" \
+			timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+			bash -c 'source "$1" && claude_run REVIEW_CONSOLIDATOR "$2" "$3" "$4"' _ \
+			"${consolidator_engine_sh}" "${CONSOLIDATOR_PROMPT_FILE}" "${tmp_out}" "${consolidator_workspace}" \
+			2> "${tmp_err}" || consolidator_claude_rc=$?
+		cmd_rc="${consolidator_claude_rc}"
+		if [ "${consolidator_claude_rc}" -eq 75 ]; then
+			grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${tmp_err}" >&2 || true
+		fi
+	fi
+	if [ "${consolidator_claude_rc}" -ne 75 ]; then
+		:
+	elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
 		if timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
 			"${CODEX_HEARTBEAT_HELPER}" \
 			--phase review_consolidate \

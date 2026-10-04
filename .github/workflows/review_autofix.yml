@@ -510,10 +510,11 @@ jobs:
           # No-PR claude-branch-review path inputs (push-without-PR caller).
           FORCE_CLAUDE_BRANCH_REVIEW: ${{ inputs.force_claude_branch_review }}
           HEAD_REF_OVERRIDE: ${{ inputs.head_ref_override }}
-          # Read but unused since the Claude-fixer hand-off was retired; the
-          # Claude CLI engine cutover (Phase 5c of
-          # docs/plans/replace-claude-sessions-with-cli-engine-plan.md) gives
-          # it its new meaning. Kept so the variable name stays reserved.
+          # Claude-fixer mode (Phase 5c of
+          # docs/plans/replace-claude-sessions-with-cli-engine-plan.md, Q35):
+          # `false` keeps the review write roles off the Claude engine. The
+          # codex-agent job's "Resolve AI engine" step applies it; the gate
+          # only reads it.
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           # Identical-failure fingerprint cap (see the block below the
           # terminal same-head skip). Default on, three identical failures on
@@ -2723,6 +2724,51 @@ jobs:
         with:
           opencode_version: ${{ env.OPENCODE_VERSION }}
 
+      # Claude engine (replace-claude-sessions plan Phase 5c, Claude-fixer
+      # mode Q19/Q35): the editor, consolidator, conflict resolver and RB
+      # judge run on Claude unless CLAUDE_FIXER_ENABLED=false, the PR's
+      # ai:codex label, AI_ENGINE_<ROLE> or AI_ENGINE say codex. Each role's
+      # engine goes to AI_ENGINE_RESOLVED_<ROLE>; exit 75 (Claude
+      # unavailable) runs that role's unchanged OpenCode command (plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        if: env.PR_CLOSED != 'true'
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_REVIEW_EDITOR: ${{ vars.AI_ENGINE_REVIEW_EDITOR || '' }}
+          AI_ENGINE_REVIEW_CONSOLIDATOR: ${{ vars.AI_ENGINE_REVIEW_CONSOLIDATOR || '' }}
+          AI_ENGINE_CONFLICT_RESOLVER: ${{ vars.AI_ENGINE_CONFLICT_RESOLVER || '' }}
+          AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE; do
+            engine="codex"
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" ]; then
+              # shellcheck disable=SC1091
+              engine="$(source "${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" && ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: env.PR_CLOSED != 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: env.PR_CLOSED != 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Install OS-level dependencies
         shell: bash
         run: |
@@ -4682,7 +4728,18 @@ jobs:
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.
-          bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+          # On Claude (AI_ENGINE_RESOLVED_REVIEW_EDITOR) the image also gets
+          # the pinned Claude Code CLI. If that image cannot be prepared the
+          # editor falls back to OpenCode (plan D1) instead of failing the job.
+          if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then
+            if ! bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare claude; then
+              echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=sandbox_prepare_failed"
+              echo "AI_ENGINE_RESOLVED_REVIEW_EDITOR=codex" >> "$GITHUB_ENV"
+              bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+            fi
+          else
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+          fi
 
       - name: Switch reasoning effort for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'

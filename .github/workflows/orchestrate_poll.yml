@@ -376,7 +376,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py ai_engine.sh claude_engine.py codex_stall_guard.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -668,6 +668,53 @@ jobs:
             --actor "${GITHUB_ACTOR}" \
             --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work || 'false' }}\"}" || true
 
+      # Claude engine (replace-claude-sessions plan Phase 5c): the orchestrator
+      # judges resolve their engine per tracking issue inside the poller
+      # (scripts/orchestrate_poll_process.sh poller_claude_judge). The CLI
+      # and the account pool are fetched only when a tick has work and at
+      # least one judge role resolves to claude without labels; a project
+      # whose ai:engine-claude label is the only route to Claude falls back
+      # to codex (exit 75, plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        if: steps.find_tracking.outputs.has_work == 'true'
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
+          AI_ENGINE_STALL_JUDGE: ${{ vars.AI_ENGINE_STALL_JUDGE || '' }}
+          AI_ENGINE_INTEGRATION_JUDGE: ${{ vars.AI_ENGINE_INTEGRATION_JUDGE || '' }}
+          AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
+          AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
+          AI_ENGINE_LABELS: ""
+        run: |
+          set -euo pipefail
+          any_claude=false
+          if [ -f scripts/ai_engine.sh ]; then
+            # shellcheck source=/dev/null
+            source scripts/ai_engine.sh
+            for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE; do
+              if [ "$(ai_engine_for_role "${role}" || echo codex)" = "claude" ]; then
+                any_claude=true
+              fi
+            done
+          fi
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
@@ -686,6 +733,16 @@ jobs:
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          # Claude engine (plan Phase 5c): the judges' engine, per tracking
+          # issue (scripts/ai_engine.sh; CLAUDE_FIXER_ENABLED=false keeps
+          # RB_JUDGE on codex).
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
+          AI_ENGINE_STALL_JUDGE: ${{ vars.AI_ENGINE_STALL_JUDGE || '' }}
+          AI_ENGINE_INTEGRATION_JUDGE: ${{ vars.AI_ENGINE_INTEGRATION_JUDGE || '' }}
+          AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
+          AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
           MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}

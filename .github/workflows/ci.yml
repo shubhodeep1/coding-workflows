@@ -502,6 +502,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine.py
 
+      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
+
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
           set -euo pipefail

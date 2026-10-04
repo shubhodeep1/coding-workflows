@@ -62,6 +62,36 @@ elif [ -f "scripts/pr_checks_lib.sh" ]; then
   source scripts/pr_checks_lib.sh
 fi
 unset _OPP_LIB_DIR
+# Claude engine (replace-claude-sessions plan Phase 5c): the orchestrator
+# judges run through scripts/ai_engine.sh next to this script, or the staged
+# CWD copy.
+_POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo scripts)/ai_engine.sh"
+[ -f "${_POLLER_AI_ENGINE_SH}" ] || _POLLER_AI_ENGINE_SH="scripts/ai_engine.sh"
+
+# poller_claude_judge <ROLE> <prompt_file> <output_file> <log_file> [model_hint]
+# Runs one judge call on Claude when <ROLE> resolves to `claude` for the
+# current tracking issue: labels come from the cached TRACKING_LABELS (plan
+# D2; no API call; one tick spans many projects, so the job's event payload
+# is never used), the model hint defaults to MODEL_EDITOR and the effort hint
+# is MODEL_REASONING_EFFORT_JUDGE. The result text goes to <output_file>,
+# the file the codex call writes; stderr is appended to <log_file> and the
+# job log. Returns 75 when the role is on codex, ai_engine.sh is not staged
+# or Claude is unavailable, so the caller runs its unchanged codex command;
+# otherwise claude_run's status (0 success, 124 timeout, other = crash).
+poller_claude_judge()
+{
+  local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
+  local judge_engine="codex" judge_rc=0
+  [ -f "${_POLLER_AI_ENGINE_SH}" ] || return 75
+  # shellcheck source=ai_engine.sh
+  source "${_POLLER_AI_ENGINE_SH}" || return 75
+  judge_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+    ai_engine_for_role "${role}" 2> >(tee -a "${log_file}" >&2) || echo codex)"
+  [ "${judge_engine}" = "claude" ] || return 75
+  AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+    claude_run "${role}" "${prompt_file}" "${output_file}" "${PWD}" 2> >(tee -a "${log_file}" >&2) || judge_rc=$?
+  return "${judge_rc}"
+}
 # shellcheck source=scripts/semble_helpers.sh
 SEMBLE_HELPERS_AVAILABLE="false"
 JUDGE_SEMBLE_MAX_CHUNKS="4"
@@ -6405,12 +6435,16 @@ security_pass_exhaustion_judge() {
       printf '%s\n' "${MOCK_SECURITY_PASS_JUDGE_JSON}" > "${output_file}"
     else
       sanitize_codex_prompt_file "${prompt_file}"
-      bash scripts/codex_heartbeat.sh \
-        --phase "orchestrate-security-pass-judge" \
-        --stdout-file "${output_file}" \
-        --stderr-file "${error_file}" \
-        -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
-          --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true
+      local security_judge_rc=0
+      poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?
+      if [ "${security_judge_rc}" -eq 75 ]; then
+        bash scripts/codex_heartbeat.sh \
+          --phase "orchestrate-security-pass-judge" \
+          --stdout-file "${output_file}" \
+          --stderr-file "${error_file}" \
+          -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
+            --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true
+      fi
     fi
     judge_json="$(_robust_parse_json_file "${output_file}")"
     if [ -n "${judge_json}" ] && printf '%s' "${judge_json}" | jq -e --slurpfile audit "${findings_file}" '
@@ -8591,7 +8625,13 @@ invoke_judge_for_integration_conflict() {
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
+  local integration_judge_rc=0
+  poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" || integration_judge_rc=$?
+  if [ "${integration_judge_rc}" -eq 75 ]; then
+    integration_judge_rc=0
+    cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log" || integration_judge_rc=$?
+  fi
+  if [ "${integration_judge_rc}" -eq 0 ]; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
     return 0
@@ -14627,7 +14667,11 @@ invoke_stall_judge() {
         printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
       else
         sanitize_codex_prompt_file "${stall_judge_prompt_file}"
-        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+        local stall_judge_rc=0
+        poller_claude_judge STALL_JUDGE "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${RUNTIME_DIR}/stall_judge.log" || stall_judge_rc=$?
+        if [ "${stall_judge_rc}" -eq 75 ]; then
+          codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+        fi
       fi
       if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
         judge_success="true"
@@ -21011,7 +21055,11 @@ ${FOLLOWUP_BLOCK_REASON}"
       else
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
-          cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+          RB_JUDGE_ENGINE_RC=0
+          poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" /dev/null || RB_JUDGE_ENGINE_RC=$?
+          if [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then
+            cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+          fi
           if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break
@@ -22924,7 +22972,11 @@ ${PR_DIFF}
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
-    cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    wave_judge_rc=0
+    poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?
+    if [ "${wave_judge_rc}" -eq 75 ]; then
+      cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    fi
     rm -f "${judge_attempt_prompt_file}"
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
     if [ -n "${judge_json_candidate}" ]; then

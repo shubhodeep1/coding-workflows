@@ -91,6 +91,29 @@ review_rb_strip_opencode_output_file() {
     rm -f "${clean_file}"
   fi
 }
+
+# review_rb_claude_run <read|write> <prompt_file> <output_file> <stderr_file> <effort>
+# Claude engine (replace-claude-sessions plan Phase 5c): runs one RB_JUDGE
+# call through claude_run in RB_OPENCODE_WORKSPACE when the workflow resolved
+# AI_ENGINE_RESOLVED_RB_JUDGE=claude (CLAUDE_FIXER_ENABLED=false keeps it on
+# codex). `read` is the verdict pass, narrowed to the read-only tool profile
+# like the OpenCode `reviewer` role; `write` is the fix pass. The answer goes
+# to <output_file>; stderr is appended to <stderr_file>. Returns 75 when the
+# role is not on Claude or Claude is unavailable, so the caller runs its
+# unchanged OpenCode command; otherwise claude_run's status.
+review_rb_claude_run()
+{
+  local access="$1" prompt_file="$2" output_file="$3" stderr_file="$4" effort="$5"
+  local engine_sh="${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" read_only="false"
+  if [ "${AI_ENGINE_RESOLVED_RB_JUDGE:-codex}" != "claude" ] || [ ! -f "${engine_sh}" ]; then
+    return 75
+  fi
+  [ "${access}" = "read" ] && read_only="true"
+  # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+  AI_ENGINE_READ_ONLY="${read_only}" AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${effort}" \
+    bash -c 'source "$1" && claude_run RB_JUDGE "$2" "$3" "$4"' _ \
+    "${engine_sh}" "${prompt_file}" "${output_file}" "${RB_OPENCODE_WORKSPACE}" 2>>"${stderr_file}"
+}
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —
 # without the rate-limit retry/alert behaviour, but without hard-failing
@@ -1442,7 +1465,11 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   emit_review_rb_substate "review_rb_judge" "judge" "StreamingTurn" "${attempt}" "${JUDGE_STDERR_FILE}"
   : > "${RB_JUDGE_OUTPUT}"
   : > "${JUDGE_STDERR_FILE}"
-  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+  rb_judge_claude_rc=0
+  review_rb_claude_run read "${RB_JUDGE_PROMPT}" "${RB_JUDGE_OUTPUT}" "${JUDGE_STDERR_FILE}" "${level}" || rb_judge_claude_rc=$?
+  if [ "${rb_judge_claude_rc}" -ne 75 ]; then
+    rc="${rb_judge_claude_rc}"
+  elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     "${CODEX_STALL_GUARD_HELPER}" \
       --phase review_rb_judge \
       --stdout-file "${RB_JUDGE_OUTPUT}" \
@@ -1911,7 +1938,11 @@ __EDIT_DISCIPLINE__
       emit_review_rb_substate "review_rb_fix" "judge_fix" "InitializingSession" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "StreamingTurn" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       : > "${RB_FIX_OUTPUT}"
-      if [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+      rb_fix_claude_rc=0
+      review_rb_claude_run write "${RB_FIX_PROMPT}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" "${JUDGE_EFFECTIVE_REASONING_EFFORT}" || rb_fix_claude_rc=$?
+      if [ "${rb_fix_claude_rc}" -ne 75 ]; then
+        rb_fix_rc="${rb_fix_claude_rc}"
+      elif [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
         "${CODEX_STALL_GUARD_HELPER}" \
           --phase review_rb_fix \
           --stdout-file "${RB_FIX_OUTPUT}" \

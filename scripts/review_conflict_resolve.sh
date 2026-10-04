@@ -2324,7 +2324,30 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
     emit_conflict_resolver_substate "InitializingSession" "${attempt}"
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
-    if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    # Claude engine (replace-claude-sessions plan Phase 5c): the workflow
+    # exports AI_ENGINE_RESOLVED_CONFLICT_RESOLVER (CLAUDE_FIXER_ENABLED=false
+    # keeps it on codex). On Claude, claude_run works in the same workspace,
+    # with the same private Git index and per-attempt timeout; exit 75
+    # (Claude unavailable) runs the unchanged OpenCode command below.
+    resolver_claude_rc=75
+    resolver_engine_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
+    if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ] && [ -f "${resolver_engine_sh}" ]; then
+      resolver_claude_rc=0
+      resolver_claude_env=(AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${_current_reasoning_effort}")
+      if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+        resolver_claude_env+=("GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}")
+      fi
+      # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+      env "${resolver_claude_env[@]}" \
+        timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        bash -c 'source "$1" && claude_run CONFLICT_RESOLVER "$2" "$3" "$4"' _ \
+        "${resolver_engine_sh}" "${_effective_prompt_file}" "${tmp_output}" "${RESOLVER_OPENCODE_WORKSPACE}" \
+        || resolver_claude_rc=$?
+      [ "${resolver_claude_rc}" -eq 75 ] || _codex_exit="${resolver_claude_rc}"
+    fi
+    if [ "${resolver_claude_rc}" -ne 75 ]; then
+      :
+    elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
       timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
         "${CODEX_STALL_GUARD_HELPER}" \
         --phase review_conflict_resolve \

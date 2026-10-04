@@ -100,6 +100,10 @@ READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "
 
 LABEL_CODEX = "ai:codex"
 LABEL_ENGINE_CLAUDE = "ai:engine-claude"
+# Claude-fixer mode (plan Phase 5c, Q19/Q35): CLAUDE_FIXER_ENABLED=false keeps
+# these review write roles off Claude, ahead of the labels and AI_ENGINE.
+CLAUDE_FIXER_ROLES: tuple[str, ...] = ("REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE")
+CLAUDE_FIXER_SWITCH = "CLAUDE_FIXER_ENABLED"
 
 MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,79}$")
 CLI_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -380,9 +384,10 @@ def resolve_role(
 ) -> dict[str, Any]:
 	"""The engine, model, effort and profile of one role.
 
-	Engine order: the work-item labels (``work_item_labels``; ``ai:codex``
-	beats ``ai:engine-claude``, D2), ``AI_ENGINE_<ROLE>``, ``AI_ENGINE``, the
-	role's code default. An
+	Engine order: ``CLAUDE_FIXER_ENABLED=false`` for the review write roles
+	in ``CLAUDE_FIXER_ROLES`` (always codex, Q35), the work-item labels
+	(``work_item_labels``; ``ai:codex`` beats ``ai:engine-claude``, D2),
+	``AI_ENGINE_<ROLE>``, ``AI_ENGINE``, the role's code default. An
 	invalid variable value is skipped and reported in ``warnings``.
 
 	Model (D3): ``model_hint`` (the role's existing model variable) when it
@@ -397,7 +402,9 @@ def resolve_role(
 	labels = {label.lower() for label in work_item_labels(env)}
 	engine = ""
 	source = ""
-	if LABEL_CODEX in labels:
+	if role in CLAUDE_FIXER_ROLES and env.get(CLAUDE_FIXER_SWITCH, "").strip().lower() == "false":
+		engine, source = "codex", f"var:{CLAUDE_FIXER_SWITCH}"
+	elif LABEL_CODEX in labels:
 		engine, source = "codex", f"label:{LABEL_CODEX}"
 	elif LABEL_ENGINE_CLAUDE in labels:
 		engine, source = "claude", f"label:{LABEL_ENGINE_CLAUDE}"

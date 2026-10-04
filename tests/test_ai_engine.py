@@ -299,6 +299,19 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
 
 
+@pytest.mark.parametrize("value, tools, mode", [
+	("true", "Read,Grep,Glob,Bash", "dontAsk"),
+	("false", "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch", "bypassPermissions"),
+	("yes", "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch", "bypassPermissions"),
+])
+def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools: str, mode: str) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, "RB_JUDGE", AI_ENGINE_READ_ONLY=value)
+	assert _rc(result) == 0, result.stderr
+	argv = _calls(sandbox)[0]["argv"]
+	assert (argv[argv.index("--tools") + 1], argv[argv.index("--permission-mode") + 1]) == (tools, mode)
+
+
 def test_profile_tool_lists_match_claude_engine() -> None:
 	# The write profile names its tools: `--tools default` loads ~35 tools and
 	# pushed a no-op start-up past the 25,000-token context gate of
