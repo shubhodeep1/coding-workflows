@@ -1837,6 +1837,51 @@ jobs:
             exit 0
           fi
 
+      - name: Unblock judge bulk-delete override
+        # Q12 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md:
+        # an `override_guard` verdict on ai:destructive-blocked leaves
+        # `<!-- ai:unblock:v1 ... verdict=override_guard ... override=bulk_delete -->`
+        # on the issue, posted by the pipeline's own login. The newest such
+        # marker that no `<!-- ai:unblock-override-used:v1 comment=<id> -->`
+        # has spent lifts the bulk-delete threshold for this run only (never
+        # for canonical workflow sources); it is spent right here, so it can
+        # never apply twice. Two API calls only when a marker is present.
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if ! jq -e 'any(.[]?; (.body // "") | contains("override=bulk_delete -->"))' "${ISSUE_COMMENTS_FILE}" >/dev/null 2>&1; then
+            exit 0
+          fi
+          pipeline_login="$(gh api user --jq '.login' 2>/dev/null || true)"
+          if [ -z "${pipeline_login}" ]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=login_unavailable"
+            exit 0
+          fi
+          override_comment_id="$(jq -r --arg login "${pipeline_login}" --arg issue "${ISSUE_NUMBER}" '
+            [.[] | select((.user.login // "") == $login)] as $mine
+            | ([$mine[] | (.body // "") | scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->") | .[0]]) as $used
+            | [$mine[]
+                | select(((.body // "") | split("\n") | map(select(test("\\S"))) | last // "")
+                    | test("^<!-- ai:unblock:v1 item=" + $issue + " stop=destructive-blocked fingerprint=[0-9a-f]{12} verdict=override_guard round=[1-9][0-9]* override=bulk_delete -->$"))
+                | select((.id | tostring) as $id | ($used | index($id)) == null)]
+            | last | .id // empty
+          ' "${ISSUE_COMMENTS_FILE}")"
+          if ! [[ "${override_comment_id}" =~ ^[0-9]+$ ]]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=no_unspent_marker"
+            exit 0
+          fi
+          if ! gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="This run uses the unblock judge's bulk-delete override once.
+
+          <!-- ai:unblock-override-used:v1 comment=${override_comment_id} -->" >/dev/null; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=spend_failed"
+            exit 0
+          fi
+          echo "UNBLOCK_BULK_DELETE_OVERRIDE=true" >> "$GITHUB_ENV"
+          echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=enabled marker=${override_comment_id}"
+
       - name: Record implementation run start event
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -3415,7 +3460,15 @@ jobs:
               exit 1
             fi
 
-            if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
+            # The unblock judge's one-shot override (plan Phase 7, Q12) lifts the
+            # bulk-delete threshold for this run only, and never when a canonical
+            # workflow source is among the deletions.
+            unblock_bulk_override_applies="false"
+            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ]; then
+              unblock_bulk_override_applies="true"
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
+            fi
+            if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ] && [ "${unblock_bulk_override_applies}" != "true" ]; then
               echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."
               echo "Deletions blocked by bulk-delete threshold:"
               printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'

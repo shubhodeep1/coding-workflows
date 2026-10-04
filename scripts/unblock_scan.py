@@ -29,9 +29,9 @@ Inputs:
 
 An item is picked when all hold:
   - it has been blocked for at least --min-blocked-minutes (the newest
-    `labeled` event of a block label it still carries; `updated_at` when the
-    timeline does not show one; a failed project with no block label counts
-    from `updated_at`);
+    `labeled` event of a block label it still carries; for a failed project
+    without one, the newest trusted orchestrator state comment, which the
+    poller posts when the project fails; else `updated_at`);
   - its newest trusted unblock marker (`<!-- ai:unblock:v1 ` or
     `<!-- ai:unblock-wait:v1 `, as the comment's last non-empty line, by
     --trusted-login) is older than --marker-hours, or there is none;
@@ -63,6 +63,7 @@ _LEDGER_SPEC.loader.exec_module(unblock_ledger)
 TRACKING_LABEL = "ai:orchestrator-tracking"
 CLOSED_LABEL = "ai:unblock-closed"
 MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
+STATE_PREFIX = "<!-- ORCHESTRATOR_STATE_V"
 RUN_NAME_RE = re.compile(r"^Unblock judge #([1-9][0-9]*)$")
 ACTIVE_RUN_STATES = ("queued", "in_progress", "waiting", "requested", "pending")
 
@@ -115,6 +116,19 @@ def _latest_marker(comments: object, trusted_login: str) -> dt.datetime | None:
 			continue
 		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
 		if not lines or not lines[-1].startswith(MARKER_PREFIXES):
+			continue
+		created = _time(comment.get("created_at"))
+		if created and (newest is None or created > newest):
+			newest = created
+	return newest
+
+
+def _latest_state_comment(comments: object, trusted_login: str) -> dt.datetime | None:
+	newest = None
+	for comment in comments if isinstance(comments, list) else []:
+		if not isinstance(comment, dict) or comment.get("login") != trusted_login:
+			continue
+		if not str(comment.get("body") or "").startswith(STATE_PREFIX):
 			continue
 		created = _time(comment.get("created_at"))
 		if created and (newest is None or created > newest):
@@ -190,6 +204,8 @@ def select(
 					created = _time(event.get("created_at"))
 					if created and (since is None or created > since):
 						since = created
+		if since is None and info and not carried and number in failed:
+			since = _latest_state_comment(info.get("comments"), trusted_login)
 		since = since or _time(item.get("updated_at"))
 		if since is None or now - since < min_blocked:
 			skip("blocked_too_recently")

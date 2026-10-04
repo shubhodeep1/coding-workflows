@@ -74,6 +74,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:workflow-heal"]="d876e3"
 	["ai:workflow-heal-escalated"]="b60205"
 	["ai:operator-step"]="fbca04"
+	["ai:unblock-closed"]="5c5c5c"
 	["ai:codex"]="0e8a16"
 	["ai:engine-claude"]="d4c5f9"
 )
@@ -132,6 +133,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:workflow-heal"]="Issue auto-filed from an escalated workflow failure by workflow failure heal"
 	["ai:workflow-heal-escalated"]="Workflow failure heal chain hit the lineage cap; needs human attention"
 	["ai:operator-step"]="Steps only a person can take; the pipeline continues and the gated work stays off until they are done"
+	["ai:unblock-closed"]="Closed by the unblock judge after every verdict was spent; a closed project is marked abandoned"
 	["ai:codex"]="Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
 	["ai:engine-claude"]="Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
 )

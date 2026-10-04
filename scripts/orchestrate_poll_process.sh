@@ -1983,6 +1983,15 @@ if ! [[ "${JUDGE_REPEAT_FINGERPRINT_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_REPEAT_FI
   echo "::warning::JUDGE_REPEAT_FINGERPRINT_MAX must be a positive integer; defaulting to 2"
   JUDGE_REPEAT_FINGERPRINT_MAX="2"
 fi
+# Consecutive project-judge runs with no usable output (the model failed, or
+# its output did not parse) before the project fails with ai:blocked and goes
+# to the unblock judge (plan Phase 7, Q13). Before, this exit retried every
+# tick forever with a CRITICAL alert each time.
+JUDGE_OUTPUT_FAILURE_MAX="${JUDGE_OUTPUT_FAILURE_MAX:-3}"
+if ! [[ "${JUDGE_OUTPUT_FAILURE_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_OUTPUT_FAILURE_MAX}" -lt 1 ]; then
+  echo "::warning::JUDGE_OUTPUT_FAILURE_MAX must be a positive integer; defaulting to 3"
+  JUDGE_OUTPUT_FAILURE_MAX="3"
+fi
 
 # Byte budgets for the PR diffs embedded in the wave judge prompt. codex's
 # `turn/start` stdin envelope is a hard 1,048,576-character cap; the judge
@@ -15693,6 +15702,274 @@ _reconcile_merged_pr_issue() {
   fi
 }
 
+# ---------------------------------------------------------------
+# Unblock judge (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
+# Phase 7): the once-per-tick scan and the per-project hooks.
+# ---------------------------------------------------------------
+# Tracking issues of projects in state `failed` this tick, one per line,
+# written by the per-project loop and read by run_unblock_scan. No API call.
+UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.XXXXXX" 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.txt")"
+: > "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+UNBLOCK_TRUSTED_LOGIN=""
+UNBLOCK_TRUSTED_LOGIN_STATE="unset"
+
+# The pipeline's own login (the GH_PAT user), resolved at most once per tick
+# with one `user` read; empty when it cannot be resolved.
+unblock_trusted_login() {
+  if [ "${UNBLOCK_TRUSTED_LOGIN_STATE}" = "unset" ]; then
+    UNBLOCK_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
+    if [[ "${UNBLOCK_TRUSTED_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+      UNBLOCK_TRUSTED_LOGIN_STATE="ok"
+    else
+      UNBLOCK_TRUSTED_LOGIN=""
+      UNBLOCK_TRUSTED_LOGIN_STATE="failed"
+    fi
+  fi
+  printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"
+}
+
+# Per project, before any command handler. Returns 10 when the unblock judge
+# closed the project (label ai:unblock-closed): the state becomes `abandoned`,
+# the tracking issue is closed through the API (no auto-close keyword, §19)
+# and the caller moves on. Otherwise files every pending trusted
+# `<!-- ai:unblock-fixup-request:v1 item=<n> id=<local id> -->` comment as a
+# fix-up issue in the current wave (the same way judge fix-ups are filed),
+# posts the wait marker on item <n>, and resumes a `failed` project so the
+# wave runs. Reads COMMENTS, STATE_FILE, TRACKING_NUM, TRACKING_LABELS,
+# PROJECT_STATUS; issues at most one create and two comments per request.
+handle_unblock_judge_project_hooks() {
+  local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
+  if has_label "${TRACKING_LABELS}" "ai:unblock-closed"; then
+    if [ "${PROJECT_STATUS}" != "abandoned" ]; then
+      jq '.status = "abandoned"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+    fi
+    if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=closed"
+    else
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=close_failed"
+    fi
+    return 10
+  fi
+  if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ] \
+    || ! printf '%s' "${COMMENTS:-[]}" | jq -e 'any(.[]?; (.body // "") | startswith("<!-- ai:unblock-fixup-request:v1 "))' >/dev/null 2>&1; then
+    return 0
+  fi
+  login="$(unblock_trusted_login)"
+  [ -n "${login}" ] || return 0
+  requests="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '
+    [.[]? | select((.user.login // "") == $login)
+      | (.body // "") as $b
+      | ($b | split("\n")) as $lines
+      | ($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")) as $m
+      | {item: $m.item, id: $m.id,
+         title: (($lines[1] // "") | sub("^###\\s*"; "")),
+         body: ($lines[2:] | join("\n"))}]' 2>/dev/null || echo '[]')"
+  count="$(printf '%s' "${requests}" | jq 'length' 2>/dev/null || echo 0)"
+  for ((idx = 0; idx < count; idx++)); do
+    request="$(printf '%s' "${requests}" | jq -c ".[${idx}]")"
+    req_item="$(jq -r '.item' <<< "${request}")"
+    req_id="$(jq -r '.id' <<< "${request}")"
+    req_title="$(jq -r '.title' <<< "${request}")"
+    req_body="$(jq -r '.body' <<< "${request}")"
+    if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}")" ]; then
+      continue
+    fi
+    [ -n "${req_title}" ] || req_title="Unblock fix-up for #${req_item}"
+    wave_idx="$(jq -r '((.current_wave // 1) | tonumber) - 1 | if . < 0 then 0 else . end' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    full_body="${req_body}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Integration branch: $(jq -r '.integration_branch // ""' "${STATE_FILE}")
+- Local ID: \`${req_id}\`
+- Type: unblock-judge fix-up (item #${req_item})
+- Managed by: AI Orchestrator"
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --title "${req_title}" \
+      --body "${full_body}" \
+      --label "ai:clarification" \
+      --label "ai:orchestrator-managed" 2>/dev/null || true)"
+    new_url="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+    new_num="$(basename "${new_url%%[?#]*}")"
+    if ! [[ "${new_num}" =~ ^[0-9]+$ ]]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} outcome=create_failed"
+      continue
+    fi
+    jq --arg id "${req_id}" --argjson num "${new_num}" --argjson wave_idx "${wave_idx}" \
+      '.issue_number_map[$id] = $num
+       | if (.waves | length) > $wave_idx then .waves[$wave_idx].issues += [{"id": $id, "github_issue": $num, "status": "pending"}] else . end
+       | if .status == "failed" then .status = "in_progress" else . end' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${req_item}/comments" \
+      -f body="Waiting for fix-up #${new_num} to merge; the unblock judge resumes this item afterwards.
+
+<!-- ai:unblock-wait:v1 item=${req_item} fixup=${new_num} -->" >/dev/null 2>&1 || true
+    if [ "${PROJECT_STATUS}" = "failed" ]; then
+      post_tracking_comment "## Unblock judge fix-up filed
+
+Fix-up #${new_num} (\`${req_id}\`) was added to the current wave for #${req_item}. Status: failed -> in_progress." || true
+      PROJECT_STATUS="in_progress"
+    fi
+    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${new_num} outcome=filed"
+  done
+  return 0
+}
+
+# Hand-over (plan Phase 7, Q13): the merge deferral cap used to end in a
+# Telegram WARNING only, repeated every tick. When the cap is first reached the
+# PR gets ai:needs-human and one comment saying why, so the unblock scan picks
+# it up (its PR retry is a review dispatch, whose conflict resolver handles
+# the conflict). Two writes, once per PR.
+unblock_handover_merge_deferral() {
+  local pr="$1" issue="$2" why="$3"
+  [[ "${pr}" =~ ^[0-9]+$ ]] || return 0
+  ensure_label_exists "ai:needs-human"
+  gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
+    || echo "::warning::Could not add ai:needs-human to PR #${pr} after MAX_MERGE_DEFERRALS."
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" \
+    -f body="Merge deferred ${MAX_MERGE_DEFERRALS} times for issue #${issue} because of persistent ${why}; handed to the unblock judge." >/dev/null 2>&1 || true
+}
+
+# Hand-over (plan Phase 7, Q13): counts consecutive project-judge runs with
+# no usable output in the state (judge_output_failures, reset on the next
+# parsed verdict). At JUDGE_OUTPUT_FAILURE_MAX the project fails with
+# ai:blocked, the same terminal as the repeat-fingerprint breaker, so the
+# unblock scan picks it up and `/judge_resume` resumes it. One state comment
+# per failure, plus one tracking comment at the cap.
+unblock_handover_judge_output() {
+  local why="$1" failures
+  failures="$(jq -r '(.judge_output_failures // 0) + 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+  [[ "${failures}" =~ ^[0-9]+$ ]] || failures=1
+  if [ "${failures}" -ge "${JUDGE_OUTPUT_FAILURE_MAX}" ]; then
+    jq --argjson n "${failures}" '.judge_output_failures = $n | .status = "failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    set_tracking_phase_label "ai:blocked"
+    post_tracking_comment "## Judge gave no usable verdict
+
+The project judge produced no usable output (${why}) ${failures} time(s) in a row (JUDGE_OUTPUT_FAILURE_MAX=${JUDGE_OUTPUT_FAILURE_MAX}). The project is marked failed for the unblock judge; \`/judge_resume\` resumes it." || true
+    echo "UNBLOCK_HANDOVER tracking_issue=${TRACKING_NUM} stop=judge_output reason=${why} failures=${failures} outcome=failed"
+  else
+    jq --argjson n "${failures}" '.judge_output_failures = $n' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "UNBLOCK_HANDOVER tracking_issue=${TRACKING_NUM} stop=judge_output reason=${why} failures=${failures} outcome=counted"
+  fi
+}
+
+# Once per tick, after the per-project loop: find blocked items and dispatch
+# unblock_judge_dispatch.yml for at most UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK
+# of them (scripts/unblock_scan.py decides).
+# API budget (§15): one REST search for open issues and PRs with a block
+# label (oldest update first, at most 30); when it returns candidates, one
+# batched GraphQL query (labeled events and the last 30 comments of each),
+# one list of the dispatch workflow's recent runs, the `user` read once per
+# tick, and one dispatch per chosen item. A failed read skips the scan for
+# this tick: nothing is dispatched on partial data.
+run_unblock_scan() {
+  local labels_q search_items numbers_json count query fragment i n details_resp details runs now_iso selection
+  local work_dir="${RUNNER_TEMP:-/tmp}/unblock-scan"
+  if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
+    echo "UNBLOCK_SCAN outcome=skip reason=disabled"
+    return 0
+  fi
+  if [ ! -f scripts/unblock_scan.py ] || [ ! -f scripts/unblock_ledger.py ]; then
+    echo "UNBLOCK_SCAN outcome=skip reason=support_missing"
+    return 0
+  fi
+  mkdir -p "${work_dir}"
+  labels_q="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py labels | jq -r '.labels | map("\"" + . + "\"") | join(",")')"
+  if [ -z "${labels_q}" ]; then
+    echo "UNBLOCK_SCAN outcome=skip reason=labels_unavailable"
+    return 0
+  fi
+  if ! search_items="$(gh_retry gh api --method GET "search/issues" \
+    -f q="repo:${GITHUB_REPOSITORY} is:open label:${labels_q}" \
+    -f sort=updated -f order=asc -f per_page=30 \
+    --jq '[.items[]? | {number, labels: [.labels[]?.name], pull_request: (.pull_request != null), created_at, updated_at}]' 2>/dev/null)"; then
+    echo "UNBLOCK_SCAN outcome=skip reason=search_failed"
+    return 0
+  fi
+  printf '%s' "${search_items}" > "${work_dir}/search.json"
+  sort -u "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null | jq -R 'select(test("^[0-9]+$")) | tonumber' | jq -s '.' > "${work_dir}/failed_projects.json" 2>/dev/null \
+    || echo '[]' > "${work_dir}/failed_projects.json"
+  numbers_json="$(jq -c --slurpfile failed "${work_dir}/failed_projects.json" '([.[].number] + $failed[0]) | unique | .[:30]' "${work_dir}/search.json")"
+  count="$(printf '%s' "${numbers_json}" | jq 'length')"
+  if [ "${count}" -eq 0 ]; then
+    echo "UNBLOCK_SCAN candidates=0 dispatched=0 outcome=idle"
+    return 0
+  fi
+  if [ -z "$(unblock_trusted_login)" ]; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=login_unavailable"
+    return 0
+  fi
+  fragment=""
+  for ((i = 0; i < count; i++)); do
+    n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]")"
+    fragment+=$'\n'"    i${n}: issueOrPullRequest(number: ${n}) {
+      ... on Issue {
+        timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+        comments(last: 30) { nodes { body createdAt updatedAt author { login } } }
+      }
+      ... on PullRequest {
+        timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+        comments(last: 30) { nodes { body createdAt updatedAt author { login } } }
+      }
+    }"
+  done
+  query="query {
+  repository(owner: \"${GITHUB_REPOSITORY%%/*}\", name: \"${GITHUB_REPOSITORY##*/}\") {${fragment}
+  }
+}"
+  if ! details_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=details_failed"
+    return 0
+  fi
+  # Wait markers are refreshed in place, so a comment counts from its last edit.
+  details="$(printf '%s' "${details_resp}" | jq -c '
+    (.data.repository // {}) | to_entries
+    | map(select(.value != null) | {key: (.key | ltrimstr("i")), value: {
+        labeled: [.value.timelineItems.nodes[]? | select(.label != null) | {label: .label.name, created_at: .createdAt}],
+        comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}]
+      }})
+    | from_entries' 2>/dev/null || echo '{}')"
+  printf '%s' "${details}" > "${work_dir}/details.json"
+  if ! runs="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/unblock_judge_dispatch.yml/runs?per_page=50" \
+    --jq '[.workflow_runs[]? | {display_title, name, status, created_at}]' 2>/dev/null)"; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=dispatch_workflow_unavailable"
+    return 0
+  fi
+  printf '%s' "${runs}" > "${work_dir}/runs.json"
+  now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if ! selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
+    --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
+    --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+    --trusted-login "$(unblock_trusted_login)" --now "${now_iso}" \
+    --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
+    --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
+    --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+    --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")"; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=select_failed"
+    return 0
+  fi
+  local dispatched=0 item kind
+  while IFS=$'\t' read -r item kind; do
+    [[ "${item}" =~ ^[0-9]+$ ]] || continue
+    if gh_retry gh workflow run unblock_judge_dispatch.yml --repo "${GITHUB_REPOSITORY}" -f item="${item}" >/dev/null 2>&1; then
+      dispatched=$((dispatched + 1))
+      echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=dispatched"
+    else
+      echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=dispatch_failed"
+    fi
+  done < <(printf '%s' "${selection}" | jq -r '.dispatch[]? | "\(.item)\t\(.kind)"')
+  echo "UNBLOCK_SCAN candidates=${count} dispatched=${dispatched} skipped=$(printf '%s' "${selection}" | jq -c '.skipped // {}') outcome=done"
+}
+
 # release_staged_support_needs_human_latches
 #
 # Release the ai:needs-human latch that implement.yml's staged-support
@@ -18205,6 +18482,17 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
   DEFAULT_BRANCH_TRACKING=""
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+  # Unblock judge (plan Phase 7): a project it closed is abandoned here; its
+  # fix-up requests join the current wave; a failed project is offered to
+  # this tick's unblock scan.
+  unblock_hook_rc=0
+  handle_unblock_judge_project_hooks || unblock_hook_rc=$?
+  if [ "${unblock_hook_rc}" -eq 10 ]; then
+    continue
+  fi
+  if [ "${PROJECT_STATUS}" = "failed" ]; then
+    echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+  fi
 	if [ "${ENABLE_SECURITY_PASS}" != "true" ] \
 		&& { [ "${PROJECT_STATUS}" = "security-pass" ] \
 			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
@@ -20313,6 +20601,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
               echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — sibling conflict detected."
               if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
                 tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent sibling merge-tree conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+                if [ "${_rtm_defer_count}" -eq "${MAX_MERGE_DEFERRALS}" ]; then
+                  unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "sibling merge-tree conflicts"
+                fi
 		      fi
 		      continue
 		    fi
@@ -20348,6 +20639,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		        echo "  [premerge-rebase] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — pre-merge rebase conflicts."
 		        if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
 		          tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent pre-merge rebase conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+		          if [ "${_rtm_defer_count}" -eq "${MAX_MERGE_DEFERRALS}" ]; then
+		            unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "pre-merge rebase conflicts"
+		          fi
 		        fi
 		        continue
 		        ;;
@@ -22994,6 +23288,7 @@ ${PR_DIFF}
 	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
 	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
 	    tg_notify "Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
+	    unblock_handover_judge_output "llm_failed"
 	    continue
 	  fi
 	  archive_transcript "${GITHUB_RUN_ID:-local-run}" "judge" "${JUDGE_OUTPUT_FILE}"
@@ -23004,7 +23299,11 @@ ${PR_DIFF}
   if [ -z "${JUDGE_JSON}" ]; then
     echo "::error::Could not parse judge output for #${TRACKING_NUM}"
     tg_notify "Orchestrator Judge output unparseable for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
+    unblock_handover_judge_output "unparseable"
     continue
+  fi
+  if [ "$(jq -r '.judge_output_failures // 0' "${STATE_FILE}" 2>/dev/null || echo 0)" != "0" ]; then
+    jq '.judge_output_failures = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
 
   emit_judge_lessons_learned_records "orchestrate_judge" "${TRACKING_NUM}" "" "${JUDGE_JSON}"
@@ -23700,6 +23999,8 @@ done
 run_standalone_stall_recovery
 
 release_staged_support_needs_human_latches
+
+run_unblock_scan
 
 close_merged_issues_sweep
 

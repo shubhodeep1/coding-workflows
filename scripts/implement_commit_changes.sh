@@ -449,7 +449,15 @@ if [ -n "${deleted_staged}" ]; then
     exit 1
   fi
 
-  if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
+  # The unblock judge's one-shot override (plan Phase 7, Q12) lifts the
+  # bulk-delete threshold for this run only, and never when a canonical
+  # workflow source is among the deletions.
+  unblock_bulk_override_applies="false"
+  if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ]; then
+    unblock_bulk_override_applies="true"
+    echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
+  fi
+  if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ] && [ "${unblock_bulk_override_applies}" != "true" ]; then
     echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."
     echo "Deletions blocked by bulk-delete threshold:"
     printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'
