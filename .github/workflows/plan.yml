@@ -1167,6 +1167,8 @@ jobs:
           if [ -f scripts/ai_engine.sh ]; then
             # shellcheck disable=SC1091
             source scripts/ai_engine.sh
+            AI_ENGINE_LABELS="$(jq -c '[.labels[]?.name]' "${ISSUE_META_FILE}")"
+            export AI_ENGINE_LABELS
             engine="$(ai_engine_for_role PLAN || echo codex)"
           fi
           [ "${engine}" = "claude" ] || engine="codex"

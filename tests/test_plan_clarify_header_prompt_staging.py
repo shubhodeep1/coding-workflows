@@ -123,6 +123,23 @@ def test_clarify_respond_isolates_every_model_call() -> None:
 	assert respond.count("CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}") == 2
 
 
+def test_clarify_respond_critique_uses_the_answer_step_fallback() -> None:
+	respond = (WORKFLOW_DIR / "orchestrate_clarify_respond.yml").read_text(encoding="utf-8")
+	answer_output = 'echo "engine=${CLARIFY_RESPOND_ENGINE}" >> "$GITHUB_OUTPUT"'
+	assert answer_output in respond
+	assert respond.index(answer_output) < respond.index("      - name: Self-critique pass for non-letter decisions")
+	assert "CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}" in respond
+
+
+def test_claude_image_build_failure_triggers_codex_fallback() -> None:
+	runner_text = (REPO_ROOT / "scripts" / "clarify_isolated_run.sh").read_text(encoding="utf-8")
+	claude_build = runner_text[runner_text.index('\tif ! image='):runner_text.index('\tfor account in "${claude_accounts[@]}"; do')]
+	build_script = 'set -euo pipefail\nenv() { return 1; }\nai_engine_fallback() { printf "AI_ENGINE_FALLBACK role=%s reason=%s\\n" "$1" "$2" >&2; }\nengine_role=CLARIFY\nversion=v0.114.0\nclaude_version=1.0.0\n' + claude_build
+	build_result = subprocess.run(["bash", "-c", build_script], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=False)
+	assert build_result.returncode == 75, build_result.stderr
+	assert "AI_ENGINE_FALLBACK role=CLARIFY reason=image_build_failed" in build_result.stderr
+
+
 def test_render_callers_stage_header_prompt() -> None:
 	"""Every workflow rendering prompts/header.txt must stage it first."""
 	callers = _workflows_rendering_header()
