@@ -33,6 +33,10 @@
 # The model runs read-only in TARGET_DIR without GH_TOKEN, GITHUB_TOKEN or
 # TG_BOT_SECRET in its environment: the merged code it reads is untrusted.
 #
+# Model text never starts a comment line ("Summary: ", "Trigger: ", "Fix: "):
+# the poller's /judge_resume, /revalidate and /re-security-pass handlers match
+# a command at the start of any tracking-issue comment line.
+#
 # Never fails its caller: every problem is logged and the exit code is 0.
 # API budget (CLAUDE.md §15): the linked-issue read in `pr` mode, one comment,
 # at most one issue create, and the operator-step writer's two calls.
@@ -198,7 +202,7 @@ activation_main()
 	fi
 
 	comment_body="$(jq -r --arg key "${key}" '
-		"## Activation: " + .verdict + "\n\n" + .summary + "\n\n"
+		"## Activation: " + .verdict + "\n\nSummary: " + .summary + "\n\n"
 		+ (if .trigger != "" then "Trigger: " + .trigger + "\n\n" else "" end)
 		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title] | join("\n")) + "\n\n" else "" end)
 		+ "<!-- ai:activation:v1 verdict=" + .verdict + " source=" + $key + " -->"
