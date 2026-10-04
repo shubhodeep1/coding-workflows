@@ -26,8 +26,8 @@
 #               (the unblock judge takes it from there; nothing waives the
 #               pass) and hold=true.
 #           A dispatch that fails (for example a consumer wrapper without the
-#           `pr_number` input) logs a warning and returns hold=false, the
-#           behaviour before this port.
+#           `pr_number` input) records a failed cycle and holds auto-merge;
+#           later review runs retry until the cycle budget is exhausted.
 #   report  Run by security-audit.yml after an audit dispatched with
 #           `pr_number`. Posts the `status=clean|findings|failed` marker for
 #           the audited commit. On clean, failed or final-cycle findings it
@@ -218,9 +218,16 @@ The security audit of this PR has used ${cycles_used} of ${max_cycles} cycles, s
 	next_cycle=$((cycles_used + 1))
 	workflow="$(single_pass_audit_workflow)"
 	if ! gh workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}" >/dev/null 2>&1; then
-		echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; merging without the single-issue security pass (the pre-port behaviour)."
-		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=skip reason=dispatch_failed workflow=${workflow}"
-		single_pass_output false
+		echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; holding auto-merge and recording cycle ${next_cycle} of ${max_cycles} as failed. A later review run retries the dispatch."
+		body="## Single-issue security pass
+
+The audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). A consumer \`ai-security-audit.yml\` that predates the \`pr_number\` input fails this way; syncing the wrapper fixes it. Auto-merge stays off, and this counts as cycle ${next_cycle} of ${max_cycles}. A later review run retries the dispatch. Once the cycles are used up, the PR is labelled \`ai:security-pass-failed\`.
+
+$(single_pass_marker failed "${head_sha}" "${next_cycle}")"
+		gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
+			|| echo "::warning::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the cycle is not recorded and the next review run retries."
+		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed cycle=${next_cycle} workflow=${workflow}"
+		single_pass_output true
 		return 0
 	fi
 	body="## Single-issue security pass

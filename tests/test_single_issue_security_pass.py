@@ -233,9 +233,43 @@ def test_two_digit_cycle_limit_is_counted_numerically(tmp_path: Path) -> None:
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
-def test_a_failed_dispatch_falls_back_to_merging(tmp_path: Path) -> None:
+def test_a_failed_dispatch_holds_and_records_a_failed_cycle(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "dispatch"})
-	assert output == "hold=false\n" and "reason=dispatch_failed" in result.stdout
+	assert result.returncode == 0 and output == "hold=true\n"
+	assert "outcome=hold reason=dispatch_failed cycle=1" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert len(posted) == 1 and posted[0][-1].endswith(_marker("failed", HEAD, 1))
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+
+
+def test_a_failed_dispatch_without_a_marker_still_holds(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "dispatch,comment_write"})
+	assert result.returncode == 0 and output == "hold=true\n"
+	assert "Could not post the failed security-pass marker" in result.stdout
+	assert any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+
+
+def test_a_recorded_dispatch_failure_is_retried_on_the_next_review(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("failed", HEAD, 1))])
+	assert result.returncode == 0 and output == "hold=true\n"
+	assert "outcome=dispatched cycle=2" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_repeated_dispatch_failures_exhaust_into_the_label(tmp_path: Path) -> None:
+	comments = [_comment(_marker("failed", HEAD, cycle), comment_id=cycle) for cycle in range(1, 5)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_FAIL": "dispatch"})
+	assert result.returncode == 0 and output == "hold=true\n"
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert len(posted) == 1 and posted[0][-1].endswith(_marker("failed", HEAD, 5))
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+
+	comments.append(_comment(_marker("failed", HEAD, 5), comment_id=5))
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert result.returncode == 0 and output == "hold=true\n"
+	assert "reason=cycles_exhausted" in result.stdout
+	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed"] in calls
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
 def _report(tmp_path: Path, outcome: str, findings: str, cycle: int = 3):
