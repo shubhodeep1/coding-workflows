@@ -971,7 +971,13 @@ class Collector:
 		for run in runs:
 			for job in run.get("jobs") or []:
 				job["present"] = bool(job.get("file")) and (self.out / job["file"]).is_file()
+				if run.get("reused") and job.get("file") and not job["present"]:
+					self._skip(job["file"], "cached_file_missing")
 			run["present_artifacts"] = [rel for rel in run.get("artifacts") or [] if (self.out / rel).is_file()]
+			if run.get("reused"):
+				for cached_artifact_path in run.get("artifacts") or []:
+					if cached_artifact_path not in run["present_artifacts"]:
+						self._skip(cached_artifact_path, "cached_file_missing")
 		index = render_index(
 			display_root=self.display_root,
 			issue_number=issue.get("number"),

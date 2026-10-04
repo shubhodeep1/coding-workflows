@@ -534,6 +534,12 @@ def test_total_size_limit_drops_oldest_extras_first(tmp_path: Path) -> None:
 	for line in index.splitlines():
 		for path in __import__("re").findall(r"`/evidence/([^`]+)`", line):
 			assert (out / path).exists() or path.endswith("/"), path
+	second = FakeGh()
+	second_manifest = _collector(tmp_path, second, max_total_bytes=12_000, max_file_bytes=6000).collect(_issue(), [_occurrence(222)], issue_repo=REPO)
+	assert {"part": f"{run_dir}__111/job-11.txt", "reason": "cached_file_missing"} in second_manifest["skipped"]
+	assert {"part": f"{run_dir}__111/artifact-codex-review-autofix-failure-logs-111-1/editor_attempt_1.err", "reason": "cached_file_missing"} in second_manifest["skipped"]
+	assert f"{run_dir}__111/job-11.txt: cached_file_missing" in (out / "INDEX.md").read_text()
+	assert not any("/actions/jobs/" in path for path in second.paths)
 
 
 def test_no_trusted_runs_still_writes_provenance(tmp_path: Path) -> None:
