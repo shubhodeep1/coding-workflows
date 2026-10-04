@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py; workflow-templates/.claude/commands/audit-plans.md | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The audit-plans command files differ, causing the byte-identical template parity test to fail and the required CI check to block merging.\n  WHY: The source reviewers classify this as a BLOCKER.\n- scripts/claude_anthropic_relay.py | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The body-draining loop leaves the socket timeout near zero, so sending the subsequent HTTP 400 response can time out or fail.\n  WHY: Severity disagreement: reviewers rated this MAJOR and NIT; the highest rating is MAJOR.\n- scripts/claude_anthropic_relay.py:146 | severity=high | confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: After an I/O error during body draining is swallowed, the handler attempts to send a 400 response on a potentially closed socket, which can raise an unhandled exception.\n  WHY: A peer that closes during draining can cause the subsequent error response write to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_anthropic_relay.py | HARDENING_SUGGESTION\n  PROBLEM: After the body-drain loop exits, the socket timeout remains at the last rejected_wait value, which could cause the subsequent send_error write to time out under extreme conditions.\n  WHY: The reviewer considers this a minor hardening consideration, not a runtime defect.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=[5]\n  PROBLEM: Mismatch between .claude/commands/audit-plans.md and workflow-templates/.claude/commands/audit-plans.md causes test_template_parity to fail.\n  WHY: The reviewer rates this BLOCKER because the required aggregate lint check fails and blocks the PR from merging.\n- scripts/claude_anthropic_relay.py:135-144 | severity=high | confidence=[4]\n  PROBLEM: Draining the rejected request body leaves the socket timeout near zero, which can cause self._reject(400) to fail while sending the HTTP 400 response.\n  WHY: The client may receive an abrupt socket close or connection reset instead of the HTTP 400 status line.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_anthropic_relay.py:135-144 | severity=low | confidence=[3]\n  PROBLEM: The drain loop leaves the socket timeout at a small remaining value, which may cause the subsequent self._reject(400) response write to fail under backpressure.\n  WHY: The reviewer rates this NIT; the response is small and usually fits on a Unix socket.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_audit_plans_command.py:29-30; workflow-templates/.claude/commands/audit-plans.md | severity=critical | confidence=[5]\n  PROBLEM: The command-template parity test fails because the root and template command files differ.\n  WHY: The exact file comparison fails, causing the required aggregate lint check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/commands/audit-plans.md (lines 103, 126) | severity=critical | confidence=[5]\n  PROBLEM: The root command file's wording differs from the workflow-templates copy, causing the byte-identical template parity test to fail.\n  WHY: The reviewer rates this BLOCKER because the required CI check is red and the aggregate lint check fails.\n- scripts/claude_anthropic_relay.py:136-144 | severity=low | confidence=[3]\n  PROBLEM: When the drain loop exits near its deadline, the socket timeout remains near zero and may cause the subsequent self._reject(400) response write to time out.\n  WHY: The existing test passes, but does not eliminate the response-write failure risk on a slow client or loaded runner.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_anthropic_relay.py:135-144 | severity=high | confidence=[3]\n  PROBLEM: The drain loop leaves a tiny residual socket timeout, which can cause the subsequent self._reject(400) response write to stall or fail.\n  WHY: A slow or backpressured client may cause the 400 send to time out and raise an unhandled exception.\n- scripts/claude_anthropic_relay.py:146 | severity=high | confidence=[3]\n  PROBLEM: The broad except OSError: pass swallows I/O errors during draining and then attempts to send a 400 response on a potentially closed socket, causing an unhandled exception.\n  WHY: A client that closes during draining can make the subsequent error response write fail.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3aa1b7b656c1fd60600b8fa992599c048316e3bde69a3d4ed860e1e4b2381f70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37230470078",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37230470078",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004205905_f7c56cbc6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37230470078"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T20:59:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
