@@ -17,10 +17,11 @@
 #       with one PATCH and print the new base (else the current one). The
 #       review gate passes the base it already fetched.
 #
-# A branch counts as merged only when a merged PR has it as its head AND the
-# branch tip is still that PR's head commit, so a branch name reused for new
-# work is never retargeted. The default branch is never looked up (no API
-# call when the work is not stacked).
+# An existing branch counts as merged only when a merged PR has it as its
+# head AND its tip is still that PR's head commit, so a reused branch name
+# is never retargeted. A confirmed 404 for that ref means it was deleted;
+# the merged PR's base is then the target for new work. The default branch
+# is never looked up (no API call when the work is not stacked).
 #
 # API budget (CLAUDE.md §15) per hop, only for a non-default branch: one
 # closed-PR search by head, one ref read; plus one PATCH in `pr` mode when the
@@ -59,8 +60,11 @@ retarget_lookup_merged()
 	base="$(printf '%s' "${merged_json}" | jq -r '.base // empty')"
 	head_sha="$(printf '%s' "${merged_json}" | jq -r '.head_sha // empty')"
 	[[ "${number}" =~ ^[0-9]+$ ]] && [ -n "${base}" ] && [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 0
-	if ! tip="$(gh api "repos/${repo}/git/ref/heads/$(retarget_urlencode "${branch}")" --jq '.object.sha // ""' 2>/dev/null)"; then
-		# A deleted branch is GitHub's own retarget case; nothing to do here.
+	if ! tip="$(gh api "repos/${repo}/git/ref/heads/$(retarget_urlencode "${branch}")" --jq '.object.sha // ""' 2>&1)"; then
+		# A confirmed deleted ref cannot have been reused; other API errors
+		# must not authorize retargeting from an unverified branch tip.
+		[[ "${tip}" == *"(HTTP 404)"* ]] || return 1
+		printf '%s %s\n' "${number}" "${base}"
 		return 0
 	fi
 	[ "${tip}" = "${head_sha}" ] || return 0
