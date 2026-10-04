@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""Turn an unblock verdict into the GitHub operations that carry it out.
+
+The unblock judge (scripts/unblock_judge.sh,
+docs/plans/replace-claude-sessions-with-cli-engine-plan.md Phase 7) asks this
+script what to do, then runs the operations in order. Every decision about
+which existing command resumes which stop lives here, so it is tested without
+the network; the shell only executes.
+
+  plan --verdict-file PATH --context-file PATH
+      PATH of --verdict-file is `unblock_ledger.py validate` output. The
+      context is `{"repo", "kind", "item", "stop", "labels", "tracking",
+      "has_plan", "linked_issue", "title"}` (`tracking` is the project's
+      tracking issue number for a project item or a child issue, else null;
+      `has_plan` is true when the issue already has an implementation plan).
+  followup --context-file PATH --fixup N
+      The reset to run once the fix-up issue N of a `descope` or
+      `operator_step` verdict has merged (Q11).
+
+Output: one JSON line `{"ops": [...]}`. Operations:
+  {"op": "comment", "issue": n, "body": s}
+  {"op": "add_labels", "issue": n, "labels": [s]}
+  {"op": "remove_label", "issue": n, "label": s}
+  {"op": "create_issue", "title": s, "body": s, "labels": [s], "wait_on": n}
+      (`wait_on`: after creating, post the wait marker naming the new issue
+      on item n)
+  {"op": "edit_files_touched", "issue": n, "paths": [s]}
+  {"op": "operator_step", "key": s, "source": s, "steps": [...]}
+  {"op": "auto_decision", "issue": n, "decision": {...}}
+  {"op": "close", "issue": n, "reason": "not_planned", "pr": bool}
+  {"op": "dispatch_review", "pr": n}
+  {"op": "telegram", "level": s, "text": s}
+
+Resume commands are the existing ones (Q10): on a project's tracking issue
+`/re-security-pass`, `/revalidate`, `/judge_resume --reset-recovery`; on an
+issue `/approved` (after `ai:awaiting-approval`), `/answer`, `/reclarify`;
+on a pull request a review dispatch. Comments are posted with the pipeline's
+GH_PAT identity, which those handlers accept as a trusted human comment.
+
+No GitHub API calls and no network (CLAUDE.md §15). Exit 0 ok, 1 bad
+arguments, 2 unreadable input.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+SOURCE_REPO = "shubhodeep1/coding-workflows"
+PROJECT_VALIDATION_STOPS = ("validation-failed", "validate-failed", "harness-broken")
+CLARIFY_STOPS = ("clarify-failed", "clarify-respond-failed", "plan-failed")
+GUARD_STOPS = ("scope-blocked", "destructive-blocked")
+CLOSED_LABEL = "ai:unblock-closed"
+MAX_COMMAND_TEXT = 300
+
+
+class UsageError(Exception):
+	"""Bad arguments: exit 1."""
+
+
+class InputError(Exception):
+	"""An unreadable input file: exit 2."""
+
+
+class _Parser(argparse.ArgumentParser):
+	def error(self, message: str) -> None:
+		raise UsageError(message)
+
+
+def _read_json(path: str, flag: str) -> object:
+	try:
+		return json.loads(Path(path).read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, ValueError) as exc:
+		raise InputError(f"cannot read {flag} {path}: {exc}") from exc
+
+
+def _one_line(text: str) -> str:
+	return " ".join(str(text or "").split())[:MAX_COMMAND_TEXT]
+
+
+def _context(raw: object) -> dict:
+	if not isinstance(raw, dict):
+		raise UsageError("--context-file must hold a JSON object")
+	kind = raw.get("kind")
+	if kind not in ("issue", "pr", "project"):
+		raise UsageError(f"unknown kind {kind!r}")
+	item = raw.get("item")
+	if not isinstance(item, int) or item < 1:
+		raise UsageError("context 'item' must be a positive integer")
+	tracking = raw.get("tracking")
+	if tracking is not None and (not isinstance(tracking, int) or tracking < 1):
+		raise UsageError("context 'tracking' must be a positive integer or null")
+	linked = raw.get("linked_issue")
+	if linked is not None and (not isinstance(linked, int) or linked < 1):
+		raise UsageError("context 'linked_issue' must be a positive integer or null")
+	labels = raw.get("labels") or []
+	if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
+		raise UsageError("context 'labels' must be a list of strings")
+	return {
+		"repo": str(raw.get("repo") or ""),
+		"kind": kind,
+		"item": item,
+		"stop": str(raw.get("stop") or ""),
+		"labels": labels,
+		"tracking": item if kind == "project" else tracking,
+		"has_plan": raw.get("has_plan") is True,
+		"linked_issue": linked,
+		"title": _one_line(raw.get("title") or ""),
+	}
+
+
+def _stop_label(stop: str) -> str:
+	return f"ai:{stop}" if stop and stop != "project-failed" else ""
+
+
+def _approve(issue: int, labels: list[str], drop: str) -> list[dict]:
+	ops: list[dict] = []
+	if drop:
+		ops.append({"op": "remove_label", "issue": issue, "label": drop})
+	ops.append({"op": "add_labels", "issue": issue, "labels": ["ai:awaiting-approval"]})
+	ops.append({"op": "comment", "issue": issue, "body": "/approved"})
+	return ops
+
+
+def reset_ops(ctx: dict, note: str) -> list[dict]:
+	"""The existing resume command for this stop (Q10 A)."""
+	kind, item, stop = ctx["kind"], ctx["item"], ctx["stop"]
+	label = _stop_label(stop)
+	text = _one_line(note)
+	if kind == "project":
+		if stop == "security-pass-failed":
+			return [{"op": "comment", "issue": item, "body": "/re-security-pass"}]
+		if stop in PROJECT_VALIDATION_STOPS:
+			return [{"op": "comment", "issue": item, "body": f"/revalidate unblock judge: {text}".rstrip()}]
+		ops = []
+		if stop in ("needs-human", "blocked") and label in ctx["labels"]:
+			ops.append({"op": "remove_label", "issue": item, "label": label})
+		ops.append({"op": "comment", "issue": item, "body": "/judge_resume --reset-recovery"})
+		return ops
+	if kind == "pr":
+		ops = []
+		if label and label in ctx["labels"]:
+			ops.append({"op": "remove_label", "issue": item, "label": label})
+		ops.append({"op": "dispatch_review", "pr": item})
+		return ops
+	present = label if label in ctx["labels"] else ""
+	if stop in GUARD_STOPS or stop == "implement-diagnose-failed":
+		if ctx["has_plan"]:
+			return _approve(item, ctx["labels"], present)
+		ops = [{"op": "remove_label", "issue": item, "label": present}] if present else []
+		return ops + [{"op": "comment", "issue": item, "body": "/reclarify"}]
+	if stop == "blocked":
+		if ctx["has_plan"]:
+			return _approve(item, ctx["labels"], present)
+		return [{"op": "comment", "issue": item, "body": f"/answer {text}".rstrip()}]
+	if stop == "needs-human":
+		if ctx["has_plan"]:
+			return _approve(item, ctx["labels"], present)
+		ops = [{"op": "remove_label", "issue": item, "label": present}] if present else []
+		return ops + [{"op": "comment", "issue": item, "body": "/reclarify"}]
+	if stop in CLARIFY_STOPS:
+		ops = [{"op": "remove_label", "issue": item, "label": present}] if present else []
+		return ops + [{"op": "comment", "issue": item, "body": "/reclarify"}]
+	# A side pipeline's dead end on an issue (escalated triage or heal chain,
+	# a failed log analysis): clearing the label lets the pipeline that set it
+	# try again, with the judge's instructions on record.
+	return [{"op": "remove_label", "issue": item, "label": present}] if present else []
+
+
+def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
+	lines = [
+		f"<!-- ai:unblock-fixup:v1 item={ctx['item']} round={verdict['round']} -->",
+		f"## Unblock {kind_word} for #{ctx['item']}",
+		"",
+		f"The unblock judge chose `{verdict['verdict']}` for #{ctx['item']} (stop `{ctx['stop']}`). Make exactly this change:",
+		"",
+		verdict.get("instructions", ""),
+	]
+	if verdict.get("placeholder"):
+		lines += [
+			"",
+			f"Keep the new behaviour off until a person finishes the operator step: gate it behind `{verdict['placeholder']}`"
+			" (a feature flag that defaults off, or a placeholder env var that makes the code skip safely).",
+		]
+	lines += ["", f"Why: {verdict['reason']}"]
+	return "\n".join(lines)
+
+
+def _fixup_ops(ctx: dict, verdict: dict, kind_word: str) -> list[dict]:
+	body = _fixup_body(ctx, verdict, kind_word)
+	title = f"Unblock {kind_word} for #{ctx['item']}: {ctx['title']}"[:240]
+	if ctx["tracking"]:
+		# A project's state is the poller's: it files the fix-up into the
+		# current wave (adopt_unblock_fixup_requests) and posts the wait marker.
+		request = "\n".join(
+			[
+				f"<!-- ai:unblock-fixup-request:v1 item={ctx['item']} id=unblock-{ctx['item']}-r{verdict['round']} -->",
+				f"### {title}",
+				"",
+				body,
+			]
+		)
+		return [{"op": "comment", "issue": ctx["tracking"], "body": request}]
+	return [{"op": "create_issue", "title": title, "body": body, "labels": [], "wait_on": ctx["item"]}]
+
+
+def plan(verdict: dict, ctx: dict) -> list[dict]:
+	name = verdict.get("verdict")
+	item = ctx["item"]
+	ops: list[dict] = []
+	if name == "retry_budget":
+		ops += [{"op": "comment", "issue": item, "body": f"Next attempt, per the unblock judge: {verdict['instructions']}"}]
+		ops += reset_ops(ctx, verdict["instructions"])
+	elif name == "auto_answer":
+		if ctx["stop"] == "needs-human" and "ai:needs-human" in ctx["labels"]:
+			ops.append({"op": "remove_label", "issue": item, "label": "ai:needs-human"})
+			ops.append({"op": "add_labels", "issue": item, "labels": ["ai:clarification"]})
+		ops.append(
+			{
+				"op": "auto_decision",
+				"issue": item,
+				"decision": {
+					"qid": f"U{verdict['round']}",
+					"question": f"Unblock #{item} (stop {ctx['stop']})",
+					"pick": _one_line(verdict["answer"]),
+					"why": _one_line(verdict["reason"]),
+				},
+			}
+		)
+		ops.append({"op": "comment", "issue": item, "body": f"/answer {verdict['answer']}"})
+	elif name == "descope":
+		ops += _fixup_ops(ctx, verdict, "descope")
+	elif name == "operator_step":
+		ops += _fixup_ops(ctx, verdict, "operator step")
+		ops.append(
+			{
+				"op": "operator_step",
+				"key": f"unblock-{item}",
+				"source": f"Unblock judge, #{item}",
+				"steps": [
+					{
+						"title": f"Clear the block on #{item}",
+						"instructions": verdict["operator_instructions"],
+						"dormant_until": verdict["placeholder"],
+					}
+				],
+			}
+		)
+		ops.append({"op": "telegram", "level": "WARNING", "text": f"Operator step needed for #{item}: {verdict['placeholder']}"})
+	elif name == "override_guard":
+		if ctx["stop"] == "scope-blocked":
+			ops.append({"op": "edit_files_touched", "issue": item, "paths": verdict["paths"]})
+		ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
+	elif name == "reissue":
+		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
+		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", verdict["instructions"], "", f"Why: {verdict['reason']}"])
+		if ctx["kind"] == "pr":
+			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": True})
+			if ctx["linked_issue"]:
+				ops.append({"op": "comment", "issue": ctx["linked_issue"], "body": f"Re-issued after #{item}: {verdict['instructions']}"})
+				ops += _approve(ctx["linked_issue"], [], "")
+		elif ctx["tracking"]:
+			ops.append(
+				{
+					"op": "comment",
+					"issue": ctx["tracking"],
+					"body": "\n".join(
+						[
+							f"<!-- ai:unblock-fixup-request:v1 item={item} id=unblock-{item}-r{verdict['round']} -->",
+							f"### {title}",
+							"",
+							body,
+						]
+					),
+				}
+			)
+			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
+		else:
+			ops.append({"op": "create_issue", "title": title, "body": body, "labels": [], "wait_on": None})
+			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
+	elif name == "accept_with_followup":
+		ops.append(
+			{
+				"op": "create_issue",
+				"title": f"Follow-up to #{item}: {ctx['title']}"[:240],
+				"body": "\n".join([f"Accepted with this follow-up by the unblock judge (#{item}).", "", verdict["instructions"]]),
+				"labels": [],
+				"wait_on": None,
+			}
+		)
+		ops += reset_ops(ctx, f"accepted with a follow-up issue: {verdict['reason']}")
+	elif name == "close":
+		ops.append({"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]})
+		if ctx["kind"] != "project":
+			# A project's tracking issue is closed by the poller, which also
+			# sets its state to abandoned (the close goes through the API, §19).
+			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": ctx["kind"] == "pr"})
+		ops.append({"op": "telegram", "level": "CRITICAL", "text": f"Unblock judge closed #{item} ({ctx['stop']}): {_one_line(verdict['reason'])}"})
+	else:
+		raise UsageError(f"unknown verdict {name!r}")
+	return ops
+
+
+def build_parser() -> argparse.ArgumentParser:
+	parser = _Parser(description=__doc__.splitlines()[0])
+	sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
+	plan_cmd = sub.add_parser("plan")
+	plan_cmd.add_argument("--verdict-file", required=True)
+	plan_cmd.add_argument("--context-file", required=True)
+	followup_cmd = sub.add_parser("followup")
+	followup_cmd.add_argument("--context-file", required=True)
+	followup_cmd.add_argument("--fixup", required=True, type=int)
+	return parser
+
+
+def run(argv: list[str] | None = None) -> dict:
+	args = build_parser().parse_args(argv)
+	ctx = _context(_read_json(args.context_file, "--context-file"))
+	if args.command == "followup":
+		if args.fixup < 1:
+			raise UsageError("--fixup must be an issue number")
+		return {"ops": reset_ops(ctx, f"fix-up #{args.fixup} merged")}
+	verdict = _read_json(args.verdict_file, "--verdict-file")
+	if not isinstance(verdict, dict):
+		raise UsageError("--verdict-file must hold a JSON object")
+	return {"ops": plan(verdict, ctx)}
+
+
+def main(argv: list[str] | None = None) -> int:
+	try:
+		result = run(argv)
+	except UsageError as exc:
+		print(json.dumps({"error": str(exc)}))
+		return 1
+	except InputError as exc:
+		print(json.dumps({"error": str(exc)}))
+		return 2
+	print(json.dumps(result))
+	return 0
+
+
+if __name__ == "__main__":
+	sys.exit(main())

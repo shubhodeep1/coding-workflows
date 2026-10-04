@@ -13,6 +13,10 @@ non-empty line is its marker:
 
   <!-- ai:unblock:v1 item=<n> stop=<id> fingerprint=<12 hex> verdict=<v> round=<k> -->
 
+(`override=bulk_delete` follows `round=` on an `override_guard` verdict for
+the destructive latch; implement.yml honours it once, for that issue's next
+run.)
+
 on the blocked item, and, for an item of an orchestrator project, also on
 the project's tracking issue. Only comments by the trusted pipeline login
 count, so a marker quoted or forged by anyone else is ignored.
@@ -23,9 +27,14 @@ Rules enforced here:
   - at most MAX_ROUNDS_PER_ITEM rounds per item and MAX_ROUNDS_PER_PROJECT
     per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
     round with the item still blocked, the only outcome is the terminal close;
-  - `override_guard` exists only for the scope and destructive latches, and its
-    paths never include `.github/workflows/**`, `.claude/**` or `scripts/**`
-    in shubhodeep1/coding-workflows;
+  - `override_guard` exists only for the scope and destructive latches on an
+    issue, and its paths never include `.github/workflows/**`, `.claude/**` or
+    `scripts/**` in shubhodeep1/coding-workflows; for the destructive latch no
+    path may be a canonical workflow source (CANONICAL_SOURCE_RE, the list
+    scripts/implement_commit_changes.sh guards), in any repository;
+  - `auto_answer` and `override_guard` are offered only for an issue, never for
+    a pull request or a project;
+  - `reissue` is never offered for a whole project;
   - `accept_with_followup` is never offered for a failed security pass or a
     failed validation (no waiver, no validation pass).
 
@@ -41,13 +50,14 @@ verdict, 2 unreadable input):
       12 hex of SHA-1 over the stop id and the normalised evidence.
   decide --item <n> --stop <id> --fingerprint <fp> --comments-file <path>
          [--project-comments-file <path>] --trusted-login <login>
-         --now <iso8601>
+         --now <iso8601> [--kind issue|pr|project] [--last-activity <iso8601>]
       Rounds used, the verdicts still allowed, and whether the item is
       terminal (and why).
   validate --verdict-file <path> --decision-file <path> --repo <owner/repo>
       Check a judge verdict against the `decide` output and the hard limits,
       and print the normalised verdict.
   marker --item <n> --stop <id> --fingerprint <fp> --verdict <v> --round <k>
+         [--override bulk_delete]
       The marker line to end the verdict comment with.
 
 No GitHub API calls and no network (CLAUDE.md §15): callers pass the
@@ -105,6 +115,15 @@ VERDICTS = (
 )
 TERMINAL_VERDICT = "close"
 GUARD_STOPS = ("scope-blocked", "destructive-blocked")
+ITEM_KINDS = ("issue", "pr", "project")
+ISSUE_ONLY_VERDICTS = ("auto_answer", "override_guard")
+NOT_FOR_PROJECT_VERDICTS = ("reissue",)
+OVERRIDES = ("bulk_delete",)
+# The canonical workflow sources scripts/implement_commit_changes.sh refuses to
+# delete without ALLOW_WORKFLOW_EDITS; kept in step with its grep pattern.
+CANONICAL_SOURCE_RE = re.compile(
+	r"^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)"
+)
 NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed")
 
 MAX_ROUNDS_PER_ITEM = 2
@@ -123,7 +142,8 @@ EVIDENCE_SCALAR_KEYS = ("reason", "validation_class", "validation_status", "pr")
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{12}$")
 MARKER_RE = re.compile(
 	r"^<!-- ai:unblock:v1 item=(?P<item>[1-9][0-9]*) stop=(?P<stop>[a-z-]+) "
-	r"fingerprint=(?P<fp>[0-9a-f]{12}) verdict=(?P<verdict>[a-z_]+) round=(?P<round>[1-9][0-9]*) -->$"
+	r"fingerprint=(?P<fp>[0-9a-f]{12}) verdict=(?P<verdict>[a-z_]+) round=(?P<round>[1-9][0-9]*)"
+	r"(?: override=(?P<override>[a-z_]+))? -->$"
 )
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 
@@ -256,6 +276,7 @@ def parse_markers(comments: object, trusted_login: str) -> list[dict]:
 				"fingerprint": match.group("fp"),
 				"verdict": match.group("verdict"),
 				"round": int(match.group("round")),
+				"override": match.group("override") or "",
 				"created_at": created_at.isoformat() if created_at else "",
 			}
 		)
@@ -269,8 +290,12 @@ def decide(
 	item_entries: list[dict],
 	project_entries: list[dict] | None,
 	now: dt.datetime,
+	kind: str = "issue",
+	last_activity: dt.datetime | None = None,
 ) -> dict:
 	"""What the judge may still do for this item."""
+	if kind not in ITEM_KINDS:
+		raise UsageError(f"unknown item kind {kind!r}; expected one of {list(ITEM_KINDS)}")
 	own = [entry for entry in item_entries if entry["item"] == item]
 	# A marker posted on both the item and the tracking issue counts once.
 	seen = set()
@@ -295,7 +320,15 @@ def decide(
 		allowed = [verdict for verdict in allowed if verdict != "override_guard"]
 	if stop in NO_WAIVER_STOPS:
 		allowed = [verdict for verdict in allowed if verdict != "accept_with_followup"]
+	if kind != "issue":
+		allowed = [verdict for verdict in allowed if verdict not in ISSUE_ONLY_VERDICTS]
+	if kind == "project":
+		allowed = [verdict for verdict in allowed if verdict not in NOT_FOR_PROJECT_VERDICTS]
 	last_times = [_parse_time(entry["created_at"]) for entry in pool if entry["item"] == item and entry["created_at"]]
+	# A fix-up's follow-up (the reset posted after it merged) restarts the
+	# 24-hour clock, so the reset gets its chance before the terminal close.
+	if last_times and last_activity is not None:
+		last_times.append(last_activity)
 	terminal_reason = ""
 	if item_rounds >= MAX_ROUNDS_PER_ITEM:
 		terminal_reason = "item_cap"
@@ -307,6 +340,7 @@ def decide(
 		terminal_reason = "menu_exhausted"
 	return {
 		"item": item,
+		"kind": kind,
 		"stop": stop,
 		"fingerprint": fp,
 		"item_rounds": item_rounds,
@@ -383,6 +417,11 @@ def validate(verdict: object, decision: object, repo: str) -> dict:
 			for path in cleaned:
 				if any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in FORBIDDEN_OVERRIDE_PREFIXES):
 					raise UsageError(f"override_guard never covers {path!r} in {SOURCE_REPO}")
+		if decision.get("stop") == "destructive-blocked":
+			for path in cleaned:
+				if CANONICAL_SOURCE_RE.match(path):
+					raise UsageError(f"override_guard never allows deleting the canonical workflow source {path!r}")
+			normalised["override"] = "bulk_delete"
 		normalised["paths"] = cleaned
 	if name == "operator_step":
 		flag = verdict.get("placeholder")
@@ -399,12 +438,17 @@ def validate(verdict: object, decision: object, repo: str) -> dict:
 	return normalised
 
 
-def marker(item: int, stop: str, fp: str, verdict: str, round_number: int) -> str:
+def marker(item: int, stop: str, fp: str, verdict: str, round_number: int, override: str = "") -> str:
 	if verdict not in VERDICTS:
 		raise UsageError(f"unknown verdict {verdict!r}")
 	if round_number < 1:
 		raise UsageError("round must be at least 1")
-	return f"<!-- ai:unblock:v1 item={item} stop={stop} fingerprint={fp} verdict={verdict} round={round_number} -->"
+	suffix = ""
+	if override:
+		if override not in OVERRIDES or verdict != "override_guard" or stop != "destructive-blocked":
+			raise UsageError(f"override {override!r} is only for an override_guard verdict on destructive-blocked")
+		suffix = f" override={override}"
+	return f"<!-- ai:unblock:v1 item={item} stop={stop} fingerprint={fp} verdict={verdict} round={round_number}{suffix} -->"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -425,6 +469,8 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--project-comments-file")
 	decide_cmd.add_argument("--trusted-login", required=True)
 	decide_cmd.add_argument("--now", required=True)
+	decide_cmd.add_argument("--kind", default="issue")
+	decide_cmd.add_argument("--last-activity", default="")
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
@@ -435,6 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
 	marker_cmd.add_argument("--fingerprint", required=True)
 	marker_cmd.add_argument("--verdict", required=True)
 	marker_cmd.add_argument("--round", required=True, type=int)
+	marker_cmd.add_argument("--override", default="")
 	return parser
 
 
@@ -461,7 +508,8 @@ def run(argv: list[str] | None = None) -> dict:
 		project_entries = None
 		if args.project_comments_file:
 			project_entries = parse_markers(_read_json(args.project_comments_file, "--project-comments-file"), args.trusted_login)
-		return decide(item, stop, fp, item_entries, project_entries, _parse_time(args.now))
+		last_activity = _parse_time(args.last_activity) if args.last_activity else None
+		return decide(item, stop, fp, item_entries, project_entries, _parse_time(args.now), args.kind, last_activity)
 	if args.command == "validate":
 		return validate(
 			_read_json(args.verdict_file, "--verdict-file"),
@@ -470,7 +518,9 @@ def run(argv: list[str] | None = None) -> dict:
 		)
 	item = _check_item(args.item)
 	return {
-		"marker": marker(item, _check_stop(args.stop), _check_fingerprint(args.fingerprint), args.verdict, args.round)
+		"marker": marker(
+			item, _check_stop(args.stop), _check_fingerprint(args.fingerprint), args.verdict, args.round, args.override
+		)
 	}
 
 
