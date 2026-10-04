@@ -428,9 +428,6 @@ def validate(verdict: object, decision: object, repo: str) -> dict:
 			for path in cleaned:
 				if CANONICAL_SOURCE_RE.match(path):
 					raise UsageError(f"override_guard never allows deleting the canonical workflow source {path!r}")
-				# Also covered above; keep the destructive-latch guard explicit.
-				if PROTECTED_AUTOMATION_OVERRIDE_RE.match(path):
-					raise UsageError(f"override_guard never allows bulk-deleting the protected automation path {path!r}")
 			normalised["override"] = "bulk_delete"
 		normalised["paths"] = cleaned
 	if name == "operator_step":
