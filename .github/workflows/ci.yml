@@ -492,6 +492,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_single_issue_security_pass.py
 
+      - name: Activation verification tests (port P4)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py
+
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
         run: |
           set -euo pipefail
@@ -1139,6 +1144,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_stale_queued.py
+
+      - name: Cancelled CI sweep recovery tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_cancelled_rerun.py
 
       - name: Conflict-dispatch active-run visibility contract tests
         run: |
