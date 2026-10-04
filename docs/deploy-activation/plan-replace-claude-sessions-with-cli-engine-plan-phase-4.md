@@ -5,17 +5,18 @@
   shubhodeep1/claude-workers#2 key-sync PR)
 - Deploy target: shubhodeep1/coding-workflows (+ shubhodeep1/claude-workers, Cloudflare `FT_GAMES_CF` account)
 - How it runs: on demand — every job with a Claude role calls `.github/actions/claude-pool-token`, which POSTs a GitHub OIDC token to `https://claude-pool-broker.shubhodeep.workers.dev/v1/pool`; the pool secret is refreshed by `claude-workers` `claude-pool-key-sync.yml` (cron hourly at :23, push to main, workflow_dispatch)
-- Status: IN_PROGRESS
+- Status: BLOCKED
 - Last updated: 2026-10-04
-- Last note: Runbook built after Phase 4 reached main; Step 1 emitted.
+- Last note: BLOCKED at Step 6 by operator decision (Q2: B, 2026-10-04): wait for a fully green claude-engine-smoke run; the write leg fails the Phase 3 context gate (startup_input_tokens 29,369 vs < 25,000). Step 6b done.
 
 ## Runbook
-1. [ ] Prereqs: Homebrew, gh, Node, `gh auth login`, read claude-workers secret names
-2. [ ] Cloudflare API token (Workers Scripts: Edit, ft.games account) → `CF_BROKER_DEPLOY_TOKEN` secret in shubhodeep1/claude-workers
-3. [ ] `CLAUDE_POOL_TOKEN_<NAME>` secret per pool account in shubhodeep1/claude-workers (drop TEST1/TEST2 if not members)
-4. [ ] Merge shubhodeep1/claude-workers#2 (push to main runs the first key sync)
-5. [ ] Verify key sync: run green with N accounts; Worker secret `CLAUDE_POOL_TOKENS` present
-6. [ ] Dispatch `claude-engine-smoke.yml` on main; verify `CLAUDE_POOL available=true accounts=N` and probe lines in both legs
+1. [x] Prereqs: Homebrew, gh, Node, `gh auth login`, read claude-workers secret names   — done 2026-10-04: `gh api user` = shubhodeep1; claude-workers secrets = CLAUDE_POOL_TOKEN_FUNTOKEN1, CLAUDE_POOL_TOKEN_FUNTOKEN2, GH_PAT
+2. [x] Cloudflare API token (Workers Scripts: Edit, ft.games account) → `CF_BROKER_DEPLOY_TOKEN` secret in shubhodeep1/claude-workers   — done 2026-10-04: token check on `claude-pool-broker/secrets` returned `"success": true`; secret set; account ID verified equal to the `FT_GAMES_CF` account
+3. [x] `CLAUDE_POOL_TOKEN_<NAME>` secret per pool account in shubhodeep1/claude-workers (drop TEST1/TEST2 if not members)   — skipped 2026-10-04: already satisfied, FUNTOKEN1 and FUNTOKEN2 present (set ~1 day earlier), no TEST1/TEST2
+4. [x] Merge shubhodeep1/claude-workers#2 (push to main runs the first key sync)   — done 2026-10-04: squash-merged; push run 37191352286 started
+5. [x] Verify key sync: run green with N accounts; Worker secret `CLAUDE_POOL_TOKENS` present   — done 2026-10-04: run 37191352286 success, log `CLAUDE_POOL key_sync status=ok accounts=2 names=FUNTOKEN1,FUNTOKEN2`; Worker secrets = [CLAUDE_POOL_TOKENS (secret_text)]
+6. [ ] Dispatch `claude-engine-smoke.yml` on main; verify `CLAUDE_POOL available=true accounts=N` and probe lines in both legs   — run 37191845530 (2026-10-04): broker part passed in both legs (`available=true reason=selected accounts=2`; probes FUNTOKEN1 five_hour=0.02 seven_day=0.21, FUNTOKEN2 five_hour=0.06 seven_day=0.21, status=allowed). Run failed: write leg Context gate `startup_input_tokens=29369` (limit 25,000; read leg 16,804); P5 denials and review-editor relay gate did not run. Held open until a fully green run (Q2: B).
+6b. [x] Redeploy `claude-pool-broker` from main (#6175 review fixes merged at c04fd1b; live Worker still the 2026-10-04T03:30Z build). Validated: vitest 31/31, `wrangler deploy --dry-run` OK. Executed by the session on operator `go` (§24.C)   — done 2026-10-04: `wrangler deploy` from main f80f1bb, version 59a53cf2-1cfb-474b-84ba-8149b4219376; no token → 403 missing_token; lowercase `bearer abc` → 403 malformed_token (new regex); live code has `Bearer[ \t]+…/i`; secret `CLAUDE_POOL_TOKENS` kept; previous versions 40a13740 / 43b1be43 retained for rollback.
 7. [ ] Verify LIVE: an hourly scheduled key-sync run succeeds; `@stable` carries the `id-token: write` wrappers (automatic daily promotion)
 
 ## Notes
@@ -33,3 +34,8 @@
   so a green run alone is not proof; Step 6 checks the `CLAUDE_POOL available=true` log line.
 - Slug carries `-phase-4` so later phases of the same plan get their own log.
 - No `/implement-plan-claude` progress log exists for this plan, so there are no auto-decisions to review.
+- Step 1 output showed `CF_BROKER_DEPLOY_TOKEN` is not set yet, so Step 2 is needed.
+- Step 2 attempt 1 (2026-10-04): the operator's shell is zsh, where `read -p` means coprocess, so both values were empty; `curl` returned `"success":false` and `CF_BROKER_DEPLOY_TOKEN` was saved as `:`. Harmless until the key sync is merged (Step 4); the corrective step overwrites it.
+- Log pushes continue on `claude/determined-pascal-kvyrbg-2`, `-3`, … (operator answer Q1: A, 2026-10-04): the first branch's PR #6186 merged and its ruleset blocks non-fast-forward pushes and deletion.
+- Step 2 attempts 2–3 (2026-10-04): attempt 2 used another Cloudflare account's ID (not saved, guard held). Attempt 3 had the right account, but the check's pattern missed Cloudflare's pretty-printed `"success": true` (with a space), so nothing was saved. Attempt 4 used `grep -oE '"success": *[a-z]+'` and saved the secret.
+- Step 5: the stored `CLAUDE_POOL_TOKEN_FUNTOKEN1` value ends with a newline; the sync strips whitespace (spike S3), so the broker gets a clean token.

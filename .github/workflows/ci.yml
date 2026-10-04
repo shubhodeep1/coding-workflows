@@ -482,6 +482,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_retarget_merged_base.py
 
+      - name: Standalone clarify auto-decide tests (port P3)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_auto_decisions.py
+
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
         run: |
           set -euo pipefail

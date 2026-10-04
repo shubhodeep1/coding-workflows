@@ -1024,7 +1024,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -4725,6 +4725,20 @@ jobs:
           # archival / audit tooling.
           if [ -n "${TRACKING_ISSUE_NUMBER}" ]; then
             printf 'Refs #%s\n' "${TRACKING_ISSUE_NUMBER}" >> "${PR_BODY_FILE}"
+          fi
+          # Port P3 (replace-claude-sessions plan, Phase 8b): repeat the
+          # issue's <!-- ai:auto-decisions:v1 --> entries in the PR body, from
+          # the comments "Fetch issue comments" already read (no API call).
+          # The renderer breaks up #<digits>, so the section can never
+          # reference or auto-close an issue; a failure only warns.
+          AUTO_DECISIONS_SECTION_FILE="${RUNTIME_DIR}/pr-body-lint/auto-decisions.md"
+          if [ -s "${ISSUE_COMMENTS_FILE:-}" ]; then
+            if PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/auto_decisions.py" pr-section \
+              --comments-file "${ISSUE_COMMENTS_FILE}" > "${AUTO_DECISIONS_SECTION_FILE}" 2>/dev/null; then
+              cat "${AUTO_DECISIONS_SECTION_FILE}" >> "${PR_BODY_FILE}"
+            else
+              echo "::warning::Could not render the auto-decisions section for issue #${ISSUE_NUMBER}; the PR body omits it."
+            fi
           fi
           printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
           cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"
