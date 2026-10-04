@@ -1516,9 +1516,12 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"gh api guard (CLAUDE.md §23.H): not a read or a §23.B routine write: " + "; ".join(writes) + "."
 			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
 		)
-	# The literal-ID loop validator owns its variable expansions. Non-vetted
-	# read loops remain undecided; only expansions outside loops ask here.
-	if _unquoted_gh_api_expansion(stripped_command) and not _LOOP_HEADER_RE.match(command):
+	# A loop's own variables go to the loop validator, but an expanded gh api
+	# call after `done` must still prompt before Bash can word-split it.
+	if _unquoted_gh_api_expansion(stripped_command) and (
+		not _LOOP_HEADER_RE.match(command)
+		or re.search(r";\s*done\b[\s\S]*\bgh\s+api\b", stripped_command)
+	):
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."

@@ -688,6 +688,11 @@ def test_unvetted_loop_keeps_no_decision(command):
 	assert _decide(command) is None
 
 
+def test_expanded_call_after_loop_still_asks():
+	command = "for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done; gh api repos/o/r/$ENDPOINT"
+	assert _decide(command) == guard.DECISION_ASK
+
+
 def test_expanded_file_field_in_loop_still_asks():
 	assert _decide("for r in 1; do gh api repos/o/r/actions/runs/$r/jobs -X GET -F page=$r; done") == guard.DECISION_ASK
 

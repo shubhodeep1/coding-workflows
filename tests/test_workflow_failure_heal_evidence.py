@@ -225,6 +225,12 @@ def test_lenient_json_reads_paginated_concatenated_arrays(tmp_path: Path) -> Non
 	assert ev._load_json_lenient(str(tmp_path / "missing.json")) is None
 
 
+def test_lenient_json_rejects_excessive_nesting(tmp_path: Path) -> None:
+	path = tmp_path / "comments.json"
+	path.write_text("[" * 1100)
+	assert ev._load_json_lenient(str(path)) is None
+
+
 # ---------------------------------------------------------------------------
 # Artifacts
 # ---------------------------------------------------------------------------

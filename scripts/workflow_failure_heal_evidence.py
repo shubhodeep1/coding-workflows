@@ -462,7 +462,7 @@ def _load_json_lenient(path: str | None) -> Any:
 		return None
 	try:
 		return json.loads(text)
-	except ValueError:
+	except (ValueError, RecursionError):
 		pass
 	decoder = json.JSONDecoder()
 	merged: list[Any] = []
@@ -474,7 +474,7 @@ def _load_json_lenient(path: str | None) -> Any:
 			break
 		try:
 			value, index = decoder.raw_decode(text, index)
-		except ValueError:
+		except (ValueError, RecursionError):
 			return None
 		if isinstance(value, list):
 			merged.extend(value)
