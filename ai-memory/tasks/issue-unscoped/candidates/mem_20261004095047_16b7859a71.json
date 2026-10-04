@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:586-602 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: If a prior poll cycle is interrupted after adding the activation-verification worktree but before removing it, the next cycle removes its directory but leaves the worktree registration, so `git worktree add` fails on every subsequent cycle.\n  WHY: Activation verification remains permanently stranded for the affected project while the other completion paths continue.\n- scripts/operator_step_issue.py:156 | severity=high | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: With more than 30 open operator-step issues, pagination can omit the oldest canonical issue that `find_issue` selects, causing the script to create duplicate issues on repeated invocations.\n  WHY: GitHub lists issues newest-first, so the canonical issue can be on page 2 while the script only fetches the first 30.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:586-602 | severity=MAJOR | confidence=[3]\n  PROBLEM: If a prior poll cycle is interrupted after adding the activation-verification worktree but before removing it, the next cycle removes its directory but leaves the worktree registration, so `git worktree add` fails on every subsequent cycle.\n  WHY: A single interrupted cycle permanently disables activation verification for the affected project; the other completion paths continue and `set_tracking_phase_label \"ai:merged\"` runs regardless.\n- scripts/operator_step_issue.py:156 | severity=MAJOR | confidence=[2]\n  PROBLEM: With more than 30 open operator-step issues, pagination can omit the oldest canonical issue that `find_issue` selects, causing the script to create duplicate issues on repeated invocations.\n  WHY: GitHub lists issues newest-first, so the canonical issue can be on page 2 while the script only fetches the first 30; the duplicates can leave the upstream pipeline unable to identify the source of truth and may cause double-posting.\n- scripts/operator_step_issue.py:73\n  PROBLEM: `_clean` strips HTML comment delimiters through substring replacement, which can leave truncated operator-step instructions when comment-like text is present.\n  WHY: An operator may see instructions with content silently omitted.\n  HARDENING_RISK_SCORE: 1\n- scripts/orchestrate_poll_process.sh:586-591\n  PROBLEM: The worktree create path does not prune stale registrations before `git worktree add`.\n  WHY: A stale registration from a crashed prior cycle can cause the worktree add to fail.\n  SUGGESTED MINIMAL FIX: Call `git worktree prune 2>/dev/null || true` after `rm -rf \"${verify_dir}\"` and before the `git fetch` line.\n  HARDENING_RISK_SCORE: 3\n- tests/test_activation_verify.py:78-96\n  PROBLEM: The `_verify` helper always sets `LINKED_ISSUE=\"7\"`, so the no-linked-issue fallback path in `activation_verify.sh` is not tested.\n  WHY: A regression in the fallback path would only be caught by manual runs.\n  SUGGESTED MINIMAL FIX: Add an `env_extra` variant with `LINKED_ISSUE=\"\"` and assert that `verdict_comment[\"endpoint\"] == \"repos/o/r/issues/42/comments\"` (post on the PR itself).\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b45804d4a53055556e286e839e30faebf4a8760e9579bc867622910a6feed139",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37192217434",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37192217434",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004095047_16b7859a71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37192217434"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-04T09:50:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
