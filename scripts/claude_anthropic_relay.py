@@ -141,7 +141,11 @@ class Relay(http.server.BaseHTTPRequestHandler):
 						rejected_remaining -= len(rejected_chunk)
 				except OSError:
 					pass
-			return self._reject(400)
+				self.connection.settimeout(5)
+			try:
+				return self._reject(400)
+			except (BrokenPipeError, ConnectionResetError):
+				return  # The client disconnected before it could receive the rejection.
 		body = self.rfile.read(int(length))
 		if len(body) != int(length):
 			return self._reject(400)

@@ -187,7 +187,15 @@ def test_broker_rejects_client_authorization(chain) -> None:
 	assert _Upstream.seen == []
 
 
-def test_broker_rejection_does_not_wait_for_an_unfinished_body(chain) -> None:
+def test_broker_rejection_does_not_wait_for_an_unfinished_body(chain, monkeypatch: pytest.MonkeyPatch) -> None:
+	rejected_timeouts = []
+	original_reject = relay.Relay._reject
+
+	def record_rejection(handler, status):
+		rejected_timeouts.append(handler.connection.gettimeout())
+		return original_reject(handler, status)
+
+	monkeypatch.setattr(relay.Relay, "_reject", record_rejection)
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.putrequest("POST", "/v1/messages")
 	connection.putheader("Content-Type", "application/json")
@@ -199,6 +207,21 @@ def test_broker_rejection_does_not_wait_for_an_unfinished_body(chain) -> None:
 	assert response.status == 400
 	response.read()
 	connection.close()
+	assert rejected_timeouts == [5]
+	assert _Upstream.seen == []
+
+
+def test_broker_rejection_ignores_peer_reset_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	def reset_on_write(_handler, _status):
+		raise ConnectionResetError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "_reject", reset_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
 	assert _Upstream.seen == []
 
 
