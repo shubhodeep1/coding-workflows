@@ -103,7 +103,7 @@ unblock_latest_wait()
 		[.[] | select((.user.login // "") == $login)
 			| . as $c
 			| ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "") as $last
-			| ($last | capture("^<!-- ai:unblock-wait:v1 item=(?<item>[0-9]+) fixup=(?<fixup>[0-9]+)(?<done> done)? -->$")) as $m
+			| ($last | capture("^<!-- ai:unblock-wait:v1 item=(?<item>[0-9]+) fixup=(?<fixup>[0-9]+)(?<done> done)? -->$")?) as $m
 			| select($m.item == $item)
 			| {id: $c.id, fixup: $m.fixup, done: (if ($m.done // "") != "" then "done" else "open" end), at: ($c.created_at // ""), updated: ($c.updated_at // $c.created_at // "")}]
 		| sort_by(.at) | last // empty
@@ -476,7 +476,7 @@ unblock_main()
 			fi
 			if [ "${ITEM_KIND}" = "issue" ]; then
 				if ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
-					|| ! jq -e --argjson issue "${ITEM}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue)' "${RUNTIME_DIR}/project_binding.json" >/dev/null 2>&1; then
+					|| ! jq -e --argjson issue "${ITEM}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${RUNTIME_DIR}/project_binding.json" >/dev/null 2>&1; then
 					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified"
 					return 0
 				fi
@@ -486,9 +486,9 @@ unblock_main()
 			local missing_project_markers unblock_marker_entry
 			if ! missing_project_markers="$(jq -r --arg login "${UNBLOCK_LOGIN}" --arg item "${ITEM}" \
 				--slurpfile project "${RUNTIME_DIR}/project_comments.json" '
-				[$project[0][]? | select((.user.login // "") == $login) | ((.body // "") | split("\n") | map(select(length > 0)) | last)] as $known
+				[$project[0][]? | select((.user.login // "") == $login) | ((.body // "") | split("\n") | map(select(length > 0)) | last // "")] as $known
 				| [.[] | select((.user.login // "") == $login)
-				   | ((.body // "") | split("\n") | map(select(length > 0)) | last)
+				   | ((.body // "") | split("\n") | map(select(length > 0)) | last // "")
 				   | select(startswith("<!-- ai:unblock:v1 item=" + $item + " ") and endswith(" -->"))
 				   | select(. as $entry | ($known | index($entry)) == null)] | unique | .[]
 			' "${RUNTIME_DIR}/item_comments.json")"; then
@@ -563,6 +563,7 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 	local actuation_failed="false"
 	if ! unblock_run_ops "${ops_file}"; then
 		actuation_failed="true"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=actuation_failed"
 	fi
 	if [[ "${tracking}" =~ ^[0-9]+$ ]] && [ "${tracking}" != "${ITEM}" ]; then
 		if ! gh api "repos/${REPOSITORY}/issues/${tracking}/comments" -f body="Unblock judge verdict on #${ITEM}: \`${verdict_name}\`.
@@ -573,7 +574,6 @@ ${marker_line}" >/dev/null 2>&1; then
 		fi
 	fi
 	if [ "${actuation_failed}" = "true" ]; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=actuation_failed"
 		return 0
 	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=acted"

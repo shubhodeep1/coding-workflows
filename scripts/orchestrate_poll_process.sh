@@ -15769,7 +15769,7 @@ handle_unblock_judge_project_hooks() {
     [.[]? | select((.user.login // "") == $login)
       | (.body // "") as $b
       | ($b | split("\n")) as $lines
-      | ($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")) as $m
+      | ($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")?) as $m
       | {item: $m.item, id: $m.id,
          title: (($lines[1] // "") | sub("^###\\s*"; "")),
          body: ($lines[2:] | join("\n"))}]' 2>/dev/null || echo '[]')"

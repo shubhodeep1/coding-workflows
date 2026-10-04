@@ -347,6 +347,15 @@ def test_auto_answer_records_an_ad_entry_then_answers() -> None:
 	assert ops[0]["decision"]["pick"] == "Q1: A" and ops[1]["body"] == "/answer Q1: A"
 
 
+@pytest.mark.parametrize("stop", ["needs-human", "clarify-failed", "clarify-respond-failed", "plan-failed"])
+def test_auto_answer_enters_a_phase_the_plan_workflow_accepts(stop: str) -> None:
+	ops = actions.plan(_verdict("auto_answer", answer="Q1: A"), _ctx(stop=stop))
+	assert [op["op"] for op in ops] == ["remove_label", "add_labels", "auto_decision", "comment"]
+	assert ops[0]["label"] == f"ai:{stop}"
+	assert ops[1]["labels"] == ["ai:clarification"]
+	assert ops[-1]["body"] == "/answer Q1: A"
+
+
 def test_followup_posts_the_reset_for_the_stop() -> None:
 	ops = actions.reset_ops(_ctx("project", "validation-failed"), "fix-up #9 merged")
 	assert _bodies(ops) == ["/revalidate unblock judge: fix-up #9 merged"]
@@ -466,8 +475,11 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 ISSUE = {"number": 7, "state": "open", "title": "Add cache", "body": "Do it", "labels": [{"name": "ai:blocked"}]}
 
 
-def _project_comments_for_item(issue: int) -> str:
-	payload = json.dumps({"issue_number_map": {"issue-1": issue}}).encode("utf-8")
+def _project_comments_for_item(issue: int, validation_only: bool = False) -> str:
+	state = {"issue_number_map": {} if validation_only else {"issue-1": issue}}
+	if validation_only:
+		state["validation_active_fix_issues"] = [issue]
+	payload = json.dumps(state).encode("utf-8")
 	manifest = hashlib.sha256(payload).hexdigest()
 	body = f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={manifest} -->\n{base64.b64encode(payload).decode('ascii')}\nORCHESTRATOR_STATE_V2 -->"
 	return json.dumps([_comment(body)])
@@ -500,6 +512,15 @@ def test_project_marker_failure_does_not_lose_the_recorded_action(tmp_path: Path
 	assert result.returncode == 0
 	assert state["comments"][0]["body"].endswith("round=1 -->")
 	assert any(comment["body"] == "/answer pin the version" for comment in state["comments"])
+	assert "op=project_record outcome=failed" in result.stdout
+
+
+def test_both_actuation_and_project_marker_failures_are_logged(tmp_path: Path) -> None:
+	child = dict(ISSUE, body="- Tracking issue: #40", labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	result, _ = _judge(tmp_path, child, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "try again"},
+		FAKE_GH_FAIL_RESUME="1", FAKE_GH_FAIL_PROJECT_RECORD="1", FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(7))
+	assert "op=comment issue=7 outcome=failed" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
 	assert "op=project_record outcome=failed" in result.stdout
 
 
@@ -540,6 +561,24 @@ def test_unmanaged_issue_cannot_route_fixup_to_claimed_project(tmp_path: Path) -
 	result, state = _judge(tmp_path, managed, verdict=verdict, FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(99))
 	assert "reason=project_binding_unverified" in result.stdout
 	assert state["comments"] == [] and state["created"] == []
+
+
+def test_validation_fixup_binds_to_project_state(tmp_path: Path) -> None:
+	child = dict(ISSUE, body="- Tracking issue: #40", labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	result, state = _judge(tmp_path, child, verdict={"verdict": "descope", "reason": "r", "instructions": "narrow the fix"},
+		FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(7, validation_only=True))
+	assert "reason=project_binding_unverified" not in result.stdout
+	assert any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
+
+
+def test_empty_pipeline_comment_does_not_block_project_ledger(tmp_path: Path) -> None:
+	child = dict(ISSUE, body="- Tracking issue: #40", labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	project_comments = json.loads(_project_comments_for_item(7)) + [_comment("")]
+	result, state = _judge(tmp_path, child, comments=[_comment("\n")], verdict={"verdict": "descope", "reason": "r", "instructions": "narrow the fix"},
+		FAKE_GH_PROJECT_COMMENTS=json.dumps(project_comments))
+	assert "reason=project_ledger_unreadable" not in result.stdout
+	assert "verdict=descope round=1 outcome=acted" in result.stdout
+	assert state["comments"]
 
 
 def test_failed_review_dispatch_leaves_pr_block_label(tmp_path: Path) -> None:
@@ -592,7 +631,7 @@ def test_judge_closes_without_the_model_when_the_caps_are_spent(tmp_path: Path) 
 def test_judge_waits_on_an_open_fixup_and_follows_up_when_it_merged(tmp_path: Path) -> None:
 	wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", "pipeline-bot", "2026-10-04T11:00:00Z")
 	wait["id"] = 123
-	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {"state": "open"}})
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment("ordinary pipeline comment"), wait], issues={"50": {"state": "open"}})
 	assert "fixup=50 outcome=waiting" in result.stdout and state["comments"] == []
 	assert state["patched"][0][0] == "repos/o/r/issues/comments/123"
 	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}})
