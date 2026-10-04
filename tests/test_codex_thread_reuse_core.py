@@ -710,6 +710,9 @@ def test_implement_workflow_passes_each_role_its_engine() -> None:
 	assert 'CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \\\n              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \\' in text
 	assert 'CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \\\n              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \\' in text
 	assert 'for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE; do' in text
+	assert 'AI_ENGINE_LABELS="$(jq -ce' in text
+	assert '"${ISSUE_META_FILE}" 2>/dev/null || printf \'["ai:codex"]\')"' in text
+	assert 'echo "AI_ENGINE_LABELS=${AI_ENGINE_LABELS}" >> "$GITHUB_ENV"' in text
 	assert 'echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"' in text
 	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.ai_engine.outputs.any_claude == 'true'" in text
 	fetch_script_list = text.split("for f in ", 1)[1].split("; do", 1)[0]

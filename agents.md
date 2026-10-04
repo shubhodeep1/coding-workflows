@@ -82,8 +82,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `review_autofix.yml` for caller compatibility but ignored. Since Phase 5c
    `CLAUDE_FIXER_ENABLED` (default `true`) is the switch for the Claude
    engine of the review write roles: `false` keeps the editor, consolidator,
-   conflict resolver and review-blocked judge on OpenCode. The
-   `claude-fixer-auto-merge` job id is kept but never runs.
+   conflict resolver and review-blocked judge on OpenCode. The review job
+   reuses its PR-state read to resolve engine labels even on dispatched
+   runs; an unavailable label set selects codex. Implement uses its refreshed
+   issue metadata for the same selection and exports the labels to later
+   Claude calls. The `claude-fixer-auto-merge` job id is kept but never runs.
    `[claude-intervention]` and `[claude-merge-resolve]` commits on older PR
    heads still end the counted run, like `[judge-fix]` and
    `[ai-merge-resolve]`.

@@ -330,7 +330,7 @@ triage_engine_sh="${SUPPORT_ROOT_DIR:-}/scripts/ai_engine.sh"
 if [ -n "${SUPPORT_ROOT_DIR:-}" ] && [ -f "${triage_engine_sh}" ]; then
 	triage_claude_rc=0
 	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
-	env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
+	env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \
 		AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
 		bash -c 'source "$1" && claude_run_selected CHECK_TRIAGE "$2" "$3" "$4"' _ \
 		"${triage_engine_sh}" "${PROMPT_FILE}" "${DIAG_FILE}" "${PWD}" \

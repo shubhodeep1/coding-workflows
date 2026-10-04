@@ -87,6 +87,14 @@ def test_reference_extraction_ignores_only_full_line_comments() -> None:
 	assert "quoted_hash_reference.sh" in refs
 
 
+def test_reference_extraction_keeps_template_suffix() -> None:
+	refs = extract_refs('scripts/claude_settings.json.tmpl ${SUPPORT_SCRIPTS_DIR}/claude_settings.json.tmpl')
+	assert refs == {"claude_settings.json.tmpl"}
+	refs = extract_refs('FILES="claude_settings.json.tmpl"\nfor f in ${FILES}; do cp "scripts/${f}" /tmp/; done')
+	assert refs == {"claude_settings.json.tmpl"}
+	assert extract_refs('scripts/unknown.json.bak') == set()
+
+
 def test_release_workflows_use_canonical_reference_checker() -> None:
 	checker_call = "PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py"
 	raw_scanner = "grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\\.(sh|py|json)'"

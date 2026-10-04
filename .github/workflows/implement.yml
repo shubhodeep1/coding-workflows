@@ -2058,6 +2058,11 @@ jobs:
           AI_ENGINE_EFFORT_HINT: ${{ env.MODEL_REASONING_EFFORT }}
         run: |
           set -euo pipefail
+          # This snapshot was refreshed by the security-dependency precheck.
+          # If labels cannot be read, prefer codex over bypassing ai:codex.
+          AI_ENGINE_LABELS="$(jq -ce 'if (.labels | type) == "array" then [.labels[] | .name] else error("labels unavailable") end' "${ISSUE_META_FILE}" 2>/dev/null || printf '["ai:codex"]')"
+          export AI_ENGINE_LABELS
+          echo "AI_ENGINE_LABELS=${AI_ENGINE_LABELS}" >> "$GITHUB_ENV"
           any_claude="false"
           for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE; do
             engine="codex"

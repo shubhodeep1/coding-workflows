@@ -1896,6 +1896,8 @@ the unchanged codex or OpenCode command runs. The triage and validate jobs
 run in a checkout they do not trust, so they stage the engine, its policy
 and `claude_engine.json` from the verified support source into
 `${RUNNER_TEMP}/claude-engine-support` and point `SUPPORT_ROOT_DIR` at it.
+The Claude check-failure triage call also drops the job's OpenRouter key;
+only its codex fallback needs that key for model access.
 `validate.yml` has no support checkout in its workspace, so its install
 and credential steps use the released `@stable` action refs, like its
 `setup-runtime@stable` step.
@@ -1955,7 +1957,11 @@ the tracking issue and the wave-1 issues it creates. The poller copies the
 tracking issue's engine label onto every issue and PR it creates later, and
 `implement.yml` copies an issue's engine label onto its PR. Clarify,
 clarify-respond and plan resolve the engine from the issue's fetched labels;
-roles not yet cut over still run on codex. When both labels are present,
+implement resolves from the refreshed issue metadata, and review/autofix
+resolves from its existing PR-state read (including dispatches without a PR
+event payload). If either label read is unavailable, that run selects codex
+instead of risking an ignored `ai:codex` override; no extra API call is made.
+Roles not yet cut over still run on codex. When both labels are present,
 `ai:codex` is copied. `/implement-plan-claude` dispatches with
 `engine=claude`; against a wrapper that has no `engine` input yet it
 dispatches without it and labels the tracking issue instead. Wave-1 issues

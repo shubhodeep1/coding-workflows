@@ -103,6 +103,7 @@ def test_credential_stripping_covers_the_claude_call() -> None:
 		claude_at = text.index("bash -c 'source \"$1\" && claude_run_selected")
 		env_line = text.rindex("env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET", 0, claude_at)
 		assert claude_at - env_line < 400, script
+		assert "-u OPENROUTER_API_KEY" in text[env_line:claude_at], script
 
 
 def test_untrusted_checkouts_use_the_staged_engine_root_only() -> None:

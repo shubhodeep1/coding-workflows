@@ -390,6 +390,10 @@ def _run_resolve_step(tmp: Path, **env_overrides: str) -> dict[str, str]:
 def test_resolve_step_wiring():
 	step = AGENT_STEPS["Resolve AI engine"]
 	assert step["id"] == "ai_engine"
+	state_check = AGENT_STEPS["Check PR state (defense-in-depth)"]["run"]
+	assert 'echo "AI_ENGINE_LABELS=$(printf' in state_check
+	assert '"${pr_meta}" | jq -ce' in state_check
+	assert '|| printf \'["ai:codex"]\')" >> "$GITHUB_ENV"' in state_check
 	assert step["env"]["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
 	for role in FIXER_ROLES:
 		assert step["env"][f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
@@ -425,6 +429,13 @@ def test_a_role_variable_still_moves_one_role_to_codex(tmp_path):
 	values = _run_resolve_step(tmp_path, AI_ENGINE_CONFLICT_RESOLVER="codex")
 	assert values["AI_ENGINE_RESOLVED_CONFLICT_RESOLVER"] == "codex"
 	assert values["AI_ENGINE_RESOLVED_REVIEW_EDITOR"] == "claude"
+
+
+def test_pr_codex_label_keeps_every_review_role_on_codex(tmp_path):
+	values = _run_resolve_step(tmp_path, AI_ENGINE="claude", AI_ENGINE_LABELS='["ai:codex"]')
+	assert values["any_claude"] == "false"
+	for role in FIXER_ROLES + ("SUMMARISER", "BEHAVIOURAL_SMOKE"):
+		assert values[f"AI_ENGINE_RESOLVED_{role}"] == "codex", role
 
 
 def test_missing_engine_keeps_every_role_on_codex(tmp_path):
