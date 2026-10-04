@@ -66,8 +66,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    token identity keeps the old re-dispatch.
    The review editor's disposable Docker workspace admits `.cjs`, `.mjs`,
    `.cts`, and `.mts` alongside other source extensions for snapshot and
-   validated transfer. Its isolation helpers must already exist in the
-   verified workflow support commit; a PR's own copies are review data,
+   validated transfer. For Claude engine fixes it also admits only
+   `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
+   and `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
+   `.claude/` files remain excluded from snapshot and transfer. Its
+   isolation helpers must already exist in the verified workflow support
+   commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
    PR-backed `claude/*` heads take the normal review path like every other
    PR: the GPT editor, conflict resolver, review-blocked judge and auto-merge

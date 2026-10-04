@@ -1557,6 +1557,7 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."
+			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
 		)
 
 	writes = [description for kind, description in results if kind == KIND_WRITE]

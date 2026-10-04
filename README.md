@@ -1910,7 +1910,7 @@ The Actions pipelines can run a model role on the Claude Code CLI
 (`claude -p`) instead of codex or OpenCode
 (`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). The plumbing
 is in place but **inert**: every role's code default is `codex`, no call site
-uses it yet, and the separate Phase 5 role cutovers switch the defaults one group at a time.
+uses it yet, and the role cutovers switch the defaults one group at a time.
 
 | Piece | What it does |
 |---|---|
@@ -1982,7 +1982,9 @@ credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
 `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
-it back afterwards.
+it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
+file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
+and reports that path instead of overwriting the new content.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in

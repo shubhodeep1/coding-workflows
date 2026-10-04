@@ -81,6 +81,8 @@ def test_repo_contract_retires_the_claude_session_labels() -> None:
 		assert name not in contract["labels"], name
 	# ai:codex keeps its meaning (plan decision D2).
 	assert "ai:codex" in contract["labels"]
+	assert "ai:engine-claude" in contract["labels"]
+	assert "ai:engine-claude" not in contract["retired_labels"]
 
 
 def test_label_helpers_no_longer_create_retired_labels() -> None:
