@@ -43,10 +43,17 @@ for i, a in enumerate(args):
 		k, _, v = args[i + 1].partition("=")
 		fields.setdefault(k, v)
 if "issues?labels=ai:operator-step" in endpoint:
+	if state.get("stale_operator_lists", 0) and state.get("created"):
+		state["stale_operator_lists"] -= 1
+		done("[]")
 	done(json.dumps(state.get("operator_issues", [])))
 if endpoint.endswith("/files?per_page=100"):
+	if os.environ.get("FAKE_GH_FAIL_FILES") == "1":
+		sys.exit(1)
 	done(json.dumps([[{"filename": "README.md"}]]))
 if endpoint.startswith("search/issues?"):
+	if os.environ.get("FAKE_GH_FAIL_SEARCH") == "1":
+		sys.exit(1)
 	done(json.dumps(state.get("fix_search", {"total_count": 0, "items": []})))
 if "-X" in args and "PATCH" in args:
 	issue_number = int(endpoint.rsplit("/", 1)[-1])
@@ -93,6 +100,7 @@ def _setup(tmp_path: Path, **state) -> tuple[dict, Path]:
 	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_STATE=str(state_file), PYTHONDONTWRITEBYTECODE="1")
 	for name in ("ACTIVATION_VERIFY_ENABLED", "TG_BOT_SECRET"):
 		env.pop(name, None)
+	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
 	return env, state_file
 
 
@@ -152,7 +160,7 @@ def test_live_verdict_only_posts_the_marker(tmp_path: Path) -> None:
 
 
 def test_merge_of_an_activation_fix_is_not_verified_again(tmp_path: Path) -> None:
-	linked = {"number": 7, "title": "t", "body": "<!-- ai:activation-fix:v1 source=pr-41 -->\nfix", "author_association": "OWNER"}
+	linked = {"number": 7, "title": "t", "body": "<!-- ai:activation-fix:v1 source=pr-41 -->\r\nfix", "author_association": "OWNER"}
 	result, state = _verify(tmp_path, DORMANT, linked=linked)
 	assert "reason=activation_fix_merge" in result.stdout and state["comments"] == []
 
@@ -166,10 +174,26 @@ def test_untrusted_or_quoted_fix_marker_does_not_skip(tmp_path: Path) -> None:
 
 def test_project_mode_posts_verdict_to_tracking_issue(tmp_path: Path) -> None:
 	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "cron", "summary": "Running.", "gaps": []},
-		env_extra={"TRACKING_NUM": "77"}, mode="project")
+		env_extra={"TRACKING_NUM": "77", "FINAL_PR": "22"}, mode="project")
 	assert "mode=project item=77 verdict=LIVE" in result.stdout
 	assert state["comments"][-1]["endpoint"] == "repos/o/r/issues/77/comments"
 	assert state["comments"][-1]["body"].endswith("source=project-77 -->")
+	assert json.loads((tmp_path / "rt" / "activation_context.json").read_text())["changed_files"] == ["README.md"]
+
+
+def test_project_without_final_pr_uses_planned_file_hints(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Running.", "gaps": []},
+		env_extra={"TRACKING_NUM": "77", "PROJECT_FILES_JSON": '["scripts/report.sh"]'}, mode="project")
+	assert "outcome=posted" in result.stdout
+	assert json.loads((tmp_path / "rt" / "activation_context.json").read_text())["changed_files"] == ["scripts/report.sh"]
+	assert state["comments"]
+
+
+def test_project_with_unavailable_final_pr_files_does_not_guess(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT,
+		env_extra={"TRACKING_NUM": "77", "FINAL_PR": "22", "FAKE_GH_FAIL_FILES": "1"}, mode="project")
+	assert "reason=files_unavailable" in result.stdout
+	assert state["comments"] == []
 
 
 def test_failed_fix_issue_does_not_mark_verification_complete(tmp_path: Path) -> None:
@@ -179,11 +203,35 @@ def test_failed_fix_issue_does_not_mark_verification_complete(tmp_path: Path) ->
 
 
 def test_existing_fix_issue_is_reused_before_posting_missing_verdict(tmp_path: Path) -> None:
-	fix_search = {"total_count": 1, "items": [{"body": "<!-- ai:activation-fix:v1 source=pr-42 -->\nwork", "author_association": "OWNER"}]}
+	fix_search = {"total_count": 1, "items": [{"body": "<!-- ai:activation-fix:v1 source=pr-42 -->\r\nwork", "author_association": "OWNER"}]}
 	result, state = _verify(tmp_path, DORMANT, fix_search=fix_search)
 	assert "outcome=fix_issue_reused" in result.stdout
 	assert len(state["created"]) == 1  # Only the operator-step issue.
 	assert state["comments"][-1]["body"].endswith("source=pr-42 -->")
+
+
+def test_failed_fix_lookup_still_reports_unfinalized_verdict_and_operator_steps(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_SEARCH": "1"})
+	assert "outcome=partial reason=fix_lookup_failed" in result.stdout
+	assert len(state["created"]) == 1
+	assert state["created"][0]["title"] == "Operator steps waiting"
+	assert "Code-gap follow-up is pending" in state["comments"][-1]["body"]
+	assert "<!-- ai:activation:v1" not in state["comments"][-1]["body"]
+
+
+def test_pr_file_lookup_failure_cannot_misgrade_multi_commit_rebase(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FAIL_FILES": "1", "PR_COMMITS": "2"})
+	assert "reason=files_unavailable" in result.stdout
+	assert state["comments"] == [] and state["created"] == []
+
+
+def test_model_key_is_redacted_before_any_github_write(tmp_path: Path) -> None:
+	api_key = "test-activation-secret-123"
+	verdict = dict(DORMANT, summary=f"OpenRouter key: {api_key}",
+		gaps=[dict(DORMANT["gaps"][0], fix=f"Do not post {api_key}"), dict(DORMANT["gaps"][1], fix=f"Set {api_key}")])
+	_, state = _verify(tmp_path, verdict, env_extra={"OPENROUTER_API_KEY": api_key})
+	assert api_key not in json.dumps(state["comments"] + state["created"])
+	assert "[redacted]" in state["comments"][-1]["body"]
 
 
 @pytest.mark.parametrize("verdict", [
@@ -238,7 +286,7 @@ def test_writer_replaces_its_own_entry_and_keeps_others(tmp_path: Path) -> None:
 	assert [key for key, _ in writer.parse_entries(state["patched"]["body"])] == ["pr-1", "pr-2"]
 	state = run("pr-1")
 	body = state["patched"]["body"]
-	assert [key for key, _ in writer.parse_entries(body)] == ["pr-1"]
+	assert [key for key, _ in writer.parse_entries(body)] == ["pr-1", "pr-2"]
 	assert "**B**" in body and "**A**" not in body
 	assert state["created"] == []
 
@@ -257,6 +305,20 @@ def test_writer_reconciles_duplicate_trackers_without_losing_entries(tmp_path: P
 	state = json.loads(state_file.read_text(encoding="utf-8"))
 	assert state["closed"] == [6]
 	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1", "pr-2", "pr-3"]
+
+
+def test_writer_does_not_recreate_when_label_listing_lags_create(tmp_path: Path) -> None:
+	env, state_file = _setup(tmp_path, stale_operator_lists=2)
+	steps = tmp_path / "steps.json"
+	steps.write_text(json.dumps([{"title": "A", "instructions": "x"}]), encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(WRITER), "upsert", "--repo", "o/r", "--key", "pr-7", "--source", "seven", "--steps-file", str(steps)],
+		capture_output=True, text=True, env=env, check=False,
+	)
+	state = json.loads(state_file.read_text(encoding="utf-8"))
+	assert result.returncode == 0, result.stdout
+	assert len(state["created"]) == 1
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-7"]
 
 
 def test_writer_trims_oldest_entries_to_fit() -> None:
@@ -301,6 +363,8 @@ def test_poller_runs_it_on_every_completion_path() -> None:
 	for i in calls:
 		assert lines[i + 1].strip() == "run_project_activation_verify"
 	assert 'TRACKING_NUM="${TRACKING_NUM}" \\' in text
+	assert 'PROJECT_FILES_JSON="$(jq -c' in text
+	assert '(.body // "" | sub("[[:space:]]+$"; ""))' in text
 	assert 'COMMENTS_FETCH_OK:-false' in text
 	assert 'activation-verify-project-${TRACKING_NUM}-XXXXXX' in text
 	poll = POLL.read_text(encoding="utf-8")

@@ -578,7 +578,7 @@ run_project_activation_verify() {
     return 0
   fi
   if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" \
-    '[.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | (.body // "") | (endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->") or endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->"))] | any' >/dev/null 2>&1; then
+    '[.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | (.body // "" | sub("[[:space:]]+$"; "")) | (endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->") or endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->"))] | any' >/dev/null 2>&1; then
     echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=already_verified"
     return 0
   fi
@@ -608,9 +608,12 @@ run_project_activation_verify() {
   PROJECT_TITLE="$(jq -r '.project_title // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
   PROJECT_BODY="$(jq -r '.project_body_snapshot // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
   FINAL_PR="$(jq -r '.final_merge_pr // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
+  PROJECT_FILES_JSON="$(jq -c '[.waves[]?.issues[]?.files_touched[]? | select(type == "string")] | unique' "${STATE_FILE}" 2>/dev/null || echo '[]')" \
     bash scripts/activation_verify.sh project || true
   git worktree remove --force "${verify_dir}" >/dev/null 2>&1 \
     || echo "::warning::Activation worktree cleanup failed for project #${TRACKING_NUM}."
+  rm -rf -- "${verify_dir}-runtime" \
+    || echo "::warning::Activation runtime cleanup failed for project #${TRACKING_NUM}."
   return 0
 }
 

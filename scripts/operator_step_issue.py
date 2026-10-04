@@ -29,7 +29,9 @@ success, 1 on bad arguments, 2 when a GitHub call failed.
 
 GitHub API budget (CLAUDE.md §15): each bounded reconciliation attempt lists
 open `ai:operator-step` issues, performs one canonical update or create, then
-lists again to verify the source entry survived a concurrent writer.
+lists again to verify the source entry survived a concurrent writer. After a
+create, a stale label listing falls back to one direct read of the known
+issue number; failed verification retries with bounded backoff.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 LABEL = "ai:operator-step"
@@ -177,6 +180,16 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 		except ValueError as exc:
 			raise ApiError(f"unreadable issue list: {exc}") from exc
 		candidates = find_issues(issues)
+		if not candidates and created_number is not None:
+			# The label listing can lag behind a successful create. Read the
+			# known issue directly rather than posting a duplicate on retry.
+			try:
+				created_issue = json.loads(_gh(["api", f"repos/{repo}/issues/{created_number}"]) or "{}")
+			except ValueError as exc:
+				raise ApiError(f"unreadable created issue #{created_number}: {exc}") from exc
+			candidates = find_issues([created_issue])
+			if not candidates:
+				raise ApiError(f"created issue #{created_number} is not a trusted operator tracker")
 		if candidates:
 			existing = candidates[0]
 			entries: list[tuple[str, str]] = []
@@ -215,6 +228,8 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 					"created": created_number == int(verified_issue["number"]),
 					"entries": len(verified_entries),
 				}
+		if _upsert_attempt + 1 < MAX_UPSERT_ATTEMPTS:
+			time.sleep(2 ** _upsert_attempt)
 	raise ApiError(f"operator-step upsert did not converge after {MAX_UPSERT_ATTEMPTS} attempts")
 
 
