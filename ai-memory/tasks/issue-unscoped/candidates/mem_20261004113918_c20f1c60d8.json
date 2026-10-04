@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:Lines 485\u2013488 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The supplied CI run reports 5 failed tests and 171 passed, but its log tail does not identify the failing tests.\n  WHY: The guard test step exits nonzero, leaving the aggregate CI check failed and blocking the PR.\n- tests/test_claude_pool_token.py:line 109 (env fixture filter) | severity=critical | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: CI run 37196819171 on head 612853d reports 5 failed tests in tests-hooks-and-orchestrator, but the log tail does not identify which tests failed.\n  WHY: Without the full test output identifying the 5 failing tests, the root cause cannot be determined from the available context.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description lists the fixture change as fixing the CI failure where `tests/test_claude_pool_token.py` inherits `GITHUB_ACTIONS=true` from the CI environment, causing the loopback broker URL to be refused by `claude_pool_token.sh:84`.\n  expected_change_site: `tests/test_claude_pool_token.py:106-110` env fixture filter\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The diff hunk at `tests/test_claude_pool_token.py:109` adds `key != \"GITHUB_ACTIONS\"` to the env filter, which matches the documented intent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- (No findings reported.)\n- Requirement: The PR description lists the fixture change as fixing the CI failure where `tests/test_claude_pool_token.py` inherits `GITHUB_ACTIONS=true` from the CI environment, causing the loopback broker URL to be refused by `claude_pool_token.sh:84`.\n  Expected change site: `tests/test_claude_pool_token.py:106-110` env fixture filter\n  Evidence of absence: The diff hunk at `tests/test_claude_pool_token.py:109` adds `key != \"GITHUB_ACTIONS\"` to the env filter, which matches the documented intent.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:Lines 485\u2013488 | severity=critical | confidence=5\n  PROBLEM: The supplied CI run for head 612853df29ba50f5eb7105371c54ea8e77097044 reports 5 failed tests and 171 passed. Its log tail includes a traceback through the guard\u2019s evaluate() path but omits the failing test names, so the specific assertions cannot be identified from the available output.\n  WHY: The guard test step exits nonzero, leaving the aggregate CI check failed and blocking the PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_claude_pool_token.py:line 109 (env fixture filter) | severity=critical | confidence=5\n  PROBLEM: CI run 37196819171 on head 612853d reports 5 failed tests in tests-hooks-and-orchestrator, but the log tail does not identify which tests failed.\n  WHY: The editor's local checks passed (three pool-guard tests, 14 hook tests, write-tool parity test), but CI is still failing with 5 tests. The change to filter out GITHUB_ACTIONS from the environment is reasonable, but it has not resolved the CI failure. Without the full test output identifying the 5 failing tests, the root cause cannot be determined from the available context.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "82caf4d1ede10a096458afd67961dec61ae4f5d1233afb5070bed6c26b39e703",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6193,
+    "run_id": "37196832964",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37196832964",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004113918_c20f1c60d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6193,
+    "run_id": "37196832964"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-04T11:39:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
