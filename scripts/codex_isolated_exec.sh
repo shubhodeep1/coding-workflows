@@ -41,6 +41,27 @@
 #                   CODEX_HOME (codex_thread_reuse.sh session resume).
 #       --reasoning / --web-search default to the values the step's own
 #                   config.toml (written by write_codex_config.sh) holds.
+#   codex_isolated_exec.sh run --engine claude --mode read-only|workspace
+#                              --claude-token-file FILE --claude-models LIST
+#                              --claude-cli-version X.Y.Z
+#                              --claude-settings FILE --claude-guard-hook FILE
+#                              --claude-instructions FILE [--claude-home DIR]
+#                              [--hide-claude-md] [--workdir DIR]
+#                              [--include PATH]... -- CLAUDE_ARGS...
+#       The Claude engine (scripts/ai_engine.sh claude_run): runs
+#       `claude CLAUDE_ARGS...` in the same container, with the pinned Claude
+#       Code CLI added to the image. scripts/claude_anthropic_relay.py runs
+#       as the host broker: it alone reads the account's OAuth token from
+#       --claude-token-file (never mounted, never in the environment) and
+#       forwards only the --claude-models to api.anthropic.com. The settings,
+#       guard hook and instructions are copied to /support/settings.json,
+#       /support/guard.py and /support/instructions.md, the paths
+#       CLAUDE_ARGS name. --claude-home is kept across runs as the CLI's
+#       ~/.claude (session resume). --hide-claude-md keeps the top-level
+#       CLAUDE.md out of the copy and out of the write-back.
+#       Exit 75: isolation unavailable (no Docker or python3, image build
+#       failed); the caller falls back to codex (plan D1). Exit 73: the relay
+#       did not start for this account. Otherwise the CLI's exit status.
 #   codex_isolated_exec.sh cleanup --root DIR
 #
 # Support files are read from this script's own directory, never from the
@@ -71,12 +92,21 @@ case "${action}" in
 esac
 
 mode=""
+engine="codex"
 root=""
 workdir=""
 codex_home=""
 reasoning=""
 web_search=""
 want_deps="false"
+claude_token_file=""
+claude_models=""
+claude_cli_version=""
+claude_settings=""
+claude_guard_hook=""
+claude_instructions=""
+claude_home=""
+hide_claude_md="false"
 includes=()
 codex_args=()
 while [ "$#" -gt 0 ]; do
@@ -89,10 +119,40 @@ while [ "$#" -gt 0 ]; do
 		--reasoning) reasoning="${2:-}"; shift 2 ;;
 		--web-search) web_search="${2:-}"; shift 2 ;;
 		--deps) want_deps="true"; shift ;;
+		--engine) engine="${2:-}"; shift 2 ;;
+		--claude-token-file) claude_token_file="${2:-}"; shift 2 ;;
+		--claude-models) claude_models="${2:-}"; shift 2 ;;
+		--claude-cli-version) claude_cli_version="${2:-}"; shift 2 ;;
+		--claude-settings) claude_settings="${2:-}"; shift 2 ;;
+		--claude-guard-hook) claude_guard_hook="${2:-}"; shift 2 ;;
+		--claude-instructions) claude_instructions="${2:-}"; shift 2 ;;
+		--claude-home) claude_home="${2:-}"; shift 2 ;;
+		--hide-claude-md) hide_claude_md="true"; shift ;;
 		--) shift; codex_args=("$@"); break ;;
 		*) echo "::error::CODEX_ISOLATION unknown argument: $1" >&2; exit 2 ;;
 	esac
 done
+
+case "${engine}" in codex|claude) ;; *) echo "::error::CODEX_ISOLATION --engine must be codex or claude" >&2; exit 2 ;; esac
+[ "${engine}" = codex ] || [ "${action}" = run ] || { echo "::error::CODEX_ISOLATION --engine claude is only valid for run" >&2; exit 2; }
+# Hidden top-level paths are filtered by every codex_isolated_workspace.py call.
+if [ "${hide_claude_md}" = true ]; then
+	export CODEX_ISOLATED_HIDE="CLAUDE.md"
+else
+	unset CODEX_ISOLATED_HIDE
+fi
+
+# Isolation that cannot be set up: the Claude engine reports it as
+# unavailable (exit 75; ai_engine.sh then runs codex, plan D1, CLAUDE.md
+# answer Q20 A) and never runs on the host either; codex fails hard.
+unavailable()
+{
+	if [ "${engine}" = claude ]; then
+		echo "CODEX_ISOLATION unavailable engine=claude reason=$1" >&2
+		exit 75
+	fi
+	fail "$2"
+}
 
 sandbox_parent="$(realpath -e -- "${RUNNER_TEMP:-${TMPDIR:-/tmp}}")"
 
@@ -137,9 +197,14 @@ if [ "${action}" = cleanup ]; then
 	exit 0
 fi
 
-command -v docker >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || fail "Docker and python3 are required; Codex is never run on the host"
-for required in codex_isolated_workspace.py clarify_openrouter_broker.py write_codex_config.sh codex_model_catalog.json; do
-	[ -f "${support_dir}/${required}" ] && [ ! -L "${support_dir}/${required}" ] || fail "support file missing next to the helper: ${required}"
+command -v docker >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || unavailable docker_missing "Docker and python3 are required; Codex is never run on the host"
+if [ "${engine}" = claude ]; then
+	required_support=(codex_isolated_workspace.py claude_anthropic_relay.py)
+else
+	required_support=(codex_isolated_workspace.py clarify_openrouter_broker.py write_codex_config.sh codex_model_catalog.json)
+fi
+for required in "${required_support[@]}"; do
+	[ -f "${support_dir}/${required}" ] && [ ! -L "${support_dir}/${required}" ] || unavailable support_missing "support file missing next to the helper: ${required}"
 done
 # Resolve the interpreter once, as an absolute path: the broker starts with
 # an empty environment, where a PATH-relative wrapper could not find it.
@@ -173,6 +238,7 @@ new_root()
 build_image()
 {
 	local version="${CODEX_VERSION:-v0.114.0}" context image
+	local -a build_args=(--build-arg "CODEX_VERSION=${version}")
 	[[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "invalid CODEX_VERSION"
 	context="$(mktemp -d)"
 	cat > "${context}/Dockerfile" <<'DOCKERFILE'
@@ -185,11 +251,19 @@ RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
     "@openai/codex-linux-x64@npm:@openai/codex@${CODEX_VERSION#v}-linux-x64" \
     --no-audit --no-fund
 DOCKERFILE
-	image="$(docker_env build -q --build-arg "CODEX_VERSION=${version}" "${context}" 2>"${context}.err")" || image=""
+	if [ "${engine}" = claude ]; then
+		# The Claude engine adds the pinned CLI; the codex image is unchanged.
+		cat >> "${context}/Dockerfile" <<'DOCKERFILE'
+ARG CLAUDE_CLI_VERSION
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" --no-audit --no-fund
+DOCKERFILE
+		build_args+=(--build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}")
+	fi
+	image="$(docker_env build -q "${build_args[@]}" "${context}" 2>"${context}.err")" || image=""
 	if ! [[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
 		tail -n 30 "${context}.err" >&2 || true
 		rm -rf -- "${context}" "${context}.err"
-		fail "sandbox image build failed"
+		unavailable image_build_failed "sandbox image build failed"
 	fi
 	rm -rf -- "${context}" "${context}.err"
 	printf '%s\n' "${image}"
@@ -254,15 +328,34 @@ fi
 
 # ---- run ----
 case "${mode}" in read-only|workspace) ;; *) fail "--mode must be read-only or workspace" ;; esac
-[ "${#codex_args[@]}" -gt 0 ] || fail "codex arguments missing"
-[ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY is required by the host-side broker"
+[ "${#codex_args[@]}" -gt 0 ] || fail "${engine} arguments missing"
+[ "${engine}" = claude ] || [ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY is required by the host-side broker"
 model=""
 for ((i = 0; i < ${#codex_args[@]}; i++)); do
 	if [ "${codex_args[$i]}" = "--model" ] && [ $((i + 1)) -lt "${#codex_args[@]}" ]; then
 		model="${codex_args[$((i + 1))]}"
 	fi
 done
-[[ "${model}" =~ ^[a-zA-Z0-9/_.:-]+$ ]] || fail "codex arguments must name a valid --model"
+[[ "${model}" =~ ^[a-zA-Z0-9/_.:-]+$ ]] || fail "${engine} arguments must name a valid --model"
+
+# A regular, non-symlink file given by an absolute path; prints its real path.
+trusted_file()
+{
+	local path="$1" label="$2"
+	[[ "${path}" == /* ]] && [ -f "${path}" ] && [ ! -L "${path}" ] || fail "${label} must be an existing regular file: ${path}"
+	realpath -e -- "${path}"
+}
+if [ "${engine}" = claude ]; then
+	[[ "${claude_cli_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "invalid --claude-cli-version"
+	[[ "${claude_models}" =~ ^claude-[a-z0-9.-]+(,claude-[a-z0-9.-]+)*$ ]] || fail "invalid --claude-models"
+	[[ ",${claude_models}," == *",${model},"* ]] || fail "--model must be one of --claude-models"
+	# The token file is read only by the host relay: it is never mounted, and
+	# its contents never reach an argument or the container environment.
+	claude_token_file="$(trusted_file "${claude_token_file}" "--claude-token-file")"
+	claude_settings="$(trusted_file "${claude_settings}" "--claude-settings")"
+	claude_guard_hook="$(trusted_file "${claude_guard_hook}" "--claude-guard-hook")"
+	claude_instructions="$(trusted_file "${claude_instructions}" "--claude-instructions")"
+fi
 
 # Reasoning effort and web search follow the step's own config.toml, so the
 # isolated run behaves like the host run it replaces.
@@ -276,8 +369,10 @@ config_value()
 [ -n "${reasoning}" ] || reasoning="${MODEL_REASONING_EFFORT:-medium}"
 [ -n "${web_search}" ] || web_search="$(config_value web_search)"
 [ -n "${web_search}" ] || web_search="live"
-[[ "${reasoning}" =~ ^(xhigh|high|medium|low|none)$ ]] || fail "invalid reasoning level"
-[[ "${web_search}" =~ ^(live|disabled)$ ]] || fail "invalid web-search value"
+if [ "${engine}" = codex ]; then
+	[[ "${reasoning}" =~ ^(xhigh|high|medium|low|none)$ ]] || fail "invalid reasoning level"
+	[[ "${web_search}" =~ ^(live|disabled)$ ]] || fail "invalid web-search value"
+fi
 
 ephemeral="false"
 if [ -n "${root}" ]; then
@@ -324,9 +419,16 @@ else
 fi
 workspace_py seed-git "${workdir}" "${root}/work" || true
 
-install -m 0644 "${support_dir}/clarify_openrouter_broker.py" "${root}/support/clarify_openrouter_broker.py"
-install -m 0644 "${support_dir}/write_codex_config.sh" "${root}/support/write_codex_config.sh"
-install -m 0644 "${support_dir}/codex_model_catalog.json" "${root}/support/codex_model_catalog.json"
+if [ "${engine}" = claude ]; then
+	install -m 0644 "${support_dir}/claude_anthropic_relay.py" "${root}/support/claude_anthropic_relay.py"
+	install -m 0644 "${claude_settings}" "${root}/support/settings.json"
+	install -m 0644 "${claude_guard_hook}" "${root}/support/guard.py"
+	install -m 0644 "${claude_instructions}" "${root}/support/instructions.md"
+else
+	install -m 0644 "${support_dir}/clarify_openrouter_broker.py" "${root}/support/clarify_openrouter_broker.py"
+	install -m 0644 "${support_dir}/write_codex_config.sh" "${root}/support/write_codex_config.sh"
+	install -m 0644 "${support_dir}/codex_model_catalog.json" "${root}/support/codex_model_catalog.json"
+fi
 
 mounts=()
 work_mount="type=bind,src=${root}/work,dst=${workdir}"
@@ -344,6 +446,15 @@ if [ -n "${codex_home}" ]; then
 	valid_path "${codex_home}" || fail "codex home path rejected"
 	case "${codex_home}" in "${workdir}"|"${workdir}"/*) fail "codex home must be outside the workdir" ;; esac
 	mounts+=(--mount "type=bind,src=${codex_home},dst=/home/agent/.codex")
+fi
+if [ -n "${claude_home}" ]; then
+	[ "${engine}" = claude ] || fail "--claude-home needs --engine claude"
+	mkdir -p "${claude_home}"
+	chmod 0700 "${claude_home}"
+	claude_home="$(realpath -e -- "${claude_home}")"
+	valid_path "${claude_home}" || fail "claude home path rejected"
+	case "${claude_home}" in "${workdir}"|"${workdir}"/*) fail "claude home must be outside the workdir" ;; esac
+	mounts+=(--mount "type=bind,src=${claude_home},dst=/home/agent/.claude")
 fi
 for include in "${includes[@]}"; do
 	[ -n "${include}" ] || continue
@@ -365,15 +476,28 @@ done
 
 image="$(build_image)"
 rm -f -- "${root}/socket/provider.sock"
-env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" PYTHONDONTWRITEBYTECODE=1 \
-	"${python_bin}" "${support_dir}/clarify_openrouter_broker.py" broker "${root}/socket/provider.sock" &
+if [ "${engine}" = claude ]; then
+	env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
+		"${python_bin}" "${support_dir}/claude_anthropic_relay.py" broker "${root}/socket/provider.sock" "${claude_token_file}" "${claude_models}" &
+else
+	env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" PYTHONDONTWRITEBYTECODE=1 \
+		"${python_bin}" "${support_dir}/clarify_openrouter_broker.py" broker "${root}/socket/provider.sock" &
+fi
 broker_pid=$!
+relay_unavailable()
+{
+	if [ "${engine}" = claude ]; then
+		echo "CODEX_ISOLATION relay_unavailable engine=claude" >&2
+		exit 73
+	fi
+	fail "$1"
+}
 for _ in $(seq 1 50); do
 	[ -S "${root}/socket/provider.sock" ] && break
-	kill -0 "${broker_pid}" 2>/dev/null || fail "model broker failed to start"
+	kill -0 "${broker_pid}" 2>/dev/null || relay_unavailable "model broker failed to start"
 	command -p sleep 0.1
 done
-[ -S "${root}/socket/provider.sock" ] || fail "model broker unavailable"
+[ -S "${root}/socket/provider.sock" ] || relay_unavailable "model broker unavailable"
 
 if [ "${mode}" = workspace ]; then
 	limits=(--pids-limit 1024 --memory 6g --cpus "$(cpu_limit 4)" --tmpfs "/tmp:rw,nosuid,nodev,exec,size=2g")
@@ -381,21 +505,49 @@ else
 	limits=(--pids-limit 256 --memory 2g --cpus "$(cpu_limit 2)" --tmpfs "/tmp:rw,nosuid,nodev,size=256m")
 fi
 
-echo "CODEX_ISOLATION run mode=${mode} model=${model} reasoning=${reasoning} web_search=${web_search} workdir=${workdir} persistent_root=$([ "${ephemeral}" = true ] && echo false || echo true)" >&2
-# No host checkout, .git, HOME, Docker socket, token or Git remote is
-# mounted, and no runner environment variable is passed in.
-rc=0
-env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm -i --init \
-	--name "${container}" --label "coding-workflows.codex-isolated.root=${root}" \
-	--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL \
-	--security-opt no-new-privileges "${limits[@]}" \
-	--tmpfs /home/agent:rw,nosuid,nodev,size=512m,mode=1777 \
-	"${mounts[@]}" \
-	--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex --env PYTHONDONTWRITEBYTECODE=1 \
-	--env CODEX_ISOLATED_PROXY_KEY=isolated-placeholder \
-	--env "CODEX_ISOLATED_MODEL=${model}" --env "CODEX_ISOLATED_REASONING=${reasoning}" \
-	--env "CODEX_ISOLATED_WEB_SEARCH=${web_search}" --env "CODEX_ISOLATED_WORKDIR=${workdir}" \
-	--workdir "${workdir}" "${image}" /bin/bash -c '
+if [ "${engine}" = claude ]; then
+	echo "CODEX_ISOLATION run engine=claude mode=${mode} model=${model} workdir=${workdir} persistent_root=$([ "${ephemeral}" = true ] && echo false || echo true) session_store=$([ -n "${claude_home}" ] && echo true || echo false) hide_claude_md=${hide_claude_md}" >&2
+	# The CLI talks to the in-container bridge with a placeholder token; the
+	# host relay swaps in the account token and checks the model.
+	engine_env=(
+		--env HOME=/home/agent --env PYTHONDONTWRITEBYTECODE=1
+		--env ANTHROPIC_BASE_URL=http://127.0.0.1:8765
+		--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder
+		--env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 --env DISABLE_AUTOUPDATER=1
+		--env "CLAUDE_ISOLATED_WORKDIR=${workdir}"
+	)
+	# The CLI refuses bypassPermissions as root unless it is told it runs in a
+	# sandbox. The container runs as the runner's UID, which is root only on
+	# runners that run as root; the container is the sandbox either way.
+	[ "$(id -u)" -ne 0 ] || engine_env+=(--env IS_SANDBOX=1)
+	inner_name="claude-isolated"
+	# shellcheck disable=SC2016  # expanded inside the container
+	inner_script='
+		set -euo pipefail
+		# Spike S10: the CLI ignores the allow list of an untrusted workspace.
+		printf "{\"projects\":{\"%s\":{\"hasTrustDialogAccepted\":true}}}\n" "${CLAUDE_ISOLATED_WORKDIR}" > "${HOME}/.claude.json"
+		if [ -d /opt/codex-venv/bin ]; then
+			export PATH="/opt/codex-venv/bin:${PATH}"
+			printf "export PATH=/opt/codex-venv/bin:\${PATH}\n" > "${HOME}/.bash_profile"
+		fi
+		python3 /support/claude_anthropic_relay.py bridge /socket/provider.sock &
+		bridge_pid=$!
+		trap "kill ${bridge_pid} 2>/dev/null || true" EXIT
+		python3 -c "import socket,time; [(time.sleep(.1) if s.connect_ex((\"127.0.0.1\",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)" \
+			|| { echo "::error::CODEX_ISOLATION model bridge unavailable" >&2; exit 98; }
+		claude "$@"
+	'
+else
+	echo "CODEX_ISOLATION run mode=${mode} model=${model} reasoning=${reasoning} web_search=${web_search} workdir=${workdir} persistent_root=$([ "${ephemeral}" = true ] && echo false || echo true)" >&2
+	engine_env=(
+		--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex --env PYTHONDONTWRITEBYTECODE=1
+		--env CODEX_ISOLATED_PROXY_KEY=isolated-placeholder
+		--env "CODEX_ISOLATED_MODEL=${model}" --env "CODEX_ISOLATED_REASONING=${reasoning}"
+		--env "CODEX_ISOLATED_WEB_SEARCH=${web_search}" --env "CODEX_ISOLATED_WORKDIR=${workdir}"
+	)
+	inner_name="codex-isolated"
+	# shellcheck disable=SC2016  # expanded inside the container
+	inner_script='
 		set -euo pipefail
 		mkdir -p "${CODEX_HOME}"
 		bash /support/write_codex_config.sh --model "${CODEX_ISOLATED_MODEL}" --reasoning "${CODEX_ISOLATED_REASONING}" \
@@ -417,7 +569,19 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm -i --init \
 		python3 -c "import socket,time; [(time.sleep(.1) if s.connect_ex((\"127.0.0.1\",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)" \
 			|| { echo "::error::CODEX_ISOLATION model bridge unavailable" >&2; exit 98; }
 		codex "$@"
-	' codex-isolated "${codex_args[@]}" < "${root}/prompt" &
+	'
+fi
+# No host checkout, .git, HOME, Docker socket, token or Git remote is
+# mounted, and no runner environment variable is passed in.
+rc=0
+env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm -i --init \
+	--name "${container}" --label "coding-workflows.codex-isolated.root=${root}" \
+	--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL \
+	--security-opt no-new-privileges "${limits[@]}" \
+	--tmpfs /home/agent:rw,nosuid,nodev,size=512m,mode=1777 \
+	"${mounts[@]}" \
+	"${engine_env[@]}" \
+	--workdir "${workdir}" "${image}" /bin/bash -c "${inner_script}" "${inner_name}" "${codex_args[@]}" < "${root}/prompt" &
 docker_pid=$!
 while :; do
 	wait "${docker_pid}" && rc=0 || rc=$?

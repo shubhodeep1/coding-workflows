@@ -106,7 +106,11 @@ def test_helper_container_has_no_credentials_network_or_host_checkout():
 	for flag in ("--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--user"):
 		assert flag in run_block
 	docker_flags = run_block[: run_block.index('"${image}" /bin/bash -c')]
-	env_flags = re.findall(r'''--env\s+"?([^"\s]+)''', docker_flags)
+	assert '"${engine_env[@]}"' in docker_flags
+	# The container environment is the per-engine engine_env array.
+	engine_env_blocks = re.findall(r"engine_env=\((.*?)\n\t\)", text, re.S)
+	assert len(engine_env_blocks) == 2
+	env_flags = re.findall(r'''--env\s+"?([^"\s]+)''', docker_flags + "".join(engine_env_blocks))
 	assert env_flags and "--env-file" not in docker_flags and " -e " not in docker_flags
 	for secret in ("OPENROUTER_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "TG_BOT_SECRET"):
 		assert not any(secret in flag for flag in env_flags), f"{secret} must never be passed to the agent container"
@@ -215,3 +219,56 @@ def test_review_blocked_fix_writer_runs_in_the_review_sandbox():
 	fix_block = text[text.index("rb_fix_opencode_cmd=("):]
 	fix_block = fix_block[: fix_block.index(")\n")]
 	assert "opencode_run_cmd" not in fix_block
+
+
+# --- the Claude engine (CLAUDE.md answer Q16 A) ---------------------------------------
+
+# Files allowed to start the Claude Code CLI directly: the container
+# entrypoints, where it runs inside the isolated container, and the token
+# step's usage probe, which sends the fixed prompt "Reply OK" (no untrusted
+# text) from an empty directory with GH_TOKEN / GITHUB_TOKEN unset.
+CLAUDE_CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh", "review_untrusted_sandbox.sh"}
+CLAUDE_FIXED_PROMPT_PROBES = {"claude_pool_token.sh"}
+RAW_CLAUDE = re.compile(r'''(?:^|[\s;&|(=]|--\s)claude\s+(?:-p\b|--print\b|"\$@")''')
+
+
+def test_no_claude_cli_is_started_outside_the_isolation_helpers():
+	offenders = {}
+	paths = list(SCRIPTS.glob("*.sh")) + list(WORKFLOWS.glob("*.yml")) + list((REPO_ROOT / ".github" / "actions").rglob("*.y*ml"))
+	for path in sorted(paths):
+		if path.name in CLAUDE_CONTAINER_ENTRYPOINTS | CLAUDE_FIXED_PROMPT_PROBES:
+			continue
+		sites = [line.strip() for line in logical_lines(path.read_text(encoding="utf-8")) if RAW_CLAUDE.search(line)]
+		if sites:
+			offenders[str(path.relative_to(REPO_ROOT))] = sites
+	assert not offenders, (
+		"The Claude Code CLI must run through scripts/codex_isolated_exec.sh --engine claude "
+		f"(or another container entrypoint); found direct launches: {offenders}"
+	)
+
+
+def test_claude_run_launches_through_the_isolated_helper_without_the_token():
+	text = (SCRIPTS / "ai_engine.sh").read_text(encoding="utf-8")
+	body = text[text.index("claude_run()"):]
+	assert 'local isolated_exec="${_AI_ENGINE_DIR}/codex_isolated_exec.sh"' in body
+	assert 'cmd=(bash "${isolated_exec}" "${isolation_args[@]}" --claude-token-file "${token_file}" --' in body
+	assert "run --engine claude --mode" in body
+	assert 'isolation_mode="read-only"' in body and 'isolation_mode="workspace"' in body
+	assert "--hide-claude-md" in body and "--claude-home" in body
+	assert "--guard-hook /support/guard.py" in body
+	# The token is never read into the job's shell or the CLI's environment.
+	assert "CLAUDE_CODE_OAUTH_TOKEN=" not in body
+	assert "export CLAUDE_CODE_OAUTH_TOKEN" not in body
+	assert 'cat -- "${token_file}"' not in body and '< "${token_file}"' not in body
+	assert "ai_engine_fallback \"${role}\" isolation_unavailable" in body
+
+
+def test_helper_claude_branch_keeps_the_token_on_the_host():
+	text = HELPER.read_text(encoding="utf-8")
+	assert '"${support_dir}/claude_anthropic_relay.py" broker "${root}/socket/provider.sock" "${claude_token_file}" "${claude_models}"' in text
+	assert "--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder" in text
+	assert "--env ANTHROPIC_BASE_URL=http://127.0.0.1:8765" in text
+	for line in text.splitlines():
+		if "--mount" in line:
+			assert "claude_token_file" not in line, line
+	assert 'export CODEX_ISOLATED_HIDE="CLAUDE.md"' in text

@@ -1190,6 +1190,7 @@ forwards one fixed endpoint for one model.
 | Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files (including `.ssh`, `.npmrc`, `.netrc`) skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap; synthetic Git contains only allowed HEAD blobs |
 | Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
 | Implement dependencies | installed once per job in a credential-free networked container; never copied back |
+| Claude engine (`claude_run`) | same container via `--engine claude`, pinned Claude Code CLI added to the image; the token stays in the host relay (`claude_anthropic_relay.py`); unavailable isolation returns `75` so the role runs codex (README "Claude engine") |
 
 What this means for operators: runners need Docker (GitHub-hosted
 `ubuntu-latest` has it). A missing Docker or a failed image build fails the
@@ -1957,8 +1958,10 @@ in `claude-engine-smoke.yml`.
 writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
 `order` file, best account first, and one `0600` file per account under
 `tokens/`). A usage-limited or rejected account moves the run to the next one.
-When no CLI, policy, instructions file or account is usable, it logs
-`AI_ENGINE_FALLBACK role= reason=`, sends at most one Telegram note per job,
+When the isolation helper, Docker, the sandbox image, the policy, the
+instructions file or every account is unusable, it logs
+`AI_ENGINE_FALLBACK role= reason=` (`isolation_unavailable`, `support_missing`,
+`no_credential`, `all_accounts_failed`, …), sends at most one Telegram note per job,
 and returns `75`; the caller then runs its codex path unchanged. A crash
 returns non-zero and follows the role's existing retry rules; a timeout
 returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
@@ -1966,14 +1969,33 @@ which only adds `engine=claude` to its log lines, and every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
 
+**Isolation.** `claude_run` never starts the CLI on the runner. Each account
+attempt runs `scripts/codex_isolated_exec.sh run --engine claude` (see
+"Isolated Codex agents"): the same credential-free container with
+`--network none`, a read-only root and no capabilities, with the pinned CLI
+added to the image. `scripts/claude_anthropic_relay.py` runs on the host as the
+broker: it alone reads the account's token file, swaps it into each request
+and forwards only the role's model and the probe model to `api.anthropic.com`;
+the container holds the placeholder `isolated-placeholder` and never sees
+`GH_TOKEN`, the OpenRouter key or the checkout's `.git`. A `read` profile sees
+a read-only copy of the workdir; a write profile edits a copy whose changed
+regular files are copied back. The CLI's session store is
+`$RUNNER_TEMP/claude-isolated-home`, mounted as `~/.claude`, so a later
+`claude_run` in the same job resumes its `session_id`. The settings, the
+`gh_api_write_guard.py` hook and the instructions are copied to `/support/` in
+the container. Docker missing or a failed image build makes `claude_run`
+return `75` (`isolation_unavailable`), and the role runs codex, which is
+isolated the same way. On a runner that runs as root the container gets
+`IS_SANDBOX=1`, which the CLI requires for `bypassPermissions` as root.
+
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
-visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
-`claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
-it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
-file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
-and reports that path instead of overwriting the new content.
+visible. If it is, set `hide_claude_md: true` in `claude_engine.json`: the
+container's copy then leaves the top-level `CLAUDE.md` out (and out of its
+synthetic `.git`), and the write-back never creates or changes it. The host
+file is never moved; a `CLAUDE.md` the run writes is dropped and logged as
+`CODEX_ISOLATION transfer ignored=CLAUDE.md reason=hidden`.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in

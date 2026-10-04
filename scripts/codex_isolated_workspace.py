@@ -45,12 +45,19 @@ Subcommands:
       symlinks, no .git) to TARGET; the helper mounts it read-only at SRC's
       absolute path, or places it inside a read-only workdir snapshot.
 
+Hidden paths: CODEX_ISOLATED_HIDE (comma-separated top-level file names,
+for example `CLAUDE.md` when the Claude engine's hide_claude_md is on) are
+treated like credential paths by every subcommand: never copied into the
+container, absent from the synthetic git tree, and never written back, so the
+host file is never moved or replaced.
+
 Every failure prints `::error::CODEX_ISOLATION ...` and exits 1.
 """
 
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -78,6 +85,23 @@ READONLY_BAD_PARTS = {
 	"id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
 }
 SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
+HIDDEN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+
+def hidden_names():
+	"""Top-level file names CODEX_ISOLATED_HIDE keeps out of the container."""
+	names = set()
+	for value in os.environ.get("CODEX_ISOLATED_HIDE", "").split(","):
+		value = value.strip()
+		if not value:
+			continue
+		if not HIDDEN_NAME_RE.match(value) or value in (".", ".."):
+			raise Rejected(f"invalid hidden path: {value!r}")
+		names.add(value)
+	return frozenset(names)
+
+
+HIDDEN_NAMES = frozenset()
 
 
 class Rejected(Exception):
@@ -122,6 +146,8 @@ def has_git_part(name):
 
 def readonly_allowed(name):
 	if not safe_name(name):
+		return False
+	if name in HIDDEN_NAMES:
 		return False
 	for part in PurePosixPath(name).parts:
 		lower = part.lower()
@@ -410,6 +436,9 @@ def transfer(host, dest, manifest):
 	entries = data["entries"]
 	prep_roots = data["prep_roots"]
 	results = copy_tree_state(dest, prep_roots)
+	for name in sorted(HIDDEN_NAMES):
+		if (dest / name).exists() or (dest / name).is_symlink():
+			log(f"transfer ignored={name} reason=hidden")
 	writes = []
 	deletes = {}
 	rmdirs = []
@@ -661,7 +690,9 @@ def main():
 		print("usage: codex_isolated_workspace.py <snapshot-readonly|snapshot-workspace|prep-finalize|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
 		raise SystemExit(2)
 	args = [Path(value) for value in sys.argv[2:]]
+	global HIDDEN_NAMES
 	try:
+		HIDDEN_NAMES = hidden_names()
 		if command == "snapshot-readonly":
 			snapshot_readonly(*args)
 		elif command == "snapshot-workspace":

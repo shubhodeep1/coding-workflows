@@ -316,3 +316,122 @@ def test_thread_reuse_direct_run_launches_through_the_helper(sandbox, tmp_path):
 	assert output.read_text().strip() == "FAKE_CODEX_OUTPUT"
 	assert docker_runs(sandbox["docker_log"]), "codex_thread_reuse.sh must launch through the helper"
 	assert_no_secret_env(codex_records(sandbox)[0]["env"])
+
+
+# --- the Claude engine (scripts/ai_engine.sh claude_run; CLAUDE.md answer Q16 A) -----
+
+CLAUDE_TOKEN = "sk-ant-oat01-isolationtesttoken"
+
+FAKE_CLAUDE = r'''#!__PYTHON__
+import json, os, subprocess, sys
+mounts = json.loads(os.environ.get("FAKE_CONTAINER_MOUNTS", "[]"))
+support = next((m["src"] for m in mounts if m.get("dst") == "/support"), "")
+show = subprocess.run(["git", "show", "HEAD:CLAUDE.md"], capture_output=True, text=True)
+record = {"argv": sys.argv[1:], "env": dict(os.environ), "prompt": sys.stdin.read(),
+	"files": sorted(os.listdir(".")), "support": sorted(os.listdir(support)) if support else [],
+	"git_show_claude_md": show.returncode == 0}
+with open(__LOG__, "a") as handle:
+	handle.write(json.dumps(record) + "\n")
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok"}))
+'''
+
+
+@pytest.fixture()
+def claude_engine(sandbox, tmp_path):
+	(sandbox["repo"] / "CLAUDE.md").write_text("repository instructions\n")
+	git(sandbox["repo"], "add", "-A")
+	git(sandbox["repo"], "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "claude md")
+	script = FAKE_CLAUDE.replace("__PYTHON__", sys.executable).replace("__LOG__", repr(str(tmp_path / "claude.jsonl")))
+	(sandbox["bin"] / "claude").write_text(script)
+	(sandbox["bin"] / "claude").chmod(0o755)
+	files = tmp_path / "claude-files"
+	files.mkdir()
+	token = sandbox["runner_temp"] / "token-A"
+	token.write_text(CLAUDE_TOKEN + "\n")
+	token.chmod(0o600)
+	for name, text in (("settings.json", '{"permissions": {"deny": []}}'), ("guard.py", "print('guard')\n"), ("instructions.md", "instructions\n")):
+		(files / name).write_text(text)
+	args = [
+		"run", "--engine", "claude", "--mode", "read-only",
+		"--claude-token-file", str(token), "--claude-models", "claude-opus-5-5,claude-haiku-4-5",
+		"--claude-cli-version", "2.1.289", "--claude-settings", str(files / "settings.json"),
+		"--claude-guard-hook", str(files / "guard.py"), "--claude-instructions", str(files / "instructions.md"),
+	]
+	return {"args": args, "log": tmp_path / "claude.jsonl", "token": token}
+
+
+CLAUDE_ARGS = ["--", "-p", "--model", "claude-opus-5-5", "--settings", "/support/settings.json"]
+
+
+def claude_records(engine):
+	return [json.loads(line) for line in engine["log"].read_text().splitlines()] if engine["log"].exists() else []
+
+
+def test_claude_engine_runs_behind_the_relay_without_credentials(sandbox, claude_engine):
+	proc = run_helper(sandbox, *claude_engine["args"], "--hide-claude-md", *CLAUDE_ARGS, env_extra={"OPENROUTER_API_KEY": ""})
+	assert proc.returncode == 0, proc.stderr
+	record = claude_records(claude_engine)[0]
+	assert_no_secret_env(record["env"])
+	assert record["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "isolated-placeholder"
+	assert record["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8765"
+	assert record["argv"] == CLAUDE_ARGS[1:]
+	assert record["support"] == ["claude_anthropic_relay.py", "guard.py", "instructions.md", "settings.json"]
+	# hide_claude_md: absent from the copy and from the synthetic git tree.
+	assert "CLAUDE.md" not in record["files"] and "src" in record["files"]
+	assert record["git_show_claude_md"] is False
+	(run,) = docker_runs(sandbox["docker_log"])
+	dumped = json.dumps(run)
+	assert CLAUDE_TOKEN not in dumped and str(claude_engine["token"]) not in dumped
+	assert TOKEN not in dumped and OPENROUTER_KEY not in dumped
+	argv = run["argv"]
+	assert argv[argv.index("--network") + 1] == "none"
+	assert "--read-only" in argv
+	assert all(".git" not in mount for mount in mounts_of(run))
+	builds = [entry for entry in read_docker_log(sandbox["docker_log"]) if entry["argv"][:1] == ["build"]]
+	assert any("CLAUDE_CLI_VERSION=2.1.289" in entry["argv"] for entry in builds)
+	assert CLAUDE_TOKEN not in proc.stderr + proc.stdout
+
+
+def test_claude_engine_model_must_be_allowed(sandbox, claude_engine):
+	proc = run_helper(sandbox, *claude_engine["args"], "--", "-p", "--model", "claude-other-1")
+	assert proc.returncode == 1
+	assert "--model must be one of --claude-models" in proc.stderr
+	assert docker_runs(sandbox["docker_log"]) == []
+
+
+def test_claude_engine_without_docker_reports_unavailable(sandbox, claude_engine, tmp_path):
+	bare = tmp_path / "bare-bin"
+	bare.mkdir()
+	for tool in ("bash", "python3", "realpath", "dirname", "basename", "mktemp", "env", "cat", "chmod", "mkdir", "rm", "id"):
+		found = shutil.which(tool)
+		if found:
+			(bare / tool).symlink_to(found)
+	proc = run_helper(sandbox, *claude_engine["args"], *CLAUDE_ARGS, path=str(bare))
+	assert proc.returncode == 75, proc.stderr
+	assert "CODEX_ISOLATION unavailable engine=claude reason=docker_missing" in proc.stderr
+	assert claude_records(claude_engine) == []
+
+
+def test_claude_engine_relay_failure_is_its_own_exit(sandbox, claude_engine):
+	claude_engine["token"].chmod(0o644)  # claude_anthropic_relay.py refuses it
+	proc = run_helper(sandbox, *claude_engine["args"], *CLAUDE_ARGS)
+	assert proc.returncode == 73, proc.stderr
+	assert "CODEX_ISOLATION relay_unavailable engine=claude" in proc.stderr
+	assert claude_records(claude_engine) == []
+
+
+def test_claude_home_is_mounted_as_the_session_store(sandbox, claude_engine, tmp_path):
+	home = sandbox["runner_temp"] / "claude-home"
+	proc = run_helper(sandbox, *claude_engine["args"], "--claude-home", str(home), *CLAUDE_ARGS)
+	assert proc.returncode == 0, proc.stderr
+	(run,) = docker_runs(sandbox["docker_log"])
+	assert f"type=bind,src={home},dst=/home/agent/.claude" in mounts_of(run)
+	assert oct(home.stat().st_mode & 0o777) == "0o700"
+
+
+def test_claude_options_are_refused_for_codex_and_prepare(sandbox, claude_engine):
+	proc = run_helper(sandbox, "prepare", "--engine", "claude", "--workdir", str(sandbox["repo"]))
+	assert proc.returncode == 2
+	write_fake_codex(sandbox)
+	proc = run_helper(sandbox, "run", "--mode", "read-only", "--claude-home", str(sandbox["runner_temp"] / "h"), *CODEX_ARGS)
+	assert proc.returncode == 1 and "--claude-home needs --engine claude" in proc.stderr

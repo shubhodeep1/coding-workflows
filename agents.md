@@ -573,6 +573,34 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `tests/test_codex_agent_isolation_contract.py` fails when a direct `codex`
   launch appears anywhere else (clarify keeps its own
   `scripts/clarify_isolated_run.sh`).
+- **Claude engine.** `claude_run` (`scripts/ai_engine.sh`) never starts the
+  Claude Code CLI on the runner: each account attempt runs
+  `codex_isolated_exec.sh run --engine claude` in the same container, with
+  the pinned CLI (`cli_version` in `.github/ai/claude_engine.json`) added to
+  the image. `scripts/claude_anthropic_relay.py` is the host broker: it reads
+  the account's `0600` token file (`--claude-token-file`, never mounted or
+  passed in the environment), swaps it into each request and allows only
+  `--claude-models` (the role's model and the probe model); the container
+  holds `CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder` and
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:8765`. A `read` profile runs in
+  `read-only` mode, write profiles in `workspace` mode. The rendered settings,
+  the `gh_api_write_guard.py` hook and the instructions are copied to
+  `/support/settings.json`, `/support/guard.py` and `/support/instructions.md`.
+  `$RUNNER_TEMP/claude-isolated-home` is mounted as `~/.claude` so
+  `--resume` finds the session. `hide_claude_md` sets
+  `CODEX_ISOLATED_HIDE=CLAUDE.md`: the top-level `CLAUDE.md` is left out of
+  the copy and the synthetic `.git`, and the write-back never creates or
+  changes it (`CODEX_ISOLATION transfer ignored=CLAUDE.md reason=hidden`).
+  Helper exit `75` (`CODEX_ISOLATION unavailable engine=claude reason=`
+  `docker_missing` / `support_missing` / `image_build_failed`) makes
+  `claude_run` log `CLAUDE_POOL … outcome=unavailable` and return `75` with
+  `AI_ENGINE_FALLBACK … reason=isolation_unavailable`, so the role runs codex.
+  Exit `73` (`CODEX_ISOLATION relay_unavailable engine=claude`, for example a
+  token file that is not `0600`) moves to the next account. A root runner
+  passes `IS_SANDBOX=1`, which the CLI needs for `bypassPermissions` as root.
+  `tests/test_codex_agent_isolation_contract.py` fails when `claude -p` is
+  started outside a container entrypoint; the token step's fixed-prompt usage
+  probe (`scripts/claude_pool_token.sh`) is the one listed exception.
 - **No MCP tools inside.** Serena (and any other MCP server) is not configured
   in the container, so isolated prompts carry no Serena hints. Semble results
   are rendered into prompts on the host and are unaffected.

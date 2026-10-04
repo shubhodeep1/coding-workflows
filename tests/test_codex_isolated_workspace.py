@@ -24,9 +24,11 @@ MODULE = REPO_ROOT / "scripts" / "codex_isolated_workspace.py"
 TOKEN = "ghp_isolationtesttoken000000000000000000"
 
 
-def run(command, *args, check=True):
-	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+def run(command, *args, check=True, hide=None):
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_") and key != "CODEX_ISOLATED_HIDE"}
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	if hide is not None:
+		env["CODEX_ISOLATED_HIDE"] = hide
 	proc = subprocess.run(
 		[sys.executable, str(MODULE), command, *[str(a) for a in args]],
 		capture_output=True,
@@ -343,3 +345,43 @@ def test_copy_include_rejects_symlink_source(tmp_path):
 	real.write_text("x\n")
 	os.symlink(real, tmp_path / "alias.txt")
 	assert run("copy-include", tmp_path / "alias.txt", tmp_path / "out", check=False).returncode == 1
+
+
+# --- hidden paths (CODEX_ISOLATED_HIDE; the Claude engine's hide_claude_md) ------------
+
+
+def test_hidden_claude_md_is_never_copied_shown_or_written_back(repo, tmp_path):
+	(repo / "CLAUDE.md").write_text("repository instructions\n")
+	git(repo, "add", "CLAUDE.md")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "claude md")
+	readonly = tmp_path / "ro"
+	run("snapshot-readonly", repo, readonly, hide="CLAUDE.md")
+	run("seed-git", repo, readonly, hide="CLAUDE.md")
+	assert not (readonly / "CLAUDE.md").exists() and (readonly / "src" / "app.py").exists()
+	assert subprocess.run(["git", "show", "HEAD:CLAUDE.md"], cwd=readonly, capture_output=True).returncode != 0
+	dest = tmp_path / "work"
+	manifest = tmp_path / "manifest.json"
+	run("snapshot-workspace", repo, dest, manifest, hide="CLAUDE.md")
+	assert not (dest / "CLAUDE.md").exists()
+	(dest / "CLAUDE.md").write_text("agent instructions\n")
+	(dest / "src" / "app.py").write_text("print('edited')\n")
+	proc = run("transfer", repo, dest, manifest, hide="CLAUDE.md")
+	assert "transfer ignored=CLAUDE.md reason=hidden" in proc.stderr
+	assert (repo / "CLAUDE.md").read_text() == "repository instructions\n"
+	assert (repo / "src" / "app.py").read_text() == "print('edited')\n"
+
+
+def test_hidden_path_does_not_delete_the_host_file(repo, tmp_path):
+	(repo / "CLAUDE.md").write_text("repository instructions\n")
+	dest = tmp_path / "work"
+	manifest = tmp_path / "manifest.json"
+	run("snapshot-workspace", repo, dest, manifest, hide="CLAUDE.md")
+	run("transfer", repo, dest, manifest, hide="CLAUDE.md")
+	assert (repo / "CLAUDE.md").read_text() == "repository instructions\n"
+
+
+@pytest.mark.parametrize("value", ["../CLAUDE.md", "docs/CLAUDE.md", ".", "a b"])
+def test_invalid_hidden_path_is_refused(repo, tmp_path, value):
+	proc = run("snapshot-readonly", repo, tmp_path / "ro", check=False, hide=value)
+	assert proc.returncode == 1
+	assert "invalid hidden path" in proc.stderr

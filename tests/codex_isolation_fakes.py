@@ -35,6 +35,9 @@ if not args:
 	sys.exit(0)
 command = args[0]
 if command == "build":
+	if PASSTHROUGH.get("FAKE_DOCKER_BUILD_FAIL"):
+		print("fake build failure", file=sys.stderr)
+		sys.exit(1)
 	print("sha256:" + "0" * 64)
 	sys.exit(0)
 if command in ("ps", "rm", "kill"):
@@ -66,17 +69,37 @@ while index < len(args):
 	break
 image = args[index]
 inner = args[index + 1:]
-# inner = ["/bin/bash", "-c", SCRIPT, NAME, *codex_args]
+# inner = ["/bin/bash", "-c", SCRIPT, NAME, *agent_args]; NAME picks the CLI.
+agent = "claude" if inner[3:4] == ["claude-isolated"] else "codex"
 codex_args = inner[4:]
 host_cwd = None
+socket_dir = None
 for mount in mounts:
 	if mount.get("dst") == workdir:
 		host_cwd = mount.get("src")
+	if mount.get("dst") == "/socket":
+		socket_dir = mount.get("src")
 env = dict(container_env)
 env.update(PASSTHROUGH)
 env["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")
 env["FAKE_CONTAINER_MOUNTS"] = json.dumps(mounts)
-proc = subprocess.run(["codex", *codex_args], cwd=host_cwd, env=env)
+if agent == "claude" and socket_dir:
+	# Test-only: the real token never enters the container. A fake CLI that
+	# behaves per account learns it from the host relay serving this socket.
+	sock = os.path.join(socket_dir, "provider.sock")
+	for pid in os.listdir("/proc"):
+		try:
+			with open(f"/proc/{pid}/cmdline", "rb") as handle:
+				argv = handle.read().split(b"\0")
+		except OSError:
+			continue
+		names = [part.decode("utf-8", "replace") for part in argv]
+		if "broker" in names and any(n.endswith("claude_anthropic_relay.py") for n in names) and sock in names:
+			token_path = names[names.index(sock) + 1]
+			with open(token_path, encoding="utf-8") as handle:
+				env["FAKE_RELAY_TOKEN"] = handle.read().strip()
+			break
+proc = subprocess.run([agent, *codex_args], cwd=host_cwd, env=env)
 sys.exit(proc.returncode)
 '''
 
@@ -132,6 +155,7 @@ def isolation_support_files(scripts_dir: Path) -> list[str]:
 		"clarify_openrouter_broker.py",
 		"write_codex_config.sh",
 		"codex_model_catalog.json",
+		"claude_anthropic_relay.py",
 	]
 
 
@@ -147,7 +171,7 @@ def copy_isolation_support(dest_scripts_dir: Path) -> None:
 		shutil.copy2(source / name, dest_scripts_dir / name)
 
 
-def enable_fake_isolation(bin_dir: Path, scripts_dir: Path, env: dict, passthrough_prefixes=("MOCK_", "GH_MOCK_", "REAL_")) -> dict:
+def enable_fake_isolation(bin_dir: Path, scripts_dir: Path, env: dict, passthrough_prefixes=("MOCK_", "GH_MOCK_", "REAL_"), short_temp: bool = True) -> dict:
 	"""Make a harness that stubs `codex` work through the real helper.
 
 	Copies the helper's support files next to the scripts under test,
@@ -162,7 +186,8 @@ def enable_fake_isolation(bin_dir: Path, scripts_dir: Path, env: dict, passthrou
 	passthrough = {key: value for key, value in env.items() if key.startswith(tuple(passthrough_prefixes))}
 	install_fake_docker(bin_dir, bin_dir.parent / "fake-docker.jsonl", passthrough)
 	updated = dict(env)
-	updated["RUNNER_TEMP"] = str(_shared_short_temp_dir())
+	if short_temp:
+		updated["RUNNER_TEMP"] = str(_shared_short_temp_dir())
 	updated.setdefault("OPENROUTER_API_KEY", "test-openrouter-key")
 	if not updated.get("OPENROUTER_API_KEY"):
 		updated["OPENROUTER_API_KEY"] = "test-openrouter-key"
