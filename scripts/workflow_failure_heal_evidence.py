@@ -811,16 +811,14 @@ class Collector:
 		if not isinstance(run, dict) or str(run.get("id")) != ref["run_id"]:
 			return False, "run_metadata_unavailable"
 		repository = run.get("repository")
-		if repository is not None and not isinstance(repository, dict):
-			return False, "run_repo_mismatch"
-		if isinstance(repository, dict) and repository.get("full_name") is not None and str(repository["full_name"]).lower() != ref["repo"].lower():
+		if not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str) or repository["full_name"].lower() != ref["repo"].lower():
 			return False, "run_repo_mismatch"
 		pulls = run.get("pull_requests")
 		pr_linked = pr_number is not None and isinstance(pulls, list) and any(isinstance(pr, dict) and pr.get("number") == pr_number for pr in pulls)
 		pr_named = pr_number is not None and any(f"[pr:{pr_number}]" in (run.get(key) or "") for key in ("display_title", "name") if isinstance(run.get(key), str))
 		head_matches = sha and isinstance(run.get("head_sha"), str) and run["head_sha"].lower() == sha
 		branch_matches = branch and run.get("head_branch") == branch
-		if (head_matches and (not branch and pr_number is None or branch_matches or pr_linked)) or pr_linked or pr_named:
+		if head_matches and ((not branch and pr_number is None) or branch_matches or pr_linked or pr_named):
 			return True, "verified"
 		return False, "run_head_mismatch"
 

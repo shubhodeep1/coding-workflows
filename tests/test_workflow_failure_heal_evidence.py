@@ -624,7 +624,7 @@ def test_default_branch_review_run_is_accepted_with_pr_token(tmp_path: Path, mon
 	issue = _issue(body=_issue()["body"].replace(REPO, "acme/registered"))
 	fake = FakeGh()
 	fake.routes["repos/acme/registered/actions/runs/111"] = {
-		"id": 111, "head_sha": MERGE_SHA, "head_branch": "main", "name": "AI Review [pr:6133]", "repository": {"full_name": "acme/registered"},
+		"id": 111, "head_sha": HEAD_SHA, "head_branch": "main", "name": "AI Review [pr:6133]", "repository": {"full_name": "acme/registered"},
 	}
 	fake.routes["repos/acme/registered/actions/runs/111/jobs?per_page=100"] = fake.routes[f"repos/{REPO}/actions/runs/111/jobs?per_page=100"]
 	fake.routes["repos/acme/registered/actions/jobs/11/logs"] = _review_log()
@@ -632,6 +632,41 @@ def test_default_branch_review_run_is_accepted_with_pr_token(tmp_path: Path, mon
 	_collector(tmp_path, fake).collect(issue, [], issue_repo=REPO)
 	assert "repos/acme/registered/actions/runs/111" in fake.paths
 	assert "repos/acme/registered/actions/runs/111/jobs?per_page=100" in fake.paths
+
+
+def test_pr_named_run_on_other_head_is_skipped_before_jobs(tmp_path: Path, monkeypatch) -> None:
+	monkeypatch.setenv("WORKFLOW_HEAL_CONSUMER_REGISTRY", str(tmp_path / "consumers.json"))
+	(tmp_path / "consumers.json").write_text(json.dumps(["acme/registered"]))
+	issue = _issue(body=_issue()["body"].replace(REPO, "acme/registered"))
+	fake = FakeGh()
+	fake.routes["repos/acme/registered/actions/runs/111"] = {
+		"id": 111, "head_sha": MERGE_SHA, "head_branch": "main", "name": "AI Review [pr:6133]", "repository": {"full_name": "acme/registered"},
+	}
+	manifest = _collector(tmp_path, fake).collect(issue, [], issue_repo=REPO)
+	assert {"part": "run:acme/registered:111", "reason": "unverified_run_head_mismatch"} in manifest["skipped"]
+	assert "run:acme/registered:111: unverified_run_head_mismatch" in (tmp_path / "evidence/INDEX.md").read_text()
+	assert "repos/acme/registered/actions/runs/111/jobs?per_page=100" not in fake.paths
+
+
+def test_pr_linked_run_requires_reported_head(tmp_path: Path) -> None:
+	fake = FakeGh()
+	fake.routes["repos/acme/registered/actions/runs/111"] = {
+		"id": 111, "head_sha": MERGE_SHA, "head_branch": "ai/issue-5144",
+		"pull_requests": [{"number": 6133}], "repository": {"full_name": "acme/registered"},
+	}
+	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"}
+	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_head_mismatch")
+	fake.routes["repos/acme/registered/actions/runs/111"]["head_sha"] = HEAD_SHA
+	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (True, "verified")
+
+
+def test_cross_repo_run_without_repository_metadata_is_rejected(tmp_path: Path) -> None:
+	fake = FakeGh()
+	fake.routes["repos/acme/registered/actions/runs/111"] = {
+		"id": 111, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144",
+	}
+	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"}
+	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_repo_mismatch")
 
 
 def test_run_metadata_rejects_different_repository(tmp_path: Path) -> None:
