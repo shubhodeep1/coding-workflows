@@ -117,6 +117,15 @@ _DIAGNOSTIC_LINE_RE = re.compile(
 	r"|[Cc]laimed changes|Editor attempt [0-9]|Editor output|WORKFLOW_HEAL\b|AUTOFIX_[A-Z_]+|PROMOTE_CYCLE_[A-Z_]+"
 	r"|^##\[warning\]|^::warning::|Process completed with exit code"
 )
+# Artifact files are not masked by GitHub the way job logs are, and this
+# text reaches model prompts: redact anything shaped like a credential.
+_SECRET_RES = (
+	re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"),
+	re.compile(r"\bsk-(?:or-v1-|proj-|ant-)?[A-Za-z0-9_-]{20,}"),
+	re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
+	re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+	re.compile(r"(?i)\b(authorization:\s*(?:bearer|token)\s+)[^\s\"']{8,}"),
+)
 _HEAL_RUN_LINE_RE = re.compile(r"\*\*(?:Failed run|Failed runs?)\:\*\*\s*(?P<url>\S+)")
 _OCCURRENCE_MARKER = "<!-- " + heal.MARKER_PREFIX + "occurrence -->"
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -134,6 +143,15 @@ def _now_iso() -> str:
 def _safe_name(value: Any, limit: int = 80) -> str:
 	text = _SAFE_NAME_RE.sub("_", str(value or "")).strip("._")
 	return (text or "x")[:limit]
+
+
+def redact_secrets(text: str) -> str:
+	for pattern in _SECRET_RES:
+		if pattern.groups:
+			text = pattern.sub(lambda m: m.group(1) + "[REDACTED]", text)
+		else:
+			text = pattern.sub("[REDACTED]", text)
+	return text
 
 
 def _clip_bytes(text: str, max_bytes: int, *, keep: str = "head") -> str:
@@ -646,7 +664,7 @@ class Collector:
 	def _write(self, rel: str, text: str) -> None:
 		path = self.out / rel
 		path.parent.mkdir(parents=True, exist_ok=True)
-		path.write_text(_clip_bytes(text, self.max_file), encoding="utf-8")
+		path.write_text(_clip_bytes(redact_secrets(text), self.max_file), encoding="utf-8")
 
 	def _write_json(self, rel: str, data: Any) -> None:
 		path = self.out / rel
@@ -1093,7 +1111,7 @@ def _cmd_slice_log(args: argparse.Namespace) -> int:
 			if isinstance(job, dict) and str(job.get("id")) == str(args.job_id):
 				steps = [step for step in job.get("steps") or [] if isinstance(step, dict)]
 				break
-	sys.stdout.write(slice_job_log(text, steps=steps, max_bytes=args.max_bytes))
+	sys.stdout.write(redact_secrets(slice_job_log(text, steps=steps, max_bytes=args.max_bytes)))
 	return 0
 
 

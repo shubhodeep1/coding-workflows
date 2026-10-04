@@ -229,6 +229,21 @@ def _zip(members: dict[str, bytes]) -> bytes:
 	return buffer.getvalue()
 
 
+def test_written_evidence_redacts_credential_shaped_strings(tmp_path: Path) -> None:
+	text = (
+		"token ghp_" + "a" * 36 + " and github_pat_" + "b" * 30 + "\n"
+		"OPENROUTER sk-or-v1-" + "c" * 40 + " slack xoxb-" + "1" * 20 + " aws AKIA" + "D" * 16 + "\n"
+		"Authorization: Bearer abcdefghijklmnop\nkeep this line\n"
+	)
+	out = ev.redact_secrets(text)
+	assert "ghp_" not in out and "github_pat_" not in out and "sk-or-v1" not in out
+	assert "xoxb-" not in out and "AKIA" not in out and "abcdefghijklmnop" not in out
+	assert "Authorization: Bearer [REDACTED]" in out and "keep this line" in out
+	collector = _collector(tmp_path, FakeGh())
+	collector._write("x.txt", text)
+	assert "ghp_" not in (tmp_path / "evidence" / "x.txt").read_text()
+
+
 def test_reviewer_logs_keep_only_status_and_stderr_members() -> None:
 	blob = _zip({"status_deepseek.txt": b"rc=0", "review_deepseek.txt": b"long review", "pass1_x.log": b"wire", "slot.err": b"boom"})
 	kept = dict(ev.extract_artifact_texts(blob, max_file_bytes=1000, member_re=ev.ARTIFACT_MEMBER_RES["reviewer-logs"]))
