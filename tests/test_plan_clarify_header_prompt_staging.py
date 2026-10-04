@@ -131,21 +131,23 @@ def test_clarify_respond_critique_uses_the_answer_step_fallback() -> None:
 	assert "CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}" in respond
 
 
-def test_isolated_runner_checks_role_support_and_timeout_before_docker(tmp_path: Path) -> None:
-	runner = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"
-	prompt = tmp_path / "prompt.txt"
-	prompt.write_text("prompt", encoding="utf-8")
-	base_env = dict(os.environ, MODEL_EDITOR="openai/gpt-6-sol", MODEL_REASONING_EFFORT="high")
-	for role, extra_env, error in (
-		("PLAN", {}, "Invalid clarify engine role"),
-		("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": "relative"}, "Invalid clarify isolation support directory"),
-		("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": str(tmp_path / "missing")}, "Invalid clarify isolation support directory"),
-		("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "0"}, "Invalid clarify isolation timeout"),
-		("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "abc"}, "Invalid clarify isolation timeout"),
-	):
-		result = subprocess.run(["bash", str(runner), str(prompt), str(tmp_path / "out"), str(tmp_path / "log"), "codex", role],
-			cwd=REPO_ROOT, env={**base_env, **extra_env}, text=True, capture_output=True, check=False)
-		assert result.returncode == 1 and error in result.stderr, result.stderr
+def test_isolated_runner_checks_role_support_and_timeout_before_docker() -> None:
+	with tempfile.TemporaryDirectory(prefix="clarify-isolation-preflight-") as td:
+		tmp_path = Path(td)
+		runner = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"
+		prompt = tmp_path / "prompt.txt"
+		prompt.write_text("prompt", encoding="utf-8")
+		base_env = dict(os.environ, MODEL_EDITOR="openai/gpt-6-sol", MODEL_REASONING_EFFORT="high")
+		for role, extra_env, error in (
+			("PLAN", {}, "Invalid clarify engine role"),
+			("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": "relative"}, "Invalid clarify isolation support directory"),
+			("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_SUPPORT_DIR": str(tmp_path / "missing")}, "Invalid clarify isolation support directory"),
+			("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "0"}, "Invalid clarify isolation timeout"),
+			("UNBLOCK_JUDGE", {"CLARIFY_ISOLATION_TIMEOUT_SECS": "abc"}, "Invalid clarify isolation timeout"),
+		):
+			result = subprocess.run(["bash", str(runner), str(prompt), str(tmp_path / "out"), str(tmp_path / "log"), "codex", role],
+				cwd=REPO_ROOT, env={**base_env, **extra_env}, text=True, capture_output=True, check=False)
+			assert result.returncode == 1 and error in result.stderr, result.stderr
 
 
 def test_isolated_runner_support_override_and_optional_in_container_timeout() -> None:
