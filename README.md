@@ -1192,6 +1192,10 @@ forwards one fixed endpoint for one model.
 | Implement dependencies | installed once per job in a credential-free networked container; never copied back |
 | Claude engine (`claude_run`) | same container via `--engine claude`, pinned Claude Code CLI added to the image; the token stays in the host relay (`claude_anthropic_relay.py`); unavailable isolation returns `75` so the role runs codex (README "Claude engine") |
 
+Credential-store filenames such as `client_secret.json` remain excluded, but
+ordinary source modules such as `secret_manager.py` and `credential_provider.py`
+remain available to the agent for planned edits.
+
 What this means for operators: runners need Docker (GitHub-hosted
 `ubuntu-latest` has it). A missing Docker or a failed image build fails the
 step with `::error::CODEX_ISOLATION …`; Codex never falls back to running on

@@ -70,7 +70,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `.cts`, and `.mts` alongside other source extensions for snapshot and
    validated transfer. For Claude engine fixes it also admits only
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
-   and `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
+   `.claude/hooks/pr_merge_status_guard.py`, and
+   `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
    `.claude/` files remain excluded from snapshot and transfer. Its
    isolation helpers must already exist in the verified workflow support
    commit; a PR's own copies are review data,
@@ -531,7 +532,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   model the call names. The provider-hosted `web_search` tool keeps working.
 - **Modes.** `read-only`: a copy of the tracked regular files (all top-level
   directories; symlinks, `.git`, `.env*`, `secrets`, `credentials`, `.ssh`,
-  `.npmrc`, `.netrc`, `.config`, secret-named paths and key files skipped;
+  `.npmrc`, `.netrc`, `.config`, credential-store filenames and key files
+  skipped; source modules such as `secret_manager.py` remain visible;
   files over 2 MiB skipped and logged; 50,000 files / 512 MiB cap) mounted
   read-only. `workspace`: a copy of the directory excluding the same
   credential paths (allowed symlinks kept as symlinks); afterwards every

@@ -83,7 +83,12 @@ def test_readonly_snapshot_takes_tracked_files_only_and_skips_secrets(repo, tmp_
 
 
 def test_credential_paths_are_absent_from_snapshots_and_synthetic_git(repo, tmp_path):
-	hidden = (".npmrc", ".netrc", ".pypirc", ".ssh/id_ed25519", ".config/gh/hosts.yml", "client_secret.json")
+	hidden = (
+		".npmrc", ".netrc", ".pypirc", ".ssh/id_ed25519", ".config/gh/hosts.yml",
+		"client_secret.json", "secrets.json", "credentials.yaml", "secrets.yml",
+		"credentials.toml", "credentials.ini", "aws_credentials", "aws_credentials.json",
+		"client-secret.json", "client-secret.yaml", "secret.json", "credentials.txt",
+	)
 	for name in hidden:
 		path = repo / name
 		path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +104,28 @@ def test_credential_paths_are_absent_from_snapshots_and_synthetic_git(repo, tmp_
 		for name in hidden:
 			assert not (copied / name).exists()
 			assert subprocess.run(["git", "show", f"HEAD:{name}"], cwd=copied, capture_output=True).returncode != 0
+
+
+def test_source_files_about_secrets_remain_editable(repo, tmp_path):
+	paths = (
+		"src/secret_manager.py", "src/credential_provider.py", "tests/test_secrets.py",
+		"src/secret.py", "src/secrets.py", "src/credentials.ts", "src/credential.go",
+	)
+	for name in paths:
+		path = repo / name
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text("original\n")
+	git(repo, "add", "-A")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "add source")
+	readonly = tmp_path / "readonly"
+	workspace, manifest = snapshot_ws(repo, tmp_path)
+	run("snapshot-readonly", repo, readonly)
+	for name in paths:
+		assert (readonly / name).read_text() == "original\n"
+		(workspace / name).write_text("edited\n")
+	run("transfer", repo, workspace, manifest)
+	for name in paths:
+		assert (repo / name).read_text() == "edited\n"
 
 
 def test_readonly_snapshot_limits_fail_closed(repo, tmp_path, monkeypatch):
