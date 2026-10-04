@@ -444,6 +444,15 @@ def test_lineage_excludes_current_issue_when_its_number_is_a_string(tmp_path: Pa
 	assert "#7000 gen" not in (tmp_path / "evidence" / "INDEX.md").read_text()
 
 
+def test_lineage_skips_malformed_issue_numbers(tmp_path: Path) -> None:
+	fake = FakeGh()
+	issue_list = fake.routes[f"repos/{REPO}/issues?labels=ai:workflow-heal&state=all&per_page=100&page=1"]
+	issue_list.append(dict(_issue(), number=None))
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert manifest["files"]
+	assert [item["number"] for item in json.loads((tmp_path / "evidence" / "lineage.json").read_text())] == [4477]
+
+
 def test_artifact_download_limit_records_skipped_artifacts(tmp_path: Path) -> None:
 	fake = FakeGh()
 	artifacts = fake.routes[f"repos/{REPO}/actions/runs/111/artifacts?per_page=100"]["artifacts"]
