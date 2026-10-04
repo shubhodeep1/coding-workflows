@@ -5,6 +5,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Phase prompts
 
+- `prompts/mode-activation-verify.txt` — Role: activation verifier. Goal: grade work that just merged LIVE or DORMANT and list each gap as code or operator (port P4).
 - `prompts/mode-check-failure-triage.txt` — Role: CI failure triager. Goal: analyze a failing pull-request check and write a GitHub issue body describing the likely root cause and suggested fix.
 - `prompts/mode-clarify-respond.txt` — You are an AI assistant resolving clarification questions on behalf of the project orchestrator.
 - `prompts/mode-clarify.txt` — Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
@@ -95,6 +96,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Scripts
 
+- `scripts/activation_verify.sh` — Grade merged work LIVE or DORMANT, post the verdict, open one issue for code gaps and record operator steps (port P4).
 - `scripts/ai_context_utils.py` — Python helper for ai context utils.
 - `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` (`claude_run`), and fall back to codex (D1).
 - `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
@@ -118,6 +120,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
+- `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled or startup-failed CI on a current PR head.
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
@@ -187,6 +190,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/nag_reminder.sh` — Fail-open reminder injection helper for long-running unattended wrapper loops.
 - `scripts/opencode_helpers.sh` — Shared OpenCode command, output, bootstrap, and alert helpers.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
+- `scripts/operator_step_issue.py` — Keep the repository's single `ai:operator-step` issue, one keyed section per source (Q33).
 - `scripts/orchestrate_force_tick.sh` — Shell helper for orchestrate force tick.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
 - `scripts/orchestrate_parse_and_post_answer.sh` — Shell helper for orchestrate parse and post answer.
