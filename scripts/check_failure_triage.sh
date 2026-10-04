@@ -3,8 +3,9 @@
 # check_failure_triage.sh
 #
 # Driven by the AI Check Failure Triage workflow
-# (.github/workflows/check_failure_triage.yml). Invoked once per failing PR
-# check-run. It:
+# (.github/workflows/check_failure_triage.yml). Invoked separately in
+# diagnose (read-only API + isolated model) and publish (trusted checkout +
+# PAT-backed writes) modes for each failing PR check-run. The publisher:
 #
 #   1. De-duplicates against any already-open triage issue for the same
 #      repo + PR + check (so a check that is already in triage does not get a
@@ -94,6 +95,11 @@ TRIAGE_LABEL="ai:check-triage"
 ESCALATED_LABEL="ai:check-triage-escalated"
 MARKER_PREFIX="check-failure-triage:"
 SELF_FRAGMENT="${CHECK_TRIAGE_SELF_CHECK_NAME_FRAGMENT:-Check Failure Triage}"
+TRIAGE_MODE="${1:-diagnose}"
+case "${TRIAGE_MODE}" in
+	diagnose|publish) ;;
+	*) echo 'CHECK_TRIAGE error invalid_mode' >&2; exit 1 ;;
+esac
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/check-triage-${GITHUB_RUN_ID:-local}}"
@@ -149,6 +155,9 @@ FP_MARKER="<!-- ${MARKER_PREFIX}fp=${FP} -->"
 # --- Resolve PR + lineage generation ---------------------------------------
 
 PR_JSON_FILE="${RUNTIME_DIR}/pr_payload.json"
+# The publication job must re-read the live PR instead of trusting the
+# prerequisite's earlier snapshot or the model artifact. This is the same
+# per-PR lookup already used by the diagnosis path, not a new per-item scan.
 if gh_api_json_to_file "${PR_JSON_FILE}" gh api "repos/${REPO}/pulls/${PR_NUMBER}"; then
 	PR_JSON="$(cat "${PR_JSON_FILE}")"
 else
@@ -175,8 +184,18 @@ if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ];
 	log "skip reason=fork_pr pr=${PR_NUMBER} head_repo=${HEAD_REPO_FULL_NAME}"
 	exit 0
 fi
+if [ "${TRIAGE_MODE}" = publish ]; then
+	# Re-derive this from the live PR, never from the model's artifact.
+	if [ "${PR_STATE}" != open ] || [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ] ||
+		! [[ "${HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]] ||
+		[ "$(printf '%s' "${PR_JSON}" | jq -r '.head.sha // ""')" != "${HEAD_SHA}" ]; then
+		log "error publish_pr_verification_failed pr=${PR_NUMBER}"
+		exit 1
+	fi
+fi
 printf '%s' "${PR_JSON}" | jq -r '.body // ""' > "${RUNTIME_DIR}/pr_body.txt" 2>/dev/null || : > "${RUNTIME_DIR}/pr_body.txt"
 
+if [ "${TRIAGE_MODE}" = publish ]; then
 # A fix PR opened by the pipeline uses branch ai/issue-<N>. If this failing PR
 # is such a branch, read its source issue's triage markers to derive the
 # lineage generation/root.
@@ -218,13 +237,19 @@ fi
 
 # --- Duplicate-issue dedup -------------------------------------------------
 
-OPEN_TRIAGE="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
+if ! OPEN_TRIAGE="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
 	-f state=open \
 	-f labels="${TRIAGE_LABEL}" \
 	-F per_page=100 \
 	--jq '[.[] | select(.pull_request | not) | {number, body: (.body // "")}]' 2>/dev/null \
-	| jq -s 'add // []' 2>/dev/null || echo '[]')"
-EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${FP}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"
+	| jq -s 'add // []' 2>/dev/null)"; then
+	log 'error open_triage_lookup_failed'
+	exit 1
+fi
+if ! EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -er --arg fp "fp=${FP}" 'if type == "array" then [.[] | select((.body // "") | contains($fp)) | .number] | first // "" else error("invalid issues") end' 2>/dev/null)"; then
+	log 'error open_triage_parse_failed'
+	exit 1
+fi
 if [ -n "${EXISTING}" ]; then
 	log "skip reason=duplicate_open_issue issue=${EXISTING} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME}"
 	exit 0
@@ -238,19 +263,47 @@ ensure_triage_labels()
 	gh_retry gh label create "${ESCALATED_LABEL}" --repo "${REPO}" --color "b60205" --description "Check-failure auto-fix chain hit the lineage cap; needs human attention" >/dev/null 2>&1 || true
 }
 
-ensure_triage_labels
+	DIAG_FILE="${CHECK_TRIAGE_DIAG_FILE:-${RUNTIME_DIR}/diagnosis.md}"
+	# The downloaded artifact is untrusted text. Never follow a symlink or
+	# accept an oversized, empty or malformed diagnosis for publication.
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${DIAG_FILE}" "${RUNTIME_DIR}/verified_diagnosis.md" <<'PY'
+import os
+import pathlib
+import stat
+import sys
 
-if [ "${GEN}" -gt "${MAX_DEPTH}" ]; then
-	log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} pr=${PR_NUMBER} check=${CHECK_NAME}"
-	# PRs are issues for the labels API, so issue edit works on the PR number.
-	if ! gh_retry gh issue edit "${PR_NUMBER}" --repo "${REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1; then
-		log "error escalation_label_failed pr=${PR_NUMBER} label=${ESCALATED_LABEL}"
-		tg_send_msg "Check-failure auto-triage hit the lineage cap for ${REPO} PR #${PR_NUMBER}, but failed to apply label '${ESCALATED_LABEL}'."$'\n'"PR: ${PR_URL}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+try:
+    fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= 65536:
+            raise ValueError("invalid artifact")
+        contents = source.read(65537)
+        text = contents.decode("utf-8")
+        if len(contents) != info.st_size or "\x00" in text or "## Summary" not in text.splitlines():
+            raise ValueError("invalid diagnosis")
+    pathlib.Path(sys.argv[2]).write_bytes(contents)
+except (OSError, ValueError, UnicodeError):
+    raise SystemExit(1) from None
+PY
+	then
+		log 'error invalid_diagnosis_artifact'
 		exit 1
 	fi
-	tg_send_msg "Check-failure auto-triage hit the lineage cap (generation ${GEN} > ${MAX_DEPTH}) for ${REPO} PR #${PR_NUMBER}, check '${CHECK_NAME}'."$'\n'"The auto-fix chain has been stopped; a human should look at this PR."$'\n'"PR: ${PR_URL}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
-	exit 0
-fi
+	DIAG_FILE="${RUNTIME_DIR}/verified_diagnosis.md"
+	ensure_triage_labels
+	if [ "${GEN}" -gt "${MAX_DEPTH}" ]; then
+		log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} pr=${PR_NUMBER} check=${CHECK_NAME}"
+		# PRs are issues for the labels API, so issue edit works on the PR number.
+		if ! gh_retry gh issue edit "${PR_NUMBER}" --repo "${REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1; then
+			log "error escalation_label_failed pr=${PR_NUMBER} label=${ESCALATED_LABEL}"
+			tg_send_msg "Check-failure auto-triage hit the lineage cap for ${REPO} PR #${PR_NUMBER}, but failed to apply label '${ESCALATED_LABEL}'."$'\n'"PR: ${PR_URL}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+			exit 1
+		fi
+		tg_send_msg "Check-failure auto-triage hit the lineage cap (generation ${GEN} > ${MAX_DEPTH}) for ${REPO} PR #${PR_NUMBER}, check '${CHECK_NAME}'."$'\n'"The auto-fix chain has been stopped; a human should look at this PR."$'\n'"PR: ${PR_URL}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+		exit 0
+	fi
+else
 
 # --- Collect failing check-run context (logs) ------------------------------
 
@@ -292,11 +345,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		cat agents.md
 		echo
 	fi
-	if [ -f scripts/render_prompt.sh ]; then
-		bash scripts/render_prompt.sh prompts/mode-check-failure-triage.txt 2>/dev/null || cat prompts/mode-check-failure-triage.txt
-	else
-		cat prompts/mode-check-failure-triage.txt 2>/dev/null || true
-	fi
+	cat prompts/mode-check-failure-triage.txt
 	echo
 	echo "=== FAILURE CONTEXT ==="
 	echo "Repository: ${REPO}"
@@ -319,25 +368,17 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	fi
 } > "${PROMPT_FILE}"
 
-if command -v codex >/dev/null 2>&1; then
-	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
-		codex --ask-for-approval never \
-		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
-		-c include_apply_patch_tool=true \
-		exec --skip-git-repo-check \
-		--model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
-		--sandbox danger-full-access \
-		< "${PROMPT_FILE}" \
-		> "${DIAG_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+if [ -f scripts/clarify_isolated_run.sh ]; then
+	if bash scripts/clarify_isolated_run.sh "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt" codex CHECK_TRIAGE; then
 		:
 	else
-		log "warn codex_exec_nonzero"
-		DIAGNOSIS_FALLBACK_REASON="failed (codex exited non-zero)"
+		log "warn isolated_diagnosis_failed"
+		DIAGNOSIS_FALLBACK_REASON="failed (isolated model unavailable)"
 		: > "${DIAG_FILE}"
 	fi
 else
-	log "warn codex_unavailable; filing raw context only"
-	DIAGNOSIS_FALLBACK_REASON="could not run (codex unavailable)"
+	log "error isolation_helper_unavailable"
+	exit 1
 fi
 
 # Fallback body if the model produced nothing usable.
@@ -355,7 +396,28 @@ if [ ! -s "${DIAG_FILE}" ]; then
 	} > "${DIAG_FILE}"
 fi
 
+# Publish only the bounded text, never the raw context or runtime workspace.
+if [ "$(stat -c %s "${DIAG_FILE}")" -gt 65536 ]; then
+	log 'warn diagnosis_oversize; replacing with inconclusive summary'
+	printf '## Summary\n\nAutomated diagnosis exceeded the safe output size; inspect the check details URL.\n' > "${DIAG_FILE}"
+fi
+# The model can quote untrusted logs. Apply the existing repository redaction
+# convention before the artifact crosses into the privileged job.
+PYTHONDONTWRITEBYTECODE=1 python3 - "${DIAG_FILE}" <<'PY'
+import pathlib
+import sys
+sys.path.insert(0, "scripts")
+from workflow_failure_heal import redact_secrets
+path = pathlib.Path(sys.argv[1])
+path.write_text(redact_secrets(path.read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
+PY
+fi # diagnose
+
 # --- Compose and open the issue --------------------------------------------
+
+if [ "${TRIAGE_MODE}" = diagnose ]; then
+	exit 0
+fi
 
 TITLE="CI failure: ${CHECK_NAME} on PR #${PR_NUMBER}"
 BODY_FILE="${RUNTIME_DIR}/issue_body.md"
@@ -387,6 +449,17 @@ BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 	echo
 	echo "_Filed by the AI check-failure-triage workflow. Auto-fix lineage generation ${GEN} (cap ${MAX_DEPTH}); the chain escalates to a human at the cap. Re-runs for the same PR + check are de-duplicated while this issue stays open._"
 } > "${BODY_FILE}"
+
+# Also redact the PR/check metadata in the trusted publisher; no credentials
+# or sensitive log excerpts may be put in the issue body.
+PYTHONDONTWRITEBYTECODE=1 python3 - "${BODY_FILE}" <<'PY'
+import pathlib
+import sys
+sys.path.insert(0, "scripts")
+from workflow_failure_heal import redact_secrets
+path = pathlib.Path(sys.argv[1])
+path.write_text(redact_secrets(path.read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
+PY
 
 ISSUE_URL_NEW="$(gh_retry gh issue create --repo "${REPO}" --title "${TITLE}" --body-file "${BODY_FILE}" --label "${TRIAGE_LABEL}" 2>/dev/null || echo '')"
 if [ -z "${ISSUE_URL_NEW}" ]; then

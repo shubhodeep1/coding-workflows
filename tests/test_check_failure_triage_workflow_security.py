@@ -63,8 +63,8 @@ if [ -f "${MOCK_GH_CALL_COUNT}" ]; then
 fi
 printf '%s' "$((count + 1))" > "${MOCK_GH_CALL_COUNT}"
 case "${MOCK_GH_MODE}" in
-  same_repo) printf '%s\n' '{"head":{"repo":{"full_name":"owner/repo"}}}' ;;
-  fork) printf '%s\n' '{"head":{"repo":{"full_name":"fork/repo"}}}' ;;
+  same_repo) printf '%s\n' '{"head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"owner/repo"}}}' ;;
+  fork) printf '%s\n' '{"head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"fork/repo"}}}' ;;
   missing_repo) printf '%s\n' '{"head":{"repo":null}}' ;;
   permanent) printf '%s\n' 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
   transient) printf '%s\n' 'gh: upstream failure (HTTP 500)' >&2; exit 1 ;;
@@ -111,6 +111,100 @@ esac
 
 
 class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
+	def test_publisher_rejects_bad_artifacts_and_moved_pr(self) -> None:
+		with tempfile.TemporaryDirectory(prefix="triage-publish-") as directory:
+			root = Path(directory)
+			(root / "scripts").mkdir()
+			(root / "scripts/workflow_failure_heal.py").write_text(
+				"def redact_secrets(text): return text\n", encoding="utf-8"
+			)
+			bin_dir = root / "bin"
+			bin_dir.mkdir()
+			artifact = root / "diagnosis.md"
+			writes = root / "writes"
+			_write_executable(bin_dir / "gh", """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *'/pulls/17'* ]]; then
+  printf '{"state":"open","head":{"ref":"%s","sha":"%s","repo":{"full_name":"owner/repo"}}}\n' "${MOCK_HEAD_REF:-feature}" "${MOCK_HEAD_SHA}"
+elif [[ "$*" == *'/issues/42'* ]]; then
+  echo '{"body":"<!-- check-failure-triage:gen=3 -->"}'
+elif [[ "$*" == *'--paginate'* ]]; then
+  if [ -n "${MOCK_DUPLICATE_FP:-}" ]; then
+    printf '[{"number":45,"body":"fp=%s"}]\n' "${MOCK_DUPLICATE_FP}"
+  else
+    printf '[]\n'
+  fi
+elif [[ "$*" == *'label create'* || "$*" == *'issue create'* || "$*" == *'issue edit'* ]]; then
+  printf '%s\n' "$*" >> "${MOCK_WRITES}"
+  if [[ "$*" == *'issue create'* ]]; then printf 'https://github.com/owner/repo/issues/42\n'; fi
+else
+  exit 1
+fi
+""")
+			env = os.environ.copy()
+			env.pop("BASH_ENV", None)
+			env.pop("ENV", None)
+			env.update({
+				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+				"MOCK_HEAD_SHA": "a" * 40, "MOCK_WRITES": str(writes),
+				"GITHUB_REPOSITORY": "owner/repo", "RUNTIME_DIR": str(root / "runtime"),
+				"CHECK_TRIAGE_PR_NUMBER": "17", "CHECK_TRIAGE_CHECK_NAME": "CI / lint",
+				"CHECK_TRIAGE_CHECK_CONCLUSION": "failure",
+				"CHECK_TRIAGE_HEAD_SHA": "a" * 40,
+				"CHECK_TRIAGE_DIAG_FILE": str(artifact),
+			})
+			def publish() -> subprocess.CompletedProcess[str]:
+				return subprocess.run(
+					["bash", str(REPO_ROOT / "scripts/check_failure_triage.sh"), "publish"],
+					cwd=root, env=env, capture_output=True, text=True,
+				)
+			for kind in ("missing", "empty", "directory", "symlink", "hardlink", "oversize", "malformed", "non_utf8"):
+				with self.subTest(kind=kind):
+					if artifact.is_symlink() or artifact.is_file():
+						artifact.unlink()
+					elif artifact.is_dir():
+						artifact.rmdir()
+					if kind == "directory":
+						artifact.mkdir()
+					elif kind == "symlink":
+						artifact.symlink_to(root / "runtime/pr_payload.json")
+					elif kind == "hardlink":
+						other = root / "second-link.md"
+						other.write_text("## Summary\n\nBad link.\n", encoding="utf-8")
+						os.link(other, artifact)
+					elif kind == "non_utf8":
+						artifact.write_bytes(b"## Summary\n\xff\n")
+					elif kind != "missing":
+						artifact.write_text({
+							"empty": "", "oversize": "## Summary\n" + "X" * 65536,
+							"malformed": "unstructured output",
+						}[kind], encoding="utf-8")
+					self.assertNotEqual(publish().returncode, 0)
+					self.assertFalse(writes.exists(), kind)
+			if artifact.is_dir():
+				artifact.rmdir()
+			elif artifact.is_symlink() or artifact.is_file():
+				artifact.unlink()
+			artifact.write_text("## Summary\n\nValid diagnosis.\n", encoding="utf-8")
+			env["MOCK_HEAD_SHA"] = "b" * 40
+			self.assertNotEqual(publish().returncode, 0)
+			self.assertFalse(writes.exists())
+			env["MOCK_HEAD_SHA"] = "a" * 40
+			result = publish()
+			self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+			self.assertIn("issue create", writes.read_text(encoding="utf-8"))
+			writes.unlink()
+			env["MOCK_DUPLICATE_FP"] = hashlib.sha256(
+				b"owner/repo|pr=17|check=CI / lint"
+			).hexdigest()
+			self.assertEqual(publish().returncode, 0)
+			self.assertFalse(writes.exists(), "duplicate issue must suppress publication")
+			env.pop("MOCK_DUPLICATE_FP")
+			env["MOCK_HEAD_REF"] = "ai/issue-42"
+			self.assertEqual(publish().returncode, 0)
+			self.assertIn("issue edit", writes.read_text(encoding="utf-8"))
+			self.assertNotIn("issue create", writes.read_text(encoding="utf-8"))
+
 	def test_workflow_contract_gates_secrets_behind_minimal_prerequisite(self) -> None:
 		workflow = _workflow()
 		jobs = workflow["jobs"]
@@ -118,6 +212,15 @@ class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
 		triage_job = jobs["triage"]
 
 		self.assertEqual(derive_job["permissions"], {"pull-requests": "read"})
+		self.assertEqual(triage_job["permissions"]["contents"], "read")
+		self.assertEqual(triage_job["permissions"]["actions"], "read")
+		self.assertEqual(_workflow()["jobs"]["publish_triage"]["needs"], ["derive_check_name_key", "triage"])
+		self.assertNotIn("GH_TOKEN", _step(triage_job, name="Run check-failure triage")["env"])
+		self.assertIn("GH_TOKEN", _step(_workflow()["jobs"]["publish_triage"], name="Publish verified triage")["env"])
+		self.assertEqual(_step(triage_job, name="Checkout PR head (failing branch)")["with"]["persist-credentials"], False)
+		self.assertEqual(_step(triage_job, name="Checkout workflow support source")["with"]["persist-credentials"], False)
+		self.assertEqual(_step(_workflow()["jobs"]["publish_triage"], name="Checkout trusted workflow support")["with"]["persist-credentials"], False)
+		self.assertIn("clarify_isolated_run.sh", _step(triage_job, name="Stage workflow support files")["run"])
 		self.assertEqual(
 			derive_job["outputs"]["check_name_key"],
 			"${{ steps.hash_check_name.outputs.check_name_key }}",
@@ -173,6 +276,7 @@ class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
 				)
 				self.assertEqual(proc.returncode, 0, proc.stderr)
 				self.assertEqual(outputs["same_repo"], "true")
+				self.assertEqual(outputs["verified_head_sha"], "a" * 40)
 				self.assertEqual(calls, 1)
 
 	def test_fork_is_rejected_without_failing_prerequisite(self) -> None:
@@ -197,6 +301,71 @@ class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
 				proc, _, calls = _run_prerequisite(**overrides)
 				self.assertNotEqual(proc.returncode, 0)
 				self.assertEqual(calls, 0)
+
+	def test_stale_pr_head_is_rejected_before_checkout(self) -> None:
+		proc, _, calls = _run_prerequisite(head_sha="b" * 40)
+		self.assertNotEqual(proc.returncode, 0)
+		self.assertEqual(calls, 1)
+
+	def test_isolated_diagnosis_and_artifact_contract(self) -> None:
+		workflow = _workflow()
+		diagnose = workflow["jobs"]["triage"]
+		publisher = workflow["jobs"]["publish_triage"]
+		self.assertIn("bash scripts/check_failure_triage.sh diagnose", _step(diagnose, name="Run check-failure triage")["run"])
+		self.assertIn("bash scripts/check_failure_triage.sh publish", _step(publisher, name="Publish verified triage")["run"])
+		self.assertNotIn("secrets.GH_PAT", str(diagnose))
+		self.assertNotIn("OPENROUTER_API_KEY", str(publisher))
+		self.assertEqual(_step(diagnose, name="Upload bounded diagnosis")["with"]["retention-days"], 1)
+		script = (REPO_ROOT / "scripts/check_failure_triage.sh").read_text()
+		self.assertIn('bash scripts/clarify_isolated_run.sh "${PROMPT_FILE}" "${DIAG_FILE}"', script)
+		self.assertNotIn("--sandbox danger-full-access", script)
+		self.assertIn("invalid_diagnosis_artifact", script)
+		isolation = (REPO_ROOT / "scripts/clarify_isolated_run.sh").read_text()
+		for boundary in ("--network none", "--read-only", "--cap-drop ALL", '".git"', "CHECK_TRIAGE"):
+			self.assertIn(boundary, isolation)
+		for wrapper in (
+			REPO_ROOT / ".github/workflows/internal-check-failure-triage.yml",
+			REPO_ROOT / "workflow-templates/ai-check-failure-triage.yml",
+		):
+			permissions = yaml.safe_load(wrapper.read_text(encoding="utf-8"))["permissions"]
+			self.assertEqual(permissions["checks"], "read")
+			self.assertEqual(permissions["actions"], "read")
+
+	def test_isolation_failure_produces_only_inconclusive_diagnosis(self) -> None:
+		with tempfile.TemporaryDirectory(prefix="triage-isolation-") as directory:
+			root = Path(directory)
+			(root / "scripts").mkdir()
+			(root / "prompts").mkdir()
+			(root / "prompts/mode-check-failure-triage.txt").write_text("Trusted triage prompt\n")
+			(root / "scripts/workflow_failure_heal.py").write_text("def redact_secrets(text): return text\n")
+			_write_executable(root / "scripts/clarify_isolated_run.sh", "#!/bin/bash\nexit 1\n")
+			bin_dir = root / "bin"
+			bin_dir.mkdir()
+			marker = root / "host-codex-invoked"
+			_write_executable(bin_dir / "codex", f"#!/bin/bash\ntouch {marker}\n")
+			_write_executable(bin_dir / "gh", """#!/bin/bash
+if [[ "$*" == *'/pulls/17'* ]]; then
+  echo '{"state":"open","head":{"ref":"feature","repo":{"full_name":"owner/repo"}}}'
+else
+  exit 1
+fi
+""")
+			env = os.environ.copy()
+			env.pop("BASH_ENV", None)
+			env.pop("ENV", None)
+			env.update({
+				"GITHUB_REPOSITORY": "owner/repo", "RUNTIME_DIR": str(root / "runtime"),
+				"CHECK_TRIAGE_PR_NUMBER": "17", "CHECK_TRIAGE_CHECK_NAME": "CI / lint",
+				"CHECK_TRIAGE_CHECK_CONCLUSION": "failure", "CHECK_TRIAGE_HEAD_SHA": "a" * 40,
+				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			})
+			result = subprocess.run(
+				["bash", str(REPO_ROOT / "scripts/check_failure_triage.sh"), "diagnose"],
+				cwd=root, env=env, capture_output=True, text=True,
+			)
+			self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+			self.assertFalse(marker.exists())
+			self.assertIn("Automated diagnosis failed", (root / "runtime/diagnosis.md").read_text())
 
 	def test_api_failures_are_classified_before_retry(self) -> None:
 		permanent_proc, _, permanent_calls = _run_prerequisite(gh_mode="permanent")
