@@ -1193,7 +1193,7 @@ forwards one fixed endpoint for one model.
 | Claude engine (`claude_run`) | same container via `--engine claude`, pinned Claude Code CLI added to the image; the token stays in the host relay (`claude_anthropic_relay.py`); unavailable isolation returns `75` so the role runs codex (README "Claude engine") |
 
 Credential-store filenames such as `client_secret.json`, `credentials.conf`,
-and `client_secret.properties` remain excluded, but
+`client_secret.properties`, `credentials.xml`, and `oauth.secret.properties` remain excluded, but
 ordinary source modules such as `secret_manager.py` and `credential_provider.py`
 remain available to the agent for planned edits.
 
