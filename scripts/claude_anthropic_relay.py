@@ -117,7 +117,10 @@ class Relay(http.server.BaseHTTPRequestHandler):
 				except OSError:
 					pass  # Malformed/slow clients still get a bounded rejection.
 				finally:
-					self.connection.settimeout(5)
+					try:
+						self.connection.settimeout(5)
+					except OSError:
+						pass  # The peer may have closed during the drain.
 		self.send_error(status, "Request rejected")
 		self.close_connection = True
 

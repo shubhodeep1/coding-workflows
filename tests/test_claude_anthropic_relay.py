@@ -212,6 +212,25 @@ def test_rejection_restores_socket_timeout_before_reply(chain, monkeypatch) -> N
 	assert observed_timeouts == [5]
 
 
+def test_rejection_still_attempts_reply_when_timeout_reset_fails(monkeypatch) -> None:
+	class BrokenSocket:
+		def settimeout(self, _timeout):
+			raise OSError("peer closed")
+
+	class Body:
+		def read(self, _length):
+			return b"x"
+
+	handler = object.__new__(relay.Relay)
+	handler.headers = {"Content-Length": "1"}
+	handler.connection = BrokenSocket()
+	handler.rfile = Body()
+	replies = []
+	monkeypatch.setattr(handler, "send_error", lambda status, _message: replies.append(status))
+	handler._reject(400, drain_body=True)
+	assert replies == [400] and handler.close_connection is True
+
+
 def test_early_rejection_does_not_wait_indefinitely_for_missing_body(chain) -> None:
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.putrequest("POST", "/v1/messages")

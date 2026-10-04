@@ -470,8 +470,6 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		else:
 			positionals.append(word)
 		index += 1
-	if delete and not uncertain:
-		return []  # Deletes do not strand new commits on a branch.
 	if remote_provided and not remote_value:
 		uncertain = True
 	if uncertain:
@@ -479,9 +477,12 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			"could not resolve git push options; checking the current branch instead", remote=remote_value)]
 	if not remote_provided and positionals:
 		remote_value = positionals[0]
+	if delete:
+		# No merged-PR check for deletions, but a foreign destination still asks.
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
 	refspecs = positionals if remote_provided else positionals[1:]
 	if not refspecs and tags and not bulk:
-		return []
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
 	if not refspecs:
 		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value)]
 	targets: list[_GuardTarget] = []
@@ -510,6 +511,9 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True, remote=remote_value))
 	if bulk:
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value))
+	if not targets and remote_value and remote_value != "origin":
+		# Every refspec was a branch deletion; only the remote needs checking.
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value))
 	return targets
 
 
@@ -1325,6 +1329,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					# default branch cannot be inferred from this checkout's origin.
 					unverified_destinations.add(push_slug or "an unverified remote")
 					continue
+			if not target.tip:
+				continue  # A deletion or tag-only push cannot strand a branch commit.
 			if target.tip != "HEAD":
 				with _git_environment(target.environment):
 					code, resolved_source_sha, _ = _run(
