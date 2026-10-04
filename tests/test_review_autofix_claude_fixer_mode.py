@@ -374,7 +374,7 @@ def _run_resolve_step(tmp: Path, **env_overrides: str) -> dict[str, str]:
 		"GITHUB_OUTPUT": str(github_output),
 		"AI_ENGINE": "",
 		"CLAUDE_FIXER_ENABLED": "true",
-		**{f"AI_ENGINE_{role}": "" for role in FIXER_ROLES},
+		**{f"AI_ENGINE_{role}": "" for role in FIXER_ROLES + ("SUMMARISER", "BEHAVIOURAL_SMOKE")},
 		**env_overrides,
 	}
 	proc = subprocess.run(["bash", "-c", step["run"]], cwd=tmp, env=env, capture_output=True, text=True)
@@ -413,9 +413,12 @@ def test_fixer_mode_on_puts_the_four_roles_on_claude(tmp_path):
 
 def test_fixer_mode_off_beats_ai_engine_and_role_variables(tmp_path):
 	values = _run_resolve_step(tmp_path, CLAUDE_FIXER_ENABLED="false", AI_ENGINE="claude", AI_ENGINE_RB_JUDGE="claude")
-	assert values["any_claude"] == "false"
 	for role in FIXER_ROLES:
 		assert values[f"AI_ENGINE_RESOLVED_{role}"] == "codex", role
+	# The utility roles (Phase 5d) are not Claude-fixer roles.
+	assert values["AI_ENGINE_RESOLVED_SUMMARISER"] == "claude"
+	values = _run_resolve_step(tmp_path, CLAUDE_FIXER_ENABLED="false", AI_ENGINE="codex")
+	assert values["any_claude"] == "false"
 
 
 def test_a_role_variable_still_moves_one_role_to_codex(tmp_path):

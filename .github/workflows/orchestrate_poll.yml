@@ -685,6 +685,7 @@ jobs:
           AI_ENGINE_INTEGRATION_JUDGE: ${{ vars.AI_ENGINE_INTEGRATION_JUDGE || '' }}
           AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           AI_ENGINE_LABELS: ""
         run: |
@@ -698,6 +699,12 @@ jobs:
                 any_claude=true
               fi
             done
+            # The security pass's audit (scripts/security_audit.sh, plan
+            # Phase 5d) reads AI_ENGINE_RESOLVED_SECURITY_AUDIT.
+            security_audit_engine="$(ai_engine_for_role SECURITY_AUDIT || echo codex)"
+            [ "${security_audit_engine}" = "claude" ] || security_audit_engine="codex"
+            [ "${security_audit_engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_SECURITY_AUDIT=${security_audit_engine}" >> "$GITHUB_ENV"
           fi
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 

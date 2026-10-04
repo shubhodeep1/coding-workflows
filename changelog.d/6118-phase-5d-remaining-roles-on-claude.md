@@ -1,0 +1,17 @@
+<!-- changelog: changed -->
+- **Validation, security audit, check triage, workflow heal, log analysis, the weekly retro and the review utility roles now run on Claude by default.** Each keeps its unchanged codex or OpenCode command as the automatic fallback.
+
+Phase 5d moves eleven more roles to the Claude Code CLI engine. Validation runs in `validate.yml` (VALIDATE and VALIDATE_SELF_HEAL) and in the nightly `validation-refresh.yml` discovery (VALIDATION_REFRESH). SECURITY_AUDIT runs in `security-audit.yml` and in the orchestrator's security pass. The rest are CHECK_TRIAGE in `check_failure_triage.yml`, WORKFLOW_HEAL in `workflow-failure-heal-intake.yml`, LOG_ANALYSIS, LOG_AUDIT and RETRO in `workflow-log-analysis.yml` and the consumer retro fan-out, and the review job's SUMMARISER and BEHAVIOURAL_SMOKE. Each job resolves its roles once, installs the CLI and fetches the account pool only when one of them is on Claude, and every call site falls back to its old command in the same attempt when Claude cannot start. The read-only roles keep a read-only tool set on Claude, and the triage and heal diagnoses still run without GitHub or Telegram credentials in their environment.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Roles moved to Claude | `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`, `SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `LOG_ANALYSIS`, `LOG_AUDIT`, `RETRO`, `SUMMARISER`, `BEHAVIOURAL_SMOKE` |
+| Models | Opus 5.5; Sonnet 5.5 for `RETRO`, `SUMMARISER`, `BEHAVIOURAL_SMOKE` |
+| Roles still on codex | `LOG_SUMMARY` (OpenRouter HTTP call), `MATERIALITY` (no model call), `ACTIVATION_VERIFY`, `UNBLOCK_JUDGE` |
+| Exit code that falls back | `75` (logged `AI_ENGINE_FALLBACK role= reason=`) |
+
+What this means for operators: validation reports, security findings, check-failure and workflow-failure diagnoses, weekly log reports and retros, and reviewer consensus summaries are written by Claude from now on. To move one role back, set `AI_ENGINE_<ROLE>` to `codex`, for example `AI_ENGINE_SECURITY_AUDIT=codex`. `AI_ENGINE=codex` moves every role. In consumer repos, validate's Claude steps come from the released `@stable` actions, so they take effect after the next stable promotion. Until then validate keeps running codex.
+
+### For contributors
+
+`scripts/ai_engine.sh` gains `claude_run_selected <ROLE>`, which runs `claude_run` only when `AI_ENGINE_RESOLVED_<ROLE>=claude` and otherwise returns 75 at once. `check_failure_triage.yml` and `validate.yml` run in a checkout they do not trust. They therefore copy `ai_engine.sh`, `claude_engine.py`, the settings template, `.github/ai/claude_engine.json`, the guard hook and the instructions from the verified support source into `${RUNNER_TEMP}/claude-engine-support` and export `SUPPORT_ROOT_DIR`; the scripts there never fall back to `./scripts`. The Python discovery (`scripts/validation_discovery_bootstrap.py`) runs the CLI in its own session and kills the process group on its per-call timeout. Tests live in `tests/test_claude_engine_utility_roles.py` (new, own `ci.yml` step) plus the `claude_run_selected` cases in `tests/test_ai_engine.py`.

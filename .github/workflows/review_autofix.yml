@@ -2730,6 +2730,8 @@ jobs:
       # ai:codex label, AI_ENGINE_<ROLE> or AI_ENGINE say codex. Each role's
       # engine goes to AI_ENGINE_RESOLVED_<ROLE>; exit 75 (Claude
       # unavailable) runs that role's unchanged OpenCode command (plan D1).
+      # Phase 5d adds the utility roles SUMMARISER and BEHAVIOURAL_SMOKE,
+      # which CLAUDE_FIXER_ENABLED does not govern.
       - name: Resolve AI engine
         id: ai_engine
         if: env.PR_CLOSED != 'true'
@@ -2739,11 +2741,13 @@ jobs:
           AI_ENGINE_REVIEW_CONSOLIDATOR: ${{ vars.AI_ENGINE_REVIEW_CONSOLIDATOR || '' }}
           AI_ENGINE_CONFLICT_RESOLVER: ${{ vars.AI_ENGINE_CONFLICT_RESOLVER || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          AI_ENGINE_SUMMARISER: ${{ vars.AI_ENGINE_SUMMARISER || '' }}
+          AI_ENGINE_BEHAVIOURAL_SMOKE: ${{ vars.AI_ENGINE_BEHAVIOURAL_SMOKE || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           any_claude=false
-          for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE; do
+          for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE SUMMARISER BEHAVIOURAL_SMOKE; do
             engine="codex"
             if [ -f "${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" ]; then
               # shellcheck disable=SC1091

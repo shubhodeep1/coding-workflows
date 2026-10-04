@@ -264,6 +264,48 @@ jobs:
           fi
           echo "SECURITY_AUDIT_FP_EXCLUSIONS=${catalog_path}" >> "$GITHUB_ENV"
 
+      # Claude engine (replace-claude-sessions plan Phase 5d): the SECURITY_AUDIT
+      # role runs on Claude unless AI_ENGINE_SECURITY_AUDIT or AI_ENGINE say codex.
+      # The engine comes from the verified support checkout at the workspace root;
+      # exit 75 runs the unchanged codex call (plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          engine_loaded=false
+          if [ -f "scripts/ai_engine.sh" ]; then
+            # shellcheck disable=SC1091
+            source "scripts/ai_engine.sh" && engine_loaded=true
+          fi
+          for role in SECURITY_AUDIT; do
+            engine="codex"
+            if [ "${engine_loaded}" = "true" ]; then
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Run security audit
         working-directory: ./audit-data
         env:

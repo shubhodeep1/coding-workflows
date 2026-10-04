@@ -312,6 +312,34 @@ def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools:
 	assert (argv[argv.index("--tools") + 1], argv[argv.index("--permission-mode") + 1]) == (tools, mode)
 
 
+def _claude_run_selected(sandbox: dict, role: str, **extra_env: str) -> subprocess.CompletedProcess:
+	out = sandbox["tmp"] / "out.txt"
+	args = " ".join(shlex.quote(part) for part in (role, str(sandbox["prompt"]), str(out), str(sandbox["work"])))
+	return _bash(sandbox, f'rc=0; claude_run_selected {args} || rc=$?; echo "RC=${{rc}}"', **extra_env)
+
+
+def test_claude_run_selected_runs_only_a_role_resolved_to_claude(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run_selected(sandbox, "VALIDATE", AI_ENGINE_RESOLVED_VALIDATE="claude")
+	assert _rc(result) == 0, result.stderr
+	assert len(_calls(sandbox)) == 1
+
+
+@pytest.mark.parametrize("env", [{}, {"AI_ENGINE_RESOLVED_VALIDATE": "codex"}, {"AI_ENGINE_RESOLVED_VALIDATE": "Claude"}, {"AI_ENGINE_RESOLVED_PLAN": "claude"}])
+def test_claude_run_selected_returns_75_without_running_otherwise(sandbox: dict, env: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run_selected(sandbox, "VALIDATE", **env)
+	assert _rc(result) == 75
+	assert _calls(sandbox) == []
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
+
+
+def test_claude_run_selected_rejects_an_invalid_role(sandbox: dict) -> None:
+	result = _claude_run_selected(sandbox, "bad role", **{"AI_ENGINE_RESOLVED_VALIDATE": "claude"})
+	assert _rc(result) == 75
+	assert _calls(sandbox) == []
+
+
 def test_profile_tool_lists_match_claude_engine() -> None:
 	# The write profile names its tools: `--tools default` loads ~35 tools and
 	# pushed a no-op start-up past the 25,000-token context gate of

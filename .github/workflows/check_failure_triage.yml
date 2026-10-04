@@ -259,6 +259,48 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+      # Claude engine (replace-claude-sessions plan Phase 5d): the CHECK_TRIAGE
+      # diagnosis runs on Claude unless AI_ENGINE_CHECK_TRIAGE or AI_ENGINE say
+      # codex. These steps read the verified support checkout before the staging
+      # step removes it; exit 75 runs the unchanged codex call (plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_CHECK_TRIAGE: ${{ vars.AI_ENGINE_CHECK_TRIAGE || '' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          engine_loaded=false
+          if [ -f ".codex-workflow-src/scripts/ai_engine.sh" ]; then
+            # shellcheck disable=SC1091
+            source ".codex-workflow-src/scripts/ai_engine.sh" && engine_loaded=true
+          fi
+          for role in CHECK_TRIAGE; do
+            engine="codex"
+            if [ "${engine_loaded}" = "true" ]; then
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Stage workflow support files
         run: |
           set -euo pipefail
@@ -319,6 +361,18 @@ jobs:
               printf '%s\n' "${_fetched[@]}" .gitignore
             } > scripts/.gitignore
           fi
+
+          # Claude engine (plan Phase 5d): keep the engine, its policy and the
+          # role config from the verified support checkout outside the PR
+          # checkout, so claude_engine.py never reads the PR's copies.
+          engine_root="${RUNNER_TEMP}/claude-engine-support"
+          mkdir -p "${engine_root}/scripts" "${engine_root}/.github/ai" "${engine_root}/.claude/hooks"
+          for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_settings.json.tmpl scripts/codex_stall_guard.sh .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py unattended_system_instructions.md; do
+            if [ -f ".codex-workflow-src/${engine_file}" ]; then
+              install -m 0644 ".codex-workflow-src/${engine_file}" "${engine_root}/${engine_file}"
+            fi
+          done
+          echo "SUPPORT_ROOT_DIR=${engine_root}" >> "$GITHUB_ENV"
 
           rm -rf .codex-workflow-src
 

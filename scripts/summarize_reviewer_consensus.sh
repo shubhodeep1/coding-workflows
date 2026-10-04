@@ -358,10 +358,29 @@ while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 	if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 		sanitize_codex_prompt_file "${prompt_file}"
 	fi
-	timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
-		"${summariser_opencode_cmd[@]}" < "${prompt_file}" \
-		> "${tmp_stdout}" 2> "${tmp_stderr}" \
-		|| last_rc=$?
+	# Claude engine (replace-claude-sessions plan Phase 5d): the SUMMARISER
+	# role runs through claude_run_selected with the read-only tool profile,
+	# like the OpenCode `reviewer` role, under the same timeout. Exit 75 (role
+	# on OpenCode, Claude unavailable, or no engine) runs the unchanged
+	# OpenCode command below.
+	summariser_engine_rc=75
+	summariser_engine_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
+	if [ -f "${summariser_engine_sh}" ]; then
+		summariser_engine_rc=0
+		# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+		AI_ENGINE_READ_ONLY=true AI_ENGINE_MODEL_HINT="${SUMMARISER_MODEL}" AI_ENGINE_EFFORT_HINT="${SUMMARISER_REASONING}" \
+			timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
+			bash -c 'source "$1" && claude_run_selected SUMMARISER "$2" "$3" "$4"' _ \
+			"${summariser_engine_sh}" "${prompt_file}" "${tmp_stdout}" "${summariser_workspace}" \
+			2> "${tmp_stderr}" || summariser_engine_rc=$?
+		[ "${summariser_engine_rc}" -eq 75 ] || last_rc="${summariser_engine_rc}"
+	fi
+	if [ "${summariser_engine_rc}" -eq 75 ]; then
+		timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
+			"${summariser_opencode_cmd[@]}" < "${prompt_file}" \
+			> "${tmp_stdout}" 2> "${tmp_stderr}" \
+			|| last_rc=$?
+	fi
 
 	clean_stdout="${tmp_stdout}.ansi-clean"
 	if opencode_strip_ansi < "${tmp_stdout}" > "${clean_stdout}"; then

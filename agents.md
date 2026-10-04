@@ -623,20 +623,20 @@ a new value, add it to the appropriate overrides file with a
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | OpenCode only (no engine switch) |
 | review consolidator | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_CONSOLIDATOR` |
 | conflict resolver | `openai/gpt-6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `CONFLICT_RESOLVER` |
-| validate generate, diagnose | `openai/gpt-6-sol` | `high` | `low` | codex · `VALIDATE` |
-| validate discover | `openai/gpt-6-sol` | `high` (per-phase override via `MODEL_REASONING_EFFORT_DISCOVER`) | `low` | codex · `VALIDATE` |
-| validate fix-harness, self-heal | `openai/gpt-6-sol` | `high` | `low` | codex · `VALIDATE_SELF_HEAL` |
-| workflow log analyze | `openai/gpt-6-sol` | `xhigh` | `low` | codex · `LOG_ANALYSIS` |
-| workflow audit | `openai/gpt-6-sol` | `xhigh` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` | codex · `LOG_AUDIT` |
-| workflow api-redundancy | `openai/gpt-6-sol` | `high` (default of `THINKING_LEVEL_ANALYSIS`) | `low` | codex · `LOG_ANALYSIS` |
-| workflow log summary | `openai/gpt-6-luna` | default | `low` | OpenCode · `LOG_SUMMARY` |
-| reviewer consensus summariser | `openai/gpt-6-luna` | `medium` (`XPOLL_SUMMARISER_REASONING`) | `low` | OpenCode · `SUMMARISER` |
+| validate generate, diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `VALIDATE` |
+| validate discover | `openai/gpt-6-sol` | `high` (per-phase override via `MODEL_REASONING_EFFORT_DISCOVER`) | `low` | Claude (Opus 5.5; codex fallback) · `VALIDATE` |
+| validate fix-harness, self-heal | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `VALIDATE_SELF_HEAL` |
+| workflow log analyze | `openai/gpt-6-sol` | `xhigh` | `low` | Claude (Opus 5.5; codex fallback) · `LOG_ANALYSIS` |
+| workflow audit | `openai/gpt-6-sol` | `xhigh` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` | Claude (Opus 5.5; codex fallback) · `LOG_AUDIT` |
+| workflow api-redundancy | `openai/gpt-6-sol` | `high` (default of `THINKING_LEVEL_ANALYSIS`) | `low` | Claude (Opus 5.5; codex fallback) · `LOG_ANALYSIS` |
+| workflow log summary | `openai/gpt-6-luna` | default | `low` | OpenRouter HTTP (no CLI call) · `LOG_SUMMARY` |
+| reviewer consensus summariser | `openai/gpt-6-luna` | `medium` (`XPOLL_SUMMARISER_REASONING`) | `low` | Claude (Sonnet 5.5, read-only; OpenCode fallback) · `SUMMARISER` |
 
 The **Engine · Claude role** column names today's engine and the role name
 `scripts/ai_engine.sh` resolves for that row (README "Claude engine").
 Every role's default in `.github/ai/claude_engine.json` is `codex`
 until its cutover (Phase 5a moved `CLARIFY`, `CLARIFY_RESPOND` and `PLAN`
-to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, Phase 5c `ORCHESTRATE`, the four orchestrator judges and the review write roles `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER` and `RB_JUDGE`; a missing config file still means codex for every role);
+to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, Phase 5c `ORCHESTRATE`, the four orchestrator judges and the review write roles `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER` and `RB_JUDGE`, Phase 5d `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`, `SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `LOG_ANALYSIS`, `LOG_AUDIT`, `RETRO`, `SUMMARISER` and `BEHAVIOURAL_SMOKE`; a missing config file still means codex for every role);
 `AI_ENGINE_<ROLE>`, `AI_ENGINE` or the `ai:engine-claude`
 / `ai:codex` labels select it per run. On Claude a role uses its existing
 model variable only when that value starts with `claude-`, else Opus 5.5

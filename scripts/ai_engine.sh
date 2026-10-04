@@ -27,6 +27,8 @@
 #   ai_engine_accounts
 #       The usable account names, best first: each line of `order` that is a
 #       valid name and has a regular, non-empty `tokens/<NAME>` file.
+#   claude_run_selected <role> <prompt_file> <out_file> <workdir> [session_id]
+#       claude_run when AI_ENGINE_RESOLVED_<ROLE>=claude, else 75 at once.
 #   claude_run <role> <prompt_file> <out_file> <workdir> [session_id]
 #       Runs `claude -p` for the role in <workdir> and writes the final
 #       result text to <out_file>, the file the codex path writes.
@@ -326,4 +328,19 @@ claude_run()
 		ai_engine_fallback "${role}" all_accounts_failed
 	fi
 	return "${rc}"
+}
+
+# claude_run_selected <role> <prompt_file> <out_file> <workdir> [session_id]
+# For the call sites of a cut-over role (plan Phase 5d): runs claude_run
+# only when the job's "Resolve AI engine" step exported
+# AI_ENGINE_RESOLVED_<ROLE>=claude; otherwise returns 75 without running
+# anything, so the caller runs its unchanged codex command. Same statuses
+# as claude_run.
+claude_run_selected()
+{
+	local role="${1:-}" resolved_var
+	_ai_engine_valid_role "${role}" || return "${_AI_ENGINE_EXIT_FALLBACK}"
+	resolved_var="AI_ENGINE_RESOLVED_${role}"
+	[ "${!resolved_var:-codex}" = "claude" ] || return "${_AI_ENGINE_EXIT_FALLBACK}"
+	claude_run "$@"
 }

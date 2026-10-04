@@ -761,7 +761,26 @@ behavioural_smoke_opencode_cmd=(
 	"${BEHAVIOURAL_SMOKE_OPENCODE_WORKSPACE}"
 )
 
-if timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+# Claude engine (replace-claude-sessions plan Phase 5d): the
+# BEHAVIOURAL_SMOKE role runs through claude_run_selected with the read-only
+# tool profile, like the OpenCode `reviewer` role, under the same timeout.
+# Exit 75 (role on OpenCode, Claude unavailable, or no engine) runs the
+# unchanged OpenCode command below.
+behavioural_smoke_engine_rc=75
+behavioural_smoke_engine_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
+if [ -f "${behavioural_smoke_engine_sh}" ]; then
+	behavioural_smoke_engine_rc=0
+	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+	AI_ENGINE_READ_ONLY=true AI_ENGINE_MODEL_HINT="${BEHAVIOURAL_SMOKE_MODEL}" AI_ENGINE_EFFORT_HINT=low \
+		timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+		bash -c 'source "$1" && claude_run_selected BEHAVIOURAL_SMOKE "$2" "$3" "$4"' _ \
+		"${behavioural_smoke_engine_sh}" "${PROMPT_FILE}" "${RAW_OUTPUT_FILE}" "${BEHAVIOURAL_SMOKE_OPENCODE_WORKSPACE}" \
+		2> "${STDERR_FILE}" || behavioural_smoke_engine_rc=$?
+	cmd_rc="${behavioural_smoke_engine_rc}"
+fi
+if [ "${behavioural_smoke_engine_rc}" -ne 75 ]; then
+	:
+elif timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
 	"${behavioural_smoke_opencode_cmd[@]}" \
 	< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
 	cmd_rc=0

@@ -1279,7 +1279,27 @@ fi
 security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
 security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
 
-if codex --ask-for-approval never \
+# Claude engine (replace-claude-sessions plan Phase 5d): the SECURITY_AUDIT
+# role (read-only profile) runs through claude_run_selected when the job's
+# "Resolve AI engine" step put it on Claude. Exit 75 (role on codex, Claude
+# unavailable, or no engine) runs the unchanged codex call below.
+security_audit_claude_rc=75
+security_audit_engine_sh="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/ai_engine.sh"
+if [ -f "${security_audit_engine_sh}" ]; then
+	security_audit_claude_rc=0
+	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+	AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL:-}" AI_ENGINE_EFFORT_HINT="xhigh" \
+		bash -c 'source "$1" && claude_run_selected SECURITY_AUDIT "$2" "$3" "$4"' _ \
+		"${security_audit_engine_sh}" "${RENDERED_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" \
+		2> "${CODEX_ERROR_FILE}" || security_audit_claude_rc=$?
+fi
+
+if [ "${security_audit_claude_rc}" -ne 75 ]; then
+	if [ "${security_audit_claude_rc}" -ne 0 ]; then
+		security_audit_emit_failure "claude-execution" "claude" "Claude exited nonzero" "unknown"
+		exit "${security_audit_claude_rc}"
+	fi
+elif codex --ask-for-approval never \
 		-c model_verbosity=low \
 		-c include_apply_patch_tool=true \
 		exec \

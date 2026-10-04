@@ -473,6 +473,62 @@ jobs:
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"
+
+          # Claude engine (replace-claude-sessions plan Phase 5d): keep the
+          # engine, its policy and the role config from the trusted support
+          # clone outside the validated checkout, so claude_engine.py never
+          # reads the target ref's copies.
+          engine_root="${RUNNER_TEMP}/claude-engine-support"
+          mkdir -p "${engine_root}/scripts" "${engine_root}/.github/ai" "${engine_root}/.claude/hooks"
+          for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_settings.json.tmpl scripts/codex_stall_guard.sh .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py unattended_system_instructions.md; do
+            if [ -f "${helper_stage_dir}/${engine_file}" ]; then
+              install -m 0644 "${helper_stage_dir}/${engine_file}" "${engine_root}/${engine_file}"
+            fi
+          done
+          echo "SUPPORT_ROOT_DIR=${engine_root}" >> "$GITHUB_ENV"
+      # Claude engine (replace-claude-sessions plan Phase 5d): VALIDATE and
+      # VALIDATE_SELF_HEAL run on Claude unless AI_ENGINE_<ROLE> or AI_ENGINE say
+      # codex. The engine is the trusted copy staged above; the actions use the
+      # released ref, like setup-runtime. Exit 75 runs the unchanged codex call.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_VALIDATE: ${{ vars.AI_ENGINE_VALIDATE || '' }}
+          AI_ENGINE_VALIDATE_SELF_HEAL: ${{ vars.AI_ENGINE_VALIDATE_SELF_HEAL || '' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          engine_loaded=false
+          if [ -f "${SUPPORT_ROOT_DIR:-/nonexistent}/scripts/ai_engine.sh" ]; then
+            # shellcheck disable=SC1091
+            source "${SUPPORT_ROOT_DIR:-/nonexistent}/scripts/ai_engine.sh" && engine_loaded=true
+          fi
+          for role in VALIDATE VALIDATE_SELF_HEAL; do
+            engine="codex"
+            if [ "${engine_loaded}" = "true" ]; then
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: shubhodeep1/coding-workflows/.github/actions/install-claude@stable
+        with:
+          config_path: ${{ runner.temp }}/claude-engine-support/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: shubhodeep1/coding-workflows/.github/actions/claude-pool-token@stable
+        with:
+          config_path: ${{ runner.temp }}/claude-engine-support/.github/ai/claude_engine.json
+
       - name: Initialize workspace metadata
         id: workspace_meta
         env:

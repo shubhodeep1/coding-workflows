@@ -1869,8 +1869,28 @@ since Phase 5b; the orchestrator judges `WAVE_JUDGE`, `STALL_JUDGE`,
 tracking issue), `ORCHESTRATE` (the decomposer in `orchestrate.yml`), and the
 review write roles `REVIEW_EDITOR` (the same untrusted sandbox, with the CLI in
 the image), `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER` and `RB_JUDGE`
-(`review_autofix.yml`), since Phase 5c. Every other role still defaults to
-`codex`.
+(`review_autofix.yml`), since Phase 5c; and since Phase 5d `VALIDATE` and
+`VALIDATE_SELF_HEAL` (`validate.yml`), `VALIDATION_REFRESH`
+(`validation-refresh.yml`), `SECURITY_AUDIT` (`security-audit.yml` and the
+poller's security pass), `CHECK_TRIAGE` (`check_failure_triage.yml`),
+`WORKFLOW_HEAL` (`workflow-failure-heal-intake.yml`), `LOG_ANALYSIS`,
+`LOG_AUDIT` and `RETRO` (`workflow-log-analysis.yml` and
+`scripts/workflow_retro_fanout.sh`), and the review utility roles
+`SUMMARISER` and `BEHAVIOURAL_SMOKE` (read-only tool profile). Still on
+`codex`: `LOG_SUMMARY` (an OpenRouter HTTP call, not a CLI call) and
+`MATERIALITY` (no model call today), plus `ACTIVATION_VERIFY` and
+`UNBLOCK_JUDGE`, which their own phases wire.
+
+These sites call `claude_run_selected <ROLE>` (`scripts/ai_engine.sh`),
+which runs `claude_run` only when the job's "Resolve AI engine" step
+exported `AI_ENGINE_RESOLVED_<ROLE>=claude`, and otherwise returns `75` so
+the unchanged codex or OpenCode command runs. The triage and validate jobs
+run in a checkout they do not trust, so they stage the engine, its policy
+and `claude_engine.json` from the verified support source into
+`${RUNNER_TEMP}/claude-engine-support` and point `SUPPORT_ROOT_DIR` at it.
+`validate.yml` has no support checkout in its workspace, so its install
+and credential steps use the released `@stable` action refs, like its
+`setup-runtime@stable` step.
 
 **Claude-fixer mode** (Phase 5c, Q19/Q35) is the review write roles on
 Claude. `CLAUDE_FIXER_ENABLED=false` keeps `REVIEW_EDITOR`,

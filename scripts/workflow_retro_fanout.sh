@@ -163,18 +163,32 @@ run_consumer_retro() {
 		cat "${json_file}"
 	} > "${prompt_file}"
 
-	local attempt codex_exit sleep_secs
+	local attempt codex_exit sleep_secs retro_engine_rc
 	codex_exit=0
 	for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
 		if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 			sanitize_codex_prompt_file "${prompt_file}"
 		fi
 		set +e
-		bash "${SCRIPT_DIR}/codex_heartbeat.sh" \
-			--phase workflow_weekly_retro \
-			--stdout-file "${body_file}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${prompt_file}"
-		codex_exit=$?
+		# Claude engine (replace-claude-sessions plan Phase 5d): the RETRO role
+		# runs through claude_run_selected; exit 75 runs the unchanged codex call.
+		retro_engine_rc=75
+		if [ -f "${SCRIPT_DIR}/ai_engine.sh" ]; then
+			# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+			AI_ENGINE_MODEL_HINT="${WORKFLOW_RETRO_MODEL}" AI_ENGINE_EFFORT_HINT="${WORKFLOW_RETRO_REASONING:-}" \
+				bash -c 'source "$1" && claude_run_selected RETRO "$2" "$3" "$4"' _ \
+				"${SCRIPT_DIR}/ai_engine.sh" "${prompt_file}" "${body_file}" "${PWD}"
+			retro_engine_rc=$?
+		fi
+		if [ "${retro_engine_rc}" -eq 75 ]; then
+			bash "${SCRIPT_DIR}/codex_heartbeat.sh" \
+				--phase workflow_weekly_retro \
+				--stdout-file "${body_file}" \
+				-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${prompt_file}"
+			codex_exit=$?
+		else
+			codex_exit="${retro_engine_rc}"
+		fi
 		set -e
 		if [ "${codex_exit}" -eq 0 ] && grep -q '[^[:space:]]' "${body_file}"; then
 			break

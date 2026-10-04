@@ -507,6 +507,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
 
+      - name: Remaining roles on the Claude engine tests (Phase 5d)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine_utility_roles.py
+
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
           set -euo pipefail

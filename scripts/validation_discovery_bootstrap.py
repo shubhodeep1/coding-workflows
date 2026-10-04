@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -258,6 +259,74 @@ def validate_discovered_manifest_yaml(
 	return True, parsed, None
 
 
+# Claude engine (replace-claude-sessions plan Phase 5d): the discovery call
+# of the VALIDATION_REFRESH role runs through scripts/ai_engine.sh
+# `claude_run_selected` when validation-refresh.yml's "Resolve AI engine"
+# step exported AI_ENGINE_RESOLVED_VALIDATION_REFRESH=claude.
+_AI_ENGINE_SH = Path(__file__).resolve().parent / "ai_engine.sh"
+CLAUDE_ENGINE_FALLBACK_EXIT = 75
+
+
+def _claude_discovery_selected() -> bool:
+	return os.environ.get("AI_ENGINE_RESOLVED_VALIDATION_REFRESH", "") == "claude" and _AI_ENGINE_SH.is_file()
+
+
+def _run_claude_discovery_attempt(
+	*,
+	clone_dir: Path,
+	prompt_path: Path,
+	model: str,
+	reasoning_effort: str,
+	per_call_timeout_secs: int | None,
+) -> tuple[int, str]:
+	"""One discovery call on Claude: (exit status, answer text).
+
+	The status follows claude_run: 0 success, 75 Claude unavailable (the
+	caller runs the unchanged codex command), 124 timeout, anything else a
+	crash. The answer is what the codex path would print on stdout.
+	"""
+	out_path = clone_dir.parent / f".claude-discovery-{os.getpid()}.txt"
+	env = os.environ.copy()
+	env.update({"PYTHONDONTWRITEBYTECODE": "1", "AI_ENGINE_MODEL_HINT": model, "AI_ENGINE_EFFORT_HINT": reasoning_effort})
+	command = [
+		"bash",
+		"-c",
+		'source "$1" && claude_run_selected VALIDATION_REFRESH "$2" "$3" "$4"',
+		"_",
+		str(_AI_ENGINE_SH),
+		str(prompt_path.resolve()),
+		str(out_path),
+		str(clone_dir),
+	]
+	# A session of its own, so a timeout stops the CLI under bash as well.
+	proc = subprocess.Popen(
+		command,
+		cwd=str(clone_dir),
+		env=env,
+		text=True,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		start_new_session=True,
+	)
+	try:
+		_stdout, stderr = proc.communicate(timeout=per_call_timeout_secs)
+		returncode = proc.returncode
+	except subprocess.TimeoutExpired:
+		try:
+			os.killpg(proc.pid, signal.SIGKILL)
+		except ProcessLookupError:
+			pass
+		_stdout, stderr = proc.communicate()
+		returncode = 124
+	try:
+		text = out_path.read_text(encoding="utf-8") if out_path.is_file() and returncode == 0 else ""
+	finally:
+		out_path.unlink(missing_ok=True)
+	if stderr:
+		print(stderr, end="" if stderr.endswith("\n") else "\n", flush=True)
+	return returncode, text
+
+
 def discover_manifest_via_codex(
 	*,
 	clone_dir: Path,
@@ -298,7 +367,39 @@ def discover_manifest_via_codex(
 	prompt_text = prompt_path.read_text(encoding="utf-8")
 
 	last_failure: str | None = None
+	use_claude = _claude_discovery_selected()
 	for attempt in range(1, attempts + 1):
+		if use_claude:
+			claude_rc, claude_text = _run_claude_discovery_attempt(
+				clone_dir=clone_dir,
+				prompt_path=prompt_path,
+				model=model,
+				reasoning_effort=reasoning_effort,
+				per_call_timeout_secs=per_call_timeout_secs,
+			)
+			if claude_rc == CLAUDE_ENGINE_FALLBACK_EXIT:
+				# Claude unavailable: this attempt and the rest run codex (D1).
+				use_claude = False
+			else:
+				if claude_rc == 124:
+					last_failure = "claude_timeout"
+				elif claude_rc != 0:
+					last_failure = f"claude_rc_nonzero(rc={claude_rc})"
+				else:
+					candidate = _extract_yaml_candidate(claude_text)
+					ok, parsed, reason = validate_discovered_manifest_yaml(candidate, schema_path=schema_path)
+					if ok:
+						return DiscoveryResult(
+							outcome="success",
+							manifest_yaml=_stable_normalize_manifest_yaml(candidate),
+							parsed_manifest=parsed,
+							attempts_used=attempt,
+							failure_reason=None,
+						)
+					last_failure = f"validator_rejected: {reason}"
+				if attempt < attempts:
+					sleep_fn(retry_backoff_base_secs * (2 ** (attempt - 1)))
+				continue
 		command = [
 			"codex",
 			"--ask-for-approval",

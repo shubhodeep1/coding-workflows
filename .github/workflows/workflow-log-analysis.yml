@@ -335,6 +335,47 @@ jobs:
             echo "retro_gate=run" >> "$GITHUB_OUTPUT"
           fi
 
+      # Claude engine (replace-claude-sessions plan Phase 5d): the weekly retro (and its consumer fan-out) runs on
+      # Claude unless AI_ENGINE_RETRO or AI_ENGINE say codex; exit 75 runs the
+      # unchanged codex call (plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_RETRO: ${{ vars.AI_ENGINE_RETRO || '' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          engine_loaded=false
+          if [ -f "scripts/ai_engine.sh" ]; then
+            # shellcheck disable=SC1091
+            source "scripts/ai_engine.sh" && engine_loaded=true
+          fi
+          for role in RETRO; do
+            engine="codex"
+            if [ "${engine_loaded}" = "true" ]; then
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Run weekly retro pass
         id: retro
         if: steps.retro_context.outputs.retro_gate == 'run'
@@ -395,11 +436,25 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_weekly_retro \
-              --stdout-file "${RETRO_BODY_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
-            RETRO_EXIT=$?
+            # Claude engine (replace-claude-sessions plan Phase 5d): RETRO runs
+            # through claude_run_selected; exit 75 runs the unchanged codex call.
+            RETRO_EXIT_ENGINE_RC=75
+            if [ -f scripts/ai_engine.sh ]; then
+              # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+              AI_ENGINE_MODEL_HINT="${WORKFLOW_RETRO_MODEL}" AI_ENGINE_EFFORT_HINT="${WORKFLOW_RETRO_REASONING:-}" \
+                bash -c 'source "$1" && claude_run_selected RETRO "$2" "$3" "$4"' _ \
+                scripts/ai_engine.sh "${CODEX_PROMPT_FILE}" "${RETRO_BODY_FILE}" "${PWD}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
+              RETRO_EXIT_ENGINE_RC=$?
+            fi
+            if [ "${RETRO_EXIT_ENGINE_RC}" -eq 75 ]; then
+              bash scripts/codex_heartbeat.sh \
+                --phase workflow_weekly_retro \
+                --stdout-file "${RETRO_BODY_FILE}" \
+                -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
+              RETRO_EXIT=$?
+            else
+              RETRO_EXIT="${RETRO_EXIT_ENGINE_RC}"
+            fi
             set -e
             if [ "${RETRO_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${RETRO_BODY_FILE}"; then
               break
@@ -872,6 +927,47 @@ jobs:
             --max-summaries "${max_summaries}" \
             --token-budget "${token_budget}"
 
+      # Claude engine (replace-claude-sessions plan Phase 5d): the log analysis runs on
+      # Claude unless AI_ENGINE_LOG_ANALYSIS or AI_ENGINE say codex; exit 75 runs the
+      # unchanged codex call (plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          engine_loaded=false
+          if [ -f "scripts/ai_engine.sh" ]; then
+            # shellcheck disable=SC1091
+            source "scripts/ai_engine.sh" && engine_loaded=true
+          fi
+          for role in LOG_ANALYSIS; do
+            engine="codex"
+            if [ "${engine_loaded}" = "true" ]; then
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Run workflow log analysis
         id: analyze
         env:
@@ -1109,11 +1205,25 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_log_analysis \
-              --stdout-file "${REPORT_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
-            ANALYZE_EXIT=$?
+            # Claude engine (replace-claude-sessions plan Phase 5d): LOG_ANALYSIS runs
+            # through claude_run_selected; exit 75 runs the unchanged codex call.
+            ANALYZE_EXIT_ENGINE_RC=75
+            if [ -f scripts/ai_engine.sh ]; then
+              # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+              AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL}" AI_ENGINE_EFFORT_HINT="xhigh" \
+                bash -c 'source "$1" && claude_run_selected LOG_ANALYSIS "$2" "$3" "$4"' _ \
+                scripts/ai_engine.sh "${CODEX_PROMPT_FILE}" "${REPORT_FILE}" "${PWD}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+              ANALYZE_EXIT_ENGINE_RC=$?
+            fi
+            if [ "${ANALYZE_EXIT_ENGINE_RC}" -eq 75 ]; then
+              bash scripts/codex_heartbeat.sh \
+                --phase workflow_log_analysis \
+                --stdout-file "${REPORT_FILE}" \
+                -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+              ANALYZE_EXIT=$?
+            else
+              ANALYZE_EXIT="${ANALYZE_EXIT_ENGINE_RC}"
+            fi
             set -e
             if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
               codex_failure_mode=""
@@ -1521,6 +1631,47 @@ jobs:
             echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
 
+      # Claude engine (replace-claude-sessions plan Phase 5d): the deep audit runs on
+      # Claude unless AI_ENGINE_LOG_AUDIT or AI_ENGINE say codex; exit 75 runs the
+      # unchanged codex call (plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_LOG_AUDIT: ${{ vars.AI_ENGINE_LOG_AUDIT || '' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          engine_loaded=false
+          if [ -f "scripts/ai_engine.sh" ]; then
+            # shellcheck disable=SC1091
+            source "scripts/ai_engine.sh" && engine_loaded=true
+          fi
+          for role in LOG_AUDIT; do
+            engine="codex"
+            if [ "${engine_loaded}" = "true" ]; then
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Run deep audit pass
         id: audit
         env:
@@ -1688,11 +1839,25 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_deep_audit \
-              --stdout-file "${SECTION_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
-            AUDIT_EXIT=$?
+            # Claude engine (replace-claude-sessions plan Phase 5d): LOG_AUDIT runs
+            # through claude_run_selected; exit 75 runs the unchanged codex call.
+            AUDIT_EXIT_ENGINE_RC=75
+            if [ -f scripts/ai_engine.sh ]; then
+              # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+              AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL}" AI_ENGINE_EFFORT_HINT="xhigh" \
+                bash -c 'source "$1" && claude_run_selected LOG_AUDIT "$2" "$3" "$4"' _ \
+                scripts/ai_engine.sh "${CODEX_PROMPT_FILE}" "${SECTION_FILE}" "${PWD}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
+              AUDIT_EXIT_ENGINE_RC=$?
+            fi
+            if [ "${AUDIT_EXIT_ENGINE_RC}" -eq 75 ]; then
+              bash scripts/codex_heartbeat.sh \
+                --phase workflow_deep_audit \
+                --stdout-file "${SECTION_FILE}" \
+                -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
+              AUDIT_EXIT=$?
+            else
+              AUDIT_EXIT="${AUDIT_EXIT_ENGINE_RC}"
+            fi
             set -e
             if [ "${AUDIT_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
               break
@@ -2025,9 +2190,51 @@ jobs:
             echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
 
+      # Claude engine (replace-claude-sessions plan Phase 5d): the API redundancy pass runs on
+      # Claude unless AI_ENGINE_LOG_ANALYSIS or AI_ENGINE say codex; exit 75 runs the
+      # unchanged codex call (plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          engine_loaded=false
+          if [ -f "scripts/ai_engine.sh" ]; then
+            # shellcheck disable=SC1091
+            source "scripts/ai_engine.sh" && engine_loaded=true
+          fi
+          for role in LOG_ANALYSIS; do
+            engine="codex"
+            if [ "${engine_loaded}" = "true" ]; then
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Run API redundancy pass
         id: api_redundancy
         env:
+          THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || 'high' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
@@ -2191,11 +2398,25 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_api_redundancy \
-              --stdout-file "${SECTION_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
-            API_EXIT=$?
+            # Claude engine (replace-claude-sessions plan Phase 5d): LOG_ANALYSIS runs
+            # through claude_run_selected; exit 75 runs the unchanged codex call.
+            API_EXIT_ENGINE_RC=75
+            if [ -f scripts/ai_engine.sh ]; then
+              # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+              AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL}" AI_ENGINE_EFFORT_HINT="${THINKING_LEVEL_ANALYSIS:-high}" \
+                bash -c 'source "$1" && claude_run_selected LOG_ANALYSIS "$2" "$3" "$4"' _ \
+                scripts/ai_engine.sh "${CODEX_PROMPT_FILE}" "${SECTION_FILE}" "${PWD}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
+              API_EXIT_ENGINE_RC=$?
+            fi
+            if [ "${API_EXIT_ENGINE_RC}" -eq 75 ]; then
+              bash scripts/codex_heartbeat.sh \
+                --phase workflow_api_redundancy \
+                --stdout-file "${SECTION_FILE}" \
+                -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
+              API_EXIT=$?
+            else
+              API_EXIT="${API_EXIT_ENGINE_RC}"
+            fi
             set -e
             if [ "${API_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
               break

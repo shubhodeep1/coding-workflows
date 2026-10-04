@@ -319,7 +319,31 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	fi
 } > "${PROMPT_FILE}"
 
-if command -v codex >/dev/null 2>&1; then
+# Claude engine (replace-claude-sessions plan Phase 5d): the CHECK_TRIAGE
+# role runs through claude_run_selected from the trusted engine root the
+# workflow staged (SUPPORT_ROOT_DIR), with the same credentials stripped.
+# The current directory is the PR checkout, so its scripts/ is never used.
+# Exit 75 (role on codex, Claude unavailable, or no engine) runs the
+# unchanged codex call below.
+triage_claude_rc=75
+triage_engine_sh="${SUPPORT_ROOT_DIR:-}/scripts/ai_engine.sh"
+if [ -n "${SUPPORT_ROOT_DIR:-}" ] && [ -f "${triage_engine_sh}" ]; then
+	triage_claude_rc=0
+	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+	env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
+		AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
+		bash -c 'source "$1" && claude_run_selected CHECK_TRIAGE "$2" "$3" "$4"' _ \
+		"${triage_engine_sh}" "${PROMPT_FILE}" "${DIAG_FILE}" "${PWD}" \
+		2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || triage_claude_rc=$?
+fi
+
+if [ "${triage_claude_rc}" -ne 75 ]; then
+	if [ "${triage_claude_rc}" -ne 0 ]; then
+		log "warn claude_run_nonzero rc=${triage_claude_rc}"
+		DIAGNOSIS_FALLBACK_REASON="failed (Claude exited non-zero)"
+		: > "${DIAG_FILE}"
+	fi
+elif command -v codex >/dev/null 2>&1; then
 	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
 		codex --ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \

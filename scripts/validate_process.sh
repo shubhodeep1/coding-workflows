@@ -2963,6 +2963,26 @@ run_validate_codex_attempt() {
     bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
   fi
 
+	# Claude engine (replace-claude-sessions plan Phase 5d): the VALIDATE role
+	# runs through claude_run_selected from the trusted engine root validate.yml
+	# staged (SUPPORT_ROOT_DIR); the checkout's own scripts/ is never used.
+	# Exit 75 (role on codex, Claude unavailable, or no engine) runs the
+	# unchanged codex paths below.
+	local validate_claude_rc=0
+	local validate_engine_sh="${SUPPORT_ROOT_DIR:-}/scripts/ai_engine.sh"
+	local validate_effort_hint="${MODEL_REASONING_EFFORT:-}"
+	if [ "${phase_name}" = "validate_discover" ]; then
+		validate_effort_hint="${MODEL_REASONING_EFFORT_DISCOVER:-${validate_effort_hint}}"
+	fi
+	if [ -n "${SUPPORT_ROOT_DIR:-}" ] && [ -f "${validate_engine_sh}" ]; then
+		# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+		AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${validate_effort_hint}" \
+			bash -c 'source "$1" && claude_run_selected VALIDATE "$2" "$3" "$4"' _ \
+			"${validate_engine_sh}" "${prompt_file}" "${output_file}" "${PWD}" \
+			2> >(tee -a "${log_file}" >&2) || validate_claude_rc=$?
+		[ "${validate_claude_rc}" -eq 75 ] || return "${validate_claude_rc}"
+	fi
+
 	if validate_thread_reuse_enabled; then
 		CODEX_THREAD_REUSE_STATE_KEY="${phase_name}" \
 		  CODEX_THREAD_REUSE_PROMPT_FILE="${prompt_file}" \

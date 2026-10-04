@@ -311,6 +311,20 @@ run_self_heal_codex()
 	local rc=0
 
 	SELF_HEAL_STALL_STATE=""
+	# Claude engine (replace-claude-sessions plan Phase 5d): the
+	# VALIDATE_SELF_HEAL role runs through claude_run_selected from the trusted
+	# engine root validate.yml staged (SUPPORT_ROOT_DIR). Exit 75 (role on
+	# codex, Claude unavailable, or no engine) runs the unchanged codex paths.
+	local self_heal_engine_sh="${SUPPORT_ROOT_DIR:-}/scripts/ai_engine.sh"
+	if [ -n "${SUPPORT_ROOT_DIR:-}" ] && [ -f "${self_heal_engine_sh}" ]; then
+		# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+		AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
+			bash -c 'source "$1" && claude_run_selected VALIDATE_SELF_HEAL "$2" "$3" "$4"' _ \
+			"${self_heal_engine_sh}" "${SELF_HEAL_PROMPT_FILE}" "${SELF_HEAL_OUTPUT_FILE}" "${PWD}" \
+			2> "${stderr_tmp}" || rc=$?
+		[ "${rc}" -eq 75 ] || return "${rc}"
+		rc=0
+	fi
 	if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
 		stall_status_file="$(mktemp /tmp/self_heal_stall_status.XXXXXX)"
 		set +e

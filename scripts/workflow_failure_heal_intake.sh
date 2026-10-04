@@ -677,7 +677,28 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	fi
 } > "${PROMPT_FILE}"
 
-if command -v codex >/dev/null 2>&1; then
+# Claude engine (replace-claude-sessions plan Phase 5d): the WORKFLOW_HEAL
+# role (read-only profile) runs through claude_run_selected with the same
+# credentials stripped from its environment. Exit 75 (role on codex, Claude
+# unavailable, or ai_engine.sh missing) runs the unchanged codex call below.
+heal_claude_rc=75
+if [ -f scripts/ai_engine.sh ]; then
+	heal_claude_rc=0
+	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+	env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \
+		AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
+		bash -c 'source "$1" && claude_run_selected WORKFLOW_HEAL "$2" "$3" "$4"' _ \
+		scripts/ai_engine.sh "${PROMPT_FILE}" "${DIAG_FILE}" "${PWD}" \
+		2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || heal_claude_rc=$?
+fi
+
+if [ "${heal_claude_rc}" -ne 75 ]; then
+	if [ "${heal_claude_rc}" -ne 0 ]; then
+		log "warn claude_run_nonzero rc=${heal_claude_rc}"
+		DIAGNOSIS_FALLBACK_REASON="failed (Claude exited non-zero)"
+		: > "${DIAG_FILE}"
+	fi
+elif command -v codex >/dev/null 2>&1; then
 	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
 		codex --ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
