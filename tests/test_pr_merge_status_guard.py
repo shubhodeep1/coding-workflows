@@ -948,6 +948,7 @@ def test_unresolved_push_destination_requests_confirmation(merged_branch_repo, c
 	assert any(
 		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
 		and "unresolved git push destination" in item.get("systemMessage", "")
+		and "actual push destination and source tip" in item.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
 		for item in map(json.loads, capsys.readouterr().out.splitlines())
 	)
 
@@ -961,6 +962,7 @@ def test_unresolved_push_source_requests_confirmation(merged_branch_repo, capsys
 	assert any(
 		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
 		and "unresolved git push source" in item.get("systemMessage", "")
+		and "actual push destination and source tip" in item.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
 		for item in map(json.loads, capsys.readouterr().out.splitlines())
 	)
 
@@ -1342,7 +1344,7 @@ def test_history_fallback_push_asks_when_inconclusive(merge_commit_repo) -> None
 	decision = _ask_decision(proc)
 	assert decision is not None, proc.stdout
 	assert "inconclusive" in decision["systemMessage"]
-	assert "still open" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "actual push destination and source tip" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_history_fallback_commit_warns_when_inconclusive(merge_commit_repo) -> None:

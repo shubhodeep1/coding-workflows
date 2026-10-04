@@ -1053,7 +1053,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (stderr redirection, check the current branch) from `git push origin 2 > /dev/null`
 > (push branch `2`, redirect stdout). When a push refspec contains an unresolved
 > destination or source (for example `git push origin "$TARGET"`), checking
-> the current branch alone is not enough; the hook asks for confirmation.
+> the current branch alone is not enough; the hook asks for confirmation and
+> tells the operator to verify the actual push destination and source tip.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
