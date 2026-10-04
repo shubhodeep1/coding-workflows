@@ -148,7 +148,9 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ENABLE_VALIDATION` | No | `true` | orchestrate_poll | When true, a `complete` judge verdict transitions the tracking issue into runtime validation (`ai:validating`) and completion occurs only after validation passes. |
 | `MAX_VALIDATE_CYCLES` | No | `3` | orchestrate_poll | Maximum runtime validation cycles (initial run + fix/revalidate loops) before forcing `ai:validation-failed`. |
 | `ENABLE_SECURITY_PASS` | No | `true` | orchestrate_poll | Mandatory current-integration-head security pass before validation or finalization. Every completion route must obtain a clean SHA-bound pass; set to `false` for the immediate operator kill switch. |
-| `MAX_SECURITY_PASS_CYCLES` | No | `5` | orchestrate_poll | Maximum completed consolidated security-fix cycles before persistent findings terminalize the project as `ai:security-pass-failed`. The counter resets to `0` when a recorded clean pass is invalidated by an advancing integration head, so findings in newly-synced code get their own budget. Re-audits after a merged fix are delta audits (files changed since the last audited commit plus files cited by earlier findings), so the budget is spent on findings that persist, not on fresh samples of unchanged code. |
+| `MAX_SECURITY_PASS_CYCLES` | No | `5` | orchestrate_poll, review_autofix | Maximum completed consolidated security-fix cycles before persistent findings terminalize the project as `ai:security-pass-failed`. The counter resets to `0` when a recorded clean pass is invalidated by an advancing integration head, so findings in newly-synced code get their own budget. Re-audits after a merged fix are delta audits (files changed since the last audited commit plus files cited by earlier findings), so the budget is spent on findings that persist, not on fresh samples of unchanged code. Also caps the single-issue security pass (`SINGLE_ISSUE_SECURITY_PASS_ENABLED`) per PR. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | No | `true` | review_autofix, security-audit | Single-issue security pass (port P1 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). Eligible standalone PRs into the default branch also bypass the deterministic doc-only/small-diff auto-merge path so they reach the audit gate after review. Same-repository heads that are not integration branches or `e2e-smoke-test` PRs wait until a security audit of the current head is clean; only a PR with exactly one linked issue may skip when that issue is a verified automation follow-up per `scripts/security_pass_skip.py`. It dispatches `security-audit.yml` (consumers: `ai-security-audit.yml`) with `ref` = the PR head branch and `pr_number`; the audit posts a `<!-- ai:single-issue-security-pass:v1 status=clean|findings|failed head=<sha> cycle=<n> -->` comment and re-runs the review on clean or failed. Its follow-up issues target the PR branch, so their merges start the next cycle. Only a result from the authenticated pipeline account for the live PR head is accepted; with `github.token` instead of `GH_PAT`, the expected account is `github-actions[bot]`. An audit without a findings summary, including `SECURITY_AUDIT_ENABLED=false`, reports `failed`, never `clean`. An unavailable account identity or comment history holds the merge. If the gate cannot write its hold decision to `GITHUB_OUTPUT`, the review job fails closed. After `MAX_SECURITY_PASS_CYCLES` cycles the PR is labelled `ai:security-pass-failed` for the planned Phase 7 unblock judge (not yet shipped); a failed label write fails the review run closed so workflow recovery can retry it. A failed audit dispatch (for example a consumer wrapper without the `pr_number` input) still logs a warning and merges as before. The audit workflow needs `pull-requests: read` to verify the PR and `actions: write` to re-dispatch review using `github.token` when `GH_PAT` is absent. Logs `SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=`. Set `false` to disable. |
+| `SECURITY_PASS_PENDING_STALE_HOURS` | No | `6` | review_autofix | Hours a same-head pending single-issue audit holds auto-merge before the next clean review re-dispatches the audit. Must be a positive integer; invalid values fall back to `6`. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | No | `2` | orchestrate_poll | Maximum times one consolidated security-fix issue that ended in `ai:implementation-failed` is closed and re-issued within a fix cycle before the pass fails as `ai:security-pass-failed` (recoverable via `/re-security-pass`). |
 | `SECURITY_PASS_CONFIDENCE_GATE` | No | `8` | orchestrate_poll | Minimum confidence score (1-10) for findings that block the project security pass. |
 | `SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED` | No | `true` | orchestrate_poll | When `MAX_SECURITY_PASS_CYCLES` is spent with findings still open, consult the security-pass exhaustion judge (`prompts/mode-judge-security-pass-exhaustion.txt`) instead of terminalizing. Per remaining finding it chooses `accept_with_followup` (waiver recorded in state plus one non-blocking `ai:security` follow-up issue; the project completes once nothing else blocks), `keep_fixing` (one more consolidated fix issue for those findings), or `fail` (the pre-judge terminal `ai:security-pass-failed`). Any judge failure falls back to the terminal path. Set `false` to restore terminal failure on exhaustion. |
@@ -1725,6 +1727,8 @@ through `clarify → plan → implement → review`.
 | `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used by the dispatchable `opencode-live-smoke.yml` rollout gate and the complete production review/autofix model pipeline. |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-head project security pass before validation or finalization. Set to `false` for the immediate operator kill switch. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before terminal `ai:security-pass-failed`. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `true` | Hold a clean standalone PR's auto-merge until a security audit of its head is clean (see the repository variables table) |
+| `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | Hours before a pending single-issue audit is considered stale and retried on the next review run. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` security-fix issue per fix cycle before terminal `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 | `SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED` | `true` | Consult the security-pass exhaustion judge when the fix-cycle budget is spent instead of terminalizing; `false` restores terminal `ai:security-pass-failed` on exhaustion. |
@@ -1863,9 +1867,29 @@ The smoke defaults `OPENCODE_VERSION` to `1.18.23`. `CODEX_VERSION` remains inde
 
 The Actions pipelines can run a model role on the Claude Code CLI
 (`claude -p`) instead of codex or OpenCode
-(`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). The plumbing
-is in place but **inert**: every role's code default is `codex`, no call site
-uses it yet, and the role cutovers switch the defaults one group at a time.
+(`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). The role
+cutovers switch the defaults one group at a time. **On Claude today:**
+`CLARIFY` (`clarify.yml`), `CLARIFY_RESPOND` (`orchestrate_clarify_respond.yml`:
+the answer, the self-critique and the revision) and `PLAN` (`plan.yml` through
+`scripts/run_plan_codex.sh`), since Phase 5a; `IMPLEMENT`, `IMPLEMENT_REPAIR`
+(`implement.yml` through `scripts/codex_thread_reuse.sh`, which resumes the
+role's Claude session across attempts the way it resumes a codex thread) and
+`IMPLEMENT_DIAGNOSE` (`scripts/implement_diagnose_post_codex_failure.sh`),
+since Phase 5b. Every other role still defaults to `codex`.
+
+**How a cut-over role runs.** The job's "Resolve AI engine" step picks the
+engine for the role. Only when it is `claude` do "Install Claude Code CLI" and
+"Resolve Claude credential" (the account pool) run. The model call then runs
+on Claude (`claude_run`, or the clarify sandbox's Claude branch). When Claude
+cannot start (no CLI, no credential, clarify image build failure or every
+account gated: exit `75`, logged
+`AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call.
+`AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
+the issue) puts a role back on codex without a code change.
+Implementation attempts on Claude honor the same `CODEX_THREAD_REUSE_TIMEOUT_SECS`
+wall-clock bound as codex attempts; diagnosis is bounded to 300 seconds on
+either engine. An exit-75 implementation fallback remains on codex for later
+attempts of that role in the same job.
 
 | Piece | What it does |
 |---|---|
@@ -1896,10 +1920,10 @@ input (`claude` or `codex`; empty leaves the project unlabelled), and the
 orchestrator puts the matching label (`ai:engine-claude` or `ai:codex`) on
 the tracking issue and the wave-1 issues it creates. The poller copies the
 tracking issue's engine label onto every issue and PR it creates later, and
-`implement.yml` copies an issue's engine label onto its PR. The separate
-role cutovers must pass work-item labels into engine selection; today the
-labels do not select a production engine. When both labels are
-present, `ai:codex` is copied. `/implement-plan-claude` dispatches with
+`implement.yml` copies an issue's engine label onto its PR. Clarify,
+clarify-respond and plan resolve the engine from the issue's fetched labels;
+roles not yet cut over still run on codex. When both labels are present,
+`ai:codex` is copied. `/implement-plan-claude` dispatches with
 `engine=claude`; against a wrapper that has no `engine` input yet it
 dispatches without it and labels the tracking issue instead. Wave-1 issues
 created before that later label write do not inherit it. If `implement.yml`

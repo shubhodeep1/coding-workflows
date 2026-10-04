@@ -165,11 +165,11 @@ def test_clarify_wiring() -> None:
 	assert 'gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?' in fetch
 	assert 'jq \'.[0:50]\' "${ISSUE_ALL_COMMENTS_FILE}" > "${ISSUE_COMMENTS_FILE}"' in fetch
 	text = CLARIFY.read_text(encoding="utf-8")
-	assert "auto_decisions.py orchestrate_parse_and_post_answer.sh; do" in text
+	assert "auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh" in text
 
 
 def test_implement_appends_the_section_before_the_lint() -> None:
 	text = IMPLEMENT.read_text(encoding="utf-8")
-	assert "security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do" in text
+	assert "security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in text
 	section = text.index("auto_decisions.py\" pr-section")
 	assert text.index('printf \'Refs #%s\\n\' "${TRACKING_ISSUE_NUMBER}"') < section < text.index('printf \'%s\\n\\n\' "${PR_TITLE}" > "${PR_LINT_FILE}"')

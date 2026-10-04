@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from runpy import run_path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -41,8 +42,11 @@ def _inline_prompt(runner_text: str) -> str:
 def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	step = _workflow_step(workflow_text, "Run Codex planning")
+	stage_step = _workflow_step(workflow_text, "Stage workflow support files")
 
 	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in workflow_text
+	assert 'install -m 0644 "${src}" scripts/claude_settings.json.tmpl' in workflow_text
+	assert (REPO_ROOT / "scripts" / "claude_settings.json.tmpl").is_file()
 	assert "if: env.SKIP_PLAN != 'true'" in step
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
 	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in step
@@ -52,6 +56,22 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 		"          bash scripts/run_plan_codex.sh\n"
 	)
 	assert len(step.encode("utf-8")) < 2_000
+
+
+def test_workflow_reference_checker_accepts_claude_settings_template() -> None:
+	checker_ns = run_path(str(REPO_ROOT / "scripts" / "check_workflow_script_refs.py"))
+	extract_refs = checker_ns["extract_refs"]
+	for reference in (
+		"scripts/claude_settings.json.tmpl",
+		"${SUPPORT_SCRIPTS_DIR}/claude_settings.json.tmpl",
+		"for f in claude_settings.json.tmpl; do install scripts/${f}; done",
+	):
+		assert extract_refs(reference) == {"claude_settings.json.tmpl"}
+	result = subprocess.run(
+		["python3", "scripts/check_workflow_script_refs.py"],
+		cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0, result.stderr
 
 
 def test_extracted_prompt_matches_pre_extraction_bytes() -> None:
@@ -72,6 +92,8 @@ def _write_executable(path: Path, content: str) -> None:
 
 def _run_runner(
 	scenario: str,
+	engine: str = "",
+	claude_scenario: str = "",
 ) -> tuple[
 	subprocess.CompletedProcess[str], Path, tempfile.TemporaryDirectory[str]
 ]:
@@ -157,6 +179,23 @@ esac
 """,
 	)
 
+	if engine:
+		# A stand-in for scripts/ai_engine.sh: claude_run logs its arguments
+		# and succeeds, crashes, or reports Claude unavailable (exit 75).
+		(scripts_dir / "ai_engine.sh").write_text(
+			"""claude_run()
+{
+	printf '%s|%s|%s|%s|%s|%s\\n' "$1" "$2" "$3" "$4" "${AI_ENGINE_MODEL_HINT:-}" "${AI_ENGINE_EFFORT_HINT:-}" >> "${MOCK_LOG_DIR}/claude-run.log"
+	case "${MOCK_CLAUDE_SCENARIO}" in
+		success) printf 'claude plan output\\n' > "$3" ;;
+		unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
+		*) return 1 ;;
+	esac
+}
+""",
+			encoding="utf-8",
+		)
+
 	(root / "pre_assembled_static.txt").write_text(
 		"STATIC CONTEXT\n", encoding="utf-8"
 	)
@@ -192,8 +231,13 @@ esac
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"RUNTIME_DIR": str(runtime_dir),
 			"TOOL_CALL_BUDGET": "40",
+			"MODEL_REASONING_EFFORT": "high",
+			"MOCK_CLAUDE_SCENARIO": claude_scenario,
 		}
 	)
+	environment.pop("PLAN_ENGINE", None)
+	if engine:
+		environment["PLAN_ENGINE"] = engine
 	for key in ("BASH_ENV", "ENV"):
 		environment.pop(key, None)
 
@@ -290,6 +334,67 @@ def test_retry_exhaustion_preserves_failure_exit() -> None:
 	assert _read_lines(runtime_dir / "sleep.log") == ["10", "20"]
 	assert len(_read_lines(runtime_dir / "codex-args.log")) == 3
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == ""
+
+
+CODEX_ARGS = (
+	"--ask-for-approval never -c model_verbosity=low "
+	"-c include_apply_patch_tool=true exec --skip-git-repo-check "
+	"--model primary/model --sandbox danger-full-access"
+)
+
+
+def test_claude_engine_runs_claude_run_and_not_codex() -> None:
+	# Phase 5a: PLAN on Claude runs claude_run in the checkout with the role's
+	# codex model and effort as hints; codex is not called.
+	result, root, _temporary_directory = _run_runner("exhaust", engine="claude", claude_scenario="success")
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert "Codex planning attempt 1/3 (engine claude)..." in result.stdout
+	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "claude plan output\n"
+	assert _read_lines(runtime_dir / "claude-run.log") == [
+		f"PLAN|{runtime_dir / 'codex_prompt.txt'}|{runtime_dir / 'codex_output.txt'}|{root}|primary/model|high"
+	]
+	assert not (runtime_dir / "codex-args.log").exists()
+
+
+def test_claude_unavailable_falls_back_to_the_unchanged_codex_call() -> None:
+	# Plan D1 and G4: exit 75 runs the exact pre-cutover codex command, in the
+	# same attempt, and the remaining attempts stay on codex.
+	result, root, _temporary_directory = _run_runner("success", engine="claude", claude_scenario="unavailable")
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert "AI_ENGINE_FALLBACK role=PLAN reason=no_credential" in result.stderr
+	assert len(_read_lines(runtime_dir / "claude-run.log")) == 1
+	assert _read_lines(runtime_dir / "codex-args.log") == [CODEX_ARGS]
+	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "primary plan output\n"
+	assert not (runtime_dir / "sleep.log").exists()
+
+
+def test_a_claude_crash_retries_on_claude_and_never_reaches_codex() -> None:
+	result, root, _temporary_directory = _run_runner("success", engine="claude", claude_scenario="crash")
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 1
+	assert "Codex exited with code 1 on attempt 1." in result.stdout
+	assert len(_read_lines(runtime_dir / "claude-run.log")) == 3
+	assert not (runtime_dir / "codex-args.log").exists()
+
+
+def test_codex_engine_runs_the_unchanged_codex_call() -> None:
+	result, root, _temporary_directory = _run_runner("success", engine="codex")
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert _read_lines(runtime_dir / "codex-args.log") == [CODEX_ARGS]
+	assert not (runtime_dir / "claude-run.log").exists()
+	runner = PLAN_RUNNER.read_text(encoding="utf-8")
+	assert (
+		'cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true '
+		'exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" '
+		'2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?'
+	) in runner
 
 
 def main() -> int:
