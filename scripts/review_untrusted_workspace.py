@@ -37,7 +37,9 @@ def allowed(name):
 		return False
 	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
-	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"), (".github", "ai"))):
+	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", "scripts/claude_settings.json.tmpl"):
+		return True
+	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
 		return False
 	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile"
 
@@ -82,10 +84,10 @@ def enumerate_workspace(root):
 			if entries > 10000:
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
-			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
+			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child not in (".github", ".claude")):
 				dirs.remove(child)
 				continue
-			if (name != ".github" and not allowed(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
+			if (name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not allowed(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
 				raise ValueError("unsafe workspace directory")
 		for child in files:
 			entries += 1
