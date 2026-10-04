@@ -99,6 +99,10 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 		('git push origin "2"> /tmp/push.log', "2"),
 		("git push origin 2> /tmp/push.log", ""),
 		("git push origin \\2> /tmp/push.log", "2"),
+		("git push origin 2 2>err >out", "2"),
+		("git push origin 2 2>err 2>out", "2"),
+		("git push origin 2 >out 2>err", "2"),
+		("git push origin 2>err >out", ""),
 	],
 )
 def test_redirection_keeps_numeric_push_refspecs(command: str, expected_branch: str) -> None:

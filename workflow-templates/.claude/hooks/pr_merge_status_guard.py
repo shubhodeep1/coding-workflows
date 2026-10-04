@@ -272,6 +272,7 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 					and command[last_segment_word_end:last_segment_word_end + len(token)] == token
 					and (fd_start == 0 or command[fd_start - 1] in " \t\r\n;&|<>()")):
 					segment.pop()
+					last_segment_word_end = 0
 			redirect_target = True
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
