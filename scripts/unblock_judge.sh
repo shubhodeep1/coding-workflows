@@ -469,7 +469,7 @@ unblock_main()
 		return 0
 	fi
 	comment_body="$(jq -r --arg marker "${marker_line}" '
-		"## Unblock judge: `" + .verdict + "` (round " + (.round | tostring) + ")\n\n" + .reason + "\n\n"
+		"## Unblock judge: `" + .verdict + "` (round " + (.round | tostring) + ")\n\nReason: " + .reason + "\n\n"
 		+ (if (.instructions // "") != "" then "Instructions: " + .instructions + "\n\n" else "" end)
 		+ (if (.answer // "") != "" then "Answer: " + .answer + "\n\n" else "" end)
 		+ (if (.paths // []) | length > 0 then "Paths: " + ((.paths // []) | map("`" + . + "`") | join(", ")) + "\n\n" else "" end)

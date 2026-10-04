@@ -37,6 +37,12 @@ issue `/approved` (after `ai:awaiting-approval`), `/answer`, `/reclarify`;
 on a pull request a review dispatch. Comments are posted with the pipeline's
 GH_PAT identity, which those handlers accept as a trusted human comment.
 
+Model-written text (reason, instructions, answer) never starts a line of a
+comment or body: the poller's command handlers match `/judge_resume`,
+`/revalidate` and `/re-security-pass` at the start of any comment line, so
+every such field follows a fixed label (`Change: `, `Why: `, ...). The ledger
+already folds each field onto one line.
+
 No GitHub API calls and no network (CLAUDE.md §15). Exit 0 ok, 1 bad
 arguments, 2 unreadable input.
 """
@@ -174,9 +180,9 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 		f"<!-- ai:unblock-fixup:v1 item={ctx['item']} round={verdict['round']} -->",
 		f"## Unblock {kind_word} for #{ctx['item']}",
 		"",
-		f"The unblock judge chose `{verdict['verdict']}` for #{ctx['item']} (stop `{ctx['stop']}`). Make exactly this change:",
+		f"The unblock judge chose `{verdict['verdict']}` for #{ctx['item']} (stop `{ctx['stop']}`). Make exactly this change.",
 		"",
-		verdict.get("instructions", ""),
+		f"Change: {verdict.get('instructions', '')}",
 	]
 	if verdict.get("placeholder"):
 		lines += [
@@ -255,7 +261,7 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
 	elif name == "reissue":
 		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
-		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", verdict["instructions"], "", f"Why: {verdict['reason']}"])
+		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
 		if ctx["kind"] == "pr":
 			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": True})
 			if ctx["linked_issue"]:
@@ -285,7 +291,7 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			{
 				"op": "create_issue",
 				"title": f"Follow-up to #{item}: {ctx['title']}"[:240],
-				"body": "\n".join([f"Accepted with this follow-up by the unblock judge (#{item}).", "", verdict["instructions"]]),
+				"body": "\n".join([f"Accepted with this follow-up by the unblock judge (#{item}).", "", f"Follow-up: {verdict['instructions']}"]),
 				"labels": [],
 				"wait_on": None,
 			}
