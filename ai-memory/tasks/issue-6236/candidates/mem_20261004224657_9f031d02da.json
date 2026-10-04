@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which `claude_run` invocations should keep pool tokens out of the model's reach (host relay plus a process that cannot read `${CLAUDE_ENGINE_POOL_DIR}`)?\nChoices:\nA) Every read-profile `claude_run` call (`SECURITY_AUDIT` and any other role that resolves to `profile=read`), done inside `claude_run` in `scripts/ai_engine.sh` and reusing the existing broker and placeholder-token pattern (RECOMMENDED)\nB) Only the `SECURITY_AUDIT` call in `scripts/security_audit.sh`, which is the reported path\nC) Every `claude_run` call, read and write profiles. Write-profile roles (editor, implement) have the same exposure through `Bash` and `bypassPermissions`, but this widens the change well beyond the finding\n**Note:** with A or B, write-profile roles keep the token in their environment. If you want that closed in a separate issue, say so in your answer.\nQ2: When isolation can't start for a run that needs it (container runtime missing, broker fails to start, image build fails), what should `claude_run` do?\nChoices:\nA) Return exit 75 with `AI_ENGINE_FALLBACK reason=<isolation_reason>`. The caller then runs its existing Codex path, which never reads the Claude pool (RECOMMENDED)\nB) Fail the run closed (non-zero, non-75 exit). No Codex fallback for that role\nC) Run Claude on the host with a `::warning::`, as today. **Note:** this keeps the reported exposure and contradicts the finding. Picking it will require clarifying again.",
+  "fingerprint": "6c013bf20a24ba2161fbf83d6c271c0eaabb403b58ca2fad291c6d2bc44c2da7",
+  "lineage": {
+    "issue_number": 6236,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37240916641",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37240916641",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261004224657_9f031d02da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6236,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37240916641"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6236 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-04T22:46:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
