@@ -229,6 +229,13 @@ def test_unconfigured_broker(env: dict) -> None:
 	assert _Stub.seen == []
 
 
+def test_unconfigured_broker_in_actions(env: dict) -> None:
+	env["config"].write_text(json.dumps({"broker_url": ""}), encoding="utf-8")
+	_, outputs = _run(env, GITHUB_ACTIONS="true")
+	assert (outputs["available"], outputs["reason"]) == ("false", "broker_not_configured")
+	assert _Stub.seen == []
+
+
 def test_no_oidc_permission(env: dict) -> None:
 	_, outputs = _run(env, ACTIONS_ID_TOKEN_REQUEST_URL=None, ACTIONS_ID_TOKEN_REQUEST_TOKEN=None)
 	assert (outputs["available"], outputs["reason"]) == ("false", "oidc_unavailable")
@@ -297,6 +304,19 @@ def test_action_main_and_post(env: dict) -> None:
 	assert "CLAUDE_POOL available=true reason=selected accounts=2" in main.stdout
 	assert (env["pool"] / "order").exists()
 	post = subprocess.run(["node", str(ACTION_DIR / "post.js")], capture_output=True, text=True, env=values, timeout=60, check=False)
+	assert post.returncode == 0
+	assert "CLAUDE_POOL cleanup removed=true" in post.stdout
+	assert not env["pool"].exists()
+
+
+def test_action_post_cleans_pool_with_trailing_runner_temp_slash(env: dict) -> None:
+	env["pool"].mkdir()
+	(env["pool"] / "order").write_text("A\n", encoding="utf-8")
+	post = subprocess.run(
+		["node", str(ACTION_DIR / "post.js")],
+		capture_output=True, text=True,
+		env=dict(env["env"], RUNNER_TEMP=str(env["pool"].parent) + "/"), check=False,
+	)
 	assert post.returncode == 0
 	assert "CLAUDE_POOL cleanup removed=true" in post.stdout
 	assert not env["pool"].exists()

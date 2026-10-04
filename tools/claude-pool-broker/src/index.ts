@@ -290,7 +290,7 @@ export function createHandler(deps: Deps)
 
 	async function authorize(claims: Record<string, unknown>): Promise<string>
 	{
-		if (claims.repository_owner !== OWNER) {
+		if (typeof claims.repository_owner !== "string" || claims.repository_owner.toLowerCase() !== OWNER) {
 			throw new Refusal(403, "wrong_owner");
 		}
 		const repository = claims.repository;
@@ -307,7 +307,7 @@ export function createHandler(deps: Deps)
 			}
 		}
 		const workflowRef = claims.job_workflow_ref;
-		if (typeof workflowRef !== "string" || !workflowRef.startsWith(WORKFLOW_PREFIX)) {
+		if (typeof workflowRef !== "string" || !workflowRef.toLowerCase().startsWith(WORKFLOW_PREFIX)) {
 			throw new Refusal(403, "wrong_workflow");
 		}
 		return repository;

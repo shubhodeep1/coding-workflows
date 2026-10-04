@@ -170,6 +170,16 @@ describe("granted", () => {
 		const s = stub();
 		expect((await call(s, request(await sign(claims({ aud: ["other", AUDIENCE] }))))).status).toBe(200);
 	});
+
+	it("accepts the owner's and reusable workflow's canonical spelling regardless of case", async () => {
+		const s = stub();
+		const token = await sign(claims({
+			repository_owner: "ShubhoDeep1",
+			repository: "ShubhoDeep1/Digital_PA",
+			job_workflow_ref: "ShubhoDeep1/Coding-Workflows/.github/workflows/clarify.yml@refs/heads/stable",
+		}));
+		expect((await call(s, request(token))).status).toBe(200);
+	});
 });
 
 describe("refused (403)", () => {

@@ -81,7 +81,7 @@ finish()
 [ -f "${config}" ] || finish false config_missing
 broker_url="$(engine_py config --config "${config}" --key broker_url 2>/dev/null)" || finish false config_invalid
 [ -z "${broker_url}" ] || [[ "${broker_url}" =~ ^https://claude-pool-broker\.shubhodeep\.workers\.dev/v1/pool$|^http://(127\.0\.0\.1|localhost)(:[0-9]{1,5})?/v1/pool$ ]] || finish false broker_url_invalid
-[ "${GITHUB_ACTIONS:-false}" != true ] || [[ "${broker_url}" == "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool" ]] || finish false broker_url_invalid
+[ "${GITHUB_ACTIONS:-false}" != true ] || [ -z "${broker_url}" ] || [[ "${broker_url}" == "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool" ]] || finish false broker_url_invalid
 audience="$(engine_py config --config "${config}" --key oidc_audience 2>/dev/null)" || finish false config_invalid
 probe_model="$(engine_py config --config "${config}" --key probe_model 2>/dev/null)" || finish false config_invalid
 gate="$(engine_py config --config "${config}" --key gate_utilization 2>/dev/null)" || finish false config_invalid

@@ -8,7 +8,8 @@ function post()
 {
 	const runnerTemp = process.env.RUNNER_TEMP || "/tmp";
 	const poolDir = process.env.CLAUDE_ENGINE_POOL_DIR || path.join(runnerTemp, "claude-pool");
-	if (!path.isAbsolute(runnerTemp) || path.dirname(poolDir) !== runnerTemp ||
+	if (!path.isAbsolute(runnerTemp) || !path.isAbsolute(poolDir) ||
+		path.resolve(path.dirname(poolDir)) !== path.resolve(runnerTemp) ||
 		!/^claude-pool(?:-[^/]+)?$/.test(path.basename(poolDir)) ||
 		poolDir.split("/").some(part => part === ".." || part === ".")) {
 		console.log("CLAUDE_POOL cleanup skipped reason=pool_dir_invalid");
