@@ -52,6 +52,8 @@
 #                           holds each token (0600)
 #   ALLOW_WORKFLOW_EDITS    `true` lifts the .github/workflows deny rules (P5)
 #   AI_ENGINE_READ_ONLY     `true` runs a write role with the read profile
+#                           (read-profile Claude children receive no GitHub,
+#                           Telegram, OpenRouter or Actions OIDC credentials)
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
 #
 # The OAuth token reaches the CLI only through CLAUDE_CODE_OAUTH_TOKEN in a
@@ -270,6 +272,14 @@ claude_run()
 			else mv -- "${hidden}" "${workdir}/CLAUDE.md"; fi' EXIT
 		fi
 		cd "${workdir}" || exit 1
+		credential_prefix=()
+		if [ "${profile}" = "read" ]; then
+			# Keep the runner/stall guard environment intact; only the model and
+			# its child tools lose credentials. The Claude OAuth token is retained.
+			credential_prefix=(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN
+				-u GH_PAT -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY
+				-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_RUNTIME_TOKEN)
+		fi
 		for name in "${accounts[@]}"; do
 			token_file="${pool_dir}/tokens/${name}"
 			session_args=()
@@ -282,7 +292,7 @@ claude_run()
 			fi
 			transcript="${run_dir}/transcript-${name}.jsonl"
 			stderr_file="${run_dir}/stderr-${name}.txt"
-			cmd=(claude -p --model "${model}" --effort "${effort}"
+			cmd=("${credential_prefix[@]}" claude -p --model "${model}" --effort "${effort}"
 				--system-prompt-file "${instructions}"
 				--setting-sources "" --settings "${run_dir}/claude-settings.json"
 				--strict-mcp-config --disable-slash-commands

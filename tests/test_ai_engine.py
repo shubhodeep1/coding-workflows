@@ -35,6 +35,11 @@ record = {
 	"cwd": os.getcwd(),
 	"claude_md_visible": os.path.exists("CLAUDE.md"),
 	"api_key_env": "ANTHROPIC_API_KEY" in os.environ,
+	"credentials": {key: key in os.environ for key in (
+		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_PAT",
+		"TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "OPENROUTER_API_KEY",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN",
+	)},
 }
 with open(log, "a", encoding="utf-8") as handle:
 	handle.write(json.dumps(record) + "\n")
@@ -297,6 +302,24 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob,Bash"
 	assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
 	assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize("role, read_only", [
+	("SECURITY_AUDIT", False), ("RB_JUDGE", True), ("IMPLEMENT", False),
+])
+def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: str, read_only: bool) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	credential_names = (
+		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_PAT",
+		"TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "OPENROUTER_API_KEY",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN",
+	)
+	result = _claude_run(sandbox, role, **dict.fromkeys(credential_names, "not-a-real-credential"),
+		AI_ENGINE_READ_ONLY="true" if read_only else "false")
+	assert _rc(result) == 0, result.stderr
+	call = _calls(sandbox)[0]
+	assert call["credentials"] == dict.fromkeys(credential_names, role == "IMPLEMENT")
+	assert call["token"] == "TOK_OK"
 
 
 @pytest.mark.parametrize("value, tools, mode", [

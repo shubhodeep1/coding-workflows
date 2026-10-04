@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Claude read roles cannot write through `gh api`.** Read-profile runs now omit GitHub, Telegram, OpenRouter and Actions OIDC/runtime credentials, and the permission hook denies API writes even when the endpoint would otherwise be a routine write. `gh api` reads require explicit hook approval; `git grep` is no longer shell-allowed for read roles. Write-profile and interactive sessions retain their existing policy. Refs #6216; related to #3576.

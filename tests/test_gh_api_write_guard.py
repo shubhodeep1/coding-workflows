@@ -980,6 +980,60 @@ def test_hook_process_emits_ask_json_for_a_write():
 	assert output["permissionDecision"] == "ask"
 
 
+@pytest.mark.parametrize("command", [
+	"gh api repos/{owner}/{repo}/issues/5/comments -f body=hi",
+	"gh api repos/{owner}/{repo}/issues/5/labels -f 'labels[]=x'",
+	"gh api repos/{owner}/{repo}/actions/workflows/ai-review.yml/dispatches -f ref=main",
+	"gh api graphql -f query='mutation { addStar(input:{starrableId:\"x\"}) { clientMutationId } }'",
+	"echo ok; gh api repos/{owner}/{repo}/issues/5/comments -f body=hi",
+])
+def test_read_only_denies_writes_including_routine_writes(command):
+	payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+	decision, reason = guard.evaluate(payload, read_only=True)
+	assert decision == guard.DECISION_DENY
+	assert "read-only role: gh api writes are denied" in reason
+	assert guard.evaluate(payload)[0] in (guard.DECISION_ALLOW, guard.DECISION_ASK, None)
+
+
+@pytest.mark.parametrize("command", [
+	"gh api repos/o/r/pulls/1",
+	'echo "$(gh api repos/o/r/pulls/1)"',
+	"for n in 1 2; do gh api repos/o/r/pulls/$n; done",
+])
+def test_read_only_keeps_approved_reads(command):
+	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}, read_only=True)[0] == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	"gh api repos/a/b -f body='oops",
+	"echo \"$(gh api -X POST repos/a/b/issues -f title=x)\"",
+])
+def test_read_only_denies_uncertain_calls(command):
+	payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+	assert guard.evaluate(payload, read_only=True)[0] == guard.DECISION_DENY
+	assert guard.evaluate(payload)[0] == guard.DECISION_ASK
+
+
+def test_read_only_hook_cli_denies_writes_and_unknown_arguments(monkeypatch, capsys):
+	payload = {"tool_name": "Bash", "tool_input": {"command": "gh api repos/{owner}/{repo}/issues/5/comments -f body=hi"}}
+	monkeypatch.setattr(sys, "stdin", type("S", (), {"read": staticmethod(lambda: json.dumps(payload))})())
+	assert guard.main(["--read-only"]) == 0
+	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+	assert guard.main(["--unknown"]) == 0
+	output = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+	assert output["permissionDecision"] == "deny"
+	assert "unknown guard argument" in output["permissionDecisionReason"]
+
+
+def test_read_only_hook_process_fails_closed_on_invalid_payload():
+	result = subprocess.run(
+		[sys.executable, str(GUARD_PATH), "--read-only"], input="not json", capture_output=True,
+		text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), check=False,
+	)
+	assert result.returncode == 0
+	assert json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 def test_hook_process_is_silent_without_gh_api():
 	result = _run_hook(json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}}))
 	assert result.returncode == 0

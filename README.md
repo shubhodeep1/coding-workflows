@@ -1987,7 +1987,10 @@ never rewritten.
 **Tool profiles.** Roles whose codex call is read-only today (`CLARIFY`,
 `CLARIFY_RESPOND`, `SECURITY_JUDGE`, `SECURITY_AUDIT`, `WORKFLOW_HEAL`) run with
 `Read`, `Grep`, `Glob` and a fixed list of read-only `git` / `gh` commands in
-`dontAsk` mode; every other role runs `bypassPermissions`, where the P5 deny
+`dontAsk` mode (no `git grep` shell allowance). Their model processes receive
+no GitHub, Telegram, OpenRouter or Actions OIDC/runtime credentials; `gh api`
+is permitted only when the hook explicitly approves GET/HEAD or read-only
+GraphQL queries. Every other role runs `bypassPermissions`, where the P5 deny
 rules still apply, with the tools `Read`, `Grep`, `Glob`, `Bash`, `Edit`,
 `Write`, `WebFetch` and `WebSearch` (the review editor's sandbox included).
 The CLI's `default` tool set is not used: it loads about 35 tools, and their
