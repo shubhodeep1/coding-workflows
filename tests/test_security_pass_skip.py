@@ -1,7 +1,9 @@
-"""Contract for `.claude/scripts/security_pass_skip.py`, the check that lets an
-issue-mode project skip its own security pass only for issues the issue
-automation created and labelled (security finding
-`mutable-label-skips-security-pass`, issue #4623)."""
+"""Contract for `scripts/security_pass_skip.py`, the check that lets a
+single-issue security pass be skipped only for issues the issue automation
+created and labelled (security finding `mutable-label-skips-security-pass`,
+issue #4623). Moved from `.claude/scripts/` when the Claude session
+automation was retired; the single-issue security pass (plan Phase 8a)
+reuses it."""
 
 from __future__ import annotations
 
@@ -12,8 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = ROOT / ".claude" / "scripts"
-TEMPLATE_SCRIPTS = ROOT / "workflow-templates" / ".claude" / "scripts"
+SCRIPTS = ROOT / "scripts"
 
 
 def _load():
@@ -307,21 +308,11 @@ def test_cli_bad_arguments_exit_1(argv, capsys):
 	assert json.loads(capsys.readouterr().out)["skip"] is False
 
 
-def test_skip_labels_match_the_router():
-	import sys
-
-	sys.path.insert(0, str(ROOT / "scripts"))
-	import claude_issue_route as route
-
-	assert tuple(skip.SKIP_LABEL_MARKERS) == route.SECURITY_PASS_SKIP_LABELS
+def test_skip_labels_are_the_automation_labels():
+	skip = _load()
+	assert tuple(skip.SKIP_LABEL_MARKERS) == ("ai:security", "ai:check-triage", "ai:workflow-heal")
 
 
-def test_template_copy_matches():
-	assert (SCRIPTS / "security_pass_skip.py").read_bytes() == (TEMPLATE_SCRIPTS / "security_pass_skip.py").read_bytes()
-
-
-def test_settings_allow_the_script():
-	for settings in (ROOT / ".claude" / "settings.json", ROOT / "workflow-templates" / ".claude" / "settings.json"):
-		allow = json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"]
-		assert "Bash(python3 .claude/scripts/security_pass_skip.py *)" in allow, settings
-		assert "Bash(PYTHONDONTWRITEBYTECODE=1 python3 .claude/scripts/security_pass_skip.py *)" in allow, settings
+def test_retired_session_copies_are_gone():
+	assert not (ROOT / ".claude" / "scripts" / "security_pass_skip.py").exists()
+	assert not (ROOT / "workflow-templates" / ".claude" / "scripts" / "security_pass_skip.py").exists()

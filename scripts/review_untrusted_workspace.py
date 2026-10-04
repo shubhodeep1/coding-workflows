@@ -37,6 +37,8 @@ def allowed(name):
 		return False
 	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
+	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", "scripts/claude_settings.json.tmpl"):
+		return True
 	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
 		return False
 	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile"
@@ -82,10 +84,10 @@ def enumerate_workspace(root):
 			if entries > 10000:
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
-			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
+			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child not in (".github", ".claude")):
 				dirs.remove(child)
 				continue
-			if (name != ".github" and not allowed(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
+			if (name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not allowed(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
 				raise ValueError("unsafe workspace directory")
 		for child in files:
 			entries += 1
@@ -105,10 +107,17 @@ def enumerate_workspace(root):
 			yield name, data, mode
 
 
-def snapshot(host, workspace, manifest):
+def snapshot(host, workspace, manifest, host_git_dir=None):
 	paths = set()
 	env = git_env(manifest)
-	for cmd in (["git", "ls-files", "-z"], ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
+	# A per-PR workspace has no .git of its own: list it through the checkout's
+	# Git database, exactly as the commit step sees it (issues #4580, #6055).
+	git = ["git"]
+	if host_git_dir is not None:
+		if not host_git_dir.is_dir():
+			raise ValueError("host git dir missing")
+		git += ["--git-dir", str(host_git_dir), "--work-tree", str(host)]
+	for cmd in (git + ["ls-files", "-z"], git + ["ls-files", "--others", "--exclude-standard", "-z"]):
 		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p)
 	baseline = {}
 	total = 0
@@ -203,18 +212,32 @@ def refresh(host, workspace, manifest):
 
 
 def main():
-	if len(sys.argv) != 5 or sys.argv[1] not in ("snapshot", "refresh", "transfer"):
+	# snapshot alone takes an optional fifth argument: the host Git dir.
+	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
 		raise SystemExit(2)
-	host, workspace, manifest = map(Path, sys.argv[2:])
+	host, workspace, manifest = map(Path, sys.argv[2:5])
 	try:
 		if sys.argv[1] == "snapshot":
-			snapshot(host, workspace, manifest)
+			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None)
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
 		else:
 			transfer(host, workspace, manifest)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
-		print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__})", file=sys.stderr)
+		# Only fixed, path-free transfer reasons may cross into workflow logs.
+		reason_code = {
+			"symlink in workspace path": "symlink_path",
+			"unsafe file type or size": "unsafe_file",
+			"file changed during read": "file_changed",
+			"workspace entry limit exceeded": "entry_limit",
+			"unsafe workspace directory": "unsafe_directory",
+			"unsafe workspace result path": "unsafe_result_path",
+			"workspace size limit exceeded": "workspace_size_limit",
+			"host baseline changed": "host_baseline_changed",
+			"new result conflicts with host path": "host_path_conflict",
+			"unsafe result path": "unsafe_result_path",
+		}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "unknown"
+		print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)
 		raise SystemExit(1) from None
 
 

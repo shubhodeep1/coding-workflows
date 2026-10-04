@@ -1,6 +1,0 @@
-<!-- changelog: fixed -->
-- **Unattended Claude issue and plan sessions run the security-pass skip check and the chain helpers as standalone Bash calls.** An already-allowlisted call no longer turns into a permission prompt because the session chained other commands onto it.
-
-Issue #4798 recorded an `/implement-issue-claude` session that ran `security_pass_skip.py` with `; echo "exit=$?"`, two `grep … | head` reads, and an `ls` appended. The call itself is allowlisted in `.claude/settings.json`, but the compound command matched no allow rule, so the unattended session waited at a prompt. Step 6 of `/implement-issue-claude` now says to run the skip check as its own Bash call, exactly as written, and to read the exit status from the tool result. The Helpers intro of `/implement-plan-claude` says the same for every helper and every other allowlisted script it names: `check_in_status.py`, `claude_fix_claim.py`, `stale_routines.py`, and `security_pass_skip.py`. It also notes the one exception: the checker's `check_in_status.py` call sets two `CLAUDE_FIXER_*` variables before `python3`, so no allow rule matches it even run alone, and the Auto-mode classifier decides it.
-
-What this means for consumer repos: the updated command files arrive with the next `@stable` sync of `.claude/commands/`. No allow rule, hook, or setting changes.

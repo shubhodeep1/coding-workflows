@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 from pathlib import Path
 from runpy import run_path
 
@@ -227,6 +231,170 @@ def test_phase4b_dispatches_only_without_active_work_and_pins_one_run() -> None:
 	assert 'echo "status=retry_timeout" >> "$GITHUB_OUTPUT"' in retry
 	assert 'echo "status=pr_closed_during_retry" >> "$GITHUB_OUTPUT"' in retry
 	assert 'echo "status=pr_state_check_failed" >> "$GITHUB_OUTPUT"' in retry
+
+
+def _run_phase4b_with_pr_states(
+	states: list[str], *, reset: str = "retry-after: 1", probe: str = "",
+	run_states: list[str] | None = None, adopt: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	workflow = _read_workflow()
+	step = _slice_between(workflow, '      - name: "Phase 4b: Verify editor restored canary (pytest + retry)"', '      # ── Phase 5:')
+	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	# Keep the actual API wrapper, retry selection and poll loop; substitute
+	# only the dependency install and pytest invocation (not the gate logic).
+	begin = body.index("PYTEST_INSTALL_LOG=")
+	end = body.index("# gh api wrapper", begin)
+	body = body[:begin] + body[end:]
+	begin = body.index("run_pytest() {")
+	end = body.index("# When pytest fails", begin)
+	body = body[:begin] + textwrap.dedent("""\
+	run_pytest() {
+	  if [ ! -f "${RUNNER_TEMP}/pytest_first" ]; then
+	    touch "${RUNNER_TEMP}/pytest_first"
+	    echo 'FAILED tests/test_e2e_editor_smoke_canary.py::test_canary_matches_issue_spec_byte_for_byte'
+	    return 1
+	  fi
+	  return 0
+	}
+	""") + body[end:]
+	stub = textwrap.dedent("""\
+	date() { cat "${RUNNER_TEMP}/clock"; }
+	sleep() {
+	  echo "$1" >> "${RUNNER_TEMP}/sleeps"
+	  echo $(( $(cat "${RUNNER_TEMP}/clock") + $1 )) > "${RUNNER_TEMP}/clock"
+	}
+	gh() {
+	  if [ "$1" = workflow ]; then return 0; fi
+	  if [ "$1" = api ] && [ "$2" = /rate_limit ]; then
+	    echo probe >> "${RUNNER_TEMP}/requests"
+	    printf '%s\\n' "${PROBE_RESET}"
+	    return 0
+	  fi
+	  if [ "$1" != api ] || [ "$2" != -i ]; then return 1; fi
+	  case "$3" in
+	    */contents/*)
+	      printf 'HTTP/2 200\\n\\n{"content":"%s"}\\n' "$(printf 'restored' | base64 -w0)" ;;
+	    */git/refs/heads/*)
+	      printf 'HTTP/2 200\\n\\n%s\\n' "${BAIT_SHA}" ;;
+	    */actions/workflows/*/runs?*)
+	      if [ "${ADOPT}" = 1 ]; then
+	        printf 'HTTP/2 200\\n\\n{"workflow_runs":[{"id":20,"head_sha":"%s","status":"in_progress","created_at":"2026-10-03T00:00:00Z","conclusion":null}]}\\n' "${BAIT_SHA}"
+	      else
+	        printf 'HTTP/2 200\\n\\n{"workflow_runs":[]}\\n'
+	      fi ;;
+	    */actions/runs/20)
+	      echo run >> "${RUNNER_TEMP}/requests"
+	      local run_count
+	      run_count=$(wc -l < "${RUNNER_TEMP}/run_reads")
+	      echo x >> "${RUNNER_TEMP}/run_reads"
+	      if [ "$(sed -n "$((run_count + 1))p" "${RUNNER_TEMP}/run_states")" = limit ]; then
+	        printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
+	        echo 'gh: API rate limit exceeded (HTTP 403)' >&2
+	        return 1
+	      fi
+	      printf 'HTTP/2 200\\n\\n{"id":20,"status":"completed","conclusion":"success"}\\n' ;;
+	    */pulls/*)
+	      echo pr >> "${RUNNER_TEMP}/requests"
+	      local count
+	      count=$(wc -l < "${RUNNER_TEMP}/pr_reads")
+	      echo x >> "${RUNNER_TEMP}/pr_reads"
+	      local state
+	      state=$(sed -n "$((count + 1))p" "${RUNNER_TEMP}/states")
+	      case "${state}" in
+	        limit)
+	          printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
+	          echo 'gh: API rate limit exceeded (HTTP 403)' >&2
+	          return 1 ;;
+	        unknown)
+	          printf 'HTTP/2 403\\n\\n{"message":"Forbidden"}\\n'
+	          echo 'gh: Forbidden (HTTP 403)' >&2
+	          return 1 ;;
+	        open|closed)
+	          if [ "${4:-}" = --jq ]; then
+	            printf 'HTTP/2 200\\n\\n%s\\n' "${state}"
+	          else
+	            printf 'HTTP/2 200\\n\\n{"head":{"sha":"%s"}}\\n' "${FIX_SHA}"
+	          fi ;;
+	        *) return 1 ;;
+	      esac ;;
+	    *) return 1 ;;
+	  esac
+	}
+	""")
+	body = body.replace('PYTEST_OUTPUT="${RUNNER_TEMP:-/tmp}/e2e_pytest_output.txt"', 'PYTEST_OUTPUT="${RUNNER_TEMP:-/tmp}/e2e_pytest_output.txt"\n' + stub, 1)
+	with tempfile.TemporaryDirectory() as temp:
+		root = Path(temp)
+		(root / "clock").write_text("1000\n", encoding="utf-8")
+		(root / "states").write_text("\n".join(states) + "\n", encoding="utf-8")
+		(root / "pr_reads").touch()
+		(root / "run_states").write_text("\n".join(run_states or []) + "\n", encoding="utf-8")
+		(root / "run_reads").touch()
+		env = os.environ.copy()
+		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "GITHUB_RUN_ID": "1",
+			"TEST_REPO": "owner/repo", "ISSUE_NUMBER": "12", "PR_NUMBER": "13", "PRIOR_REVIEW_RUN": "10",
+			"BAIT_SHA": "a" * 40, "FIX_SHA": "b" * 40, "EDITOR_RETRY_BUDGET_MINUTES": "25",
+			"REVIEW_WORKFLOW_FILE": "internal-review.yml", "RESET_HEADER": reset, "PROBE_RESET": probe,
+			"ADOPT": "1" if adopt else "0"})
+		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
+		return result, (root / "output").read_text(encoding="utf-8"), (root / "requests").read_text(encoding="utf-8") if (root / "requests").exists() else ""
+
+
+def test_phase4b_rate_limits_recheck_pr_before_accepting_adopted_run() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "limit", "open", "open"])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert requests.splitlines() == ["pr", "pr", "pr", "run", "pr"]
+	assert "PR state unresolvable" not in result.stderr
+
+
+def test_phase4b_rate_limit_wait_catches_closed_pr() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "closed"])
+	assert result.returncode != 0
+	assert "status=pr_closed_during_retry" in output
+	assert "run" not in requests
+
+
+def test_phase4b_run_rate_limit_rechecks_pr_before_accepting_run() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["open", "closed"], run_states=["limit"])
+	assert result.returncode != 0
+	assert "status=pr_closed_during_retry" in output
+	assert requests.splitlines() == ["pr", "run", "pr"]
+
+
+def test_phase4b_registration_rate_limit_keeps_ninety_second_bound() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit"], reset="x-ratelimit-reset: 99999", adopt=False)
+	assert result.returncode != 0
+	assert "status=retry_dispatch_failed" in output
+	assert "run" not in requests
+
+
+def test_phase4b_unknown_state_cannot_authorize_completed_run() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "unknown", "open", "open"])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert requests.splitlines() == ["pr", "pr", "pr", "run", "pr"]
+
+
+def test_phase4b_reset_beyond_deadline_fails_closed() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit"], reset="x-ratelimit-reset: 99999")
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "run" not in requests
+
+
+def test_phase4b_malformed_reset_probes_once_and_waits_before_retrying() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "limit", "open", "open"], reset="retry-after: invalid", probe="bad-reset")
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert requests.splitlines().count("probe") == 1
+	assert "waiting 60s" in result.stderr
+
+
+def test_phase4b_four_ordinary_state_failures_still_break() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["unknown"] * 12)
+	assert result.returncode != 0
+	assert "status=pr_state_check_failed" in output
+	assert "run" not in requests
 
 
 def test_phase6_registers_once_and_polls_only_the_pinned_run() -> None:
