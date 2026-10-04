@@ -42,6 +42,8 @@ if args[:2] == ["api", "repos/o/r/pulls/42"]:
 	sys.exit(0)
 if args[:2] == ["api", "repos/o/r/issues/42/labels"] and "label" in fail:
 	sys.exit(1)
+if args[:2] == ["api", "repos/o/r/issues/42/comments"] and "comment_write" in fail:
+	sys.exit(1)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
 		sys.exit(1)
@@ -256,6 +258,16 @@ def test_report_posts_the_result_and_reruns_the_review(tmp_path: Path, outcome: 
 	assert posted[-1][-1].endswith(_marker(status, HEAD, 3))
 	review = ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"]
 	assert (review in calls) is redispatch
+
+
+def test_report_does_not_rerun_review_without_a_persisted_result(tmp_path: Path) -> None:
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 3))], env={
+		"FAKE_GH_FAIL": "comment_write", "SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "0",
+	})
+	assert result.returncode == 0 and "reason=comment_write_failed" in result.stdout
+	assert any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
 @pytest.mark.parametrize("pr", [_pr(head_ref="other"), _pr(head_repo="fork/r"), _pr(base="other")])

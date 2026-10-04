@@ -11,7 +11,7 @@ Port P1 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md` (Phase 8
 | New `security-audit.yml` / `ai-security-audit.yml` input | `pr_number` |
 | New log prefix | `SINGLE_ISSUE_SECURITY_PASS` |
 
-What this means for operators: a standalone PR merges only after its own audit is clean, with no waiver path. A PR still failing after five cycles is labelled `ai:security-pass-failed` for the planned Phase 7 unblock judge; until Phase 7 ships, it remains held. Until a consumer's `ai-security-audit.yml` wrapper is synced with the `pr_number` input, the dispatch fails and the PR merges as before, with a warning. Set `SINGLE_ISSUE_SECURITY_PASS_ENABLED=false` to turn the pass off.
+What this means for operators: a standalone PR merges only after its own audit is clean, with no waiver path. If posting an audit result fails, the audit does not re-dispatch review without a persisted marker; the pending marker stays in place until a later review event retries the stale audit. A PR still failing after five cycles is labelled `ai:security-pass-failed` for the planned Phase 7 unblock judge; until Phase 7 ships, it remains held. Until a consumer's `ai-security-audit.yml` wrapper is synced with the `pr_number` input, the dispatch fails and the PR merges as before, with a warning. Set `SINGLE_ISSUE_SECURITY_PASS_ENABLED=false` to turn the pass off.
 
 ### For contributors
 

@@ -316,8 +316,11 @@ The audit of \`${head_sha}\` filed follow-up issues against this branch. Their m
 The audit of \`${head_sha}\` did not finish. The review re-runs and starts the next cycle." ;;
 	esac
 	body+=$'\n\n'"$(single_pass_marker "${status}" "${head_sha}" "${cycle}")"
-	gh api "repos/${REPOSITORY}/issues/${pr_number}/comments" -f body="${body}" >/dev/null 2>&1 \
-		|| echo "::warning::Could not post the security-pass result on PR #${pr_number}."
+	if ! gh api "repos/${REPOSITORY}/issues/${pr_number}/comments" -f body="${body}" >/dev/null 2>&1; then
+		echo "::warning::Could not post the security-pass result on PR #${pr_number}."
+		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=comment_write_failed cycle=${cycle}"
+		return 0
+	fi
 	if { [ "${status}" != "findings" ] || [ "${cycle}" -ge "${max_cycles}" ]; } && [ -n "${default_branch}" ]; then
 		review_workflow="$(single_pass_review_workflow)"
 		gh workflow run "${review_workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f pr_number="${pr_number}" >/dev/null 2>&1 \
