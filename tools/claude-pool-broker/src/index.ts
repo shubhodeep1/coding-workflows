@@ -300,9 +300,11 @@ export function createHandler(deps: Deps)
 		if (!repository.toLowerCase().startsWith(`${OWNER}/`)) {
 			throw new Refusal(403, "wrong_owner");
 		}
-		const repos = await loadRegistry();
-		if (!repos.has(repository.toLowerCase())) {
-			throw new Refusal(403, "repo_not_allowed");
+		if (repository.toLowerCase() !== SELF_REPO.toLowerCase()) {
+			const repos = await loadRegistry();
+			if (!repos.has(repository.toLowerCase())) {
+				throw new Refusal(403, "repo_not_allowed");
+			}
 		}
 		const workflowRef = claims.job_workflow_ref;
 		if (typeof workflowRef !== "string" || !workflowRef.startsWith(WORKFLOW_PREFIX)) {
@@ -323,7 +325,7 @@ export function createHandler(deps: Deps)
 		let repository = "";
 		try {
 			const authorization = request.headers.get("authorization") || "";
-			const match = /^Bearer ([A-Za-z0-9_.-]+)$/.exec(authorization);
+			const match = /^Bearer[ \t]+([A-Za-z0-9_.-]+)$/i.exec(authorization);
 			if (!match) {
 				throw new Refusal(403, "missing_token");
 			}

@@ -103,9 +103,9 @@ LABEL_ENGINE_CLAUDE = "ai:engine-claude"
 
 MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,79}$")
 CLI_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-# https only; plain http is accepted for loopback alone (local stub brokers in tests).
+# Only the deployed broker may receive an Actions OIDC token; loopback is for local tests.
 URL_RE = re.compile(
-	r"^(?:https://[A-Za-z0-9.-]+|http://(?:127\.0\.0\.1|localhost))(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?$"
+	r"^(?:https://claude-pool-broker\.shubhodeep\.workers\.dev|http://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?)/v1/pool$"
 )
 AUDIENCE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 

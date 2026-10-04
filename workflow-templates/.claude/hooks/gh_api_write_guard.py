@@ -1504,13 +1504,16 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		)
 
 	hazard = _shell_rewrite_hazard(stripped_command)
-	if hazard:
+	# The literal-ID loop parser validates supported expansions and shell framing
+	# as one unit; unsupported loops remain undecided after write classification.
+	if hazard and not _LOOP_HEADER_RE.match(command):
 		return DECISION_ASK, (
 			f"gh api guard (CLAUDE.md §23.H): the command uses {hazard}, which Bash expands or parses differently "
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
 		)
-	if _unquoted_gh_api_expansion(stripped_command):
+	# The literal-ID loop parser below validates its counter expansion in context.
+	if not _LOOP_HEADER_RE.match(command) and _unquoted_gh_api_expansion(stripped_command):
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."

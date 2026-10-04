@@ -31,6 +31,10 @@ JWT = "eyJhbGciOiJSUzI1NiJ9.eyJyZXBvc2l0b3J5IjoieCJ9.c2lnbmF0dXJlc2lnbmF0dXJl"
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, sys
+assert "ACTIONS_ID_TOKEN_REQUEST_TOKEN" not in os.environ
+assert "ACTIONS_ID_TOKEN_REQUEST_URL" not in os.environ
+assert "GH_TOKEN" not in os.environ
+assert "GITHUB_TOKEN" not in os.environ
 table = json.loads(os.environ["FAKE_PROBE_TABLE"])
 entry = table.get(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""), {"auth": True})
 def emit(event):
@@ -142,7 +146,7 @@ def _without_masks(text: str) -> str:
 
 
 def test_selected_pool_is_ordered_least_used_first(env: dict) -> None:
-	result, outputs = _run(env)
+	result, outputs = _run(env, GH_TOKEN="probe-must-not-see", GITHUB_TOKEN="probe-must-not-see")
 	assert result.returncode == 0, result.stderr
 	assert outputs == {"available": "true", "reason": "selected", "accounts": "2", "pool_dir": str(env["pool"])}
 	pool = env["pool"]
@@ -230,6 +234,26 @@ def test_no_oidc_permission(env: dict) -> None:
 	assert (outputs["available"], outputs["reason"]) == ("false", "oidc_unavailable")
 
 
+def test_untrusted_broker_url_is_refused_before_requesting_oidc(env: dict) -> None:
+	env["config"].write_text(json.dumps({"broker_url": "https://attacker.example/v1/pool"}), encoding="utf-8")
+	_, outputs = _run(env)
+	assert (outputs["available"], outputs["reason"], outputs["accounts"]) == ("false", "broker_not_configured", "0")
+	assert _Stub.seen == []
+
+
+def test_actions_job_cannot_use_loopback_broker(env: dict) -> None:
+	_, outputs = _run(env, GITHUB_ACTIONS="true")
+	assert (outputs["available"], outputs["reason"]) == ("false", "broker_url_invalid")
+	assert _Stub.seen == []
+
+
+def test_oidc_request_url_without_query_string(env: dict) -> None:
+	url = env["env"]["ACTIONS_ID_TOKEN_REQUEST_URL"].split("?", 1)[0]
+	_, outputs = _run(env, ACTIONS_ID_TOKEN_REQUEST_URL=url)
+	assert outputs["available"] == "true"
+	assert "?audience=coding-workflows-claude-pool" in _Stub.seen[0]["path"]
+
+
 def test_oidc_request_rejected(env: dict) -> None:
 	_, outputs = _run(env, ACTIONS_ID_TOKEN_REQUEST_TOKEN="wrong")
 	assert (outputs["available"], outputs["reason"]) == ("false", "oidc_request_failed_401")
@@ -246,7 +270,24 @@ def test_cli_missing(env: dict) -> None:
 def test_pool_dir_must_be_a_dedicated_directory(env: dict, bad: str) -> None:
 	result, outputs = _run(env, CLAUDE_ENGINE_POOL_DIR=bad)
 	assert (outputs["available"], outputs["reason"]) == ("false", "pool_dir_invalid")
+	assert outputs["accounts"] == "0" and outputs["pool_dir"] == bad
 	assert _Stub.seen == []
+
+
+def test_pool_dir_cannot_escape_runner_temp_or_follow_symlink(env: dict) -> None:
+	outside = env["tmp"] / "elsewhere" / "claude-pool"
+	outside.mkdir(parents=True)
+	(outside / "keep").write_text("kept", encoding="utf-8")
+	_, outputs = _run(env, CLAUDE_ENGINE_POOL_DIR=str(outside))
+	assert outputs["reason"] == "pool_dir_invalid"
+	assert (outside / "keep").exists()
+	env["pool"].symlink_to(outside, target_is_directory=True)
+	_, outputs = _run(env)
+	assert outputs["reason"] == "pool_dir_invalid"
+	assert env["pool"].is_symlink() and (outside / "keep").exists()
+	post = subprocess.run(["node", str(ACTION_DIR / "post.js")], capture_output=True, text=True, env=env["env"], check=False)
+	assert "cleanup skipped reason=pool_dir_invalid" in post.stdout
+	assert env["pool"].is_symlink() and (outside / "keep").exists()
 
 
 def test_action_main_and_post(env: dict) -> None:

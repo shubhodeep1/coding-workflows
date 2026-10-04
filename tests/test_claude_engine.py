@@ -81,6 +81,8 @@ def test_checked_in_config_matches_code_defaults() -> None:
 		("https://claude-pool-broker.shubhodeep.workers.dev/v1/pool", True),
 		("http://127.0.0.1:8080/v1/pool", True),
 		("http://localhost/v1/pool", True),
+		("https://attacker.example/v1/pool", False),
+		("https://claude-pool-broker.shubhodeep.workers.dev/other", False),
 		("http://claude-pool-broker.example/v1/pool", False),
 		("https://evil.example/v1/pool?x=1", False),
 		("ftp://x/y", False),

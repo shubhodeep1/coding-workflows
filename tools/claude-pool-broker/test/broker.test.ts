@@ -160,9 +160,10 @@ describe("granted", () => {
 
 	it("accepts coding-workflows itself without the registry entry", async () => {
 		const s = stub();
-		s.registry.body = [];
+		s.registry.ok = false;
 		const token = await sign(claims({ repository: "shubhodeep1/coding-workflows", job_workflow_ref: "shubhodeep1/coding-workflows/.github/workflows/claude-engine-smoke.yml@refs/heads/main" }));
 		expect((await call(s, request(token))).status).toBe(200);
+		expect(s.calls).not.toContain(REGISTRY_URL);
 	});
 
 	it("accepts an audience list that contains the audience", async () => {
@@ -228,6 +229,14 @@ describe("refused (403)", () => {
 		expect((await call(s, request("a.b"))).body.error).toBe("malformed_token");
 		expect((await call(s, request("!!!.@@@.###"))).body.error).toBe("missing_token");
 		expect((await call(s, request("eyJ.eyJ.sig"))).body.error).toBe("malformed_token");
+	});
+
+	it("accepts a case-insensitive bearer scheme", async () => {
+		const s = stub();
+		const token = await sign(claims());
+		const req = request(null);
+		req.headers.set("authorization", `bearer  ${token}`);
+		expect((await call(s, req)).status).toBe(200);
 	});
 });
 
