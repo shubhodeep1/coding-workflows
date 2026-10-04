@@ -922,7 +922,7 @@ if args[:1] == ["api"]:
 	if "/compare/" in path:
 		if method != "GET":
 			fail("HTTP method must be GET for compare")
-		compare = state.get("compare")
+		compare = state.get("compare_by_path", {}).get(path, state.get("compare"))
 		if compare is None:
 			fail("HTTP 404")
 		out(json.dumps(compare))
@@ -1762,6 +1762,7 @@ def test_intake_self_repo_autofix_failure_targets_the_support_ref_branch() -> No
 	# the PR's branch stranded #4478 and #4585 on project branches (#6055).
 	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"])
 	state["compare"] = {"status": "behind", "ahead_by": 0, "behind_by": 3, "commits": [], "files": []}
+	state["compare_by_path"] = {f"repos/{SELF_REPO}/compare/stable...{SHA_A}": {"status": "ahead"}}
 	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(script_ref=SHA_A), state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	created = state_after["issues_created"][0]
@@ -1775,6 +1776,18 @@ def test_intake_self_repo_autofix_failure_targets_the_support_ref_branch() -> No
 	assert outcome and "as a hotfix on `main`" in outcome[0]["body"]
 
 
+def test_intake_prefers_stable_when_support_sha_is_on_both_branches() -> None:
+	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"])
+	state["compare"] = {"status": "behind", "ahead_by": 0, "behind_by": 3, "commits": [], "files": []}
+	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(script_ref=SHA_A), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert f"support_ref_branch support_ref={SHA_A} branch=stable" in result.stdout
+	assert not any(f"/compare/main...{SHA_A}" in part for call in state_after["calls"] for part in call)
+
+
 def test_intake_self_repo_autofix_failure_with_unknown_support_ref_uses_the_default() -> None:
 	# The compare calls fail (no route): the support branch cannot be told,
 	# so the documented default target (WORKFLOW_HEAL_TARGET_BRANCH) applies.
@@ -1784,6 +1797,19 @@ def test_intake_self_repo_autofix_failure_with_unknown_support_ref_uses_the_defa
 	match = TARGET_BRANCH_RE.search(created["body"])
 	assert match and (match.group(1) or match.group(2)) == "stable"
 	assert "branch=unknown target_branch_source=default" in result.stdout
+
+
+def test_intake_does_not_route_to_main_when_stable_compare_fails() -> None:
+	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"])
+	state["compare"] = {"status": "behind"}
+	state["compare_by_path"] = {f"repos/{SELF_REPO}/compare/stable...{SHA_A}": None}
+	result, state_after, _prompt = _run_intake(_self_repo_autofix_payload(script_ref=SHA_A), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	created = state_after["issues_created"][0]
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert "branch=unknown target_branch_source=default" in result.stdout
+	assert not any(f"/compare/main...{SHA_A}" in part for call in state_after["calls"] for part in call)
 
 
 def test_intake_reads_the_review_job_when_the_review_run_did_not_fail() -> None:

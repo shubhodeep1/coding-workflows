@@ -929,6 +929,15 @@ class Collector:
 	def collect(self, issue: dict[str, Any], comments: list[Any], *, issue_repo: str) -> dict[str, Any]:
 		self.out.mkdir(parents=True, exist_ok=True)
 		ctx = heal_context(issue)
+		# The source marker is editable issue prose. Never let it widen GH_PAT
+		# access beyond this repo and the intake's registered consumer set.
+		registered_repos = _load_json_lenient(os.environ.get("WORKFLOW_HEAL_CONSUMER_REGISTRY") or ".github/ai/consumer_repos.json")
+		if ctx["source_repo"] != issue_repo and (
+			not isinstance(registered_repos, list) or ctx["source_repo"] not in registered_repos
+		):
+			self._skip("source_repo", "not_registered")
+			ctx["source_repo"] = ""
+			ctx["source_number"] = ""
 		rate = self.gh.rate_limit()
 		remaining = ((rate.get("core") or {}).get("remaining")) if rate else None
 		if isinstance(remaining, int) and remaining < self.min_rate:

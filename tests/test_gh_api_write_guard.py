@@ -32,6 +32,15 @@ CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 SEED_REPO_COMMAND = REPO_ROOT / ".claude" / "commands" / "seed-repo.md"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
+# The source repo retired its interactive .claude tree; the consumer template
+# remains active. Retain root/template parity checks when both are present.
+if not GUARD_PATH.is_file():
+	GUARD_PATH = TEMPLATE_GUARD_PATH
+if not SETTINGS_PATH.is_file():
+	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
+if not SEED_REPO_COMMAND.is_file():
+	SEED_REPO_COMMAND = REPO_ROOT / "workflow-templates" / ".claude" / "commands" / "seed-repo.md"
+
 LOCAL_SLUG = "shubhodeep1/coding-workflows"
 
 
@@ -691,6 +700,7 @@ def test_unvetted_loop_keeps_no_decision(command):
 def test_expanded_call_after_loop_still_asks():
 	command = "for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done; gh api repos/o/r/$ENDPOINT"
 	assert _decide(command) == guard.DECISION_ASK
+	assert _decide("for r in 1 2; do gh api repos/o/r/actions/runs/$r/jobs; done\ngh api repos/o/r/$ENDPOINT") == guard.DECISION_ASK
 
 
 def test_expanded_file_field_in_loop_still_asks():

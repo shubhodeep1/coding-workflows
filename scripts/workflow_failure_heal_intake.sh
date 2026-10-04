@@ -823,7 +823,8 @@ _branch_exists()
 }
 
 # Branch the review run's support scripts came from: "stable" for the
-# stable ref, otherwise the first of main / stable that contains the SHA.
+# stable ref, otherwise prefer stable when both stable and main contain the
+# SHA: a hotfix on stable is forwarded to main, but not the other way around.
 # One compare call per branch tried (at most 2); prints nothing when it
 # cannot tell, and the caller keeps the default target.
 _support_ref_branch()
@@ -833,10 +834,12 @@ _support_ref_branch()
 		stable|refs/tags/stable) printf 'stable\n'; return 0 ;;
 	esac
 	[[ "${ref}" =~ ^[0-9a-f]{40}$ ]] || return 0
-	for branch in main stable; do
+	for branch in stable main; do
 		status="$({ gh_retry gh api "repos/${SELF_REPO}/compare/${branch}...${ref}" 2>/dev/null || true; } | jq -r '.status // empty' 2>/dev/null || true)"
 		case "${status}" in
 			behind|identical) printf '%s\n' "${branch}"; return 0 ;;
+			ahead|diverged) ;;
+			*) return 0 ;;
 		esac
 	done
 	return 0

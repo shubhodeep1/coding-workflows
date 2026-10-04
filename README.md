@@ -1396,6 +1396,9 @@ through `clarify → plan → implement → review`.
   context; when that page is full, evidence collection fetches the complete
   comment history once more so newer occurrence-run links are not missed. If
   that read fails, evidence collection falls back to the first 50 comments.
+  The editable `source=` marker cannot direct `GH_PAT` reads outside this repo
+  and `.github/ai/consumer_repos.json` (or `WORKFLOW_HEAL_CONSUMER_REGISTRY`);
+  if that registry is unavailable, cross-repository evidence is skipped.
 - **"Already fixed?" context:** the prompt also carries (1) the branch
   progress since the failing code, from one REST compare call
   (`compare/<sha>...<branch>`: a release run or a review/autofix run in this
@@ -1422,8 +1425,9 @@ through `clarify → plan → implement → review`.
   ref" in `review_autofix.yml` accepts only `refs/heads/main`,
   `refs/tags/stable` or a pinned SHA, never the PR's head, so the defect lives
   there. The intake maps the report's `script_ref` (else `wrapper_sha`) with
-  one compare call each against `main` and `stable` (`behind`/`identical`
-  means the branch contains it) and logs `support_ref_branch support_ref=…
+  one compare call each against `stable` then `main` (`behind`/`identical`
+  means the branch contains it). When both contain the SHA, it targets
+  `stable`, whose hotfix is forwarded to `main`; it logs `support_ref_branch support_ref=…
   branch=…`; when it cannot tell, the issue keeps `stable`. Only when
   `script_ref` is the PR's own head SHA, so the run executed the PR's own
   workflow code, does the issue target the PR's head branch (a `stable`

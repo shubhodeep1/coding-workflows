@@ -123,7 +123,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
     `Target branch: stable`, or, for a review/autofix failure from a PR in
     this repo, the branch its support scripts came from: `main` or `stable`
-    by one compare call each, the PR's head branch only when `script_ref` is
+    by one compare call each (prefer `stable` when both contain the SHA,
+    since its hotfix is forwarded to `main`), the PR's head branch only when `script_ref` is
     the PR's own head SHA, else `stable` (`target_branch_source=support_ref`);
     `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only;
@@ -191,7 +192,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     folder** for a trusted `ai:workflow-heal` issue (`collect`: sliced job
     logs, allowlisted artifact files, provenance, lineage with whether each
     fix reached `main`, runs on the failing head, rate limit / OpenRouter key
-    status; 400 KB, reused across stages through actions/cache), mounted
+    status; 400 KB, reused across stages through actions/cache). Cross-repo
+    reads require the source repo in the intake's consumer registry; missing
+    registry data skips them. The folder is mounted
     read-only at `/evidence` in the clarify sandbox, and point the prompt at it
     (`=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`). Stable log prefixes:
     `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
