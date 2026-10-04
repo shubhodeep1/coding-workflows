@@ -284,7 +284,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do
+          for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -714,6 +714,47 @@ jobs:
             git remote set-url origin "${{ github.server_url }}/${{ github.repository }}"
           fi
 
+      # Claude engine (replace-claude-sessions plan Phase 5a): the
+      # CLARIFY_RESPOND role (answer, self-critique and revision) runs on
+      # Claude unless the issue's labels, AI_ENGINE_CLARIFY_RESPOND or
+      # AI_ENGINE say codex. The CLI and the pool credential are fetched only
+      # when it resolves to Claude; any Claude failure to start falls back to
+      # the unchanged codex calls below (exit 75, plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_CLARIFY_RESPOND: ${{ vars.AI_ENGINE_CLARIFY_RESPOND || '' }}
+          AI_ENGINE_MODEL_HINT: ${{ env.MODEL_EDITOR }}
+          AI_ENGINE_EFFORT_HINT: ${{ env.MODEL_REASONING_EFFORT }}
+        run: |
+          set -euo pipefail
+          engine="codex"
+          if [ -f scripts/ai_engine.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/ai_engine.sh
+            AI_ENGINE_LABELS="$(jq -c '[.labels[]?.name]' "${ISSUE_PAYLOAD_FILE}")"
+            export AI_ENGINE_LABELS
+            engine="$(ai_engine_for_role CLARIFY_RESPOND || echo codex)"
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Build prompt and run Codex
         id: run_codex
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
@@ -721,6 +762,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY_RESPOND || '25' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_RESPOND_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
 
@@ -772,18 +814,30 @@ jobs:
 
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex clarify-respond attempt ${attempt}/${max_attempts}..."
+            echo "Codex clarify-respond attempt ${attempt}/${max_attempts} (engine ${CLARIFY_RESPOND_ENGINE})..."
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
-            if bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"; then
+            rc=0
+            if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || rc=$?
+              if [ "${rc}" -eq 75 ]; then
+                # Claude unavailable (logged as AI_ENGINE_FALLBACK): this
+                # attempt and the rest run the codex path (plan D1).
+                CLARIFY_RESPOND_ENGINE="codex"
+                rc=0
+              fi
+            fi
+            if [ "${CLARIFY_RESPOND_ENGINE}" != "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || rc=$?
+            fi
+            if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify-respond succeeded on attempt ${attempt}."
                 break
               fi
               echo "::warning::Codex returned empty output on attempt ${attempt}."
             else
-              rc=$?
               echo "::warning::Codex exited with code $rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
@@ -795,12 +849,14 @@ jobs:
               exit 1
             fi
           done
+          echo "engine=${CLARIFY_RESPOND_ENGINE}" >> "$GITHUB_OUTPUT"
 
       - name: Self-critique pass for non-letter decisions
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
 
@@ -845,7 +901,18 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${RUNTIME_DIR}/critic_prompt.txt"
             fi
-            if bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt"; then
+            critic_rc=0
+            if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || critic_rc=$?
+              if [ "${critic_rc}" -eq 75 ]; then
+                CLARIFY_RESPOND_ENGINE="codex"
+                critic_rc=0
+              fi
+            fi
+            if [ "${CLARIFY_RESPOND_ENGINE}" != "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" || critic_rc=$?
+            fi
+            if [ "${critic_rc}" -eq 0 ]; then
               if grep -q 'VERDICT: REJECT' "${RUNTIME_DIR}/critic_output.txt"; then
                 echo "::warning::Self-critique rejected the decision. Appending critique and re-running."
                 CRITIC_REASON="$(grep -A5 'REASON:' "${RUNTIME_DIR}/critic_output.txt" || echo "No reason provided")"
@@ -860,7 +927,18 @@ jobs:
                 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
                   sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}.v2"
                 fi
-                if bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"; then
+                revise_rc=0
+                if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
+                  bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || revise_rc=$?
+                  if [ "${revise_rc}" -eq 75 ]; then
+                    CLARIFY_RESPOND_ENGINE="codex"
+                    revise_rc=0
+                  fi
+                fi
+                if [ "${CLARIFY_RESPOND_ENGINE}" != "claude" ]; then
+                  bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || revise_rc=$?
+                fi
+                if [ "${revise_rc}" -eq 0 ]; then
                   echo "Revised decision produced after self-critique."
                 else
                   echo "::warning::Revised Codex call failed; using original output."
