@@ -82,7 +82,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ACTIVATION_VERIFY_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | issue_pr_status, orchestrate_poll | Model for the activation verifier. |
 | `THINKING_LEVEL_ACTIVATION_VERIFY` | No | `high` | issue_pr_status, orchestrate_poll | Reasoning effort for the activation verifier. |
 | `UNBLOCK_JUDGE_ENABLED` | No | `true` | orchestrate_poll, unblock_judge | Unblock judge (Phase 7 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`, see [Unblock judge](#unblock-judge)). `false` stops the poller's unblock scan, the judge runs, and the poller's fix-up adoption; items then wait for a person as before. |
-| `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK` | No | `5` | orchestrate_poll | Legacy upper bound for unblock dispatch. While judge and activation runs share the operator-step writer concurrency group, the scan sends only one judge at a time (even if this is higher), oldest block first, to avoid replacing a pending run. Set `0` to disable dispatch. |
+| `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK` | No | `5` | orchestrate_poll | Legacy upper bound for unblock dispatch. The scan sends only one judge at a time (even if this is higher), oldest block first. Set `0` to disable dispatch. |
 | `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES` | No | `30` | orchestrate_poll | How long an item must carry its block label (or a project must have been failed) before the scan sends it to the judge. |
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
@@ -2616,16 +2616,19 @@ and resolver chains, a failed project) now goes to the unblock judge
   A failed fix-up lookup or resume write leaves the wait marker pending for
   another run; closing a fix-up without a merge does not resume its parent.
   A failed review dispatch leaves the PR's block label in place for the next
-  scan. A failed scope edit cannot be followed by `/approved`. A PR `reissue`
+  scan. If a standalone fix-up's wait marker cannot be posted, the judge
+  closes the newly created fix-up instead of leaving an untracked open issue;
+  a failed close is logged for recovery. A failed scope edit cannot be followed by `/approved`. A PR `reissue`
   creates a standalone replacement before closing the PR;
   PR project fix-ups and verdict history use the GitHub-reported
   `orchestrator/project-<n>` base. Issue project fix-ups require the
   `ai:orchestrator-managed` label and membership in the project's state;
   missing or unverifiable state skips actuation until it can be confirmed.
-  `operator_step` also
-  writes the `ai:operator-step` issue and sends a Telegram WARNING.
-  Activation-verifier and unblock-judge jobs share a repository-scoped
-  concurrency group so simultaneous runs cannot overwrite tracker entries.
+  `operator_step` also writes the `ai:operator-step` issue and sends a
+  Telegram WARNING. Each source owns one keyed issue comment, so concurrent
+  activation and unblock runs update independent comments instead of
+  overwriting one shared issue body. Concurrent first-time tracker creation
+  converges on the oldest trusted tracker and closes the duplicate.
   `override_guard` extends the issue's `files_touched` block, or, for the
   destructive latch, leaves a one-shot `override=bulk_delete` marker that
   `implement.yml` spends on the issue's next run. The bulk-delete exception

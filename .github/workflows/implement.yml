@@ -1878,7 +1878,7 @@ jobs:
             [.[] | select((.user.login // "") == $login)] as $mine
             | ([$mine[] | (.body // "") | scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->") | .[0]]) as $used
             | [$mine[]
-                | select(((.body // "") | split("\n") | map(select(test("\\S"))) | last // "")
+                | select(((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r"))
                     | test("^<!-- ai:unblock:v1 item=" + $issue + " stop=destructive-blocked fingerprint=[0-9a-f]{12} verdict=override_guard round=[1-9][0-9]* override=bulk_delete -->$"))
                 | select((.id | tostring) as $id | ($used | index($id)) == null)]
             | last | .id // empty
@@ -1889,7 +1889,7 @@ jobs:
           fi
           approved_deletions="$(jq -c --argjson id "${override_comment_id}" '
             .[] | select(.id == $id) | (.body // "")
-            | capture("(?m)^Approved deletions: (?<paths>\\[[^\\n]*\\])$").paths | fromjson
+            | capture("(?m)^Approved deletions: (?<paths>\\[[^\\r\\n]*\\])\\r?$").paths | fromjson
             | select(type == "array" and length > 0 and all(.[]; type == "string"))
           ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
           if [ -z "${approved_deletions}" ]; then

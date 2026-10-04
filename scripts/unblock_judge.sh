@@ -185,7 +185,13 @@ unblock_run_ops()
 						-f body="Waiting for fix-up #${created} to merge; the unblock judge resumes this item afterwards.
 
 <!-- ai:unblock-wait:v1 item=${number} fixup=${created} -->" >/dev/null 2>&1 \
-						|| unblock_log "item=${ITEM} op=wait_marker outcome=failed"
+						|| {
+							ops_failed="true"
+							unblock_log "item=${ITEM} op=wait_marker outcome=failed fixup=${created}"
+							# Without the parent marker, a later verdict could create another fix-up.
+							gh api -X PATCH "repos/${REPOSITORY}/issues/${created}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
+								|| unblock_log "item=${ITEM} op=orphan_fixup_close outcome=failed fixup=${created}"
+						}
 				fi
 				;;
 			edit_files_touched)

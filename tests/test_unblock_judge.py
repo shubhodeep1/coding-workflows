@@ -343,8 +343,10 @@ def test_close_labels_and_closes_but_leaves_a_project_to_the_poller() -> None:
 
 def test_auto_answer_records_an_ad_entry_then_answers() -> None:
 	ops = actions.plan(_verdict("auto_answer", answer="Q1: A"), _ctx())
-	assert [op["op"] for op in ops] == ["auto_decision", "comment"]
-	assert ops[0]["decision"]["pick"] == "Q1: A" and ops[1]["body"] == "/answer Q1: A"
+	assert [op["op"] for op in ops] == ["remove_label", "add_labels", "auto_decision", "comment"]
+	assert ops[0]["label"] == "ai:blocked"
+	assert ops[1]["labels"] == ["ai:clarification"]
+	assert ops[2]["decision"]["pick"] == "Q1: A" and ops[3]["body"] == "/answer Q1: A"
 
 
 @pytest.mark.parametrize("stop", ["needs-human", "clarify-failed", "clarify-respond-failed", "plan-failed"])
@@ -400,6 +402,9 @@ if os.environ.get("FAKE_GH_FAIL_OPERATOR") and endpoint.startswith("repos/o/r/is
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 f = fields()
 if method == "POST" and endpoint.endswith("/comments"):
+	if os.environ.get("FAKE_GH_FAIL_WAIT_MARKER") and "<!-- ai:unblock-wait:v1 item=7 fixup=" in f.get("body", ""):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_PROJECT_RECORD") and endpoint == "repos/o/r/issues/40/comments" and f.get("body", "").startswith("Unblock judge verdict"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
@@ -531,6 +536,20 @@ def test_reissue_does_not_close_pr_when_issue_creation_fails(tmp_path: Path) -> 
 	assert "op=create_issue outcome=failed" in result.stdout
 	assert "reason=prerequisite_failed" in result.stdout
 	assert not any(endpoint == "repos/o/r/pulls/7" for endpoint, _ in state["patched"])
+
+
+def test_failed_fixup_wait_marker_is_not_reported_as_acted(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "descope", "reason": "r", "instructions": "remove the broken path"}, FAKE_GH_FAIL_WAIT_MARKER="1")
+	assert len(state["created"]) == 1
+	assert not any("ai:unblock-wait:v1 item=7 fixup=" in comment["body"] for comment in state["comments"])
+	assert [endpoint for endpoint, fields in state["patched"] if fields.get("state") == "closed"] == ["repos/o/r/issues/901"]
+	assert "op=wait_marker outcome=failed fixup=901" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
+	assert "outcome=acted" not in result.stdout
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "descope", "reason": "r", "instructions": "remove the broken path"}, FAKE_GH_FAIL_WAIT_MARKER="1", FAKE_GH_FAIL_CLOSE="1")
+	assert "op=orphan_fixup_close outcome=failed fixup=901" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
+	assert state["patched"] == []
 
 
 def test_pr_project_fixup_uses_verified_base_not_body_tracking_number(tmp_path: Path) -> None:
@@ -672,10 +691,7 @@ def test_dispatch_wrappers_and_reusable_workflow() -> None:
 		assert wf["jobs"]["judge"]["uses"] == f"shubhodeep1/coding-workflows/.github/workflows/unblock_judge.yml{ref}"
 		assert wf["permissions"]["id-token"] == "write"
 	reusable = yaml.safe_load((ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8"))
-	assert reusable["jobs"]["unblock-judge"]["concurrency"] == {
-		"group": "operator-step-writer-${{ github.repository }}",
-		"cancel-in-progress": False,
-	}
+	assert "concurrency" not in reusable["jobs"]["unblock-judge"]
 	steps = {step["name"]: step for step in reusable["jobs"]["unblock-judge"]["steps"]}
 	assert steps["Judge the blocked item"]["continue-on-error"] is True
 	assert "unblock_judge.sh" in steps["Judge the blocked item"]["run"]

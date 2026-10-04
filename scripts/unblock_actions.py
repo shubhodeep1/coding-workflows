@@ -219,7 +219,7 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		ops += [{"op": "comment", "issue": item, "body": f"Next attempt, per the unblock judge: {verdict['instructions']}"}]
 		ops += reset_ops(ctx, verdict["instructions"])
 	elif name == "auto_answer":
-		if ctx["stop"] != "blocked" and "ai:clarification" not in ctx["labels"] and "ai:planning" not in ctx["labels"]:
+		if "ai:clarification" not in ctx["labels"] and "ai:planning" not in ctx["labels"]:
 			if _stop_label(ctx["stop"]) in ctx["labels"]:
 				ops.append({"op": "remove_label", "issue": item, "label": _stop_label(ctx["stop"])})
 			ops.append({"op": "add_labels", "issue": item, "labels": ["ai:clarification"]})

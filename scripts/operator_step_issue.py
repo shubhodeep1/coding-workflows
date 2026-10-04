@@ -10,11 +10,10 @@ flag that defaults off, or a placeholder env var named `*_UNSET_OPERATOR_STEP`)
 until the operator acts.
 
 There is one open `ai:operator-step` issue per repository. Its body starts
-with `<!-- ai:operator-step:v1 -->` and holds one section per source, each
-opened by `<!-- ai:operator-step:entry key=<key> -->`. Writing a key that is
-already there replaces its section, so a re-run never duplicates steps; a new
-key is appended. When the body would pass GitHub's size limit, the oldest
-sections are dropped first.
+with `<!-- ai:operator-step:v1 -->`; each source is one issue comment opened
+by `<!-- ai:operator-step:entry key=<key> -->`. Writing an existing key edits
+that comment, while a new key creates one. Independent sources therefore do
+not race through one issue-body read-modify-write.
 
 Usage:
 
@@ -28,8 +27,10 @@ Output is one JSON line: `issue`, `url`, `created`, `entries`. Exit 0 on
 success, 1 on bad arguments, 2 when a GitHub call failed.
 
 GitHub API budget (CLAUDE.md §15): one identity read, one list of open
-`ai:operator-step` issues, then one update or a label lookup (and creation
-when missing) followed by one issue create.
+`ai:operator-step` issues, one comment create and one comment listing, plus
+an update and duplicate deletes when a key already exists. A missing tracker
+adds a label lookup, issue creation and one issue re-list that resolves
+concurrent creation races.
 """
 
 from __future__ import annotations
@@ -137,6 +138,33 @@ def render_body(entries: list[tuple[str, str]]) -> str:
 		kept.pop(0)
 
 
+def load_entry_comments(repo: str, issue_number: int) -> list[dict]:
+	"""Return all issue comments, flattening gh's --slurp pagination shape."""
+	raw = _gh(["api", "--paginate", "--slurp", f"repos/{repo}/issues/{issue_number}/comments?per_page=100"])
+	try:
+		pages = json.loads(raw or "[]")
+	except ValueError as exc:
+		raise ApiError(f"unreadable operator-step comments: {exc}") from exc
+	if not isinstance(pages, list):
+		raise ApiError("unreadable operator-step comments: expected an array")
+	if pages and all(isinstance(page, list) for page in pages):
+		return [comment for page in pages for comment in page if isinstance(comment, dict)]
+	return [comment for comment in pages if isinstance(comment, dict)]
+
+
+def matching_entry_comments(comments: list[dict], trusted_login: str, key: str) -> list[dict]:
+	"""Trusted comments for one key, oldest first."""
+	marker = f"<!-- ai:operator-step:entry key={key} -->"
+	matches = [
+		comment
+		for comment in comments
+		if _trusted(comment, trusted_login)
+		and str(comment.get("body") or "").split("\n", 1)[0].strip() == marker
+		and isinstance(comment.get("id"), int)
+	]
+	return sorted(matches, key=lambda comment: comment["id"])
+
+
 def load_steps(path: str) -> list[dict]:
 	try:
 		steps = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -164,24 +192,63 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 		raise ApiError(f"unreadable issue list: {exc}") from exc
 	existing = find_issue(issues, trusted_login)
 	entry = render_entry(key, source, steps)
-	entries = parse_entries(str(existing.get("body") or "")) if existing else []
-	if any(entry_key == key for entry_key, _ in entries):
-		entries = [(entry_key, entry if entry_key == key else text) for entry_key, text in entries]
-	else:
-		entries.append((key, entry))
-	body = render_body(entries)
-	if existing:
-		number = int(existing["number"])
-		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", f"body={body}"])
-		return {"issue": number, "url": existing.get("html_url", ""), "created": False, "entries": len(parse_entries(body))}
+	created_tracker = False
+	created_number: int | None = None
+	if not existing:
+		try:
+			_gh(["api", f"repos/{repo}/labels/ai%3Aoperator-step"])
+		except ApiError as exc:
+			if "HTTP 404" not in str(exc):
+				raise
+			_gh(["api", f"repos/{repo}/labels", "-f", f"name={LABEL}", "-f", "color=fbca04", "-f", "description=Steps only a person can take; the pipeline continues and the gated work stays off until they are done"])
+		try:
+			created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={TITLE}", "-f", f"body={render_body([])}", "-f", f"labels[]={LABEL}"]) or "{}")
+		except ValueError as exc:
+			raise ApiError(f"unreadable operator-step issue creation response: {exc}") from exc
+		created_number = created.get("number")
+		if not isinstance(created_number, int):
+			raise ApiError("operator-step issue creation returned no issue number")
+		created_tracker = True
+		try:
+			refreshed = json.loads(_gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"]) or "[]")
+		except ValueError as exc:
+			raise ApiError(f"unreadable operator-step issue list after creation: {exc}") from exc
+		existing = find_issue(refreshed, trusted_login)
+		if not existing:
+			raise ApiError("operator-step issue was not visible after creation")
+		if int(existing["number"]) != created_number:
+			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{created_number}", "-f", "state=closed", "-f", "state_reason=not_planned"])
+
+	number = int(existing["number"])
 	try:
-		_gh(["api", f"repos/{repo}/labels/ai%3Aoperator-step"])
-	except ApiError as exc:
-		if "HTTP 404" not in str(exc):
-			raise
-		_gh(["api", f"repos/{repo}/labels", "-f", f"name={LABEL}", "-f", "color=fbca04", "-f", "description=Steps only a person can take; the pipeline continues and the gated work stays off until they are done"])
-	created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={TITLE}", "-f", f"body={body}", "-f", f"labels[]={LABEL}"]) or "{}")
-	return {"issue": created.get("number"), "url": created.get("html_url", ""), "created": True, "entries": len(parse_entries(body))}
+		created_comment = json.loads(_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={entry}"]) or "{}")
+	except ValueError as exc:
+		raise ApiError(f"unreadable operator-step comment creation response: {exc}") from exc
+	created_comment_id = created_comment.get("id")
+	if not isinstance(created_comment_id, int):
+		raise ApiError("operator-step comment creation returned no comment id")
+
+	# Every write first appends an atomic proposal. The newest concurrent
+	# proposal for one key updates the oldest durable comment and removes the
+	# duplicates; writes for different keys never contend.
+	comments = load_entry_comments(repo, number)
+	matches = matching_entry_comments(comments, trusted_login, key)
+	if matches and matches[-1]["id"] == created_comment_id:
+		if matches[0]["id"] != created_comment_id:
+			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/comments/{matches[0]['id']}", "-f", f"body={entry}"])
+		for duplicate in matches[1:]:
+			try:
+				_gh(["api", "-X", "DELETE", f"repos/{repo}/issues/comments/{duplicate['id']}"])
+			except ApiError as exc:
+				if "HTTP 404" not in str(exc):
+					raise
+	entry_keys = {entry_key for entry_key, _ in parse_entries(str(existing.get("body") or ""))}
+	for comment in comments:
+		if _trusted(comment, trusted_login):
+			match = ENTRY_RE.match(str(comment.get("body") or "").split("\n", 1)[0].strip())
+			if match:
+				entry_keys.add(match.group(1))
+	return {"issue": number, "url": existing.get("html_url", ""), "created": created_tracker, "entries": len(entry_keys)}
 
 
 def main(argv: list[str] | None = None) -> int:

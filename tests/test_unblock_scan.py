@@ -208,5 +208,7 @@ def test_bulk_override_never_covers_canonical_deletions(path: str) -> None:
 def test_bulk_override_spend_and_judge_log_reference_extract_scalar_captures() -> None:
 	implement = (ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
 	assert 'scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->") | .[0]' in implement
+	assert 'last // "" | rtrimstr("\\r")' in implement
+	assert 'capture("(?m)^Approved deletions: (?<paths>\\\\[[^\\\\r\\\\n]*\\\\])\\\\r?$")' in implement
 	judge = (ROOT / "scripts/unblock_judge.sh").read_text(encoding="utf-8")
 	assert 'scan("/actions/runs/([0-9]+)") | .[0]' in judge
