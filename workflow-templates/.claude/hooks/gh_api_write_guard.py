@@ -66,7 +66,8 @@ Decision for the whole Bash call (a hook decides once per tool call):
     expands or parses these unlike the tokenizer, so a word could become a
     hidden flag or command → `permissionDecision: ask` (issue #4619);
   - a direct `gh api` argument contains an unquoted expansion that Bash
-    could word-split into another flag → `permissionDecision: ask` (#5558);
+    could word-split into another flag → `permissionDecision: ask` (#5558),
+    except in a literal-ID loop, where the loop validator decides;
   - any `write` → `permissionDecision: ask`;
   - every call is `read` or `routine` and the command contains nothing else
     but safe helpers: items joined by `;` / `&&`, each a `gh api` call
@@ -1510,7 +1511,9 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
 		)
-	if _unquoted_gh_api_expansion(stripped_command):
+	# A literal-ID loop's variable is vetted by _is_approvable_read_loop;
+	# unvetted loops get no decision unless they contain a classified write.
+	if not _LOOP_HEADER_RE.match(stripped_command) and _unquoted_gh_api_expansion(stripped_command):
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."

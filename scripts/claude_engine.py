@@ -103,7 +103,10 @@ LABEL_ENGINE_CLAUDE = "ai:engine-claude"
 
 MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,79}$")
 CLI_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?$")
+# https only; plain http is accepted for loopback alone (local stub brokers in tests).
+URL_RE = re.compile(
+	r"^(?:https://[A-Za-z0-9.-]+|http://(?:127\.0\.0\.1|localhost))(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?$"
+)
 AUDIENCE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
@@ -330,6 +333,34 @@ def parse_labels(text: str | None) -> list[str]:
 	return [part for part in re.split(r"[,\s]+", text) if part]
 
 
+def work_item_labels(env: dict[str, str]) -> list[str]:
+	"""The labels of the run's work item (plan Phase 6).
+
+	``AI_ENGINE_LABELS`` when it is set, even empty (a call site that already
+	holds the issue's or PR's labels passes them). Otherwise the labels of
+	``issue`` or ``pull_request`` in the job's own event payload
+	(``GITHUB_EVENT_PATH``), which every Actions job carries: no API call. A
+	missing or unreadable payload means no labels.
+	"""
+	if "AI_ENGINE_LABELS" in env:
+		return parse_labels(env.get("AI_ENGINE_LABELS", ""))
+	event_path = env.get("GITHUB_EVENT_PATH", "")
+	if not event_path:
+		return []
+	try:
+		event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return []
+	if not isinstance(event, dict):
+		return []
+	names: list[str] = []
+	for key in ("issue", "pull_request"):
+		item = event.get(key)
+		if isinstance(item, dict) and isinstance(item.get("labels"), list):
+			names += [label.get("name") for label in item["labels"] if isinstance(label, dict) and isinstance(label.get("name"), str)]
+	return names
+
+
 def normalize_effort(value: str | None, default: str) -> str:
 	"""D3: ``none|minimal`` → ``low``; ``low…max`` unchanged; anything else → ``default``."""
 	effort = (value or "").strip().lower()
@@ -349,8 +380,9 @@ def resolve_role(
 ) -> dict[str, Any]:
 	"""The engine, model, effort and profile of one role.
 
-	Engine order: the work-item labels (``ai:codex`` beats ``ai:engine-claude``,
-	D2), ``AI_ENGINE_<ROLE>``, ``AI_ENGINE``, the role's code default. An
+	Engine order: the work-item labels (``work_item_labels``; ``ai:codex``
+	beats ``ai:engine-claude``, D2), ``AI_ENGINE_<ROLE>``, ``AI_ENGINE``, the
+	role's code default. An
 	invalid variable value is skipped and reported in ``warnings``.
 
 	Model (D3): ``model_hint`` (the role's existing model variable) when it
@@ -362,7 +394,7 @@ def resolve_role(
 		raise EngineError(f"unknown role: {role!r}")
 	defaults = config["role_defaults"][role]
 	warnings: list[str] = []
-	labels = {label.lower() for label in parse_labels(env.get("AI_ENGINE_LABELS", ""))}
+	labels = {label.lower() for label in work_item_labels(env)}
 	engine = ""
 	source = ""
 	if LABEL_CODEX in labels:

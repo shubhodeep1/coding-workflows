@@ -35,7 +35,8 @@ ce = _load()
 
 
 def _run(*args: str, env: dict[str, str] | None = None, stdin: str = "") -> subprocess.CompletedProcess:
-	full_env = {key: value for key, value in os.environ.items() if not key.startswith("AI_ENGINE")}
+	# CI jobs carry a real GITHUB_EVENT_PATH whose labels would leak in.
+	full_env = {key: value for key, value in os.environ.items() if not key.startswith(("AI_ENGINE", "GITHUB_EVENT_PATH"))}
 	full_env["PYTHONDONTWRITEBYTECODE"] = "1"
 	full_env.update(env or {})
 	return subprocess.run(
@@ -62,16 +63,33 @@ def test_checked_in_config_is_valid_and_inert() -> None:
 	assert set(config["role_defaults"]) == set(ce.ROLES)
 	# Phase 3 is inert: no role defaults to Claude yet.
 	assert {fields["engine"] for fields in config["role_defaults"].values()} == {"codex"}
-	assert config["broker_url"] == ""
+	assert config["broker_url"] == "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool"
 	assert config["gate_utilization"] == 0.9
 	assert config["probe_model"] == "claude-haiku-4-5-20251001"
 	assert config["oidc_audience"] == "coding-workflows-claude-pool"
 
 
 def test_checked_in_config_matches_code_defaults() -> None:
+	# Only the broker URL differs: a missing config file means no broker.
 	raw = json.loads(CONFIG.read_text(encoding="utf-8"))
 	config, _ = ce.normalize_config(raw)
-	assert config == ce.DEFAULT_CONFIG
+	assert {**config, "broker_url": ""} == ce.DEFAULT_CONFIG
+
+
+@pytest.mark.parametrize(
+	"url, ok",
+	[
+		("https://claude-pool-broker.shubhodeep.workers.dev/v1/pool", True),
+		("http://127.0.0.1:8080/v1/pool", True),
+		("http://localhost/v1/pool", True),
+		("http://claude-pool-broker.example/v1/pool", False),
+		("https://evil.example/v1/pool?x=1", False),
+		("ftp://x/y", False),
+	],
+)
+def test_broker_url_must_be_https_or_loopback(url: str, ok: bool) -> None:
+	_, invalid = ce.normalize_config({"broker_url": url})
+	assert ("broker_url" not in invalid) is ok
 
 
 def test_utility_roles_use_sonnet_and_the_rest_opus() -> None:
@@ -536,3 +554,29 @@ def test_cost_audit_ignores_non_finite_costs() -> None:
 	assert cost_audit.parse_log(line)["claude_cost_usd"] == 0.0
 	line = json.dumps({"type": "result", "usage": {}, "total_cost_usd": -3})
 	assert cost_audit.parse_log(line)["claude_cost_usd"] == 0.0
+
+
+# --- Phase 6: labels from the event payload --------------------------------------
+
+
+def test_labels_come_from_the_event_payload_when_unset(tmp_path: Path) -> None:
+	event = tmp_path / "event.json"
+	event.write_text(json.dumps({"issue": {"labels": [{"name": "bug"}, {"name": "ai:engine-claude"}]}}), encoding="utf-8")
+	resolved = _resolve("PLAN", {"GITHUB_EVENT_PATH": str(event)})
+	assert (resolved["engine"], resolved["source"], resolved["model"], resolved["effort"]) == ("claude", "label:ai:engine-claude", "claude-opus-5-5", "high")
+	event.write_text(json.dumps({"pull_request": {"labels": [{"name": "ai:engine-claude"}, {"name": "ai:codex"}]}}), encoding="utf-8")
+	assert _resolve("REVIEW_EDITOR", {"GITHUB_EVENT_PATH": str(event)})["source"] == "label:ai:codex"
+
+
+def test_an_explicit_empty_label_list_overrides_the_payload(tmp_path: Path) -> None:
+	event = tmp_path / "event.json"
+	event.write_text(json.dumps({"issue": {"labels": [{"name": "ai:engine-claude"}]}}), encoding="utf-8")
+	assert _resolve("PLAN", {"GITHUB_EVENT_PATH": str(event), "AI_ENGINE_LABELS": ""})["engine"] == "codex"
+
+
+@pytest.mark.parametrize("content", ["not json", "[]", '{"issue": {"labels": "x"}}', '{"issue": {"labels": [1, {"name": 2}]}}'])
+def test_an_unusable_payload_means_no_labels(tmp_path: Path, content: str) -> None:
+	event = tmp_path / "event.json"
+	event.write_text(content, encoding="utf-8")
+	assert ce.work_item_labels({"GITHUB_EVENT_PATH": str(event)}) == []
+	assert ce.work_item_labels({"GITHUB_EVENT_PATH": str(tmp_path / "absent.json")}) == []

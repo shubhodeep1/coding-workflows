@@ -79,7 +79,7 @@ def sandbox(tmp_path: Path):
 	env = {
 		key: value
 		for key, value in os.environ.items()
-		if not key.startswith(("AI_ENGINE", "CLAUDE_", "ANTHROPIC_", "SUPPORT_", "TG_", "GITHUB_WORKSPACE"))
+		if not key.startswith(("AI_ENGINE", "CLAUDE_", "ANTHROPIC_", "SUPPORT_", "TG_", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH"))
 	}
 	env.update(
 		{
