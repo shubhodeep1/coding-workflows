@@ -271,7 +271,7 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			redirect_start = lexer.instream.tell() - len(token)
 			if command[redirect_start:redirect_start + len(token)] != token:
 				redirect_start -= 1  # shlex read one character past the operator.
-			if segment and segment[-1].isdigit():
+			if segment and segment[-1].isdigit() and not token.startswith("&"):
 				numeric_start = redirect_start - len(segment[-1])
 				if (numeric_start >= 0 and command[numeric_start:redirect_start] == segment[-1]
 					and (numeric_start == 0 or command[numeric_start - 1] in " \t\r\n;&|()<>")):

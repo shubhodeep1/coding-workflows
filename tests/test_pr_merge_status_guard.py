@@ -798,6 +798,10 @@ def test_numeric_push_refspec_survives_separate_redirect(merged_branch_repo, mon
 	assert guard._shell_segments_with_operators("git push origin ''123>out.log") == [
 		("", ["git", "push", "origin", "123"]),
 	]
+	for redirect in ("&>out.log", "&>>out.log"):
+		assert guard._shell_segments_with_operators(f"git push origin 123{redirect}") == [
+			("", ["git", "push", "origin", "123"]),
+		]
 	lookups: list[str] = []
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
@@ -810,6 +814,13 @@ def test_numeric_push_refspec_survives_separate_redirect(merged_branch_repo, mon
 	assert code == 2, message
 	assert "Branch `123`" in message
 	assert lookups == ["123"]
+	for redirect in ("&>out.log", "&>>out.log"):
+		lookups.clear()
+		code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+			"tool_input": {"command": f"git push origin 123{redirect}"}})
+		assert code == 2, message
+		assert "Branch `123`" in message
+		assert lookups == ["123"]
 	lookups.clear()
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": r"git push origin \123>out.log"}})
