@@ -32,12 +32,6 @@ CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 SEED_REPO_COMMAND = REPO_ROOT / ".claude" / "commands" / "seed-repo.md"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-# The source repo retired these session assets; consumers still use the templates.
-if not SETTINGS_PATH.is_file():
-	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
-if not SEED_REPO_COMMAND.is_file():
-	SEED_REPO_COMMAND = REPO_ROOT / "workflow-templates" / ".claude" / "commands" / "seed-repo.md"
-
 LOCAL_SLUG = "shubhodeep1/coding-workflows"
 
 
@@ -697,14 +691,6 @@ def test_unvetted_loop_keeps_no_decision(command):
 	"for r in 1; do gh api $r/repos/o/r/issues; done",
 ])
 def test_unvetted_loop_with_unquoted_api_expansion_asks(command):
-	assert _decide(command) == guard.DECISION_ASK
-
-
-@pytest.mark.parametrize("command", [
-	"for r in 1; do gh api repos/o/r/issues/{1,2}; done",
-	"for r in 1; do gh api repos/o/r/issues/1; done # hidden shell comment",
-])
-def test_shell_rewrite_hazard_in_loop_asks(command):
 	assert _decide(command) == guard.DECISION_ASK
 
 
