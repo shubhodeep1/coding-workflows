@@ -36,11 +36,15 @@ if args[:2] == ["api", "user"]:
 	print("owner")
 	sys.exit(0)
 if args[:2] == ["api", "repos/o/r/pulls/42"]:
+	if "pr_lookup" in fail:
+		sys.exit(1)
 	print(open(os.environ["FAKE_GH_PR"]).read())
 	sys.exit(0)
 if args[:2] == ["api", "repos/o/r/issues/42/labels"] and "label" in fail:
 	sys.exit(1)
 if args[0] == "api" and "--paginate" in args:
+	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
+		sys.exit(1)
 	print(open(os.environ["FAKE_GH_COMMENTS"]).read())
 	sys.exit(0)
 sys.exit(0)
@@ -98,7 +102,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		SECURITY_PASS_AUDIT_BRANCH="ai/issue-7",
 		SUPPORT_SCRIPTS_DIR=str(support),
 	)
-	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN"):
+	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"):
 		run_env.pop(name, None)
 	run_env.update(env or {})
 	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False)
@@ -148,6 +152,21 @@ def test_pipeline_identity_failure_holds_instead_of_authorizing(tmp_path: Path) 
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
+def test_installation_token_accepts_only_its_bot_marker(tmp_path: Path) -> None:
+	comments = [_comment(_marker("clean", HEAD, 1), login="owner"), _comment(_marker("findings", HEAD, 1), login="github-actions[bot]", comment_id=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={
+		"FAKE_GH_FAIL": "identity", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK": "github-actions[bot]",
+	})
+	assert output == "hold=true\n" and "reason=awaiting_followups" in result.stdout
+	assert calls == [["api", "user", "--jq", '.login // ""']]
+
+
+def test_mixed_linked_issues_cannot_skip_security_audit(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", skip=True, env={"LINKED_ISSUES_JSON": '[{"number":7},{"number":99}]'})
+	assert output == "hold=true\n" and "outcome=dispatched" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
 def test_first_clean_review_dispatches_the_audit(tmp_path: Path) -> None:
 	stale = [_comment(_marker("clean", OLD, 1)), _comment(_marker("clean", HEAD, 1), association="NONE", login="someone")]
 	result, calls, output = _run(tmp_path, "gate", comments=stale)
@@ -166,6 +185,12 @@ def test_a_running_audit_or_open_followups_hold_without_a_new_dispatch(tmp_path:
 def test_a_stale_pending_audit_is_dispatched_again(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 1), age_hours=7)])
 	assert "outcome=dispatched cycle=2" in result.stdout
+
+
+def test_pending_timeout_uses_operator_override(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 1), age_hours=3)], env={"SECURITY_PASS_PENDING_STALE_HOURS": "2"})
+	assert output == "hold=true\n" and "outcome=dispatched cycle=2" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
 
 def test_cycles_exhausted_labels_the_pr_for_the_unblock_judge(tmp_path: Path) -> None:
@@ -234,6 +259,36 @@ def test_report_rejects_a_different_pr_head(tmp_path: Path, pr: dict) -> None:
 	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
 
 
+def test_report_lookup_failure_is_not_a_head_mismatch(tmp_path: Path) -> None:
+	result, calls, _ = _run(tmp_path, "report", env={
+		"FAKE_GH_FAIL": "pr_lookup", "SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+	})
+	assert "reason=pr_lookup_failed" in result.stdout
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+
+
+def test_report_with_installation_token_uses_its_pending_marker(tmp_path: Path) -> None:
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 1), login="github-actions[bot]")], env={
+		"FAKE_GH_FAIL": "identity", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK": "github-actions[bot]",
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "0",
+	})
+	assert "outcome=clean" in result.stdout
+	assert any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+
+
+def test_report_retries_transient_comment_listing(tmp_path: Path) -> None:
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "gh_helpers.sh").write_text('gh_retry() { "$@" || "$@"; }\n', encoding="utf-8")
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 1))], env={
+		"GITHUB_WORKSPACE": str(tmp_path), "FAKE_GH_FAIL": "comments_once",
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "0",
+	})
+	assert "outcome=clean" in result.stdout
+	assert sum("--paginate" in call for call in calls) == 2
+
+
 def test_last_cycle_findings_redispatch_for_exhaustion(tmp_path: Path) -> None:
 	result, calls, _ = _report(tmp_path, "success", "2", cycle=5)
 	assert "outcome=findings cycle=5" in result.stdout
@@ -267,6 +322,8 @@ def test_review_wiring() -> None:
 	assert names.index("Single-issue security pass") + 1 == names.index("Enable auto-merge on PR")
 	gate = steps["Single-issue security pass"]
 	assert gate["id"] == "single_issue_security_pass"
+	assert gate["env"]["SECURITY_PASS_PENDING_STALE_HOURS"] == "${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}"
+	assert gate["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
 	assert gate["if"] == steps["Enable auto-merge on PR"]["if"].replace(" && steps.single_issue_security_pass.outputs.hold != 'true'", "")
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
 		assert steps[name]["if"].endswith("&& steps.single_issue_security_pass.outputs.hold != 'true'")
@@ -289,7 +346,10 @@ def test_audit_wiring() -> None:
 	assert "review_single_issue_security_pass.sh\" report" in report["run"]
 	assert "^security-audit: .*skipping" not in report["run"]
 	assert report["env"]["SECURITY_PASS_AUDIT_BRANCH"] == "${{ env.AUDIT_BRANCH }}"
+	assert report["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
 	assert workflow["permissions"]["actions"] == "write"
+	assert workflow["permissions"]["pull-requests"] == "read"
 	template = AUDIT_TEMPLATE.read_text(encoding="utf-8")
 	assert "pr_number: ${{ inputs.pr_number || '' }}" in template
 	assert "actions: write" in template
+	assert "pull-requests: read" in template

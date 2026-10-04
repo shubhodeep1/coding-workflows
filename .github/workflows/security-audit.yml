@@ -41,6 +41,7 @@ name: Security Audit
 permissions:
   contents: read
   issues: write
+  pull-requests: read
   actions: write
   # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
   id-token: write
@@ -306,6 +307,7 @@ jobs:
           SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
           SECURITY_PASS_AUDIT_OUTCOME: ${{ steps.run_security_audit.outcome }}
           SECURITY_PASS_AUDIT_BRANCH: ${{ env.AUDIT_BRANCH }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
         run: |
           set -uo pipefail

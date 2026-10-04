@@ -137,7 +137,9 @@ single_pass_gate()
 		single_pass_output false
 		return 0
 	fi
-	linked="$(printf '%s' "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
+	# Skip only when the sole linked issue is verified; mixed-issue PRs
+	# must not inherit one follow-up's exemption.
+	linked="$(printf '%s' "${LINKED_ISSUES_JSON:-[]}" | jq -r 'if type == "array" and length == 1 then .[0].number // empty else empty end' 2>/dev/null || true)"
 	if [[ "${linked}" =~ ^[0-9]+$ ]] && [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/security_pass_skip.py" ]; then
 		skip_json="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/security_pass_skip.py" --repo "${REPOSITORY}" --issue "${linked}" 2>/dev/null || true)"
 		if [ "$(printf '%s' "${skip_json}" | jq -r '.skip // false' 2>/dev/null)" = "true" ]; then
@@ -148,6 +150,9 @@ single_pass_gate()
 	fi
 	# The gate job also probes /user, but its identity is not exported to this job.
 	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
+		SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_AUTHOR_LOGIN_FALLBACK:-}"
+	fi
 	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ] || [ ! -s "${comments}" ] \
 		|| ! jq -e 'type == "array"' "${comments}" >/dev/null 2>&1; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable"
@@ -233,14 +238,34 @@ single_pass_report()
 	fi
 	# Audit data and PR number are independent dispatch inputs. Bind the result
 	# to the live same-repository PR before trusting it as a merge authorization.
-	if [ -z "${SECURITY_PASS_AUDIT_BRANCH:-}" ] || ! pr_head="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}" 2>/dev/null)" \
-		|| ! jq -e --arg sha "${head_sha}" --arg branch "${SECURITY_PASS_AUDIT_BRANCH}" --arg repo "${REPOSITORY}" --arg base "${default_branch}" \
+	if [ -z "${SECURITY_PASS_AUDIT_BRANCH:-}" ]; then
+		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=pr_head_mismatch"
+		return 0
+	fi
+	if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -f "${GITHUB_WORKSPACE}/scripts/gh_helpers.sh" ]; then
+		# shellcheck source=/dev/null
+		source "${GITHUB_WORKSPACE}/scripts/gh_helpers.sh"
+	fi
+	if type gh_retry >/dev/null 2>&1; then
+		pr_head="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${pr_number}" 2>/dev/null)" || pr_head=""
+	else
+		pr_head="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}" 2>/dev/null)" || pr_head=""
+	fi
+	if [ -z "${pr_head}" ]; then
+		echo "::warning::Could not verify PR #${pr_number} for the security-pass report; leaving its audit result unpublished."
+		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=pr_lookup_failed"
+		return 0
+	fi
+	if ! jq -e --arg sha "${head_sha}" --arg branch "${SECURITY_PASS_AUDIT_BRANCH}" --arg repo "${REPOSITORY}" --arg base "${default_branch}" \
 			'.state == "open" and .head.sha == $sha and .head.ref == $branch and .head.repo.full_name == $repo and .base.ref == $base' <<< "${pr_head}" >/dev/null 2>&1; then
 		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=pr_head_mismatch"
 		return 0
 	fi
 	# No other report-side call provides the identity of the comment author.
 	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
+		SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_AUTHOR_LOGIN_FALLBACK:-}"
+	fi
 	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
 		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=author_unverifiable"
 		return 0
@@ -255,7 +280,11 @@ single_pass_report()
 		status="failed"
 	fi
 	comments_file="$(mktemp)"
-	if gh api --paginate "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' > "${comments_file}" 2>/dev/null \
+	if { if type gh_retry >/dev/null 2>&1; then
+		gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100"
+	else
+		gh api --paginate "repos/${REPOSITORY}/issues/${pr_number}/comments?per_page=100"
+	fi; } 2>/dev/null | jq -s 'add // []' > "${comments_file}" 2>/dev/null \
 		&& jq -e 'type == "array"' "${comments_file}" >/dev/null 2>&1; then
 		cycle="$(single_pass_markers "${comments_file}" | awk -F'\t' -v h="${head_sha}" '$3 == "pending" && $4 == h { c = $5 } END { print c + 0 }')"
 	else
