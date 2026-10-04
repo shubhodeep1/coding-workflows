@@ -165,7 +165,7 @@ def test_clarify_wiring() -> None:
 	assert 'gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?' in fetch
 	assert 'jq \'.[0:50]\' "${ISSUE_ALL_COMMENTS_FILE}" > "${ISSUE_COMMENTS_FILE}"' in fetch
 	text = CLARIFY.read_text(encoding="utf-8")
-	assert "auto_decisions.py orchestrate_parse_and_post_answer.sh; do" in text
+	assert "auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh" in text
 
 
 def test_implement_appends_the_section_before_the_lint() -> None:
