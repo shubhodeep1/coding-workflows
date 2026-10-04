@@ -270,6 +270,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/watchdog_helpers.sh` — Shell helper for shared Codex watchdog utilities.
 - `scripts/workflow_failure_heal.py` — Shared logic for the workflow failure heal pipeline: payload build/validation, fingerprinting, dedup/lineage/budget decisions, and heal issue composition.
 - `scripts/workflow_failure_heal_autofix_report.sh` — Report a repeated review/autofix failure on a pull request to coding-workflows' heal intake from the review workflow's failure path, with the run's own evidence.
+- `scripts/workflow_failure_heal_evidence.py` — Evidence for workflow-heal issues: step-sliced job logs for the intake's diagnosis prompt, and the evidence folder (logs, artifact files, provenance, lineage, run timeline, rate limit) clarify, plan and implement collect for a trusted heal issue.
 - `scripts/workflow_failure_heal_intake.sh` — Diagnose an escalated workflow failure report in coding-workflows, enforce heal dedup/lineage/budget rules, and open the heal issue.
 - `scripts/workflow_failure_heal_pr_reconcile.sh` — When a coding-workflows pull request closes, close the heal PRs stacked on its head branch (source not merged) or move their heal commits onto the source base and re-point them (source merged).
 - `scripts/workflow_failure_heal_report.sh` — Report a human-needed escalation from a consumer (or this repo) to coding-workflows with linked failed runs and the wrapper release pin.
