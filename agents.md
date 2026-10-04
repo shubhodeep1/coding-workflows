@@ -239,6 +239,12 @@ in parallel with it (see "CI job layout" below). Rejections emit the secret-safe
 ubiquitous `grep` instead of `rg` so runner images without ripgrep still fail
 only on real policy drift.
 
+The consumer merged-PR hook (`workflow-templates/.claude/hooks/pr_merge_status_guard.py`)
+retains numeric tokens before redirections as possible push refspecs: shell
+tokenization cannot distinguish `git push origin 2 > /dev/null` from a numeric
+file-descriptor prefix after discarding whitespace. Ambiguous redirects can
+cause an extra branch lookup; they must not hide a push to merged history.
+
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
 pass that output to action inputs or through step-local environment variables,

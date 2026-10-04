@@ -265,8 +265,8 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			redirect_target = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			if segment and segment[-1].isdigit():
-				segment.pop()
+			# shlex cannot distinguish an fd prefix from a numeric refspec
+			# followed by whitespace; retain it for a conservative branch check.
 			redirect_target = True
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
