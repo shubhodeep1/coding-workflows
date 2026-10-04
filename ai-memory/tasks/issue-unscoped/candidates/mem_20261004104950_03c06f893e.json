@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:1515-1519 | severity=high | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `_is_approvable_read_loop` bypass of the unquoted-expansion check does not require `_LOOP_HEADER_RE.match(command)`, so it can approve a command without validating heredoc text retained by `stripped_command`.\n  WHY: An unquoted `$VAR` in that heredoc text could word-split into a new flag or command without being inspected by the loop validator.\n- tests/test_claude_pool_token.py:106-110 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The test fixture inherits `GITHUB_ACTIONS` while configuring a loopback broker.\n  WHY: In GitHub Actions, `GITHUB_ACTIONS=true` causes the script to reject the fixture\u2019s loopback broker URL before the tests reach their intended paths, leaving 15 tests failing.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR cannot merge because the `tests-hooks-and-orchestrator` job fails the `lint` aggregate; the CI blocker remains unaddressed.\n  expected_change_site: tests/test_claude_pool_token.py env fixture at lines 106-124\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `tests/test_claude_pool_token.py` inherits `GITHUB_ACTIONS=true` without clearing it; `scripts/claude_pool_token.sh` lines 83-84 reject loopback broker URLs when that variable is set; the fixture configures a loopback URL; CI reports 15 failures with `broker_url_invalid` instead of expected outcomes; neither file is touched by the PR diff or LAST RUN DIFF.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/gh_api_write_guard.py:1515-1519 | severity=high | confidence=3\n  PROBLEM: The `_is_approvable_read_loop` bypass of the `_unquoted_gh_api_expansion` check at line 1515 omits the `_LOOP_HEADER_RE.match(command)` guard that the hazard check at line 1509 includes.\n  WHY: If `_is_approvable_read_loop` returns True on a preprocessed command whose `stripped_command` retains a heredoc body with an unquoted expansion, the guard would bypass the expansion check without any validator having inspected that expansion. A well-formed literal-ID loop whose heredoc body contains an unquoted `$VAR` could word-split into a new flag or command.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: PR cannot merge because the `tests-hooks-and-orchestrator` job fails the `lint` aggregate; the PR description's deliverable list is complete in the diff, but the autofix editor's last commit did not address a pre-existing CI blocker and the next CI run still fails (run 37194081434, head SHA c941638).\n  Expected change site: tests/test_claude_pool_token.py env fixture at lines 106-124\n  Evidence of absence: The env fixture inherits GITHUB_ACTIONS=true from the CI environment without clearing it; scripts/claude_pool_token.sh lines 83-84 reject loopback broker URLs (http://127.0.0.1:{port}/v1/pool) when GITHUB_ACTIONS=true; the fixture configures exactly that loopback URL; the CI log lists 15 failures all returning reason=broker_url_invalid instead of their expected outcomes. The proposed fix is a one-line fixture addition filtering GITHUB_ACTIONS out of inherited os.environ for tests that use a loopback broker; this is outside the PR's stated scope.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_claude_pool_token.py:106-110; scripts/claude_pool_token.sh:84 | severity=high | confidence=5\n  PROBLEM: The test fixture inherits `GITHUB_ACTIONS` from the environment while configuring a loopback broker at line 98.\n  WHY: In GitHub Actions, `GITHUB_ACTIONS=true` causes the script to reject the fixture\u2019s loopback broker URL before the tests reach their intended paths. The supplied CI run reports 15 failures in this suite. This is pre-existing and unrelated to the PR diff, but it leaves the PR\u2019s CI check failing.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_claude_pool_token.py:106-124; scripts/claude_pool_token.sh:83-84\n  PROBLEM: The env fixture inherits `GITHUB_ACTIONS=true` without filtering it, while the script rejects loopback broker URLs when that variable is set.\n  WHY: The reviewer reports 15 pre-existing `broker_url_invalid` test failures unrelated to the PR. The reviewer also states the literal-ID loop guard tightening is safe, its shell-comment test is correct, and the hook copies are byte-identical.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "6df250fa3268fd0ef81912ae28639cd410cb0b6bf2c19d338347e0c459acfc7a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6193,
+    "run_id": "37194081611",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37194081611",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004104950_03c06f893e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6193,
+    "run_id": "37194081611"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-04T10:49:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
