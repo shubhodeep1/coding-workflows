@@ -1918,8 +1918,9 @@ working run and still stops a stuck one.
 engine for the role. Only when it is `claude` do "Install Claude Code CLI" and
 "Resolve Claude credential" (the account pool) run. The model call then runs
 on Claude (`claude_run`, or the clarify sandbox's Claude branch). When Claude
-cannot start (no CLI, no credential, every account gated: exit `75`, logged
-`AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call, and
+cannot start (no CLI, no credential, clarify image build failure or every
+account gated: exit `75`, logged `AI_ENGINE_FALLBACK`), the same attempt runs
+the unchanged codex call, and
 the rest of the job stays on codex. `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
 
@@ -1952,10 +1953,10 @@ input (`claude` or `codex`; empty leaves the project unlabelled), and the
 orchestrator puts the matching label (`ai:engine-claude` or `ai:codex`) on
 the tracking issue and the wave-1 issues it creates. The poller copies the
 tracking issue's engine label onto every issue and PR it creates later, and
-`implement.yml` copies an issue's engine label onto its PR. The separate
-role cutovers must pass work-item labels into engine selection; today the
-labels do not select a production engine. When both labels are
-present, `ai:codex` is copied. `/implement-plan-claude` dispatches with
+`implement.yml` copies an issue's engine label onto its PR. Clarify,
+clarify-respond and plan resolve the engine from the issue's fetched labels;
+roles not yet cut over still run on codex. When both labels are present,
+`ai:codex` is copied. `/implement-plan-claude` dispatches with
 `engine=claude`; against a wrapper that has no `engine` input yet it
 dispatches without it and labels the tracking issue instead. Wave-1 issues
 created before that later label write do not inherit it. If `implement.yml`
