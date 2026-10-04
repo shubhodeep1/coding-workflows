@@ -412,6 +412,13 @@ def test_collect_builds_the_bundle_and_index(tmp_path: Path) -> None:
 	assert manifest["api_calls"] <= 20
 
 
+def test_lineage_excludes_current_issue_when_its_number_is_a_string(tmp_path: Path) -> None:
+	_collector(tmp_path, FakeGh()).collect(_issue(number="7000"), [], issue_repo=REPO)
+	lineage = json.loads((tmp_path / "evidence" / "lineage.json").read_text())
+	assert [item["number"] for item in lineage] == [4477]
+	assert "#7000 gen" not in (tmp_path / "evidence" / "INDEX.md").read_text()
+
+
 def test_artifact_download_limit_records_skipped_artifacts(tmp_path: Path) -> None:
 	fake = FakeGh()
 	artifacts = fake.routes[f"repos/{REPO}/actions/runs/111/artifacts?per_page=100"]["artifacts"]

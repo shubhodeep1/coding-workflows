@@ -833,7 +833,7 @@ class Collector:
 				break
 		related = []
 		for item in issues:
-			if item.get("number") == own_number or not _is_trusted_author(item):
+			if str(item.get("number")) == str(own_number) or not _is_trusted_author(item):
 				continue
 			markers = heal.parse_heal_markers(item.get("body"))
 			if (root and markers.get("root") == root) or (source and markers.get("source") == source):
