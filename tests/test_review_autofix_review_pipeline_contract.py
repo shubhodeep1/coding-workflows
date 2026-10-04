@@ -8196,8 +8196,10 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(host / ".claude/commands/audit-plans.md").write_text("operator command\n")
 		(host / "scripts").mkdir()
 		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
+		(host / "tests").mkdir()
+		(host / "tests/test_audit_plans_command.py").write_text("operator command contract\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
-		subprocess.run(["git", "add", ".github", ".claude", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github", ".claude", "scripts", "tests"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
@@ -8210,6 +8212,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert not (source / ".claude/hooks/other.py").exists()
 		assert not (source / ".claude/commands/audit-plans.md").exists()
 		assert (source / "scripts/claude_settings.json.tmpl").exists()
+		assert not (source / "tests/test_audit_plans_command.py").exists()
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
 		(source / ".github/ai/claude_engine.json").write_text("after\n")
