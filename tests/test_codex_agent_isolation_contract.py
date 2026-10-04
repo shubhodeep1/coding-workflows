@@ -200,7 +200,9 @@ def test_poller_file_editing_judges_use_worktrees_and_trusted_push():
 	assert "Do NOT run git commit, git push or any" in text
 	assert '_integration_judge_commit_and_push "${judge_wt}"' in text
 	assert 'python3 "${ORCH_FINGERPRINT_VERIFIER}" "${fp_file}"' in text
-	assert 'return "${judge_push_rc}"' in text
+	assert '_integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" || true' in text
+	assert 'return 0\n}\n\n# _integration_judge_remove_worktree' in text
+	assert 'git -C "${wt}" rev-parse -q --verify MERGE_HEAD' in text
 	assert 'if ! jq -ce' in text
 	assert '"$(wc -c < "${fp_file}" 2>/dev/null || echo 0)" -gt 3' in text
 	assert 'git -C "${wt}" add -A -- .' in text

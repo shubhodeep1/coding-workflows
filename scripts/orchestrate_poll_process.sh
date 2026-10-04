@@ -8662,11 +8662,10 @@ invoke_judge_for_integration_conflict() {
     return 1
   fi
   echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-  local judge_push_rc=0
-  _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" || judge_push_rc=$?
+  _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" || true
   rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
   _integration_judge_remove_worktree "${judge_wt}"
-  return "${judge_push_rc}"
+  return 0
 }
 
 # _integration_judge_remove_worktree <path> — drop a judge worktree and
@@ -8723,6 +8722,11 @@ _integration_judge_commit_and_push() {
   rm -f "${fp_file}"
   if [ "${fp_exit}" -ne 0 ]; then
     echo "::warning::[integration-heal] Judge resolution for PR #${final_pr} violates the merged sub-issue fingerprints (exit ${fp_exit}); nothing pushed."
+    return 1
+  fi
+  if ! git -C "${wt}" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+      && git -C "${wt}" diff --cached --quiet; then
+    echo "  [integration-heal] No merge or judge changes to commit for PR #${final_pr}; mergeability will be rechecked on the next tick."
     return 1
   fi
   if ! git -C "${wt}" -c user.name="codex-bot" -c user.email="codex@users.noreply.github.com" -c commit.gpgsign=false \

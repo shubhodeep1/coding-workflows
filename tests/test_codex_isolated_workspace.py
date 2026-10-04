@@ -80,6 +80,25 @@ def test_readonly_snapshot_takes_tracked_files_only_and_skips_secrets(repo, tmp_
 	assert os.access(dest / "run.sh", os.X_OK)
 
 
+def test_credential_paths_are_absent_from_snapshots_and_synthetic_git(repo, tmp_path):
+	hidden = (".npmrc", ".netrc", ".pypirc", ".ssh/id_ed25519", ".config/gh/hosts.yml", "client_secret.json")
+	for name in hidden:
+		path = repo / name
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text("credential value\n")
+	git(repo, "add", "-A")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "add credential fixtures")
+	readonly = tmp_path / "readonly"
+	workspace, _manifest = snapshot_ws(repo, tmp_path)
+	run("snapshot-readonly", repo, readonly)
+	run("seed-git", repo, readonly)
+	run("seed-git", repo, workspace)
+	for copied in (readonly, workspace):
+		for name in hidden:
+			assert not (copied / name).exists()
+			assert subprocess.run(["git", "show", f"HEAD:{name}"], cwd=copied, capture_output=True).returncode != 0
+
+
 def test_readonly_snapshot_limits_fail_closed(repo, tmp_path, monkeypatch):
 	sys.path.insert(0, str(MODULE.parent))
 	import codex_isolated_workspace as module

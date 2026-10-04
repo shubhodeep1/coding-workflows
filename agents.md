@@ -523,11 +523,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   bridge (`bridge` mode). It forwards only `POST /api/v1/responses` for the one
   model the call names. The provider-hosted `web_search` tool keeps working.
 - **Modes.** `read-only`: a copy of the tracked regular files (all top-level
-  directories; symlinks, `.git`, `.env*`, `secrets`, `credentials` and key
-  files skipped; files over 2 MiB skipped and logged; 50,000 files / 512 MiB
-  cap) mounted read-only. `workspace`: a copy of the directory excluding
-  `.git`, `.env*`, credential directories and key files (allowed symlinks kept
-  as symlinks); afterwards every changed regular file is written back with
+  directories; symlinks, `.git`, `.env*`, `secrets`, `credentials`, `.ssh`,
+  `.npmrc`, `.netrc`, `.config`, secret-named paths and key files skipped;
+  files over 2 MiB skipped and logged; 50,000 files / 512 MiB cap) mounted
+  read-only. `workspace`: a copy of the directory excluding the same
+  credential paths (allowed symlinks kept as symlinks); afterwards every
+  changed regular file is written back with
   mode 0644/0755 and removed files are deleted
   (also after a failed or interrupted attempt). A new or changed symlink, a
   special file, or a host path that changed since the snapshot rejects the
@@ -551,6 +552,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   integration-conflict judge work in separate git worktrees under
   `RUNTIME_DIR`; the poller (not the agent) fetches, merges, checks
   conflict markers and the merged sub-issue fingerprints, commits and pushes.
+  A failed publication logs a warning but counts as a completed judge
+  invocation; the next poll tick rechecks mergeability rather than terminalizing
+  the project. An already-up-to-date merge creates no empty commit.
   The review-blocked judge's OpenCode fix writer runs in
   `scripts/review_untrusted_sandbox.sh`.
 - **Sites.** plan, implement (attempts, post-Codex repair, diagnose, PR issue

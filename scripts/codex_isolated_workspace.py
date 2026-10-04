@@ -72,7 +72,11 @@ CHUNK = 1024 * 1024
 
 # Read-only snapshots never include support checkouts, Codex state, env files
 # or anything that looks like a credential store (clarify's rules, Q11 A).
-READONLY_BAD_PARTS = {".git", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials", "__pycache__"}
+READONLY_BAD_PARTS = {
+	".git", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials", "__pycache__",
+	".ssh", ".aws", ".azure", ".kube", ".config", ".docker", ".npmrc", ".netrc", ".pypirc",
+	"id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+}
 SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
 
 
@@ -121,7 +125,8 @@ def readonly_allowed(name):
 		return False
 	for part in PurePosixPath(name).parts:
 		lower = part.lower()
-		if lower in READONLY_BAD_PARTS or lower.startswith(".env") or lower.endswith(SECRET_SUFFIXES):
+		if (lower in READONLY_BAD_PARTS or lower.startswith(".env") or lower.endswith(SECRET_SUFFIXES)
+			or "secret" in lower or "credential" in lower):
 			return False
 	return True
 
