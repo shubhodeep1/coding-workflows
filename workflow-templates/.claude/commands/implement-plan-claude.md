@@ -7,7 +7,7 @@ $ARGUMENTS
 ## Procedure
 
 1. **Run `/implement-plan-ai`'s procedure.** `Read` `.claude/commands/implement-plan-ai.md` and follow its steps 1–8 exactly (resolve the plan, read the context, make the plan reachable on the remote, pick the orchestrator wrapper, compose the reference-only `project_description`, dispatch, capture the run and the tracking issue, report), with the two differences below. Its Tool Access and Rules sections apply unchanged.
-2. **Say which engine.** Add one line to the `project_description` instruction preamble: `Engine: Claude (ai:engine-claude) — run every role of this project on the Claude engine.`
+2. **Say which engine.** Add one line to the `project_description` instruction preamble: `Engine requested: Claude (ai:engine-claude). Until engine-label selection is wired in Phase 6, use each role's configured engine.`
 3. **Label the tracking issue.** Once the `ai:orchestrator-tracking` issue for the dispatched run exists, add the `ai:engine-claude` label to it (a §23.B routine label write) and verify it is present. If the issue has not appeared or the label write fails (including when the label has not yet been synced), report the dispatched run and the missing label explicitly; do not claim the project is bound to the Claude engine. The workflow may already be running on the configured engine. Do not dispatch a second project to retry labelling.
 
 ## Output Format
