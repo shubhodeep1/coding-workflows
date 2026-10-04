@@ -5,6 +5,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Phase prompts
 
+- `prompts/mode-activation-verify.txt` — Role: activation verifier. Goal: grade work that just merged LIVE or DORMANT and list each gap as code or operator (port P4).
 - `prompts/mode-check-failure-triage.txt` — Role: CI failure triager. Goal: analyze a failing pull-request check and write a GitHub issue body describing the likely root cause and suggested fix.
 - `prompts/mode-clarify-respond.txt` — You are an AI assistant resolving clarification questions on behalf of the project orchestrator.
 - `prompts/mode-clarify.txt` — Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
@@ -95,6 +96,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Scripts
 
+- `scripts/activation_verify.sh` — Grade merged work LIVE or DORMANT, post the verdict, open one issue for code gaps and record operator steps (port P4).
 - `scripts/ai_context_utils.py` — Python helper for ai context utils.
 - `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` (`claude_run`), and fall back to codex (D1).
 - `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
@@ -188,6 +190,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/nag_reminder.sh` — Fail-open reminder injection helper for long-running unattended wrapper loops.
 - `scripts/opencode_helpers.sh` — Shared OpenCode command, output, bootstrap, and alert helpers.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
+- `scripts/operator_step_issue.py` — Keep the repository's single `ai:operator-step` issue, one keyed section per source (Q33).
 - `scripts/orchestrate_force_tick.sh` — Shell helper for orchestrate force tick.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
 - `scripts/orchestrate_parse_and_post_answer.sh` — Shell helper for orchestrate parse and post answer.
@@ -229,8 +232,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_resolve_review_threads_plan.py` — Build the thread-resolution plan for review_resolve_review_threads.sh.
 - `scripts/review_run_judge_interim.sh` — Shell helper for review run judge interim.
 - `scripts/review_run_reviewers.sh` — Shell helper for review run reviewers.
-- `scripts/review_synthesise_smoke.sh` — Shell helper for review synthesise smoke.
 - `scripts/review_sandbox/Dockerfile` — Pinned, credential-free review dependency and editor image.
+- `scripts/review_single_issue_security_pass.sh` — Hold a standalone PR's auto-merge until a security audit of its head is clean, and report the audit result back (port P1).
+- `scripts/review_synthesise_smoke.sh` — Shell helper for review synthesise smoke.
 - `scripts/review_untrusted_sandbox.sh` — Prepare the disposable review workspace and run the OpenCode writer without host credentials.
 - `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
