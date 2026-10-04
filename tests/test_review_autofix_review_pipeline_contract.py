@@ -8193,7 +8193,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(host / ".claude/hooks/gh_api_write_guard.py").write_text("before\n")
 		(host / ".claude/hooks/other.py").write_text("operator hook\n")
 		(host / ".claude/commands").mkdir()
-		(host / ".claude/commands/audit-plans.md").write_text("before\n")
+		(host / ".claude/commands/audit-plans.md").write_text("operator command\n")
 		(host / "scripts").mkdir()
 		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
@@ -8219,14 +8219,13 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
 		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
 		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
-		assert (host / ".claude/commands/audit-plans.md").read_text() == "before\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
 		(source / ".claude/commands").mkdir()
 		(source / ".claude/commands/audit-plans.md").write_text("untrusted\n")
 		result = run("transfer")
 		assert result.returncode != 0
 		assert "reason=unsafe_directory" in result.stderr
-		assert (host / ".claude/commands/audit-plans.md").read_text() == "before\n"
+		assert (host / ".claude/commands/audit-plans.md").read_text() == "operator command\n"
 		(source / ".claude/commands/audit-plans.md").unlink()
 		(source / ".claude/commands").rmdir()
 		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
@@ -8237,6 +8236,12 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(source / ".github/untrusted/result.yml").write_text("untrusted\n")
 		assert run("transfer").returncode != 0
 		assert not (host / ".github/untrusted/result.yml").exists()
+		(source / ".github/untrusted/result.yml").unlink()
+		(source / ".github/untrusted").rmdir()
+		(source / ".claude/commands").mkdir()
+		(source / ".claude/commands/audit-plans.md").write_text("untrusted\n")
+		assert run("transfer").returncode != 0
+		assert (host / ".claude/commands/audit-plans.md").read_text() == "operator command\n"
 
 
 def test_review_isolation_transfers_into_active_work_tree() -> None:
