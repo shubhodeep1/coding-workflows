@@ -1074,6 +1074,8 @@ class Collector:
 			self._skip("source_repo", "not_registered")
 			ctx["source_repo"] = ""
 			ctx["source_number"] = ""
+		# Parse rejected references only for the skipped index; never fetch them.
+		candidate_refs = trusted_run_refs(issue, comments, allowed_repos=[issue_repo] + ([ctx["source_repo"]] if ctx["source_repo"] else []), limit=self.max_runs)
 		provenance_check = self._verify_provenance(issue, comments, issue_repo)
 		if not provenance_check["body"]:
 			self._skip("run_provenance", provenance_check["reason"])
@@ -1090,6 +1092,10 @@ class Collector:
 		timeline = self.timeline(ctx)
 		allowed = [issue_repo] + ([ctx["source_repo"]] if ctx.get("source_repo") else [])
 		refs = trusted_run_refs(issue, comments, allowed_repos=allowed, limit=self.max_runs, include_body=provenance_check["body"], verified_comment_ids=provenance_check["comment_ids"])
+		verified_run_keys = {(ref["repo"], ref["run_id"]) for ref in refs}
+		for candidate_ref in candidate_refs:
+			if (candidate_ref["repo"], candidate_ref["run_id"]) not in verified_run_keys:
+				self._skip(f"run:{candidate_ref['repo']}:{candidate_ref['run_id']}", "unverified_intake_provenance")
 		if not refs:
 			self._skip("runs", "no_trusted_run_links")
 		runs = []

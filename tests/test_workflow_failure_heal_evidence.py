@@ -524,6 +524,7 @@ def test_issue_edited_by_another_account_drops_cross_repo_reads(tmp_path: Path, 
 	assert manifest["run_provenance"] == {"status": "unverified", "reason": "issue_edited_by_other"}
 	assert {"part": "run_provenance", "reason": "issue_edited_by_other"} in manifest["skipped"]
 	assert {"part": "source_repo", "reason": "provenance_unverified"} in manifest["skipped"]
+	assert {"part": "run:acme/registered:111", "reason": "unverified_intake_provenance"} in manifest["skipped"]
 	assert not any("repos/acme/registered/" in path for path in fake.paths)
 	assert not any("/actions/jobs/" in path for path in fake.paths)
 
@@ -552,6 +553,16 @@ def test_comment_edited_by_other_does_not_suppress_body_run(tmp_path: Path) -> N
 	assert manifest["run_provenance"]["status"] == "verified"
 	assert f"repos/{REPO}/actions/runs/111/jobs?per_page=100" in fake.paths
 	assert f"repos/{REPO}/actions/runs/222/jobs?per_page=100" not in fake.paths
+	assert {"part": f"run:{REPO}:222", "reason": "unverified_intake_provenance"} in manifest["skipped"]
+	assert f"run:{REPO}:222: unverified_intake_provenance" in (tmp_path / "evidence/INDEX.md").read_text()
+
+
+def test_unverified_issue_body_run_is_recorded_without_fetch(tmp_path: Path) -> None:
+	fake = FakeGh()
+	fake.routes["provenance"]["data"]["issue"]["issue"]["userContentEdits"] = {"totalCount": 1, "nodes": [{"editor": {"login": "other"}}]}
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:111", "reason": "unverified_intake_provenance"} in manifest["skipped"]
+	assert not any("/actions/jobs/" in path for path in fake.paths)
 
 
 @pytest.mark.parametrize("edits", [

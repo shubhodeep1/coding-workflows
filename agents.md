@@ -206,8 +206,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     authorship and edit history for the heal issue and occurrence comments;
     cross-repo runs additionally require matching run metadata (repo and
     reported head or PR). Unverifiable runs are skipped before log/artifact
-    reads, including when a cached run is restored. The folder is mounted
-    read-only at `/evidence` in the clarify sandbox, and point the prompt at it
+    reads, including when a cached run is restored; rejected intake-origin
+    references are listed with reasons under `Skipped` in `INDEX.md`. The
+    folder is mounted read-only at `/evidence` in the clarify sandbox, and
+    point the prompt at it
     (`=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`). Stable log prefixes:
     `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`, `WORKFLOW_HEAL_EVIDENCE`.
