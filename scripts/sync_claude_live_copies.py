@@ -27,9 +27,14 @@ main that touch `workflow-templates/.claude/**`. It fails open: an unreachable `
 force push, shallow history) syncs nothing and logs why; the CI parity test
 still reports any drift on the next pull request.
 
-API budget (CLAUDE.md §15): `sync` issues at most two REST calls per push,
-and only when something needs syncing: one GET for an open PR from the branch
-and, when there is none, one POST to open it.
+The auto-merge-eligible branch accepts only template history attributable to
+merged, non-pipeline PRs with clean commit subjects. Other changes go to a
+separate draft PR for human review. GH_PAT is still a broad write credential;
+branch provenance is a conservative signal, not proof of a human author.
+
+API budget (CLAUDE.md §15): per run, at most one association lookup per
+distinct template commit (30 by default), 1-3 pages per distinct merged PR,
+and two PR lookups plus at most one create/convert per nonempty group.
 
 Log lines start with `CLAUDE_LIVE_SYNC`.
 """
@@ -44,6 +49,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -52,6 +58,11 @@ TEMPLATE_PREFIX = "workflow-templates/.claude/"
 LIVE_PREFIX = ".claude/"
 ALLOWLIST_PATH = ".github/ai/claude_template_divergence.json"
 DEFAULT_SYNC_BRANCH = "ai/sync-claude-live-copies"
+HELD_BRANCH_SUFFIX = "-held"
+PIPELINE_HEAD_RE = re.compile(r"^(ai|orchestrator|auto)/")
+PIPELINE_MARKER_RE = re.compile(r"^\[(ai-autofix|judge-fix|ai-merge-resolve|claude-[a-z0-9-]+)\]")
+SQUASHED_PR_RE = re.compile(r"\(#\d+\)\s*$")
+DEFAULT_MAX_PROVENANCE_COMMITS = 30
 
 
 def log(message: str) -> None:
@@ -153,6 +164,249 @@ def _gh_json(*args: str) -> object:
 	return json.loads(result.stdout or "null")
 
 
+def _template_commits(root: Path, relative: str, after: str) -> list[tuple[str, str]] | None:
+	try:
+		live_revision = _git(root, "log", "-1", "--format=%H", after, "--", LIVE_PREFIX + relative, check=False)
+	except OSError:
+		return None
+	if live_revision.returncode != 0:
+		return None
+	live_sha = live_revision.stdout.strip()
+	if live_sha and not re.fullmatch(r"[0-9a-f]{40,64}", live_sha):
+		return None
+	range_ref = f"{live_sha}..{after}" if live_sha else after
+	try:
+		history = _git(root, "log", "--format=%H%x09%s", range_ref, "--", TEMPLATE_PREFIX + relative, check=False)
+	except OSError:
+		return None
+	if history.returncode != 0:
+		return None
+	commits: list[tuple[str, str]] = []
+	for line in history.stdout.splitlines():
+		sha, separator, subject = line.partition("\t")
+		if not separator or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+			return None
+		commits.append((sha, subject))
+	return commits
+
+
+def _commit_authorization(
+	repository: str, sha: str, subject: str,
+	pr_cache: dict[str, object], commit_cache: dict[int, object],
+) -> tuple[bool, str, str]:
+	if PIPELINE_MARKER_RE.match(subject):
+		return False, "pipeline_commit_marker", "none"
+	try:
+		# The sync-branch PR lookup cannot establish the source commit's provenance.
+		if sha not in pr_cache:
+			pr_cache[sha] = _gh_json(f"repos/{repository}/commits/{sha}/pulls?per_page=100")
+		associations = pr_cache[sha]
+		if not isinstance(associations, list) or len(associations) >= 100 or any(not isinstance(pr, dict) for pr in associations):
+			raise ValueError("invalid commit associations")
+		if any(pr.get("merged_at") is not None and (not isinstance(pr["merged_at"], str) or not pr["merged_at"]) for pr in associations):
+			raise ValueError("invalid merge timestamp")
+		merged = [pr for pr in associations if pr.get("merged_at")]
+		if not merged:
+			return False, "no_merged_pr", "none"
+		for pr in merged:
+			number = pr.get("number")
+			head = pr.get("head")
+			if not isinstance(number, int) or isinstance(number, bool) or number <= 0 or not isinstance(head, dict) or not isinstance(head.get("ref"), str):
+				raise ValueError("invalid merged PR")
+			if PIPELINE_HEAD_RE.match(head["ref"]):
+				return False, "pipeline_branch", str(number)
+		for pr in merged:
+			number = pr["number"]
+			if number not in commit_cache:
+				entries: list[object] = []
+				for page in range(1, 4):
+					batch = _gh_json(f"repos/{repository}/pulls/{number}/commits?per_page=100&page={page}")
+					if not isinstance(batch, list) or any(not isinstance(item, dict) for item in batch):
+						raise ValueError("invalid PR commits")
+					entries.extend(batch)
+					if len(batch) < 100:
+						break
+				commit_cache[number] = entries
+			entries = commit_cache[number]
+			if not isinstance(entries, list) or not entries:
+				raise ValueError("empty PR commits")
+			if len(entries) >= 250:
+				return False, "pr_commits_truncated", str(number)
+			for entry in entries:
+				commit = entry.get("commit") if isinstance(entry, dict) else None
+				message = commit.get("message") if isinstance(commit, dict) else None
+				if not isinstance(message, str) or not message:
+					raise ValueError("invalid PR commit subject")
+				pr_subject = message.splitlines()[0]
+				if PIPELINE_MARKER_RE.match(pr_subject):
+					return False, "pr_commit_marker", str(number)
+				if SQUASHED_PR_RE.search(pr_subject):
+					return False, "squashed_pr_commit", str(number)
+	except (subprocess.CalledProcessError, OSError, ValueError):
+		return False, "api_failed", "none"
+	return True, "", str(merged[0]["number"])
+
+
+def _classify_paths(root: Path, paths: list[str], after: str, repository: str) -> tuple[list[str], dict[str, tuple[str, str, str]]]:
+	authorized: list[str] = []
+	held: dict[str, tuple[str, str, str]] = {}
+	pr_cache: dict[str, object] = {}
+	commit_cache: dict[int, object] = {}
+	try:
+		cap = int(os.environ.get("CLAUDE_LIVE_SYNC_MAX_PROVENANCE_COMMITS", str(DEFAULT_MAX_PROVENANCE_COMMITS)))
+	except ValueError:
+		cap = DEFAULT_MAX_PROVENANCE_COMMITS
+	if cap <= 0:
+		cap = DEFAULT_MAX_PROVENANCE_COMMITS
+	seen: set[str] = set()
+	for relative in paths:
+		commits = _template_commits(root, relative, after)
+		reason, sha12, pr_number = "", "none", "none"
+		if commits is None:
+			reason = "history_failed"
+		elif not commits:
+			reason = "no_template_commits"
+		elif len(seen | {sha for sha, _ in commits}) > cap:
+			reason = "provenance_cap_exceeded"
+			sha12 = commits[0][0][:12]
+		else:
+			seen.update(sha for sha, _ in commits)
+			for sha, subject in commits:
+				ok, reason, pr_number = _commit_authorization(repository, sha, subject, pr_cache, commit_cache)
+				if not ok:
+					sha12 = sha[:12]
+					break
+		if reason:
+			held[relative] = (reason, sha12, pr_number)
+			log(f"held path={LIVE_PREFIX}{relative} reason={reason} commit={sha12} pr={pr_number}")
+		else:
+			authorized.append(relative)
+			log(f"authorized path={LIVE_PREFIX}{relative} commits={len(commits)}")
+	return authorized, held
+
+
+def _carry_forward(root: Path, after: str, branch: str, paths: list[str], drifted: set[str]) -> tuple[str, list[str]] | None:
+	previous_sha = ""
+	extra_paths: list[str] = []
+	remote_result = _git(root, "ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{branch}", check=False)
+	if remote_result.returncode == 0:
+		previous_sha = remote_result.stdout.partition("\t")[0]
+		if (
+			not re.fullmatch(r"[0-9a-f]{40,64}", previous_sha)
+			or _git(root, "fetch", "--no-tags", "origin", f"refs/heads/{branch}", check=False).returncode != 0
+			or _git(root, "rev-parse", "FETCH_HEAD", check=False).stdout.strip() != previous_sha
+		):
+			log("error reason=sync_branch_fetch_failed")
+			return None
+		prior_paths = _git(root, "diff", "--name-only", f"{after}...FETCH_HEAD", "--", LIVE_PREFIX, check=False)
+		main_paths = _git(root, "diff", "--name-only", f"FETCH_HEAD...{after}", "--", LIVE_PREFIX, check=False)
+		if prior_paths.returncode != 0 or main_paths.returncode != 0:
+			log("error reason=sync_branch_diff_failed")
+			return None
+		main_changed = set(main_paths.stdout.splitlines())
+		for path in prior_paths.stdout.splitlines():
+			if not path.startswith(LIVE_PREFIX):
+				continue
+			prior_relative = path[len(LIVE_PREFIX):]
+			if prior_relative not in drifted or path in main_changed or prior_relative in paths:
+				continue
+			prior_copy = _git(root, "show", f"FETCH_HEAD:{path}", check=False)
+			if prior_copy.returncode == 0 and prior_copy.stdout == (root / TEMPLATE_PREFIX / prior_relative).read_text(encoding="utf-8"):
+				extra_paths.append(prior_relative)
+	elif remote_result.returncode != 2:
+		log("error reason=sync_branch_lookup_failed")
+		return None
+	return previous_sha, extra_paths
+
+
+def _commit_and_push(root: Path, branch: str, after: str, relatives: list[str], previous_sha: str, message: str) -> bool:
+	try:
+		_git(root, "checkout", "-B", branch, after)
+		for relative in relatives:
+			(root / LIVE_PREFIX / relative).parent.mkdir(parents=True, exist_ok=True)
+			shutil.copy2(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative)
+			log(f"copied path={LIVE_PREFIX}{relative}")
+		_git(root, "add", "--", *[LIVE_PREFIX + relative for relative in relatives])
+		_git(root, "-c", "user.name=github-actions[bot]", "-c", "user.email=github-actions[bot]@users.noreply.github.com", "commit", "-q", "-m", message)
+	except (subprocess.CalledProcessError, OSError):
+		log("error reason=git_stage_failed")
+		return False
+	try:
+		_git(root, "push", f"--force-with-lease=refs/heads/{branch}:{previous_sha}", "origin", f"HEAD:refs/heads/{branch}")
+	except subprocess.CalledProcessError:
+		log("error reason=push_failed")
+		return False
+	return True
+
+
+def _open_or_refresh_pr(repository: str, owner: str, branch: str, base: str, title: str, body: str, *, draft: bool, relatives: list[str], push: Callable[[], bool]) -> int | None:
+	if not draft and not push():
+		return None
+	try:
+		open_prs = _gh_json(f"repos/{repository}/pulls?state=open&head={owner}:{branch}&per_page=1")
+	except (subprocess.CalledProcessError, OSError, ValueError):
+		log("error reason=api_failed stage=lookup")
+		return None
+	if not isinstance(open_prs, list) or (open_prs and not isinstance(open_prs[0], dict)):
+		log("error reason=api_failed stage=lookup_invalid_response")
+		return None
+	if draft and open_prs:
+		pr = open_prs[0]
+		if not isinstance(pr.get("draft"), bool) or not isinstance(pr.get("node_id"), str):
+			log("error reason=api_failed stage=lookup_invalid_response")
+			return None
+		if not pr["draft"]:
+			try:
+				converted = _gh_json("graphql", "-f", "query=mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){pullRequest{isDraft}}}", "-f", f"id={pr['node_id']}")
+				if not isinstance(converted, dict) or converted.get("errors") or converted.get("data", {}).get("convertPullRequestToDraft", {}).get("pullRequest", {}).get("isDraft") is not True:
+					raise ValueError("draft conversion unconfirmed")
+			except (subprocess.CalledProcessError, OSError, ValueError, AttributeError):
+				log("error reason=api_failed stage=convert_to_draft")
+				return None
+			log(f"converted_to_draft pr={pr.get('number')}")
+	if draft and not push():
+		return None
+	if open_prs:
+		number = open_prs[0].get("number")
+		if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+			log("error reason=api_failed stage=lookup_invalid_response")
+			return None
+		if draft:
+			log(f"held branch={branch} pr={number} paths={len(relatives)}")
+		else:
+			log(f"updated pr={number} branch={branch} paths={len(relatives)}")
+		return number
+	try:
+		created = _gh_json(
+			"-X", "POST", f"repos/{repository}/pulls",
+			"-f", f"title={title}", "-f", f"head={branch}", "-f", f"base={base}", "-f", f"body={body}",
+			*(["-F", "draft=true"] if draft else []),
+		)
+	except (subprocess.CalledProcessError, OSError, ValueError):
+		log("error reason=api_failed stage=create")
+		return None
+	number = created.get("number") if isinstance(created, dict) else None
+	if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+		log("error reason=api_failed stage=create_invalid_response")
+		return None
+	if draft:
+		log(f"opened pr={number} draft=true branch={branch} paths={len(relatives)}")
+		log(f"held branch={branch} pr={number} paths={len(relatives)}")
+	else:
+		log(f"opened pr={number} branch={branch} paths={len(relatives)}")
+	return number
+
+
+def _write_outputs(held_pr: int | None, held: dict[str, tuple[str, str, str]]) -> None:
+	output = os.environ.get("GITHUB_OUTPUT")
+	if not output:
+		return
+	summary = "; ".join(f"{LIVE_PREFIX}{relative} ({reason}, commit {sha}, PR {pr})" for relative, (reason, sha, pr) in held.items())
+	summary = "".join(char for char in summary if 32 <= ord(char) <= 126)[:1500]
+	with open(output, "a", encoding="utf-8") as stream:
+		stream.write(f"held={'true' if held else 'false'}\nheld_pr={held_pr or ''}\nheld_summary={summary}\n")
+
+
 def sync(root: Path, before: str, after: str, *, dry_run: bool) -> int:
 	paths = plan(root, before, after)
 	if not paths:
@@ -163,107 +417,73 @@ def sync(root: Path, before: str, after: str, *, dry_run: bool) -> int:
 	base = os.environ.get("BASE_BRANCH") or "main"
 	if not dry_run and (
 		branch == base
+		or branch.endswith(HELD_BRANCH_SUFFIX)
 		or (branch != DEFAULT_SYNC_BRANCH and not branch.startswith(DEFAULT_SYNC_BRANCH + "-"))
 		or _git(root, "check-ref-format", "--branch", branch, check=False).returncode != 0
 	):
 		log("error reason=unsafe_sync_branch")
 		return 1
-	previous_sha = ""
-	if not dry_run:
-		remote_result = _git(root, "ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{branch}", check=False)
-		if remote_result.returncode == 0:
-			previous_sha = remote_result.stdout.partition("\t")[0]
-			if (
-				not re.fullmatch(r"[0-9a-f]{40,64}", previous_sha)
-				or _git(root, "fetch", "--no-tags", "origin", f"refs/heads/{branch}", check=False).returncode != 0
-				or _git(root, "rev-parse", "FETCH_HEAD", check=False).stdout.strip() != previous_sha
-			):
-				log("error reason=sync_branch_fetch_failed")
-				return 1
-			prior_paths = _git(root, "diff", "--name-only", f"{after}...FETCH_HEAD", "--", LIVE_PREFIX, check=False)
-			main_paths = _git(root, "diff", "--name-only", f"FETCH_HEAD...{after}", "--", LIVE_PREFIX, check=False)
-			if prior_paths.returncode != 0 or main_paths.returncode != 0:
-				log("error reason=sync_branch_diff_failed")
-				return 1
-			drifted = set(mismatched(root))
-			main_changed = set(main_paths.stdout.splitlines())
-			for path in prior_paths.stdout.splitlines():
-				if not path.startswith(LIVE_PREFIX):
-					continue
-				prior_relative = path[len(LIVE_PREFIX):]
-				if prior_relative not in drifted or path in main_changed or prior_relative in paths:
-					continue
-				# Carry forward only a copy that the previous sync actually set to today's template.
-				prior_copy = _git(root, "show", f"FETCH_HEAD:{path}", check=False)
-				if prior_copy.returncode == 0 and prior_copy.stdout == (root / TEMPLATE_PREFIX / prior_relative).read_text(encoding="utf-8"):
-					paths.append(prior_relative)
-		elif remote_result.returncode != 2:
-			log("error reason=sync_branch_lookup_failed")
-			return 1
-	for relative in paths:
-		(root / LIVE_PREFIX / relative).parent.mkdir(parents=True, exist_ok=True)
-		shutil.copy2(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative)
-		log(f"copied path={LIVE_PREFIX}{relative}")
 	if dry_run:
+		# CI preparation never writes to the remote; the provenance gate applies
+		# only to the privileged sync, not to disposable test checkouts.
+		for relative in paths:
+			(root / LIVE_PREFIX / relative).parent.mkdir(parents=True, exist_ok=True)
+			shutil.copy2(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative)
+			log(f"copied path={LIVE_PREFIX}{relative}")
 		return 0
 	if not repository or "/" not in repository:
 		log("error reason=missing_repository")
 		return 1
-	short_after = after[:12]
-	message = (
-		f"chore(.claude): sync live copies with their templates after {short_after}\n\n"
-		"The pipeline's editors cannot edit .claude/**. Copy the templates for:\n\n"
-		+ "".join(f"- .claude/{relative}\n" for relative in paths)
-		+ "\nCopied by scripts/sync_claude_live_copies.py (sync-claude-live-copies.yml).\n"
-	)
-	try:
-		_git(root, "checkout", "-B", branch)
-		_git(root, "add", "--", *[LIVE_PREFIX + relative for relative in paths])
-		_git(root, "-c", "user.name=github-actions[bot]", "-c", "user.email=github-actions[bot]@users.noreply.github.com", "commit", "-q", "-m", message)
-	except subprocess.CalledProcessError:
-		log("error reason=git_stage_failed")
-		return 1
-	try:
-		_git(root, "push", f"--force-with-lease=refs/heads/{branch}:{previous_sha}", "origin", f"HEAD:refs/heads/{branch}")
-	except subprocess.CalledProcessError:
-		log("error reason=push_failed")
-		return 1
-	owner = repository.split("/", 1)[0]
-	try:
-		open_prs = _gh_json(f"repos/{repository}/pulls?state=open&head={owner}:{branch}&per_page=1")
-	except (subprocess.CalledProcessError, OSError, ValueError):
-		log("error reason=api_failed stage=lookup")
-		return 1
-	if not isinstance(open_prs, list):
-		log("error reason=api_failed stage=lookup_invalid_response")
-		return 1
-	if open_prs:
-		if not isinstance(open_prs[0], dict):
-			log("error reason=api_failed stage=lookup_invalid_response")
+	previous_shas: dict[str, str] = {}
+	for target_branch in (branch, branch + HELD_BRANCH_SUFFIX):
+		carried = _carry_forward(root, after, target_branch, paths, set(mismatched(root)))
+		if carried is None:
 			return 1
-		log(f"updated pr={open_prs[0].get('number')} branch={branch} paths={len(paths)}")
-		return 0
-	body = (
-		"Syncs live `.claude/` copies with their `workflow-templates/.claude/` templates "
-		f"after `{short_after}`:\n\n"
-		+ "".join(f"- `.claude/{relative}`\n" for relative in paths)
-		+ "\nThe pipeline's editors cannot edit `.claude/**`, so a template-only change leaves this repo's own copy "
-		"behind and fails the parity tests on every PR. Opened by `scripts/sync_claude_live_copies.py` from the "
-		"`sync-claude-live-copies.yml` workflow.\n"
-	)
-	try:
-		created = _gh_json(
-			"-X", "POST", f"repos/{repository}/pulls",
-			"-f", f"title=chore(.claude): sync live copies with their templates ({short_after})",
-			"-f", f"head={branch}",
-			"-f", f"base={base}",
-			"-f", f"body={body}",
+		previous_shas[target_branch], additional = carried
+		paths.extend(path for path in additional if path not in paths)
+	authorized, held = _classify_paths(root, paths, after, repository)
+	short_after = after[:12]
+	owner = repository.split("/", 1)[0]
+	if authorized:
+		message = (
+			f"chore(.claude): sync live copies with their templates after {short_after}\n\n"
+			"The pipeline's editors cannot edit .claude/**. Copy the templates for:\n\n"
+			+ "".join(f"- .claude/{relative}\n" for relative in authorized)
+			+ "\nCopied by scripts/sync_claude_live_copies.py (sync-claude-live-copies.yml).\n"
 		)
-	except (subprocess.CalledProcessError, OSError, ValueError):
-		log("error reason=api_failed stage=create")
-		return 1
-	number = created.get("number") if isinstance(created, dict) else None
-	log(f"opened pr={number} branch={branch} paths={len(paths)}")
+		body = (
+			"Syncs live `.claude/` copies with their `workflow-templates/.claude/` templates "
+			f"after `{short_after}`:\n\n"
+			+ "".join(f"- `.claude/{relative}`\n" for relative in authorized)
+			+ "\nThe pipeline's editors cannot edit `.claude/**`, so a template-only change leaves this repo's own copy "
+			"behind and fails the parity tests on every PR. Opened by `scripts/sync_claude_live_copies.py` from the "
+			"`sync-claude-live-copies.yml` workflow.\n"
+		)
+		if _open_or_refresh_pr(
+			repository, owner, branch, base, f"chore(.claude): sync live copies with their templates ({short_after})", body,
+			draft=False, relatives=authorized,
+			push=lambda: _commit_and_push(root, branch, after, authorized, previous_shas[branch], message),
+		) is None:
+			return 1
+	held_pr: int | None = None
+	if held:
+		held_branch = branch + HELD_BRANCH_SUFFIX
+		held_paths = list(held)
+		held_lines = "".join(f"- `.claude/{relative}`: {reason} (commit {sha}, PR {pr})\n" for relative, (reason, sha, pr) in held.items())
+		held_body = (
+			f"Template changes after `{short_after}` require human approval:\n\n{held_lines}\n"
+			"Held as a draft because the template change did not come from an authorized source "
+			"(sync-claude-live-copies.yml provenance gate). Verify the diff, then mark ready or merge by hand.\n"
+		)
+		held_message = f"chore(.claude): HELD sync of live copies ({short_after})\n\n{held_lines}"
+		held_pr = _open_or_refresh_pr(
+			repository, owner, held_branch, base, f"chore(.claude): HELD sync of live copies ({short_after})", held_body,
+			draft=True, relatives=held_paths,
+			push=lambda: _commit_and_push(root, held_branch, after, held_paths, previous_shas[held_branch], held_message),
+		)
+		if held_pr is None:
+			return 1
+	_write_outputs(held_pr, held)
 	return 0
 
 
