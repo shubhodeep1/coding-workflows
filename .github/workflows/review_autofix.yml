@@ -6157,6 +6157,10 @@ jobs:
           # actually happened. Empty reason = legacy / pre-fix script,
           # falls through to the original body.
           case "${JUDGE_SKIP_REASON:-}" in
+            isolation_unavailable)
+              BODY_HEADING="AI review/autofix — judge deferred: isolation unavailable"
+              BODY_DETAIL="The judge could not prepare its credential-free sandbox (for example, the PR snapshot exceeded the isolation size limit or support files are missing). It refused to run a host writer on PR content. Linked issues remain labelled \`ai:review-blocked\`; stall recovery will retry the judge. If this repeats on the same head, a human must review."
+              ;;
             missing_followup_details)
               BODY_HEADING="AI review/autofix — judge omitted follow-up issue details"
               BODY_DETAIL="The review-blocked judge chose \`merge_with_followup\` but returned an empty \`followup_issue.title\` and/or \`.body\`, so the workflow refused the action rather than merge code without durable tracking for the deferred gap. Stall recovery will re-fire the judge; if this repeats, inspect the judge output in the workflow log."
