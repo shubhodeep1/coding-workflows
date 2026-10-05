@@ -436,7 +436,11 @@ def test_read_profile_settings_have_a_bash_guard_without_changing_write_settings
 	assert len(write["hooks"]["PreToolUse"]) == 1
 	read = ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook="/trusted/claude_engine.py")
 	assert set(ce.READ_PROFILE_DENY) <= set(read["permissions"]["deny"])
-	assert {"Read(//proc/**)", "Grep(**/claude-pool/**)", "Read(**/.git/config)", "Bash(git * --no-index*)"} <= set(read["permissions"]["deny"])
+	assert {
+		"Read(//proc/**)", "Grep(**/claude-pool/**)", "Read(**/.git/config)", "Glob(**/.git/config)",
+		"Grep(**/.git-credentials)", "Grep(**/.netrc)", "Glob(~/.config/gh/**)",
+		"Grep(~/.claude/.credentials.json)", "Bash(git * --no-index*)",
+	} <= set(read["permissions"]["deny"])
 	assert read["hooks"]["PreToolUse"][1] == {
 		"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "/trusted/claude_engine.py" guard-read-bash', "timeout": 30}],
 	}
@@ -486,10 +490,10 @@ def test_read_guard_hook_override_in_cli(tmp_path: Path) -> None:
 		"--profile", "read", "--guard-hook", "/guard.py")
 	assert _run(*params, "--read-guard-hook", "/claude_engine.py").returncode == 0
 	settings = json.loads(settings_file.read_text(encoding="utf-8"))
-	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/claude_engine.py" read-guard'
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/claude_engine.py" guard-read-bash'
 	assert _run(*params).returncode == 0
 	settings = json.loads(settings_file.read_text(encoding="utf-8"))
-	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"].endswith('/scripts/claude_engine.py" read-guard')
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"].endswith('/scripts/claude_engine.py" guard-read-bash')
 	assert _run(*params, "--read-guard-hook", "relative.py").returncode == 2
 
 
@@ -504,9 +508,13 @@ def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, mon
 	git("config", "user.email", "test@example.invalid")
 	git("config", "http.https://github.com/.extraheader", "AUTHORIZATION: hidden")
 	(source / "ok.txt").write_text("tracked", encoding="utf-8")
+	(source / "run.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(source / "run.sh").chmod(0o755)
+	(source / "removed.txt").write_text("deleted", encoding="utf-8")
 	(source / "CLAUDE.md").write_text("invisible", encoding="utf-8")
-	git("add", "ok.txt", "CLAUDE.md")
+	git("add", "ok.txt", "run.sh", "removed.txt", "CLAUDE.md")
 	git("commit", "-qm", "base")
+	(source / "removed.txt").unlink()
 	(source / "untracked.txt").write_text("untracked", encoding="utf-8")
 	(source / ".env").write_text("private", encoding="utf-8")
 	(source / "id.key").write_text("private", encoding="utf-8")
@@ -523,12 +531,18 @@ def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, mon
 	assert summary["git"] == "present" and summary["git_objects"] == str(source / ".git" / "objects")
 	assert (dest / "ok.txt").read_text(encoding="utf-8") == "tracked"
 	assert (dest / "untracked.txt").read_text(encoding="utf-8") == "untracked"
+	assert (dest / "run.sh").stat().st_mode & stat.S_IXUSR
+	assert not (dest / "removed.txt").exists()
+	monkeypatch.delenv("GIT_DIR")
+	monkeypatch.delenv("GIT_WORK_TREE")
+	status = subprocess.check_output(["git", "-C", str(dest), "status", "--short"], text=True,
+		env={**os.environ, "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(source / ".git" / "objects")}).splitlines()
+	assert " D removed.txt" in status and "?? untracked.txt" in status
+	assert not any("run.sh" in line for line in status)
 	for path in ("CLAUDE.md", ".env", "id.key", "skip.pem", "link.txt", "big.bin", "ignored.txt", ".codex-workflow-src"):
 		assert not (dest / path).exists(), path
 	assert "hidden" not in (dest / ".git" / "config").read_text(encoding="utf-8")
 	assert (dest / ".git" / "objects" / "info" / "alternates").read_text(encoding="ascii") == "/git-objects\n"
-	monkeypatch.delenv("GIT_DIR")
-	monkeypatch.delenv("GIT_WORK_TREE")
 	assert (dest / ".git" / "HEAD").read_text(encoding="ascii").strip() == git("rev-parse", "HEAD")
 
 

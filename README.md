@@ -1964,6 +1964,11 @@ attempts of that role in the same job.
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
+Read-profile calls reject non-empty `AI_ENGINE_ISOLATED_READ_PATHS` instead of
+bind-mounting additional host paths; the caller falls back with
+`reason=isolation_read_path_invalid`. Only the filtered checkout snapshot,
+read-only Git object store, and trusted support inputs are mounted.
+
 **Which engine a role uses**, first match wins: `CLAUDE_FIXER_ENABLED=false`
 for the four review write roles, the work item's labels (`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),
 `AI_ENGINE_<ROLE>`, `AI_ENGINE`, then the role's default in

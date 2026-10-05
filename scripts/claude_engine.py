@@ -186,10 +186,11 @@ READ_GUARD_SUBCOMMAND = "guard-read-bash"
 READ_PROFILE_DENY: tuple[str, ...] = (
 	# read-profile-can-access-credential-files: defence in depth behind the isolated filesystem.
 	"Read(//proc/**)", "Grep(//proc/**)", "Glob(//proc/**)",
-	"Read(**/.git/config)", "Grep(**/.git/config)",
-	"Read(**/.git-credentials)", "Read(**/.netrc)",
-	"Read(~/.config/gh/**)", "Grep(~/.config/gh/**)",
-	"Read(~/.claude/.credentials.json)",
+	"Read(**/.git/config)", "Grep(**/.git/config)", "Glob(**/.git/config)",
+	"Read(**/.git-credentials)", "Grep(**/.git-credentials)",
+	"Read(**/.netrc)", "Grep(**/.netrc)",
+	"Read(~/.config/gh/**)", "Grep(~/.config/gh/**)", "Glob(~/.config/gh/**)",
+	"Read(~/.claude/.credentials.json)", "Grep(~/.claude/.credentials.json)",
 	"Read(**/claude-pool/**)", "Grep(**/claude-pool/**)", "Glob(**/claude-pool/**)",
 	"Bash(git * --no-index*)",
 	# #6217: git --output can overwrite support and Actions command files.
@@ -1252,6 +1253,8 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 			git_root = source
 	except (subprocess.CalledProcessError, OSError):
 		pass
+	if git_root is None and (source / ".git").exists():
+		raise EngineError("read snapshot git metadata failed")
 	if git_root:
 		try:
 			entries = [os.fsdecode(item) for item in git_run(source, "ls-files", "-z", "--cached", "--others", "--exclude-standard").stdout.split("\0") if item]
@@ -1274,13 +1277,23 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 			(omit_claude_md and parts[-1] == "CLAUDE.md")):
 			continue
 		current = source
+		missing = False
 		for part in parts[:-1]:
 			current /= part
-			info = current.lstat()
+			try:
+				info = current.lstat()
+			except FileNotFoundError:
+				missing = True
+				break
 			if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
 				raise EngineError("unsafe read snapshot parent")
+		if missing:
+			continue
 		path = current / parts[-1]
-		info = path.lstat()
+		try:
+			info = path.lstat()
+		except FileNotFoundError:
+			continue
 		if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024 * 1024:
 			continue
 		files_copied += 1
@@ -1308,7 +1321,7 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 				writer.write(content)
 		finally:
 			os.close(parent_fd)
-		target.chmod(0o644)
+		target.chmod(0o755 if info.st_mode & 0o111 else 0o644)
 
 	result: dict[str, Any] = {"files": files_copied, "bytes": bytes_copied, "git": "absent"}
 	if git_root:
@@ -1317,7 +1330,10 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 			objects = common / "objects"
 			if (objects / "info" / "alternates").exists() or not objects.is_dir() or objects.is_symlink():
 				return result
-			head = git_run(source, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
+			try:
+				head = git_run(source, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
+			except subprocess.CalledProcessError:
+				return result
 			if not re.fullmatch(r"[0-9a-f]{40,64}", head):
 				return result
 			git_run(dest, "-c", "init.templateDir=/dev/null", "init", "-q")
