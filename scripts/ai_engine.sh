@@ -309,7 +309,8 @@ _ai_engine_claude_run_isolated()
 	fi
 	if [ -n "${session_id}" ]; then
 		mkdir -p "${RUNNER_TEMP:-/tmp}/claude-read-sessions" && chmod 0700 "${RUNNER_TEMP:-/tmp}/claude-read-sessions" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
-		session_mount_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/claude-read-sessions")" && pool_mount_root="$(realpath -e -- "${pool_dir}")" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
+		session_mount_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/claude-read-sessions")" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
+		pool_mount_root="$(realpath -e -- "${pool_dir}")" || { ai_engine_fallback "${role}" isolation_pool_unavailable; return 75; }
 		if [[ "${session_mount_root}/" == "${pool_mount_root}/"* || "${pool_mount_root}/" == "${session_mount_root}/"* ]]; then
 			ai_engine_fallback "${role}" isolation_pool_overlap; return 75
 		fi

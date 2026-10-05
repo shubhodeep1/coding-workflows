@@ -2014,6 +2014,8 @@ token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token.
 If isolation cannot start, `AI_ENGINE_FALLBACK reason=isolation_*` returns 75.
 For read-profile session reuse, an unavailable session directory reports
 `reason=isolation_session_dir_unavailable` before any container starts.
+If the pool directory disappears after isolation preflight, the fallback is
+`reason=isolation_pool_unavailable`, not a session-directory error.
 When no CLI, policy, instructions file or account is usable, it logs
 `AI_ENGINE_FALLBACK role= reason=`, sends at most one Telegram note per job,
 and returns `75`; the caller then runs its codex path unchanged. A crash

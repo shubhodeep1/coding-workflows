@@ -540,6 +540,23 @@ def test_read_isolation_session_dir_failure_reports_its_cause(sandbox: dict) -> 
 	assert not _docker_calls(sandbox)
 
 
+def test_read_isolation_pool_removed_after_preflight_reports_its_cause(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	args = " ".join(shlex.quote(str(part)) for part in (
+		"SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"],
+		"0123abcd-0000-4000-8000-00000000abcd",
+	))
+	test_script = (
+		'command() { if [ "$1" = -v ] && [ "$2" = ps ]; then return 0; fi; builtin command "$@"; }; '
+		'_ai_engine_isolation_image() { mv -- "$CLAUDE_ENGINE_POOL_DIR" "${CLAUDE_ENGINE_POOL_DIR}.gone"; printf "%s\\n" test-image; }; '
+		f'rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"'
+	)
+	result = _bash(sandbox, test_script)
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_pool_unavailable" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
 def test_read_isolation_rotates_accounts(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK", B="TOK_OK")
 	# The stub emits a rate limit on the first attempt only.
