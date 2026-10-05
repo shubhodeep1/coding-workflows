@@ -271,7 +271,7 @@ _judge_isolation_should_run()
     # TRACKING_LABELS / STALL_JUDGE_LABELS can contain [] after a failed fetch;
     # candidate-details and linked-PR caches cannot prove label removal either.
     # Read the full issue object (not the paginated /labels endpoint) before reset.
-    fresh_labels_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue}" --jq '{labels: [.labels[]?.name]}' 2>/dev/null || true)"
+    fresh_labels_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue}" --jq '{labels: (if (.labels | type) == "array" then [.labels[].name] else null end)}' 2>/dev/null || true)"
   else
     fresh_labels_json=''
   fi

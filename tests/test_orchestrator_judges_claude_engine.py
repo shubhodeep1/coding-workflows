@@ -565,10 +565,14 @@ def test_judge_isolation_defers_escalates_once_and_resets_on_label_removal(tmp_p
 @pytest.mark.parametrize("snapshot, live_labels, issue, escalated, expected_rc, reason, api_calls", [
 	('[]', '{"labels":[]}', '12', True, 0, 'label_cleared', 1),
 	('[]', '', '12', True, 1, 'labels_unavailable', 1),
-	('[]', '{"labels":["ai:needs-human"]}', '12', True, 1, 'escalated', 1),
+	('[]', '{"labels":[{"name":"ai:needs-human"}]}', '12', True, 1, 'escalated', 1),
 	('["ai:needs-human"]', '', '12', True, 1, 'escalated', 0),
 	('null', '{"labels":[]}', '12', True, 0, 'label_cleared', 1),
-	('[]', '{"labels":[1]}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"number":12}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":null}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":{}}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":[{}]}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":[{"name":1}]}', '12', True, 1, 'labels_unavailable', 1),
 	('[]', 'not json', '12', True, 1, 'labels_unavailable', 1),
 	('[]', '{"labels":[]}', 'not-a-number', True, 1, 'labels_unavailable', 0),
 	('[]', '', '12', False, 0, None, 0),
@@ -587,7 +591,7 @@ def test_judge_isolation_requires_live_label_removal(
 		+ 'GITHUB_REPOSITORY=owner/repo\nJUDGE_ISOLATION_MAX_FAILURES=3\n'
 		+ f'STATE_FILE={state}\n'
 		+ 'gh_retry() { printf "%s\\n" "$*" >> gh_calls; '
-		+ (f"printf '%s\\n' '{live_labels}'" if live_labels else "return 1")
+		+ (f"printf '%s\\n' '{live_labels}' | jq \"$4\"" if live_labels else "return 1")
 		+ '; }\n'
 		+ f'rc=0; _judge_isolation_should_run WAVE_JUDGE "$STATE_FILE" {issue} \'{snapshot}\' || rc=$?\n'
 		+ 'printf "rc=%s\\n" "$rc"\n'
