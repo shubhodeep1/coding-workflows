@@ -8209,6 +8209,12 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		trusted_checkout.mkdir(parents=True)
 		(trusted_checkout / "audit-plans.md").write_text("trusted template\n")
 		(trusted_checkout / "apply-url.md").write_text("trusted template\n")
+		admission_spec = importlib.util.spec_from_file_location("review_workspace_admission", workspace_helper)
+		assert admission_spec and admission_spec.loader
+		admission_module = importlib.util.module_from_spec(admission_spec)
+		admission_spec.loader.exec_module(admission_module)
+		assert not admission_module.allowed(".claude/commands/pr-new.md", host)
+		assert admission_module.allowed(".claude/commands/audit-plans.md", commands={".claude/commands/audit-plans.md"})
 		(host / "scripts").mkdir()
 		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)

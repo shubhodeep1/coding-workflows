@@ -40,10 +40,8 @@ def allowed(name, host=None, commands=None):
 		return False
 	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):
 		return True
-	# Only snapshot may consult the host; refresh/transfer use its frozen inventory.
+	# Command admission must use the inventory frozen by snapshot.
 	if len(parts) == 3 and parts[:2] == (".claude", "commands") and parts[2].endswith(".md") and not parts[2].startswith("."):
-		if commands is None and host is not None:
-			commands = template_command_inventory(host)
 		return commands is not None and name in commands
 	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
 		return False
@@ -129,7 +127,7 @@ def enumerate_workspace(root, host=None, commands=None):
 			if entries > 10000:
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
-			if not allowed(name, host, commands):
+			if not allowed(name, commands=commands):
 				# Build products and cached dependencies are not editor output.
 				if name in ROOT_FILES or rel == Path("."):
 					raise ValueError("unsafe workspace result path")
@@ -162,7 +160,7 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 	baseline = {}
 	total = 0
 	for name in sorted(paths):
-		if not allowed(name, host, commands):
+		if not allowed(name, commands=commands):
 			continue
 		if (host / name).is_symlink():
 			continue  # Existing tracked symlinks are not in the editor snapshot.
