@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_pr_check_runs_context.py:217-221 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The protection lookup runs synchronously without a timeout, allowing `gh_retry` rate-limit waits to block beyond the collector\u2019s configured wait deadline.\n  WHY: The deadline is checked only after the subprocess returns, so a rate-limited lookup can delay the legacy-budget fallback and exceed the configured 60- or 300-second wait.\n- scripts/collect_pr_check_runs_context.py:239-303 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The implementation still uses the old SHA regex, rejects complete paginated listings with `total_count >= 1000`, and compares `head_sha` case-sensitively.\n  WHY: A 64-character SHA can be classified as stale, complete listings with 1,000 or more check-runs can be rejected as malformed, and mixed-case SHAs can fail comparison.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Test the two wait budgets and failure paths.\"\n  expected_change_site: tests/test_review_autofix_review_pipeline_contract.py main() function entry-point list\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The three test functions are defined in the file at lines 3389, 3489, 3505 but are not registered in main() (currently lines 8425-8445); CI invokes the file via `.github/workflows/ci.yml:875`, `mark-stable.yml:352`, and `test-and-mark-stable.yml:4580`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/collect_pr_check_runs_context.py:217-221 | severity=high | confidence=4\n  PROBLEM: `_lookup_protected_required_names()` calls `subprocess.run()` without a timeout, so `gh_retry` rate-limit retries can block beyond the configured wait budget.\n  WHY: The collector checks its deadline only after `subprocess.run()` returns, allowing the protection lookup to delay the fallback and exceed the intended 60- or 300-second cap.\n- scripts/collect_pr_check_runs_context.py:239, 247, 259-260, 303 | severity=high | confidence=5\n  PROBLEM: The implementation still uses the old SHA regex, rejects complete paginated listings with `total_count >= 1000`, and compares `head_sha` case-sensitively.\n  WHY: A 64-character SHA can be classified as stale, complete listings with 1,000 or more check-runs can be rejected as malformed, and mixed-case SHAs can fail comparison.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/collect_pr_check_runs_context.py:209, 217-221 | severity=high | confidence=4\n  PROBLEM: `_lookup_protected_required_names` invokes `subprocess.run` without a timeout, so rate-limit retries can block beyond the collector\u2019s configured wait deadline.\n  WHY: The collector re-checks its deadline only after the lookup returns, delaying fallback to the legacy wait budget.\n- Requirement: \"Test the two wait budgets and failure paths.\" (from the linked issue) and the LAST RUN DIFF at /tmp/codex-pr-37254693987-1-511/last_run_diff.patch which adds three test functions (test_check_runs_wait_budgets_and_late_unknown, test_check_runs_wait_diagnostics_are_bounded, test_check_runs_protection_lookup_and_zero_wait) at lines 3389, 3489, 3505 and registers them in the main() CI entry point at lines 8431-8436.\n  Expected change site: tests/test_review_autofix_review_pipeline_contract.py main() function entry-point list (currently lines 8425-8445 in the working tree).\n  Evidence of absence: The three test functions are defined in the file (confirmed at lines 3389, 3489, 3505), but they are NOT registered in main(). The file's main() function (currently running through line 8445) calls test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion() at line 8428 and then continues with test_post_review_snapshot_ignores_only_its_own_incomplete_check(), test_pending_and_startup_failure_checks_cannot_look_clean(), test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list() at lines 8429-8431 \u2014 none of the three new tests appear between line 8428 and line 8438. CI invokes this file via `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py` (verified in .github/workflows/ci.yml:875, mark-stable.yml:352, test-and-mark-stable.yml:4580), which executes the __main__ guard at line 8955 that calls main(); main() only invokes the explicitly-registered tests, so the three new bounded-wait tests will not be executed by CI. The LAST RUN DIFF claims to add them at lines 8431-8436, but the actual file does not.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/collect_pr_check_runs_context.py:661-663 | severity=high | confidence=5\n  PROBLEM: The synchronous branch-protection lookup is not bounded by the collector\u2019s configured wait deadline.\n  WHY: `gh_retry` can sleep for rate-limit resets across multiple attempts, and the collector cannot check its deadline or fall back to the legacy wait budget until the lookup returns.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/collect_pr_check_runs_context.py:~213 | severity=high | confidence=4\n  PROBLEM: `_lookup_protected_required_names()` calls `subprocess.run` without a timeout, allowing `gh_retry` rate-limit waits to block beyond the collector\u2019s configured deadline.\n  WHY: The collector checks its deadline only after the subprocess returns, so an unbounded lookup can exceed the 60- or 300-second budget and delay the legacy-wait fallback.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/collect_pr_check_runs_context.py:~210-225 | severity=high | confidence=4\n  PROBLEM: The protection-lookup subprocess has no timeout, allowing `gh_retry` rate-limit waits to extend the collector\u2019s configured wait beyond its 60- or 300-second cap.\n  WHY: The deadline is re-checked only after `_lookup_protected_required_names` returns, so a rate-limited call delays the legacy-budget fallback.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1451bd689f2f883f79eaa7ae6832ee334bfcfd8503e20d437787baa03c43226e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6265,
+    "run_id": "37254693987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37254693987",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005031933_f8d25eda0c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6265,
+    "run_id": "37254693987"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T03:19:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
