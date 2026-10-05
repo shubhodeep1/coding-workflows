@@ -930,6 +930,7 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 
 @pytest.mark.parametrize("refspec,command", [
 	("2", "git push origin 2 > /tmp/out"),
+	("2", "git push origin 2 3>/tmp/out"),
 	("2", "git push origin 2&>/tmp/out"),
 	("12", "git push origin 12&>>/tmp/out"),
 	("2", "git push origin ''2>/dev/null"),
@@ -978,6 +979,8 @@ def test_empty_quoted_numeric_refspec_is_not_an_fd() -> None:
 @pytest.mark.parametrize("command", [
 	"git push origin HEAD:feature/open 2>/dev/null",
 	"git push origin HEAD:feature/open 2>&1",
+	"git push origin HEAD:feature/open 12>/dev/null",
+	"git push origin HEAD:feature/open 2>out 2>&1",
 ])
 def test_adjacent_fd_redirect_does_not_create_numeric_refspec(command: str) -> None:
 	invocations = guard._guarded_git_invocations(command, "/repo")
