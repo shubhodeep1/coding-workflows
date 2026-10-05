@@ -102,7 +102,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    head (configurable with `RB_JUDGE_ISOLATION_MAX_FAILURES`); unavailable
    Claude retries OpenCode in a fresh sandbox, never host Codex. Failed transfer discards the
    verdict and removes only newly untracked files. Cleanup/inventory failures
-   stop the tick so another issue cannot stage a partial transfer. The
+   stop the tick so another issue cannot stage a partial transfer. Lost comment
+   responses are reconciled from trusted history; uncleared human latches
+   block the judge even on a new head. The
    `claude-fixer-auto-merge` job id is kept but never runs.
    `[claude-intervention]` and `[claude-merge-resolve]` commits on older PR
    heads still end the counted run, like `[judge-fix]` and

@@ -269,6 +269,13 @@ jobs:
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
+      - name: Install OpenCode CLI for isolated review-blocked judge
+        if: steps.find_tracking.outputs.has_work == 'true'
+        continue-on-error: true
+        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
+        with:
+          opencode_version: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
+
       - name: Install OS-level core tools
         if: steps.find_tracking.outputs.has_work == 'true'
         shell: bash

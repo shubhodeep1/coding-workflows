@@ -149,13 +149,16 @@ def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
 
 
 FAKE_RB_SANDBOX = r"""#!/usr/bin/env bash
-# "${rc}" -eq 0 ] && [ "${claude_access}" = write
+# if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
 case "$1" in
   prepare-ephemeral)
     [ "$FAKE_CLAUDE_MODE" != prepare_failed ] || exit 1
     printf 'prepare\n' >> "${CALLS}.sandbox"
     printf '%s\n' "$FAKE_SANDBOX_ROOT" ;;
   run)
+    rc=0; claude_access="${9:-write}"
+    # Arg 9 (read) applies to both engines; read-only roles never transfer edits back.
+    if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then :; fi
     printf '%s|%s|%s|%s\n' "$7" "$8" "$9" "$6" >> "${CALLS}.sandbox"
     [ "$FAKE_CLAUDE_MODE" != outdated ] || exit 2
     [ "$FAKE_CLAUDE_MODE" != codex_unavailable ] || exit 75
@@ -233,6 +236,19 @@ def test_poller_rb_judge_never_falls_back_to_host(tmp_path: Path) -> None:
 	assert _read(tmp_path / "rb_judge_isolation_reason").strip() == "opencode_config_failed"
 
 
+def test_older_sandbox_with_only_claude_transfer_guard_is_rejected(tmp_path: Path) -> None:
+	support = _stage_rb_support(tmp_path)
+	sandbox = support / "review_untrusted_sandbox.sh"
+	sandbox.write_text(FAKE_RB_SANDBOX.replace(
+		'    if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then :; fi',
+		'    if [ "${rc}" -eq 0 ]; then :; fi',
+	), encoding="utf-8")
+	proc, calls = _run_helper(tmp_path, engine="codex", role="RB_JUDGE")
+	assert "rc=77" in proc.stdout, proc.stderr
+	assert _read(tmp_path / "rb_judge_isolation_reason").strip() == "sandbox_helper_outdated"
+	assert _read(Path(f"{calls}.sandbox")) == ""
+
+
 def test_rejected_poller_transfer_removes_only_new_untracked_files(tmp_path: Path) -> None:
 	assert 'LC_ALL=C comm -z -13 <(LC_ALL=C sort -z "${rb_untracked_before_file}") <(LC_ALL=C sort -z "${rb_untracked_after_file}")' in _helper_source()
 	_stage_rb_support(tmp_path)
@@ -282,7 +298,8 @@ def test_poller_rb_prepare_preserves_engine_selection_log(tmp_path: Path) -> Non
 	assert "sandbox preparation started" in log
 
 
-def test_isolation_deferral_escalates_once_per_head(tmp_path: Path) -> None:
+@pytest.mark.parametrize("comment_reply, expected_comment_id", [('{"id":123}', 123), ('{}', None)])
+def test_isolation_deferral_escalates_once_per_head(tmp_path: Path, comment_reply: str, expected_comment_id: int | None) -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	block = text.split('        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then\n', 1)[1].split(
 		'        echo "::warning::Review-blocked judge failed', 1,
@@ -299,7 +316,7 @@ def test_isolation_deferral_escalates_once_per_head(tmp_path: Path) -> None:
 		'gh_retry() {\n'
 		'  if [ "$1 $2" = "_safe_gh_jq repos/owner/repo/issues/10" ]; then echo "[]"; return; fi\n'
 		'  printf "%s\\n" "$*" >> "$RUNTIME_DIR/remote_calls"\n'
-		'  if [ "$1 $2" = "gh api" ]; then echo \'{"id":123}\'; fi\n'
+		f'  if [ "$1 $2" = "gh api" ]; then printf "%s\\n" \'{comment_reply}\'; fi\n'
 		'}\n'
 		'RB_ISOLATION_REASON=sandbox_prepare_failed\n'
 		'RB_ISOLATION_REASON="$(cat "${RUNTIME_DIR}/rb_judge_isolation_reason")"\n'
@@ -311,8 +328,68 @@ def test_isolation_deferral_escalates_once_per_head(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	entry = json.loads(state.read_text(encoding="utf-8"))["review_blocked_isolation_state"]["10"]
 	assert entry["count"] == 2 and entry["escalated"] is True and entry["owned_label"] is True
+	assert entry["comment_id"] == expected_comment_id
 	assert _read(tmp_path / "remote_calls").count("gh api ") == 1
 	assert _read(tmp_path / "remote_calls").count("gh issue edit ") == 1
+
+
+@pytest.mark.parametrize("owned_label", [False, True])
+def test_new_head_does_not_bypass_uncleared_isolation_latch(tmp_path: Path, owned_label: bool) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	block = text.split('      RB_ISOLATION_HEAD="', 1)[1].split('      # Collect full PR context', 1)[0]
+	state = tmp_path / "state.json"
+	old_head, new_head = "a" * 40, "b" * 40
+	state.write_text(json.dumps({"review_blocked_isolation_state": {"10": {
+		"head_sha": old_head, "count": 3, "escalated": True,
+		"comment_id": 123, "owned_label": owned_label,
+	}}}), encoding="utf-8")
+	script = (
+		"set -euo pipefail\n"
+		f'STATE_FILE={state}\nGITHUB_REPOSITORY=owner/repo\nrb_issue=10\nRB_PR=77\n'
+		f'_rb_pr_json=\'{json.dumps({"head": {"sha": new_head}})}\'\n'
+		'gh_retry() { if [ "$1" = _safe_gh_jq ]; then printf \'%s\\n\' \'{"labels":["ai:needs-human"]}\'; else return 1; fi; }\n'
+		'for rb_issue in 10; do\n'
+		'RB_ISOLATION_HEAD="' + block + 'printf "judge-ran\\n"\ndone\n'
+	)
+	env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "WORKSPACE_PATH")}
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=skip reason=latch_not_cleared" in result.stdout
+	assert "judge-ran" not in result.stdout
+	assert json.loads(state.read_text(encoding="utf-8"))["review_blocked_isolation_state"]["10"]["head_sha"] == old_head
+
+
+@pytest.mark.parametrize("comment_seen", [True, False])
+def test_lost_escalation_comment_response_does_not_retry_judge(tmp_path: Path, comment_seen: bool) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	block = text.split('      RB_ISOLATION_HEAD="', 1)[1].split('      # Collect full PR context', 1)[0]
+	state = tmp_path / "state.json"
+	head_sha = "a" * 40
+	state.write_text(json.dumps({"review_blocked_isolation_state": {"10": {
+		"head_sha": head_sha, "count": 3, "escalated": True,
+		"comment_id": None, "owned_label": True, "reason": "sandbox_prepare_failed",
+	}}}), encoding="utf-8")
+	comments = [[{"id": 123, "user": {"id": 42}, "body": f"## Review-blocked judge isolation unavailable\n<!-- ai:rb-judge-isolation-escalated head={head_sha} reason=sandbox_prepare_failed -->"}]] if comment_seen else [[]]
+	script = (
+		"set -euo pipefail\n"
+		f'STATE_FILE={state}\nGITHUB_REPOSITORY=owner/repo\nrb_issue=10\nRB_PR=77\n'
+		f'_rb_pr_json=\'{json.dumps({"head": {"sha": head_sha}})}\'\n'
+		'gh_retry() {\n'
+		'  if [ "$1" = _safe_gh_jq ]; then\n'
+		'    if [ "$2" = user ]; then printf "42\\n"; else printf \'%s\\n\' \'{"labels":["ai:needs-human"]}\'; fi\n'
+		'  elif [ "$3" = --paginate ]; then printf \'%s\\n\' ' + "'" + json.dumps(comments) + "'" + ';\n'
+		'  else printf "post\\n" >> remote_calls; printf \'%s\\n\' \'{"id":123}\'; fi\n'
+		'}\n'
+		'for rb_issue in 10; do\n'
+		'RB_ISOLATION_HEAD="' + block + 'printf "judge-ran\\n"\ndone\n'
+	)
+	env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "WORKSPACE_PATH")}
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=skip reason=escalated" in result.stdout
+	assert "judge-ran" not in result.stdout
+	assert json.loads(state.read_text(encoding="utf-8"))["review_blocked_isolation_state"]["10"]["comment_id"] == 123
+	assert _read(tmp_path / "remote_calls") == ("" if comment_seen else "post\n")
 
 
 # Each judge call site: the role, then the unchanged codex command that runs
@@ -369,6 +446,14 @@ def _poll_steps() -> list[dict]:
 def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> None:
 	steps = _poll_steps()
 	names = [step.get("name") for step in steps]
+	opencode = steps[names.index("Install OpenCode CLI for isolated review-blocked judge")]
+	assert opencode["if"] == "steps.find_tracking.outputs.has_work == 'true'"
+	assert opencode["continue-on-error"] is True
+	assert opencode["uses"] == (
+		"shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde"
+	)
+	assert opencode["with"]["opencode_version"] == "${{ vars.OPENCODE_VERSION || '1.18.23' }}"
+	assert names.index("Install OpenCode CLI for isolated review-blocked judge") < names.index("Process each tracking issue")
 	stage = steps[names.index("Stage workflow support files")]["run"]
 	assert "security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh; do" in stage
 	resolve = steps[names.index("Resolve AI engine")]

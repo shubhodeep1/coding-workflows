@@ -879,11 +879,14 @@ def _run_poller(
 		rb_support = sandbox / ".codex-workflow-src" / "scripts"
 		rb_support.mkdir(parents=True, exist_ok=True)
 		_write_exec(rb_support / "review_untrusted_sandbox.sh", '''#!/usr/bin/env bash
-# "${rc}" -eq 0 ] && [ "${claude_access}" = write
+# if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
 case "$1" in
   prepare-ephemeral) printf '%s\\n' "$RUNTIME_DIR" ;;
   cleanup) exit 0 ;;
   run)
+    rc=0; claude_access="${9:-write}"
+    # Arg 9 (read) applies to both engines; read-only roles never transfer edits back.
+    if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then :; fi
     printf '%s\\n' "$MOCK_CODEX_JSON" > "$3"
     if [ "${9:-write}" = write ] && [ -n "${MOCK_CODEX_TOUCH_FILE:-}" ]; then
       printf 'mock change\\n' >> "$MOCK_CODEX_TOUCH_FILE"

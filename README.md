@@ -1910,6 +1910,11 @@ for final verdicts and write with validated transfer when its combined
 decide-and-fix branch is checked out. Unavailable Claude retries OpenCode in
 a fresh isolated sandbox; missing isolation defers instead of running a host
 agent and escalates after `RB_JUDGE_ISOLATION_MAX_FAILURES` failures on one head.
+An OpenCode installation failure does not stop other poller work; the isolated
+judge defers if its configuration or sandbox cannot be prepared.
+A lost escalation-comment response is reconciled against the issue's trusted
+comment history on the next tick; an uncleared `ai:needs-human` latch still
+blocks the judge after a new head is pushed.
 A failed transfer discards the sandbox verdict and
 removes only untracked files created since the judge started, preserving
 pre-existing files. If cleanup or verification of that removal fails, the

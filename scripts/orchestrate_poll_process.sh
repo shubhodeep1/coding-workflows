@@ -224,7 +224,8 @@ poller_rb_judge_isolated()
   fi
   # An older verified support commit ignores arg 9 for OpenCode and would
   # transfer verdict-only edits. Wait for the support update instead.
-  if ! grep -Fq '"${rc}" -eq 0 ] && [ "${claude_access}" = write' "${rb_support_dir}/review_untrusted_sandbox.sh"; then
+  if ! grep -Fq '# Arg 9 (read) applies to both engines; read-only roles never transfer edits back.' "${rb_support_dir}/review_untrusted_sandbox.sh" ||
+     [ "$(grep -Fc 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' "${rb_support_dir}/review_untrusted_sandbox.sh")" -lt 2 ]; then
     printf '%s\n' sandbox_helper_outdated > "${RUNTIME_DIR}/rb_judge_isolation_reason"
     return 77
   fi
@@ -20959,6 +20960,21 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         fi
         RB_ISOLATION_HAS_LABEL="$(printf '%s' "${RB_ISOLATION_ISSUE_JSON}" | jq -r '.labels | index("ai:needs-human") != null')"
         if [ "${RB_ISOLATION_OLD_HEAD}" = "${RB_ISOLATION_HEAD}" ] && [ "${RB_ISOLATION_HAS_LABEL}" = true ]; then
+          if [ "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.comment_id // empty')" = '' ]; then
+            RB_ISOLATION_ACTOR="$(gh_retry _safe_gh_jq user --jq '.id' 2>/dev/null || true)"
+            RB_ISOLATION_COMMENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments?per_page=100" 2>/dev/null || true)"
+            if [[ "${RB_ISOLATION_ACTOR}" =~ ^[0-9]+$ ]] && printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -e 'type == "array" and all(.[]; type == "array")' >/dev/null 2>&1; then
+              RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -r --argjson actor "${RB_ISOLATION_ACTOR}" --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_HEAD} " '[.[][] | select(.user.id == $actor and (.body | type == "string") and (.body | contains($marker)))] | last | .id // empty')"
+              if ! [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+                RB_ISOLATION_COMMENT="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments" -f body="$(printf '## Review-blocked judge isolation unavailable\n\nReason: %s. Failures: %s. Head: %s. The judge will not run on this head again; push a new commit or remove `ai:needs-human` to retry.\n\n<!-- ai:rb-judge-isolation-escalated head=%s reason=%s -->' "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.reason')" "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.count')" "${RB_ISOLATION_HEAD:0:7}" "${RB_ISOLATION_HEAD}" "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.reason')")" 2>/dev/null || true)"
+                RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENT}" | jq -r '.id // empty' 2>/dev/null || true)"
+              fi
+              if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+                jq --arg key "${rb_issue}" --argjson id "${RB_ISOLATION_COMMENT_ID}" '.review_blocked_isolation_state[$key].comment_id = $id' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+                REVIEW_BLOCKED_STATE_CHANGED=true
+              fi
+            fi
+          fi
           echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=skip reason=escalated"
           continue
         fi
@@ -20985,8 +21001,13 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
                 echo '::warning::Could not clear review-blocked isolation latch; deferring.' >&2
                 continue
               }
+              RB_ISOLATION_HAS_LABEL=false
             fi
           fi
+        fi
+        if [ "${RB_ISOLATION_OLD_HEAD}" != "${RB_ISOLATION_HEAD}" ] && [ "${RB_ISOLATION_HAS_LABEL}" = true ]; then
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=skip reason=latch_not_cleared"
+          continue
         fi
       fi
       if [ -n "${RB_ISOLATION_OLD_HEAD}" ] && { [ "${RB_ISOLATION_OLD_HEAD}" != "${RB_ISOLATION_HEAD}" ] || [ "${RB_ISOLATION_ESCALATED}" = true ]; }; then
@@ -21365,7 +21386,7 @@ ${FOLLOWUP_BLOCK_REASON}"
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         RB_ISOLATION_REASON="$(cat "${RUNTIME_DIR}/rb_judge_isolation_reason" 2>/dev/null || true)"
         case "${RB_ISOLATION_REASON}" in
-          support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated|sandbox_cleanup_failed_before_run) ;;
+          support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated) ;;
           *) RB_ISOLATION_REASON=unknown ;;
         esac
         if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then
@@ -21395,8 +21416,8 @@ ${FOLLOWUP_BLOCK_REASON}"
             if [ -n "${RB_ISOLATION_LABELS}" ]; then
               RB_ISOLATION_COMMENT="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments" -f body="$(printf '## Review-blocked judge isolation unavailable\n\nReason: %s. Failures: %s. Head: %s. The judge will not run on this head again; push a new commit or remove `ai:needs-human` to retry.\n\n<!-- ai:rb-judge-isolation-escalated head=%s reason=%s -->' "${RB_ISOLATION_REASON}" "${RB_ISOLATION_COUNT}" "${RB_ISOLATION_HEAD:0:7}" "${RB_ISOLATION_HEAD}" "${RB_ISOLATION_REASON}")" 2>/dev/null || true)"
               RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENT}" | jq -r '.id // empty' 2>/dev/null || true)"
-              if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
-                jq --arg key "${rb_issue}" --argjson id "${RB_ISOLATION_COMMENT_ID}" --argjson owned "${RB_ISOLATION_OWNED_LABEL}" '.review_blocked_isolation_state[$key] |= (.escalated = true | .comment_id = $id | .owned_label = $owned)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+              if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]] || [ "${RB_ISOLATION_OWNED_LABEL}" = true ] || printf '%s' "${RB_ISOLATION_LABELS}" | jq -e 'index("ai:needs-human") != null' >/dev/null 2>&1; then
+                jq --arg key "${rb_issue}" --arg id "${RB_ISOLATION_COMMENT_ID}" --argjson owned "${RB_ISOLATION_OWNED_LABEL}" '.review_blocked_isolation_state[$key] |= (.escalated = true | .comment_id = (if ($id | test("^[0-9]+$")) then ($id | tonumber) else null end) | .owned_label = $owned)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=escalated reason=${RB_ISOLATION_REASON} count=${RB_ISOLATION_COUNT} max=${RB_JUDGE_ISOLATION_MAX_FAILURES}"
                 tg_notify "Review-blocked judge isolation unavailable for issue #${rb_issue} (PR #${RB_PR}); escalated after ${RB_ISOLATION_COUNT} failures. Reason: ${RB_ISOLATION_REASON}." "CRITICAL"
               fi
