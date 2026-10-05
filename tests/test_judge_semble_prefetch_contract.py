@@ -246,9 +246,6 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     workflow = _read(ORCHESTRATE_POLL_WF)
     workspace_block = _step_block(workflow, "Create runtime workspace")
     stage_block = _step_block(workflow, "Stage workflow support files")
-    setup_block = _step_block(workflow, "setup-uv")
-    install_block = _step_block(workflow, "Install semble")
-    index_block = _step_block(workflow, "Build semble index")
 
     assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
     assert 'echo "SEMBLE_AVAILABLE=false"' in workspace_block
@@ -264,31 +261,15 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     assert "Optional Semble support script ${f} is unavailable" in stage_block
     assert "legacy path remains active" in stage_block
 
-    assert "if: ${{ false }}" in setup_block
-    assert "uses: astral-sh/setup-uv@v7" in setup_block
+    # The eager setup-uv / Install semble / Build semble index steps were
+    # removed: they were permanently disabled (actionlint rejects a constant
+    # `if: ${{ false }}`), and the live poller owns setup lazily.
+    for removed_step in ("- name: setup-uv", "- name: Install semble", "- name: Build semble index"):
+        assert removed_step not in workflow
+    assert "if: ${{ false }}" not in workflow
 
-    assert "if: ${{ false }}" in install_block
-    assert 'echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"' in install_block
-    assert 'if [ ! -f scripts/install_semble.sh ]; then' in install_block
-    assert 'scripts/install_semble.sh missing from staged workflow support files' in install_block
-    assert 'if ! bash scripts/install_semble.sh; then' in install_block
-    assert 'SEMBLE_BIN_PATH="$(command -v semble 2>/dev/null || true)"' in install_block
-    assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
-
-    assert "if: ${{ false }}" in index_block
-    assert 'semble_index_path="${SEMBLE_INDEX_PATH:-${RUNTIME_DIR}/.semble-index}"' in index_block
-    # This retained step is disabled; the first judge query now invokes the
-    # shared BM25 wrapper builder. Keep its legacy body for compatibility.
-    assert 'if [ -f scripts/build_semble_wrapper.sh ]; then' in index_block
-    assert 'SEMBLE_INDEX_PATH="${semble_index_path}" \\' in index_block
-    assert 'bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1' in index_block
-    assert '"${semble_bin}" index . --out "${semble_index_path}"' not in index_block
-
-    assert workflow.find("- name: setup-uv") < workflow.find("- name: Process each tracking issue")
-    assert workflow.find("- name: Install semble") < workflow.find("- name: Process each tracking issue")
-    assert workflow.find("- name: Build semble index") < workflow.find("- name: Process each tracking issue")
-    # Disabled workflow steps preserve their names; the live poller owns setup
-    # only after a judge provides nonempty query content.
+    # The live poller owns setup only after a judge provides nonempty query
+    # content.
     poller = _read(ORCHESTRATE_POLL_PROCESS)
     prefetch = poller.split("render_judge_semble_prefetch_from_query_file() {", 1)[1].split("\nis_truthy() {", 1)[0]
     assert 'if [ "${SEMBLE_ENABLED:-true}" != "true" ]' in prefetch
