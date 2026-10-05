@@ -193,6 +193,7 @@ changelog.d/5892-heal-autofix-fingerprint-header.md
 changelog.d/5964-reviewer-infra-nonblocking.md
 changelog.d/5999-restore-scoped-smoke-run-lookups.md
 changelog.d/6055-review-editor-edits-reach-work-tree.md
+changelog.d/6099-bounded-check-wait.md
 changelog.d/6118-phase-0-standalone-issues-default-to-codex.md
 changelog.d/6118-phase-2-retire-claude-session-automation.md
 changelog.d/6118-phase-3-claude-engine-plumbing.md
