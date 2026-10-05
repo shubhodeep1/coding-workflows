@@ -404,6 +404,8 @@ class FakeGh:
 			"user": {"login": "healer"},
 			"rate_limit": {"resources": {"core": {"limit": 5000, "remaining": remaining, "reset": 1}, "graphql": {"limit": 5000, "remaining": 4999, "reset": 1}}},
 			"provenance": {"data": {"issue": {"issue": {"author": {"login": "healer"}, "lastEditedAt": None, "editor": None, "userContentEdits": {"totalCount": 0, "nodes": []}}}, "comments": []}},
+			f"repos/{REPO}/actions/runs/111": {"id": 111, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "repository": {"full_name": REPO}},
+			f"repos/{REPO}/actions/runs/222": {"id": 222, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "pull_requests": [{"number": 6133}], "repository": {"full_name": REPO}},
 			f"repos/{REPO}/actions/runs/111/jobs?per_page=100": {"jobs": jobs},
 			f"repos/{REPO}/actions/runs/222/jobs?per_page=100": {"jobs": jobs},
 			f"repos/{REPO}/actions/jobs/11/logs": _review_log(),
@@ -425,7 +427,7 @@ class FakeGh:
 			]}}}}},
 			f"repos/{REPO}/compare/main...{MERGE_SHA}": {"status": "diverged", "ahead_by": 45, "behind_by": 252},
 			f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30": {"workflow_runs": [
-				{"id": 111, "name": "Internal: AI Review & Autofix [pr:6133]", "event": "workflow_dispatch", "status": "completed", "conclusion": "success", "created_at": "2026-10-04T00:47:35Z", "html_url": f"https://github.com/{REPO}/actions/runs/111"},
+				{"id": 111, "name": "Internal: AI Review & Autofix [pr:6133]", "event": "workflow_dispatch", "status": "completed", "conclusion": "success", "created_at": "2026-10-04T00:47:35Z", "html_url": f"https://github.com/{REPO}/actions/runs/111", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "repository": {"full_name": REPO}},
 			]},
 		}
 
@@ -613,7 +615,7 @@ def test_a_later_stage_reuses_completed_runs(tmp_path: Path) -> None:
 	second = FakeGh()
 	manifest = _collector(tmp_path, second).collect(_issue(), [_occurrence(222)], issue_repo=REPO)
 	assert not any("/actions/runs/111/" in path or "/actions/jobs/" in path for path in second.paths)
-	assert manifest["api_calls"] <= 8
+	assert manifest["api_calls"] <= 9  # Run 222 is absent from the head-SHA timeline and needs one identity GET.
 	assert "reused from an earlier stage" in (tmp_path / "evidence" / "INDEX.md").read_text()
 
 
@@ -759,6 +761,54 @@ def test_pr_linked_run_requires_reported_head(tmp_path: Path) -> None:
 	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_head_mismatch")
 	fake.routes["repos/acme/registered/actions/runs/111"]["head_sha"] = HEAD_SHA
 	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (True, "verified")
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_same_repo_unrelated_run_is_skipped_before_jobs(tmp_path: Path, cached: bool) -> None:
+	fake = FakeGh()
+	fake.routes[f"repos/{REPO}/actions/runs/222"] = {
+		"id": 222, "head_sha": MERGE_SHA, "head_branch": "other", "pull_requests": [], "repository": {"full_name": REPO},
+	}
+	stale = tmp_path / "evidence/runs/acme__coding-workflows__222"
+	if cached:
+		stale.mkdir(parents=True)
+		(stale / "meta.json").write_text('{"complete": true}')
+	manifest = _collector(tmp_path, fake).collect(_issue(), [_occurrence(222)], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:222", "reason": "unverified_run_head_mismatch"} in manifest["skipped"]
+	assert f"run:{REPO}:222: unverified_run_head_mismatch" in (tmp_path / "evidence/INDEX.md").read_text()
+	assert f"repos/{REPO}/actions/runs/222/jobs?per_page=100" not in fake.paths
+	assert not stale.exists()
+
+
+@pytest.mark.parametrize("reported_sha", ["", "not-a-sha"])
+def test_same_repo_missing_head_skips_metadata_fetch(tmp_path: Path, reported_sha: str) -> None:
+	fake = FakeGh()
+	ref = {"repo": REPO, "run_id": "222", "source_repo": REPO, "source_number": "6133", "head_sha": reported_sha, "head_branch": "ai/issue-5144"}
+	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_no_verified_context")
+	assert fake.paths == []
+
+
+def test_same_repo_run_from_other_source_is_rejected_without_fetch(tmp_path: Path) -> None:
+	fake = FakeGh()
+	ref = {"repo": REPO, "run_id": "222", "source_repo": "acme/registered", "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"}
+	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_no_verified_context")
+	assert fake.paths == []
+
+
+def test_same_repo_run_metadata_rejects_other_repository(tmp_path: Path) -> None:
+	fake = FakeGh()
+	fake.routes[f"repos/{REPO}/actions/runs/222"]["repository"] = {"full_name": "other/repo"}
+	ref = {"repo": REPO, "run_id": "222", "source_repo": REPO, "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"}
+	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_repo_mismatch")
+
+
+def test_same_repo_timeline_hit_needs_no_run_get(tmp_path: Path) -> None:
+	fake = FakeGh()
+	collector = _collector(tmp_path, fake)
+	collector.timeline(ev.heal_context(_issue()))
+	ref = {"repo": REPO, "run_id": "111", "source_repo": REPO, "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"}
+	assert collector._verify_run(ref, REPO) == (True, "verified")
+	assert f"repos/{REPO}/actions/runs/111" not in fake.paths
 
 
 @pytest.mark.parametrize("reported_sha", ["", "not-a-sha"])

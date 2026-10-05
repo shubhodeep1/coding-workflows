@@ -205,9 +205,11 @@ changelog.d/6118-phase-8a-single-issue-security-pass.md
 changelog.d/6118-phase-8b-standalone-auto-decide.md
 changelog.d/6118-phase-8c-activation-verification.md
 changelog.d/6118-phase-8d-retarget-merged-base.md
+changelog.d/6133-pr-merge-guard-live-copy-sync.md
 changelog.d/6181-review-transfer-failure-evidence.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
+changelog.d/6221-heal-evidence-editor-isolation.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
@@ -470,6 +472,7 @@ scripts/dev/test_watchdog_helpers.sh
 scripts/dev/test_write_guard.sh
 scripts/dispatch_and_watch_workflow_run.sh
 scripts/drift_audit.sh
+scripts/editor_git_credentials.sh
 scripts/emit_event.py
 scripts/emit_event.sh
 scripts/files_touched_scope_guard.py
@@ -782,6 +785,7 @@ tests/test_gh_helpers_list_runs_method.py
 tests/test_gh_helpers_parse_reset_header.py
 tests/test_gh_retry_stdout_isolation.py
 tests/test_header_render.sh
+tests/test_heal_evidence_editor_isolation.py
 tests/test_identity_recall_render.sh
 tests/test_implement_blocked_verdict_terminalizes.py
 tests/test_implement_post_codex_recovery.py
