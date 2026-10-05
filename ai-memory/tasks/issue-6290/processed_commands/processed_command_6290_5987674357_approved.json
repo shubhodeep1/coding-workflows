@@ -5,13 +5,30 @@
   "entry_id": "processed_command_6290_5987674357_approved",
   "issue_number": 6290,
   "metadata": {
+    "branch": "ai/issue-6290",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "README.md",
+      "agents.md",
+      "changelog.d/6290-review-overlay-trusted-source.md",
+      "scripts/load_workflow_overlay.py",
+      "scripts/render_prompt.py",
+      "scripts/stage_workflow_support.sh",
+      "tests/test_validate_workflow_validate_bootstrap.py",
+      "tests/test_workflow_overlay_core.py"
+    ],
+    "issue_number": 6290,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6290",
+    "pr_number": 6295,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6295",
+    "run_attempt": "1",
+    "run_id": "37260251456",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37260251456"
   },
   "run_attempt": 1,
   "run_id": "37260251456",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-05T03:41:01Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T03:57:52Z",
   "workflow": "implement"
 }
