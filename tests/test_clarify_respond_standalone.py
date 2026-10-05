@@ -358,6 +358,14 @@ def test_from_answers_handles_strategies_guard_overrides_and_missing_decisions()
 	assert bare["decisions"][0]["why"] == "Every read-profile role"
 
 
+@pytest.mark.parametrize("section_header", ["**RATIONALE:**", "## RATIONALE:", "EXECUTION PLAN (required for any non-letter decision):"])
+def test_data_guard_ignores_lettered_lines_outside_decisions(section_header: str) -> None:
+	guard_spec = importlib.util.spec_from_file_location("clarify_data_provision_guard", ROOT / "scripts" / "clarify_data_provision_guard.py")
+	guard_module = importlib.util.module_from_spec(guard_spec)
+	guard_spec.loader.exec_module(guard_module)
+	assert guard_module._parse_answers(f"DECISIONS:\nQ1: A\n{section_header}\nQ1: B\n") == {"Q1": ["A"]}
+
+
 def test_setup_items_cannot_inject_a_comment_delimiter_or_reference_an_issue() -> None:
 	answer = "DECISIONS:\nQ1: B\n\nSETUP REQUIRED:\n- TOKEN --> <!-- x --> fixes #12\n"
 	body = auto.render([], auto.from_answers(QUESTIONS, answer), "c")["body"]

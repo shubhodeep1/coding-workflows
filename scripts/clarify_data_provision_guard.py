@@ -84,10 +84,11 @@ def _parse_answers(answers_text: str) -> dict[str, list[str]]:
 
 	for line in answers_text.splitlines():
 		stripped = line.strip()
-		if stripped.upper().startswith("DECISIONS"):
+		header_token = stripped.lstrip("#* \t").upper()
+		if header_token.startswith("DECISIONS"):
 			in_decisions = True
 			continue
-		if stripped.upper().startswith("RATIONALE"):
+		if header_token.startswith(("RATIONALE", "EXECUTION PLAN")):
 			in_decisions = False
 			continue
 
