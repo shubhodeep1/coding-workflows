@@ -634,6 +634,19 @@ def test_poll_preflight_installs_for_label_even_with_global_codex(tmp_path: Path
 	assert output_file.read_text(encoding="utf-8").strip() == "any_claude=true"
 
 
+def test_poll_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path: Path) -> None:
+	preflight = next(step["run"] for step in _poll_steps() if step.get("name") == "Resolve AI engine")
+	(tmp_path / "tracking_issues.json").write_text('[{"number":1,"labels":[]}]', encoding="utf-8")
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "ai_engine.sh").write_text("return 42\n", encoding="utf-8")
+	output_file = tmp_path / "github_output"
+	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "claude"}
+	result = subprocess.run(["bash", "-c", preflight], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert output_file.read_text(encoding="utf-8").strip() == "any_claude=false"
+	assert "Failed to source scripts/ai_engine.sh; continuing with codex defaults." in result.stderr
+
+
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 DECOMPOSER_CODEX = (
 	'timeout --signal=TERM --kill-after=30s -- "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" \\\n'
