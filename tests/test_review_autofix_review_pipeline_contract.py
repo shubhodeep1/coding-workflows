@@ -814,7 +814,7 @@ def _run_pass2_decision_harness(
 		if moved_head:
 			source_path.write_text("moved\n", encoding="utf-8")
 			subprocess.run(["git", "-C", str(root), "commit", "-qam", "moved"], check=True)
-		models = ("model/one", "model/two")
+		models = ("model/one", "model/two-hyphen")
 		(root / "reviewer_active_models.txt").write_text("\n".join(models) + "\n", encoding="utf-8")
 		for model, raw, status in zip(models, raw_outputs, statuses):
 			slug = model.replace("/", "_")
@@ -827,7 +827,7 @@ def _run_pass2_decision_harness(
 				"=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n"
 				"=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n"
 				"=== FINDINGS FROM model_one ===\n(No findings reported.)\n=== END FINDINGS FROM model_one ===\n\n"
-				"=== FINDINGS FROM model_two ===\n(No findings reported.)\n=== END FINDINGS FROM model_two ===\n"
+				"=== FINDINGS FROM model_two-hyphen ===\n(No findings reported.)\n=== END FINDINGS FROM model_two-hyphen ===\n"
 			)
 		(reviews / "consensus_pass1.txt").write_text(ledger, encoding="utf-8")
 		env = {**os.environ, "SUPPORT_ROOT_DIR": str(REPO_ROOT), "SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
@@ -837,7 +837,7 @@ def _run_pass2_decision_harness(
 			"INITIAL_HEAD_SHA": head_sha, "BASE_BRANCH": "main", "HAS_PR_DIFF": "true", "PR_NUMBER": "123"}
 		for shell_override in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
 			env.pop(shell_override, None)
-		failure_injection = ('cp() { case "$2" in *status_review_model_two*) return 1 ;; esac; command cp "$@"; }\n'
+		failure_injection = ('cp() { case "$2" in *status_review_model_two-hyphen*) return 1 ;; esac; command cp "$@"; }\n'
 			if publish_failure else "")
 		result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + metadata_block + decision_block +
 			failure_injection +
@@ -3648,6 +3648,16 @@ def test_strict_merge_snapshot_requires_complete_same_head_evidence() -> None:
 			check_runs_responses=[response],
 		)
 		assert "collection_status: invalid_snapshot\n" in result["context_text"], result
+	# A complete paginated listing is valid even at GitHub's 1,000-run boundary.
+	bulk_runs = [{**green, "id": index + 1} for index in range(1000)]
+	bulk_pages = [{"total_count": 1000, "check_runs": bulk_runs[index:index + 100]}
+		for index in range(0, 1000, 100)]
+	bulk = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": sha}}, strict_merge_snapshot="true", wait_timeout_secs="0",
+		check_runs_responses=[{"json": bulk_pages}],
+	)
+	assert "collection_status: ready\n" in bulk["context_text"], bulk
+	assert "total_check_runs: 1000\n" in bulk["context_text"], bulk
 
 	api_error = _run_collect_pr_check_runs_harness(
 		pr_payload={"head": {"sha": sha}}, strict_merge_snapshot="true",
@@ -4556,6 +4566,24 @@ def test_pass2_clean_skip_publishes_review_outputs_and_consensus() -> None:
 	assert 'CROSS_POLLINATION_FILE="$(build_cross_pollination_summary' in text
 
 
+def test_pass2_clean_checklist_output_with_hyphenated_model_skips() -> None:
+	clean_checklist = "\n\n".join(
+		f"{heading}\nNONE" for heading in (
+			"SECURITY & INPUT VALIDATION", "CORRECTNESS & LOGIC",
+			"CONCURRENCY / RACES / IDEMPOTENCY", "ERROR PATHS & EDGE CASES",
+			"PERFORMANCE & RESOURCE USE", "INDEX-CONTRACT / DB RULES",
+			"NAMING / BACKWARD COMPATIBILITY", "IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS",
+			"TASK COMPLETENESS / INTENT GAPS",
+		)
+	) + "\n"
+	result = _run_pass2_decision_harness(raw_outputs=(clean_checklist, clean_checklist))
+	assert result["decision"] == "skip", result
+	assert result["bundle_inputs"] == clean_checklist + "\n" + clean_checklist
+	assert _run_pass2_decision_harness(raw_outputs=(
+		clean_checklist + "Unstructured note\n", clean_checklist,
+	))["decision"] == "raw_not_clean"
+
+
 def test_pass2_uncertain_or_actionable_evidence_keeps_full_pass() -> None:
 	clean = _run_pass2_decision_harness()["consensus"]
 	for kwargs, expected in (
@@ -4566,7 +4594,7 @@ def test_pass2_uncertain_or_actionable_evidence_keeps_full_pass() -> None:
 		({"extra_slot": True}, "slot_unaccounted"),
 		({"ledger": clean.replace("(No task gaps reported.)", "- requirement: missing")}, "ledger_not_clean"),
 		({"ledger": clean.replace("=== END CONSENSUS TASK GAPS ===", "")}, "ledger_malformed"),
-		({"ledger": clean.replace("=== FINDINGS FROM model_two ===", "=== FINDINGS FROM unknown ===")}, "ledger_malformed"),
+		({"ledger": clean.replace("=== FINDINGS FROM model_two-hyphen ===", "=== FINDINGS FROM unknown ===")}, "ledger_malformed"),
 		({"path": "scripts/handler.sh"}, "protected_or_unknown_path"),
 		({"rename_from": "scripts/handler.sh"}, "protected_or_unknown_path"),
 		({"path": "src/auth.py"}, "security_path"),

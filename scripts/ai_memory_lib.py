@@ -3429,11 +3429,12 @@ def persist_memory_operation(
         try:
             if poll_checkout_mode == "end" and poll_eligible and poll_checkout_dir is not None:
                 if _poll_memory_checkout_valid(poll_checkout_dir, memory_branch, poll_origin):
-                    fetched = _run_git(
-                        poll_checkout_dir,
-                        ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"],
-                        check=False,
-                    )
+                    with _memory_stage_timer(timings, "fetch_ms"):
+                        fetched = _run_git(
+                            poll_checkout_dir,
+                            ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"],
+                            check=False,
+                        )
                     if fetched.returncode == 0 and _run_git(
                         poll_checkout_dir, ["merge", "--ff-only", f"refs/remotes/origin/{memory_branch}"], check=False
                     ).returncode == 0:

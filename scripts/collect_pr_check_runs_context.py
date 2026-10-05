@@ -66,7 +66,7 @@ def _strict_merge_runs(raw_text: str, head_sha: str, repository: str, self_run_i
 		if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
 			return None
 		page_total = page.get("total_count")
-		if type(page_total) is not int or page_total < 0 or page_total >= 1000 or (total_count is not None and page_total != total_count):
+		if type(page_total) is not int or page_total < 0 or (total_count is not None and page_total != total_count):
 			return None
 		# An empty intermediary page or a page larger than the requested
 		# per_page=100 is not a complete paginated response.

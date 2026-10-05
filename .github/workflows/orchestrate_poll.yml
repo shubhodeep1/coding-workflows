@@ -39,6 +39,8 @@ env:
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'high' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  SEMBLE_SANDBOX_IMAGE: ${{ vars.SEMBLE_SANDBOX_IMAGE || 'coding-workflows-semble-sandbox:0.1.3' }}
+  SEMBLE_QUERY_TIMEOUT_SECS: ${{ vars.SEMBLE_QUERY_TIMEOUT_SECS || '15' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to
   # scripts/review_conflict_resolve.sh (integration-sync conflict resolver

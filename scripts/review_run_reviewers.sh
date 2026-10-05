@@ -5329,12 +5329,21 @@ try:
 	for slug in slugs:
 		if (outputs / f"status_pass1_{slug}.txt").read_text(encoding="utf-8").strip() != "success":
 			reject("slot_not_success")
-		# An explicit standalone NONE is the only raw output that attests to
-		# no defects AND no task gaps; narration or mixed findings is uncertain.
-		if (outputs / f"pass1_{slug}.txt").read_text(encoding="utf-8").strip() != "NONE":
+		# Reviewers normally use nine checklist headings, each with NONE;
+		# reject narration, extra sections and any nonempty finding or gap.
+		raw = (outputs / f"pass1_{slug}.txt").read_text(encoding="utf-8").strip()
+		clean_headings = (
+			"SECURITY & INPUT VALIDATION", "CORRECTNESS & LOGIC",
+			"CONCURRENCY / RACES / IDEMPOTENCY", "ERROR PATHS & EDGE CASES",
+			"PERFORMANCE & RESOURCE USE", "INDEX-CONTRACT / DB RULES",
+			"NAMING / BACKWARD COMPATIBILITY", "IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS",
+			"TASK COMPLETENESS / INTENT GAPS",
+		)
+		clean_lines = [line.strip() for line in raw.splitlines() if line.strip()]
+		if raw != "NONE" and clean_lines != [line for heading in clean_headings for line in (heading, "NONE")]:
 			reject("raw_not_clean")
 	ledger = pathlib.Path(ledger_path).read_text(encoding="utf-8")
-	blocks = re.findall(r"(?ms)^=== (CONSENSUS FINDINGS|CONSENSUS TASK GAPS|FINDINGS FROM ([A-Za-z0-9_]+)) ===\n(.*?)^=== END \1 ===\s*(?=^===|\Z)", ledger)
+	blocks = re.findall(r"(?ms)^=== (CONSENSUS FINDINGS|CONSENSUS TASK GAPS|FINDINGS FROM ([A-Za-z0-9_-]+)) ===\n(.*?)^=== END \1 ===\s*(?=^===|\Z)", ledger)
 	if len(blocks) != len(slugs) + 2 or [block[0] for block in blocks] != ["CONSENSUS FINDINGS", "CONSENSUS TASK GAPS"] + [f"FINDINGS FROM {slug}" for slug in slugs]:
 		reject("ledger_malformed")
 	if [block[2].strip() for block in blocks] != ["(No findings reported.)", "(No task gaps reported.)"] + ["(No findings reported.)"] * len(slugs):

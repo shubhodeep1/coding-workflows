@@ -285,6 +285,12 @@ def _scope_fragment(label: str) -> str:
 	end_idx = next(i for i, line in enumerate(lines) if line.strip() == end)
 	base = len(lines[start_idx]) - len(lines[start_idx].lstrip(" "))
 	fragment = [line[base:] if len(line) >= base else line for line in lines[start_idx : end_idx + 1]]
+	if label == "commit":
+		# The production commit script defines this helper before the guard;
+		# include the real definition in the isolated fragment as well.
+		helper_start = text.index("_implement_output_multiline() {")
+		helper_end = text.index("\n}\n", helper_start) + len("\n}\n")
+		return text[helper_start:helper_end] + "\n" + "\n".join(fragment)
 	return "\n".join(fragment)
 
 
@@ -386,7 +392,8 @@ def _strip_comments(fragment: str) -> str:
 def test_preflight_and_commit_fragments_share_logic() -> None:
 	# Both guard sites must run identical executable logic (only the marker
 	# label and surrounding comments differ).
-	assert _strip_comments(_scope_fragment("preflight")) == _strip_comments(_scope_fragment("commit"))
+	commit_guard = _scope_fragment("commit").split("# >>> files_touched scope-enforcement guard (commit) >>>", 1)[1]
+	assert _strip_comments(_scope_fragment("preflight")) == _strip_comments(commit_guard)
 
 
 # --------------------------------------------------------------------------

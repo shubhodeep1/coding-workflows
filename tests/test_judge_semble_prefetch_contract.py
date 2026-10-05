@@ -248,6 +248,8 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     stage_block = _step_block(workflow, "Stage workflow support files")
 
     assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
+    assert "SEMBLE_SANDBOX_IMAGE: ${{ vars.SEMBLE_SANDBOX_IMAGE || 'coding-workflows-semble-sandbox:0.1.3' }}" in workflow
+    assert "SEMBLE_QUERY_TIMEOUT_SECS: ${{ vars.SEMBLE_QUERY_TIMEOUT_SECS || '15' }}" in workflow
     assert 'echo "SEMBLE_AVAILABLE=false"' in workspace_block
     assert 'echo "SEMBLE_BIN="' in workspace_block
     assert 'echo "SEMBLE_INDEX_AVAILABLE=false"' in workspace_block

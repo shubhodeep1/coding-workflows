@@ -1218,6 +1218,9 @@ def test_poll_checkout_reconciles_foreign_update_and_cleans_up() -> None:
 		git("checkout", "main")
 		code, end, stderr = _poll_event(work, checkout, "poll_completed")
 		assert code == 0 and end["did_push"] and "fresh clone" not in stderr
+		poll_end_telemetry = _extract_ai_memory_telemetry(stderr)
+		assert len(poll_end_telemetry) == 1
+		_assert_memory_timings(poll_end_telemetry[0], {"fetch_ms", "commit_ms", "push_ms"})
 		assert not checkout.exists()
 		bare = work.parent / "bare.git"
 		assert subprocess.run(["git", "--git-dir", str(bare), "show", "ai-memory:ai-memory/foreign.txt"],

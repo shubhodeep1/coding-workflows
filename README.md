@@ -38,6 +38,8 @@ The memory schema set also includes the cross-run cache document used by workflo
 
 **Telemetry:** Every memory operation emits a structured `AI_MEMORY_TELEMETRY: {...}` line to workflow logs (stderr from Python; shell wrappers use stdout unless stdout is reserved for machine-readable JSON, in which case telemetry is sent to stderr). These lines are picked up by the workflow log analysis pipeline and surfaced in the **AI Memory Health** section of optimization reports. Key fields: `op` (operation name), `ok`, `records_selected`, `estimated_tokens`, `keyword_method` (`llm`/`plain`/`none`), `fail_open`, `did_push`.
 
+Retrieve and run-event telemetry includes `elapsed_ms` and numeric attempted-stage timings (`clone_ms`, `fetch_ms`, `rebase_ms`, `commit_ms`, `push_ms`, `retry_sleep_ms`). A stage not attempted is omitted. Poll-end events that reuse the private memory checkout include the reconciliation fetch in `fetch_ms`; missing or unsafe checkouts fall back to a fresh clone.
+
 ## Quickstart
 
 Get AI-powered issue-to-PR automation running in your repository in a few minutes.
