@@ -200,6 +200,30 @@ def test_semble_query_block_command_failure_stays_fail_open() -> None:
 		assert "SEMBLE_QUERY" not in result.stdout
 
 
+def test_semble_query_block_timeout_reports_timeout() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		_write_executable(bin_dir / "semble", "#!/usr/bin/env bash\ntrap 'exit 143' TERM\nsleep 5\n")
+		result = _run_bash(
+			f"source {HELPERS}\nsemble_query_block 'summary' 3 'Editor Context'",
+			root,
+			env={
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"SEMBLE_AVAILABLE": "true",
+				"SEMBLE_INDEX_AVAILABLE": "true",
+				"SEMBLE_INDEX_PATH": str(index_dir),
+				"SEMBLE_QUERY_TIMEOUT_SECS": "0.2",
+			},
+		)
+		assert result.returncode != 0
+		assert "SEMBLE_FALLBACK target=editor-context reason=timeout" in result.stderr
+		assert "reason=exit=143" not in result.stderr
+
+
 def test_semble_query_block_empty_and_whitespace_results_fall_back() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)

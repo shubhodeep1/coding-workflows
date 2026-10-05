@@ -65,6 +65,7 @@ cleanup_index_build()
 	fi
 	[ -z "${snapshot_dir:-}" ] || rm -rf -- "${snapshot_dir}"
 	[ -z "${output_dir:-}" ] || rm -rf -- "${output_dir}"
+	trap - TERM INT
 }
 
 build_index()
@@ -72,6 +73,8 @@ build_index()
 	local snapshot_dir="" output_dir="" index_container=""
 	# trap RETURN also handles timeouts/failures before publishing the pickle.
 	trap cleanup_index_build RETURN
+	trap 'cleanup_index_build; exit 143' TERM
+	trap 'cleanup_index_build; exit 130' INT
 	snapshot_dir="$(mktemp -d)" || return 1
 	output_dir="$(mktemp -d)" || return 1
 	chmod 0700 "${snapshot_dir}" "${output_dir}" || return 1
@@ -103,7 +106,7 @@ if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
 	printf 'semble 0.1.3\n'
 	exit 0
 fi
-if [ "$#" -ne 8 ] || [ "$1" != "query" ] || [ "$3" != "--index" ] ||
+if [ "$#" -lt 8 ] || [ "$1" != "query" ] || [ "$3" != "--index" ] ||
    [ "$5" != "--top-k" ] || [ "$7" != "--format" ] ||
    [ "$4" != "${index_path}" ] || [ "$8" != "text" ] ||
    [[ ! "$6" =~ ^[1-9][0-9]*$ ]]; then
@@ -116,6 +119,7 @@ container_name="semble-q-$$-${RANDOM}"
 # Mount the single opaque index, not its directory: RUNTIME_DIR can also
 # contain provider credentials and prompt artifacts from the caller.
 if [ ! -f "${index_path}" ] || [ -L "${index_path}" ]; then
+	printf 'Semble index is missing or is a symlink\n' >&2
 	exit 1
 fi
 cleanup_query()

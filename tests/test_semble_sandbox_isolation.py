@@ -13,7 +13,7 @@ BUILD = ROOT / "scripts/build_semble_wrapper.sh"
 IMAGE_ID = "sha256:" + "a" * 64
 
 
-def _fake_docker(tmp_path: Path, *, fail_build: bool = False, slow_query: bool = False) -> tuple[Path, Path, Path]:
+def _fake_docker(tmp_path: Path, *, fail_build: bool = False, slow_query: bool = False, skip_index: bool = False) -> tuple[Path, Path, Path]:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	log_file = tmp_path / "docker.jsonl"
@@ -40,7 +40,8 @@ def _fake_docker(tmp_path: Path, *, fail_build: bool = False, slow_query: bool =
 		"                if list(snapshot.rglob('.git')) or list(snapshot.rglob('.codex-workflow-src')):\n"
 		"                    sys.exit(4)\n"
 		"            if value.startswith('type=bind,src=') and value.endswith(',dst=/out'):\n"
-		"                pathlib.Path(value.split(',')[1][4:], 'index.pkl').write_bytes(b'opaque index')\n"
+		+ ("                pathlib.Path(value.split(',')[1][4:], 'index.pkl').write_bytes(b'opaque index')\n" if not skip_index else "")
+		+
 		"                break\n"
 		"    else:\n"
 		+ ("        time.sleep(30)\n" if slow_query else "")
@@ -81,6 +82,7 @@ def test_install_uses_only_hash_locked_context_and_scrubbed_docker(tmp_path: Pat
 	dockerfile = (context_dir / "Dockerfile").read_text()
 	assert "FROM python:3.12.12-slim-bookworm@sha256:" in dockerfile
 	assert "--require-hashes --no-deps --only-binary=:all:" in dockerfile
+	assert "HOME=/tmp" in dockerfile
 	lock = (context_dir / "requirements.lock").read_text()
 	lines = lock.splitlines()
 	assert any(line.startswith("semble==0.1.3 --hash=sha256:") for line in lines)
@@ -104,6 +106,22 @@ def test_install_without_docker_falls_back(tmp_path: Path) -> None:
 	result = subprocess.run(["/bin/bash", str(INSTALL)], env={"PATH": "", "GITHUB_ENV": str(env_file)}, capture_output=True, text=True)
 	assert result.returncode == 0
 	assert env_file.read_text() == "SEMBLE_AVAILABLE=false\n"
+
+
+def test_failed_index_build_never_reports_available(tmp_path: Path) -> None:
+	bin_dir, _, _ = _fake_docker(tmp_path, skip_index=True)
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	(repo / "example.py").write_text("hello world\n")
+	index = tmp_path / "index.pkl"
+	env_file = tmp_path / "build.env"
+	env = _env(tmp_path, bin_dir, env_file)
+	env.update({"GITHUB_WORKSPACE": str(repo), "SEMBLE_INDEX_PATH": str(index), "SEMBLE_WRAPPER_DIR": str(tmp_path / "wrapper")})
+	result = subprocess.run(["bash", str(BUILD)], env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert "SEMBLE_AVAILABLE=false" in env_file.read_text()
+	assert "SEMBLE_INDEX_AVAILABLE=false" in env_file.read_text()
+	assert not index.exists()
 
 
 def test_index_and_query_never_mount_git_or_inherit_credentials(tmp_path: Path) -> None:
@@ -142,6 +160,12 @@ def test_index_and_query_never_mount_git_or_inherit_credentials(tmp_path: Path) 
 	good = subprocess.run([str(launcher), "query", query, "--index", str(index), "--top-k", "2", "--format", "text"], env=env, capture_output=True, text=True)
 	assert good.returncode == 0, good.stderr
 	assert good.stdout.startswith("[1] example.py:1-1")
+	with_extra = subprocess.run([str(launcher), "query", query, "--index", str(index), "--top-k", "2", "--format", "text", "--extra-flag"], env=env, capture_output=True, text=True)
+	assert with_extra.returncode == 0, with_extra.stderr
+	index.unlink()
+	missing = subprocess.run([str(launcher), "query", query, "--index", str(index), "--top-k", "2", "--format", "text"], env=env, capture_output=True, text=True)
+	assert missing.returncode == 1
+	assert "Semble index is missing or is a symlink" in missing.stderr
 	query_args = [call["argv"] for call in _calls(log_file) if call["argv"][0] == "run"][-1]
 	assert query_args[query_args.index("--") + 1] == query
 	assert "--network" in query_args and "none" in query_args
@@ -165,3 +189,10 @@ def test_launcher_timeout_removes_its_container(tmp_path: Path) -> None:
 	)
 	assert result.returncode != 0
 	assert any(call["argv"][:2] == ["rm", "-f"] for call in _calls(log_file))
+
+
+def test_index_build_cleans_up_on_termination() -> None:
+	text = BUILD.read_text(encoding="utf-8")
+	assert "trap 'cleanup_index_build; exit 143' TERM" in text
+	assert "trap 'cleanup_index_build; exit 130' INT" in text
+	assert "trap - TERM INT" in text

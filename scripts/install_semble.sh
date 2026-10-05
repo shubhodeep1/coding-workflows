@@ -42,7 +42,7 @@ write_semble_sandbox_context()
 FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
 COPY requirements.lock semble_index.py semble_query.py /opt/semble/
 RUN pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r /opt/semble/requirements.lock && mkdir /index
-ENV PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1
+ENV PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 HOME=/tmp
 USER 65534:65534
 LABEL org.coding-workflows.semble.version="0.1.3"
 DOCKERFILE
@@ -205,6 +205,9 @@ build_semble_sandbox_image()
 
 main()
 {
+	if [ -n "${SEMBLE_PYTHON_BIN:-}" ]; then
+		log "SEMBLE_PYTHON_BIN is ignored; the host Python interpreter is not used."
+	fi
 	if ! build_semble_sandbox_image; then
 		mark_unavailable
 	fi
