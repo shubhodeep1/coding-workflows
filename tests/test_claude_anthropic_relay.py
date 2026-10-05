@@ -185,6 +185,28 @@ def test_broker_rejects_client_authorization(chain) -> None:
 	assert _Upstream.seen == []
 
 
+def test_rejection_does_not_wait_indefinitely_for_a_missing_body(chain) -> None:
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "5")
+	connection.endheaders()
+	connection.sock.settimeout(3)
+	assert connection.getresponse().status == 400
+	connection.close()
+
+
+def test_rejection_handles_an_oversized_length_header(chain) -> None:
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "9" * 5000)
+	connection.endheaders()
+	connection.sock.settimeout(3)
+	assert connection.getresponse().status == 400
+	connection.close()
+
+
 def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 	def refused(host, timeout=None, context=None):
 		return http.client.HTTPConnection("127.0.0.1", 9, timeout=2)

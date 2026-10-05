@@ -100,12 +100,22 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		pass
 
 	def _reject(self, status):
+		if self.command == "POST" and not self._request_body_consumed:
+			length = self.headers.get("Content-Length", "")
+			if length.isascii() and length.isdecimal() and len(length) <= len(str(MAX_BODY)) and 0 < int(length) <= MAX_BODY:
+				# Let a sending client finish without letting an incomplete body stall the relay.
+				self.connection.settimeout(1)
+				try:
+					self.rfile.read(int(length))
+				except OSError:
+					pass
 		self.send_error(status, "Request rejected")
 		self.close_connection = True
 
 	def do_POST(self):
 		# No alternate paths, chunked uploads, client-selected hosts, API keys,
 		# or (on the broker) any client authorization cross the boundary.
+		self._request_body_consumed = False
 		mode = self.server.mode
 		length = self.headers.get("Content-Length", "")
 		if (
@@ -129,6 +139,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		if headers is None:
 			return self._reject(400)
 		body = self.rfile.read(int(length))
+		self._request_body_consumed = True
 		if len(body) != int(length):
 			return self._reject(400)
 		if mode == "broker":
