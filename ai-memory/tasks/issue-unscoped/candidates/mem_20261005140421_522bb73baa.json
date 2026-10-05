@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6221-heal-evidence-editor-isolation.md:1-6 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: This fragment duplicates editor credential isolation already covered by changelog.d/6055-heal-evidence-bundle.md and adds an unrelated merged-PR guard claim, resulting in overlapping and misleading release entries.\n  WHY: `scripts/assemble_changelog.py` treats each file as a separate entry; qwen rated this MAJOR while deepseek and google rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says the changelog fragments were folded into one, but the diff still ships both `changelog.d/6055-heal-evidence-bundle.md` and `changelog.d/6221-heal-evidence-editor-isolation.md`, with duplicated editor-isolation content.\n  expected_change_site: `changelog.d/6055-heal-evidence-bundle.md` and `changelog.d/6221-heal-evidence-editor-isolation.md`\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `changelog.d/assemble_changelog.py` (CLAUDE.md \u00a720) folds every `changelog.d/*.md` file as a separate release entry; `workflow-templates/.claude/hooks/pr_merge_status_guard.py` is not in the changed-files list.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/6221-heal-evidence-editor-isolation.md | severity=low | confidence=5\n  PROBLEM: The PR ships two changelog fragments with overlapping content. Fragment 6055-heal-evidence-bundle.md already covers the editor credential isolation (line 15: \"The plan and implement editors now run without git credentials, and that part fails closed\") and the \"For contributors\" section describes the full hide/restore flow. Fragment 6221-heal-evidence-editor-isolation.md repeats that coverage (lines 2-4) and adds an unrelated merged-PR guard claim (line 6) that does not belong in the heal evidence bundle.\n  WHY: scripts/assemble_changelog.py treats each file as a separate entry, producing redundant changelog entries at release time and injecting an unrelated guard claim into the heal evidence release notes.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/6055-heal-evidence-bundle.md and changelog.d/6221-heal-evidence-editor-isolation.md | severity=low | confidence=5\n  PROBLEM: The PR description states that the changelog fragments were folded into one, but both 6055 and 6221 fragments were added individually, and fragment 6221 includes unrelated guard claims.\n  WHY: This results in duplicate and overlapping entries in the final changelog.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR description states \"Changelog fragments folded into one (8b98d5b, \u00a720). The stacked 6246-\u2026 and 6247-\u2026 fragments described fixes to unshipped code; 6055-\u2026 already covered both.\" Despite the fold intent, the diff still ships two fragments: `changelog.d/6055-heal-evidence-bundle.md` and `changelog.d/6221-heal-evidence-editor-isolation.md`, with the 6055 fragment already including the editor-isolation message (\"The plan and implement editors now run without git credentials, and that part fails closed\u2026\") and the 6221 fragment duplicating that content.\n  Expected change site: `changelog.d/6055-heal-evidence-bundle.md` lines 1\u20132, 15 and `changelog.d/6221-heal-evidence-editor-isolation.md` lines 1\u20136.\n  Evidence of absence: `changelog.d/assemble_changelog.py` (CLAUDE.md \u00a720) folds every `changelog.d/*.md` file as a separate release entry, so the merge will publish two overlapping entries about the same editor-isolation behavior. The 6221 fragment additionally documents a merged-PR guard fix (from #6177) that is not part of this PR's code changes (`workflow-templates/.claude/hooks/pr_merge_status_guard.py` is not in the changed-files list), which is confusing in a release entry shipped in this PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/6221-heal-evidence-editor-isolation.md | severity=MAJOR | confidence=5\n  PROBLEM: Two changelog fragments exist for what the PR description says was folded into one. The PR description explicitly states \"Changelog fragments folded into one (8b98d5b, \u00a720). The stacked 6246-\u2026 and 6247-\u2026 fragments described fixes to unshipped code; 6055-\u2026 already covered both.\" Yet `changelog.d/6221-heal-evidence-editor-isolation.md` still exists alongside `changelog.d/6055-heal-evidence-bundle.md`. The 6055 fragment already covers editor credential isolation at line 15 (\"The plan and implement editors now run without git credentials, and that part fails closed...\"). The 6221 fragment additionally includes an unrelated claim about the merged-PR guard at line 6.\n  WHY: `scripts/assemble_changelog.py` treats each `.md` file in `changelog.d/` as a separate entry. The release will contain two overlapping changelog entries for the same body of work, and the 6221 entry will inject an unrelated merged-PR guard claim into the changelog.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- changelog.d/6221-heal-evidence-editor-isolation.md | Location: lines 1-6 (entire file)\n  Issue: Two changelog fragments exist for one PR (6055 and 6221), violating \u00a720.B \"One fragment per PR.\" The PR description itself says \"Changelog fragments folded into one (8b98d5b, \u00a720)\" but only folded the 6246/6247 fragments, leaving 6221. The 6055 fragment already covers editor credential isolation in its \"What this means for operators\" and \"For contributors\" sections. The 6221 fragment duplicates that coverage and additionally bundles an unrelated merged-PR guard change (git push --repo=origin) that has no fragment of its own.\n  Suggested minimal fix: Delete changelog.d/6221-heal-evidence-editor-isolation.md; the 6055 fragment already documents the editor isolation. If the merged-PR guard change warrants its own entry, it should get its own fragment in a separate PR or be added to 6055's \"For contributors\" section.\n  Estimated lines changed: 1 (delete file)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3628fcc289c8c887b94f9558d9d1c85d45b02a4a499ecd5f5473e0dd949e9bdb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37316192462",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37316192462",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005140421_522bb73baa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37316192462"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T14:04:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
