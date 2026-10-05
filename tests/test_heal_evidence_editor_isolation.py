@@ -92,6 +92,31 @@ def test_restore_rejects_editor_changed_push_url(tmp_path: Path) -> None:
 	assert "newsecret" not in (repo / ".git" / "config").read_text()
 
 
+def test_restore_rejects_multiple_origin_urls(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "config", "--local", "--add", "remote.origin.url", "https://github.com/attacker/repo.git")
+	_git(repo, "config", "--local", "--add", "remote.origin.url", "https://github.com/owner/repo.git")
+	assert subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True).returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_restore_scopes_header_to_origin_without_git_suffix(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://github.com/owner/repo")
+	_git(repo, "config", "--local", "http.https://github.com/.extraheader", "AUTHORIZATION: basic oldsecret")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	subprocess.run(["bash", str(HELPER), "restore"], env=env, check=True, capture_output=True)
+	assert "AUTHORIZATION: basic" in _git(repo, "config", "--local", "--get", "http.https://github.com/owner/repo.extraheader")
+
+
 def test_hide_rejects_an_explicit_push_url_before_editor_launch(tmp_path: Path) -> None:
 	repo = tmp_path / "repo"
 	repo.mkdir()

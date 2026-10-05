@@ -932,6 +932,24 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	assert lookups == ["feature/x"]
 
 
+@pytest.mark.parametrize("option", ["--repo=origin", "--repo origin"])
+def test_repo_option_guards_single_bare_branch_refspec(merged_branch_repo, monkeypatch, option: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"git push {option} feature/x"}})
+	assert code == 2, message
+	assert lookups == ["feature/x"]
+
+
 @pytest.mark.parametrize("command", [
 	'git push origin "$TARGET"',
 	'git push origin HEAD:"$TARGET"',
