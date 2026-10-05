@@ -29,6 +29,7 @@ import socketserver
 import ssl
 import stat
 import sys
+import time
 
 MAX_BODY = 32 * 1024 * 1024
 UPSTREAM_HOST = "api.anthropic.com"
@@ -104,11 +105,21 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			length = self.headers.get("Content-Length", "")
 			if length.isascii() and length.isdecimal() and len(length) <= len(str(MAX_BODY)) and 0 < int(length) <= MAX_BODY:
 				# Let a sending client finish without letting an incomplete body stall the relay.
-				self.connection.settimeout(1)
+				previous_timeout = self.connection.gettimeout()
+				deadline = time.monotonic() + 1
+				body_remaining = int(length)
 				try:
-					self.rfile.read(int(length))
+					while body_remaining and (seconds_left := deadline - time.monotonic()) > 0:
+						self.connection.settimeout(seconds_left)
+						# read1 avoids retrying receives past the overall deadline.
+						drained_chunk = self.rfile.read1(min(65536, body_remaining))
+						if not drained_chunk:
+							break
+						body_remaining -= len(drained_chunk)
 				except OSError:
 					pass
+				finally:
+					self.connection.settimeout(previous_timeout)
 		self.send_error(status, "Request rejected")
 		self.close_connection = True
 
@@ -132,6 +143,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json"
 			or not length.isascii()
 			or not length.isdecimal()
+			or len(length) > len(str(MAX_BODY))
 			or not 0 < int(length) <= MAX_BODY
 		):
 			return self._reject(400)

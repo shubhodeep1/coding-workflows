@@ -16,6 +16,7 @@ import json
 import os
 import threading
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -205,6 +206,37 @@ def test_rejection_handles_an_oversized_length_header(chain) -> None:
 	connection.sock.settimeout(3)
 	assert connection.getresponse().status == 400
 	connection.close()
+
+
+def test_rejection_drain_has_a_total_deadline_and_restores_socket_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+	handler = relay.Relay.__new__(relay.Relay)
+	handler.command = "POST"
+	handler._request_body_consumed = False
+	handler.headers = {"Content-Length": "100"}
+	handler.connection = Mock()
+	handler.connection.gettimeout.return_value = 30
+	handler.rfile = Mock()
+	handler.rfile.read1.return_value = b"x"
+	handler.send_error = Mock()
+	monkeypatch.setattr(relay, "time", Mock(monotonic=Mock(side_effect=[0, 0, .3, .6, 1.01])))
+
+	handler._reject(400)
+
+	assert handler.rfile.read1.call_count == 3
+	assert handler.connection.settimeout.call_args_list[-1].args == (30,)
+	handler.send_error.assert_called_once_with(400, "Request rejected")
+
+
+def test_bridge_rejects_an_oversized_length_with_valid_other_headers(chain) -> None:
+	connection = http.client.HTTPConnection("127.0.0.1", chain["bridge_port"], timeout=3)
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer isolated-placeholder")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", "9" * 5000)
+	connection.endheaders()
+	assert connection.getresponse().status == 400
+	connection.close()
+	assert _Upstream.seen == []
 
 
 def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
