@@ -65,6 +65,9 @@ if ! type rb_security_severity_block >/dev/null 2>&1; then
   rb_security_block_hold() { return 1; }
   rb_security_block_already_reported() { return 1; }
 fi
+if ! type rb_security_disable_auto_merge >/dev/null 2>&1; then
+  rb_security_disable_auto_merge() { return 1; }
+fi
 OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
 # shellcheck source=/dev/null
@@ -1062,10 +1065,21 @@ RB_SECURITY_FINDINGS_FILE="${RUNTIME_DIR}/rb_judge_security_findings.txt"
 rb_security_mode_detect
 if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
   if ! rb_security_findings_render "${TARGET_BRANCH:-$(jq -r '.head.ref // ""' "${PR_PAYLOAD_FILE:-/dev/null}" 2>/dev/null || true)}" "${RB_SECURITY_FINDINGS_FILE}"; then
+    # Unknown findings cannot justify leaving an earlier auto-merge active.
+    if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_disable_auto_merge "$(git rev-parse HEAD 2>/dev/null || true)"; then
+      echo "::error::Could not verify or disable auto-merge after the findings lookup failed."
+    fi
     echo "::error::Security-pass findings are incomplete; refusing a judge decision without them."
     exit 1
   fi
   echo "Security pass exhausted for PR #${PR_NUMBER}; the judge decides with the open findings."
+  if [ "${RB_SECURITY_BLOCKING_COUNT:-0}" -gt 0 ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
+    RB_SECURITY_EARLY_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+    if ! rb_security_disable_auto_merge "${RB_SECURITY_EARLY_HEAD_SHA}"; then
+      echo "::error::Could not withdraw or verify auto-merge before judging blocking security findings."
+      exit 1
+    fi
+  fi
 fi
 
 # -----------------------------------------------------------
@@ -1167,6 +1181,10 @@ RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
 if [ "${RB_SECURITY_MODE:-false}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] && [ "${IS_FINAL}" = "true" ] \
   && { ! [[ "${RB_SECURITY_BLOCKING_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${RB_SECURITY_BLOCKING_COUNT}" -gt 0 ]; } \
   && rb_security_block_already_reported "${RB_JUDGED_HEAD_SHA}"; then
+  if ! rb_security_disable_auto_merge "${RB_JUDGED_HEAD_SHA}"; then
+    echo "::error::Could not verify or disable auto-merge for blocked PR #${PR_NUMBER}."
+    exit 1
+  fi
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=security_blocked_pending" >> "$GITHUB_OUTPUT"
   echo "RB_JUDGE_SECURITY_PASS mode=severity_block pr=${PR_NUMBER} outcome=hold reason=already_reported"

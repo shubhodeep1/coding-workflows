@@ -522,8 +522,14 @@ jobs:
 
 > A security-exhaustion judge needs the complete paginated list of open
 > `ai:security` findings. If the lookup fails or a page is malformed, the
-> judge step fails before deciding; the next review run can retry. For a
-> security-mode `[judge-fix]`, the extension comment must be published
+> judge attempts to withdraw any earlier auto-merge enrollment, then fails
+> before deciding; the next review run can retry. For a
+> high/critical/unrated finding, the judge checks the live PR head and disables
+> any earlier auto-merge enrollment before judging; it checks again before
+> recording a terminal hold. If either verification or disable fails, the
+> judge fails closed and workflow recovery retries rather than claiming a hold.
+> Medium/low-only findings retain the existing merge path. For a security-mode
+> `[judge-fix]`, the extension comment must be published
 > before the commit is pushed. If publication fails, the step fails and
 > leaves the fix unpushed so the next judge cannot merge it without its
 > additional audit cycle.

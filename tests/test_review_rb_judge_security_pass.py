@@ -55,6 +55,13 @@ if args == ["api", "--paginate", "--slurp", "repos/o/r/issues/42/comments?per_pa
 	if os.environ.get("FAKE_GH_FAIL") == "comments": sys.exit(1)
 	print(json.dumps([json.load(open(os.environ["FAKE_GH_COMMENTS"]))]))
 	sys.exit(0)
+if args == ["api", "repos/o/r/pulls/42"]:
+	if os.environ.get("FAKE_GH_FAIL") == "pr_read": sys.exit(1)
+	print(json.dumps({"state": "open", "head": {"sha": os.environ.get("FAKE_GH_HEAD", "e" * 40)},
+		"auto_merge": {"enabled_by": {"login": "pipeline-account"}} if os.environ.get("FAKE_GH_AUTO_MERGE") else None}))
+	sys.exit(0)
+if args == ["pr", "merge", "42", "--repo", "o/r", "--disable-auto"]:
+	sys.exit(1 if os.environ.get("FAKE_GH_FAIL") == "disable_auto" else 0)
 if args[:2] == ["api", "repos/o/r/issues/42/labels"] and os.environ.get("FAKE_GH_FAIL") == "labels":
 	sys.exit(1)
 if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
@@ -249,6 +256,27 @@ rb_security_block_hold {HEAD} "6246" final_round'''
 	assert (tmp_path / "judge_output").read_text() == "judge_handled=true\njudge_action=security_blocked\njudge_skip_reason=final_round\n"
 
 
+def test_terminal_hold_disables_prior_auto_merge_before_labelling(tmp_path: Path) -> None:
+	script = f'ensure_label_exists() {{ :; }}; _resilient_phase_swap() {{ :; }}; rb_security_block_hold {HEAD} "6246" final_round'
+	result, calls, _ = _run(tmp_path, script, {"FAKE_GH_AUTO_MERGE": "1"})
+	assert result.returncode == 0, result.stderr
+	assert calls.index(["pr", "merge", "42", "--repo", "o/r", "--disable-auto"]) < calls.index(
+		["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed", "-f", "labels[]=ai:review-blocked"])
+
+
+@pytest.mark.parametrize("env", [
+	{"FAKE_GH_FAIL": "pr_read"},
+	{"FAKE_GH_AUTO_MERGE": "1", "FAKE_GH_FAIL": "disable_auto"},
+	{"FAKE_GH_HEAD": "f" * 40},
+])
+def test_terminal_hold_fails_closed_if_auto_merge_cannot_be_cleared(tmp_path: Path, env: dict) -> None:
+	script = f'ensure_label_exists() {{ :; }}; _resilient_phase_swap() {{ :; }}; rb_security_block_hold {HEAD} "6246" final_round'
+	result, calls, _ = _run(tmp_path, script, env)
+	assert result.returncode != 0
+	assert not (tmp_path / "judge_output").exists()
+	assert not any(call[:2] in (["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
+
+
 def test_terminal_hold_does_not_repost_trusted_marker(tmp_path: Path) -> None:
 	comment_file = tmp_path / "trusted_comments.json"
 	comment_file.write_text(json.dumps([{
@@ -256,10 +284,11 @@ def test_terminal_hold_does_not_repost_trusted_marker(tmp_path: Path) -> None:
 		"body": f"Already held\n<!-- ai:single-issue-security-pass-blocked:v1 head={HEAD} -->",
 	}]), encoding="utf-8")
 	script = f'ensure_label_exists() {{ :; }}; _resilient_phase_swap() {{ :; }}; rb_security_block_hold {HEAD} "6246" fix_no_changes'
-	result, calls, _ = _run(tmp_path, script, {"FAKE_GH_COMMENTS": str(comment_file)})
+	result, calls, _ = _run(tmp_path, script, {"FAKE_GH_COMMENTS": str(comment_file), "FAKE_GH_AUTO_MERGE": "1"})
 	assert result.returncode == 0, result.stderr
+	assert ["pr", "merge", "42", "--repo", "o/r", "--disable-auto"] in calls
 	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
-	assert "judge_skip_reason=fix_no_changes" in (tmp_path / "judge_output").read_text()
+	assert (tmp_path / "judge_output").read_text() == "judge_handled=true\njudge_action=security_blocked_pending\njudge_skip_reason=fix_no_changes\n"
 
 
 @pytest.mark.parametrize("sha, fail", [(HEAD, "labels"), ("invalid", "")])
@@ -384,16 +413,34 @@ def test_judge_script_wiring() -> None:
 	assert 'if ! rb_security_post_extension "$(git rev-parse HEAD 2>/dev/null || true)"; then' in text
 	assert 'exit 42' in text
 	assert 'if ! rb_security_findings_render' in text
+	assert text.index('rb_security_disable_auto_merge "$(git rev-parse HEAD 2>/dev/null || true)"') < text.index('Security-pass findings are incomplete; refusing a judge decision')
 	assert 'fix) [ "${IS_FINAL}" = "true" ] && RB_MERGE_ACTION="true"' in text
 	assert 'The final-attempt fix is treated as a merge because judge fix retries are exhausted; no fix commit was created.' in text
 	assert 'echo "::warning::Failed to push judge fix — falling back to manual intervention."\n            exit 1' in text
 	assert "review_rb_judge_security_pass.sh" in STAGE.read_text(encoding="utf-8")
 	assert 'if ! type rb_security_severity_block' in text
+	assert 'if ! type rb_security_disable_auto_merge' in text
 	assert 'rb_security_prompt_section "${RB_SECURITY_FINDINGS_FILE}" "${IS_FINAL}" "${RB_SECURITY_BLOCKING_COUNT:-0}"' in text
 	assert text.index('RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD') < text.index('rb_security_block_already_reported "${RB_JUDGED_HEAD_SHA}"') < text.index('} > "${RB_JUDGE_PROMPT}"')
+	assert text.index('rb_security_findings_render "${TARGET_BRANCH') < text.index('rb_security_disable_auto_merge "${RB_SECURITY_EARLY_HEAD_SHA}"') < text.index('} > "${RB_JUDGE_PROMPT}"')
 	assert text.index('merged_pr_unsafe_action') < text.index('RB_SECURITY_SEVERITY_DECISION="$(rb_security_severity_block') < text.index('post_review_blocked_assessment \\') < gate_at
 	assert text.count('rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes') == 2
 	assert text.index('rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" final_round') < gate_at
+
+
+def test_failed_findings_lookup_withdraws_auto_merge_before_exiting() -> None:
+	text = JUDGE.read_text(encoding="utf-8")
+	start = text.index('  if ! rb_security_findings_render "${TARGET_BRANCH')
+	end = text.index('  echo "Security pass exhausted for PR', start)
+	result = subprocess.run(
+		["bash", "-c", 'set -euo pipefail; TARGET_BRANCH=branch; RB_SECURITY_FINDINGS_FILE=/dev/null; PR_ALREADY_MERGED=false; '
+		 'rb_security_findings_render() { return 1; }; rb_security_disable_auto_merge() { echo "DISABLED=$1"; }; '
+		 + text[start:end] + 'echo UNEXPECTED_MERGE'],
+		cwd=ROOT, capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 1
+	assert "DISABLED=" in result.stdout and "UNEXPECTED_MERGE" not in result.stdout
+	assert "Security-pass findings are incomplete" in result.stdout
 
 
 def test_noop_fix_merge_paths_hold_before_labelling_issues(tmp_path: Path) -> None:

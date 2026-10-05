@@ -6,13 +6,14 @@
 #   1. Security-exhaustion mode. When the single-issue security pass
 #      (scripts/review_single_issue_security_pass.sh) has used every audit
 #      cycle, the judge decides instead of the PR waiting for a human:
-#      merge / merge_with_followup (the open `[security-audit]` findings stay
+#      merge / merge_with_followup only with medium/low findings (which stay
 #      open as issues; implement.yml resolves their `Integration branch:`
 #      through scripts/retarget_merged_base.sh, so they are fixed against the
-#      default branch once this PR merges), fix (within
+#      default branch once this PR merges), fix for blocking findings (within
 #      MAX_REVIEW_BLOCKED_RETRIES; each security-mode judge fix posts an
 #      extension marker that grants one more audit cycle, so the fix is
-#      audited), or close_and_reissue.
+#      audited), or close_and_reissue. A final-round or no-change fix holds
+#      high/critical/unrated findings and withdraws prior auto-merge.
 #   2. Merge gate. A merge the judge decides outside security-exhaustion mode
 #      goes through the same security gate as a clean review: a clean audit
 #      of the head merges, a pending audit or open findings hold the merge,
@@ -24,7 +25,9 @@
 # nothing for an ineligible PR) and makes no write. rb_security_findings_render
 # makes one paginated listing (one call per page) of open `ai:security`
 # issues, filtered locally by their `Integration branch:` line. A failed or
-# malformed page stops the judge before it decides. rb_security_merge_gate
+# malformed page stops the judge before it decides. Blocking findings also
+# require a live PR GET at pre-judge and hold time, plus a disable-auto write
+# only when an earlier auto-merge enrollment is present. rb_security_merge_gate
 # costs what the gate costs (see review_single_issue_security_pass.sh).
 # rb_security_post_extension writes one logical comment before the judge fix
 # is pushed; gh_retry may repeat the POST after a transient failure, and the
@@ -205,11 +208,33 @@ rb_security_block_already_reported()
 	return 1
 }
 
+# A held PR may still have auto-merge enrolled by an older review/head.
+# The existing PR reads precede the judge LLM, so re-read at this boundary.
+rb_security_disable_auto_merge()
+{
+	local head_sha="$1" live_pr_json
+	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
+	# No existing read covers the live enrollment at this point; do not use
+	# the earlier PR payload, which can predate the judge's assessment.
+	live_pr_json="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null)" || return 1
+	if ! jq -e --arg sha "${head_sha}" '.state == "open" and .head.sha == $sha and has("auto_merge") and (.auto_merge == null or (.auto_merge | type == "object"))' <<< "${live_pr_json}" >/dev/null 2>&1; then
+		return 1
+	fi
+	if jq -e '.auto_merge != null' <<< "${live_pr_json}" >/dev/null 2>&1; then
+		# The read above cannot disable an enrollment; this is the one required write.
+		gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto >/dev/null 2>&1 || return 1
+	fi
+}
+
 rb_security_block_hold()
 {
 	local head_sha="$1" issue_numbers="$2" reason="$3" issue_number body
 	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
 	case "${reason}" in final_round|fix_no_changes) ;; *) return 1 ;; esac
+	if ! rb_security_disable_auto_merge "${head_sha}"; then
+		echo "::error::Could not verify or disable auto-merge for blocked PR #${PR_NUMBER}."
+		return 1
+	fi
 	ensure_label_exists "ai:security-pass-failed" "${REPOSITORY}"
 	ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
 	if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" \
@@ -232,7 +257,11 @@ Open high/critical/unrated security findings (${RB_SECURITY_BLOCKING_ISSUES:-unk
 			return 1
 		fi
 	fi
-	printf 'judge_handled=true\njudge_action=security_blocked\njudge_skip_reason=%s\n' "${reason}" >> "${GITHUB_OUTPUT}" || return 1
+	if [ "${RB_SECURITY_BLOCK_MARKER_FOUND:-false}" = "true" ]; then
+		printf 'judge_handled=true\njudge_action=security_blocked_pending\njudge_skip_reason=%s\n' "${reason}" >> "${GITHUB_OUTPUT}" || return 1
+	else
+		printf 'judge_handled=true\njudge_action=security_blocked\njudge_skip_reason=%s\n' "${reason}" >> "${GITHUB_OUTPUT}" || return 1
+	fi
 	rb_security_log "mode=severity_block pr=${PR_NUMBER:-} outcome=hold reason=${reason} blocking=${RB_SECURITY_BLOCKING_COUNT:-unknown}"
 }
 
