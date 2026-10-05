@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6325,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6325\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6395\",\"pr_number\":6395,\"branch\":\"ai/issue-6325\",\"run_id\":\"37341632572\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37341632572\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6325-review-blocked-fix-target-provenance.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "3e72649a2c7045f26c947292f0f70780d71b62a77476ddb557a53a29318a0659",
+  "lineage": {
+    "issue_number": 6325,
+    "parent_ids": [],
+    "pr_number": 6395,
+    "run_id": "37341632572",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37341632572",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6395"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005170908_68dde4bc40",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6325,
+    "level": "run",
+    "pr_number": 6395,
+    "run_id": "37341632572"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6325: https://github.com/shubhodeep1/coding-workflows/pull/6395",
+  "timestamps": {
+    "created_at": "2026-10-05T17:09:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
