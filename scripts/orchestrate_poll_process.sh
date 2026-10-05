@@ -15776,16 +15776,23 @@ handle_unblock_judge_project_hooks() {
       close_reason="comments_unavailable"
     else
       if ! close_marker="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" --arg item "${TRACKING_NUM}" '
-        [ .[] | select((.user.login // "") == $login and (.id | type) == "number" and .id > 0 and .id == (.id | floor))
+        . as $comments
+        | [ .[] | select((.user.login // "") == $login and (.id | type) == "number" and .id > 0 and .id == (.id | floor))
           | ((.body // "") | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | last // "") as $last
           | ($last | capture("^<!-- ai:unblock:v1 item=(?<item>[1-9][0-9]*) stop=(?<stop>[a-z-]+) fingerprint=[0-9a-f]{12} verdict=(?<verdict>[a-z_]+) round=[1-9][0-9]*(?: override=[a-z_]+)? -->$")?) as $marker
           | select($marker.item == $item)
           | {id: .id, stop: $marker.stop, verdict: $marker.verdict} ]
-        | sort_by(.id) | last // empty' 2>/dev/null)"; then
+        | sort_by(.id) | last // empty
+        | . as $verdict
+        # A new state write after the verdict can represent a resume and a later failure.
+        | . + {state_after: any($comments[]; (.user.login // "") == $login and (.id | type) == "number" and .id > $verdict.id
+          and ((.body // "") | test("^<!-- ORCHESTRATOR_STATE_V(1 -->|2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->)")))}' 2>/dev/null)"; then
         close_reason="comments_unavailable"
       elif [ -z "${close_marker}" ]; then
         close_reason="no_trusted_marker"
       elif [ "$(printf '%s' "${close_marker}" | jq -r '.verdict')" != "close" ]; then
+        close_reason="stale_marker"
+      elif [ "${PROJECT_STATUS}" != "abandoned" ] && [ "$(printf '%s' "${close_marker}" | jq -r '.state_after')" != "false" ]; then
         close_reason="stale_marker"
       elif [ "${PROJECT_STATUS}" != "abandoned" ]; then
         close_stop="$(printf '%s' "${close_marker}" | jq -r '.stop')"

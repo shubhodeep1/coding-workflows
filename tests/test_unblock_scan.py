@@ -160,6 +160,13 @@ def test_closed_by_judge_missing_details_and_unlabelled_items_are_skipped() -> N
 	assert result["skipped"] == {"closed_by_judge": 1, "no_details": 1, "no_block_label": 1}
 
 
+def test_spoofed_closed_label_does_not_hide_a_still_failed_project() -> None:
+	search = [_item(40, ["ai:orchestrator-tracking", "ai:blocked", "ai:unblock-closed"])]
+	details = {"40": _details("ai:blocked", 8)}
+	assert _select(search, details, failed=[40])["dispatch"] == [{"item": 40, "kind": "project"}]
+	assert _select(search, details)["skipped"] == {"closed_by_judge": 1}
+
+
 def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 	(tmp_path / "search.json").write_text(json.dumps({"items": [_item(1, ["ai:blocked"])]}), encoding="utf-8")
 	(tmp_path / "details.json").write_text(json.dumps({"1": _details("ai:blocked", 5)}), encoding="utf-8")
@@ -301,6 +308,30 @@ def test_project_close_orders_same_timestamp_verdicts_by_comment_id(tmp_path: Pa
 		[_close_comment(12), _close_comment(11, verdict="retry_budget")], ["ai:unblock-closed"], "failed")
 	assert result.returncode == 10, result.stderr
 	assert state["status"] == "abandoned" and len(calls) == 1 and posts == ["posted"]
+
+
+@pytest.mark.parametrize("state_header", ["<!-- ORCHESTRATOR_STATE_V1 -->",
+	"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + "0" * 64 + " -->"])
+def test_project_close_refuses_a_verdict_before_a_later_failure_state(tmp_path: Path, state_header: str) -> None:
+	state_comment = {"id": 2, "user": {"login": BOT}, "body": f"{state_header}\n{{}}"}
+	result, state, calls, posts = _run_close_hook(tmp_path,
+		[_close_comment(1), state_comment], ["ai:unblock-closed"], "failed")
+	assert result.returncode == 0, result.stderr
+	assert "outcome=refused reason=stale_marker" in result.stdout
+	assert state["status"] == "failed" and calls == [] and posts == []
+
+	result, state, calls, posts = _run_close_hook(tmp_path,
+		[state_comment, _close_comment(3)], ["ai:unblock-closed"], "failed")
+	assert result.returncode == 10, result.stderr
+	assert state["status"] == "abandoned" and len(calls) == 1 and posts == ["posted"]
+
+
+def test_project_close_retry_allows_its_own_abandoned_state_write(tmp_path: Path) -> None:
+	result, state, calls, posts = _run_close_hook(tmp_path,
+		[_close_comment(1), {"id": 2, "user": {"login": BOT}, "body": "<!-- ORCHESTRATOR_STATE_V1 -->\n{}"}],
+		["ai:unblock-closed"], "abandoned")
+	assert result.returncode == 10, result.stderr
+	assert state["status"] == "abandoned" and len(calls) == 1 and posts == []
 
 
 def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | None = None, state: dict | None = None,
