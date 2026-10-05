@@ -12,8 +12,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 COMMAND = ROOT / ".claude" / "commands" / "audit-plans.md"
 TEMPLATE_COMMAND = ROOT / "workflow-templates" / ".claude" / "commands" / "audit-plans.md"
-if not COMMAND.exists():
-	COMMAND = TEMPLATE_COMMAND
 
 
 @pytest.fixture(scope="module")
