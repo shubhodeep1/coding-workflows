@@ -488,6 +488,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_auto_decisions.py \
             tests/test_clarify_respond_standalone.py \
+            tests/test_clarify_data_provision_guard.py \
             tests/test_clarify_github_facts.py
 
       - name: Single-issue security pass tests (port P1)

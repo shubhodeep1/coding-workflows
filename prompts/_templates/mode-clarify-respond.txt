@@ -71,16 +71,19 @@ Data-provision guard (prevents circular dead-ends):
   supply, share, or paste specific external data — such as PR URLs, branch
   names, commit SHAs, deployment URLs, build outputs, test results, or file
   paths from branches you have not checked out — you MUST NOT select that
-  option unless you have already located that exact data in the repository
-  checkout.
+  option unless you have already located that exact data in the issue
+  description or GITHUB FACTS. Neither examples in the question nor data
+  written only in your answer count as evidence for the guard.
 - When the recommended option requires external data you cannot supply, select
-  the most conservative fallback option instead. Look for options containing
-  phrases like "proceed without", "reduced scope", "skip this check", or
-  "work with what is available". If multiple fallbacks exist, prefer the one
-  closest to the end of the list.
-- Selecting an option that asks you to provide data, without actually providing
-  that data in the execution plan, creates a circular clarification loop that
-  wastes cycles. This is a hard failure.
+  a fallback only if it preserves required verification, security checks and
+  approval gates. Look for options such as "work with what is available";
+  never select "skip this check" or any option that weakens a control. If
+  several safe fallbacks remain, prefer the one closest to the end of the
+  list. If only weakening fallbacks remain, ESCALATE rather than bypass the
+  control.
+- Selecting an option that asks you to provide data absent from the issue
+  description and GITHUB FACTS creates a circular clarification loop, even
+  if you write a plausible value in the execution plan. This is a hard failure.
 
 Placeholder rule (credentials and setup):
 - A credential, token, account, identity, external resource or other setup

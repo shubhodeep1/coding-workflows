@@ -214,10 +214,33 @@ def test_standalone_worker_failure_does_not_end_the_job() -> None:
 	assert steps["Build prompt and run Codex"]["continue-on-error"] == "${{ steps.check_orchestrator.outputs.mode == 'standalone' }}"
 	assert "steps.run_codex.outcome == 'failure'" in steps["Standalone RECOMMENDED fallback"]["if"]
 	assert "steps.standalone_fallback.outputs.ready == 'true'" in steps["Data-provision guard"]["if"]
+	guard_run = steps["Data-provision guard"]["run"]
+	assert '"${RUNTIME_DIR}/issue_body.txt" "${RUNTIME_DIR}/github_facts.txt"' in guard_run
+	assert 'EVIDENCE_ARGS+=(--evidence-file "${evidence_file}")' in guard_run
+	assert '"${EVIDENCE_ARGS[@]}"' in guard_run
 	parse = steps["Parse and post answer"]["if"]
 	assert "(steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true')" in parse
 	names = list(steps)
 	assert names.index("Standalone RECOMMENDED fallback") < names.index("Data-provision guard") < names.index("Parse and post answer") < names.index("Record standalone auto-decisions")
+
+
+def test_data_guard_step_fails_closed_without_guard_or_inputs(tmp_path: Path) -> None:
+	env = _env(tmp_path)
+	script = _steps()["Data-provision guard"]["run"]
+	for setup in ("missing_guard", "missing_questions", "guard_error"):
+		guard_path = tmp_path / "scripts" / "clarify_data_provision_guard.py"
+		questions_path = tmp_path / "runtime" / "clarification_comment.txt"
+		if setup != "missing_guard":
+			guard_path.parent.mkdir(exist_ok=True)
+			guard_path.write_text("raise RuntimeError('guard unavailable')\n", encoding="utf-8")
+		if setup != "missing_questions":
+			questions_path.write_text(QUESTIONS, encoding="utf-8")
+		Path(env["CODEX_OUTPUT_FILE"]).write_text(WORKER_ANSWER, encoding="utf-8")
+		result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+		assert result.returncode != 0, (setup, result.stdout, result.stderr)
+		assert Path(env["CODEX_OUTPUT_FILE"]).read_text(encoding="utf-8") == WORKER_ANSWER
+		guard_path.unlink(missing_ok=True)
+		questions_path.unlink(missing_ok=True)
 
 
 def _install_scripts(tmp_path: Path, sent: Path) -> None:
@@ -267,11 +290,12 @@ def test_fallback_guard_checks_later_recommended_answer(tmp_path: Path) -> None:
 	assert answers.rstrip("\n") == "Q1: B\nQ2: A"
 	result = subprocess.run(
 		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
-		 "--clarification-file", str(clarification_path), "--answers-file", str(answer_path)],
+		"--clarification-file", str(clarification_path), "--answers-file", str(answer_path)],
 		capture_output=True, text=True, check=True,
 	)
-	assert "Q1: B\nQ2: B" in result.stdout
-	assert "Q2: overrode A -> B" in result.stdout
+	assert "Q1: B\nQ2: ESCALATE" in result.stdout
+	assert "Q2: escalated A" in result.stdout
+	assert "ESCALATION:" in result.stdout
 
 
 def _run_record(tmp_path: Path, comments: list[dict], answer: str = WORKER_ANSWER, **extra: str) -> tuple[list[list[str]], str]:
@@ -372,18 +396,26 @@ def test_data_guard_ignores_lettered_lines_outside_decisions(section_header: str
 
 def test_data_guard_rewrites_emphasized_decisions_before_posting(tmp_path: Path) -> None:
 	questions = QUESTIONS.replace("A dedicated bot identity; provision its credentials privately", "Provide the PR URL for verification")
-	questions = questions.replace("Disable verdict-triggered auto-merge", "Skip this verification")
+	questions = questions.replace("Disable verdict-triggered auto-merge", "Proceed without the URL using available information")
 	clarification = tmp_path / "questions.txt"
 	clarification.write_text(questions, encoding="utf-8")
 	answers = tmp_path / "answer.txt"
 	answers.write_text("**DECISIONS:**\n**Q1**: **B**\n**Q2**: **A**\n\n**RATIONALE:**\nQ2: This needs a URL.\n", encoding="utf-8")
 	result = subprocess.run(
 		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
-		 "--clarification-file", str(clarification), "--answers-file", str(answers)],
+		"--clarification-file", str(clarification), "--answers-file", str(answers)],
 		capture_output=True, text=True, check=True,
 	)
 	assert "Q2: B\n" in result.stdout and "Q2: overrode A -> B" in result.stdout
 	assert auto.from_answers(questions, result.stdout)["answers"] == "Q1: B\nQ2: B\n"
+	clarification.write_text(questions.replace("Proceed without the URL using available information", "Skip this verification"), encoding="utf-8")
+	escalated = subprocess.run(
+		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
+		"--clarification-file", str(clarification), "--answers-file", str(answers)],
+		capture_output=True, text=True, check=True,
+	)
+	assert "Q2: ESCALATE" in escalated.stdout
+	assert auto.from_answers(clarification.read_text(encoding="utf-8"), escalated.stdout)["answers"] == "Q1: B\nQ2: ESCALATE\n"
 
 
 def test_setup_items_cannot_inject_a_comment_delimiter_or_reference_an_issue() -> None:
