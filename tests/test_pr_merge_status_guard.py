@@ -1015,12 +1015,21 @@ def test_inline_config_push_checks_effective_destination(merged_branch_repo, mon
 	assert lookups == ["feature/x"]
 
 
-def test_inline_repo_option_treats_main_as_refspec_not_remote(merged_branch_repo, monkeypatch) -> None:
+def test_inline_repo_option_positional_remote_overrides_option(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
-	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("default-branch refspec"))
-	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	lookups: list[tuple[str, str]] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append((slug, branch))
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {
 		"command": "git -c remote.main.url=https://github.com/o/other.git -c push.default=current push --repo=origin main"
-	}}) == (0, "")
+	}})
+	assert code == 2, message
+	assert lookups == [("o/other", "feature/x")]
 
 
 def test_inline_positional_remote_queries_its_repository(merged_branch_repo, monkeypatch) -> None:
@@ -1051,7 +1060,7 @@ def test_inline_repo_option_queries_selected_remote(merged_branch_repo, monkeypa
 		return [dict(MERGED_PR, headRefOid=merged_sha)] if slug == "o/other" else []
 	monkeypatch.setattr(guard, "query_pull_requests", listing)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {
-		"command": "git -c remote.other.url=https://github.com/o/other.git push --repo=other HEAD:feature/x"
+		"command": "git -c remote.other.url=https://github.com/o/other.git -c push.default=current push --repo=other"
 	}})
 	assert code == 2, message
 	assert lookups == [("o/other", "feature/x")]
@@ -1109,6 +1118,11 @@ def test_positional_remote_without_inline_config_keeps_legacy_mapping(merged_bra
 	"GIT_CONFIG_GLOBAL=/tmp/other git push origin",
 	"env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=current git push origin",
 	"env GIT_CONFIG_PARAMETERS=x git push origin",
+	"env -u UNUSED GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=current git push origin",
+	"/usr/bin/env -- GIT_CONFIG_PARAMETERS=x git push origin",
+	"env -i GIT_CONFIG_PARAMETERS=x git push origin",
+	"env -C /tmp GIT_CONFIG_PARAMETERS=x git push origin",
+	"env -u GIT_CONFIG_COUNT git push origin",
 	"git -c remote.main.url=$URL push origin",
 	"git -c remote.origin.push=refs/heads/feature/x:refs/heads/main push origin",
 	"git -c remote.origin.pushurl=https://github.com/o/r.git push origin",
@@ -1140,6 +1154,35 @@ def test_config_env_global_option_does_not_hide_push() -> None:
 	assert "push" in guard.git_subcommands("git --config-env a.b=V push origin")
 	assert "push" in guard.git_subcommands("git --config-env=a.b=V push origin")
 	assert "push" in guard.git_subcommands("env GIT_CONFIG_COUNT=1 git push origin")
+	assert "push" in guard.git_subcommands("env -u UNUSED GIT_CONFIG_COUNT=1 git push origin")
+	assert "push" in guard.git_subcommands("/usr/bin/env -- GIT_CONFIG_COUNT=1 git push origin")
+	assert "push" in guard.git_subcommands("env -C /tmp GIT_CONFIG_COUNT=1 git push origin")
+
+
+@pytest.mark.parametrize("command", [
+	"env -S 'GIT_CONFIG_PARAMETERS=x git push origin feature/x'",
+	"/usr/bin/env --split-string='GIT_CONFIG_COUNT=1 git push origin feature/x'",
+])
+def test_env_split_string_push_is_denied_when_mapping_is_unknown(command: str) -> None:
+	code, message = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert code == 2
+	assert "env -S Git command cannot be mapped" in message
+
+
+def test_inline_push_does_not_pass_git_config_to_default_branch_network_probe(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def default_branch_without_inline_config(cwd):
+		assert guard._GIT_CONFIG_ARGS.get() == ()
+		return "main"
+	monkeypatch.setattr(guard, "default_branch", default_branch_without_inline_config)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [dict(MERGED_PR, headRefOid=merged_sha)])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {
+		"command": "git -c core.sshCommand=untrusted-helper push origin feature/x"
+	}})
+	assert code == 2, message
 
 
 @pytest.mark.parametrize(("mode", "expected"), [

@@ -1062,14 +1062,15 @@ not delete wrappers that are already present in `.github/workflows/`.
 > the guard checks the refspecs after that remote, not the remote name as a
 > branch. If the local remote-config lookup errors rather than reporting no
 > such remote, the guard asks instead of guessing which branch the push targets.
-> With inline `git -c` options, `--repo` instead identifies the push remote and
-> every positional argument is a refspec. The guard reads the selected remote's
-> push URL and effective `push.default`/upstream mapping using those options,
+> With inline `git -c` options, a configured positional remote overrides
+> `--repo`; any remaining positional arguments are refspecs. The guard reads
+> the selected remote's push URL and effective `push.default`/upstream mapping,
 > then checks that repository's PRs. Git keeps the saved URL for an existing
 > remote despite an inline `remote.<name>.url` override; a newly defined inline
 > remote uses that URL. Inline `--config-env` and `GIT_CONFIG_*`
-> assignments (including `env GIT_CONFIG_*=... git push`) that cannot be
-> resolved safely are blocked, as are unmappable inline bulk/refspec pushes.
+> assignments (including option-prefixed `env GIT_CONFIG_*=... git push`) that cannot be
+> resolved safely are blocked, as are `env -S` Git writes and unmappable inline
+> bulk/refspec pushes.
 > Inline remote-URL overrides on `git commit` are blocked so the commit check
 > still uses the checkout's repository identity. Ordinary pushes without
 > inline config retain the previous origin-based check and confirmation path.

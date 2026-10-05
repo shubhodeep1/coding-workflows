@@ -406,8 +406,27 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 			index += 1
-		if index < len(tokens) and tokens[index] == "env":
+		if index < len(tokens) and tokens[index] in ("env", "/usr/bin/env"):
 			index += 1
+			while index < len(tokens) and tokens[index].startswith("-"):
+				option = tokens[index]
+				if option == "--":
+					index += 1
+					break
+				if option in ("-u", "--unset", "-C", "--chdir") and index + 1 < len(tokens):
+					if option in ("-C", "--chdir") or _INLINE_GIT_CONFIG_ENV_RE.fullmatch(tokens[index + 1]):
+						config_block = "env directory or Git configuration override"
+					index += 2
+				elif option in ("-i", "--ignore-environment", "-0", "--null"):
+					if option in ("-i", "--ignore-environment"):
+						config_block = "env environment reset"
+					index += 1
+				elif option.startswith(("-u", "--unset=", "--chdir=")):
+					if option.startswith("--chdir=") or _INLINE_GIT_CONFIG_ENV_RE.fullmatch(option.split("=", 1)[-1].removeprefix("-u")):
+						config_block = "env directory or Git configuration override"
+					index += 1
+				else:
+					break
 			while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
 				name, value = tokens[index].split("=", 1)
 				if _INLINE_GIT_CONFIG_ENV_RE.fullmatch(name):
@@ -570,8 +589,15 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; destination branch is unknown", config=invocation.config)]
-	if remote_provided and invocation.config:
-		refspecs = positionals
+	if remote_provided and positionals and invocation.config:
+		with _git_environment(invocation.environment, invocation.config):
+			code, _, _ = _run(["git", "config", "--get", f"remote.{positionals[0]}.url"],
+				invocation.cwd, _GIT_TIMEOUT_SECONDS)
+		if code != 0 and not (code == 1 and extract_repo_slug(positionals[0])):
+			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+				"inline git config: positional push repository cannot be resolved", config=invocation.config)]
+		refspecs = positionals[1:]
+		selected_remote = positionals[0]
 	elif remote_provided and positionals:
 		with _git_environment(invocation.environment):
 			code, _, _ = _run(["git", "config", "--get", f"remote.{positionals[0]}.url"],
@@ -814,8 +840,19 @@ def git_subcommands(command: str) -> set[str]:
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1
-		if index < len(tokens) and tokens[index] == "env":
+		if index < len(tokens) and tokens[index] in ("env", "/usr/bin/env"):
 			index += 1
+			while index < len(tokens) and tokens[index].startswith("-"):
+				option = tokens[index]
+				if option == "--":
+					index += 1
+					break
+				if option in ("-u", "--unset", "-C", "--chdir") and index + 1 < len(tokens):
+					index += 2
+				elif option in ("-i", "--ignore-environment", "-0", "--null") or option.startswith(("-u", "--unset=", "--chdir=")):
+					index += 1
+				else:
+					break
 			while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
 				index += 1
 		if index >= len(tokens):
@@ -1465,6 +1502,18 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 
 	if _guard_disabled():
 		return 0, ""
+	try:
+		for tokens in _shell_segments(command):
+			index = 0
+			while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
+				index += 1
+			if index < len(tokens) and tokens[index] in ("env", "/usr/bin/env") and any(
+				option == "-S" or option.startswith(("-S", "--split-string")) for option in tokens[index + 1:]
+			):
+				if re.search(r"\bgit\b.*\b(?:push|commit)\b", " ".join(tokens[index + 1:])):
+					return 2, "BLOCKED: env -S Git command cannot be mapped safely by the merged-PR guard."
+	except ValueError:
+		pass
 	if not guarded_git_subcommands:
 		return 0, ""
 
@@ -1562,9 +1611,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				if not branch:
 					# Detached HEAD without a literal branch destination.
 					continue
+			# Inline options must not reach the network-bound default-branch lookup.
+			with _git_environment(target.environment):
 				base = default_branch(target.cwd)
-				if not push_slug and base and branch == base:
-					continue
+			if not push_slug and base and branch == base:
+				continue
 			with _git_environment(target.environment):
 				checkout_slug = repo_slug(target.cwd) if push_slug else ""
 			with _git_environment(target.environment, target.config):
