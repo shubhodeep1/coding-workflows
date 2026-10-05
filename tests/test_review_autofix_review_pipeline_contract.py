@@ -8212,17 +8212,19 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert not (source / ".claude/hooks/other.py").exists()
 		assert not (source / ".claude/commands/audit-plans.md").exists()
 		assert (source / "scripts/claude_settings.json.tmpl").exists()
-		assert not (source / "tests/test_audit_plans_command.py").exists()
+		assert (source / "tests/test_audit_plans_command.py").read_text() == "operator command contract\n"
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
 		(source / ".github/ai/claude_engine.json").write_text("after\n")
 		(source / ".claude/hooks/gh_api_write_guard.py").write_text("after\n")
 		(source / "scripts/claude_settings.json.tmpl").write_text("after\n")
+		(source / "tests/test_audit_plans_command.py").write_text("updated contract\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
 		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
 		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		assert (host / "tests/test_audit_plans_command.py").read_text() == "updated contract\n"
 		(source / ".claude/commands").mkdir()
 		(source / ".claude/commands/audit-plans.md").write_text("untrusted\n")
 		result = run("transfer")

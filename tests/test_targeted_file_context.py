@@ -617,6 +617,30 @@ def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:
 		assert "passwd" not in context
 
 
+def test_symlinks_and_git_metadata_are_not_inlined() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / ".git").mkdir()
+		(root / ".git" / "config").write_text("x-access-token:SENTINEL\n", encoding="utf-8")
+		(root / "docs").mkdir()
+		(root / "docs" / "linked.md").symlink_to(root / ".git" / "config")
+		(root / "linked-dir").symlink_to(root / "docs", target_is_directory=True)
+		(root / "docs" / "regular.md").write_text("ordinary text\n", encoding="utf-8")
+
+		context = emit_context(
+			["docs/linked.md", "linked-dir/regular.md", ".git/config", ".GIT/config", "docs/regular.md"],
+			root,
+			max_bytes=4096,
+		)
+		assert "SENTINEL" not in context
+		assert "--- FILE: docs/linked.md (symbolic link; not inlined) ---" in context
+		assert "--- FILE: linked-dir/regular.md (symbolic link; not inlined) ---" in context
+		assert "--- FILE: .git/config (.git path; not inlined) ---" in context
+		assert "--- FILE: .GIT/config (.git path; not inlined) ---" in context
+		assert "--- FILE: docs/regular.md (14 bytes" in context
+		assert "ordinary text" in context
+
+
 def test_missing_input_emits_safe_empty_block() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		context = emit_context(
@@ -912,6 +936,17 @@ def main() -> int:
 		passed += 1
 	else:
 		print(f"  FAIL  delegated tests/test_semble_helpers.py: exit {companion.returncode}")
+		failed += 1
+	static_context_guard = subprocess.run(
+		[sys.executable, str(REPO_ROOT / "tests" / "test_static_context_symlink_guard.py")],
+		cwd=REPO_ROOT,
+		check=False,
+	)
+	if static_context_guard.returncode == 0:
+		print("  PASS  delegated tests/test_static_context_symlink_guard.py")
+		passed += 1
+	else:
+		print(f"  FAIL  delegated tests/test_static_context_symlink_guard.py: exit {static_context_guard.returncode}")
 		failed += 1
 	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 	return 1 if failed > 0 else 0
