@@ -235,7 +235,7 @@ _ai_engine_isolation_preflight()
 	AI_ENGINE_ISOLATION_FAILURE=""
 	command -v docker >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_docker_missing; return 1; }
 	command -v python3 >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_python_missing; return 1; }
-	for entry in setsid ps git realpath sha256sum; do
+	for entry in setsid ps git realpath sha256sum timeout; do
 		command -v "${entry}" >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_support_missing; return 1; }
 	done
 	if [ ! -f "${_AI_ENGINE_DIR}/claude_anthropic_relay.py" ] || [ ! -f "${_AI_ENGINE_DIR}/clarify_sandbox/Dockerfile" ]; then
@@ -336,7 +336,7 @@ _ai_engine_claude_run_isolated()
 {
 	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" session_id="$5" model="$6" effort="$7" instructions="$8" pool_dir="$9" run_dir="${10}" hide_claude_md="${11}"
 	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root snapshot_dir snapshot_result snapshot_summary snapshot_files snapshot_git snapshot_reason extra_files
-	local extra_snapshot_dir extra_source extra_dest extra_summary extra_existing run_dir_real extra_overlaps extra_details
+	local extra_snapshot_dir extra_source extra_dest extra_summary extra_existing run_dir_real extra_overlaps extra_details read_max_secs
 	local -a mounts=() session_args=() cmd=() accounts=() snapshot_args=() extra_sources=() extra_roots=()
 	local git_objects snapshot_files_used snapshot_bytes_used snapshot_files_limit snapshot_bytes_limit extra_snapshot
 	local AI_ENGINE_ISOLATION_WORKDIR AI_ENGINE_ISOLATION_FAILURE AI_ENGINE_ISOLATION_GUARD
@@ -381,7 +381,7 @@ _ai_engine_claude_run_isolated()
 	fi
 	snapshot_dir="${run_dir}/source-snapshot"
 	if [ "${hide_claude_md}" = true ]; then
-		snapshot_args+=(--omit-root-claude-md)
+		snapshot_args+=(--omit-root-claude-md --omit-claude-md)
 	fi
 	if ! snapshot_result="$(_ai_engine_py read-snapshot --workdir "${workdir}" --dest "${snapshot_dir}" "${snapshot_args[@]}")" ||
 	   ! snapshot_summary="$(_ai_engine_snapshot_summary "${snapshot_result}")"; then
@@ -396,7 +396,7 @@ _ai_engine_claude_run_isolated()
 		if ! mkdir -p -- "${extra_snapshot_dir}" ||
 		   ! extra_summary="$(_ai_engine_py read-snapshot --workdir "${extra_source}" --dest "${extra_dest}")" ||
 		   ! extra_details="$(_ai_engine_snapshot_summary "${extra_summary}")"; then
-			echo "CLAUDE_READ_ISOLATION role=${role} outcome=rejected reason=isolation_snapshot_failed files=${snapshot_files} git=${snapshot_git} extra_dirs=0" >&2
+			echo "CLAUDE_READ_ISOLATION role=${role} outcome=rejected reason=isolation_snapshot_failed files=${snapshot_files} git=${snapshot_git} extra_dirs=$((${#mounts[@]} / 2 - 1))" >&2
 			ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 		fi
 		extra_files="${extra_details%% *}"
@@ -411,8 +411,8 @@ _ai_engine_claude_run_isolated()
 	fi
 	# Each auxiliary checkout gets the same credential filter and a synthetic Git
 	# commit. Share the main snapshot's file/byte budget across all three roots.
-	snapshot_files_limit="${CLAUDE_READ_SNAPSHOT_MAX_FILES:-20000}"
-	snapshot_bytes_limit="${CLAUDE_READ_SNAPSHOT_MAX_BYTES:-268435456}"
+	snapshot_files_limit="${CLAUDE_READ_SNAPSHOT_MAX_FILES:-50000}"
+	snapshot_bytes_limit="${CLAUDE_READ_SNAPSHOT_MAX_BYTES:-1073741824}"
 	if [[ ! "${snapshot_files_limit}" =~ ^[0-9]+$ || ! "${snapshot_bytes_limit}" =~ ^[0-9]+$ ]]; then
 		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
@@ -452,6 +452,11 @@ _ai_engine_claude_run_isolated()
 		mounts+=(--mount "type=bind,src=${session_mount_root},dst=/home/agent/.claude/projects")
 	fi
 	probe_model="$(_ai_engine_py config --key probe_model)" || { ai_engine_fallback "${role}" policy_unavailable; return 75; }
+	read_max_secs="${CLAUDE_READ_ISOLATION_MAX_SECS:-14400}"
+	if [[ ! "${read_max_secs}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+		echo '::warning::invalid CLAUDE_READ_ISOLATION_MAX_SECS; using 14400' >&2
+		read_max_secs=14400
+	fi
 	mapfile -t accounts < <(ai_engine_accounts)
 	echo "CLAUDE_ISOLATION role=${role} profile=read mode=container extra_dirs=$((${#extra_roots[@]} + ${#AI_ENGINE_ISOLATION_PATHS[@]}))" >&2
 	echo "CLAUDE_READ_ISOLATION role=${role} outcome=ready reason=${snapshot_reason} files=${snapshot_files} git=${snapshot_git} extra_dirs=$((${#extra_roots[@]} + ${#AI_ENGINE_ISOLATION_PATHS[@]}))" >&2
@@ -515,10 +520,10 @@ _ai_engine_claude_run_isolated()
 		stderr_file="${run_dir}/stderr-${name}.txt"
 		attempt_rc=0
 		if [ -f "${_AI_ENGINE_DIR}/codex_stall_guard.sh" ]; then
-			bash "${_AI_ENGINE_DIR}/codex_stall_guard.sh" --phase "${role,,}" --engine claude \
+			timeout --signal=TERM --kill-after=30s "${read_max_secs}s" bash "${_AI_ENGINE_DIR}/codex_stall_guard.sh" --phase "${role,,}" --engine claude \
 				--stdout-file "${transcript}" --stderr-file "${stderr_file}" -- "${cmd[@]}" < "${prompt_file}" || attempt_rc=$?
 		else
-			"${cmd[@]}" < "${prompt_file}" > "${transcript}" 2> "${stderr_file}" || attempt_rc=$?
+			timeout --signal=TERM --kill-after=30s "${read_max_secs}s" "${cmd[@]}" < "${prompt_file}" > "${transcript}" 2> "${stderr_file}" || attempt_rc=$?
 		fi
 		env -i PATH="${PATH}" docker rm -f "${container_name}" >/dev/null 2>&1 || true
 		kill "${broker_pid}" "${reaper_pid}" 2>/dev/null || true

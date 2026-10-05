@@ -469,7 +469,10 @@ def test_read_snapshot_copies_tracked_files_and_sanitized_git_history(tmp_path: 
 	git("config", "http.https://github.com/.extraheader", "AUTHORIZATION: secret")
 	(repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
 	(repo / "CLAUDE.md").write_text("private marker\n", encoding="utf-8")
-	git("add", "tracked.txt", "CLAUDE.md")
+	(repo / ".git-credentials").write_text("https://user:secret@example.invalid\n", encoding="utf-8")
+	(repo / ".claude").mkdir()
+	(repo / ".claude" / "settings.json").write_text('{"key":"secret"}\n', encoding="utf-8")
+	git("add", "tracked.txt", "CLAUDE.md", ".git-credentials", ".claude/settings.json")
 	git("commit", "-qm", "initial")
 	git("update-ref", "refs/remotes/origin/main", "HEAD")
 	(repo / "secret.txt").write_text("secret\n", encoding="utf-8")
@@ -488,6 +491,8 @@ def test_read_snapshot_copies_tracked_files_and_sanitized_git_history(tmp_path: 
 		assert not (tmp_path / "host-index").exists()
 		assert json.loads(result.stdout)["git"] == "copied"
 		assert not (dest / "CLAUDE.md").exists()
+		assert not (dest / ".git-credentials").exists()
+		assert not (dest / ".claude").exists()
 		assert (dest / "tracked.txt").read_text(encoding="utf-8") == "tracked\n"
 		assert not (dest / "secret.txt").exists()
 		assert not (dest / "tracked-link").exists()
@@ -495,6 +500,33 @@ def test_read_snapshot_copies_tracked_files_and_sanitized_git_history(tmp_path: 
 		assert "extraheader" not in (dest / ".git/config").read_text(encoding="utf-8")
 		assert git("log", "-1", "--oneline", cwd=dest).endswith("initial")
 		assert git("rev-parse", "origin/main", cwd=dest) == git("rev-parse", "HEAD", cwd=repo)
+
+
+def test_read_snapshot_deduplicates_unmerged_index_paths(tmp_path: Path) -> None:
+	repo = tmp_path / "conflicted"
+	repo.mkdir()
+	def git(*args: str) -> subprocess.CompletedProcess[str]:
+		return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True)
+	git("init", "-q")
+	git("config", "user.email", "test@example.invalid")
+	git("config", "user.name", "Test")
+	(repo / "shared.txt").write_text("base\n", encoding="utf-8")
+	git("add", "shared.txt")
+	git("commit", "-qm", "base")
+	git("checkout", "-qb", "other")
+	(repo / "shared.txt").write_text("other\n", encoding="utf-8")
+	git("commit", "-qam", "other")
+	git("checkout", "-q", "-")
+	(repo / "shared.txt").write_text("ours\n", encoding="utf-8")
+	git("commit", "-qam", "ours")
+	merge = subprocess.run(["git", "-C", str(repo), "merge", "other"], capture_output=True, text=True)
+	assert merge.returncode == 1
+	assert len(git("ls-files", "--cached").stdout.splitlines()) == 3
+	dest = tmp_path / "conflict-snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["files"] == 1
+	assert (dest / "shared.txt").read_text(encoding="utf-8") == (repo / "shared.txt").read_text(encoding="utf-8")
 
 
 def test_read_snapshot_limits_non_git_and_alternates(tmp_path: Path) -> None:

@@ -2079,7 +2079,7 @@ returns `75` for the caller's existing fallback, never unisolated Claude.
 | `AI_ENGINE_ISOLATED_READ_PATHS` | empty | WORKFLOW_HEAL-only paths under `RUNTIME_DIR` for filtered auxiliary snapshots; other paths fall back. |
 | `CLAUDE_READ_SNAPSHOT_MAX_FILES` | `50000` | Maximum snapshot working-tree file count. |
 | `CLAUDE_READ_SNAPSHOT_MAX_BYTES` | `1073741824` | Maximum snapshot working-tree bytes. |
-| `CLAUDE_READ_ISOLATION_MAX_SECS` | `14400` | Maximum per-account relay and container call time. |
+| `CLAUDE_READ_ISOLATION_MAX_SECS` | `14400` | Maximum per-account container call time; relay startup has a separate 5-second check. Invalid values use the default. |
 
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input

@@ -1212,7 +1212,7 @@ def cmd_settings(args: argparse.Namespace) -> int:
 	return 0
 
 
-_SNAPSHOT_BAD_PARTS = frozenset((".git", ".ai", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", ".env", "secrets", "credentials", "__pycache__"))
+_SNAPSHOT_BAD_PARTS = frozenset((".git", ".ai", ".codex", ".claude", ".ssh", ".codex-workflow-src", ".codex-workflow-src-main", ".env", ".git-credentials", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss", "secrets", "credentials", "__pycache__"))
 _SNAPSHOT_BAD_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
 
 
@@ -1377,7 +1377,7 @@ def read_snapshot(workdir: Path, dest: Path, omit_root_claude_md: bool = False) 
 	dest.mkdir(parents=True, mode=0o700)
 	try:
 		if git_workdir:
-			paths = [Path(os.fsdecode(path)) for path in _snapshot_git(workdir, "ls-files", "-z", "--cached").split(b"\0") if path]
+			paths = list(dict.fromkeys(Path(os.fsdecode(path)) for path in _snapshot_git(workdir, "ls-files", "-z", "--cached").split(b"\0") if path))
 		else:
 			paths = []
 			for base, dirs, files in os.walk(workdir, followlinks=False):

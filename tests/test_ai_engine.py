@@ -766,6 +766,28 @@ def test_read_isolation_mounts_only_sanitized_extra_directories(sandbox: dict) -
 	assert str(sandbox["pool"]) not in " ".join(argv)
 
 
+def test_read_isolation_reports_prepared_extras_on_snapshot_failure(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	first = sandbox["tmp"] / "first-source"
+	first.mkdir()
+	(first / "source.txt").write_text("safe\n", encoding="utf-8")
+	second = sandbox["tmp"] / "broken-source"
+	(second / ".git").mkdir(parents=True)
+	result = _claude_run(sandbox, "WORKFLOW_HEAL", AI_ENGINE_READ_EXTRA_DIRS=f"{first}:{second}")
+	assert _rc(result) == 75, result.stderr
+	assert "outcome=rejected reason=isolation_snapshot_failed files=2 git=none extra_dirs=1" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_enforces_container_timeout(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["tmp"] / "docker-mode").write_text("hang")
+	result = _claude_run(sandbox, "SECURITY_AUDIT", CLAUDE_READ_ISOLATION_MAX_SECS="1")
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_container_start_failed" in result.stderr
+	assert _docker_calls(sandbox)
+
+
 def test_read_isolation_relay_failure_falls_back(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
