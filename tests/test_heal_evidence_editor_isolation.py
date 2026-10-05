@@ -221,6 +221,25 @@ def test_restore_validates_every_checkout_before_injecting_any_token(tmp_path: P
 	assert "newsecret" not in (support / ".git" / "config").read_text()
 
 
+def test_restore_rejects_marker_header_without_a_validated_origin(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	support = repo / ".codex-workflow-src"
+	support.mkdir()
+	_git(support, "init", "-q")
+	_git(support, "remote", "add", "origin", "https://github.com/shubhodeep1/coding-workflows.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	marker = tmp_path / "editor_git_credentials_hidden.txt"
+	marker.write_text(f"{repo}\torigin\n{support}\textraheader:http.https://github.com/.extraheader\n")
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert result.returncode != 0 and "reason=header_without_origin" in result.stderr
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+	assert "newsecret" not in (support / ".git" / "config").read_text()
+
+
 def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	implement = (WORKFLOWS / "implement.yml").read_text()
 	plan = (WORKFLOWS / "plan.yml").read_text()
