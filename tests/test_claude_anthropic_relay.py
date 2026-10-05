@@ -180,8 +180,9 @@ def test_broker_rejects_client_authorization(chain) -> None:
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	body = json.dumps({"model": MODEL}).encode()
 	# Send only headers: rejection must precede reading the advertised body.
-	connection.request("POST", "/v1/messages", None, {"Content-Type": "application/json", "Content-Length": str(len(body)), "Authorization": "Bearer mine"})
+	connection.connect()
 	connection.sock.settimeout(5)
+	connection.request("POST", "/v1/messages", None, {"Content-Type": "application/json", "Content-Length": str(len(body)), "Authorization": "Bearer mine"})
 	try:
 		assert connection.getresponse().status == 400
 	finally:
