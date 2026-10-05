@@ -560,6 +560,18 @@ def test_heal_auxiliary_snapshot_shares_file_budget(sandbox: dict) -> None:
 	assert not _docker_calls(sandbox)
 
 
+def test_heal_duplicate_auxiliary_paths_fail_before_docker(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	runtime = sandbox["tmp"] / "heal-runtime"
+	checkout = runtime / "heal_src"
+	checkout.mkdir(parents=True)
+	result = _claude_run(sandbox, "WORKFLOW_HEAL", RUNTIME_DIR=str(runtime),
+		AI_ENGINE_ISOLATED_READ_PATHS=f"{checkout}:{checkout}")
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_read_path_invalid" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
 @pytest.mark.parametrize("invalid", ["other", "symlink", "extra_role"])
 def test_heal_auxiliary_paths_fail_closed_on_unapproved_mount(sandbox: dict, invalid: str) -> None:
 	_accounts(sandbox, A="TOK_OK")

@@ -227,6 +227,10 @@ _ai_engine_isolation_preflight()
 		if [ "${#AI_ENGINE_ISOLATION_PATHS[@]}" -gt 2 ] || [[ "${AI_ENGINE_ISOLATED_READ_PATHS}" == *: ]]; then
 			AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
 		fi
+		if [ "${#AI_ENGINE_ISOLATION_PATHS[@]}" -eq 2 ] &&
+		   [ "${AI_ENGINE_ISOLATION_PATHS[0]}" = "${AI_ENGINE_ISOLATION_PATHS[1]}" ]; then
+			AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
+		fi
 		for candidate in "${AI_ENGINE_ISOLATION_PATHS[@]}"; do
 			if [ ! -d "${candidate}" ] || [ -L "${candidate}" ] ||
 			   { [ "${candidate}" != "${RUNTIME_DIR}/heal_src" ] && [ "${candidate}" != "${RUNTIME_DIR}/heal_branch_tip" ]; }; then
