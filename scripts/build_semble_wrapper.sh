@@ -23,6 +23,14 @@
 
 set -euo pipefail
 
+semble_neutral_dir=""
+
+semble_python()
+(
+	cd -- "${semble_neutral_dir}" || return 1
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "${semble_python_path}" "$@"
+)
+
 log()
 {
 	printf 'build_semble_wrapper: %s\n' "$*" >&2
@@ -113,7 +121,7 @@ build_index()
 	rm -rf "${index_path}" || true
 	mkdir -p "${wrapper_dir}" || true
 
-	if ! "${semble_python_path}" - "${repo_root}" "${index_path}" <<'PY'
+	if ! semble_python - "${repo_root}" "${index_path}" <<'PY'
 import pickle
 import sys
 from pathlib import Path
@@ -277,6 +285,21 @@ main()
 	local semble_python_path=""
 
 	resolve_paths
+	if ! repo_root="$(cd -- "${repo_root}" 2>/dev/null && pwd)"; then
+		mark_unavailable "repo-root-unavailable"
+	fi
+	semble_neutral_dir="$(mktemp -d 2>/dev/null || true)"
+	if [ -z "${semble_neutral_dir}" ]; then
+		mark_unavailable "neutral-cwd-unavailable"
+	fi
+	trap 'rm -rf -- "${semble_neutral_dir}"' EXIT
+	# The interpreter runs from the neutral cwd, including when the index
+	# destination was supplied relative to the original workspace.
+	if ! index_path="$(realpath -m -- "${index_path}")" ||
+	   ! wrapper_dir="$(realpath -m -- "${wrapper_dir}")"; then
+		mark_unavailable "path-resolution-failed"
+	fi
+	wrapper_path="${wrapper_dir}/semble"
 
 	# Resolve the python interpreter once so build_index() and the generated
 	# wrapper agree with whatever install_semble.sh used. SEMBLE_PYTHON_BIN
@@ -288,10 +311,10 @@ main()
 		mark_unavailable "python-interpreter-missing:${semble_python_bin}"
 	fi
 
-	if ! "${semble_python_path}" -c "import semble" >/dev/null 2>&1; then
+	if ! semble_python -c "import semble" >/dev/null 2>&1; then
 		mark_unavailable "semble-python-module-missing"
 	fi
-	if ! "${semble_python_path}" -c "import bm25s" >/dev/null 2>&1; then
+	if ! semble_python -c "import bm25s" >/dev/null 2>&1; then
 		mark_unavailable "bm25s-missing"
 	fi
 	# Validate the import the *generated wrapper* needs at query time.
@@ -301,7 +324,7 @@ main()
 	# the index would build successfully and `SEMBLE_INDEX_AVAILABLE=true`
 	# would be written, only for `semble query` to ModuleNotFoundError at
 	# runtime. Catching it here keeps the build/query contract honest.
-	if ! "${semble_python_path}" -c "from semble.search import search_bm25" >/dev/null 2>&1; then
+	if ! semble_python -c "from semble.search import search_bm25" >/dev/null 2>&1; then
 		mark_unavailable "semble-search-import-missing"
 	fi
 
