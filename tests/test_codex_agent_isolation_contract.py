@@ -137,6 +137,9 @@ def test_dependency_containers_require_the_registry_proxy():
 	for workflow, minimum in (("implement.yml", 2), ("review_autofix.yml", 2)):
 		text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
 		assert text.count("DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}") >= minimum
+	assert "Review dependencies skipped: registry proxy support missing" in (SCRIPTS / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert "Review dependencies skipped: registry proxy unavailable" in (SCRIPTS / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert "Review dependencies skipped: registry proxy bridge unavailable" in (SCRIPTS / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 
 
 def step_block(workflow_text: str, name: str) -> str:

@@ -62,6 +62,43 @@ def test_broker_rejects_invalid_requests(broker, capfd, head, status, reason):
 	assert "reason=" + reason in capfd.readouterr().err
 
 
+def test_empty_probe_does_not_log_a_refusal(broker, capfd):
+	with socket.socket(socket.AF_UNIX) as client:
+		client.settimeout(2)
+		client.connect(broker)
+		client.shutdown(socket.SHUT_WR)
+		assert client.recv(512) == b""
+	assert "outcome=refused" not in capfd.readouterr().err
+
+
+def test_broker_limits_threads_before_accepting_a_handler(tmp_path, monkeypatch):
+	started = threading.Event()
+	release = threading.Event()
+	handler_calls = []
+
+	def hold_handler(self):
+		handler_calls.append(self)
+		started.set()
+		release.wait(timeout=10)
+
+	monkeypatch.setattr(proxy.BrokerHandler, "handle_tunnel", hold_handler)
+	path = str(tmp_path / "limited.sock")
+	with proxy.ThreadingUnixServer(path, proxy.BrokerHandler) as server:
+		server.slots = threading.BoundedSemaphore(1)
+		worker = threading.Thread(target=server.serve_forever, daemon=True)
+		worker.start()
+		try:
+			with socket.socket(socket.AF_UNIX) as first:
+				first.connect(path)
+				assert started.wait(timeout=2)
+				assert b"503" in request(path, b"CONNECT pypi.org:443 HTTP/1.1\r\n\r\n")
+				assert len(handler_calls) == 1
+		finally:
+			release.set()
+			server.shutdown()
+			worker.join(timeout=2)
+
+
 @pytest.mark.parametrize("addresses", [
 	["127.0.0.1"], ["10.0.0.1"], ["169.254.169.254"],
 	["93.184.216.34", "127.0.0.1"], ["224.0.0.1"],
@@ -101,6 +138,22 @@ def test_broker_splices_to_vetted_address_and_bridge_forwards(monkeypatch, broke
 			bridge.shutdown()
 			worker.join(timeout=2)
 	assert capfd.readouterr().err.count("outcome=allowed host=pypi.org") == 1
+
+
+def test_bridge_reports_broker_connection_failure(tmp_path, capfd):
+	with proxy.ThreadingTCPServer(("127.0.0.1", 0), proxy.BridgeHandler) as bridge:
+		bridge.broker_path = str(tmp_path / "missing.sock")
+		worker = threading.Thread(target=bridge.serve_forever, daemon=True)
+		worker.start()
+		try:
+			with socket.create_connection(bridge.server_address, timeout=2) as client:
+				client.settimeout(2)
+				client.sendall(b"CONNECT pypi.org:443 HTTP/1.1\r\n\r\n")
+				assert client.recv(512).startswith(b"HTTP/1.1 502 Bad Gateway\r\n")
+		finally:
+			bridge.shutdown()
+			worker.join(timeout=2)
+	assert "reason=broker_unavailable" in capfd.readouterr().err
 
 
 def test_global_resolution_preserves_vetted_ip_tuple(monkeypatch):

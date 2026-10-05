@@ -558,7 +558,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   allowlisted public registry hosts, vets all resolved IPs and connects by IP.
   The review dependency container uses the same proxy; the default allowlist is
   PyPI and npm/Yarn registries, replaceable via `DEPENDENCY_PROXY_ALLOWED_HOSTS`.
-  A missing proxy never restores direct container network access.
+  A missing proxy skips dependency installation without restoring direct
+  container network access; review preparation continues, but validations
+  needing those dependencies may be unverified.
   Their output stays in the sandbox ("prep roots") and is never copied back.
   The agent itself has no network: it marks validators it cannot run
   UNVERIFIED instead of installing them.

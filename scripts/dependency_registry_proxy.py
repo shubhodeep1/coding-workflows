@@ -92,13 +92,7 @@ def splice(left: socket.socket, right: socket.socket) -> None:
 
 class BrokerHandler(socketserver.BaseRequestHandler):
 	def handle(self) -> None:
-		if not self.server.slots.acquire(blocking=False):
-			self.refuse(503, "busy")
-			return
-		try:
-			self.handle_tunnel()
-		finally:
-			self.server.slots.release()
+		self.handle_tunnel()
 
 	def refuse(self, status: int, reason: str, host: str = "", port: str = "") -> None:
 		print(f"DEPENDENCY_PROXY outcome=refused host={sanitize_for_log(host)} port={sanitize_for_log(port)} reason={reason}", file=sys.stderr, flush=True)
@@ -117,6 +111,8 @@ class BrokerHandler(socketserver.BaseRequestHandler):
 					break
 				chunk = self.request.recv(1)
 				if not chunk:
+					if not head:
+						return
 					break
 				head.extend(chunk)
 		except (OSError, TimeoutError):
@@ -168,19 +164,49 @@ class BrokerHandler(socketserver.BaseRequestHandler):
 
 class BridgeHandler(socketserver.BaseRequestHandler):
 	def handle(self) -> None:
+		connected = False
 		try:
 			with socket.socket(socket.AF_UNIX) as broker:
 				broker.settimeout(15)
 				broker.connect(self.server.broker_path)
+				connected = True
 				broker.settimeout(None)
 				splice(self.request, broker)
 		except OSError:
-			pass
+			if not connected:
+				print("DEPENDENCY_PROXY outcome=refused reason=broker_unavailable", file=sys.stderr, flush=True)
+				try:
+					self.request.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+				except OSError:
+					pass
 
 
 class ThreadingUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 	daemon_threads = True
 	block_on_close = False
+
+	def process_request(self, request: socket.socket, client_address: str) -> None:
+		if not self.slots.acquire(blocking=False):
+			print("DEPENDENCY_PROXY outcome=refused host= port= reason=busy", file=sys.stderr, flush=True)
+			try:
+				request.settimeout(1)
+				request.sendall(b"HTTP/1.1 503 Rejected\r\nConnection: close\r\n\r\n")
+			except OSError:
+				pass
+			finally:
+				self.shutdown_request(request)
+			return
+		try:
+			super().process_request(request, client_address)
+		except BaseException:
+			self.slots.release()
+			raise
+
+	def process_request_thread(self, request: socket.socket, client_address: str) -> None:
+		try:
+			super().process_request_thread(request, client_address)
+		finally:
+			self.slots.release()
 
 
 class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
