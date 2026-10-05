@@ -306,6 +306,28 @@ def parse_heal_markers(body: str | None) -> dict[str, str]:
 	return markers
 
 
+def parse_leading_heal_markers(text: str | None) -> dict[str, str]:
+	"""Read only whole-line markers before any issue/comment prose or evidence."""
+	markers: dict[str, str] = {}
+	for line in (text or "").split("\n"):
+		match = re.fullmatch(r"<!--\s*" + re.escape(MARKER_PREFIX) + r"(?P<key>[a-z_]+)(?:=(?P<value>[^\s>]+))?\s*-->", line.rstrip("\r"))
+		if not match:
+			break
+		if match.group("value") is not None:
+			markers.setdefault(match.group("key"), match.group("value"))
+	return markers
+
+
+def compose_runs_marker(run_refs: Any) -> str:
+	"""Render the intake's machine-readable run references, if any."""
+	run_tokens = [
+		f"{ref['repo']}:{ref['run_id']}"
+		for ref in run_refs or []
+		if isinstance(ref, dict) and is_valid_repo_slug(ref.get("repo")) and str(ref.get("run_id") or "").isdigit()
+	]
+	return f"<!-- {MARKER_PREFIX}runs={','.join(run_tokens)} -->" if run_tokens else ""
+
+
 def extract_run_refs(texts: Iterable[str], repo: str, limit: int = MAX_RUN_REFS) -> list[dict[str, Any]]:
 	"""Collect unique ``actions/runs/<id>`` links for ``repo`` from free text.
 
@@ -1668,13 +1690,9 @@ def compose_issue_body(
 	# The failing runs, machine-readable, so the clarify / plan / implement
 	# evidence step (workflow_failure_heal_evidence.py) can fetch their logs
 	# even when the intake found no job to summarise.
-	run_tokens = [
-		f"{ref['repo']}:{ref['run_id']}"
-		for ref in payload.get("run_refs") or []
-		if isinstance(ref, dict) and is_valid_repo_slug(ref.get("repo")) and str(ref.get("run_id") or "").isdigit()
-	]
-	if run_tokens:
-		parts.append(f"<!-- {MARKER_PREFIX}runs={','.join(run_tokens)} -->")
+	runs_marker = compose_runs_marker(payload.get("run_refs"))
+	if runs_marker:
+		parts.append(runs_marker)
 	parts.append("")
 	if target_branch:
 		parts.append(f"- **Target branch:** `{target_branch}`")
@@ -1776,7 +1794,11 @@ def compose_issue_body(
 
 
 def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str) -> str:
-	lines = [f"<!-- {MARKER_PREFIX}occurrence -->", "Another occurrence of this failure was reported:", ""]
+	lines = [f"<!-- {MARKER_PREFIX}occurrence -->"]
+	runs_marker = compose_runs_marker(payload.get("run_refs"))
+	if runs_marker:
+		lines.append(runs_marker)
+	lines.extend(["Another occurrence of this failure was reported:", ""])
 	lines.extend(_context_lines(payload, run_summaries=[]))
 	for ref in payload.get("run_refs") or []:
 		lines.append(f"- **Failed run:** {ref['url']}")

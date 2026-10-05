@@ -1389,10 +1389,12 @@ through `clarify → plan → implement → review`.
   OWNER/MEMBER/COLLABORATOR or `github-actions[bot]` author) each of the three
   stages runs `workflow_failure_heal_evidence.py collect` in a trusted step
   (`GH_PAT`) before its agent and writes an evidence folder: per failing run
-  (the `runs=` marker, `**Failed run:**` lines, and occurrence comments by the
-  issue's own author; at most 3, newest) the sliced log of the failing or
+  (only the leading `runs=` marker of the issue body and of intake-authored
+  occurrence comments; at most 3, newest) the sliced log of the failing or
   review job and the diagnostic files of the `codex-review-autofix-failure-logs-*`
   / `reviewer-logs-*` artifacts (editor attempts, `.err`, `status_*`);
+  every run must match the reported repository, head SHA and branch or PR,
+  and must have failed (a successful or unfinished run must have a review job);
   provenance (source PR state, the failing head against the default and
   target branches); earlier heals of the same lineage with where each fix PR
   merged and **whether that reached `main`**; the other runs on the failing
