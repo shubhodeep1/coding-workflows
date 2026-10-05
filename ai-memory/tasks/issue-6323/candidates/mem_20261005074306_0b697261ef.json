@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6323,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6323\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6330\",\"pr_number\":6330,\"branch\":\"ai/issue-6323\",\"run_id\":\"37277611888\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37277611888\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/check_failure_triage.yml\",\".github/workflows/internal-check-failure-triage.yml\",\"agents.md\",\"changelog.d/6323-check-triage-isolated-diagnosis.md\",\"scripts/check_failure_triage.sh\",\"tests/test_check_failure_triage_workflow_security.py\",\"tests/test_ci_failure_workflow_run_triggers.py\",\"workflow-templates/ai-check-failure-triage.yml\"]}",
+  "fingerprint": "deeb84979082ab5692e24fe8952fb46aec15af340448ab60413f2a9d4c24fa30",
+  "lineage": {
+    "issue_number": 6323,
+    "parent_ids": [],
+    "pr_number": 6330,
+    "run_id": "37277611888",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37277611888",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6330"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005074306_0b697261ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6323,
+    "level": "run",
+    "pr_number": 6330,
+    "run_id": "37277611888"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6323: https://github.com/shubhodeep1/coding-workflows/pull/6330",
+  "timestamps": {
+    "created_at": "2026-10-05T07:43:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
