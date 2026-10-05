@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3643 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The command suppresses all `rev-parse` failures, causing a broken checkout to be reported as a generic review-head mismatch.\n  WHY: A missing workspace, corrupt repository, or permission error receives the same diagnostic as a genuine SHA mismatch, slowing operator triage.\n- scripts/review_untrusted_workspace.py:38-39 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The exact-path exclusion for one test is fragile and leaves the isolation policy implicit, so a rename or new operator-input-dependent test can reintroduce the isolated-snapshot collection failure without a clear diagnostic.\n  WHY: The exclusion only matches `tests/test_audit_plans_command.py`, while the required `.claude/commands/audit-plans.md` is outside the snapshot.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:3643 | severity=low | confidence=3\n  PROBLEM: The command `env -u GIT_DIR -u GIT_WORK_TREE git -C \"${GITHUB_WORKSPACE}\" rev-parse HEAD 2>/dev/null || true` swallows every `rev-parse` failure mode (missing directory, corrupt repository, permission error) into an empty string via `2>/dev/null || true`. The downstream `[[ \"${review_source_sha}\" =~ ^[0-9a-f]{40}$ ]]` check then fails, triggering `AUTOFIX_STALE_BASE_SKIP=true` with a single generic message that does not distinguish a genuine SHA mismatch from a broken checkout.\n  WHY: The review is safely skipped either way (fail-safe direction), but a legitimately broken checkout such as a missing GITHUB_WORKSPACE or corrupt .git produces the same \"Review source, workspace, and PR metadata heads differ\" diagnostic as an actual SHA mismatch, slowing operator triage of an already-broken run.\n- scripts/review_untrusted_workspace.py:38-39 | severity=low | confidence=3\n  PROBLEM: The exclusion `if name == \"tests/test_audit_plans_command.py\": return False` is an exact-match on one file path. If that test module is ever renamed, or a second operator-input-dependent test is added, the exclusion silently stops matching and the test re-enters the isolated-editor snapshot, where it fails at pytest-collection time with `FileNotFoundError` because the required `.claude/commands/audit-plans.md` is intentionally outside the snapshot.\n  WHY: The CI pipeline relies on this exclusion to keep the isolated editor testable; a rename would not break snapshot construction but would restore the collection failure from PR #6135 without any signal from the `allowed()` predicate itself. The failure is ultimately caught as a test failure, so the blast radius is contained, but the maintenance contract is fragile.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py:38-39 | severity=low | confidence=3\n  PROBLEM: The exclusion is a hardcoded exact-match string on one specific test path. If `tests/test_audit_plans_command.py` is renamed, moved, or a second operator-input-dependent test is added (e.g. another test reading `.claude/commands/<x>.md` outside the isolation trust boundary), pytest collection in the isolated snapshot will trip the same `FileNotFoundError` mode this change exists to suppress \u2014 and the only diagnostic the isolation layer offers is the generic path-free `unsafe_directory` reason, so a future contributor has no signal from `allowed()` that the new test needed the same exemption.\n  WHY: `allowed()` returns `False` only on literal `name == \"tests/test_audit_plans_command.py\"`. A renamed path passes through to the suffix allow-list, lands in the snapshot, and fails pytest at fixture-time exactly as PR #6135 did.\n- scripts/review_untrusted_workspace.py:38-39 | severity=low | confidence=3\n  PROBLEM: The hardcoded exclusion quietly extends the trust-boundary predicate (`allowed()`) for a single test file, decoupled from any documented rule that names the contract. The trust-boundary helper already gates on `EXCLUDED` / `SUFFIXES` / `ROOT_FILES` / the `.claude/hooks` allow-list at `scripts/review_untrusted_workspace.py:40-46`, so the new check sits outside the explicit policy surfaces a future contributor would inspect when adding a new operator-input test.\n  WHY: A new operator-input test added today silently bypasses the trust boundary when the snapshot cannot supply its required input, with no audit trail linking the test to its exclusion.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_untrusted_workspace.py:38-39\n  PROBLEM: The exclusion is a hardcoded exact-match on a single test path. If that test is renamed or another test with a module-scope fixture reading an excluded operator file is added, the isolated-editor pytest collection failure silently reappears with no diagnostic from the allowed() predicate itself.\n  WHY: The suggested minimal fix is to add a comment above the exclusion cross-referencing the test's module-scope fixture contract, or widen to a small set if a second such test appears; no change needed today.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d0cec9689b7123166d5078645831dc95e68621346f560ccecc5700890261770b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6135,
+    "run_id": "37252731841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37252731841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005021017_7f770dfdad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6135,
+    "run_id": "37252731841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T02:10:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
