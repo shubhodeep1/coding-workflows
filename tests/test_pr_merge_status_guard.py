@@ -825,7 +825,9 @@ def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch
 	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD:feature/open")
 	assert proc.returncode == 2, proc.stdout + proc.stderr
 	assert "Branch `feature/x`" in proc.stderr
-	assert "could not resolve git command directory" in proc.stdout
+	response = json.loads(proc.stdout)
+	assert "could not resolve git command directory" in response["systemMessage"]
+	assert "hookSpecificOutput" not in response
 
 
 def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_repo) -> None:
@@ -833,8 +835,10 @@ def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_rep
 	_git(repo, "checkout", "main")
 	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD")
 	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert "could not resolve git push repository" in proc.stdout
-	assert '"permissionDecision": "ask"' in proc.stdout
+	response = json.loads(proc.stdout)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not resolve git command directory" in response["systemMessage"]
+	assert "could not resolve git push repository" in response["systemMessage"]
 
 
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
@@ -868,8 +872,10 @@ def test_appended_git_override_asks_when_checkout_is_not_merged(merged_branch_re
 	value = worktree / ".git" if override == "GIT_DIR" else worktree
 	proc = _run_hook(repo, stub_bin, f"{override}+={value} git push origin HEAD")
 	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert "could not resolve git push repository" in proc.stdout
-	assert '"permissionDecision": "ask"' in proc.stdout
+	response = json.loads(proc.stdout)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not resolve git command directory" in response["systemMessage"]
+	assert "could not resolve git push repository" in response["systemMessage"]
 
 
 def test_explicit_source_tip_and_multiple_destinations(merged_branch_repo) -> None:
@@ -1073,6 +1079,38 @@ def test_multiple_unknown_push_targets_emit_one_confirmation(merged_branch_repo,
 	assert (code, message) == (0, "")
 	output = json.loads(capsys.readouterr().out)
 	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_api_failure_and_unresolved_destination_emit_one_confirmation(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	def unavailable_pr_listing(slug, branch, cwd):
+		raise guard.LookupUnavailable("API unavailable")
+
+	monkeypatch.setattr(guard, "query_pull_requests", unavailable_pr_listing)
+	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/a HEAD:$DEST"}}) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not reach GitHub" in response["systemMessage"]
+	assert "could not resolve git push destination" in response["systemMessage"]
+	assert "could not reach GitHub" in response["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "could not resolve git push destination" in response["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_internal_error_preserves_buffered_confirmation(monkeypatch, capsys) -> None:
+	def failing_evaluation(payload):
+		guard._request_confirmation("x")
+		raise RuntimeError("broken")
+
+	monkeypatch.setattr(guard, "_evaluate_bash", failing_evaluation)
+	assert guard.evaluate({"tool_name": "Bash"}) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "internal error" in response["systemMessage"]
+	assert "merged-PR guard needs confirmation: x" in response["systemMessage"]
+	assert guard.evaluate({"tool_name": "Other"}) == (0, "")
+	assert capsys.readouterr().out == ""
 
 
 def test_unknown_push_target_does_not_prompt_before_merged_branch_block(merged_branch_repo, monkeypatch, capsys) -> None:
