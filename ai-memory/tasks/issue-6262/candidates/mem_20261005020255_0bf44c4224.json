@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6262,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6262\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6267\",\"pr_number\":6267,\"branch\":\"ai/issue-6262\",\"run_id\":\"37252656049\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37252656049\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/orchestrate_poll.yml\",\"README.md\",\"agents.md\",\"changelog.d/6262-read-profile-claude-isolation.md\",\"scripts/ai_engine.sh\",\"scripts/claude_engine.py\",\"tests/test_ai_engine.py\",\"tests/test_claude_engine.py\"]}",
+  "fingerprint": "953f2226fa58885ccac30e8127a56956c786349b324d4577995d37ef9da42011",
+  "lineage": {
+    "issue_number": 6262,
+    "parent_ids": [],
+    "pr_number": 6267,
+    "run_id": "37252656049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37252656049",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6267"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005020255_0bf44c4224",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6262,
+    "level": "run",
+    "pr_number": 6267,
+    "run_id": "37252656049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6262: https://github.com/shubhodeep1/coding-workflows/pull/6267",
+  "timestamps": {
+    "created_at": "2026-10-05T02:02:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
