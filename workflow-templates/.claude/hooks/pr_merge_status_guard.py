@@ -117,6 +117,7 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
+_SHELL_WORD_DELIMITERS = frozenset(" \t\r" + _SHELL_PUNCTUATION_CHARS)
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -269,15 +270,14 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			previous_end = token_end
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			# shlex reads one character past a word. Only an adjacent, raw
-			# fully unquoted digits-only word is an FD; `2 >file`, `'2'>file`,
-			# `''2>file`, and `\2>file` keep the refspec.
+			# shlex reads one character past a word. Pop only when the whole raw
+			# word is unquoted ASCII digits adjacent to the redirect; any quote
+			# or escape in the word keeps it as an argument.
 			if (not token.startswith("&") and segment and segment[-1].isascii() and segment[-1].isdigit()
 				and previous_end == token_end - len(token)):
 				raw_start = previous_end - len(segment[-1]) - 1
 				if (raw_start >= 0 and command[raw_start:previous_end - 1] == segment[-1]
-					and (raw_start == 0 or command[raw_start - 1] in " \t\r\n")
-					and (raw_start == 0 or command[raw_start - 1] != "\\")):
+					and (raw_start == 0 or command[raw_start - 1] in _SHELL_WORD_DELIMITERS)):
 					segment.pop()
 			redirect_target = True
 			previous_end = token_end
