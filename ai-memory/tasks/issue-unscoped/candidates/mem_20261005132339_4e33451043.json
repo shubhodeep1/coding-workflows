@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_workflow_support.sh:53 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Inserting dependency_registry_proxy.py between clarify_openrouter_broker.py and review_reject_verify.sh breaks the contiguous bootstrap-order contract asserted by the test.\n  WHY: All six reviewers rated this BLOCKER; the assertion at tests/test_review_autofix_review_pipeline_contract.py:5623 will fail with an AssertionError in CI.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/stage_workflow_support.sh:53 | severity=critical | confidence=5\n  PROBLEM: The insertion of dependency_registry_proxy.py between clarify_openrouter_broker.py and review_reject_verify.sh in REQUIRED_BOOTSTRAP_SCRIPTS breaks the contiguous-sequence contract assertion at tests/test_review_autofix_review_pipeline_contract.py:5623.\n  WHY: The tests-promote-stall-and-review CI job in ci.yml runs test_review_autofix_review_pipeline_contract.py, which will fail with AssertionError on line 5623.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/stage_workflow_support.sh:Line 53 | severity=critical | confidence=5\n  PROBLEM: dependency_registry_proxy.py was inserted into REQUIRED_BOOTSTRAP_SCRIPTS between clarify_openrouter_broker.py and review_reject_verify.sh.\n  WHY: tests/test_review_autofix_review_pipeline_contract.py:5623 in test_reject_verifier_bootstrap_and_stage_order_contract asserts that the exact contiguous sequence \"review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh\" is present in scripts/stage_workflow_support.sh. Interposing dependency_registry_proxy.py breaks this substring match, causing tests/test_review_autofix_review_pipeline_contract.py in the tests-promote-stall-and-review CI job to fail with an AssertionError.\n- scripts/dependency_registry_proxy.py:line 223\n  PROBLEM: os.path.dirname(path) returns an empty string when path is provided as a bare filename without directory slashes, causing os.path.isdir(\"\") to return False and exit 2 prematurely.\n  WHY: Suggested minimal fix: Use os.path.dirname(os.path.abspath(path)) to resolve parent directory existence regardless of relative path format.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stage_workflow_support.sh:line 53, REQUIRED_BOOTSTRAP_SCRIPTS=...\"clarify_openrouter_broker.py dependency_registry_proxy.py review_reject_verify.sh...\" | severity=critical | confidence=5\n  PROBLEM: Inserting `dependency_registry_proxy.py` between `clarify_openrouter_broker.py` and `review_reject_verify.sh` breaks the contiguous-sequence contract test `test_reject_verifier_bootstrap_and_stage_order_contract` at `tests/test_review_autofix_review_pipeline_contract.py:5623`.\n  WHY: The `tests-promote-stall-and-review` CI job invokes pytest on `tests/test_review_autofix_review_pipeline_contract.py`, which calls `_stage_helper_text()` and runs the substring assertion at line 5623. With the current ordering, the assertion fails with `AssertionError`, failing the CI check and breaking the `tests-promote-stall-and-review` job.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stage_workflow_support.sh:Line 53, REQUIRED_BOOTSTRAP_SCRIPTS | severity=critical | confidence=5\n  PROBLEM: Adding dependency_registry_proxy.py between clarify_openrouter_broker.py and review_reject_verify.sh breaks the required bootstrap-order contract.\n  WHY: tests/test_review_autofix_review_pipeline_contract.py:5623 asserts that those scripts appear as one contiguous sequence. The added entry breaks that assertion, so the CI test job fails.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/stage_workflow_support.sh:line 53, REQUIRED_BOOTSTRAP_SCRIPTS assignment | severity=critical | confidence=5\n  PROBLEM: dependency_registry_proxy.py was inserted between clarify_openrouter_broker.py and review_reject_verify.sh in the REQUIRED_BOOTSTRAP_SCRIPTS list.\n  WHY: The contract test test_reject_verifier_bootstrap_and_stage_order_contract at tests/test_review_autofix_review_pipeline_contract.py:5623 asserts the exact contiguous substring \"review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh\" is present in the stage helper text. Interposing dependency_registry_proxy.py between clarify_openrouter_broker.py and review_reject_verify.sh breaks this assertion.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/stage_workflow_support.sh:Line 53 \u2014 REQUIRED_BOOTSTRAP_SCRIPTS list, position of `dependency_registry_proxy.py` inserted between `clarify_openrouter_broker.py` and `review_reject_verify.sh` | severity=critical | confidence=5\n  PROBLEM: The PR inserted `dependency_registry_proxy.py` into the middle of a contiguous subsequence that the contract test `test_reject_verifier_bootstrap_and_stage_order_contract` pins verbatim.\n  WHY: The test at tests/test_review_autofix_review_pipeline_contract.py:5623 asserts that the literal string `\"review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh\"` is present in `scripts/stage_workflow_support.sh`. With `dependency_registry_proxy.py` interposed between `clarify_openrouter_broker.py` and `review_reject_verify.sh`, that contiguous run no longer exists in the file.\n- scripts/review_untrusted_sandbox.sh:lines 70-148\n  PROBLEM: The `else`/`fi` block body (install broker, docker run, inner if/else/fi, stop_deps_broker, closing fi) is not indented relative to the outer `if`/`else`, unlike the surrounding code.\n  WHY: This obscures the nesting for future maintainers editing a 90-line block that mixes proxy startup, docker run, and trap-driven cleanup. Suggested minimal fix: Re-indent the block body to match the outer `if`/`else` indentation level (whitespace-only, no logic change), or extract the proxy+docker block into a small function so the prepare step's control flow stays readable.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1c34bc3063c8642909ec8421f07464c3bb1afcaaed6d0347d0087151c72b6c73",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6356,
+    "run_id": "37311980715",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37311980715",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005132339_4e33451043",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6356,
+    "run_id": "37311980715"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T13:23:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
