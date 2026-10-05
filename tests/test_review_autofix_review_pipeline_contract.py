@@ -8192,6 +8192,9 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(host / ".claude/hooks").mkdir(parents=True)
 		(host / ".claude/hooks/gh_api_write_guard.py").write_text("before\n")
 		(host / ".claude/hooks/other.py").write_text("operator hook\n")
+		(host / ".claude/commands").mkdir(parents=True)
+		(host / ".claude/commands/audit-plans.md").write_text("before\n")
+		(host / ".claude/commands/other.md").write_text("operator command\n")
 		(host / "scripts").mkdir()
 		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
@@ -8206,17 +8209,26 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert not (source / ".github/ai/WORKFLOW.md").exists()
 		assert (source / ".claude/hooks/gh_api_write_guard.py").exists()
 		assert not (source / ".claude/hooks/other.py").exists()
+		assert (source / ".claude/commands/audit-plans.md").exists()
+		assert not (source / ".claude/commands/other.md").exists()
 		assert (source / "scripts/claude_settings.json.tmpl").exists()
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
 		(source / ".github/ai/claude_engine.json").write_text("after\n")
 		(source / ".claude/hooks/gh_api_write_guard.py").write_text("after\n")
+		(source / ".claude/commands/audit-plans.md").write_text("after\n")
 		(source / "scripts/claude_settings.json.tmpl").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
 		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
 		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
+		assert (host / ".claude/commands/audit-plans.md").read_text() == "after\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		# Other command files stay out of the sandbox: an editor write is dropped.
+		(source / ".claude/commands/other.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".claude/commands/other.md").read_text() == "operator command\n"
+		(source / ".claude/commands/other.md").unlink()
 		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/ai/WORKFLOW.md").read_text() == "operator config\n"
@@ -8225,6 +8237,12 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(source / ".github/untrusted/result.yml").write_text("untrusted\n")
 		assert run("transfer").returncode != 0
 		assert not (host / ".github/untrusted/result.yml").exists()
+		shutil.rmtree(source / ".github/untrusted")
+		# A new .claude/ directory outside the admitted ones still fails closed.
+		(source / ".claude/skills").mkdir()
+		(source / ".claude/skills/result.md").write_text("untrusted\n")
+		assert run("transfer").returncode != 0
+		assert not (host / ".claude/skills").exists()
 
 
 def test_review_isolation_transfers_into_active_work_tree() -> None:
