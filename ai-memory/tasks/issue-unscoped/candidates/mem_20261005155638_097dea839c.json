@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:line not provided | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The _push_targets refspec parsing change is outside the stated PR intent and could incorrectly handle git push refspecs.\n  WHY: Incorrect parsing could allow pushes to restricted branches or format push commands unexpectedly.\n- tests/test_claude_anthropic_relay.py:line not provided | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The unauthorized-request test change is outside the stated PR intent.\n  WHY: Although it appears to improve test reliability, its inclusion violates the minimal change set rule (\u00a79).\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Commit 1: the false alarm. The clarify.yml auto-decide step now has id: standalone_auto_decide and outputs answered=true. The Telegram step skips with AI_PHASE_GATE_V1 phase=clarify gate=tg_alert reason=auto_answered.\"\n  expected_change_site: .github/workflows/clarify.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff implements this logic.\n- requirement: \"Commit 2: the clarify-respond worker for standalone issues. Standalone mode answers clarify's questions comment with the same CLARIFY_RESPOND worker... The model step is continue-on-error in standalone mode only.\"\n  expected_change_site: .github/workflows/orchestrate_clarify_respond.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff implements this.\n- requirement: \"orchestrate_clarify_respond.yml now stages clarify_data_provision_guard.py. Consumer repos never received it...\"\n  expected_change_site: .github/workflows/orchestrate_clarify_respond.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff implements this staging.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: .claude/hooks/pr_merge_status_guard.py\n  Code: _push_targets modification to handle refspecs with colon-qualifiers.\n  Problem: This change is present in the PR but is not described in the PR intent (standalone clarify-respond worker). It modifies how git push refspecs are handled, which carries a risk of breaking existing push logic or bypassing intended restrictions.\n  Why it fails at runtime: If the refspec parsing logic is incorrect, it might allow pushing to restricted branches or incorrectly format push commands, leading to unexpected behavior in git push commands executed by the agent.\n  ISSUE_CONFIDENCE: 3\n\n- File: tests/test_claude_anthropic_relay.py\n  Code: Modification to the unauthorized-request test to put headers before writing the body.\n  Problem: This test change is unrelated to the PR intent of introducing a clarify-respond worker. While it may improve test stability by avoiding race conditions, its inclusion in this PR is unexpected.\n  Why it fails at runtime: None, the change appears to improve test reliability, but its inclusion in this PR is a violation of the minimal change set rule (\u00a79).\n  ISSUE_CONFIDENCE: 4\n\n- Requirement: \"Commit 1: the false alarm. The clarify.yml auto-decide step now has id: standalone_auto_decide and outputs answered=true. The Telegram step skips with AI_PHASE_GATE_V1 phase=clarify gate=tg_alert reason=auto_answered.\"\n  Expected change site: .github/workflows/clarify.yml\n  Evidence of absence: The PR diff implements this logic.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: \"Commit 2: the clarify-respond worker for standalone issues. Standalone mode answers clarify's questions comment with the same CLARIFY_RESPOND worker... The model step is continue-on-error in standalone mode only.\"\n  Expected change site: .github/workflows/orchestrate_clarify_respond.yml\n  Evidence of absence: The PR diff implements this.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: \"orchestrate_clarify_respond.yml now stages clarify_data_provision_guard.py. Consumer repos never received it...\"\n  Expected change site: .github/workflows/orchestrate_clarify_respond.yml\n  Evidence of absence: The PR diff implements this staging.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f6472b6dccd69d85d08628a562af0e8b857eeb06ad1a0c6de027a2b676196f30",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6283,
+    "run_id": "37334268739",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37334268739",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005155638_097dea839c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6283,
+    "run_id": "37334268739"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T15:56:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
