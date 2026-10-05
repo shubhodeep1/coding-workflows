@@ -660,6 +660,10 @@ jobs:
             echo "Missing or empty required codex input file(s): unattended_system_instructions.md and/or ai_pipeline.md"
             exit 1
           fi
+          if [ -L ./pre_assembled_static.txt ] || { [ -e ./pre_assembled_static.txt ] && [ ! -f ./pre_assembled_static.txt ]; }; then
+            echo "::error::Checkout contains a non-regular pre_assembled_static.txt; refusing to assemble static context." >&2
+            exit 1
+          fi
           clarify_respond_readme_context="$(mktemp "${RUNNER_TEMP}/clarify-respond-readme.XXXXXX")"
           bash scripts/build_static_context.sh readme "${clarify_respond_readme_context}"
 

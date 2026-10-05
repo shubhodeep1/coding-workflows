@@ -256,6 +256,17 @@ def test_orchestrator_static_context_guards_symlinks() -> None:
 				required_path.unlink()
 				required_path.write_text("trusted input\n", encoding="utf-8")
 
+			output = root / "pre_assembled_static.txt"
+			output.unlink()
+			output.symlink_to(secret)
+			result = subprocess.run(
+				["bash", "-c", step_run], cwd=root, env=workflow_env,
+				capture_output=True, text=True, check=False,
+			)
+			assert result.returncode != 0
+			assert "non-regular pre_assembled_static.txt" in result.stderr
+			assert secret.read_text(encoding="utf-8") == "x-access-token:SENTINEL\n"
+
 
 def test_shared_readme_context_rejects_non_regular_inputs_and_output() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
@@ -306,6 +317,28 @@ def test_shared_readme_context_rejects_non_regular_inputs_and_output() -> None:
 		assert "Static context output is not a regular file" in result.stderr
 
 
+def test_shared_readme_only_requires_readme_and_bounds_prompt_size() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		readme = root / "README.md"
+		output = root / "readme-context.txt"
+		readme.write_text("safe overview\n", encoding="utf-8")
+		result = subprocess.run(
+			["bash", str(REPO_ROOT / "scripts/build_static_context.sh"), "readme", str(output)],
+			cwd=root, env=_safe_env(), capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "UNTRUSTED_DATA: safe overview" in output.read_text(encoding="utf-8")
+		readme.write_bytes(b"x\n" * 12000)
+		result = subprocess.run(
+			["bash", str(REPO_ROOT / "scripts/build_static_context.sh"), "readme", str(output)],
+			cwd=root, env=_safe_env(), capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert output.read_text(encoding="utf-8") == ""
+		assert "reason=prompt_size" in result.stderr
+
+
 def test_all_static_readme_assemblers_use_the_shared_reader() -> None:
 	workflow_expectations = {
 		"orchestrate.yml": "orchestrate_readme_context",
@@ -330,10 +363,17 @@ def main() -> int:
 		test_phase_static_context_skips_symlinks_but_keeps_canonical_agents,
 		test_orchestrator_static_context_guards_symlinks,
 		test_shared_readme_context_rejects_non_regular_inputs_and_output,
+		test_shared_readme_only_requires_readme_and_bounds_prompt_size,
 		test_all_static_readme_assemblers_use_the_shared_reader,
 	):
 		test()
-	print("OK: static-context symlink guard checks passed")
+	readme_suite = subprocess.run(
+		[sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_review_static_context_readme.py"],
+		cwd=REPO_ROOT, env=_safe_env(), check=False,
+	)
+	if readme_suite.returncode != 0:
+		return readme_suite.returncode
+	print("OK: static-context symlink guard and review README checks passed")
 	return 0
 
 

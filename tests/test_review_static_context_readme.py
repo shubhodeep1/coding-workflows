@@ -93,6 +93,14 @@ def test_non_regular_and_oversize_readmes_are_rejected(tmp_path, kind):
 	assert b"reason=unsafe_file" in result.stderr
 
 
+def test_short_lines_cannot_expand_past_prompt_budget(tmp_path):
+	(tmp_path / "README.md").write_bytes(b"x\n" * 12000)
+	result = run_readme(tmp_path)
+	assert result.returncode == 3
+	assert result.stdout == b""
+	assert b"reason=prompt_size" in result.stderr
+
+
 @pytest.mark.parametrize("action", ["snapshot", "refresh", "transfer", "readme-trimmed"])
 def test_subcommand_bad_arity_still_exits_two(tmp_path, action):
 	result = subprocess.run(
@@ -198,6 +206,13 @@ def test_review_prompt_builders_frame_readme_as_untrusted_data(tmp_path, script)
 	assert "printf 'UNTRUSTED_DATA: %s\\n'" in consolidator
 	judge = (ROOT / "scripts/review_rb_judge.sh").read_text()
 	assert "emit_review_rb_untrusted_file 'PR README.MD (trimmed)'" in judge
+
+
+def test_reviewer_budget_counts_framed_readme():
+	text = (ROOT / "scripts/review_run_reviewers.sh").read_text()
+	assert 'wc -c < "${RUNTIME_DIR}/static_readme_trimmed.txt"' in text
+	assert '16 * $(wc -l < "${RUNTIME_DIR}/static_readme_trimmed.txt")' in text
+	assert 'reviewer_static_prefix_bytes - reviewer_readme_context_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES' in text
 
 
 @pytest.mark.parametrize("kind", ["symlink", "fifo", "directory"])

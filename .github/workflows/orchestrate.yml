@@ -555,6 +555,10 @@ jobs:
             echo "::error::Required static context input is a symbolic link; refusing to assemble the prompt." >&2
             exit 1
           fi
+          if [ -L ./pre_assembled_static.txt ] || { [ -e ./pre_assembled_static.txt ] && [ ! -f ./pre_assembled_static.txt ]; }; then
+            echo "::error::Checkout contains a non-regular pre_assembled_static.txt; refusing to assemble static context." >&2
+            exit 1
+          fi
           orchestrate_readme_context="$(mktemp "${RUNNER_TEMP}/orchestrate-readme.XXXXXX")"
           bash scripts/build_static_context.sh readme "${orchestrate_readme_context}"
           {

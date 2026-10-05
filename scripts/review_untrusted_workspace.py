@@ -16,6 +16,7 @@ import tempfile
 
 
 MAX_FILE = 2 * 1024 * 1024
+MAX_README_PROMPT_BYTES = 200000
 MAX_TOTAL = 64 * 1024 * 1024
 MAX_FILES = 5000
 EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox", ".nox", "dist", "build", "coverage", ".next", ".turbo", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials"}
@@ -85,6 +86,8 @@ def readme_trimmed(host: Path) -> bytes:
 		if line.startswith(b"### 2. Create wrapper workflows"):
 			break
 		lines.append(line + b"\n")
+	if sum(len(line) + len(b"UNTRUSTED_DATA: ") for line in lines) > MAX_README_PROMPT_BYTES:
+		raise ValueError("README exceeds prompt budget")
 	return b"".join(lines)
 
 
@@ -242,6 +245,7 @@ def main():
 				"symlink in workspace path": "symlink_path",
 				"unsafe file type or size": "unsafe_file",
 				"file changed during read": "file_changed",
+				"README exceeds prompt budget": "prompt_size",
 			}.get(str(exc), "unknown")
 			print(f"REVIEW_STATIC_CONTEXT_README outcome=rejected reason={reason}", file=sys.stderr)
 			raise SystemExit(3) from None
