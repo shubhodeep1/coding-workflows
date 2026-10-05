@@ -109,6 +109,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		# or (on the broker) any client authorization cross the boundary.
 		mode = self.server.mode
 		length = self.headers.get("Content-Length", "")
+		headers = forwarded_request_headers(self.headers)
 		if (
 			not PATH_RE.match(self.path)
 			or self.headers.get("Transfer-Encoding")
@@ -124,6 +125,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or not length.isascii()
 			or not length.isdecimal()
 			or not 0 < int(length) <= MAX_BODY
+			or headers is None
 		):
 			# Consume a bounded, declared body before closing so a rejected
 			# client still sending it can receive the 400 instead of EPIPE.
@@ -137,13 +139,10 @@ class Relay(http.server.BaseHTTPRequestHandler):
 						if not drain_chunk:
 							break
 						drain_remaining -= len(drain_chunk)
+					# Give the rejection write its own bounded timeout, not the last drain interval.
+					self.connection.settimeout(1)
 				except OSError:
 					pass
-				# Give the rejection write its own bounded timeout, not the last drain interval.
-				self.connection.settimeout(1)
-			return self._reject(400)
-		headers = forwarded_request_headers(self.headers)
-		if headers is None:
 			return self._reject(400)
 		body = self.rfile.read(int(length))
 		if len(body) != int(length):

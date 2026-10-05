@@ -1924,8 +1924,8 @@ attempts of that role in the same job.
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
-For a POST rejected during initial request validation, the relay waits at
-most one second to drain a declared body with a short decimal `Content-Length`
+For a POST rejected during initial request or forwarded-header validation,
+the relay waits at most one second to drain a declared body with a short decimal `Content-Length`
 of at most `MAX_BODY` before returning 400. A client that withholds the body
 still receives the rejection; the 400 response has its own one-second socket
 timeout even if the drain deadline expires. Malformed or oversized lengths are

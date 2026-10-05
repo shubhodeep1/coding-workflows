@@ -213,6 +213,25 @@ def test_broker_consumes_rejected_body_before_responding(chain) -> None:
 	assert _Upstream.seen == []
 
 
+def test_broker_consumes_body_for_rejected_forwarded_header(chain) -> None:
+	with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+		client.settimeout(3)
+		client.connect(chain["socket"])
+		client.sendall(
+			b"POST /v1/messages HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/json\r\n"
+			+ b"anthropic-version: " + b"x" * (relay.MAX_HEADER_VALUE + 1)
+			+ b"\r\nContent-Length: 4\r\n\r\nab"
+		)
+		client.settimeout(0.2)
+		with pytest.raises(socket.timeout):
+			client.recv(1)
+		client.settimeout(3)
+		client.sendall(b"cd")
+		with client.makefile("rb") as response:
+			assert response.readline().startswith(b"HTTP/1.0 400")
+	assert _Upstream.seen == []
+
+
 def test_rejected_body_drain_has_total_deadline_and_bounded_reads(monkeypatch) -> None:
 	clock = [0.0]
 	requested = []
@@ -222,6 +241,7 @@ def test_rejected_body_drain_has_total_deadline_and_bounded_reads(monkeypatch) -
 		return b"x"
 
 	connection = Mock()
+	connection.settimeout.side_effect = [None, None, None, OSError("closed connection")]
 	def reject(status):
 		connection.settimeout.assert_called_with(1)
 		return status
