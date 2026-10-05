@@ -36,9 +36,9 @@ jobs:
 
   # GitHub never sends check_run events for checks created by GitHub Actions
   # ("to prevent recursive workflows"), so the job above never fires for
-  # Actions CI. This job triages the failed `CI` workflow run instead: one triage
-  # per failed run (the check name is the workflow name, the dedup key per
-  # PR), and the diagnosis reads every failing check on the PR head.
+  # Actions CI. This job evaluates failed `CI` runs instead; the check name
+  # is the workflow name, so repeated failures share one open issue per PR
+  # and workflow. The diagnosis reads every failing check on the PR head.
   triage-workflow-run:
     if: >-
       github.event_name == 'workflow_run' &&

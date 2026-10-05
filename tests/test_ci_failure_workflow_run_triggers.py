@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INTERNAL = REPO_ROOT / ".github" / "workflows" / "internal-check-failure-triage.yml"
 CONSUMER = REPO_ROOT / "workflow-templates" / "ai-check-failure-triage.yml"
 INTAKE = REPO_ROOT / ".github" / "workflows" / "workflow-failure-heal-intake.yml"
+TRIAGE_SCRIPT = REPO_ROOT / "scripts" / "check_failure_triage.sh"
 
 
 def _load(path: Path) -> dict:
@@ -99,6 +100,12 @@ def test_workflow_run_job_triages_one_failed_pull_request_run(path: Path, ref: s
 	assert not _evaluate(condition, "workflow_run", _run_event("CI", prs=0))
 	assert not _evaluate(condition, "workflow_run", _run_event("CI"), {"CHECK_FAILURE_TRIAGE_ENABLED": "false"})
 	assert not _evaluate(condition, "check_run", {"check_run": {}})
+
+
+def test_workflow_run_dedup_reuses_open_issue_per_pr_and_workflow() -> None:
+	script = TRIAGE_SCRIPT.read_text(encoding="utf-8")
+	assert 'FP="$(printf \'%s\' "${REPO}|pr=${PR_NUMBER}|check=${CHECK_NAME}"' in script
+	assert 'log "skip reason=duplicate_open_issue' in script
 
 
 def test_consumer_wrapper_listens_to_every_workflow_but_its_own() -> None:

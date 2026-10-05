@@ -1211,11 +1211,11 @@ the way to a fix PR without human action.
   job the triage never ran for Actions CI. This repo's wrapper listens to the
   `CI` workflow; the consumer wrapper listens to every workflow (`"*"`) and
   skips the pipeline's own `AI …` workflows, so each finished workflow also
-  leaves a skipped wrapper run in the Actions tab. There is one triage per
-  failed run: the check name is the workflow name, which keeps one open
-  triage issue per PR and workflow, and the diagnosis reads every failing
-  check on the PR head. The original `check_run: completed` job stays for
-  checks reported by apps other than GitHub Actions. Both events need the
+  leaves a skipped wrapper run in the Actions tab. Each failed run is evaluated,
+  but an existing open triage issue for the same PR and workflow suppresses a
+  duplicate; the diagnosis reads every failing check on the PR head. The
+  original `check_run: completed` job stays for checks reported by apps other
+  than GitHub Actions. Both events need the
   workflow file on the default branch.
 - **On by default:** runs unless the repo variable `CHECK_FAILURE_TRIAGE_ENABLED`
   is set to `false`. While disabled the wrapper job is skipped immediately (no
