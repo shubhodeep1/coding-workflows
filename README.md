@@ -1068,6 +1068,11 @@ not delete wrappers that are already present in `.github/workflows/`.
 > parity CI test still reports missing or differing live files. Template or
 > live-path symlinks fail the sync/parity check instead of being followed,
 > preventing copies from reading credentials or writing outside `.claude/`.
+> For PRs into `main`, CI prepares template-only copies in its disposable
+> checkout before running parity tests, so those PRs can pass before the
+> post-merge sync opens a live-copy PR. A PR that edits its live copy but
+> leaves it mismatched still fails; push CI checks the committed tree without
+> preparation and reports any remaining drift.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest

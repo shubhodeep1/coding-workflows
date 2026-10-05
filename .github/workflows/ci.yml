@@ -388,6 +388,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Prepare template-only PR live copies for parity tests
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${PR_BASE_SHA}" --after HEAD
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1021,6 +1032,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Prepare template-only PR live copies for parity tests
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${PR_BASE_SHA}" --after HEAD
 
       - name: Setup Python
         uses: actions/setup-python@v6

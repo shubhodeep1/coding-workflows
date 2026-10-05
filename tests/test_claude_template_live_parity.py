@@ -100,6 +100,24 @@ def test_plan_fails_open_without_a_usable_before_commit(tmp_path: Path) -> None:
 	assert sync_mod.plan(root, "f" * 40, after) == []
 
 
+def test_pr_dry_run_prepares_parity_without_changing_the_pr_commit(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+	assert sync_mod.sync(root, before, after, dry_run=True) == 0
+	assert sync_mod.mismatched(root) == []
+	assert _git(root, "rev-parse", "HEAD") == after
+	assert _git(root, "show", "HEAD:.claude/hooks/guard.py") == "v1"
+
+
+def test_pr_dry_run_does_not_mask_live_edits(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	before, _after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	_commit(root, ".claude/hooks/guard.py", "custom\n")
+	assert sync_mod.sync(root, before, _git(root, "rev-parse", "HEAD"), dry_run=True) == 0
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+
+
 def test_sync_refuses_template_symlink_into_git_credentials(tmp_path: Path) -> None:
 	root = _scratch_repo(tmp_path)
 	before = _git(root, "rev-parse", "HEAD")
@@ -308,3 +326,10 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	assert step["env"]["PUSH_AFTER"] == "${{ github.sha }}"
 	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 	assert "tests/test_claude_template_live_parity.py" in ci
+	for job_name in ("tests-hooks-and-orchestrator", "tests-release-and-log-analysis"):
+		steps = yaml.safe_load(ci)["jobs"][job_name]["steps"]
+		assert steps[0]["with"]["fetch-depth"] == 0
+		prepare = next(step for step in steps if step["name"] == "Prepare template-only PR live copies for parity tests")
+		assert prepare["if"] == "github.event_name == 'pull_request' && github.base_ref == 'main'"
+		assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
+		assert 'sync --dry-run --before "${PR_BASE_SHA}" --after HEAD' in prepare["run"]

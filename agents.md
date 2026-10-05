@@ -768,6 +768,14 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   only when something needs syncing. Log prefix `CLAUDE_LIVE_SYNC`.
 - A push that changed only the live copy is left to the parity test.
 
+For PRs targeting `main`, both CI jobs that test template/live parity run
+`sync_claude_live_copies.py sync --dry-run` in their disposable checkouts,
+using the PR base SHA and full git history. This prepares only eligible
+template-only changes for the tests without committing or pushing live files.
+Changes to both halves that still differ remain test failures. Push CI and
+PRs targeting `stable` check the committed tree without preparation, so drift
+on `main` is still reported while the post-merge sync PR is pending.
+
 New templates without a live copy are also treated as drift and copied into
 `.claude/` (including new subdirectories) with their executable permissions.
 Template symlinks (including directory links) and symlinks anywhere in a live
