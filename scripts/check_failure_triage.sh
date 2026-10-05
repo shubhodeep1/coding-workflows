@@ -58,7 +58,7 @@ log()
 
 triage_single_line_metadata()
 {
-	PYTHONDONTWRITEBYTECODE=1 python3 -c '
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
 import sys
 import re
 import unicodedata
@@ -346,7 +346,7 @@ if [ -f scripts/collect_pr_check_runs_context.py ]; then
 	if PR_PAYLOAD_FILE="${PR_PAYLOAD_FILE}" \
 		PR_CHECK_RUNS_CONTEXT_FILE="${PR_CHECK_RUNS_CONTEXT_FILE}" \
 		CHECK_RUNS_WAIT_TIMEOUT_SECS="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-60}" \
-		PYTHONDONTWRITEBYTECODE=1 python3 scripts/collect_pr_check_runs_context.py; then
+		PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/collect_pr_check_runs_context.py; then
 		:
 	else
 		: > "${PR_CHECK_RUNS_CONTEXT_FILE}"
@@ -406,7 +406,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	# Read them in a credential-free process, without following symlinks.
 	triage_agents_max_bytes=262144
 	for triage_agents_file in agents.md AGENTS.md; do
-		if env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 python3 - "${GITHUB_WORKSPACE:-.}" "${triage_agents_file}" "${triage_agents_max_bytes}" <<'PY'
+		if env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${GITHUB_WORKSPACE:-.}" "${triage_agents_file}" "${triage_agents_max_bytes}" <<'PY'
 import os
 import stat
 import sys
@@ -490,8 +490,10 @@ if [ -f "${ISOLATED_HELPER}" ] && [ ! -L "${ISOLATED_HELPER}" ] &&
 	[ "$(realpath "${SOURCE_ROOT}/scripts/clarify_sandbox/Dockerfile")" = "${SOURCE_ROOT}/scripts/clarify_sandbox/Dockerfile" ] &&
 	cmp -s "${SOURCE_ROOT}/scripts/clarify_openrouter_broker.py" "${TRUSTED_SUPPORT_DIR}/scripts/clarify_openrouter_broker.py" &&
 	cmp -s "${SOURCE_ROOT}/scripts/clarify_sandbox/Dockerfile" "${TRUSTED_SUPPORT_DIR}/scripts/clarify_sandbox/Dockerfile"; then
-	if (cd "${SOURCE_ROOT}" &&
-		env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
+	# triage-host-python-import-shadowing: execute support from the trusted tree;
+	# the PR checkout is only the source of snapshot data.
+	if (cd "${TRUSTED_SUPPORT_DIR}" &&
+		env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID CLARIFY_SOURCE_ROOT="${SOURCE_ROOT}" \
 		bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt"); then
 		:
 	else
@@ -513,7 +515,7 @@ if [ ! -s "${DIAG_FILE}" ]; then
 		echo
 		echo "## Evidence"
 		echo
-		PYTHONDONTWRITEBYTECODE=1 python3 - "${PR_CHECK_RUNS_CONTEXT_FILE}" <<'PY'
+		PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${PR_CHECK_RUNS_CONTEXT_FILE}" <<'PY'
 import itertools
 import pathlib
 import re
@@ -536,7 +538,7 @@ fi
 # Do not let them supply routing keys or markers to resolve_integration_ref.sh,
 # security_dependency.py, or orchestrate_lib.py (TARGET_BRANCH_LINE_RE).
 # Only the header assembled below may carry trusted triage markers.
-if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${DIAG_FILE}" <<'PY'
+if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${DIAG_FILE}" <<'PY'
 import pathlib
 import re
 import sys
@@ -594,7 +596,7 @@ BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 	echo "_Filed by the AI check-failure-triage workflow. Auto-fix lineage generation ${GEN} (cap ${MAX_DEPTH}); the chain escalates to a human at the cap. Re-runs for the same PR + check are de-duplicated while this issue stays open._"
 } > "${BODY_FILE}"
 
-if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${BODY_FILE}" <<'PY'
+if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" <<'PY'
 import os
 import pathlib
 import sys
@@ -616,7 +618,7 @@ then
 	exit 1
 fi
 
-if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" <<'PY'
+if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" <<'PY'
 import pathlib
 import re
 import sys

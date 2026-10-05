@@ -28,6 +28,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    They stage the helper and Dockerfile from the support ref (main fallback);
    isolation failures never fall back to host Codex. GitHub-side fetching,
    memory, retry, and comment handling remain on the runner.
+   Host Python uses isolated imports; `CLARIFY_SOURCE_ROOT` selects the snapshot
+   input directory (default `$PWD`), which is read only as data.
 3. **plan** (`plan.yml`, `internal-plan.yml`) — read the clarified issue and
    emit a structured implementation plan with files-to-change and a
    per-issue ≤60-minute time budget.
@@ -130,6 +132,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Both wrappers pass only the four declared secrets, and diagnosis runs in
     the credential-free, read-only clarify container with a host-side broker;
     missing isolation falls back to a raw-context issue, never host Codex.
+    The helper runs from trusted support with `CLARIFY_SOURCE_ROOT` set to the
+    PR checkout, so host Python and the broker never execute PR-head modules.
     PR-head `agents.md` / `AGENTS.md` enters the prompt through a bounded,
     credential-free regular-file read that never follows symlinks.
     Untrusted check/workflow names are single-lined, length-capped, and have

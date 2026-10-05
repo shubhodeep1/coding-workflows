@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run one clarify attempt in a credential-free, network-isolated container.
 # Only this helper (not the agent) accesses Docker and the host-side broker.
+# CLARIFY_SOURCE_ROOT optionally selects the source snapshot (default: $PWD).
 set -euo pipefail
 
 prompt_file="${1:?prompt file required}"
@@ -22,6 +23,13 @@ else
 fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 1; }
 [ -f scripts/clarify_sandbox/Dockerfile ] && [ -f scripts/clarify_openrouter_broker.py ] && [ -f scripts/write_codex_config.sh ] && [ -f scripts/codex_model_catalog.json ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
+# The source root is read as data only; host Python never imports from it.
+source_root="${CLARIFY_SOURCE_ROOT:-${PWD}}"
+if [ ! -d "${source_root}" ] || [ -L "${source_root}" ]; then
+	echo '::error::Clarify source root unavailable' >&2
+	exit 1
+fi
+source_root="$(cd "${source_root}" && pwd -P)" || { echo '::error::Clarify source root unavailable' >&2; exit 1; }
 
 # The runner-owned temporary root contains no credentials. Its socket child is
 # traversable by the container's matching non-root UID, not by other users.
@@ -43,15 +51,16 @@ mkdir -m 0755 "${run_root}/source" "${run_root}/results"
 # Include only regular, tracked source files with safe path classes. Never
 # follow a symlink (including parent directories); do not include .git,
 # support checkouts, runner configuration, env files or private keys.
-PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" <<'PY'
+# triage-host-python-import-shadowing: -I excludes both cwd and the script directory.
+PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${source_root}" "${run_root}/source" <<'PY'
 import os
 import pathlib
 import stat
 import subprocess
 import sys
 
-root = pathlib.Path.cwd()
-dest = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2])
 roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d"}
 root_files = {"README.md", "agents.md", "AGENTS.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
 suffixes = {".py", ".sh", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql"}
@@ -138,7 +147,7 @@ if [ "${engine}" = claude ]; then
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
-			python3 "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" &
+			python3 -I -B "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" &
 		broker_pid=$!
 		for _ in $(seq 1 50); do
 			[ -S "${run_root}/socket/provider.sock" ] && break
@@ -212,7 +221,7 @@ fi
 image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"
 [ -n "${image}" ] || { echo '::error::Clarify image build failed' >&2; exit 1; }
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${MODEL_EDITOR}" PYTHONDONTWRITEBYTECODE=1 \
-	python3 scripts/clarify_openrouter_broker.py broker "${run_root}/socket/provider.sock" &
+	python3 -I -B scripts/clarify_openrouter_broker.py broker "${run_root}/socket/provider.sock" &
 broker_pid=$!
 for _ in $(seq 1 50); do
 	[ -S "${run_root}/socket/provider.sock" ] && break
