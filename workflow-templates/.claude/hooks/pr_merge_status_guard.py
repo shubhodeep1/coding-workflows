@@ -1392,13 +1392,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
-	if unresolved_push_sources or unresolved_push_destinations:
-		_request_confirmation(" ".join(unresolved_push_sources + unresolved_push_destinations))
+	unresolved_push_sources.extend(unresolved_push_destinations)
 	if bulk_reasons:
-		_request_confirmation(
+		unresolved_push_sources.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
+	if unresolved_push_sources:
+		_request_confirmation(" ".join(unresolved_push_sources))
 	return 0, ""
 
 
