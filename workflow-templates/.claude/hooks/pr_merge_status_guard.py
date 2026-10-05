@@ -273,34 +273,35 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
-	previous_end = -1
+	retained_word_end = -1
 	for token in lexer:
 		token_end = lexer.instream.tell()
 		if redirect_target:
 			redirect_target = False
-			previous_end = token_end
+			retained_word_end = -1
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
 			# shlex reads one character past a word. Pop only when the whole raw
 			# word is unquoted ASCII digits adjacent to the redirect; any quote
 			# or escape in the word keeps it as an argument.
 			if (not token.startswith("&") and segment and segment[-1].isascii() and segment[-1].isdigit()
-				and previous_end == token_end - len(token)):
-				raw_start = previous_end - len(segment[-1]) - 1
-				if (raw_start >= 0 and command[raw_start:previous_end - 1] == segment[-1]
+				and retained_word_end == token_end - len(token)):
+				raw_start = retained_word_end - len(segment[-1]) - 1
+				if (raw_start >= 0 and command[raw_start:retained_word_end - 1] == segment[-1]
 					and (raw_start == 0 or command[raw_start - 1] in _SHELL_WORD_DELIMITERS)):
 					segment.pop()
 			redirect_target = True
-			previous_end = token_end
+			retained_word_end = -1
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
 				result.append((operator, segment))
 				segment = []
 			operator = token
+			retained_word_end = -1
 		else:
 			segment.append(token)
-		previous_end = token_end
+			retained_word_end = token_end
 	if segment:
 		result.append((operator, segment))
 	return result

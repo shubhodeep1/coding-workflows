@@ -103,6 +103,12 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 	("git push origin 2>/dev/null", ["git", "push", "origin"]),
 	("git push origin 123>x", ["git", "push", "origin"]),
 	("git push origin ² > x", ["git", "push", "origin", "²"]),
+	("git push origin 2 2>&2>/dev/null", ["git", "push", "origin", "2"]),
+	("git push origin 3 2>&3>/dev/null", ["git", "push", "origin", "3"]),
+	("git push origin 2 >&2>f", ["git", "push", "origin", "2"]),
+	("git push origin 12 2>12>x", ["git", "push", "origin", "12"]),
+	("git push origin 2 2<&2<in", ["git", "push", "origin", "2"]),
+	("git push origin 2 2>&2 >/dev/null", ["git", "push", "origin", "2"]),
 ])
 def test_numeric_push_target_before_redirect(command: str, expected: list[str]) -> None:
 	assert guard._shell_segments_with_operators(command)[0] == ("", expected)
@@ -1219,6 +1225,8 @@ def test_unknown_push_target_does_not_prompt_before_merged_branch_block(merged_b
 	"git push origin 2  >/dev/null",
 	'git push origin "2">/dev/null',
 	"git push origin feature/open 2 >&1",
+	"git push origin 2 2>&2>/dev/null",
+	"git push origin 2 >&2>f",
 ])
 def test_numeric_refspec_before_redirect_is_guarded(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1243,6 +1251,8 @@ def test_numeric_refspec_before_redirect_is_guarded(merged_branch_repo, monkeypa
 	("git push origin 2 > /dev/null", ["git", "push", "origin", "2"]),
 	("x 12<in", ["x"]),
 	("x '2'>f", ["x", "2"]),
+	("x 2>a 3>b", ["x"]),
+	("x 2>&2 >f", ["x"]),
 ])
 def test_numeric_word_before_redirect_tokenization(command: str, expected: list[str]) -> None:
 	assert guard._shell_segments_with_operators(command) == [("", expected)]
