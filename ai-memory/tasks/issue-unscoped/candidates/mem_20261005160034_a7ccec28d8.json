@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:1753 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The guard accepts a plain `.codex-workflow-src` directory as a support checkout, allowing `git rev-parse HEAD` to inherit the consumer repository's HEAD.\n  WHY: This can repeatedly trigger `SECURITY_PASS_AUTO_RESET` and prevent the project from completing.\n- tests/test_orchestrate_poll_process.py:between lines 4847-4849 (absent) | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The regression test `test_engine_sha_requires_own_support_checkout` is absent.\n  WHY: No test reproduces the plain-directory case, leaving the engine-SHA resolution bug without regression coverage.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The LAST RUN DIFF applied changes to `scripts/orchestrate_poll_process.sh` and `tests/test_orchestrate_poll_process.py` (engine SHA fix + regression test), declared by the autofix editor in comment entry[31] as \"Changes made\" and in entry[32] as \"fix already present.\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh:1753` and `tests/test_orchestrate_poll_process.py`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: `scripts/orchestrate_poll_process.sh:1753` reads `[ -d .codex-workflow-src ]` with no `.git` suffix. The string `.codex-workflow-src/.git` does not appear anywhere in `scripts/orchestrate_poll_process.sh`. The test function name `test_engine_sha_requires_own_support_checkout` does not appear in `tests/test_orchestrate_poll_process.py`, and no function between lines 4847 and 4849 exercises the plain-directory-vs-checkout distinction.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:1753 | severity=BLOCKER | confidence=5\n  PROBLEM: The LAST RUN DIFF intended to change `[ -d .codex-workflow-src ]` to `[ -e .codex-workflow-src/.git ]`, but the file still carries the old guard.\n  WHY IT FAILS AT RUNTIME: In a consumer repo whose `.codex-workflow-src` is a plain directory (staged from a release, no `.git`), the poller calls `git -C .codex-workflow-src rev-parse HEAD`, which walks up to the consumer's own git checkout and returns the consumer's HEAD. The engine SHA changes every time the consumer pushes a commit. On every poll tick, the engine SHA differs from the one recorded when the security pass failed, so `SECURITY_PASS_AUTO_RESET` fires and re-runs the full-range audit, resetting the fix-cycle budget each time. The project never completes.\n- tests/test_orchestrate_poll_process.py:between lines 4847-4849 (absent) | severity=BLOCKER | confidence=5\n  PROBLEM: The LAST RUN DIFF added the test function `test_engine_sha_requires_own_support_checkout` with 32 lines of coverage for the plain-directory-vs-checkout behavior, but the function does not exist anywhere in the current file.\n  WHY IT FAILS AT RUNTIME: Without the test and the production guard, the engine-SHA resolution bug described above remains in the code. The CI green signal (0 failed checks) masks the absence because no test reproduces the bug.\n- TASK_GAP\n  Requirement: The LAST RUN DIFF applied changes to `scripts/orchestrate_poll_process.sh` and `tests/test_orchestrate_poll_process.py` (engine SHA fix + regression test), declared by the autofix editor in comment entry[31] as \"Changes made\" and in entry[32] as \"fix already present.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh:1753` (`.codex-workflow-src/.git` guard) and `tests/test_orchestrate_poll_process.py` (new test between line 4847 and 4849).\n  Evidence of absence: `scripts/orchestrate_poll_process.sh:1753` reads `[ -d .codex-workflow-src ]` with no `.git` suffix. The string `.codex-workflow-src/.git` does not appear anywhere in `scripts/orchestrate_poll_process.sh`. The test function name `test_engine_sha_requires_own_support_checkout` does not appear in `tests/test_orchestrate_poll_process.py`, and no function between lines 4847 and 4849 exercises the plain-directory-vs-checkout distinction.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "70e1ff398a0826fd17f93e2b190ee80fd05facc7a32a7059c5d36948de021b97",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37334287378",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37334287378",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005160034_a7ccec28d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37334287378"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T16:00:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
