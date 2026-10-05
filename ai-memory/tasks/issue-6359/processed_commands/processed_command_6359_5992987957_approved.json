@@ -5,13 +5,29 @@
   "entry_id": "processed_command_6359_5992987957_approved",
   "issue_number": 6359,
   "metadata": {
+    "branch": "ai/issue-6359",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "agents.md",
+      "changelog.d/6359-rb-judge-atomic-transfer.md",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_rb_judge.sh",
+      "scripts/review_untrusted_workspace.py",
+      "tests/test_review_autofix_claude_fixer_mode.py",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 6359,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6359",
+    "pr_number": 6367,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6367",
+    "run_attempt": "1",
+    "run_id": "37299274393",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37299274393"
   },
   "run_attempt": 1,
   "run_id": "37299274393",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-05T10:56:01Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T11:13:42Z",
   "workflow": "implement"
 }
