@@ -405,11 +405,25 @@ def test_missing_extension_in_shallow_checkout_holds_if_history_unavailable(tmp_
 
 
 def test_status_does_not_fetch_missing_shallow_extension(tmp_path: Path) -> None:
+	# Keep the existing identifier; a failed history fetch still leaves status
+	# unverifiable without publishing an audit decision or judge merge.
 	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
-	result, calls, output = _run(tmp_path, "status", comments=comments, env={"FAKE_GIT_SHALLOW": "true"})
+	result, calls, output = _run(tmp_path, "status", comments=comments, env={"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_FETCH_FAIL": "true"})
 	assert result.returncode == 0 and output == ""
 	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_status_unshallows_before_classifying_exhaustion(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 6)), _comment(_extension(OLD), comment_id=9)]
+	marker_file = tmp_path / "unshallowed"
+	result, calls, output = _run(tmp_path, "status", comments=comments, env={
+		"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_ANCESTORS": OLD,
+		"FAKE_GIT_INCOMPLETE_ANCESTRY": "true", "FAKE_GIT_UNSHALLOW_MARKER": str(marker_file),
+	})
+	assert result.returncode == 0 and output == "" and marker_file.exists()
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=exhausted" in result.stdout
+	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
 
 
 def test_shallow_existing_extension_unshallows_before_exhaustion(tmp_path: Path) -> None:
@@ -439,7 +453,7 @@ def test_incomplete_shallow_extension_never_grants_or_denies_a_cycle(tmp_path: P
 	env = {
 		"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_ANCESTORS": OLD,
 		"FAKE_GIT_INCOMPLETE_ANCESTRY": "true", "FAKE_GIT_UNSHALLOW_MARKER": str(marker_file),
-		"FAKE_GIT_FETCH_FAIL": "true" if mode != "status" else "false",
+		"FAKE_GIT_FETCH_FAIL": "true",
 		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
 		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "0",
 	}

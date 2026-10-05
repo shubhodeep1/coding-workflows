@@ -34,8 +34,9 @@
 #             audited too.
 #           A dispatch that fails (for example a consumer wrapper without the
 #           `pr_number` input) holds the merge for a later retry.
-#   status  Read-only: runs the gate's checks with no label, comment,
-#           dispatch or GITHUB_OUTPUT write, and prints
+#   status  Runs the gate's checks with no label, comment, dispatch or
+#           GITHUB_OUTPUT write. May fetch missing Git history to verify
+#           extension ancestry; prints
 #           SINGLE_ISSUE_SECURITY_PASS_STATE=<skip|unverifiable|clean|pending|
 #           findings|exhausted|exhausted_unaudited|needs_audit>. An exhausted
 #           head also emits SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=<sha>.
@@ -163,7 +164,7 @@ single_pass_extensions()
 				if [ "$(git -C "${checkout}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
 					# An absent object in a shallow clone may be a real fix outside
 					# the fetched history, not an orphan from a failed push.
-					if [ "${SINGLE_PASS_STATUS_ONLY}" = "true" ] || ! git check-ref-format --branch "${branch_ref}" >/dev/null 2>&1 \
+					if ! git check-ref-format --branch "${branch_ref}" >/dev/null 2>&1 \
 						|| ! git -C "${checkout}" fetch --no-tags --unshallow origin "+refs/heads/${branch_ref}:refs/remotes/origin/${branch_ref}" 2>/dev/null; then
 						return 1
 					fi
@@ -176,7 +177,7 @@ single_pass_extensions()
 			git -C "${checkout}" merge-base --is-ancestor "${extension_sha}" "${audited_head}" 2>/dev/null || extension_ancestor_rc=$?
 			if [ "${extension_ancestor_rc}" -eq 1 ] && [ "$(git -C "${checkout}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
 				# An existing commit can still have an incomplete path to HEAD.
-				if [ "${SINGLE_PASS_STATUS_ONLY}" = "true" ] || ! git check-ref-format --branch "${branch_ref}" >/dev/null 2>&1 \
+				if ! git check-ref-format --branch "${branch_ref}" >/dev/null 2>&1 \
 					|| ! git -C "${checkout}" fetch --no-tags --unshallow origin "+refs/heads/${branch_ref}:refs/remotes/origin/${branch_ref}" 2>/dev/null; then
 					return 1
 				fi
