@@ -1317,6 +1317,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	unknown_destination_reasons: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
@@ -1326,7 +1327,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
 			if target.warning.startswith("could not resolve git push"):
-				_request_confirmation(target.warning)
+				unknown_destination_reasons.append(target.warning)
 				continue
 			if target.warning:
 				_warn(target.warning)
@@ -1396,10 +1397,12 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	if blocks:
 		return 2, "\n\n".join(blocks)
 	if bulk_reasons:
-		_request_confirmation(
+		unknown_destination_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
+	if unknown_destination_reasons:
+		_request_confirmation("; ".join(sorted(set(unknown_destination_reasons))))
 	return 0, ""
 
 
