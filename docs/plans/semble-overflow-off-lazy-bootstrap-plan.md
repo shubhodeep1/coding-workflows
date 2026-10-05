@@ -278,8 +278,9 @@ The decisions taken in the clarification round are recorded under
 - **§20 changelog.** Each implementation phase adds one
   `changelog.d/<phase-issue-or-pr>-<slug>.md` fragment, using that phase's
   assigned issue or PR number when its implementation PR is created. This
-  plan-only PR does not ship observable behavior and needs no fragment. Never
-  edit `CHANGELOG.md` directly.
+  plan does not implement the Semble changes; the PR also includes a
+  merged-PR guard parser fix that changes observable behavior and requires a
+  changelog fragment. Never edit `CHANGELOG.md` directly.
 - **§27 workflow size.**
   - `.github/workflows/review_autofix.yml` is 445,389 bytes, about 34.6 KB
     under the 480,000-byte split threshold. Phases 1 and 3 may add only a
