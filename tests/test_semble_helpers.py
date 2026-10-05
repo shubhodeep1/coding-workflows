@@ -200,6 +200,30 @@ def test_semble_query_block_command_failure_stays_fail_open() -> None:
 		assert "SEMBLE_QUERY" not in result.stdout
 
 
+def test_semble_query_block_timeout_reports_timeout() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		index_dir = root / ".semble-index"
+		index_dir.mkdir()
+		_write_executable(bin_dir / "semble", "#!/usr/bin/env bash\ntrap 'exit 143' TERM\nsleep 5\n")
+		result = _run_bash(
+			f"source {HELPERS}\nsemble_query_block 'summary' 3 'Editor Context'",
+			root,
+			env={
+				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"SEMBLE_AVAILABLE": "true",
+				"SEMBLE_INDEX_AVAILABLE": "true",
+				"SEMBLE_INDEX_PATH": str(index_dir),
+				"SEMBLE_QUERY_TIMEOUT_SECS": "0.2",
+			},
+		)
+		assert result.returncode != 0
+		assert "SEMBLE_FALLBACK target=editor-context reason=timeout" in result.stderr
+		assert "reason=exit=143" not in result.stderr
+
+
 def test_semble_query_block_empty_and_whitespace_results_fall_back() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
@@ -251,164 +275,14 @@ def test_semble_elapsed_ms_clamps_negative_duration_to_zero() -> None:
 		assert result.stderr == ""
 
 
-def test_install_semble_marks_available_when_pinned_binary_exists() -> None:
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		fake_semble = bin_dir / "semble"
-		github_env = root / "github.env"
-		_write_executable(
-			fake_semble,
-			"#!/usr/bin/env bash\n"
-			"if [ \"${1:-}\" = \"--version\" ]; then\n"
-			"\tprintf 'Semble CLI v0.1.3 (build 7)\\n'\n"
-			"\texit 0\n"
-			"fi\n"
-			"printf 'unexpected args: %s\\n' \"$*\" >&2\n"
-			"exit 2\n",
-		)
-
-		result = subprocess.run(
-			["bash", str(INSTALLER)],
-			cwd=root,
-			env={
-				**_base_env(),
-				"HOME": str(root),
-				"PYTHONDONTWRITEBYTECODE": "1",
-				"PATH": f"{bin_dir}:/usr/bin:/bin",
-				"GITHUB_ENV": str(github_env),
-			},
-			capture_output=True,
-			text=True,
-		)
-
-		assert result.returncode == 0, result.stderr
-		assert result.stdout == ""
-		assert github_env.read_text(encoding="utf-8") == "SEMBLE_AVAILABLE=true\n"
-
-
-def test_install_semble_rejects_partial_version_match() -> None:
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		fake_semble = bin_dir / "semble"
-		github_env = root / "github.env"
-		_write_executable(
-			fake_semble,
-			"#!/usr/bin/env bash\n"
-			"if [ \"${1:-}\" = \"--version\" ]; then\n"
-			"\tprintf 'semble 10.1.3\\n'\n"
-			"\texit 0\n"
-			"fi\n"
-			"printf 'unexpected args: %s\\n' \"$*\" >&2\n"
-			"exit 2\n",
-		)
-
-		result = subprocess.run(
-			["bash", str(INSTALLER)],
-			cwd=root,
-			env={
-				**_base_env(),
-				"HOME": str(root),
-				"PYTHONDONTWRITEBYTECODE": "1",
-				"PATH": f"{bin_dir}:/usr/bin:/bin",
-				"GITHUB_ENV": str(github_env),
-				"SEMBLE_PYTHON_BIN": "missing-python",
-			},
-			capture_output=True,
-			text=True,
-		)
-
-		assert result.returncode == 0, result.stderr
-		assert result.stdout == ""
-		assert github_env.read_text(encoding="utf-8") == "SEMBLE_AVAILABLE=false\n"
-		assert "found non-pinned Semble (semble 10.1.3); attempting install of semble==0.1.3." in result.stderr
-
-
-def test_install_semble_rejects_multiline_non_pinned_version_output() -> None:
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		fake_semble = bin_dir / "semble"
-		github_env = root / "github.env"
-		_write_executable(
-			fake_semble,
-			"#!/usr/bin/env bash\n"
-			"if [ \"${1:-}\" = \"--version\" ]; then\n"
-			"\tprintf 'Semble CLI v0.1.4\\nFixed 0.1.3 bug\\n'\n"
-			"\texit 0\n"
-			"fi\n"
-			"printf 'unexpected args: %s\\n' \"$*\" >&2\n"
-			"exit 2\n",
-		)
-
-		result = subprocess.run(
-			["bash", str(INSTALLER)],
-			cwd=root,
-			env={
-				**_base_env(),
-				"HOME": str(root),
-				"PYTHONDONTWRITEBYTECODE": "1",
-				"PATH": f"{bin_dir}:/usr/bin:/bin",
-				"GITHUB_ENV": str(github_env),
-				"SEMBLE_PYTHON_BIN": "missing-python",
-			},
-			capture_output=True,
-			text=True,
-		)
-
-		assert result.returncode == 0, result.stderr
-		assert result.stdout == ""
-		assert github_env.read_text(encoding="utf-8") == "SEMBLE_AVAILABLE=false\n"
-
-
-def test_install_semble_fails_open_and_marks_unavailable_on_install_error() -> None:
-	with tempfile.TemporaryDirectory() as tmp:
-		root = Path(tmp)
-		bin_dir = root / "bin"
-		bin_dir.mkdir()
-		github_env = root / "github.env"
-		fake_python = bin_dir / "fakepython"
-		fake_user_base = root / "fake-user-base"
-		_write_executable(
-			fake_python,
-			"#!/usr/bin/env bash\n"
-			"if [ \"${1:-}\" = \"-\" ]; then\n"
-			"\tcat >/dev/null\n"
-			"\tprintf '%s/bin\\n' \"${FAKE_USER_BASE:?}\"\n"
-			"\texit 0\n"
-			"fi\n"
-			"if [ \"${1:-}\" = \"-m\" ] && [ \"${2:-}\" = \"pip\" ] && [ \"${3:-}\" = \"install\" ]; then\n"
-			"\tprintf 'simulated pip failure\\n' >&2\n"
-			"\texit 9\n"
-			"fi\n"
-			"printf 'unexpected args: %s\\n' \"$*\" >&2\n"
-			"exit 2\n",
-		)
-
-		result = subprocess.run(
-			["bash", str(INSTALLER)],
-			cwd=root,
-			env={
-				**_base_env(),
-				"HOME": str(root),
-				"PYTHONDONTWRITEBYTECODE": "1",
-				"PATH": "/usr/bin:/bin",
-				"GITHUB_ENV": str(github_env),
-				"SEMBLE_PYTHON_BIN": str(fake_python),
-				"FAKE_USER_BASE": str(fake_user_base),
-			},
-			capture_output=True,
-			text=True,
-		)
-
-		assert result.returncode == 0, result.stderr
-		assert result.stdout == ""
-		assert github_env.read_text(encoding="utf-8") == "SEMBLE_AVAILABLE=false\n"
-		assert "pip install failed for semble==0.1.3: simulated pip failure" in result.stderr
+def test_install_semble_never_runs_host_python_or_pip() -> None:
+	text = INSTALLER.read_text(encoding="utf-8")
+	assert "python3 -m pip" not in text
+	assert "attempt_pip_install" not in text
+	assert "current_semble_version" not in text
+	assert "--require-hashes --no-deps --only-binary=:all:" in text
+	assert "env -i PATH=" in text
+	assert "SEMBLE_QUERY_TIMEOUT_SECS:-15" in HELPERS.read_text(encoding="utf-8")
 
 
 def main() -> int:

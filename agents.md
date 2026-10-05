@@ -321,6 +321,7 @@ a new value, add it to the appropriate overrides file with a
 
 ## Utility helpers
 
+- Semble is optional: `scripts/install_semble.sh` builds a hash-locked Docker image from embedded files, and `scripts/build_semble_wrapper.sh` indexes a `.git`-free snapshot and writes a query launcher. The index and every query run in network-less, read-only, credential-free containers; neither helper imports or installs Semble on the host. The poller lazily invokes both helpers with `env -i`; failures disable Semble and retain the existing fallback paths.
 - `scripts/repo_root.py` provides `repo_root()` and
   `repo_root_from(start: Path)` for scripts and tests that need to
   resolve the repository root by walking upward until they find both

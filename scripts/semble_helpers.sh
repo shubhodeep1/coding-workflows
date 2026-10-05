@@ -127,7 +127,7 @@ semble_query_block()
 	local target=""
 	local semble_bin=""
 	local semble_index=""
-	local timeout_secs="${SEMBLE_QUERY_TIMEOUT_SECS:-5}"
+	local timeout_secs="${SEMBLE_QUERY_TIMEOUT_SECS:-15}"
 	local start_ms=""
 	local elapsed_ms="0"
 	local tmp_stdout=""
@@ -179,7 +179,7 @@ semble_query_block()
 
 	start_ms="$(date +%s%3N 2>/dev/null || printf '0')"
 	if command -v timeout >/dev/null 2>&1; then
-		if timeout --preserve-status "${timeout_secs}s" \
+		if timeout "${timeout_secs}s" \
 			"${semble_bin}" query "${query_text}" --index "${semble_index}" --top-k "${max_chunks}" --format text "$@" >"${tmp_stdout}" 2>"${tmp_stderr}"; then
 			status=0
 		else

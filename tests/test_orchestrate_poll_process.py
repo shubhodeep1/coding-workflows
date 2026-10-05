@@ -22205,16 +22205,23 @@ def _exercise_lazy_poll_semble(
 		github_env.write_text("OUTER_ENV_UNCHANGED=true\n", encoding="utf-8")
 		(root / "scripts" / "install_semble.sh").write_text(
 			"#!/usr/bin/env bash\n"
+			f"CALL_LOG={str(call_log)!r}\n"
+			f"MOCK_SEMBLE_FAILURE={failure!r}\n"
 			'echo install >> "$CALL_LOG"\n'
+			'[ "$SEMBLE_SANDBOX_IMAGE" = example/semble:custom ] || exit 1\n'
 			'if [ "$MOCK_SEMBLE_FAILURE" = "install" ]; then exit 1; fi\n'
 			'if [ "$MOCK_SEMBLE_FAILURE" = "install-incomplete" ]; then exit 0; fi\n'
+			'echo SEMBLE_SANDBOX_IMAGE_ID=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >> "$GITHUB_ENV"\n'
 			'echo SEMBLE_AVAILABLE=true >> "$GITHUB_ENV"\n',
 			encoding="utf-8",
 		)
 		if not missing_helper:
 			(root / "scripts" / "build_semble_wrapper.sh").write_text(
 				"#!/usr/bin/env bash\n"
+				f"CALL_LOG={str(call_log)!r}\n"
+				f"MOCK_SEMBLE_FAILURE={failure!r}\n"
 				'echo build >> "$CALL_LOG"\n'
+				'[ "$SEMBLE_SANDBOX_IMAGE_ID" = sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ] || exit 1\n'
 				'if [ "$MOCK_SEMBLE_FAILURE" = "build" ]; then\n'
 				'  echo SEMBLE_INDEX_AVAILABLE=false >> "$GITHUB_ENV"; exit 0\n'
 				'fi\n'
@@ -22240,6 +22247,7 @@ def _exercise_lazy_poll_semble(
 		env.update({
 			"RUNTIME_DIR": str(runtime), "GITHUB_ENV": str(github_env),
 			"CALL_LOG": str(call_log), "SEMBLE_ENABLED": enabled,
+			"SEMBLE_SANDBOX_IMAGE": "example/semble:custom",
 			"MOCK_SEMBLE_FAILURE": failure,
 		})
 		proc = subprocess.run(

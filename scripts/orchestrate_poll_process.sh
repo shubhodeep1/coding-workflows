@@ -317,6 +317,7 @@ render_judge_semble_prefetch_from_query_file() {
   local semble_build_env="${RUNTIME_DIR}/poll_semble_build_env"
   local semble_index_path="${RUNTIME_DIR}/.semble-index"
   local semble_wrapper_path="${RUNTIME_DIR}/semble/bin/semble"
+  local semble_image_id=""
 
   if [ "${SEMBLE_ENABLED:-true}" != "true" ] \
     || [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
@@ -338,14 +339,28 @@ render_judge_semble_prefetch_from_query_file() {
       return 0
     fi
     : > "${semble_install_env}" || return 0
-    if ! GITHUB_ENV="${semble_install_env}" GITHUB_PATH= bash scripts/install_semble.sh > "${RUNTIME_DIR}/semble_install.log" 2>&1 \
+    # Helpers build an isolated image and a .git-free snapshot; scrub the
+    # poller's GitHub, provider and notification credentials before both calls.
+    if ! env -i PATH="${PATH}" HOME="${HOME:-/tmp}" RUNNER_TEMP="${RUNNER_TEMP:-}" \
+      RUNTIME_DIR="${RUNTIME_DIR}" GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
+      GITHUB_ENV="${semble_install_env}" SEMBLE_SANDBOX_IMAGE="${SEMBLE_SANDBOX_IMAGE:-coding-workflows-semble-sandbox:0.1.3}" \
+      bash scripts/install_semble.sh > "${RUNTIME_DIR}/semble_install.log" 2>&1 \
       || ! grep -Fxq 'SEMBLE_AVAILABLE=true' "${semble_install_env}"; then
       echo "::warning::Poll Semble install unavailable; continuing without judge prefetch." >&2
       return 0
     fi
     : > "${semble_build_env}" || return 0
-    if ! GITHUB_ENV="${semble_build_env}" GITHUB_PATH= SEMBLE_INDEX_PATH="${semble_index_path}" \
-      SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 \
+    semble_image_id="$(grep -m1 '^SEMBLE_SANDBOX_IMAGE_ID=' "${semble_install_env}" 2>/dev/null || true)"
+    semble_image_id="${semble_image_id#SEMBLE_SANDBOX_IMAGE_ID=}"
+    if [[ ! "${semble_image_id}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+      echo "::warning::Poll Semble image ID unavailable; continuing without judge prefetch." >&2
+      return 0
+    fi
+    if ! env -i PATH="${PATH}" HOME="${HOME:-/tmp}" RUNNER_TEMP="${RUNNER_TEMP:-}" \
+      RUNTIME_DIR="${RUNTIME_DIR}" GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
+      GITHUB_ENV="${semble_build_env}" SEMBLE_INDEX_PATH="${semble_index_path}" \
+      SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" SEMBLE_SANDBOX_IMAGE_ID="${semble_image_id}" \
+      bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 \
       || ! grep -Fxq 'SEMBLE_AVAILABLE=true' "${semble_build_env}" \
       || ! grep -Fxq 'SEMBLE_INDEX_AVAILABLE=true' "${semble_build_env}" \
       || ! grep -Fxq "SEMBLE_INDEX_PATH=${semble_index_path}" "${semble_build_env}" \
