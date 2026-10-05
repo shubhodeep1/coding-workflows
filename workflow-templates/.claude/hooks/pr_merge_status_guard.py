@@ -74,6 +74,8 @@ Exit codes (Claude Code hook protocol):
   0 — allow the command. A warning may be emitted via `systemMessage`, or a
       `permissionDecision: ask` may route the call through the harness prompt.
   2 — block the command; stderr is fed back to Claude as the reason.
+The hook prints at most one JSON object on stdout per call, merging warnings
+and confirmation reasons into that object.
 
 Escape hatch: set CLAUDE_PR_MERGE_GUARD=off to disable only the merged-PR check.
 The API-write confirmation safeguard remains active.
@@ -162,6 +164,7 @@ _GIT_TIMEOUT_SECONDS = 5
 # Network-bound git calls (`ls-remote`, `fetch`) used by the history fallback.
 _GIT_REMOTE_TIMEOUT_SECONDS = 15
 _GIT_ENVIRONMENT: ContextVar[dict[str, str] | None] = ContextVar("guard_git_environment", default=None)
+_pending_output: dict[str, list[str]] = {"system_messages": [], "ask_reasons": []}
 
 # Options with an argument must not turn that argument into a refspec. Unknown
 # options are treated as uncertain rather than authorizing a different branch.
@@ -1198,7 +1201,9 @@ def _history_block_message(branch: str, base: str, detail: str, api_failure: str
 
 def _warn(reason: str) -> None:
 	"""Emit a non-blocking warning to the user and allow the command."""
-	print(json.dumps({"systemMessage": f"merged-PR guard skipped: {reason}"}))
+	message = f"merged-PR guard skipped: {reason}"
+	if message not in _pending_output["system_messages"]:
+		_pending_output["system_messages"].append(message)
 
 
 def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None:
@@ -1212,41 +1217,47 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 	# The prompt is read by a human: `reason` carries the full transport
 	# error for the log, `prompt_reason` a one-paragraph version for the prompt.
 	short_reason = prompt_reason or reason
-	print(
-		json.dumps(
-			{
-				"systemMessage": f"merged-PR guard needs confirmation: {reason}",
-				"hookSpecificOutput": {
-					"hookEventName": "PreToolUse",
-					"permissionDecision": "ask",
-					"permissionDecisionReason": (
-						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
-						f"pull request for this branch is still open. If it has merged, "
-						f"deny — the branch must be rebuilt from the default branch and "
-						f"a new PR opened."
-					),
-				},
-			}
-		)
+	message = f"merged-PR guard needs confirmation: {reason}"
+	if message not in _pending_output["system_messages"]:
+		_pending_output["system_messages"].append(message)
+	ask_reason = (
+		f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
+		f"pull request for this branch is still open. If it has merged, "
+		f"deny — the branch must be rebuilt from the default branch and "
+		f"a new PR opened."
 	)
+	if ask_reason not in _pending_output["ask_reasons"]:
+		_pending_output["ask_reasons"].append(ask_reason)
 
 
 def _request_api_write_confirmation() -> None:
 	"""Restore the harness prompt for a non-canonical allowlisted API write."""
-	print(
-		json.dumps(
-			{
-				"hookSpecificOutput": {
-					"hookEventName": "PreToolUse",
-					"permissionDecision": "ask",
-					"permissionDecisionReason": (
-						"Non-canonical API curl options can override the allowlisted "
-						"HTTP method or destination."
-					),
-				}
-			}
-		)
+	ask_reason = (
+		"Non-canonical API curl options can override the allowlisted "
+		"HTTP method or destination."
 	)
+	if ask_reason not in _pending_output["ask_reasons"]:
+		_pending_output["ask_reasons"].append(ask_reason)
+
+
+def _reset_pending_output() -> None:
+	_pending_output["system_messages"].clear()
+	_pending_output["ask_reasons"].clear()
+
+
+def _emit_pending_output(code: int) -> None:
+	response: dict = {}
+	if _pending_output["system_messages"]:
+		response["systemMessage"] = "\n".join(_pending_output["system_messages"])
+	if code == 0 and _pending_output["ask_reasons"]:
+		response["hookSpecificOutput"] = {
+			"hookEventName": "PreToolUse",
+			"permissionDecision": "ask",
+			"permissionDecisionReason": "\n\n".join(_pending_output["ask_reasons"]),
+		}
+	if response:
+		print(json.dumps(response))
+	_reset_pending_output()
 
 
 def _payload_cwd(payload: dict) -> str:
@@ -1332,6 +1343,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		if invocation.subcommand == "push" and invocation.warning:
+			_warn(invocation.warning)
 			unresolved_push_sources.append(
 				"could not resolve git push repository; the session checkout may not be the pushed repository."
 			)
@@ -1518,14 +1530,26 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 	return 2, _block_message(offender, branch, base, tip_label=f"origin/{branch}")
 
 
-def evaluate(payload: dict) -> tuple[int, str]:
-	"""Core decision. Returns (exit_code, message_for_stderr)."""
+def _evaluate_tool(payload: dict) -> tuple[int, str]:
+	"""Dispatch the hook's decision for the requested tool."""
 	tool_name = payload.get("tool_name")
 	if tool_name == "Bash":
 		return _evaluate_bash(payload)
 	if tool_name in MCP_PUSH_TOOLS:
 		return _evaluate_mcp_push(payload)
 	return 0, ""
+
+
+def evaluate(payload: dict) -> tuple[int, str]:
+	"""Core decision. Returns (exit_code, message_for_stderr)."""
+	_reset_pending_output()
+	try:
+		code, message = _evaluate_tool(payload)
+	except Exception as exc:  # noqa: BLE001 - the guard must never break the session
+		_warn(f"internal error ({exc})")
+		code, message = 0, ""
+	_emit_pending_output(code)
+	return code, message
 
 
 def main() -> int:
@@ -1542,8 +1566,7 @@ def main() -> int:
 
 	try:
 		code, message = evaluate(payload)
-	except Exception as exc:  # noqa: BLE001 - the guard must never break the session
-		_warn(f"internal error ({exc})")
+	except Exception:  # noqa: BLE001 - stdout may already contain a hook response
 		return 0
 
 	if message:
