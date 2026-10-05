@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6322,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6322\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6327\",\"pr_number\":6327,\"branch\":\"ai/issue-6322\",\"run_id\":\"37276850098\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37276850098\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".claude/hooks/pr_merge_status_guard.py\",\"changelog.d/6322-pr-merge-guard-single-json-output.md\",\"tests/test_pr_merge_status_guard.py\",\"workflow-templates/.claude/hooks/pr_merge_status_guard.py\"]}",
+  "fingerprint": "8ae84aeeae9747635227acf8c39f8c4c46d7bed70652e65a70a5e21e7bf5ae4b",
+  "lineage": {
+    "issue_number": 6322,
+    "parent_ids": [],
+    "pr_number": 6327,
+    "run_id": "37276850098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37276850098",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6327"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005073333_a3c39e98a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6322,
+    "level": "run",
+    "pr_number": 6327,
+    "run_id": "37276850098"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6322: https://github.com/shubhodeep1/coding-workflows/pull/6327",
+  "timestamps": {
+    "created_at": "2026-10-05T07:33:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
