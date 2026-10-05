@@ -586,8 +586,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `RUNTIME_DIR`; the poller (not the agent) fetches, merges, checks
   conflict markers and the merged sub-issue fingerprints, commits and pushes.
   Before that push, it rejects judge changes outside the conflicted paths;
-  conflicted workflows/actions files may contain only lines from either side,
-  retaining each side's line order and duplicate counts when combining them.
+  conflicted protected paths (`.github/`, `.claude/`, `scripts/`, `prompts/`,
+  `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`,
+  agent-instruction files, and build, dependency, config and script files)
+  may contain only lines from either side, retaining each side's line order
+  and duplicate counts when combining them.
   Lines inherited unchanged from the common base cannot be duplicated; a
   provenance check that exceeds its fixed work limit rejects the resolution.
   Its push uses a one-shot credential helper instead of storing `GH_TOKEN` in
