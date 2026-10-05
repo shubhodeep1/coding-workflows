@@ -2396,6 +2396,10 @@ Per design (Q3=A), the surfacing is **informational**: it does not block the sub
 
 No auto-retry is attempted. A human must review the pathspec exclusions before automation resumes.
 
+If the commit step cannot safely write a nonempty `remaining_changes` output, it fails before
+setting `did_commit=false`. The no-op handler does not run, and the excluded paths remain in the
+commit-step log instead of being reported as a clean no-op.
+
 **Staged-support restore (this repository only).** The "Stage workflow support files" step of
 `.github/workflows/implement.yml` installs `SCRIPT_REF`'s runtime helpers into the checkout before
 Codex runs. In consumer repos commit-time exclusions keep those artifacts out of commits; in

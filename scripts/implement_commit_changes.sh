@@ -596,7 +596,7 @@ if [ -z "$(git diff --cached --name-only)" ]; then
     echo "${remaining_changes}" | sed 's/^/  /'
     echo "If these are legitimate consumer-repo files, the pathspec exclusions in the commit step may be too broad."
     # Pass to Handle no-op step for inclusion in the issue comment
-    _implement_output_multiline remaining_changes "${remaining_changes}" warning || true
+    _implement_output_multiline remaining_changes "${remaining_changes}"
   fi
   echo "did_commit=false" >> "$GITHUB_OUTPUT"
   exit 0

@@ -5559,6 +5559,30 @@ def test_implement_env_file_delimiters_are_collision_checked() -> None:
 	assert "_implement_output_multiline remaining_changes" in commit
 
 
+def test_commit_noop_rejects_unwritable_remaining_changes_output(tmp_path: Path) -> None:
+	repo_dir = tmp_path / "repo"
+	_bootstrap_git_repo(repo_dir)
+	support_dir = repo_dir / ".codex-workflow-src"
+	_bootstrap_git_repo(support_dir)
+	(support_dir / "README.md").write_text("editor change\n", encoding="utf-8")
+	output_file = tmp_path / "github_output"
+	output_file.write_text("", encoding="utf-8")
+	mock_commands = tmp_path / "mock_commands.sh"
+	mock_commands.write_text("od() { return 1; }\n", encoding="utf-8")
+	env = _isolated_test_env({
+		"GITHUB_REPOSITORY": "owner/repo", "GITHUB_OUTPUT": str(output_file),
+		"ISSUE_NUMBER": "948",
+	}, cwd=repo_dir)
+	env["BASH_ENV"] = str(mock_commands)
+	proc = subprocess.run(
+		["bash", str(IMPLEMENT_COMMIT_SCRIPT)], cwd=repo_dir, env=env,
+		text=True, capture_output=True, timeout=60,
+	)
+	assert proc.returncode != 0, (proc.stdout, proc.stderr)
+	assert "Unable to safely write multiline output for remaining_changes" in proc.stdout
+	assert "did_commit=false" not in output_file.read_text(encoding="utf-8")
+
+
 def test_alt_model_smoke_override_parses_valid_body() -> None:
 	"""[E2E Smoke Test alt-model] title + valid Note line → MODEL_EDITOR
 	overridden to the model named in the issue body.
