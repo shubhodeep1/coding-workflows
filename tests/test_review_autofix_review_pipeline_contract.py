@@ -3746,7 +3746,7 @@ def test_collect_pr_check_runs_helper_stops_malformed_repoll_at_deadline() -> No
 
 def test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout() -> None:
 	runs = [
-		{"id": idx, "name": f"check-{idx}", "status": "completed", "conclusion": "success"}
+		{"id": idx + 1, "name": f"check-{idx}", "status": "completed", "conclusion": "success"}
 		for idx in range(4)
 	]
 	result = _run_collect_pr_check_runs_harness(
