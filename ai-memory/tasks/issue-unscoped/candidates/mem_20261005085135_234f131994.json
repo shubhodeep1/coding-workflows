@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cVerify the latest trusted project state is still failed before deciding and again before applying a terminal label; skip stale dispatches or unverifiable state.\u201d\n  expected_change_site: `scripts/unblock_judge.sh::unblock_run_ops`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `scripts/unblock_judge.sh:652-666` rechecks trusted state before the verdict comment and operations; `scripts/unblock_actions.py:356-362` plans the `ai:unblock-closed` label without another state check; `scripts/orchestrate_poll_process.sh:15765-15775` treats the label as authorization to mark the project abandoned and close its tracking issue.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh | Location: remove_label branch in unblock_run_ops (LAST RUN DIFF block at line 165)\n  PROBLEM: The grep for HTTP 404 is case-sensitive; if `gh` ever lowercases \"http\" in a future release, the match silently degrades and a 404 would be treated as a real failure.\n  WHY: This would mark `ops_failed=true` and abort the rest of the ops, including the verdict comment for retry_budget verdicts that the README explicitly says should still proceed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cVerify the latest trusted project state is still failed before deciding and again before applying a terminal label; skip stale dispatches or unverifiable state.\u201d\n  Expected change site: `scripts/unblock_judge.sh::unblock_run_ops`, immediately before adding `ai:unblock-closed` to a project.\n  Evidence of absence: The trusted-state recheck at `scripts/unblock_judge.sh:652-666` happens before the verdict comment is recorded at lines 679-681 and before operations are planned and run at lines 683-690. `scripts/unblock_actions.py:356-362` plans the project\u2019s `ai:unblock-closed` label without another state check. If the project resumes after the recheck but before that label is added, `scripts/orchestrate_poll_process.sh:15765-15775` treats the label as authorization to mark the project abandoned and close its tracking issue.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3bf0ff776edf44e3b85a1b2c4987a2197e333d713c73faaef0d484d889c7324e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6284,
+    "run_id": "37283027010",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37283027010",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005085135_234f131994",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6284,
+    "run_id": "37283027010"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T08:51:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
