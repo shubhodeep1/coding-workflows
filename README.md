@@ -2615,15 +2615,18 @@ and resolver chains, a failed project) now goes to the unblock judge
   consumer) calls `.github/workflows/unblock_judge.yml`, which runs
   `scripts/unblock_judge.sh` with the UNBLOCK_JUDGE role
   (`prompts/mode-judge-unblock.txt`). It reads the item, its comments, the
-  failing run's log tail, the PR diff and, for a project, its state and
+  verified failing run's log tail (omitted when the run cannot be bound to the
+  item by PR head/number, item branch or tracking run name; a matching issue
+  title alone is insufficient), the PR diff and, for a project, its state and
   specification, and picks one verdict: `retry_budget`, `auto_answer`,
   `descope`, `override_guard`, `reissue`, `accept_with_followup`,
   `operator_step` or `close`.
 - **Hard limits** (`scripts/unblock_ledger.py`). A verdict is never repeated
   for the same failure fingerprint; at most 2 rounds per item and 6 per
   project; `override_guard` only for the scope and destructive latches on an
-  issue, never for `.github/workflows/**`, `.claude/**` or `scripts/**` in
-  this repository and never for deleting a canonical workflow source;
+  issue, never for `.github/**`, `.claude/**` or `workflow-templates/**` in
+  any repository, nor for `scripts/**` in this repository, and never for
+  deleting a canonical workflow source;
   `accept_with_followup` never for a failed security pass or validation. The
   model's output is validated before anything happens. Codex runs in a
   network-isolated container with the OpenRouter key held by a host-side broker;
@@ -2669,7 +2672,12 @@ and resolver chains, a failed project) now goes to the unblock judge
   report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
   poller then sets the state to `abandoned` and closes the tracking issue.
   For an issue or PR, a failed close leaves the terminal label unset so a
-  later scan can retry.
+  later scan can retry. If the close succeeds but adding the label fails,
+  the judge logs the failure and still sends the CRITICAL alert; the closed
+  item cannot be rediscovered by the open-item scan. If a project's label
+  write fails, it remains blocked and a CRITICAL alert reports that closure
+  is pending; the poller cannot abandon it without the label. An already-absent
+  block label does not prevent the judge from posting the resume command.
 
 A person can still act on any blocked item at any time; the judge only
 picks up what is still blocked. `UNBLOCK_JUDGE_ENABLED=false` turns all of

@@ -24,7 +24,7 @@ Hard rules:
 - Never repeat a verdict that is not in `allowed`; earlier verdicts for this fingerprint already failed.
 - Never waive a security finding, never treat a validation as passed, never merge past a failing required check.
 - Never invent a credential, token, secret value or commit SHA. If one is missing, the verdict is `operator_step`.
-- `override_guard` never covers `.github/workflows/`, `.claude/` or `scripts/` in shubhodeep1/coding-workflows.
+- `override_guard` never covers any path under `.github/`, `.claude/` or `workflow-templates/`, in any repository, and never `scripts/` in shubhodeep1/coding-workflows.
 - For the destructive guard, `override_guard` never lists a canonical workflow source (`agents.md`, `ai_pipeline.md`, `unattended_system_instructions.md`, `CLAUDE.md`, `prompts/`, `scripts/`, `.github/ai/`, `.github/scripts/`) or any path under `.github/`, `.claude/` or `workflow-templates/`, in any repository.
 - Keep every text field under 1,200 characters, plain text, and without HTML comments.
 

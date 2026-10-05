@@ -36,8 +36,10 @@
 # Never fails its caller: every problem is logged and the exit code is 0.
 # API budget (CLAUDE.md §15), per run: one `user` read, the item, its
 # comments (paginated), the tracking issue's comments for a project's item,
-# at most one linked-issue read, one fix-up read while waiting, the run log
-# and diff for evidence, one verdict comment (two for a project's item) and
+# at most one linked-issue read, one fix-up read while waiting, the PR diff,
+# at most three run-metadata reads to bind a run cited in a pipeline-authored
+# comment to this item, then that run's log, one verdict comment (two for a
+# project's item) and
 # the planned operations (at most about six writes). A failed project marker
 # is reconciled if the item stays blocked; actuation used the item ledger.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
@@ -136,7 +138,7 @@ PY
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" count idx op issue number created body label close_failed="false" ops_failed="false"
+	local ops_file="$1" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false"
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -165,8 +167,12 @@ unblock_run_ops()
 				;;
 			remove_label)
 				label="$(jq -r ".ops[${idx}].label" "${ops_file}")"
-				gh api -X DELETE "repos/${REPOSITORY}/issues/${issue}/labels/$(jq -rn --arg l "${label}" '$l | @uri')" >/dev/null 2>&1 \
-					|| { ops_failed="true"; unblock_log "item=${ITEM} op=remove_label issue=${issue} label=${label} outcome=failed"; }
+				if ! gh api -X DELETE "repos/${REPOSITORY}/issues/${issue}/labels/$(jq -rn --arg l "${label}" '$l | @uri')" >/dev/null 2> "${RUNTIME_DIR}/remove_label_error.txt"; then
+					if ! grep -q 'HTTP 404' "${RUNTIME_DIR}/remove_label_error.txt"; then
+						ops_failed="true"
+						unblock_log "item=${ITEM} op=remove_label issue=${issue} label=${label} outcome=failed"
+					fi
+				fi
 				;;
 			create_issue)
 				local -a create_args=(-f "title=$(jq -r ".ops[${idx}].title" "${ops_file}")" -f "body=$(jq -r ".ops[${idx}].body" "${ops_file}")")
@@ -267,9 +273,11 @@ PY
 				fi
 				if [ "$(jq -r ".ops[${idx}].pr" "${ops_file}")" = "true" ]; then
 					gh api -X PATCH "repos/${REPOSITORY}/pulls/${issue}" -f state=closed >/dev/null 2>&1 \
+						&& close_succeeded="true" \
 						|| { close_failed="true"; ops_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
 				else
 					gh api -X PATCH "repos/${REPOSITORY}/issues/${issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
+						&& close_succeeded="true" \
 						|| { close_failed="true"; ops_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
 				fi
 				;;
@@ -281,7 +289,12 @@ PY
 					|| { ops_failed="true"; unblock_log "item=${ITEM} op=dispatch_review pr=${number} outcome=failed"; }
 				;;
 			telegram)
-				[ "${ops_failed}" = "true" ] && continue
+				if [ "${ops_failed}" = "true" ] && [ "${close_succeeded}" != "true" ]; then
+					if [ "${ITEM_KIND}" = "project" ] && [ "$(jq -r ".ops[${idx}].level" "${ops_file}")" = "CRITICAL" ]; then
+						unblock_tg "CRITICAL" "Unblock judge could not mark project #${ITEM} for closure; label write failed (${REPOSITORY})."
+					fi
+					continue
+				fi
 				unblock_tg "$(jq -r ".ops[${idx}].level" "${ops_file}")" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
 				;;
 			*)
@@ -375,7 +388,7 @@ unblock_main()
 	fi
 
 	# The project an item belongs to, and a PR's linked issue.
-	local tracking="" linked="" body_text pr_json="" head_sha="" pr_bound_issue=""
+	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref="" pr_bound_issue=""
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "project" ]; then
 		tracking="${ITEM}"
@@ -404,6 +417,7 @@ unblock_main()
 			fi
 		fi
 		head_sha="$(jq -r '.head.sha // ""' <<< "${pr_json}")"
+		head_ref="$(jq -r '.head.ref // ""' <<< "${pr_json}")"
 		linked="$(printf '%s\n' "${body_text}" | grep -oiE '\b(refs|closes|close|closed|fixes|fix|fixed|resolves|resolve|resolved)[[:space:]]+#[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
 	fi
 
@@ -604,17 +618,69 @@ ${marker_line}" >/dev/null 2>&1; then
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=acted"
 }
 
+# Attach failed logs only when a pipeline-authored citation belongs to this
+# item. Missing or unverifiable metadata leaves the prompt's log section empty.
+unblock_select_run_log()
+{
+	local candidate_id run_json checked=0 unreadable="false" reason="run_unbound"
+	local -a candidates=()
+	: > "${RUNTIME_DIR}/run_log_tail.txt"
+	mapfile -t candidates < <(jq -r --arg login "${UNBLOCK_LOGIN}" '
+		[.[] | select((.user.login // "") == $login and (((.body // "") | test("ai:unblock|ORCHESTRATOR_STATE")) | not))
+		 | (.body // "") | scan("/actions/runs/([0-9]+)") | .[0]]
+		| reverse | reduce .[] as $id ([]; if index($id) == null then . + [$id] else . end)
+		| .[:3][]
+	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null)
+	if [ "${#candidates[@]}" -eq 0 ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=omitted reason=no_trusted_run candidates=0"
+		return 0
+	fi
+	for candidate_id in "${candidates[@]}"; do
+		[[ "${candidate_id}" =~ ^[0-9]+$ ]] || continue
+		checked=$((checked + 1))
+		# The existing item, comment, PR and check-runs reads contain no run
+		# repository/branch metadata; this bounded read is needed to bind the ID.
+		if ! run_json="$(gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}" 2>/dev/null)"; then
+			unreadable="true"
+			continue
+		fi
+		if ! jq -e 'type == "object"' <<< "${run_json}" >/dev/null 2>&1; then
+			unreadable="true"
+			continue
+		fi
+		if ! jq -e --arg id "${candidate_id}" --arg repo "${REPOSITORY}" --arg kind "${ITEM_KIND}" \
+				--arg item "${ITEM}" \
+				--arg sha "${head_sha:-}" --arg ref "${head_ref:-}" '
+				(.id == ($id | tonumber) and .repository.full_name == $repo and .head_repository.full_name == $repo)
+				and (if $kind == "pr" then
+					((.display_title // "") | endswith("[pr:" + $item + "]"))
+					or (($sha | test("^[0-9a-f]{40}$")) and .head_sha == $sha)
+					or ($ref != "" and .head_branch == $ref)
+					or any(.pull_requests[]?; .number == ($item | tonumber))
+				elif $kind == "issue" then
+					.head_branch == ("ai/issue-" + $item)
+				else
+					.head_branch == ("orchestrator/project-" + $item)
+					or ((.display_title // "") | endswith("[tracking:" + $item + "]"))
+				end)
+			' <<< "${run_json}" >/dev/null 2>&1; then
+			continue
+		fi
+		gh run view "${candidate_id}" -R "${REPOSITORY}" --log-failed 2>/dev/null | tail -n 400 | tail -c 120000 > "${RUNTIME_DIR}/run_log_tail.txt" || true
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=attached run=${candidate_id}"
+		return 0
+	done
+	[ "${unreadable}" = "false" ] || reason="run_unreadable"
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} op=run_log outcome=omitted reason=${reason} candidates=${checked}"
+}
+
 # Builds the evidence prompt, runs the UNBLOCK_JUDGE role and writes the raw
 # verdict JSON to verdict_raw.json. Returns 1 (after logging) when there is
 # no usable answer.
 unblock_ask_model()
 {
-	local prompt_file="${RUNTIME_DIR}/prompt.txt" output_file="${RUNTIME_DIR}/model_output.txt" run_id model reasoning engine rc iso_rc parse_rc
-	run_id="$(jq -r '[.[] | (.body // "") | scan("/actions/runs/([0-9]+)") | .[0]] | last // empty' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true)"
-	: > "${RUNTIME_DIR}/run_log_tail.txt"
-	if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
-		gh run view "${run_id}" -R "${REPOSITORY}" --log-failed 2>/dev/null | tail -n 400 | tail -c 120000 > "${RUNTIME_DIR}/run_log_tail.txt" || true
-	fi
+	local prompt_file="${RUNTIME_DIR}/prompt.txt" output_file="${RUNTIME_DIR}/model_output.txt" model reasoning engine rc iso_rc parse_rc
+	unblock_select_run_log
 	: > "${RUNTIME_DIR}/pr_diff.txt"
 	if [ "${ITEM_KIND}" = "pr" ]; then
 		gh api "repos/${REPOSITORY}/pulls/${ITEM}" -H "Accept: application/vnd.github.diff" 2>/dev/null | head -c 120000 > "${RUNTIME_DIR}/pr_diff.txt" || true
