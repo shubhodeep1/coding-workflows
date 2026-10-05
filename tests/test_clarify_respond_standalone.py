@@ -257,6 +257,23 @@ def test_fallback_pages_when_a_question_has_no_recommendation(tmp_path: Path) ->
 	assert "CRITICAL|Clarification required for #6262: [security-audit] finding" in log
 
 
+def test_fallback_guard_checks_later_recommended_answer(tmp_path: Path) -> None:
+	questions = QUESTIONS.replace("A dedicated bot identity; provision its credentials privately", "Provide the PR URL for verification")
+	questions = questions.replace("Disable verdict-triggered auto-merge", "Skip this verification")
+	outputs, answers, _ = _run_fallback(tmp_path, questions)
+	assert outputs["ready"] == "true"
+	clarification_path = tmp_path / "runtime" / "clarification_comment.txt"
+	answer_path = tmp_path / "runtime" / "codex_output.txt"
+	assert answers.rstrip("\n") == "Q1: B\nQ2: A"
+	result = subprocess.run(
+		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
+		 "--clarification-file", str(clarification_path), "--answers-file", str(answer_path)],
+		capture_output=True, text=True, check=True,
+	)
+	assert "Q1: B\nQ2: B" in result.stdout
+	assert "Q2: overrode A -> B" in result.stdout
+
+
 def _run_record(tmp_path: Path, comments: list[dict], answer: str = WORKER_ANSWER, **extra: str) -> tuple[list[list[str]], str]:
 	_install_scripts(tmp_path, tmp_path / "sent.txt")
 	_stub_gh(tmp_path / "bin", tmp_path / "gh.log", {})

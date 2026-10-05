@@ -80,7 +80,7 @@ def _parse_questions(clarification_text: str) -> dict[str, dict[str, str]]:
 def _parse_answers(answers_text: str) -> dict[str, list[str]]:
 	"""Parse answer text into {Q_ID: [selected_letters]}."""
 	answers: dict[str, list[str]] = {}
-	in_decisions = False
+	in_decisions = True
 
 	for line in answers_text.splitlines():
 		stripped = line.strip()
@@ -91,7 +91,7 @@ def _parse_answers(answers_text: str) -> dict[str, list[str]]:
 			in_decisions = False
 			continue
 
-		if in_decisions or not answers:
+		if in_decisions:
 			# Match Q1: A or Q1: A+C
 			m = re.match(r"(Q\d+):\s*([A-Z](?:\+[A-Z])*)\s*$", stripped)
 			if m:
