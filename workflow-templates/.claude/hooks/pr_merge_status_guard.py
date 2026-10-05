@@ -413,7 +413,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				if option == "--":
 					index += 1
 					break
-				if option in ("-u", "--unset", "-C", "--chdir") and index + 1 < len(tokens):
+				if option in ("-u", "--unset", "-C", "--chdir", "-a", "--argv0") and index + 1 < len(tokens):
 					if option in ("-C", "--chdir") or _INLINE_GIT_CONFIG_ENV_RE.fullmatch(tokens[index + 1]):
 						config_block = "env directory or Git configuration override"
 					index += 2
@@ -850,7 +850,7 @@ def git_subcommands(command: str) -> set[str]:
 				if option == "--":
 					index += 1
 					break
-				if option in ("-u", "--unset", "-C", "--chdir") and index + 1 < len(tokens):
+				if option in ("-u", "--unset", "-C", "--chdir", "-a", "--argv0") and index + 1 < len(tokens):
 					index += 2
 				elif option in ("-i", "--ignore-environment", "-0", "--null") or option.startswith(("-u", "--unset=", "--chdir=")):
 					index += 1
@@ -1515,7 +1515,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if index < len(tokens) and tokens[index] in ("env", "/usr/bin/env") and any(
 				option == "-S" or option.startswith(("-S", "--split-string")) for option in tokens[index + 1:]
 			):
-				if re.search(r"\bgit\b.*\b(?:push|commit)\b", " ".join(tokens[index + 1:])):
+				if re.search(r"\bgit\b[\s\S]*\b(?:push|commit)\b", " ".join(
+					option[2:] if option.startswith("-S") and option != "-S" else option
+					for option in tokens[index + 1:]
+				)):
 					return 2, "BLOCKED: env -S Git command cannot be mapped safely by the merged-PR guard."
 	except ValueError:
 		pass

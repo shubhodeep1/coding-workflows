@@ -1126,6 +1126,8 @@ def test_positional_remote_without_inline_config_keeps_legacy_mapping(merged_bra
 	"env --debug GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=current git push origin",
 	"/usr/bin/env --default-signal=PIPE GIT_CONFIG_PARAMETERS=x /usr/bin/git push origin",
 	"env -v GIT_CONFIG_COUNT=1 git commit -m x",
+	"env -a git GIT_CONFIG_COUNT=1 git push origin",
+	"env --argv0 git GIT_CONFIG_PARAMETERS=x git push origin",
 	"git -c remote.main.url=$URL push origin",
 	"git -c remote.origin.push=refs/heads/feature/x:refs/heads/main push origin",
 	"git -c remote.origin.pushurl=https://github.com/o/r.git push origin",
@@ -1162,11 +1164,16 @@ def test_config_env_global_option_does_not_hide_push() -> None:
 	assert "push" in guard.git_subcommands("env -C /tmp GIT_CONFIG_COUNT=1 git push origin")
 	assert "push" in guard.git_subcommands("env --debug GIT_CONFIG_COUNT=1 git push origin")
 	assert "push" in guard.git_subcommands("/usr/bin/env --default-signal=PIPE /usr/bin/git push origin")
+	assert "push" in guard.git_subcommands("env -a git git push origin")
+	assert "push" in guard.git_subcommands("env --argv0 git git push origin")
 
 
 @pytest.mark.parametrize("command", [
 	"env -S 'GIT_CONFIG_PARAMETERS=x git push origin feature/x'",
 	"/usr/bin/env --split-string='GIT_CONFIG_COUNT=1 git push origin feature/x'",
+	"env -S'GIT_CONFIG_PARAMETERS=x git push origin feature/x'",
+	'env -S"git commit -m x"',
+	"env -S 'git\npush origin feature/x'",
 ])
 def test_env_split_string_push_is_denied_when_mapping_is_unknown(command: str) -> None:
 	code, message = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
