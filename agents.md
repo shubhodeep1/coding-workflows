@@ -218,8 +218,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     every run, same-repo included, requires matching run metadata (repo,
     reported head SHA, and PR or head branch) and a failed conclusion (a
     successful or unfinished run only counts as its review job). Unverifiable
-    runs are skipped before log/artifact reads, including when a cached run is
-    restored; rejected intake-origin
+    runs are skipped before log/artifact reads; rejected intake-origin
     references are listed with reasons under `Skipped` in `INDEX.md`. The
     folder is mounted read-only at `/evidence` in the clarify sandbox, and
     the prompt points to its index

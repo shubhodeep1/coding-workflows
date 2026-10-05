@@ -1280,6 +1280,7 @@ def test_purge_legacy_cache_cli_prints_json_and_exits_zero(monkeypatch, capsys) 
 	assert json.loads(capsys.readouterr().out) == {
 		"listed": 0, "matched": 0, "deleted": 0, "failed": 0, "status": "none",
 	}
+	assert ev.purge_legacy_evidence_caches(StubGitHub(), "not a slug")["status"] == "invalid_repo"
 
 
 # ---------------------------------------------------------------------------

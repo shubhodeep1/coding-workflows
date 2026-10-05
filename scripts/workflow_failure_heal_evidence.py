@@ -1415,6 +1415,9 @@ def render_index(
 def purge_legacy_evidence_caches(gh: GitHub, repo: str) -> dict[str, Any]:
 	"""Delete at most one page of the old PR-readable evidence caches."""
 	result: dict[str, Any] = {"listed": 0, "matched": 0, "deleted": 0, "failed": 0, "status": "list_failed"}
+	if not heal.is_valid_repo_slug(repo):
+		result["status"] = "invalid_repo"
+		return result
 	listing = gh.json(f"repos/{repo}/actions/caches?key=heal-evidence-&per_page=100")
 	if not isinstance(listing, dict) or not isinstance(listing.get("actions_caches"), list):
 		log("warn purge_list_failed")

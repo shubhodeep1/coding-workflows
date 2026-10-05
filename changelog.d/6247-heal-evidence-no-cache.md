@@ -1,4 +1,12 @@
 <!-- changelog: security -->
-- **Workflow-heal evidence no longer goes into a PR-readable Actions cache.** Logs and artifacts, including those from consumer repositories, are collected afresh in each trusted stage instead of being saved where fork pull-request runs could read them.
+- **Workflow-heal evidence no longer goes into a PR-readable Actions cache.**
 
-Each stage now uses about 20 REST calls instead of about 5 in later stages. On the next eligible heal stage, a best-effort cleanup deletes legacy `heal-evidence-*` cache entries; entries readable before that cleanup remain exposed until deleted or expired.
+Clarify, plan and implement now collect logs and artifacts, including consumer-repository evidence, afresh in each trusted stage instead of saving them for fork pull-request runs to read. Each stage uses about 20 REST calls, rather than about 5 for a later stage with a cache hit. An eligible heal stage also lists the first page of legacy `heal-evidence-*` caches and attempts to delete matching entries. Cleanup failures do not block evidence collection, and entries not yet deleted remain readable until deleted or expired.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Evidence collection | About 20 REST calls per stage |
+| Legacy cache cleanup | One list call for up to 100 entries, then one delete call per matching entry |
+| Automatic cache eviction | 7 days after the last access |
+
+What this means for operators: new heal evidence is no longer shared through Actions caches. Existing cache entries need a successful cleanup pass or expiration before they stop being readable by pull-request runs.
