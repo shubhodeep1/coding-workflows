@@ -1964,10 +1964,13 @@ attempts of that role in the same job.
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
-Read-profile calls reject non-empty `AI_ENGINE_ISOLATED_READ_PATHS` instead of
-bind-mounting additional host paths; the caller falls back with
-`reason=isolation_read_path_invalid`. Only the filtered checkout snapshot and
-trusted support inputs are mounted. Its Git history is a synthetic commit of
+Read-profile calls reject arbitrary `AI_ENGINE_ISOLATED_READ_PATHS` with
+`reason=isolation_read_path_invalid`. `WORKFLOW_HEAL` alone may request the
+`heal_src` and `heal_branch_tip` worktrees beneath its `RUNTIME_DIR`; these
+are filtered into separate read-only snapshots under the same aggregate
+20,000-file/256-MiB budget as the main checkout, not mounted from the host.
+An invalid path or exceeded budget falls back to Codex. Git history in each
+snapshot is a synthetic commit of
 the filtered files (including exclusion of standard extensionless SSH keys,
 such as `id_ed25519`, `id_ed25519_sk`, and `id_ecdsa_sk`); historical revisions
 and the source Git object store are not available to read-profile tools.
@@ -2073,6 +2076,7 @@ returns `75` for the caller's existing fallback, never unisolated Claude.
 | Read-profile setting | Default | Purpose |
 |---|---|---|
 | `AI_ENGINE_READ_EXTRA_DIRS` | empty | Colon-separated absolute directories to snapshot alongside the workdir (the workflow-heal worktrees). |
+| `AI_ENGINE_ISOLATED_READ_PATHS` | empty | WORKFLOW_HEAL-only paths under `RUNTIME_DIR` for filtered auxiliary snapshots; other paths fall back. |
 | `CLAUDE_READ_SNAPSHOT_MAX_FILES` | `50000` | Maximum snapshot working-tree file count. |
 | `CLAUDE_READ_SNAPSHOT_MAX_BYTES` | `1073741824` | Maximum snapshot working-tree bytes. |
 | `CLAUDE_READ_ISOLATION_MAX_SECS` | `14400` | Maximum per-account relay and container call time. |
