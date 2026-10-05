@@ -1231,7 +1231,8 @@ the way to a fix PR without human action.
   bounded before the secret-bearing triage job starts.
 - **Diagnosis:** for same-repo PRs, the repo is checked out at the failing head
   SHA without persisted checkout credentials. The workflow collects PR metadata
-  and logs with `GH_PAT`, then runs Codex from a separate trusted support directory
+  and logs with `GH_PAT` from a separate trusted support directory (so PR-head
+  Python files cannot shadow the collector's imports), then runs Codex there
   with no GitHub token in the diagnosis step. Missing trusted instructions stop
   triage rather than falling back to PR-head instructions. The diagnosis model
   (`WORKFLOW_CHECK_TRIAGE_MODEL`, default `openai/gpt-6-sol`, `high`) reads the failing check's logs (via
@@ -1259,8 +1260,10 @@ the way to a fix PR without human action.
 - **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
-  sent and the run fails (no partial state is left). Missing trusted support
-  or context prevents issue creation. Stable log lines are
+  sent and the run fails (no partial state is left). If trusted support staging
+  fails before it can export its directory, the run fails without loading
+  PR-head notification helpers, so inspect the workflow log for the failure.
+  Missing trusted support or context prevents issue creation. Stable log lines are
   prefixed `CHECK_TRIAGE`.
 
 ### Workflow Failure Heal

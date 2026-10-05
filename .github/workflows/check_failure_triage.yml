@@ -273,7 +273,7 @@ jobs:
           mkdir -p scripts
 
           _fetched=()
-          for f in gh_helpers.sh tg_helpers.sh render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh; do
+          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               if [ "${f}" = "render_prompt.py" ]; then
@@ -338,10 +338,16 @@ jobs:
           if [ -f .codex-workflow-src/agents.md ]; then
             install -m 0644 .codex-workflow-src/agents.md "${trusted_dir}/agents_canonical.md"
           fi
+          for trusted_helper_file in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py; do
+            install -m 0755 ".codex-workflow-src/scripts/${trusted_helper_file}" "${trusted_dir}/scripts/${trusted_helper_file}"
+          done
+          install -m 0755 .codex-workflow-src/scripts/check_failure_triage.sh "${trusted_dir}/scripts/check_failure_triage.sh"
+          install -m 0755 .codex-workflow-src/scripts/collect_pr_check_runs_context.py "${trusted_dir}/scripts/collect_pr_check_runs_context.py"
           install -m 0755 .codex-workflow-src/scripts/render_prompt.sh "${trusted_dir}/scripts/render_prompt.sh"
           if [ -f .codex-workflow-src/scripts/render_prompt.py ]; then
             install -m 0755 .codex-workflow-src/scripts/render_prompt.py "${trusted_dir}/scripts/render_prompt.py"
           fi
+          install -m 0755 .codex-workflow-src/scripts/assemble_prompt.sh "${trusted_dir}/scripts/assemble_prompt.sh"
           echo "CHECK_TRIAGE_TRUSTED_SUPPORT_DIR=${trusted_dir}" >> "$GITHUB_ENV"
 
           rm -rf .codex-workflow-src
@@ -373,6 +379,7 @@ jobs:
           CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
         run: |
           set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
           bash scripts/check_failure_triage.sh
 
       - name: Diagnose check failure
@@ -390,6 +397,7 @@ jobs:
           CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
         run: |
           set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
           bash scripts/check_failure_triage.sh
 
       # A fine-grained PAT with Issues: write (and Metadata: read) keeps
@@ -403,6 +411,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
           source scripts/gh_helpers.sh
           body_file="${RUNTIME_DIR}/issue_body.md"
           test -s "${body_file}"
@@ -444,6 +453,10 @@ jobs:
           CHECK_NAME: ${{ inputs.check_name }}
         run: |
           set -euo pipefail
+          # Staging can fail before the trusted directory exists. Never source
+          # the PR checkout's notification helpers in that case.
+          [ -n "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:-}" ] || exit 0
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR}" || exit 0
           source scripts/tg_helpers.sh 2>/dev/null || true
           type tg_send_msg >/dev/null 2>&1 || exit 0
           safe_check_name="${CHECK_NAME//$'\r'/ }"
