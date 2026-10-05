@@ -260,14 +260,24 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
+	previous_end = -1
 	for token in lexer:
+		token_end = lexer.instream.tell()
 		if redirect_target:
 			redirect_target = False
+			previous_end = token_end
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			if segment and segment[-1].isdigit():
-				segment.pop()
+			# shlex reads one character past a word. Only an adjacent, raw
+			# numeric prefix is an FD; `2 >file` or `'2'>file` keeps the refspec.
+			if (segment and segment[-1].isascii() and segment[-1].isdigit()
+				and previous_end == token_end - len(token)):
+				raw_start = previous_end - len(segment[-1]) - 1
+				if (raw_start >= 0 and command[raw_start:previous_end - 1] == segment[-1]
+					and (raw_start == 0 or command[raw_start - 1] != "\\")):
+					segment.pop()
 			redirect_target = True
+			previous_end = token_end
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
@@ -276,6 +286,7 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			operator = token
 		else:
 			segment.append(token)
+		previous_end = token_end
 	if segment:
 		result.append((operator, segment))
 	return result

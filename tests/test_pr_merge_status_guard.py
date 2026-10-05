@@ -923,6 +923,42 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	assert lookups == ["feature/x"]
 
 
+@pytest.mark.parametrize("refspec,command", [
+	("2", "git push origin 2 > /tmp/out"),
+	("2", "git push origin '2'>/tmp/out"),
+	("2", "git push origin \\2>/tmp/out"),
+	("12", "git push origin \\12>/tmp/out"),
+	("12", "git push origin '1'2>/tmp/out"),
+])
+def test_numeric_push_refspec_before_redirect_is_checked(merged_branch_repo, monkeypatch,
+	refspec: str, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "branch", refspec)
+	_git(repo, "checkout", "main")
+	merged_sha = _git(repo, "rev-parse", refspec)
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == refspec else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert lookups == [refspec]
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin HEAD:feature/open 2>/dev/null",
+	"git push origin HEAD:feature/open 2>&1",
+])
+def test_adjacent_fd_redirect_does_not_create_numeric_refspec(command: str) -> None:
+	invocations = guard._guarded_git_invocations(command, "/repo")
+	assert len(invocations) == 1
+	assert invocations[0].arguments == ["origin", "HEAD:feature/open"]
+
+
 def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	worktree = repo.parent / "other"

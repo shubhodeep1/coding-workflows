@@ -468,6 +468,8 @@ production-safe at merge, with its own changelog fragment and rollback.
 
 1. `scripts/semble_helpers.sh`: add `semble_ensure_ready`, with the opening
    brace on a new line as in the rest of the file. Behaviour:
+   - Accept the required target slug from `semble_query_block`, for use in
+     bootstrap-failure telemetry (`target=<slug>`).
    - **Mode.** `mode="${SEMBLE_BOOTSTRAP_MODE:-eager}"`, lower-cased. Any
      value other than `lazy` or `eager` logs
      `::warning::SEMBLE_BOOTSTRAP_MODE=<v> is invalid; using eager` once and
@@ -520,8 +522,9 @@ production-safe at merge, with its own changelog fragment and rollback.
    `SEMBLE_ENABLED=true` and the state file does not say `state=failed`.
    Otherwise it returns 1.
 3. `scripts/semble_helpers.sh` `semble_query_block` (line 122): immediately
-   after argument validation and before the `SEMBLE_AVAILABLE` check, add
-   `semble_ensure_ready >/dev/null || true`. Stdout must stay clean because
+   after computing `target="$(_semble_target_slug "${header_label}")"` and
+   before the `SEMBLE_AVAILABLE` check, add
+   `semble_ensure_ready "${target}" >/dev/null || true`. Stdout must stay clean because
    callers capture it as the prefetch text; **do not suppress stderr**,
    which carries installer errors and Phase 4 bootstrap events. The existing
    fallback events then fire unchanged if Semble is still unavailable.
@@ -640,9 +643,18 @@ production-safe at merge, with its own changelog fragment and rollback.
 5. Callers set `SEMBLE_STATIC_CONTEXT_FILE` where the same prompt embeds a
    static prefix that exists at query time:
    - `implement.yml` (both repair and diagnose): `./pre_assembled_static.txt`
-   - `scripts/orchestrate_poll_process.sh` judge paths:
-     `${RUNTIME_DIR}/judge_static.txt`, set locally around the
-     `semble_query_block` call at line 327
+   - `scripts/orchestrate_poll_process.sh` judge paths: pass the static file
+     actually used by each prompt to `render_judge_semble_prefetch_from_query_file`,
+     which sets the variable locally around `semble_query_block` (line 327)
+     only when that file is readable and nonempty. Assemble
+     `${RUNTIME_DIR}/judge_static.txt` before prefetch in the main,
+     security-pass exhaustion and stall judge paths (currently assembled
+     afterward). In the review-blocked path, move prefetch after its existing
+     branch preparation and static assembly, so the measured file still
+     matches the prompt after checkout. The integration-conflict judge already
+     assembles its separate `${judge_static_file}` before prefetch; pass that
+     file rather than `${RUNTIME_DIR}/judge_static.txt`. On assembly failure,
+     leave the variable unset so `static_dup_bytes` is omitted, not guessed.
    - `review_autofix.yml`: the static file the reviewer and editor prompts
      embed. Locate it via `pre_assembled_static.txt` handling in
      `review_run_reviewers.sh` / `review_apply_fixes.sh`; if none exists at
@@ -775,7 +787,7 @@ write a fake index and wrapper and count invocations:
   second call reads the state file without re-installing
 - two concurrent calls (`&` plus `wait`) produce exactly one install
 - failure writes `state=failed`, emits `reason=lazy-bootstrap-failed`, and
-  does not retry
+  does not retry; assert the event's `target=` matches the caller's label
 - a fail-soft installer returning 0 without a pinned module skips the build;
   a fail-soft builder returning 0 without a nonempty index or executable
   wrapper never writes `state=ready`
@@ -800,6 +812,9 @@ Contract updates:
 - `tests/test_semble_helpers.py`: `run=`, `sources=` and `static_dup_bytes=`
   formatting and omission rules, including measured zero on fallbacks and
   lazy install failure events reaching stderr.
+- Judge prefetch contract tests: each judge path passes its actual static
+  file after assembly (and after branch prep in the review-blocked path), or
+  omits the field when the static file is unavailable.
 - `tests/test_targeted_file_context.py`: the same fields on the overflow
   emitter.
 - `tests/test_cost_audit_semble_metrics.py`:
