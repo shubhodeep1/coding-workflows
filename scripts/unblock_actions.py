@@ -155,9 +155,9 @@ def _untrusted_pr_ops(ctx: dict, verdict_name: str) -> list[dict]:
 		{
 			"op": "comment", "issue": item,
 			"body": (
-				f"Unblock judge could not act on `{verdict_name}`: this PR comes from a fork "
-				"or an author without verified write access. No issue was opened from its content; "
-				"the PR was closed. A maintainer can reopen it or open an issue by hand."
+				f"Unblock judge could not act on `{verdict_name}`: this PR's head or author "
+				"could not be verified as trusted. No issue was opened from its content; "
+				"the PR is being closed. A maintainer can reopen it or open an issue by hand."
 			),
 		},
 		{"op": "close", "issue": item, "reason": "not_planned", "pr": True},

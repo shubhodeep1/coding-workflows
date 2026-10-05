@@ -558,6 +558,9 @@ if os.environ.get("FAKE_GH_FAIL_OPERATOR") and endpoint.startswith("repos/o/r/is
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 f = fields()
 if method == "POST" and endpoint.endswith("/comments"):
+	if os.environ.get("FAKE_GH_FAIL_EXPLANATION") and f.get("body", "").startswith("Unblock judge could not act on `"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_WAIT_MARKER") and "<!-- ai:unblock-wait:v1 item=7 fixup=" in f.get("body", ""):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
@@ -979,7 +982,40 @@ def test_untrusted_project_pr_does_not_request_a_fixup(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert state["created"] == []
 	assert not any("ai:unblock-fixup-request:v1" in comment["body"] for comment in state["comments"])
+	assert not any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
 	assert any(endpoint == "repos/o/r/pulls/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
+
+
+@pytest.mark.parametrize("failure,closed", [("FAKE_GH_FAIL_EXPLANATION", True), ("FAKE_GH_FAIL_CLOSE", False)])
+def test_untrusted_pr_write_failure_still_warns(tmp_path: Path, failure: str, closed: bool) -> None:
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	(support / "prompts").mkdir()
+	for name in ("unblock_ledger.py", "unblock_actions.py"):
+		(support / "scripts" / name).symlink_to(ROOT / "scripts" / name)
+	(support / "prompts" / "mode-judge-unblock.txt").symlink_to(ROOT / "prompts" / "mode-judge-unblock.txt")
+	(support / "scripts" / "tg_helpers.sh").write_text(
+		'tg_send_msg() { printf "%s|%s\\n" "$2" "$1" >> "$FAKE_TG_ALERTS"; }\n', encoding="utf-8",
+	)
+	alerts = tmp_path / "alerts.txt"
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "reissue", "reason": "r", "instructions": "model instructions"},
+		SUPPORT_DIR=str(support), FAKE_GH_PR_HEAD_REPO="evil/r", FAKE_TG_ALERTS=str(alerts), **{failure: "1"})
+	assert result.returncode == 0, result.stderr
+	assert state["created"] == []
+	assert any(endpoint == "repos/o/r/pulls/7" for endpoint, _ in state["patched"]) == closed
+	assert [label for _, label in state["labels_added"]] == (["ai:unblock-closed"] if closed else [])
+	assert alerts.read_text(encoding="utf-8").startswith("WARNING|Unblock judge ")
+	assert ("could not close" in alerts.read_text(encoding="utf-8")) != closed
+
+
+def test_untrusted_project_pr_does_not_dispatch_review(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		FAKE_GH_PR_BASE="orchestrator/project-40", FAKE_GH_PR_HEAD_REPO="evil/r")
+	assert "reason=project_binding_unverified detail=untrusted_pr_verdict" in result.stdout
+	assert state["dispatched"] == [] and state["created"] == [] and state["patched"] == []
+	assert state["comments"] == []
 
 
 def test_failed_fixup_wait_marker_is_not_reported_as_acted(tmp_path: Path) -> None:
@@ -999,7 +1035,7 @@ def test_failed_fixup_wait_marker_is_not_reported_as_acted(tmp_path: Path) -> No
 def test_pr_project_fixup_uses_verified_base_not_body_tracking_number(tmp_path: Path) -> None:
 	pr = dict(ISSUE, pull_request={"url": "u"}, body="- Tracking issue: #99")
 	verdict = {"verdict": "descope", "reason": "r", "instructions": "drop the broken part"}
-	result, state = _judge(tmp_path, pr, verdict=verdict, FAKE_GH_PR_HEAD_REPO="evil/r")
+	result, state = _judge(tmp_path, pr, verdict=verdict)
 	assert result.returncode == 0, result.stderr
 	assert len(state["created"]) == 1
 	assert all(comment["endpoint"] != "repos/o/r/issues/99/comments" for comment in state["comments"])
@@ -1012,8 +1048,6 @@ def test_pr_project_fixup_uses_verified_base_not_body_tracking_number(tmp_path: 
 
 
 @pytest.mark.parametrize(("head_repo", "head_ref", "project_issue", "detail"), [
-	("evil/r", "ai/issue-12", 12, "fork_head"),
-	("null", "ai/issue-12", 12, "fork_head"),
 	("o/r", "feature/x", 12, "head_ref"),
 	("o/r", "ai/issue-12", 99, ""),
 	("o/r", "ai/issue-7", 12, ""),
@@ -1027,6 +1061,18 @@ def test_pr_project_binding_fails_closed(tmp_path: Path, head_repo: str, head_re
 	if detail:
 		assert f"detail={detail}" in result.stdout
 	assert state["comments"] == [] and state["created"] == []
+
+
+@pytest.mark.parametrize("head_repo", ["evil/r", "null"])
+def test_untrusted_project_head_never_binds_project(tmp_path: Path, head_repo: str) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
+		FAKE_GH_PR_BASE="orchestrator/project-40", FAKE_GH_PR_HEAD_REPO=head_repo,
+		FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(12))
+	assert result.returncode == 0 and "op=pr_provenance trusted=false" in result.stdout, result.stderr
+	assert state["created"] == []
+	assert not any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
+	assert any(endpoint == "repos/o/r/pulls/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
 
 
 def test_pr_project_binding_accepts_same_repo_case_insensitively(tmp_path: Path) -> None:
@@ -1076,8 +1122,6 @@ def test_judge_prompt_excludes_forged_project_state(tmp_path: Path, kind: str) -
 
 
 @pytest.mark.parametrize(("head_repo", "head_ref", "member", "detail"), [
-	("evil/r", "ai/issue-5", 5, "fork_head"),
-	("", "ai/issue-5", 5, "fork_head"),
 	("o/r", "feature/x", 5, "head_ref"),
 	("o/r", "ai/issue-5", 99, ""),
 ])
