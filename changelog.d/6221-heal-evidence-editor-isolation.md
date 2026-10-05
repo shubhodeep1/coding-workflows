@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **Heal-evidence plan and implement editors receive only structured diagnostics and drop inherited GitHub credentials.** Their checkout credentials are hidden during editor launches, and heal-evidence implementation rejects commits outside the pre-editor issue or plan allowlist even when the usual escape hatch is enabled.
+
+The prior heal-evidence prompt linked the raw failing logs and artifacts to a network-capable editor running with the workflow's GitHub token. An injected log could therefore redirect edits or API calls. Plan and implement now receive only bounded diagnostic fields, with free-form step names and error signatures reduced to SHA-256 fingerprints; the editor process drops GitHub, Telegram and Actions runtime credentials and temporarily loses checkout origin and extraheader auth. A pre-editor scope list from the issue or approved plan is pinned into both commit guards. Clarify retains its existing isolated evidence path. Network access and the parent step environment remain unchanged.
+
+The consumer merged-PR guard now checks bare branches supplied after `git push --repo=origin` without misreading a positional configured remote, which overrides `--repo` even when a local branch has the same name.

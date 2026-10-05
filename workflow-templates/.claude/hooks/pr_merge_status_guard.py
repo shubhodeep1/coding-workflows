@@ -14,9 +14,9 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories warn and fall back to
-the session checkout check; unresolved push refspecs also ask for confirmation.
-Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unknown directories fall back to the
+session checkout with a warning; unresolved push sources or destinations
+request confirmation. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 
 Detection rule — all three conditions must hold before the command is blocked:
@@ -185,7 +185,7 @@ class _GitInvocation(NamedTuple):
 class _GuardTarget(NamedTuple):
 	cwd: str
 	environment: dict[str, str]
-	branch: str
+	branch: str | None
 	tip: str
 	reaches_remote: bool
 	warning: str = ""
@@ -480,7 +480,17 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; checking the current branch instead")]
-	refspecs = positionals if remote_provided else positionals[1:]
+	# A positional configured remote overrides --repo, even when a local branch
+	# has the same name. Otherwise every positional after --repo is a refspec.
+	if remote_provided and positionals and positionals[0] != "HEAD" and ":" not in positionals[0]:
+		with _git_environment(invocation.environment):
+			remote_status, remote_listing, _ = _run(["git", "remote"], invocation.cwd, _GIT_TIMEOUT_SECONDS)
+		is_repository = remote_status == 0 and positionals[0] in remote_listing.splitlines()
+		refspecs = positionals[1:] if is_repository else positionals
+	elif remote_provided and positionals and (positionals[0] == "HEAD" or ":" in positionals[0]):
+		refspecs = positionals
+	else:
+		refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:
@@ -505,9 +515,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		if branch == "":
 			continue
 		if branch is None:
-			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; checking the current branch instead",
-				bulk="unresolved git push destination"))
+			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
 	if bulk:
@@ -1185,9 +1193,8 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 
 	Used when the guard cannot prove the branch is safe: the API is
 	unreachable and git history is inconclusive, or ancestry cannot be
-	verified for a remote-only push, or a push refspec cannot be resolved.
-	The human verifies the actual destination and source; a denial sends the
-	reason back to Claude.
+	verified for a remote-only push. The human confirms the PR is still open;
+	a denial sends the reason back to Claude.
 	"""
 	# The prompt is read by a human: `reason` carries the full transport
 	# error for the log, `prompt_reason` a one-paragraph version for the prompt.
@@ -1200,11 +1207,10 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 					"hookEventName": "PreToolUse",
 					"permissionDecision": "ask",
 					"permissionDecisionReason": (
-						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only after "
-						f"verifying the actual push destination and source tip do not stack "
-						f"on a branch whose PR has already merged without an open PR. "
-						f"Otherwise deny, rebuild the branch from the default branch, "
-						f"and open a new PR."
+						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
+						f"pull request for this branch is still open. If it has merged, "
+						f"deny — the branch must be rebuilt from the default branch and "
+						f"a new PR opened."
 					),
 				},
 			}
@@ -1308,12 +1314,19 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	unresolved_push_sources: list[str] = []
+	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
 		)
 		for target in targets:
+			if target.branch is None:
+				unresolved_push_destinations.append(
+					"could not resolve git push destination; shell expansion may change the pushed branch."
+				)
+				continue
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
 			if target.warning:
@@ -1325,9 +1338,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						target.cwd, _GIT_TIMEOUT_SECONDS,
 					)
 				if code != 0:
-					_warn("could not resolve git push source; checking the session checkout instead")
-					bulk_reasons.append("unresolved git push source")
-					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+					unresolved_push_sources.append(
+						f"could not resolve git push source for `{target.branch}`; "
+						"shell expansion may change the pushed commit."
+					)
+					continue
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
@@ -1384,11 +1399,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
+	unresolved_push_sources.extend(unresolved_push_destinations)
 	if bulk_reasons:
-		_request_confirmation(
-			"Git push may write branches or source tips the guard could not verify: "
+		unresolved_push_sources.append(
+			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
+	if unresolved_push_sources:
+		_request_confirmation(" ".join(unresolved_push_sources))
 	return 0, ""
 
 

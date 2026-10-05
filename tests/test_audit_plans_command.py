@@ -12,8 +12,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 COMMAND = ROOT / ".claude" / "commands" / "audit-plans.md"
 TEMPLATE_COMMAND = ROOT / "workflow-templates" / ".claude" / "commands" / "audit-plans.md"
-if not COMMAND.is_file() and TEMPLATE_COMMAND.is_file():
-	COMMAND = TEMPLATE_COMMAND
 
 
 @pytest.fixture(scope="module")
@@ -29,9 +27,7 @@ def step6(text) -> str:
 
 
 def test_template_parity():
-	assert TEMPLATE_COMMAND.is_file()
-	if COMMAND != TEMPLATE_COMMAND:
-		assert TEMPLATE_COMMAND.read_text(encoding="utf-8") == COMMAND.read_text(encoding="utf-8")
+	assert TEMPLATE_COMMAND.read_text(encoding="utf-8") == COMMAND.read_text(encoding="utf-8")
 
 
 def test_gate_enumerates_orchestrator_projects(step6):

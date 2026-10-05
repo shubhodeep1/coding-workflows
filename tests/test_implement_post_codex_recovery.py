@@ -1976,6 +1976,11 @@ EDITOR_LEDGER_ENV_SCRUB = (
 	"env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR"
 	" -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \\"
 )
+EDITOR_CREDENTIAL_ENV_SCRUB = (
+	"env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID"
+	" -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+	" -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \\"
+)
 
 
 def test_editor_launches_drop_staged_support_ledger_env() -> None:
@@ -1998,10 +2003,12 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 		assert len(launch_indexes) == 1, (step_name, launch_indexes)
 		preceding = script_lines[launch_indexes[0] - 1].strip()
 		assert preceding == EDITOR_LEDGER_ENV_SCRUB, (step_name, preceding)
+		assert script_lines[launch_indexes[0] - 2].strip() == EDITOR_CREDENTIAL_ENV_SCRUB
 		# The scrub sits inside the CODEX_THREAD_REUSE_* prefix assignment chain,
 		# so the helper still receives its own configuration.
 		assert script_lines[launch_indexes[0] - 2].rstrip().endswith("\\"), step_name
 	assert _workflow_text().count(EDITOR_LEDGER_ENV_SCRUB) == 2
+	assert _workflow_text().count(EDITOR_CREDENTIAL_ENV_SCRUB) == 2
 
 
 def test_editor_env_scrub_keeps_helper_config_and_drops_ledger_paths() -> None:
@@ -2207,6 +2214,50 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 		assert "staged_support_rebase_conflict=true" in output_text
 		assert "staged_support_rebase_conflict_files=scripts/helper.sh" in output_text
 		assert "scope_violation_blocked" not in output_text
+
+
+def test_heal_evidence_scope_lock_blocks_overrides_and_allows_named_file(tmp_path: Path) -> None:
+	for name, allowlist, expected in (
+		("missing", "", "heal-evidence-no-allowlist"),
+		("outside", "other.md", "out-of-scope"),
+		("inside", "README.md", ""),
+	):
+		parent = tmp_path / name
+		parent.mkdir()
+		repo_dir, github_output, env, _ = _staged_support_fixture(parent, _STAGED_HELPER_MAIN)
+		support_dir = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
+		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_dir / "files_touched_scope_guard.py")
+		env.update({
+			"HEAL_EVIDENCE_SCOPE_LOCK": "true",
+			"HEAL_EVIDENCE_SCOPE_ALLOWLIST": allowlist,
+			"ENFORCE_FILES_TOUCHED": "false",
+			"ALLOW_OUT_OF_SCOPE_FILES": "true",
+		})
+		proc = _run_commit_helper(repo_dir, env)
+		assert (proc.returncode == 0) == (expected == ""), proc.stdout + proc.stderr
+		if expected:
+			assert f"scope_violation_blocked={expected}" in github_output.read_text()
+		else:
+			assert "did_commit=true" in github_output.read_text()
+
+
+def test_heal_evidence_preflight_blocks_missing_allowlist(tmp_path: Path) -> None:
+	repo_dir, github_output, env, _ = _staged_support_fixture(tmp_path, _STAGED_HELPER_MAIN)
+	support_dir = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
+	shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_dir / "files_touched_scope_guard.py")
+	env.update({
+		"HEAL_EVIDENCE_SCOPE_LOCK": "true",
+		"HEAL_EVIDENCE_SCOPE_ALLOWLIST": "",
+		"ENFORCE_FILES_TOUCHED": "false",
+		"ALLOW_OUT_OF_SCOPE_FILES": "true",
+	})
+	script = _render_github_expressions(
+		_extract_run_script("Preflight destructive-commit guard"),
+		{"github.repository": "shubhodeep1/coding-workflows"},
+	)
+	proc = _run_shell_script(script, cwd=repo_dir, env=env)
+	assert proc.returncode != 0, proc.stdout + proc.stderr
+	assert "scope_violation_blocked=heal-evidence-no-allowlist" in github_output.read_text()
 
 
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
