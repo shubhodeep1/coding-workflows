@@ -93,8 +93,7 @@ rb_security_findings_render()
 		|| ! printf '%s' "${issues_json}" | jq -e '
 			type == "array" and length > 0 and all(.[];
 				type == "array" and all(.[];
-					type == "object" and (.number | type == "number")
-					and (.title | type == "string") and (has("body") and (.body == null or (.body | type == "string")))
+					type == "object" and (has("body") and (.body == null or (.body | type == "string")))
 				)
 			)
 		' >/dev/null 2>&1; then
@@ -109,7 +108,7 @@ rb_security_findings_render()
 		  | select(type == "object" and (has("pull_request") | not))
 		  | select(field("Integration branch") == $branch)
 		]
-		| if any(.[]; (.number | type != "number") or .number <= 0) then error("invalid issue number") else . end
+		| if any(.[]; (.number | type != "number") or .number <= 0 or (.title | type != "string")) then error("invalid issue number or title") else . end
 		| {count: ([.[] | select(blocking)] | length),
 		   issues: [.[] | select(blocking) | .number | select(type == "number" and . > 0) | "#\(.)"],
 		   text: (if length == 0 then "(No open security-audit finding issues target this branch.)"
