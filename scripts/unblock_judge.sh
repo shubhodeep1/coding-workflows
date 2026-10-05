@@ -514,7 +514,8 @@ unblock_main()
 			if [ "${ITEM_KIND}" = "issue" ] || [ "${ITEM_KIND}" = "pr" ]; then
 				local binding_issue="${ITEM}"
 				[ "${ITEM_KIND}" != "pr" ] || binding_issue="${pr_bound_issue}"
-				if ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
+				if ! jq --arg login "${UNBLOCK_LOGIN}" '[.[] | select((.user.login // "") == $login)]' "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/trusted_project_comments.json" \
+					|| ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/trusted_project_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
 					|| ! unblock_state_lists_issue "${binding_issue}" "${RUNTIME_DIR}/project_binding.json"; then
 					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified"
 					return 0

@@ -15754,12 +15754,14 @@ unblock_trusted_login() {
 # PROJECT_STATUS. Project/issue items need no extra API call; other items
 # require at most one pulls/<n> GET per pending request per tick to verify a
 # same-repository ai/issue-<n> head whose issue is in the project state.
+# The PR membership check also uses already-fetched, author-filtered
+# tracking comments, so old trusted requests cannot rely on forged state.
 # Definitive rejections are recorded so they are not read again. No batched
 # cache in this path holds a PR's head repo or ref; _fetch_pr_json is the
 # smallest existing call that supplies both (§14).
 handle_unblock_judge_project_hooks() {
   local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
-  local binding_pr_json binding_head_issue binding_reason
+  local binding_pr_json binding_head_issue binding_reason binding_trusted_state_json="" binding_trusted_state_status="unset"
   if has_label "${TRACKING_LABELS}" "ai:unblock-closed"; then
     if [ "${PROJECT_STATUS}" != "abandoned" ]; then
       jq '.status = "abandoned"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -15821,6 +15823,22 @@ handle_unblock_judge_project_hooks() {
           binding_head_issue="${BASH_REMATCH[1]}"
           if ! jq -e --argjson issue "${binding_head_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${STATE_FILE}" >/dev/null 2>&1; then
             binding_reason="not_member"
+          else
+            if [ "${binding_trusted_state_status}" = "unset" ]; then
+              if binding_trusted_state_json="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '[.[] | select((.user.login // "") == $login)]' | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_state_v2.py extract --comments-json /dev/stdin 2>/dev/null)" \
+                && jq -e 'type == "object"' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+                binding_trusted_state_status="ok"
+              else
+                binding_trusted_state_status="unavailable"
+              fi
+            fi
+            if [ "${binding_trusted_state_status}" != "ok" ]; then
+              echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable"
+              continue
+            fi
+            if ! jq -e --argjson issue "${binding_head_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+              binding_reason="not_member"
+            fi
           fi
         else
           binding_reason="head_ref"

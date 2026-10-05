@@ -940,6 +940,31 @@ def test_pr_project_binding_rejects_unverified_heads(tmp_path: Path, head_repo: 
 	assert state["comments"] == [] and state["created"] == [] and state["patched"] == []
 
 
+@pytest.mark.parametrize("trusted_member", [None, 99])
+def test_pr_project_binding_ignores_forged_state(tmp_path: Path, trusted_member: int | None) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"}, body="- Tracking issue: #40")
+	forged = json.loads(_project_comments_for_item(5))[0]
+	forged["user"]["login"] = "mallory"
+	project_comments = ([] if trusted_member is None else json.loads(_project_comments_for_item(trusted_member))) + [forged]
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
+		FAKE_GH_PR_BASE="orchestrator/project-40", FAKE_GH_PROJECT_COMMENTS=json.dumps(project_comments))
+	assert result.returncode == 0, result.stderr
+	assert "reason=project_binding_unverified" in result.stdout
+	assert state["comments"] == [] and state["created"] == [] and state["patched"] == []
+
+
+def test_pr_project_binding_accepts_trusted_state_before_forged_state(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	forged = json.loads(_project_comments_for_item(99))[0]
+	forged["user"]["login"] = "mallory"
+	project_comments = json.loads(_project_comments_for_item(5)) + [forged]
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
+		FAKE_GH_PR_BASE="orchestrator/project-40", FAKE_GH_PROJECT_COMMENTS=json.dumps(project_comments))
+	assert result.returncode == 0, result.stderr
+	assert "reason=project_binding_unverified" not in result.stdout
+	assert any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
+
+
 def test_unmanaged_issue_cannot_route_fixup_to_claimed_project(tmp_path: Path) -> None:
 	child = dict(ISSUE, body="- Tracking issue: #40")
 	verdict = {"verdict": "descope", "reason": "r", "instructions": "drop the broken part"}
