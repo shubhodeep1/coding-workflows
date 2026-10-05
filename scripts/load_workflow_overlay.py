@@ -435,7 +435,7 @@ def _trusted_git_env() -> dict[str, str]:
 	# Workflow steps can pin git to the PR checkout; isolate all trusted-source operations.
 	for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
 		auth_env.pop(name, None)
-	token = auth_env.get("GH_TOKEN", "")
+	token = auth_env.get("GH_TOKEN") or auth_env.get("GITHUB_TOKEN", "")
 	if token:
 		encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
 		auth_env.update({
@@ -483,9 +483,11 @@ def fetch_trusted_overlay_source(repo: str, branch: str, git_dir: Path) -> str:
 	auth_env = _trusted_git_env()
 	if _trusted_git(["init", "--bare", str(git_dir)], auth_env=auth_env).returncode != 0:
 		raise WorkflowOverlayLoadError("git_init_failed")
+	if _trusted_git([f"--git-dir={git_dir}", "remote", "add", "origin", remote_url], auth_env=auth_env).returncode != 0:
+		raise WorkflowOverlayLoadError("git_remote_failed")
 	if _trusted_git([
 		f"--git-dir={git_dir}", "fetch", "--no-tags", "--depth", "1", "--filter=blob:none",
-		remote_url, f"refs/heads/{branch}",
+		"origin", f"refs/heads/{branch}",
 	], auth_env=auth_env).returncode != 0:
 		raise WorkflowOverlayLoadError("fetch_failed")
 	result = _trusted_git([f"--git-dir={git_dir}", "rev-parse", "FETCH_HEAD"], auth_env=auth_env)
@@ -559,15 +561,15 @@ def load_trusted_overlay(args: argparse.Namespace, repo_root: Path) -> None:
 			fragments = 0
 			for override in overrides:
 				fragment_path = override.append_path or override.replace_path
-				if fragment_path and materialize_trusted_file(git_dir, sha, fragment_path, trusted_root):
-					fragments += 1
-				else:
-					print("::warning::WORKFLOW_OVERLAY_SOURCE mode=trusted outcome=fragment_missing")
+				if not fragment_path or not materialize_trusted_file(git_dir, sha, fragment_path, trusted_root):
+					raise WorkflowOverlayLoadError("Trusted overlay fragment missing")
+				fragments += 1
 		append_github_env(github_env_path, render_export_values(overlay_enabled=True, repo_root=trusted_root, overrides=overrides))
 		print(f"::notice::WORKFLOW_OVERLAY_SOURCE mode=trusted repo={args.trusted_source_repo} branch={branch} sha={sha} overlay=present fragments={fragments}")
 	except WorkflowOverlayLoadError as exc:
 		if str(exc) not in {
-			"default_branch_lookup_failed", "default_branch_invalid", "git_init_failed", "fetch_failed", "fetch_head_invalid", "git_unavailable"
+			"default_branch_lookup_failed", "default_branch_invalid", "git_init_failed", "git_remote_failed", "fetch_failed", "fetch_head_invalid", "git_unavailable",
+			"Trusted overlay tree lookup failed", "Trusted overlay blob read failed"
 		}:
 			raise
 		# An unavailable remote disables only the overlay; never read the checkout copy.

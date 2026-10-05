@@ -816,6 +816,8 @@ committing the corresponding file:
   Review/autofix and validate stage it and its fragments from one fetched,
   pinned default-branch commit, not from the PR/integration checkout; a fetch
   failure disables the overlay instead of falling back to the checkout.
+  Missing or non-regular trusted fragments fail staging; unreadable trusted
+  blobs disable the overlay.
   `replace_path` is ignored with a warning for `mode-judge`, `mode-judge-*`
   and `mode-orchestrate-poll-judge`; `append_path` remains supported.
 - `.github/ai/concurrency_caps.yml` — parsed by

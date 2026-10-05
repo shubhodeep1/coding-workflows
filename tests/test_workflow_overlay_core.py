@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -422,6 +424,41 @@ def test_trusted_overlay_fetch_failure_disables_without_leaking_token() -> None:
 		assert "sentinel-secret" not in proc.stderr + proc.stdout
 
 
+def test_trusted_overlay_missing_fragment_is_rejected_before_export() -> None:
+	with tempfile.TemporaryDirectory(prefix="trusted_overlay_missing_fragment_") as td:
+		root = Path(td)
+		checkout, trusted_root, _remote = _trusted_fixture(root, overlay=(
+			"---\nschema_version: workflow_overlay.v1\nprompt_overrides:\n"
+			"  - mode: mode-inline\n    append_path: absent.txt\n---\n"
+		))
+		proc, github_env = _run_trusted_loader(checkout, trusted_root, root)
+		assert proc.returncode == 1
+		assert "Trusted overlay fragment missing" in proc.stderr
+		assert not github_env.exists()
+
+
+def test_trusted_overlay_blob_read_failure_disables_overlay() -> None:
+	with tempfile.TemporaryDirectory(prefix="trusted_overlay_blob_failure_") as td:
+		root = Path(td)
+		checkout, trusted_root, _remote = _trusted_fixture(root, overlay="---\nschema_version: workflow_overlay.v1\n---\n")
+		git_binary = shutil.which("git")
+		assert git_binary is not None
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		git_shim = bin_dir / "git"
+		git_shim.write_text(
+			"#!/bin/sh\ncase \" $* \" in *' show '*) exit 1;; esac\n"
+			f"exec {shlex.quote(git_binary)} \"$@\"\n", encoding="utf-8",
+		)
+		git_shim.chmod(0o755)
+		proc, github_env = _run_trusted_loader(checkout, trusted_root, root, extra_env={
+			"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert _parse_github_env(github_env)["WORKFLOW_OVERLAY_ENABLED"] == "false"
+		assert "outcome=disabled reason=Trusted overlay blob read failed" in proc.stderr
+
+
 def test_trusted_overlay_rejects_unsafe_fragment_paths() -> None:
 	for fragment_path, symlink in (("fragment.txt", True), ("../outside.txt", False)):
 		with tempfile.TemporaryDirectory(prefix="trusted_overlay_unsafe_") as td:
@@ -472,6 +509,10 @@ def test_judge_overlays_reject_replace_but_accept_append() -> None:
 
 def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 	stage_helper_text = STAGE_WORKFLOW_SUPPORT.read_text(encoding="utf-8")
+	loader_text = LOAD_WORKFLOW_OVERLAY_PY.read_text(encoding="utf-8")
+	assert '"remote", "add", "origin", remote_url' in loader_text
+	assert '"--filter=blob:none"' in loader_text
+	assert '"origin", f"refs/heads/{branch}"' in loader_text
 	for workflow_path in WORKFLOW_FILES:
 		workflow_text = workflow_path.read_text(encoding="utf-8")
 		if workflow_path.name == "review_autofix.yml":
@@ -531,6 +572,8 @@ if __name__ == "__main__":
 	test_trusted_overlay_absent_disables_checkout_overlay()
 	test_trusted_overlay_resolves_remote_head_without_event_and_ignores_checkout_git_env()
 	test_trusted_overlay_fetch_failure_disables_without_leaking_token()
+	test_trusted_overlay_missing_fragment_is_rejected_before_export()
+	test_trusted_overlay_blob_read_failure_disables_overlay()
 	test_trusted_overlay_rejects_unsafe_fragment_paths()
 	test_invalid_default_branch_overlay_fails_instead_of_disabling()
 	test_judge_overlays_reject_replace_but_accept_append()
