@@ -492,7 +492,15 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; destination branch is unknown")]
-	refspecs = positionals if remote_provided else positionals[1:]
+	if remote_provided and positionals:
+		with _git_environment(invocation.environment):
+			code, _, _ = _run(
+				["git", "config", "--get", f"remote.{positionals[0]}.url"],
+				invocation.cwd, _GIT_TIMEOUT_SECONDS,
+			)
+		refspecs = positionals[1:] if code == 0 else positionals
+	else:
+		refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:

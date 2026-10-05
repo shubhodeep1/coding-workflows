@@ -1007,7 +1007,11 @@ def test_quoted_numeric_push_refspec_cannot_match_later_redirect(merged_branch_r
 	assert lookups == ["12"]
 
 
-@pytest.mark.parametrize("command", ["git push origin HEAD:$DEST", "git push --unknown origin 12"])
+@pytest.mark.parametrize("command", [
+	"git push origin HEAD:$DEST",
+	"git push --repo=origin HEAD:$DEST",
+	"git push --unknown origin 12",
+])
 def test_unknown_explicit_push_target_requires_confirmation(merged_branch_repo, capsys, command: str) -> None:
 	repo, _ = merged_branch_repo
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
