@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- Full security audits now inspect every tracked file over 2 MiB that passes the existing credential filter, including binaries and data files, using bounded read-only chunks. An eligible file above the per-file cap (16 MiB by default), or a set above the total cap (64 MiB by default), fails the audit before the model runs instead of reporting success with a coverage note. Operators can raise the caps or shrink or untrack the files; incremental audits still report out-of-scope files as coverage notes.
