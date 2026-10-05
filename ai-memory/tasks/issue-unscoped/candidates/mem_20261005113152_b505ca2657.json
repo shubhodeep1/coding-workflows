@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_failure_workflow_run_triggers.py:125-129 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The regex assumes workflow names never contain a single quote, so an apostrophe in a future name can cause JSON extraction to fail.\n  WHY: The test would fail with a JSON decode error rather than a clear assertion message; this is test-only fragility with no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- The changes are described as surgical and correct; all deliverables named in the PR description are present, and there are no task-completeness gaps. The regex fragility and queued-plus-skipped run noise are acknowledged as known trade-offs, not runtime defects introduced or worsened by this last run.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_ci_failure_workflow_run_triggers.py:125-129 | severity=NIT | confidence=2\n  PROBLEM: The regex `r\"!contains\\(fromJson\\('([^']+)'\\), github\\.event\\.workflow_run\\.name\\)\"` assumes workflow names never contain a single quote.\n  WHY: If a future workflow template's `name:` field contains an apostrophe, the regex would capture incomplete JSON, causing `json.loads()` to fail with a confusing decode error rather than a clear assertion message. This is test-only fragility with no runtime impact on the workflow itself.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7b01f3e1b05bef3cd75f1e89139f7558b09d42f9a05d0ba2a5e70e64bf63dc20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37295524452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37295524452",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005113152_b505ca2657",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37295524452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T11:31:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
