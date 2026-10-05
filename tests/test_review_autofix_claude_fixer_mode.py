@@ -32,6 +32,7 @@ from review_autofix_step_scripts import (  # noqa: E402
 )
 
 TOPOLOGY_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_merge_topology_gate.sh"
+COUNT_ITERATIONS_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_count_iterations.sh"
 WRAPPERS = (REPO_ROOT / "workflow-templates" / "ai-review.yml",)
 HEAD = "c" * 40
 AUTHOR = "workflow-bot"
@@ -114,7 +115,7 @@ def test_topology_gate_has_no_claude_branch():
 
 
 def test_iteration_counter_counts_claude_autofix_rounds():
-	run = AGENT_STEPS["Count autofix iterations"]["run"]
+	run = COUNT_ITERATIONS_SCRIPT.read_text(encoding="utf-8")
 	pattern = re.search(r"grep -Eq '(\^\\\[\(ai\|claude\)-autofix\\\])'", run)
 	assert pattern, run
 	regex = re.compile(r"^\[(ai|claude)-autofix\]")
