@@ -903,6 +903,8 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 	"COUNT+=1 git push origin HEAD:feature/x",
 	"git push --repo origin HEAD:feature/x",
 	"git push --repo=origin HEAD:feature/x",
+	"git push origin HEAD:feature/x --repo=upstream",
+	"git push --repo=upstream origin HEAD:feature/x",
 	"git push origin HEAD~0:feature/x",
 	"git push origin HEAD:feature/x 2>&1",
 	"git push origin 2>/dev/null",
