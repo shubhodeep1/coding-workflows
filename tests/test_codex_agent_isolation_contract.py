@@ -58,8 +58,12 @@ def raw_codex_sites(path: Path):
 
 def test_no_codex_agent_is_started_outside_the_isolation_helpers():
 	offenders = {}
-	for path in sorted(list(SCRIPTS.glob("*.sh")) + list(SCRIPTS.glob("*.py")) + list(WORKFLOWS.glob("*.yml"))):
-		if path.name in CONTAINER_ENTRYPOINTS:
+	paths = (list(SCRIPTS.rglob("*.sh")) + list(SCRIPTS.rglob("*.py")) +
+		list(WORKFLOWS.rglob("*.yml")) + list(WORKFLOWS.rglob("*.yaml")) +
+		list((REPO_ROOT / ".github" / "actions").rglob("*.yml")) +
+		list((REPO_ROOT / ".github" / "actions").rglob("*.yaml")))
+	for path in sorted(paths):
+		if path.parent == SCRIPTS and path.name in CONTAINER_ENTRYPOINTS:
 			continue
 		sites = raw_codex_sites(path)
 		if sites:

@@ -566,7 +566,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; destination branch is unknown", remote=remote_value)]
-	if remote_provided and positionals:
+	if remote_provided and positionals and not extract_repo_slug(positionals[0]):
 		with _git_environment(invocation.environment):
 			code, _, _ = _run(
 				["git", "config", "--get", f"remote.{positionals[0]}.url"],
@@ -1436,7 +1436,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			unresolved_push_sources.append(
 				"could not resolve git push repository; the session checkout may not be the pushed repository."
 			)
-			invocation = invocation._replace(arguments=[], warning="")
+			unverified_destinations.add("could not resolve the git push directory")
+			continue
 		if invocation.subcommand == "push" and invocation.config_override:
 			unverified_destinations.add("per-command Git configuration may redirect the push")
 			continue  # Origin's PR history cannot authorize a push with overridden configuration.

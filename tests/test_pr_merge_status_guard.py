@@ -834,11 +834,10 @@ def test_commit_in_merged_worktree_is_not_judged_from_main_checkout(merged_branc
 def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch_repo) -> None:
 	repo, stub_bin = merged_branch_repo
 	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD:feature/open")
-	assert proc.returncode == 2, proc.stdout + proc.stderr
-	assert "Branch `feature/x`" in proc.stderr
+	assert proc.returncode == 0, proc.stdout + proc.stderr
 	response = json.loads(proc.stdout)
 	assert "could not resolve git command directory" in response["systemMessage"]
-	assert "hookSpecificOutput" not in response
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
 def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_repo) -> None:
@@ -853,7 +852,7 @@ def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_rep
 
 
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
-def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, monkeypatch, override: str) -> None:
+def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, monkeypatch, capsys, override: str) -> None:
 	repo, _ = merged_branch_repo
 	worktree = repo.parent / "open"
 	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "main")
@@ -862,16 +861,12 @@ def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, 
 	invocations = guard._guarded_git_invocations(command, str(repo))
 	assert len(invocations) == 1
 	assert invocations[0].environment == {}
-	assert invocations[0].warning == "could not resolve git command directory; checking the session checkout instead"
-	merged_sha = _git(repo, "rev-parse", "HEAD")
-	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
-	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
-	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd:
-		[dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [])
+	assert invocations[0].warning == "could not resolve git command directory"
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("unresolved directory must not query checkout"))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": command}})
-	assert code == 2, message
-	assert "Branch `feature/x`" in message
+	assert code == 0 and message == ""
+	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
