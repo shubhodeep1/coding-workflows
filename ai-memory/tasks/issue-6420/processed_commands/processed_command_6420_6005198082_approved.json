@@ -5,13 +5,27 @@
   "entry_id": "processed_command_6420_6005198082_approved",
   "issue_number": 6420,
   "metadata": {
+    "branch": "ai/issue-6420",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/mark-stable.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "agents.md",
+      "changelog.d/6420-release-gate-claude-parity.md",
+      "tests/test_claude_template_live_parity.py"
+    ],
+    "issue_number": 6420,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6420",
+    "pr_number": 6421,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6421",
+    "run_attempt": "1",
+    "run_id": "37387487397",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37387487397"
   },
   "run_attempt": 1,
   "run_id": "37387487397",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-05T23:20:11Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T23:30:01Z",
   "workflow": "implement"
 }
