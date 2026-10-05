@@ -308,7 +308,7 @@ _ai_engine_claude_run_isolated()
 		mounts+=(--mount "type=bind,src=${run_dir}/empty-claude-md,dst=${workdir}/CLAUDE.md,readonly")
 	fi
 	if [ -n "${session_id}" ]; then
-		mkdir -p "${RUNNER_TEMP:-/tmp}/claude-read-sessions" && chmod 0700 "${RUNNER_TEMP:-/tmp}/claude-read-sessions" || { ai_engine_fallback "${role}" isolation_mask_failed; return 75; }
+		mkdir -p "${RUNNER_TEMP:-/tmp}/claude-read-sessions" && chmod 0700 "${RUNNER_TEMP:-/tmp}/claude-read-sessions" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
 		if compgen -G "${RUNNER_TEMP:-/tmp}/claude-read-sessions/*/${session_id}.jsonl" >/dev/null; then
 			session_args=(--resume "${session_id}")
 		else
