@@ -630,6 +630,7 @@ def main() -> int:
 		wait_reason = "strict_merge" if strict_merge else "lookup_skipped"
 		wait_pending: list[tuple[str, str]] = []
 		effective_budget = wait_timeout
+		short_wait_at_start: bool | None = None
 
 		while True:
 			proc = _run_check_runs_api(repository=repository, head_sha=head_sha, script_dir=Path(__file__).resolve().parent)
@@ -655,6 +656,7 @@ def main() -> int:
 			except ValueError as exc:
 				deadline = start + wait_timeout
 				effective_budget = wait_timeout
+				short_wait_at_start = False
 				wait_reason = "malformed_snapshot"
 				wait_pending = []
 				print(f"::warning::CHECK_RUNS_AUTOFIX_MALFORMED_OUTPUT head_sha={_short(head_sha, 40)} reason={exc} bytes={len(raw_text.encode('utf-8'))}")
@@ -674,7 +676,7 @@ def main() -> int:
 				raw_text, head_sha, self_run_id, required_names, time.time(),
 			)
 			if (in_flight and wait_timeout > KNOWN_REQUIRED_WAIT_CAP_SECS and wait_reason == "no_required_set"
-				and not lookup_attempted and base_ref):
+				and short_wait_at_start is None and not lookup_attempted and base_ref):
 				lookup_attempted = True
 				required_names = _lookup_protected_required_names(
 					repository, base_ref, Path(__file__).resolve().parent,
@@ -685,7 +687,14 @@ def main() -> int:
 				)
 			if wait_reason == "no_required_set" and not lookup_attempted:
 				wait_reason = "lookup_skipped"
-			effective_budget = min(wait_timeout, KNOWN_REQUIRED_WAIT_CAP_SECS) if eligible else wait_timeout
+			# Do not shorten a wait retroactively when checks age into eligibility.
+			if short_wait_at_start is None:
+				short_wait_at_start = eligible
+			elif not eligible:
+				short_wait_at_start = False
+			if eligible and not short_wait_at_start:
+				wait_reason = "initial_wait_not_eligible"
+			effective_budget = min(wait_timeout, KNOWN_REQUIRED_WAIT_CAP_SECS) if short_wait_at_start else wait_timeout
 			deadline = start + effective_budget
 			_emit_wait_diag("decision", effective_budget, wait_timeout, wait_reason, head_sha,
 				time.time() - start, wait_pending)

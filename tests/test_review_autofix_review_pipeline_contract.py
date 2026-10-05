@@ -3457,6 +3457,19 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 		assert "collection_status: timeout" in context and "budget_secs=300" in log
 		assert sum(sleeps) == 300 and sleeps[:3] == [20, 40, 80], sleeps
 		assert lookups <= 1
+	becomes_old = {**required, "started_at": __import__("datetime").datetime.fromtimestamp(
+		base_time - 200, __import__("datetime").timezone.utc).isoformat()}
+	context, log, sleeps, lookups = run_case([[becomes_old]])
+	assert "collection_status: timeout" in context and "incomplete[0].name: CI" in context
+	assert "budget_secs=60" not in log and "reason=recently_started" in log
+	assert sum(sleeps) == 300 and lookups == 0
+	context, log, sleeps, lookups = run_case([[required, unknown], [required]])
+	assert "collection_status: timeout" in context and "reason=initial_wait_not_eligible" in log
+	assert "budget_secs=60" not in log and sum(sleeps) == 300 and lookups == 1
+	for middle in ([required, unknown], [{**required, "head_sha": "b" * 40}], {"check_runs": [required]}):
+		context, log, sleeps, lookups = run_case([[required], middle, [required]])
+		assert "collection_status: timeout" in context and "budget_secs=300" in log
+		assert sum(sleeps) == 300 and lookups == 1
 
 	context, log, sleeps, lookups = run_case([[required]], lookup=None)
 	assert "reason=no_required_set" in log and "budget_secs=300" in log and sum(sleeps) == 300 and lookups == 1
