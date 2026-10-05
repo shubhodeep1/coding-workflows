@@ -13,14 +13,17 @@ import subprocess
 import sys
 import time
 import traceback
+import unicodedata
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
 
 DEFAULT_WAIT_TIMEOUT_SECS = 300
+KNOWN_REQUIRED_WAIT_CAP_SECS = 60
 MAX_WAIT_TIMEOUT_SECS = 3600
 DEFAULT_POLL_INTERVAL_SECS = 20
 MIN_POLL_INTERVAL_SECS = 5
@@ -187,6 +190,122 @@ def _load_head_sha(payload_path: Path) -> str:
 	return str(head_sha)
 
 
+def _load_base_ref(payload_path: Path) -> str:
+	try:
+		payload = json.loads(payload_path.read_text(encoding="utf-8"))
+	except (OSError, ValueError, UnicodeDecodeError):
+		return ""
+	if not isinstance(payload, dict) or not isinstance(payload.get("base"), dict):
+		return ""
+
+	base_ref = payload["base"].get("ref")
+	if not isinstance(base_ref, str) or not base_ref or len(base_ref) > 255 or base_ref.startswith("-"):
+		return ""
+	if any(unicodedata.category(char) == "Cc" for char in base_ref):
+		return ""
+	return base_ref
+
+
+def _lookup_protected_required_names(repository: str, base_ref: str, script_dir: Path) -> frozenset[str] | None:
+	if not base_ref or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+		return None
+	# The PR payload contains no branch-protection data, and the existing
+	# check-runs listing has no required flag. One candidate-only protection
+	# read (plus gh_retry retries) is necessary; never infer from defaults.
+	env = os.environ.copy()
+	env.update({"PR_CHECKS_REPOSITORY": repository, "BASE_REF": base_ref})
+	proc = subprocess.run(
+		["bash", "-c", 'source "$1" && source "$2" && _pr_required_check_names_from_protection "$BASE_REF"',
+		"bash", str(script_dir / "gh_helpers.sh"), str(script_dir / "pr_checks_lib.sh")],
+		check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+	)
+	if proc.returncode != 0 or not proc.stdout.strip():
+		return None
+	names = proc.stdout.splitlines()
+	# A line separator inside a protection context must not manufacture a
+	# different required name when the shell's newline format is decoded.
+	if any(not name for name in names) or proc.stdout != "\n".join(names) + "\n":
+		return None
+	return frozenset(names)
+
+
+def _short_wait_eligibility(
+	raw_text: str, head_sha: str, self_run_id: str, required: frozenset[str] | None, now: float,
+) -> tuple[bool, str, list[tuple[str, str]]]:
+	try:
+		pages = _parse_pages(raw_text)
+	except ValueError:
+		return False, "malformed_snapshot", []
+	if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+		return False, "stale_head", []
+	runs: list[dict[str, Any]] = []
+	seen_ids: set[int] = set()
+	total: int | None = None
+	for page in pages:
+		page_total = page.get("total_count")
+		page_runs = page["check_runs"]
+		if (type(page_total) is not int or page_total < 0 or page_total >= 1000
+			or (total is not None and total != page_total) or len(page_runs) > 100
+			or (not page_runs and (len(pages) != 1 or page_total != 0))):
+			return False, "malformed_snapshot", []
+		total = page_total
+		for run in page_runs:
+			if not isinstance(run, dict) or type(run.get("id")) is not int or run["id"] <= 0 or run["id"] in seen_ids:
+				return False, "malformed_snapshot", []
+			seen_ids.add(run["id"])
+			runs.append(run)
+	if total != len(runs):
+		return False, "malformed_snapshot", []
+	if any(run.get("head_sha") not in (None, head_sha) for run in runs):
+		return False, "stale_head", []
+	pending_runs = [run for run in runs if (run.get("status") != "completed" or run.get("conclusion") is None)
+		and not (self_run_id.isdigit() and f"/actions/runs/{self_run_id}/job/" in str(run.get("details_url") or ""))]
+	pending = [(str(run.get("name") or ""), str(run.get("status") or "")) for run in pending_runs]
+	if not pending:
+		return False, "lookup_skipped", pending
+	for run in pending_runs:
+		if run.get("status") != "in_progress":
+			return False, "queued_or_waiting", pending
+		name = run.get("name")
+		if not isinstance(name, str) or not name:
+			return False, "unknown_check", pending
+		started = run.get("started_at")
+		if not isinstance(started, str) or len(started) > 40:
+			return False, "missing_started_at", pending
+		try:
+			start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+			start_seconds = start_dt.timestamp()
+		except (ValueError, OverflowError, OSError):
+			return False, "missing_started_at", pending
+		if start_dt.tzinfo is None or start_dt.utcoffset() != timezone.utc.utcoffset(None):
+			return False, "missing_started_at", pending
+		age = now - start_seconds
+		if age < DEFAULT_WAIT_TIMEOUT_SECS:
+			return False, "recently_started", pending
+		if required is not None and name not in required:
+			return False, "unknown_check", pending
+	if required is None:
+		return False, "no_required_set", pending
+	return True, "known_long_running_required", pending
+
+
+def _emit_wait_diag(
+	phase: str, budget: int, legacy_budget: int, reason: str, head_sha: str,
+	elapsed: float, pending: list[tuple[str, str]], final_status: str = "",
+) -> None:
+	def safe(value: str) -> str:
+		return re.sub(r"[^A-Za-z0-9 ._/:()\-]", "_", value)[:60].lstrip(":") or "_"
+
+	checks = ",".join(f"{safe(name)}:{safe(status)}" for name, status in pending[:10])
+	if len(pending) > 10:
+		checks += f",+{len(pending) - 10}"
+	print(f"CHECK_RUNS_WAIT_V1 phase={phase} budget_secs={budget} legacy_budget_secs={legacy_budget} "
+		f"reason={reason} head={head_sha[:12] if re.fullmatch(r'[0-9a-f]{40}', head_sha) else '-'} "
+		f"head_match={'false' if reason in ('stale_head', 'malformed_snapshot') else 'true'} "
+		f"elapsed_secs={max(0, int(elapsed))} pending={len(pending)} checks={checks or '-'}"
+		+ (f" final_status={final_status}" if phase == "outcome" else ""))
+
+
 def _run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
 	env = os.environ.copy()
 	env.update({
@@ -250,7 +369,7 @@ def _build_wait_view(raw_text: str, self_run_id: str) -> list[dict[str, Any]]:
 		status = "" if run.get("status") is None else str(run.get("status"))
 		# GitHub also returns requested/pending/waiting. A completed-only
 		# snapshot is required before a clean Claude-fixer review may merge.
-		if status == "completed":
+		if status == "completed" and run.get("conclusion") is not None:
 			continue
 		details_url = "" if run.get("details_url") is None else str(run.get("details_url"))
 		if self_run_id and f"/actions/runs/{self_run_id}/job/" in details_url:
@@ -481,11 +600,18 @@ def main() -> int:
 		backoff_cap = max(BACKOFF_CAP_SECS, poll_interval)
 		repository = os.environ.get("GITHUB_REPOSITORY", "")
 		self_run_id = os.environ.get("SELF_RUN_ID", "")
-		deadline = int(time.time()) + wait_timeout
+		base_ref = _load_base_ref(payload_path) if not strict_merge and wait_timeout > 0 else ""
+		start = int(time.time())
+		deadline = start + wait_timeout
 		last_wait_view: list[dict[str, Any]] | None = None
 		unchanged_wait_snapshots = 0
 		final_status = "ready"
 		raw_text = ""
+		required_names: frozenset[str] | None = None
+		lookup_attempted = False
+		wait_reason = "strict_merge" if strict_merge else "lookup_skipped"
+		wait_pending: list[tuple[str, str]] = []
+		effective_budget = wait_timeout
 
 		while True:
 			proc = _run_check_runs_api(repository=repository, head_sha=head_sha, script_dir=Path(__file__).resolve().parent)
@@ -507,8 +633,12 @@ def main() -> int:
 					) else "not_ready"
 				break
 			try:
-				_parse_pages(raw_text)
+				pages = _parse_pages(raw_text)
 			except ValueError as exc:
+				deadline = start + wait_timeout
+				effective_budget = wait_timeout
+				wait_reason = "malformed_snapshot"
+				wait_pending = []
 				print(f"::warning::CHECK_RUNS_AUTOFIX_MALFORMED_OUTPUT head_sha={_short(head_sha, 40)} reason={exc} bytes={len(raw_text.encode('utf-8'))}")
 				now = int(time.time())
 				if now >= deadline:
@@ -522,6 +652,28 @@ def main() -> int:
 
 			wait_view = _build_wait_view(raw_text, self_run_id)
 			in_flight = len(wait_view)
+			eligible, wait_reason, wait_pending = _short_wait_eligibility(
+				raw_text, head_sha, self_run_id, required_names, time.time(),
+			)
+			if (in_flight and wait_timeout > 0 and wait_reason == "no_required_set"
+				and not lookup_attempted and base_ref):
+				lookup_attempted = True
+				required_names = _lookup_protected_required_names(
+					repository, base_ref, Path(__file__).resolve().parent,
+				)
+				eligible, wait_reason, wait_pending = _short_wait_eligibility(
+					raw_text, head_sha, self_run_id, required_names, time.time(),
+				)
+			if wait_reason == "no_required_set" and not lookup_attempted:
+				wait_reason = "lookup_skipped"
+			effective_budget = min(wait_timeout, KNOWN_REQUIRED_WAIT_CAP_SECS) if eligible else wait_timeout
+			deadline = start + effective_budget
+			_emit_wait_diag("decision", effective_budget, wait_timeout, wait_reason, head_sha,
+				time.time() - start, wait_pending)
+			# A partial paginated response cannot establish that checks finished.
+			if wait_reason == "malformed_snapshot" and any("total_count" in page for page in pages):
+				final_status = "api_error"
+				break
 			if last_wait_view is not None and wait_view == last_wait_view:
 				unchanged_wait_snapshots += 1
 			else:
@@ -535,7 +687,7 @@ def main() -> int:
 			now = int(time.time())
 			if now >= deadline:
 				final_status = "timeout"
-				print(f"::warning::CHECK_RUNS_WAIT_TIMEOUT reached after {wait_timeout}s with {in_flight} check-run(s) still queued/in_progress; proceeding with snapshot.")
+				print(f"::warning::CHECK_RUNS_WAIT_TIMEOUT reached after {effective_budget}s with {in_flight} check-run(s) still queued/in_progress; proceeding with snapshot.")
 				break
 
 			remaining = deadline - now
@@ -551,6 +703,8 @@ def main() -> int:
 			print(f"Waiting for {in_flight} in-progress/queued check-run(s) on {head_sha} (sleep {sleep_secs}s, deadline in {remaining}s)…")
 			time.sleep(max(0, sleep_secs))
 
+		_emit_wait_diag("outcome", effective_budget, wait_timeout, wait_reason, head_sha,
+			time.time() - start, wait_pending, final_status)
 		writer_ok = _write_context_file(out_path=out_path, raw_text=raw_text, head_sha=head_sha, final_status=final_status)
 		if not writer_ok:
 			_write_text(

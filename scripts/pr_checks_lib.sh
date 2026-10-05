@@ -57,6 +57,29 @@
 # assignment; tests/test_pr_checks_lib_required_filter.py pins them equal.
 : "${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:=CI,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate}"
 
+# Return only protection-confirmed required contexts, never the configured
+# fallback used by the merge gate. A failed or empty read has no provenance.
+_pr_required_check_names_from_protection()
+{
+	local base_ref="$1"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local protection_ref protection_json
+	[ -n "${base_ref}" ] || return 1
+	protection_ref="$(printf '%s' "${base_ref}" | jq -sRr '@uri' 2>/dev/null)" || protection_ref=""
+	if [ -z "${protection_ref}" ]; then
+		protection_ref="$(printf '%s' "${base_ref}" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote_from_bytes(sys.stdin.buffer.read(), safe=""))' 2>/dev/null)" || protection_ref=""
+	fi
+	[ -n "${protection_ref}" ] || return 1
+	protection_json="$(gh_retry _safe_gh_jq "repos/${repo}/branches/${protection_ref}/protection" 2>/dev/null)" || return 1
+	printf '%s' "${protection_json}" | jq -er '
+		if (type == "object" and (.required_status_checks.contexts | type) == "array"
+			and (.required_status_checks.contexts | length) > 0
+			and all(.required_status_checks.contexts[]; type == "string" and length > 0 and (contains("\n") | not))) then
+			.required_status_checks.contexts | join("\n")
+		else empty end
+	' 2>/dev/null
+}
+
 # Helper: returns the comma-separated list of check-run names treated as
 # blocking for the given base ref. Resolution: branch protection's
 # required_status_checks.contexts first (server-side truth), then the

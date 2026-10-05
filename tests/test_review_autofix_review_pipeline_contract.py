@@ -18,6 +18,7 @@ import textwrap
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
@@ -353,6 +354,13 @@ if args[:1] == ["api"]:
 			if not stderr.endswith("\n"):
 				sys.stderr.write("\n")
 		sys.exit(exit_code)
+	if path.endswith("/protection"):
+		state["protection_calls"] = state.get("protection_calls", 0) + 1
+		exit_code, stdout, stderr = render_response(state.get("protection_response", {"exit_code": 1}))
+		save()
+		sys.stdout.write(stdout)
+		sys.stderr.write(stderr)
+		sys.exit(exit_code)
 
 save()
 sys.stderr.write(f"mock gh: unsupported args: {args!r}\n")
@@ -376,6 +384,7 @@ def _run_collect_pr_check_runs_harness(
 	log_tail_bytes: str = "0",
 	gh_retry_max_attempts: str = "1",
 	strict_merge_snapshot: str = "false",
+	protection_response: dict[str, object] | None = None,
 ) -> dict[str, object]:
 	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-") as td:
 		tmp = Path(td)
@@ -388,6 +397,7 @@ def _run_collect_pr_check_runs_harness(
 		_install_check_runs_mock_gh(bin_dir, gh_state_file)
 		gh_state_file.write_text(json.dumps({
 			"check_runs_responses": check_runs_responses or [],
+			"protection_response": protection_response or {"exit_code": 1},
 		}), encoding="utf-8")
 
 		pr_payload_file = runtime_dir / "pr_payload.json"
@@ -3372,6 +3382,168 @@ def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusio
 	assert "Check-run context sha256:" in result["stdout"]
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
 	assert any("--paginate" in call and "--slurp" in call and "/check-runs?per_page=100" in call for call in call_texts)
+
+
+def test_check_runs_wait_budgets_and_late_unknown() -> None:
+	spec = importlib.util.spec_from_file_location("bounded_check_runs_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	head = "a" * 40
+	base_time = 1_800_000_000
+	required = {"id": 1, "head_sha": head, "name": "CI", "status": "in_progress",
+		"started_at": "2027-01-15T07:50:00Z", "conclusion": None}
+	# Keep the start age well beyond 300 seconds independent of local time.
+	required["started_at"] = __import__("datetime").datetime.fromtimestamp(
+		base_time - 600, __import__("datetime").timezone.utc).isoformat()
+
+	def run_case(pages: list[list[dict]], *, timeout: int = 300, lookup: frozenset[str] | None = frozenset({"CI"}),
+		self_id: str = "") -> tuple[str, str, list[int], int]:
+		clock = [base_time]
+		sleeps: list[int] = []
+		reads = [0]
+		lookups = [0]
+
+		def read(**_kwargs: object) -> subprocess.CompletedProcess[str]:
+			index = min(reads[0], len(pages) - 1)
+			reads[0] += 1
+			runs = pages[index]
+			return subprocess.CompletedProcess(["gh"], 0, json.dumps([{"total_count": len(runs), "check_runs": runs}]), "")
+
+		def sleep(seconds: int) -> None:
+			sleeps.append(seconds)
+			clock[0] += seconds
+
+		def protected(*_args: object) -> frozenset[str] | None:
+			lookups[0] += 1
+			return lookup
+
+		with tempfile.TemporaryDirectory() as td:
+			payload = Path(td) / "pr.json"
+			output = Path(td) / "checks.txt"
+			payload.write_text(json.dumps({"head": {"sha": head}, "base": {"ref": "main"}}), encoding="utf-8")
+			stdout = io.StringIO()
+			with (mock.patch.dict(os.environ, {"PR_PAYLOAD_FILE": str(payload), "PR_CHECK_RUNS_CONTEXT_FILE": str(output),
+				"CHECK_RUNS_WAIT_TIMEOUT_SECS": str(timeout), "CHECK_RUNS_POLL_INTERVAL_SECS": "20",
+				"CHECK_RUNS_LOG_TAIL_BYTES": "0", "GITHUB_REPOSITORY": "owner/repo", "SELF_RUN_ID": self_id,
+				"CHECK_RUNS_STRICT_MERGE_SNAPSHOT": "false", "CHECK_RUNS_AUTOFIX_ENABLED": "true"}),
+				mock.patch.object(module, "_run_check_runs_api", read),
+				mock.patch.object(module, "_lookup_protected_required_names", protected),
+				mock.patch.object(module, "time", SimpleNamespace(time=lambda: clock[0], sleep=sleep)),
+				contextlib.redirect_stdout(stdout)):
+				assert module.main() == 0
+			return output.read_text(encoding="utf-8"), stdout.getvalue(), sleeps, lookups[0]
+
+	context, log, sleeps, lookups = run_case([[required]])
+	assert "collection_status: timeout" in context and "incomplete[0].name: CI" in context
+	assert "budget_secs=60" in log and "reason=known_long_running_required" in log
+	assert "CHECK_RUNS_WAIT_TIMEOUT reached after 60s" in log
+	assert sum(sleeps) == 60 and lookups == 1
+
+	unknown = {**required, "id": 2, "name": "optional"}
+	for runs in ([unknown], [required, unknown], [{**required, "status": "queued"}],
+		[{**required, "status": "completed", "conclusion": None}],
+		[{**required, "started_at": None}], [{**required, "started_at": "2999-01-01T00:00:00Z"}],
+		[{**required, "started_at": __import__("datetime").datetime.fromtimestamp(
+			base_time - 30, __import__("datetime").timezone.utc).isoformat()}],
+		[{**required, "head_sha": "b" * 40}]):
+		context, log, sleeps, lookups = run_case([runs])
+		assert "collection_status: timeout" in context and "budget_secs=300" in log
+		assert sum(sleeps) == 300 and sleeps[:3] == [20, 40, 80], sleeps
+		assert lookups <= 1
+
+	context, log, sleeps, lookups = run_case([[required]], lookup=None)
+	assert "reason=no_required_set" in log and "budget_secs=300" in log and sum(sleeps) == 300 and lookups == 1
+	context, log, sleeps, lookups = run_case([[required]], timeout=30)
+	assert "budget_secs=30" in log and sum(sleeps) == 30 and lookups == 1
+	context, log, sleeps, lookups = run_case([[required], [required, unknown]])
+	assert "budget_secs=60" in log and "budget_secs=300" in log
+	assert sum(sleeps) == 300 and lookups == 1
+	context, log, sleeps, lookups = run_case([[required], [{**required, "status": "completed", "conclusion": "success"}]])
+	assert "collection_status: ready" in context and "incomplete_count: 0" in context
+	assert sleeps == [20] and lookups == 1
+	self_run = {**unknown, "details_url": "https://github.com/owner/repo/actions/runs/999/job/1"}
+	context, log, sleeps, lookups = run_case([[required, self_run]], self_id="999")
+	assert "budget_secs=60" in log and lookups == 1
+
+
+def test_check_runs_wait_diagnostics_are_bounded() -> None:
+	spec = importlib.util.spec_from_file_location("bounded_check_runs_diag_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	stdout = io.StringIO()
+	with contextlib.redirect_stdout(stdout):
+		module._emit_wait_diag("outcome", 60, 300, "unknown_check", "a" * 40, 60,
+			[("::error::%SECRET\n" + "x" * 500, "in_progress")] * 12, "timeout")
+	line = stdout.getvalue()
+	assert line.startswith("CHECK_RUNS_WAIT_V1 phase=outcome")
+	assert "pending=12" in line and ",+2" in line and "final_status=timeout" in line
+	assert "::error::" not in line and "%SECRET" not in line and "\n" == line[-1]
+	assert len(line) < 900
+
+
+def test_check_runs_protection_lookup_and_zero_wait() -> None:
+	spec = importlib.util.spec_from_file_location("bounded_check_runs_lookup_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	with tempfile.TemporaryDirectory() as td:
+		bin_dir = Path(td) / "bin"
+		bin_dir.mkdir()
+		state_file = Path(td) / "state.json"
+		_install_check_runs_mock_gh(bin_dir, state_file)
+		for response in ({"json": {"required_status_checks": {"contexts": ["CI"]}}},
+			{"exit_code": 1, "stderr": "gh: Not Found (HTTP 404)"},
+			{"exit_code": 1, "stderr": "Resource not accessible by integration (HTTP 403)"},
+			{"stdout": "not json"}, {"json": {"required_status_checks": {"contexts": []}}}):
+			state_file.write_text(json.dumps({"protection_response": response}), encoding="utf-8")
+			with mock.patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"MOCK_GH_STATE_FILE": str(state_file), "GH_RETRY_MAX_ATTEMPTS": "1"}):
+				names = module._lookup_protected_required_names("owner/repo", "release/v1", CHECK_RUNS_HELPER.parent)
+			assert names == (frozenset({"CI"}) if response.get("json") == {"required_status_checks": {"contexts": ["CI"]}} else None)
+			state = json.loads(state_file.read_text(encoding="utf-8"))
+			assert state.get("protection_calls") == 1
+			assert any("release%2Fv1/protection" in " ".join(call) for call in state["calls"])
+		assert module._lookup_protected_required_names("owner/repo", "main", bin_dir) is None
+	assert module._load_base_ref(Path(td) / "missing.json") == ""
+	for ref in ("-bad", "bad\nbranch", "x" * 256, ""):
+		with tempfile.TemporaryDirectory() as td2:
+			payload = Path(td2) / "pr.json"
+			payload.write_text(json.dumps({"base": {"ref": ref}}), encoding="utf-8")
+			assert module._load_base_ref(payload) == ""
+
+	zero = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "a" * 40}, "base": {"ref": "main"}},
+		wait_timeout_secs="0", check_runs_responses=[{"json": [{"total_count": 1, "check_runs": [
+			{"id": 1, "name": "CI", "status": "in_progress", "head_sha": "a" * 40,
+				"started_at": "2020-01-01T00:00:00Z"}]}]}],
+	)
+	assert zero["mock_state"].get("protection_calls", 0) == 0
+	assert "collection_status: timeout" in zero["context_text"]
+	assert "CHECK_RUNS_WAIT_V1 phase=outcome" in zero["stdout"]
+	strict = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "a" * 40}, "base": {"ref": "main"}},
+		strict_merge_snapshot="true", wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"total_count": 1, "check_runs": [
+			{"id": 1, "name": "CI", "status": "in_progress", "head_sha": "a" * 40,
+				"started_at": "2020-01-01T00:00:00Z"}]}]}],
+	)
+	assert strict["mock_state"].get("protection_calls", 0) == 0
+	assert "collection_status: not_ready" in strict["context_text"]
+	assert "reason=strict_merge" in strict["stdout"]
+	partial = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "a" * 40}}, wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"total_count": 2, "check_runs": [
+			{"id": 1, "name": "CI", "status": "completed", "conclusion": "success", "head_sha": "a" * 40}]}]}],
+	)
+	assert "collection_status: api_error" in partial["context_text"]
+	assert "reason=malformed_snapshot" in partial["stdout"]
+	failed = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "a" * 40}}, check_runs_responses=[{"exit_code": 1}],
+	)
+	assert "collection_status: api_error" in failed["context_text"]
+	assert "final_status=api_error" in failed["stdout"]
 
 
 def test_post_review_snapshot_ignores_only_its_own_incomplete_check() -> None:
