@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml: around lines 1347\u20131353; README.md: lines 338\u2013350 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The documented three-wrapper minimum manual setup does not install the responder listener, while standalone clarification delegates questions and suppresses its alert.\n  WHY: In a consumer using only those three wrappers, no responder listens for the posted questions comment, leaving the issue unanswered.\n- tests/test_update_workflows_guardrails.py: lines 55-65 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The standard-profile test uses `core[-1]` to position the responder entry, coupling the expected layout to the responder remaining the last item in `core`.\n  WHY: A future reordering of `core` could silently change the expected standard layout without the test surfacing the dependency.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_update_workflows_guardrails.py: lines 55-65 | severity=NIT | confidence=2\n  PROBLEM: The test now uses a cryptic `core[:-1] + [\"ai-orchestrate.yml\", \"ai-orchestrate-poll.yml\", core[-1], \"ai-validate.yml\", \"ai-sync-labels.yml\", \"review_rb_judge_dispatch.yml\"]` pattern to place the responder wrapper at position 7 of the standard profile.\n  WHY: The pattern is functionally correct, but a future reordering of `core` could silently change the expected standard layout without any test failure to surface the dependency.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml; README.md: `Standalone auto-decide` delegates by setting `delegated=true` (around lines 1347\u20131353), and the Telegram notification skips delegated questions (around lines 1491\u20131498). README.md\u2019s \u201cAt minimum, create these three core wrappers\u201d section (lines 338\u2013350) | severity=MAJOR | confidence=5\n  PROBLEM: The default standalone clarification path assumes the separate `ai-orchestrate-clarify-respond.yml` listener is installed, but the documented minimum manual setup does not install it.\n  WHY: In a consumer with only the three documented minimum wrappers, `clarify.yml` posts questions, skips its RECOMMENDED answer, and suppresses the alert. No responder workflow listens for that comment, so the issue remains unanswered.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4dcea5179f4bb4b915a5083c4651b191ea58c5318f7fbd8a5dfd1a54b9db56df",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6283,
+    "run_id": "37358033287",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37358033287",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005185846_d22a116212",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6283,
+    "run_id": "37358033287"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T18:58:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
