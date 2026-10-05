@@ -310,13 +310,16 @@ render_judge_semble_prefetch_from_query_file() {
   local query_file="$1"
   local header_label="${2:-Judge Context}"
   local max_chunks="${3:-${JUDGE_SEMBLE_MAX_CHUNKS}}"
+  local static_file="${4:-}"
   local query_text=""
   local prefetch_text=""
 
-  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
-    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
-    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
-    || [ ! -s "${query_file}" ]; then
+  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ ! -s "${query_file}" ]; then
+    return 0
+  fi
+  if declare -F semble_should_query >/dev/null 2>&1; then
+    semble_should_query || return 0
+  elif [ "${SEMBLE_AVAILABLE:-false}" != "true" ] || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ]; then
     return 0
   fi
 
@@ -324,7 +327,11 @@ render_judge_semble_prefetch_from_query_file() {
   query_text="${query_text:0:${JUDGE_SEMBLE_QUERY_MAX_BYTES}}"
   [ -n "${query_text}" ] || return 0
 
-  prefetch_text="$(semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
+  if [ -s "${static_file}" ]; then
+    prefetch_text="$(SEMBLE_STATIC_CONTEXT_FILE="${static_file}" semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
+  else
+    prefetch_text="$(SEMBLE_STATIC_CONTEXT_FILE= semble_query_block "${query_text}" "${max_chunks}" "${header_label}" || true)"
+  fi
   [ -n "${prefetch_text}" ] || return 0
 
   printf '%s\n' "${prefetch_text:0:${JUDGE_SEMBLE_CONTEXT_MAX_BYTES}}"
@@ -6434,14 +6441,14 @@ security_pass_exhaustion_judge() {
     printf '%s\n' 'Security-pass exhaustion judge context.'
     append_judge_semble_query_text "Remaining findings:" "$(security_pass_findings_rows_json "${findings_file}")" 7000
   } > "${semble_query_file}"
-  semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${semble_query_file}" "Security Pass Judge Context")"
-  rm -f "${semble_query_file}"
   if [ ! -s "${static_file}" ]; then
     if ! assemble_judge_static_context "${static_file}"; then
       echo "WARNING: failed to assemble security-pass judge static context; continuing without it" >&2
       : > "${static_file}"
     fi
   fi
+  semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${semble_query_file}" "Security Pass Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${static_file}")"
+  rm -f "${semble_query_file}"
   {
     cat "${static_file}"
     echo
@@ -8584,7 +8591,7 @@ invoke_judge_for_integration_conflict() {
     append_judge_semble_query_text "PR diff excerpt:" "${pr_diff}" 5000
     append_judge_semble_query_text "Intent fingerprints JSON:" "${intent_fingerprints}" 3500
   } > "${judge_semble_query_file}"
-  judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context")"
+  judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${judge_static_file}")"
 
   {
     cat "${judge_static_file}"
@@ -14637,14 +14644,13 @@ invoke_stall_judge() {
     append_judge_semble_query_text "Linked PR summary:" "target_pr ${target_pr}; pr_state ${pr_state}; mergeable ${pr_mergeable}; head_ref ${head_ref}; base_ref ${base_ref}" 900
     append_judge_semble_query_text "Diagnostics JSON:" "${diagnostics}" 7000
   } > "${stall_judge_semble_query_file}"
-  stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${stall_judge_semble_query_file}" "Stall Judge Context")"
-
   if [ ! -s "${static_file}" ]; then
     if ! assemble_judge_static_context "${static_file}"; then
       echo "WARNING: failed to assemble stall judge static context; continuing with fallback-safe execution" >&2
       : > "${static_file}"
     fi
   fi
+  stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${stall_judge_semble_query_file}" "Stall Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${static_file}")"
 
   {
     cat "${static_file}"
@@ -20800,7 +20806,6 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         append_judge_semble_query_text "PR issue comments JSON:" "${PR_COMMENTS}" 2500
         append_judge_semble_query_text "PR review comments JSON:" "${PR_REVIEW_COMMENTS}" 2500
       } > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
-      RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"
 
       # Determine if this is a final decision (retries exhausted) or a fix attempt
       IS_FINAL="false"
@@ -21013,6 +21018,7 @@ ${FOLLOWUP_BLOCK_REASON}"
       if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
       fi
+      RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${RUNTIME_DIR}/judge_static.txt")"
 
       {
         cat "${RUNTIME_DIR}/judge_static.txt"
@@ -22852,10 +22858,9 @@ ${PR_DIFF}
     append_judge_semble_query_text "Wave status JSON:" "${WAVE_STATUS}" 2500
     append_judge_semble_query_text "CI status JSON:" "${CI_STATUS}" 1500
   } > "${JUDGE_SEMBLE_QUERY_FILE}"
-  JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${JUDGE_SEMBLE_QUERY_FILE}" "Judge Context")"
-
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
+  JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${JUDGE_SEMBLE_QUERY_FILE}" "Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${RUNTIME_DIR}/judge_static.txt")"
 
   # Build judge prompt
   {

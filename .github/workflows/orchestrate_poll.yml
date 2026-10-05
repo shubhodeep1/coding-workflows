@@ -39,6 +39,8 @@ env:
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'high' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
+  TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to
   # scripts/review_conflict_resolve.sh (integration-sync conflict resolver
@@ -600,12 +602,12 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: setup-uv
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -628,7 +630,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -652,8 +654,9 @@ jobs:
             # captured log on failure.
             SEMBLE_INDEX_PATH="${semble_index_path}" \
               bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            grep -m1 '^SEMBLE_BOOTSTRAP ' "${RUNTIME_DIR}/semble_index.log" || true
             if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
-              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | grep -v '^SEMBLE_BOOTSTRAP ' | sed 's/^/semble index: /' || true
             fi
           else
             echo "::notice::scripts/build_semble_wrapper.sh not staged; leaving Semble disabled for this poll run."

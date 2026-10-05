@@ -253,6 +253,8 @@ env:
   CHECK_RUNS_LOG_TAIL_BYTES: ${{ vars.CHECK_RUNS_LOG_TAIL_BYTES || '16384' }}
   FINGERPRINT_QUARANTINE_RUNS_M: ${{ vars.FINGERPRINT_QUARANTINE_RUNS_M || '3' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
+  TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}
   UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
@@ -2953,12 +2955,12 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Setup uv for Semble
-        if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.PR_CLOSED != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy') || env.SERENA_ENABLED == 'true')
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -2989,7 +2991,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         # Defense-in-depth: the shared script is fail-soft already, but the
         # step-level guard ensures a future wrapper regression still
         # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
@@ -3019,8 +3021,9 @@ jobs:
             # stderr before any cleanup runs, so it's always present in the
             # captured log on failure.
             bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            grep -m1 '^SEMBLE_BOOTSTRAP ' "${RUNTIME_DIR}/semble_index.log" || true
             if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
-              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | grep -v '^SEMBLE_BOOTSTRAP ' | sed 's/^/semble index: /' || true
             fi
           else
             echo "::notice::build_semble_wrapper.sh not staged; continuing without Semble-backed prompt context."

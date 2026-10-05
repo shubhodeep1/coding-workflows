@@ -2020,7 +2020,7 @@ if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT
     --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
     --output "${TARGETED_FILES_CONTEXT_FILE}"
   )
-  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ]; then
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] && [ "$(printf '%s' "${TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
     targeted_file_context_args+=(
       --semble-bin "${SEMBLE_BIN:-}"
       --semble-index "${SEMBLE_INDEX_PATH:-}"
@@ -2042,7 +2042,13 @@ if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
 fi
-if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
+conflict_semble_should_query=false
+if declare -F semble_should_query >/dev/null 2>&1; then
+  semble_should_query && conflict_semble_should_query=true
+elif [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]; then
+  conflict_semble_should_query=true
+fi
+if [ "${conflict_semble_should_query}" = "true" ] \
    && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] \
    && declare -F semble_query_block >/dev/null 2>&1; then
   semble_query_block \

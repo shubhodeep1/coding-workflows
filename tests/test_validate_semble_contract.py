@@ -255,7 +255,9 @@ def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
 	assert 'echo "bootstrap_enabled=${bootstrap_enabled}"' in wf
 	assert "- name: setup-uv\n        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'" in wf
 	assert "uses: astral-sh/setup-uv@v7" in wf
-	assert "- name: Install semble\n        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'" in wf
+	assert "- name: Install semble\n        if: steps.semble_gate.outputs.enabled == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'" in wf
+	assert 'echo "SEMBLE_ENABLED=true" >> "$GITHUB_ENV"' in wf
+	assert "SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}" in wf
 	assert 'echo "::notice::VALIDATION_USE_SEMBLE is not true; skipping Semble install."' in wf
 	assert "bash scripts/install_semble.sh" in wf
 	assert "- name: Build semble index" in _workflow_text()
