@@ -21,6 +21,8 @@ Subcommands:
           on SYNC_BRANCH (default `ai/sync-claude-live-copies`, recreated from
           the pushed commit). Lease-check the push and open a pull request into
           BASE_BRANCH unless one is already open. --dry-run stops after the copy.
+          --keep-committed-security-paths with --dry-run leaves hooks and
+          settings.json untouched so CI checks the committed live copies.
 
 `sync` runs from `.github/workflows/sync-claude-live-copies.yml` on pushes to
 main that touch `workflow-templates/.claude/**`. It fails open: an unreachable `before` commit (first push,
@@ -57,6 +59,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_PREFIX = "workflow-templates/.claude/"
 LIVE_PREFIX = ".claude/"
 ALLOWLIST_PATH = ".github/ai/claude_template_divergence.json"
+SECURITY_LIVE_PREFIXES = ("hooks/",)
+SECURITY_LIVE_FILES = ("settings.json",)
 DEFAULT_SYNC_BRANCH = "ai/sync-claude-live-copies"
 HELD_BRANCH_SUFFIX = "-held"
 PIPELINE_HEAD_RE = re.compile(r"^(ai|orchestrator|auto)/")
@@ -407,11 +411,23 @@ def _write_outputs(held_pr: int | None, held: dict[str, tuple[str, str, str]]) -
 		stream.write(f"held={'true' if held else 'false'}\nheld_pr={held_pr or ''}\nheld_summary={summary}\n")
 
 
-def sync(root: Path, before: str, after: str, *, dry_run: bool) -> int:
+def is_security_live_path(relative: str) -> bool:
+	return relative.startswith(SECURITY_LIVE_PREFIXES) or relative in SECURITY_LIVE_FILES
+
+
+def sync(root: Path, before: str, after: str, *, dry_run: bool, keep_committed_security_paths: bool = False) -> int:
 	paths = plan(root, before, after)
 	if not paths:
 		log(f"nothing_to_sync before={before} after={after}")
 		return 0
+	if dry_run and keep_committed_security_paths:
+		kept_committed_security_paths = [relative for relative in paths if is_security_live_path(relative)]
+		for relative in kept_committed_security_paths:
+			log(f"dry_run_kept_committed path={LIVE_PREFIX}{relative} reason=security_path")
+		paths = [relative for relative in paths if not is_security_live_path(relative)]
+		if not paths:
+			log(f"nothing_to_sync before={before} after={after} kept_committed={len(kept_committed_security_paths)}")
+			return 0
 	repository = os.environ.get("GITHUB_REPOSITORY", "")
 	branch = os.environ.get("SYNC_BRANCH") or DEFAULT_SYNC_BRANCH
 	base = os.environ.get("BASE_BRANCH") or "main"
@@ -498,6 +514,7 @@ def main(argv: list[str] | None = None) -> int:
 		command.add_argument("--after", required=True)
 		if name == "sync":
 			command.add_argument("--dry-run", action="store_true")
+			command.add_argument("--keep-committed-security-paths", action="store_true")
 	args = parser.parse_args(argv)
 	root = Path(args.root)
 	if args.command == "check":
@@ -509,7 +526,9 @@ def main(argv: list[str] | None = None) -> int:
 		for relative in plan(root, args.before, args.after):
 			print(relative)
 		return 0
-	return sync(root, args.before, args.after, dry_run=args.dry_run)
+	if args.keep_committed_security_paths and not args.dry_run:
+		parser.error("--keep-committed-security-paths requires --dry-run")
+	return sync(root, args.before, args.after, dry_run=args.dry_run, keep_committed_security_paths=args.keep_committed_security_paths)
 
 
 if __name__ == "__main__":
