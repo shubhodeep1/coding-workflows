@@ -503,8 +503,8 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.MULTILINE)) == len(SITES) + 1
 	rb_block = text[text.index('      # Run the judge\n      RB_JUDGE_SUCCESS=false'):text.index('      # Parse judge output')]
 	assert 'poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log"' in rb_block
-	assert 'RB_JUDGE_ENGINE_RC}" -eq 77' in rb_block
-	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ]; then\n            break\n          fi' in rb_block
+	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then\n            RB_JUDGE_ISOLATION_FAILED=true\n            break\n          fi' in rb_block
+	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ]; then\n            break\n          fi' in rb_block
 	assert 'danger-full-access' not in rb_block and not re.search(r'\bcodex\s+.*\bexec\b', rb_block)
 	assert '.review_blocked_isolation_state' in rb_block
 	assert 'ai:rb-judge-isolation-escalated' in text

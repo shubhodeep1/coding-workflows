@@ -21388,9 +21388,8 @@ ${FOLLOWUP_BLOCK_REASON}"
             break
           fi
           # A rejected write transfer may have touched the combined-mode
-          # checkout before failing; a failed preparation cannot succeed on
-          # another same-tick attempt. Retry on the next poll after cleanup.
-          if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ]; then
+          # checkout before failing. Do not retry it in the same tick.
+          if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ]; then
             break
           fi
           if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
