@@ -1061,13 +1061,25 @@ not delete wrappers that are already present in `.github/workflows/`.
 > consumer. The merged-PR guard checks a numeric push refspec even when output
 > is redirected; only an adjacent, unquoted descriptor is removed from the
 > parsed command.
+> For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
+> the merged-PR guard ignores the unresolved value and checks the session checkout.
+> If that check does not block, it asks for confirmation because the pushed
+> repository may differ. Other unresolved push directories follow the same rule.
 > When a `git push` source cannot be resolved locally (for example,
 > a shell-expanded source), the merged-PR guard asks for confirmation rather
 > than using the session checkout as a substitute for the pushed commit.
 > A push with a destination that cannot be resolved locally (such as
 > `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
 > If `--repo` and a positional remote are both supplied, the guard checks the
-> refspecs after that remote, not the remote name as a branch.
+> refspecs after that remote, not the remote name as a branch. If the local
+> remote-config lookup cannot identify the positional repository (including an
+> unconfigured path or URL), the guard asks instead of treating it as a refspec.
+
+> The merged-PR guard checks numeric push refspecs before a separate output
+> redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
+> or option leaves the destination unknown, it requests confirmation rather
+> than checking an unrelated current branch. A push with no refspec keeps the
+> existing current-branch check.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
