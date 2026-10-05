@@ -471,6 +471,15 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- Host-side static-context reads of checkout-controlled `README.md` and
+  `agents.md` skip symbolic links rather than following them into prompt text.
+  Required `unattended_system_instructions.md` and `ai_pipeline.md` symlinks
+  instead fail prompt assembly before any content is written; review checkout
+  credential persistence is unchanged.
+- Static prompts omit the optional overflow-runbook pointer when
+  `probably_unnecessary_but_read_if_stuck.md` is a symlink; regular runbooks
+  still receive the pointer. A symlink emits a warning without directing the
+  model to read its target from the credential-bearing checkout.
 - The review gate's existing PR read validates the same-repository head and
   exports `review_checkout_sha` only for a 40-hex SHA. `Checkout repo` uses
   that SHA for every PR event, so reviewer and other `GITHUB_WORKSPACE` file
@@ -484,6 +493,12 @@ a new value, add it to the appropriate overrides file with a
   source/workspace/PR-metadata SHA mismatch, or a branch that advances during
   fetch, sets `AUTOFIX_STALE_BASE_SKIP` so no reviewer, editor or merge acts
   on stale files.
+- `orchestrate.yml` and `orchestrate_clarify_respond.yml` also assemble static
+  context on the host. They reject symlinked required instructions and pipeline
+  files before writing prompt output, and omit symlinked local agents files,
+  `README.md`, and the optional overflow-runbook pointer with warnings. Regular
+  files retain their existing content and `AGENTS.md` precedence in the
+  clarify-respond workflow. Checkout credential handling is unchanged.
 - `internal-review.yml` itself must not forward a `with:` input that
   `review_autofix.yml` on `main` does not define yet: GitHub validates the
   call against `main`'s file, so every review run on the PR adding the input
@@ -1630,7 +1645,7 @@ Operator runbooks (env var reference, autofix retrigger/dedup internals,
 orchestrator integration-sync auto-heal, validation self-healing, workflow
 log analysis pipeline, semantic cache scope, wrapper pin policy) live in
 `./probably_unnecessary_but_read_if_stuck.md`. Read it only when needed —
-it is intentionally large.
+and only if it is a regular file, not a symlink — it is intentionally large.
 
 `CHANGELOG.md` is never edited directly. Write one fragment per PR at
 `changelog.d/<issue-or-pr>-<slug>.md`; `scripts/assemble_changelog.py` folds

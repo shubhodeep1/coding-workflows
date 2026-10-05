@@ -52,6 +52,11 @@ fi
 phase="$1"
 output="$2"
 
+if [ -L unattended_system_instructions.md ] || [ -L ai_pipeline.md ]; then
+	echo "::error::Required static context input is a symbolic link; refusing to assemble the prompt." >&2
+	exit 1
+fi
+
 if [ ! -f unattended_system_instructions.md ] || [ ! -f ai_pipeline.md ]; then
 	echo "Missing required input file(s): unattended_system_instructions.md and/or ai_pipeline.md" >&2
 	exit 1
@@ -63,20 +68,34 @@ emit_system_instructions() {
 	echo
 }
 
+_static_context_regular_file() {
+	if [ -L "$1" ]; then
+		echo "::warning::$1 is a symbolic link; omitted from the static context." >&2
+		return 1
+	fi
+	[ -f "$1" ]
+}
+
 emit_agents_md() {
 	# Implement phase: include canonical-from-coding-workflows agents_canonical.md
 	# (staged from .codex-workflow-src) followed by the consumer repo's own
 	# agents.md if present. Other phases just emit the local agents.md.
 	# Guard RUNTIME_DIR explicitly under set -u.
+	local local_agents_regular
 	case "${phase}" in
 		implement)
-			if { [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; } || [ -f agents.md ]; then
+			if _static_context_regular_file agents.md; then
+				local_agents_regular=true
+			else
+				local_agents_regular=false
+			fi
+			if { [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; } || [ "$local_agents_regular" = true ]; then
 				echo "=== AGENTS.MD ==="
 				if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; then
 					cat "${RUNTIME_DIR}/agents_canonical.md"
 					echo
 				fi
-				if [ -f agents.md ]; then
+				if [ "$local_agents_regular" = true ]; then
 					echo "=== REPO-SPECIFIC AGENTS.MD ==="
 					cat agents.md
 					echo
@@ -84,7 +103,7 @@ emit_agents_md() {
 			fi
 			;;
 		*)
-			if [ -f agents.md ]; then
+			if _static_context_regular_file agents.md; then
 				echo "=== AGENTS.MD ==="
 				cat agents.md
 				echo
@@ -94,7 +113,7 @@ emit_agents_md() {
 }
 
 emit_readme_trimmed() {
-	if [ -f README.md ]; then
+	if _static_context_regular_file README.md; then
 		echo "=== README.MD (trimmed) ==="
 		# Keep overview/setup/conventions; exclude wrapper-workflow + automation runbooks.
 		awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
@@ -103,7 +122,7 @@ emit_readme_trimmed() {
 }
 
 emit_overflow_pointer() {
-	if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+	if _static_context_regular_file probably_unnecessary_but_read_if_stuck.md; then
 		echo "=== OVERFLOW REFERENCE ==="
 		echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
 		echo
