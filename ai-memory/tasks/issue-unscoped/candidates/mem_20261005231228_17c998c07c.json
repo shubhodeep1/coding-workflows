@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_data_provision_guard.py:30-31 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The URL/PR detection regex matches keywords inside innocent words, causing false-positive escalation.\n  WHY: Words such as \u201ccommitment\u201d and \u201cbranches\u201d contain the matched substrings \u201ccommit\u201d and \u201cbranch\u201d without referring to external data.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Check whether required evidence is actually absent; never replace a required security verification with a skip option. Fail closed if verification cannot run.\"\n  expected_change_site: scripts/clarify_data_provision_guard.py, specifically how it handles errors during the evidence check\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The current guard fails to catch all cases where required evidence is unavailable, particularly when the clarification option uses a phrasing that avoids explicit \"data provision\" keywords but implies a verification skip; the approach relies on regex matching rather than a robust, keyword-independent validation of whether the responder has access to the requested evidence.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/clarify_data_provision_guard.py:30-31 | severity=MAJOR | confidence=4\n  PROBLEM: The regex `(?:URL|PR\\b|pull\\s+request|SHA|commit|branch|http|deployment|build\\s+output|test\\s+result|log\\b|screenshot)` will incorrectly match parts of innocent words, such as \"commit\" inside \"commitment\" or \"branch\" inside \"branches\".\n  WHY: This leads to false-positive escalation of harmless clarification responses that merely contain the substrings rather than referring to external data.\n- TASK_GAP\n  Requirement: \"Check whether required evidence is actually absent; never replace a required security verification with a skip option. Fail closed if verification cannot run.\"\n  Expected change site: scripts/clarify_data_provision_guard.py, specifically how it handles errors during the evidence check.\n  Evidence of absence: The current guard fails to catch all cases where required evidence is unavailable, particularly when the clarification option uses a phrasing that avoids explicit \"data provision\" keywords but implies a verification skip. The recent fixes have addressed specific phrasing, but the underlying approach relies on regex matching rather than a robust, keyword-independent validation of whether the responder has access to the requested evidence.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7b53098ab886a9c0e95115533575ba6de8ecf14839b1020d56091f6e67e30461",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6350,
+    "run_id": "37382155864",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37382155864",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005231228_17c998c07c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6350,
+    "run_id": "37382155864"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T23:12:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
