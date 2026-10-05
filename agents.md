@@ -117,6 +117,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    responses are reconciled from trusted history; uncleared human latches
    block the judge even on a new head. The
    `claude-fixer-auto-merge` job id is kept but never runs.
+   The other four poller judge roles use that sandbox with read-only access
+   on both engines; a missing sandbox never starts a host judge.
    `[claude-intervention]` and `[claude-merge-resolve]` commits on older PR
    heads still end the counted run, like `[judge-fix]` and
    `[ai-merge-resolve]`.
@@ -128,7 +130,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `Preserving repo-tracked path during artifact cleanup: <path>`.
 9. **orchestrate** (`orchestrate.yml`, `orchestrate_poll.yml`) — issue
    decomposition + judge polling, including the default-on, current-head
-   project security-pass gate before validation/finalization.
+   project security-pass gate before validation/finalization. The poller's
+   wave, stall, integration and security-pass judges use read-only,
+   credential-free review sandboxes on both engines. Isolation failure
+   defers (never host fallback) and escalates per role after
+   `JUDGE_ISOLATION_MAX_FAILURES`; only deterministic poller code writes to
+   GitHub. Integration verdicts re-dispatch the isolated conflict resolver.
 10. **judge** (`mode-judge.txt`, `mode-orchestrate-poll-judge.txt`,
     `mode-judge-review-blocked.txt`, `mode-judge-stall-recovery.txt`) —
     JSON-emitting evaluation of wave state.
@@ -648,7 +655,7 @@ a new value, add it to the appropriate overrides file with a
 |---|---|---|---|---|
 | clarify, clarify-respond | `openai/gpt-6-sol` | `high` (smoke: `low` — `clarify.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | Claude (Opus 5.5; codex fallback) · `CLARIFY`, `CLARIFY_RESPOND` |
 | plan | `openai/gpt-6-sol` | `high` (smoke: `low` — `plan.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | Claude (Opus 5.5; codex fallback) · `PLAN` |
-| orchestrate (decompose), judge | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `ORCHESTRATE`, `WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE` |
+| orchestrate (decompose), judge | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback for `ORCHESTRATE`, isolated OpenCode fallback for poller judges) · `ORCHESTRATE`, `WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE` |
 | implement (main editor) | `openai/gpt-6-sol` | `high` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT` |
 | implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_REPAIR` |
 | implement-diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_DIAGNOSE` |
@@ -1400,6 +1407,7 @@ and shipped:
 - `MODEL_CATALOG_BACKFILL`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `RB_JUDGE_ISOLATION`
+- `JUDGE_ISOLATION`
 - `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -1603,6 +1611,7 @@ LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=RB_JUDGE_ISOLATION
+LOG_PREFIX.name=JUDGE_ISOLATION
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---

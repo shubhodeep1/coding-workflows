@@ -1,12 +1,4 @@
-"""Phase 5c (replace-claude-sessions plan): the orchestrator judges on Claude.
-
-scripts/orchestrate_poll_process.sh runs the wave, stall, integration,
-security-pass and review-blocked judges through ``poller_claude_judge``. On
-Claude the judge goes through ``claude_run``; other roles keep their host
-codex fallback, but RB_JUDGE uses only the isolated review sandbox.
-These tests run the helper against a stand-in ai_engine.sh and pin each call
-site's codex command (G4).
-"""
+"""Orchestrator judge engine selection and credential-free sandbox contract."""
 
 from __future__ import annotations
 
@@ -51,7 +43,7 @@ def _helper_source() -> str:
 	text = POLLER.read_text(encoding="utf-8")
 	return "\n".join(
 		re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL).group(0)
-		for name in ("poller_claude_judge", "_poller_rb_judge_sandbox_attempt", "poller_rb_judge_isolated")
+		for name in ("poller_claude_judge", "_poller_rb_judge_sandbox_attempt", "poller_judge_isolated", "poller_rb_judge_isolated")
 	)
 
 
@@ -90,6 +82,8 @@ def _run_helper(
 	)
 	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE=engine, FAKE_CLAUDE_MODE=claude_mode,
 		GITHUB_WORKSPACE=str(tmp_path), RUNTIME_DIR=str(tmp_path), FAKE_SANDBOX_ROOT=str(tmp_path / "sandbox-root"))
+	for inherited in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "WORKSPACE_PATH"):
+		env.pop(inherited, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
 	return proc, calls
 
@@ -98,57 +92,83 @@ def _read(path: Path) -> str:
 	return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-def test_judge_on_claude_runs_claude_run_with_the_tracking_labels(tmp_path: Path) -> None:
+def test_judge_on_claude_runs_in_sandbox_with_tracking_labels(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
 	proc, calls = _run_helper(tmp_path, engine="claude")
 	assert "rc=0" in proc.stdout, proc.stderr
 	assert _read(tmp_path / "out.txt") == "claude verdict\n"
-	assert _read(Path(f"{calls}.claude")).splitlines() == [
-		f'WAVE_JUDGE|prompt.txt|out.txt|{tmp_path}|["bug","ai:engine-claude"]|openai/gpt-6-sol|xhigh',
-	]
+	assert _read(Path(f"{calls}.sandbox")).splitlines() == ["prepare", "claude|WAVE_JUDGE|read|/dev/null", "cleanup"]
 	assert _read(Path(f"{calls}.resolve")).splitlines() == ['WAVE_JUDGE|["bug","ai:engine-claude"]']
 	assert "AI_ENGINE_SELECTED role=WAVE_JUDGE engine=claude" in _read(tmp_path / "judge_log.txt")
 
 
-def test_judge_on_codex_returns_75_without_running_claude(tmp_path: Path) -> None:
+def test_judge_on_codex_uses_sandbox(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
 	proc, calls = _run_helper(tmp_path, engine="codex")
-	assert "rc=75" in proc.stdout, proc.stderr
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert _read(Path(f"{calls}.sandbox")).splitlines() == ["prepare", f"codex|WAVE_JUDGE|read|{tmp_path}/poller_judge_opencode.json", "cleanup"]
 	assert _read(Path(f"{calls}.claude")) == ""
 
-
 def test_dev_null_suppresses_judge_selection_stderr(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
 	proc, _calls = _run_helper(tmp_path, engine="codex", log_file="/dev/null")
-	assert "rc=75" in proc.stdout
+	assert "rc=0" in proc.stdout
 	assert proc.stderr == ""
 
-
-def test_claude_unavailable_returns_75_so_codex_runs(tmp_path: Path) -> None:
+def test_claude_unavailable_retries_in_new_sandbox(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
 	proc, calls = _run_helper(tmp_path, engine="claude", claude_mode="unavailable")
-	assert "rc=75" in proc.stdout, proc.stderr
-	assert len(_read(Path(f"{calls}.claude")).splitlines()) == 1
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert _read(Path(f"{calls}.sandbox")).splitlines() == ["prepare", "claude|WAVE_JUDGE|read|/dev/null", "cleanup", "prepare", f"codex|WAVE_JUDGE|read|{tmp_path}/poller_judge_opencode.json", "cleanup"]
 
 
 def test_claude_crash_is_not_a_fallback(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
 	proc, _calls = _run_helper(tmp_path, engine="claude", claude_mode="crash")
 	assert "rc=1" in proc.stdout, proc.stderr
 
 
-def test_missing_ai_engine_returns_75(tmp_path: Path) -> None:
+def test_missing_ai_engine_uses_isolated_opencode(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
 	proc, calls = _run_helper(tmp_path, engine="claude", with_engine=False)
-	assert "rc=75" in proc.stdout, proc.stderr
+	assert "rc=0" in proc.stdout, proc.stderr
 	assert _read(Path(f"{calls}.resolve")) == ""
 
 
 def test_no_tracking_labels_means_an_explicit_empty_list(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
 	_proc, calls = _run_helper(tmp_path, engine="codex", tracking_labels=None)
 	assert _read(Path(f"{calls}.resolve")).splitlines() == ["WAVE_JUDGE|[]"]
 
 
 def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
 	_proc, calls = _run_helper(tmp_path, engine="claude", extra="claude-sonnet-5-5")
-	assert _read(Path(f"{calls}.claude")).split("|")[5] == "claude-sonnet-5-5"
+	assert _read(Path(f"{calls}.config")) == ""
+	assert _read(Path(f"{calls}.sandbox")).splitlines()[1].startswith("claude|WAVE_JUDGE|read|")
+
+
+@pytest.mark.parametrize("role", ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE"))
+def test_all_poller_judges_are_read_only_and_never_use_host_fallback(tmp_path: Path, role: str) -> None:
+	support = _stage_rb_support(tmp_path)
+	for engine, mode, expected in (("claude", "unavailable", 0), ("codex", "prepare_failed", 77)):
+		proc, calls = _run_helper(tmp_path, engine=engine, claude_mode=mode, role=role)
+		assert f"rc={expected}" in proc.stdout, proc.stderr
+		assert all(f"|{role}|read|" in line for line in _read(Path(f"{calls}.sandbox")).splitlines() if "|" in line)
+		if expected == 77:
+			assert _read(tmp_path / "judge_isolation_reason").strip() == "sandbox_prepare_failed"
+	(support / "review_untrusted_sandbox.sh").write_text(FAKE_RB_SANDBOX.replace(
+		'# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.',
+		'# old version',
+	), encoding="utf-8")
+	proc, calls = _run_helper(tmp_path, engine="claude", role=role)
+	assert "rc=77" in proc.stdout, proc.stderr
+	assert _read(tmp_path / "judge_isolation_reason").strip() == "sandbox_helper_outdated"
+	assert _read(Path(f"{calls}.claude")) == ""
 
 
 FAKE_RB_SANDBOX = r"""#!/usr/bin/env bash
+# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.
 # if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
 case "$1" in
   prepare-ephemeral)
@@ -159,6 +179,7 @@ case "$1" in
     rc=0; claude_access="${9:-write}"
     # Arg 9 (read) applies to both engines; read-only roles never transfer edits back.
     if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then :; fi
+    case "${8:-}" in WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE) [ "${claude_access}" = read ] || exit 2 ;; esac
     printf '%s|%s|%s|%s\n' "$7" "$8" "$9" "$6" >> "${CALLS}.sandbox"
     [ "$FAKE_CLAUDE_MODE" != outdated ] || exit 2
     [ "$FAKE_CLAUDE_MODE" != codex_unavailable ] || exit 75
@@ -461,45 +482,38 @@ def test_isolation_escalation_does_not_promise_next_tick_retry(tmp_path: Path, e
 		'_gh_url() { printf "https://example.invalid/%s" "$1"; }\n'
 		+ notice
 	)
-	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False)
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path,
+		env={key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")},
+		capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	assert ("Will retry next poll cycle" in _read(tmp_path / "notifications")) is expected_warning
 
 
-# Each judge call site: the role, then the unchanged codex command that runs
-# only on exit 75.
+# Each judge call site must never run a credentialed host agent.
 SITES = {
 	"SECURITY_JUDGE": (
 		'poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?',
-		'if [ "${security_judge_rc}" -eq 75 ]; then',
-		'-- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \\\n            --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true',
 	),
 	"INTEGRATION_JUDGE": (
 		'poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" || integration_judge_rc=$?',
-		'if [ "${integration_judge_rc}" -eq 75 ]; then',
-		'cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log" || integration_judge_rc=$?',
 	),
 	"STALL_JUDGE": (
 		'poller_claude_judge STALL_JUDGE "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${RUNTIME_DIR}/stall_judge.log" || stall_judge_rc=$?',
-		'if [ "${stall_judge_rc}" -eq 75 ]; then',
-		'codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true',
 	),
 	"WAVE_JUDGE": (
 		'poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?',
-		'if [ "${wave_judge_rc}" -eq 75 ]; then',
-		'cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true',
 	),
 }
 
 
-def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None:
+def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 	text = POLLER.read_text(encoding="utf-8")
-	for role, (claude_call, gate, codex_call) in SITES.items():
+	for role, (claude_call,) in SITES.items():
 		assert text.count(claude_call) == 1, role
 		start = text.index(claude_call)
-		assert text.index(gate, start) > start, role
-		assert text.index(codex_call, start) > text.index(gate, start), role
-		assert text.count(codex_call) == 1, role
+		assert 'if [ "${' + role.lower() + '_rc}" -eq 75 ]; then' not in text[start:start + 700]
+	assert 'poller_judge_isolated "${role}"' in text
+	assert 'claude_run "${role}"' not in text
 	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.MULTILINE)) == len(SITES) + 1
 	rb_block = text[text.index('      # Run the judge\n      RB_JUDGE_SUCCESS=false'):text.index('      # Parse judge output')]
 	assert 'poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log"' in rb_block
@@ -510,6 +524,41 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 	assert 'ai:rb-judge-isolation-escalated' in text
 	assert text.index('outcome=skip reason=escalated') < text.index('RB_COMBINED_MODE="false"', text.index('Detected review-blocked issues'))
 	assert 'RB_JUDGE_ISOLATION_MAX_FAILURES="${RB_JUDGE_ISOLATION_MAX_FAILURES:-3}"' in text
+	assert 'JUDGE_ISOLATION_MAX_FAILURES="${JUDGE_ISOLATION_MAX_FAILURES:-3}"' in text
+	assert 'SECURITY_PASS_JUDGE_OUTCOME=deferred' in text
+	assert '_record_judge_isolation_failure WAVE_JUDGE "${STATE_FILE}"' in text
+	assert '_record_judge_isolation_failure STALL_JUDGE "${_judge_state_file}"' in text
+	assert '_record_judge_isolation_failure INTEGRATION_JUDGE "${STATE_FILE}"' in text
+	assert '_record_judge_isolation_failure SECURITY_JUDGE "${STATE_FILE}"' in text
+
+
+def test_judge_isolation_defers_escalates_once_and_resets_on_label_removal(tmp_path: Path) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	functions = "\n".join(re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL).group(0)
+		for name in ("_judge_isolation_should_run", "_clear_judge_isolation_state", "_judge_isolation_checkpoint", "_record_judge_isolation_failure"))
+	state = tmp_path / "state.json"
+	state.write_text('{"judge_isolation_state":"invalid"}\n', encoding="utf-8")
+	(tmp_path / "judge_isolation_reason").write_text("sandbox_prepare_failed\n", encoding="utf-8")
+	script = ("set -euo pipefail\n" + functions + f'RUNTIME_DIR={tmp_path}\nTRACKING_NUM=12\n'
+		+ f'JUDGE_ISOLATION_MAX_FAILURES=2\nSTATE_FILE={state}\nGITHUB_REPOSITORY=owner/repo\n'
+		+ 'ensure_label_exists() { :; }\n'
+		+ 'post_state_comment() { :; }\n'
+		+ 'gh_retry() { printf "%s\\n" "$*" >> gh_calls; if [ "$1 $2" = "gh api" ]; then printf \'{"id":42}\\n\'; fi; }\n'
+		+ 'tg_notify() { printf "%s\\n" "$*" >> alerts; }\n'
+		+ '_record_judge_isolation_failure WAVE_JUDGE "$STATE_FILE" 12 \'[]\'\n'
+		+ '_record_judge_isolation_failure WAVE_JUDGE "$STATE_FILE" 12 \'[]\'\n'
+		+ 'if _judge_isolation_should_run WAVE_JUDGE "$STATE_FILE" 12 \'["ai:needs-human"]\'; then exit 8; fi\n'
+		+ '_judge_isolation_should_run WAVE_JUDGE "$STATE_FILE" 12 \'[]\'\n'
+		+ 'jq -e \'.judge_isolation_state.WAVE_JUDGE == null\' "$STATE_FILE"\n')
+	env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")}
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.count("outcome=escalated") == 1
+	assert "outcome=skip reason=escalated" in result.stdout
+	assert "outcome=reset reason=label_cleared" in result.stdout
+	assert _read(tmp_path / "gh_calls").count("gh issue edit") == 1
+	assert _read(tmp_path / "gh_calls").count("gh api") == 1
+	assert _read(tmp_path / "alerts").count("CRITICAL") == 1
 
 
 def _poll_steps() -> list[dict]:
@@ -550,6 +599,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 		assert process_env[f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
 	assert process_env["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
 	assert process_env["RB_JUDGE_ISOLATION_MAX_FAILURES"] == "${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}"
+	assert process_env["JUDGE_ISOLATION_MAX_FAILURES"] == "${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}"
 
 
 def test_poll_preflight_installs_for_label_even_with_global_codex(tmp_path: Path) -> None:
@@ -607,6 +657,8 @@ def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tupl
 		+ 'echo "rc=${decomposer_rc} engine=${ORCHESTRATE_ENGINE}"\n'
 	)
 	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE="claude", FAKE_CLAUDE_MODE=claude_mode, PATH=f"{bin_dir}:{os.environ['PATH']}")
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(inherited, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
 	return proc, calls
 
