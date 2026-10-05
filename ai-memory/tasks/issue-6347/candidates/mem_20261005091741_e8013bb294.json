@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: In a full-scope audit, which oversized (>2 MiB) tracked files must be chunked and inspected? Any file that cannot be inspected within the caps fails the audit.\nChoices:\nA: Every tracked regular file that passes the existing read-only credential/hidden-path filter, whatever its content (source, lockfiles, generated files, binaries). This matches the issue text exactly and leaves no gap an attacker can pad into. A consumer repo with a tracked binary or data file over 16 MiB, or more than 64 MiB of oversized files in total, will fail its weekly audit until the caps or the files change. (RECOMMENDED)\nB: Same as A, but files detected as binary (a NUL byte in the content) are not chunked and stay in the coverage note, marked \"binary, not inspected\". Fewer cap failures in consumer repos, but an attacker can hide a file by adding one NUL byte, which reopens a small version of the gap.\nC: Same as A, but known dependency lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `poetry.lock`, `uv.lock`, `go.sum`, `composer.lock`) are skipped and stay in the coverage note. **Note:** this leaves a named gap, so it only partly meets the issue's \"every eligible file\" recommendation.\nQ2: When a full-scope audit finds an oversized file it cannot inspect (over a cap, or the export fails), what happens to the run?\nChoices:\nA: The audit fails before the model runs, as the scoped path does today (`security_audit_emit_failure \"oversized-scope\"`, exit 1). No tracker comment is posted and the `ai:security-audit-last-sha` marker does not move, so the next run retries. (RECOMMENDED)\nB: The audit runs on everything it can inspect and posts its findings, then marks the run failed and does not move the last-audited-SHA marker. This keeps partial findings, but the failure result is harder to read.",
+  "fingerprint": "49b4c8051cbaf9c2c1204f5efcc79957d7b1aa2551dea453bb6465a309dc20f6",
+  "lineage": {
+    "issue_number": 6347,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37288131585",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37288131585",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005091741_e8013bb294",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6347,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37288131585"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6347 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T09:17:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
