@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6359,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6359\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6367\",\"pr_number\":6367,\"branch\":\"ai/issue-6359\",\"run_id\":\"37299274393\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37299274393\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6359-rb-judge-atomic-transfer.md\",\"scripts/review_apply_fixes.sh\",\"scripts/review_rb_judge.sh\",\"scripts/review_untrusted_workspace.py\",\"tests/test_review_autofix_claude_fixer_mode.py\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "102e123f96543c18c881184156a7f31b0832211d95f3f2d71b67d925d7aa0c3e",
+  "lineage": {
+    "issue_number": 6359,
+    "parent_ids": [],
+    "pr_number": 6367,
+    "run_id": "37299274393",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37299274393",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6367"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005111225_537fe28405",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6359,
+    "level": "run",
+    "pr_number": 6367,
+    "run_id": "37299274393"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6359: https://github.com/shubhodeep1/coding-workflows/pull/6367",
+  "timestamps": {
+    "created_at": "2026-10-05T11:12:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
