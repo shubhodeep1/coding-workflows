@@ -1,102 +1,335 @@
 #!/usr/bin/env bash
 # Temporarily hide checkout credentials from plan/implement editor processes.
+#
+# hide:    before an editor runs, strip the credentials from each checkout's
+#          origin URL and remove its http.<url>.extraheader entries. The
+#          marker records what was removed (never a secret).
+# restore: after the editor exits, put the trusted step's GH_TOKEN back.
+#
+# Fail-closed: the editor can write each checkout's git config, the global
+# git config and the marker, so restore checks every checkout against its
+# trusted repository identity before injecting any token, and injects
+# nothing when one check fails. hide refuses before changing anything when a
+# checkout is not in a known state. Callers run under `set -e`, so a refusal
+# stops the step.
+#
+# Exit codes: 0 done (or nothing to restore), 1 refused, 2 usage.
 set -u
 marker="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/editor_git_credentials_hidden.txt"
 action="${1:-}"
 shift || true
 case "${action}" in hide|restore) ;; *) echo 'usage: editor_git_credentials.sh hide|restore [repo...]' >&2; exit 2 ;; esac
+# The workflows check the support source out from this repository.
+support_repository="shubhodeep1/coding-workflows"
+# Settings that could send a restored token elsewhere or run a command that
+# receives it. Only system scope (root-owned) and command scope (this trusted
+# step's GIT_CONFIG_* environment) may set them. Include directives are
+# refused too: actions/checkout@v5 writes its header into .git/config, and a
+# credential file pulled in by include would stay visible to the editor.
+hazard_re='^(remote\.origin\.(pushurl|proxy)|url\..*\.(insteadof|pushinsteadof)|http\.(.*\.)?(proxy|sslverify|sslcainfo|sslcapath|sslcert|sslkey|curloptresolve|followredirects)|credential\.(.*\.)?helper|core\.(askpass|sshcommand|gitproxy|fsmonitor)|include\.path|includeif\..*\.path)$'
+
 # Implement exports GIT_DIR/GIT_WORK_TREE; git -C alone still uses that repo.
 repo_git()
 {
 	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES git -C "$@"
 }
+
+log_event()
+{
+	echo "EDITOR_GIT_CREDENTIALS action=${action} repo=${1} removed=${2} outcome=${3}${4:+ reason=${4}}" >&2
+}
+
+canonical_dir()
+{
+	(cd "$1" 2>/dev/null && pwd -P)
+}
+
+# True only for the top of a checkout, not a directory inside a parent repo.
+is_checkout_root()
+{
+	local top canon
+	[ -d "$1" ] || return 1
+	top="$(repo_git "$1" rev-parse --show-toplevel 2>/dev/null)" || return 1
+	canon="$(canonical_dir "$1")" || return 1
+	[ -n "${top}" ] && [ "${top}" = "${canon}" ]
+}
+
+# The workspace holds the triggering repository; the others hold support source.
+trusted_slug()
+{
+	local workspace
+	workspace="$(canonical_dir "${GITHUB_WORKSPACE:-$PWD}")"
+	if [ -n "${workspace}" ] && [ "$(canonical_dir "$1")" = "${workspace}" ]; then
+		printf '%s' "${GITHUB_REPOSITORY}"
+	else
+		printf '%s' "${support_repository}"
+	fi
+}
+
+# The origin URL without its user-info, or the URL unchanged when it has none.
+without_auth()
+{
+	if [[ "$1" =~ ^https://[^/@]+@github\.com/ ]]; then
+		printf 'https://%s' "${1#*@}"
+	else
+		printf '%s' "$1"
+	fi
+}
+
+is_trusted_origin()
+{
+	local url="${1,,}" slug="${2,,}"
+	[ "${url}" = "https://github.com/${slug}" ] || [ "${url}" = "https://github.com/${slug}.git" ]
+}
+
+# Prints the single origin URL; fails when there is none or more than one.
+single_origin_url()
+{
+	local urls count
+	urls="$(repo_git "$1" config --get-all remote.origin.url 2>/dev/null)" || return 1
+	count="$(printf '%s\n' "${urls}" | grep -c .)"
+	[ "${count}" = 1 ] || return 1
+	printf '%s' "${urls}"
+}
+
+# True when a hazardous setting comes from an editor-writable scope (local,
+# worktree, global), or when the lookup itself fails (fail-closed).
+has_config_hazard()
+{
+	local out rc scope rest
+	out="$(repo_git "$1" config --show-scope --get-regexp "${hazard_re}" 2>/dev/null)"
+	rc=$?
+	[ "${rc}" -eq 1 ] && return 1
+	[ "${rc}" -eq 0 ] || return 0
+	while IFS=$'\t' read -r scope rest; do
+		[ -n "${rest}" ] || continue
+		case "${scope}" in system|command) ;; *) return 0 ;; esac
+	done <<< "${out}"
+	return 1
+}
+
+valid_slug()
+{
+	[[ "$1" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+}
+
 if [ "$#" -gt 0 ]; then
 	repos=("$@")
 else
 	repos=("${GITHUB_WORKSPACE:-$PWD}" "${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src" "${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main")
 fi
 
+if [ -L "${marker}" ]; then
+	log_event all none refused marker_symlink
+	exit 1
+fi
+
 if [ "${action}" = hide ]; then
+	if ! valid_slug "${GITHUB_REPOSITORY:-}"; then
+		log_event all none refused repository_identity_missing
+		exit 1
+	fi
 	# Do not discard a previous marker when a restore failed.
 	if [ -s "${marker}" ]; then
-		echo 'EDITOR_GIT_CREDENTIALS action=hide repo=all removed=none outcome=warn' >&2
-		exit 0
+		log_event all none refused marker_present
+		exit 1
 	fi
-	if ! : > "${marker}"; then
-		echo 'EDITOR_GIT_CREDENTIALS action=hide repo=all removed=none outcome=warn' >&2
-		exit 0
-	fi
+	# Validate every checkout before changing any of them.
+	plan_lines=()
+	refused=false
 	for repo in "${repos[@]}"; do
-		if ! repo_git "${repo}" rev-parse --git-dir >/dev/null 2>&1; then
-			echo 'EDITOR_GIT_CREDENTIALS action=hide repo=non-git removed=none outcome=skip' >&2
+		label="${repo##*/}"
+		if ! is_checkout_root "${repo}"; then
+			log_event non-git none skip not_a_checkout
 			continue
 		fi
-		label="${repo##*/}"
-		url="$(repo_git "${repo}" remote get-url origin 2>/dev/null || true)"
-		if [[ "${url}" =~ ^https://[^/@]+@github\.com/ ]]; then
-			clean="https://${url#*@}"
-			if repo_git "${repo}" remote set-url origin "${clean}" >/dev/null 2>&1; then
-				printf '%s\torigin\n' "${repo}" >> "${marker}"
-				echo "EDITOR_GIT_CREDENTIALS action=hide repo=${label} removed=origin_url outcome=ok" >&2
-			else
-				echo "EDITOR_GIT_CREDENTIALS action=hide repo=${label} removed=none outcome=warn" >&2
-			fi
+		if ! url="$(single_origin_url "${repo}")"; then
+			log_event "${label}" none refused origin_not_single
+			refused=true
+			continue
 		fi
+		clean="$(without_auth "${url}")"
+		if ! is_trusted_origin "${clean}" "$(trusted_slug "${repo}")"; then
+			log_event "${label}" none refused origin_untrusted
+			refused=true
+			continue
+		fi
+		if has_config_hazard "${repo}"; then
+			log_event "${label}" none refused config_hazard
+			refused=true
+			continue
+		fi
+		inject=0
+		[ "${url}" != "${clean}" ] && inject=1
+		plan_lines+=("${repo}"$'\t'origin$'\t'"${clean}"$'\t'"${inject}")
+		keys="$(repo_git "${repo}" config --local --name-only --get-regexp '^http\..*\.extraheader$' 2>/dev/null | sort -u)"
 		while IFS= read -r key; do
 			[ -n "${key}" ] || continue
-			if repo_git "${repo}" config --local --unset-all "${key}" >/dev/null 2>&1; then
-				printf '%s\textraheader:%s\n' "${repo}" "${key}" >> "${marker}"
-				echo "EDITOR_GIT_CREDENTIALS action=hide repo=${label} removed=extraheader outcome=ok" >&2
-			else
-				echo "EDITOR_GIT_CREDENTIALS action=hide repo=${label} removed=none outcome=warn" >&2
+			if [[ ! "${key}" =~ ^http\.https://github\.com/[^@[:space:]]*\.extraheader$ ]]; then
+				log_event "${label}" none refused extraheader_scope
+				refused=true
+				continue
 			fi
-		done < <(repo_git "${repo}" config --local --name-only --get-regexp '^http\..*\.extraheader$' 2>/dev/null | sort -u)
+			plan_lines+=("${repo}"$'\t'"extraheader:${key}")
+		done <<< "${keys}"
+		if repo_git "${repo}" config --local --get-regexp '^http\.extraheader$' >/dev/null 2>&1; then
+			log_event "${label}" none refused extraheader_unscoped
+			refused=true
+		fi
 	done
-else
-	[ -s "${marker}" ] || exit 0
-	if [ -z "${GH_TOKEN:-}" ]; then
-		echo 'EDITOR_GIT_CREDENTIALS action=restore repo=all removed=none outcome=warn' >&2
-		exit 0
+	if [ "${refused}" = true ]; then
+		exit 1
+	fi
+	# Record before removing, so an interrupted hide can still be restored.
+	if ! (umask 077 && : > "${marker}") || ! { [ "${#plan_lines[@]}" -eq 0 ] || printf '%s\n' "${plan_lines[@]}" > "${marker}"; }; then
+		log_event all none refused marker_unwritable
+		exit 1
 	fi
 	failed=false
-	while IFS=$'\t' read -r repo item; do
-		if [ -z "${repo}" ] || [ -z "${item}" ]; then
-			continue
-		fi
+	for line in "${plan_lines[@]}"; do
+		IFS=$'\t' read -r repo item clean inject <<< "${line}"
 		label="${repo##*/}"
-		allowed=false
-		for expected_repo in "${repos[@]}"; do
-			if [ "${repo}" = "${expected_repo}" ]; then allowed=true; break; fi
-		done
-		if [ "${allowed}" != true ]; then
-			echo 'EDITOR_GIT_CREDENTIALS action=restore repo=unexpected removed=none outcome=warn' >&2
-			failed=true
-			continue
-		fi
 		case "${item}" in
 			origin)
-				url="$(repo_git "${repo}" remote get-url origin 2>/dev/null || true)"
-				# The marker lives in an editor-visible directory. Never inject a
-				# token into an origin the editor changed to a different host.
-				if [[ "${url}" =~ ^https://github\.com/ ]]; then
-					repo_git "${repo}" remote set-url origin "https://x-access-token:${GH_TOKEN}@${url#https://}" >/dev/null 2>&1 || failed=true
-				else failed=true; fi
-				;;
-			extraheader:http.https://github.com/*.extraheader)
-				key="${item#extraheader:}"
-				if [[ ! "${key}" =~ ^http\.https://github\.com/[^[:space:]]*\.extraheader$ ]]; then
+				[ "${inject}" = 1 ] || continue
+				if repo_git "${repo}" remote set-url origin "${clean}" >/dev/null 2>&1; then
+					log_event "${label}" origin_url ok
+				else
+					log_event "${label}" none refused set_url_failed
 					failed=true
-					continue
 				fi
-				header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
-				repo_git "${repo}" config --local "${key}" "${header}" >/dev/null 2>&1 || failed=true
 				;;
-			*) failed=true ;;
+			extraheader:*)
+				if repo_git "${repo}" config --local --unset-all "${item#extraheader:}" >/dev/null 2>&1; then
+					log_event "${label}" extraheader ok
+				else
+					log_event "${label}" none refused unset_failed
+					failed=true
+				fi
+				;;
 		esac
-		echo "EDITOR_GIT_CREDENTIALS action=restore repo=${label} removed=${item%%:*} outcome=$([ "${failed}" = true ] && echo warn || echo ok)" >&2
-	done < "${marker}"
-	if [ "${failed}" = false ]; then
-		: > "${marker}"
-	fi
+	done
+	[ "${failed}" = false ] || exit 1
+	exit 0
 fi
+
+# restore
+if [ ! -s "${marker}" ]; then
+	log_event all none skip marker_missing
+	exit 0
+fi
+if [ -z "${GH_TOKEN:-}" ]; then
+	log_event all none warn token_missing
+	exit 1
+fi
+if ! valid_slug "${GITHUB_REPOSITORY:-}"; then
+	log_event all none refused repository_identity_missing
+	exit 1
+fi
+# First pass: check every marker entry and checkout; inject nothing yet.
+declare -A origin_clean=() origin_inject=()
+header_items=()
+refused=false
+while IFS=$'\t' read -r repo item clean inject; do
+	[ -n "${repo}${item}" ] || continue
+	label="${repo##*/}"
+	allowed=false
+	for expected_repo in "${repos[@]}"; do
+		if [ "${repo}" = "${expected_repo}" ]; then allowed=true; break; fi
+	done
+	if [ "${allowed}" != true ]; then
+		log_event unexpected none refused repo_unexpected
+		refused=true
+		continue
+	fi
+	case "${item}" in
+		origin)
+			if [ -z "${clean:-}" ] || [[ ! "${inject:-}" =~ ^[01]$ ]]; then
+				log_event "${label}" none refused origin_unrecorded
+				refused=true
+				continue
+			fi
+			origin_clean["${repo}"]="${clean}"
+			origin_inject["${repo}"]="${inject}"
+			;;
+		extraheader:*)
+			header_items+=("${repo}"$'\t'"${item#extraheader:}")
+			;;
+		*)
+			log_event "${label}" none refused item_unknown
+			refused=true
+			;;
+	esac
+done < "${marker}"
+for repo in "${!origin_clean[@]}"; do
+	label="${repo##*/}"
+	clean="${origin_clean[${repo}]}"
+	if ! is_checkout_root "${repo}"; then
+		log_event "${label}" none refused not_a_checkout
+		refused=true
+		continue
+	fi
+	if ! is_trusted_origin "${clean}" "$(trusted_slug "${repo}")"; then
+		log_event "${label}" none refused origin_untrusted
+		refused=true
+		continue
+	fi
+	# The editor must leave origin exactly as hide left it.
+	if ! url="$(single_origin_url "${repo}")" || [ "${url}" != "${clean}" ]; then
+		log_event "${label}" none refused origin_changed
+		refused=true
+		continue
+	fi
+	if has_config_hazard "${repo}"; then
+		log_event "${label}" none refused config_hazard
+		refused=true
+	fi
+done
+for header in "${header_items[@]}"; do
+	IFS=$'\t' read -r repo key <<< "${header}"
+	label="${repo##*/}"
+	if [ -z "${origin_clean[${repo}]+set}" ]; then
+		log_event "${label}" none refused header_without_origin
+		refused=true
+		continue
+	fi
+	# Only the broad checkout header or one already scoped to this origin.
+	if [ "${key}" != "http.https://github.com/.extraheader" ] && [ "${key}" != "http.${origin_clean[${repo}]}.extraheader" ]; then
+		log_event "${label}" none refused extraheader_scope
+		refused=true
+	fi
+done
+if [ "${refused}" = true ]; then
+	exit 1
+fi
+# Second pass: every checkout is valid, so put the token back.
+failed=false
+for repo in "${!origin_clean[@]}"; do
+	label="${repo##*/}"
+	clean="${origin_clean[${repo}]}"
+	if [ "${origin_inject[${repo}]}" = 1 ]; then
+		if repo_git "${repo}" remote set-url origin "https://x-access-token:${GH_TOKEN}@${clean#https://}" >/dev/null 2>&1; then
+			log_event "${label}" origin ok
+		else
+			log_event "${label}" none warn set_url_failed
+			failed=true
+		fi
+	fi
+done
+header_value="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+for header in "${header_items[@]}"; do
+	IFS=$'\t' read -r repo key <<< "${header}"
+	label="${repo##*/}"
+	# Scope the header to this checkout's origin, never to all of github.com.
+	if repo_git "${repo}" config --local "http.${origin_clean[${repo}]}.extraheader" "${header_value}" >/dev/null 2>&1; then
+		log_event "${label}" extraheader ok
+	else
+		log_event "${label}" none warn header_failed
+		failed=true
+	fi
+done
+if [ "${failed}" = true ]; then
+	exit 1
+fi
+: > "${marker}"
 exit 0

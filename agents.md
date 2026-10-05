@@ -451,6 +451,11 @@ a new value, add it to the appropriate overrides file with a
   A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
   Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
   origin/extraheader auth for the editor and restores it after each launch.
+  It fails closed (exit 1, log prefix `EDITOR_GIT_CREDENTIALS … reason=…`):
+  hide refuses before the editor starts, and restore refuses before any token
+  is injected, when a checkout's origin is not its trusted repository or was
+  changed, or a pushurl, URL rewrite, proxy, credential helper or include
+  directive sits in an editor-writable git config scope.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when
