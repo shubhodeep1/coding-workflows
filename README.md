@@ -1918,7 +1918,10 @@ OpenRouter HTTP call: on exit 75 for the rest of the batch, and when
 `WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS` (default `900`) runs out, which keeps
 the Claude calls inside the `analyze-commit-notify` job's 60-minute cap. It
 runs without `OPENROUTER_API_KEY`, and then runs left over stay
-unsummarized. Still on `codex`: `ACTIVATION_VERIFY` and `UNBLOCK_JUDGE`,
+unsummarized. When both the summary token budget and Claude's time budget
+are spent, the remaining runs count as token-budget skips; no engine fallback
+is reported for runs that cannot start. Still on `codex`: `ACTIVATION_VERIFY`
+and `UNBLOCK_JUDGE`,
 which their own phases wire.
 
 These sites call `claude_run_selected <ROLE>` (`scripts/ai_engine.sh`),
@@ -2101,11 +2104,12 @@ Effective read-profile calls, including calls narrowed by
 `AI_ENGINE_READ_ONLY=true`, run in a no-network, read-only container with a
 filtered copy of source and newly built credential-free Git metadata. The host
 Anthropic relay alone reads account tokens; the container sees a placeholder.
-`CLAUDE_READ_ISOLATION role= outcome=started|unavailable reason=` logs setup.
-If Docker, support, policy or snapshot setup fails, Claude is not run on the
-host: the call returns 75 with `AI_ENGINE_FALLBACK reason=isolation_unavailable`
-and the caller uses its existing fallback. Write-profile roles still run on
-the host and require a separate credential-isolation follow-up.
+Successful setup logs `CLAUDE_READ_ISOLATION role= outcome=ready reason=`;
+snapshot rejection logs `outcome=rejected`. If Docker, support, policy or
+snapshot setup fails, Claude is not run on the host: the call returns 75 with
+`AI_ENGINE_FALLBACK role= reason=<specific failure>` and the caller uses its
+existing fallback. Write-profile roles still run on the host and require a
+separate credential-isolation follow-up.
 
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input

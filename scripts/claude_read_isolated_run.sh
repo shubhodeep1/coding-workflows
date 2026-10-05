@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Credential-free read-profile Claude runner; called only by ai_engine.sh.
+# Standalone read-profile Claude runner; production uses ai_engine.sh's inline isolation.
 set -euo pipefail
 
 role="${1:?}" prompt_file="${2:?}" out_file="${3:?}" workdir="${4:?}"

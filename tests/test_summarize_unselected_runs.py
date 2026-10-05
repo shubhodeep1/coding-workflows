@@ -838,7 +838,7 @@ class _FakeHttpSummarizer:
 		return ("- http summary", 7)
 
 
-def _run_claude_case(*, mode, openrouter_key, resolved="claude", time_budget=None, expire_during_fetch=False, expire_during_call=False):
+def _run_claude_case(*, mode, openrouter_key, resolved="claude", time_budget=None, expire_during_fetch=False, expire_during_call=False, exhaust_both_budgets=False):
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		scripts_dir = tmp_path / "scripts"
@@ -861,12 +861,19 @@ def _run_claude_case(*, mode, openrouter_key, resolved="claude", time_budget=Non
 			def summarize(self, *_args, **_kwargs):
 				clock[0] = 13.0
 				raise TimeoutError("claude timed out at the deadline")
+		class _BudgetSpendingClaudeSummarizer(summarizer.ClaudeSummarizer):
+			def summarize(self, *args, **kwargs):
+				answer, _tokens = super().summarize(*args, **kwargs)
+				clock[0] = 13.0
+				return answer, 7
 		summarizer.SCRIPTS_DIR = scripts_dir
 		summarizer._load_collector_module = lambda: _ExpiringCollector if expire_during_fetch else _TwoRunCollector
 		summarizer.OpenRouterSummarizer = _FakeHttpSummarizer
 		if expire_during_call:
 			summarizer.ClaudeSummarizer = _ExpiringClaudeSummarizer
-		if expire_during_fetch or expire_during_call:
+		if exhaust_both_budgets:
+			summarizer.ClaudeSummarizer = _BudgetSpendingClaudeSummarizer
+		if expire_during_fetch or expire_during_call or exhaust_both_budgets:
 			summarizer.time.monotonic = lambda: clock[0]
 		_FakeHttpSummarizer.calls = 0
 		try:
@@ -881,7 +888,10 @@ def _run_claude_case(*, mode, openrouter_key, resolved="claude", time_budget=Non
 				"WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS": time_budget,
 			}
 			with _env(**env), _capture_std() as (_out, err):
-				rc = summarizer.main(["--report", str(report)])
+				options = ["--report", str(report)]
+				if exhaust_both_budgets:
+					options += ["--max-output-tokens", "1", "--token-budget", "7"]
+				rc = summarizer.main(options)
 		finally:
 			summarizer.SCRIPTS_DIR, summarizer._load_collector_module, summarizer.OpenRouterSummarizer, summarizer.ClaudeSummarizer, summarizer.time.monotonic = saved
 		assert rc == 0
@@ -930,6 +940,18 @@ def test_claude_time_budget_spent_during_fetch_uses_openrouter_for_that_run():
 	assert [row["log_summary"] for row in rows] == ["- http summary"] * 2
 	assert telemetry["claude_fallback_reason"] == "time_budget"
 	assert telemetry["skipped_summary_error"] == 0
+
+
+def test_spent_token_budget_takes_precedence_over_expired_claude_deadline():
+	for openrouter_key in ("orkey", ""):
+		rows, calls, telemetry, _err = _run_claude_case(mode="success", openrouter_key=openrouter_key,
+			time_budget="12", exhaust_both_budgets=True)
+		assert len(calls) == 1
+		assert "log_summary" in rows[0] and "log_summary" not in rows[1]
+		assert telemetry["skipped_budget_exhausted"] == 1
+		assert telemetry["skipped_no_engine"] == 0
+		assert telemetry["claude_fallback_reason"] == ""
+		assert _FakeHttpSummarizer.calls == 0
 
 
 def test_claude_near_deadline_after_fetch_uses_openrouter():
