@@ -151,26 +151,16 @@ USAGE_LIMIT_TEXT_RE = re.compile(
 # `timeout` sends SIGTERM (exit 124); its --kill-after sends SIGKILL (137).
 TIMEOUT_EXIT_CODES = (124, 137)
 
-# Read-only roles may run these commands and nothing else in Bash. `gh api`
-# also passes the gh_api_write_guard.py hook, which denies every write.
+# Command-prefix permissions cannot make Bash read-only: even git show/diff/log
+# can write files via --output. Read roles therefore have no shell tool.
 READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Read",
 	"Grep",
 	"Glob",
-	"Bash(git log*)",
-	"Bash(git show*)",
-	"Bash(git diff*)",
-	"Bash(git status*)",
-	"Bash(git ls-files*)",
-	"Bash(git grep*)",
-	"Bash(gh issue view*)",
-	"Bash(gh pr view*)",
-	"Bash(gh pr diff*)",
-	"Bash(gh api *)",
 )
 PROFILE_TOOLS: dict[str, str] = {
 	"write": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
-	"read": "Read,Grep,Glob,Bash",
+	"read": "Read,Grep,Glob",
 }
 PROFILE_MODES: dict[str, str] = {
 	"write": "bypassPermissions",
@@ -394,6 +384,8 @@ def resolve_role(
 	starts with ``claude-``, else the role's Claude default. Effort (D3): the
 	role's existing reasoning value mapped by ``normalize_effort``. The
 	``ai:engine-claude`` label forces the default model at ``high``.
+	``AI_ENGINE_READ_ONLY=true`` narrows any role's profile to read; no other
+	value can widen a read-default role.
 	"""
 	if role not in ROLES:
 		raise EngineError(f"unknown role: {role!r}")
@@ -432,7 +424,7 @@ def resolve_role(
 		"engine": engine,
 		"model": model,
 		"effort": effort,
-		"profile": defaults["profile"],
+		"profile": "read" if env.get("AI_ENGINE_READ_ONLY", "").strip() == "true" else defaults["profile"],
 		"source": source,
 		"warnings": warnings,
 	}

@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts import claude_engine
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AI_ENGINE = REPO_ROOT / "scripts" / "ai_engine.sh"
 STALL_GUARD = REPO_ROOT / "scripts" / "codex_stall_guard.sh"
@@ -292,16 +294,20 @@ def test_write_role_command_line(sandbox: dict) -> None:
 
 def test_read_role_command_line(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
-	result = _claude_run(sandbox, "SECURITY_AUDIT", AI_ENGINE_MODEL_HINT="claude-sonnet-5-5")
+	result = _claude_run(sandbox, "SECURITY_AUDIT", AI_ENGINE_MODEL_HINT="claude-sonnet-5-5", AI_ENGINE_READ_ONLY="false")
 	assert _rc(result) == 0, result.stderr
 	argv = _calls(sandbox)[0]["argv"]
-	assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob,Bash"
+	assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob"
 	assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
 	assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+	policy = json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
+	assert policy["permissions"]["allow"] == ["Read", "Grep", "Glob"]
+	assert policy["permissions"]["deny"]
+	assert policy["hooks"]["PreToolUse"][0]["matcher"] == "Bash"
 
 
 @pytest.mark.parametrize("value, tools, mode", [
-	("true", "Read,Grep,Glob,Bash", "dontAsk"),
+	("true", "Read,Grep,Glob", "dontAsk"),
 	("false", "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch", "bypassPermissions"),
 	("yes", "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch", "bypassPermissions"),
 ])
@@ -320,6 +326,38 @@ def test_review_roles_cannot_run_host_claude(sandbox: dict, role: str) -> None:
 	assert _rc(result) == 75, result.stderr
 	assert f"AI_ENGINE_FALLBACK role={role} reason=host_run_forbidden" in result.stderr
 	assert _calls(sandbox) == []
+
+
+def test_read_profile_has_no_shell_permission() -> None:
+	assert claude_engine.READ_PROFILE_ALLOW == ("Read", "Grep", "Glob")
+	assert "Bash" not in claude_engine.PROFILE_TOOLS["read"].split(",")
+	assert not any(rule.startswith("Bash") for rule in claude_engine.READ_PROFILE_ALLOW)
+
+
+@pytest.mark.parametrize("value, expected", [
+	("true", "read"),
+	("TRUE", "write"),
+	("1", "write"),
+	("", "write"),
+])
+def test_resolve_read_only_switch_is_narrow_only(value: str, expected: str) -> None:
+	config, _ = claude_engine.normalize_config(None)
+	assert claude_engine.resolve_role("RB_JUDGE", config, {"AI_ENGINE_READ_ONLY": value})["profile"] == expected
+	assert claude_engine.resolve_role("SECURITY_AUDIT", config, {"AI_ENGINE_READ_ONLY": value})["profile"] == "read"
+
+
+def test_read_only_switch_reaches_resolve_cli(sandbox: dict) -> None:
+	result = _bash(sandbox, '_ai_engine_py resolve --role RB_JUDGE --field profile', AI_ENGINE_READ_ONLY="true")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "read"
+
+
+def test_security_judge_prompt_has_no_shell_fallback() -> None:
+	for path in (REPO_ROOT / "prompts" / "mode-judge-security-pass-exhaustion.txt",
+		REPO_ROOT / "prompts" / "_templates" / "mode-judge-security-pass-exhaustion.txt"):
+		text = path.read_text(encoding="utf-8")
+		assert "If no shell tool is available, verify each finding by reading and searching the cited files" in text
+		assert "do not fail or return an invalid verdict solely because `git` cannot be run" in text
 
 
 def test_profile_tool_lists_match_claude_engine() -> None:
