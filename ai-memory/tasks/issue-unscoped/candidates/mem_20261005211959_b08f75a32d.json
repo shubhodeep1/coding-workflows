@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/check_failure_triage.yml:Jobs.triage-workflow-run.if | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The workflow-path exclusion list may not prevent triage from triggering on custom workflows with pipeline-name conflicts or variations.\n  WHY: The review notes this possible risk but also says the current exclusion list appears sufficient for the intended requirement.\n- scripts/check_failure_triage.sh:124 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script may not explicitly handle the `diagnose` or `all` stages when `TRIAGE_STAGE` is `collect`.\n  WHY: It exits early after collecting context, which the review says might lead to incomplete triage if stages are run improperly.\n- scripts/check_failure_triage.sh:125 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The missing `TRUSTED_SUPPORT_DIR` case exits without a diagnostic log beyond \"error trusted_support_incomplete\".\n  WHY: The review says this provides no further diagnostic context before exiting.\n- .github/workflows/check_failure_triage.yml:Jobs.triage-workflow-run.uses | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reusable workflow is called using the `@main` ref instead of a stable release SHA.\n  WHY: This makes the pipeline dependent on the state of `main`, introducing a trust-boundary risk.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/check_failure_triage.yml:Jobs.triage-workflow-run.if | severity=NIT | confidence=[4]\n  PROBLEM: The exclusion list of workflow paths uses literal strings but `github.event.workflow.path` for a workflow in a repository always includes the full path (e.g., `.github/workflows/ai-review.yml`). The exclusion list contains the correct filenames, but it does not account for the possibility of custom workflows that share a pipeline name or have variations.\n  WHY: The implementation relies on the workflow path, which is correct, but there is a risk if a user-defined workflow has a name conflict and shares a path or name that could accidentally trigger the triage. However, the current exclusion list appears sufficient for the intended requirement.\n- scripts/check_failure_triage.sh:125 | severity=NIT | confidence=[3]\n  PROBLEM: The script uses an incomplete error handling for `TRUSTED_SUPPORT_DIR`.\n  WHY: It provides no diagnostic log before exiting for the `TRUSTED_SUPPORT_DIR` missing case beyond \"error trusted_support_incomplete\".\n- scripts/check_failure_triage.sh:124 | severity=MAJOR | confidence=[3]\n  PROBLEM: When `TRIAGE_STAGE` is `collect`, the script exits early after collecting context, but it does not explicitly handle the `diagnose` or `all` stages.\n  WHY: This might lead to incomplete triage if run in stages or when `collect` is not called properly.\n- .github/workflows/check_failure_triage.yml:Jobs.triage-workflow-run.uses | severity=MAJOR | confidence=[4]\n  PROBLEM: The reusable workflow is called using the `@main` ref instead of a stable release SHA.\n  WHY: This introduces a trust boundary, making the pipeline dependent on the state of `main`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1ff1176aff254b84a118ca8e5b2dcc557769f05eb4a3a7f88e9ebd8f5f550dbf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37365164658",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37365164658",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005211959_b08f75a32d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37365164658"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T21:19:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
