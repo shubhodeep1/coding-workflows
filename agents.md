@@ -473,6 +473,9 @@ a new value, add it to the appropriate overrides file with a
   the PR worktree.
 - Host-side static-context reads of checkout-controlled `README.md` and
   `agents.md` skip symbolic links rather than following them into prompt text.
+  Required `unattended_system_instructions.md` and `ai_pipeline.md` symlinks
+  instead fail prompt assembly before any content is written; review checkout
+  credential persistence is unchanged.
 - The review gate's existing PR read validates the same-repository head and
   exports `review_checkout_sha` only for a 40-hex SHA. `Checkout repo` uses
   that SHA for every PR event, so reviewer and other `GITHUB_WORKSPACE` file

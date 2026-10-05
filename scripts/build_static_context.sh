@@ -52,6 +52,11 @@ fi
 phase="$1"
 output="$2"
 
+if [ -L unattended_system_instructions.md ] || [ -L ai_pipeline.md ]; then
+	echo "::error::Required static context input is a symbolic link; refusing to assemble the prompt." >&2
+	exit 1
+fi
+
 if [ ! -f unattended_system_instructions.md ] || [ ! -f ai_pipeline.md ]; then
 	echo "Missing required input file(s): unattended_system_instructions.md and/or ai_pipeline.md" >&2
 	exit 1

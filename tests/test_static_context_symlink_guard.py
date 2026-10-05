@@ -130,6 +130,24 @@ def test_phase_static_context_skips_symlinks_but_keeps_canonical_agents() -> Non
 			assert "local agents" in context
 			assert "::warning::" not in result.stderr
 
+		for required_name in ("unattended_system_instructions.md", "ai_pipeline.md"):
+			required_path = root / required_name
+			original_content = required_path.read_text(encoding="utf-8")
+			required_path.unlink()
+			required_path.symlink_to(secret)
+			for phase in ("clarify", "plan", "implement"):
+				output = root / f"{phase}-{required_name}-symlink.txt"
+				result = subprocess.run(
+					["bash", str(REPO_ROOT / "scripts" / "build_static_context.sh"), phase, str(output)],
+					cwd=root, env=env, capture_output=True, text=True, check=False,
+				)
+				assert result.returncode != 0
+				assert "Required static context input is a symbolic link" in result.stderr
+				assert "SENTINEL" not in result.stdout + result.stderr
+				assert not output.exists()
+			required_path.unlink()
+			required_path.write_text(original_content, encoding="utf-8")
+
 
 def main() -> int:
 	for test in (
