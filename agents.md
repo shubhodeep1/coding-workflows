@@ -67,14 +67,21 @@ Phases of the unattended pipeline (each is a separate workflow file under
    token identity keeps the old re-dispatch.
    The review editor's disposable Docker workspace admits `.cjs`, `.mjs`,
    `.cts`, and `.mts` alongside other source extensions for snapshot and
-   validated transfer. For Claude engine fixes it also admits only
+    validated transfer. For Claude engine fixes it also admits
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
-   and `scripts/claude_settings.json.tmpl`; the merged-PR safety hook and
-   other `.github/ai/` and `.claude/` files remain excluded from snapshot
-   and transfer. The editor prompt names excluded paths so sandbox-only missing
-   files are not repaired by creating forbidden directories; transfer still
-   rejects them and reports `reason=unsafe_directory dir=<bounded>` when safe.
-   Its
+    and `scripts/claude_settings.json.tmpl`; the merged-PR safety hook stays
+    excluded from snapshot and transfer. It also admits each
+    `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md`
+   twin exists both in the host checkout and the verified workflow-support
+   checkout (`GITHUB_WORKSPACE/.codex-workflow-src`) when the snapshot is
+   taken. A PR-added twin absent from trusted support cannot authorize a new
+   command; missing support admits none. The admitted command set is fixed
+   for the whole run; later transfers and retries cannot widen it. The editor
+   can still repair parity for existing supported commands; other `.github/ai/`
+    and `.claude/` files remain excluded from snapshot and transfer. An editor
+    write to an excluded file in an admitted directory is dropped; a new
+    directory outside the admitted ones fails the transfer and the editor step
+    with it, reporting `reason=unsafe_directory dir=<bounded>` when safe. Its
    isolation helpers must already exist in the verified workflow support
    commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
