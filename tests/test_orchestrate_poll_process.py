@@ -707,6 +707,7 @@ def _run_poller(
 	fail_search_issues: bool = False,
 	search_issue_items: list[dict] | None = None,
 	prs: list[dict] | None = None,
+	pr_files_fail: bool = False,
 	pr_commits: dict[int, list[dict]] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
@@ -1233,6 +1234,7 @@ def _run_poller(
 
 		gh_mock = r'''#!/usr/bin/env python3
 import json
+import os
 import re
 import subprocess
 import sys
@@ -2202,6 +2204,9 @@ if args[0] == 'api':
 		print(json.dumps(store.get('pr_commits', {}).get(m_commits.group(1), [])))
 		sys.exit(0)
 	if m_files:
+		if os.environ.get('MOCK_PR_FILES_FAIL') == 'true':
+			print('forced PR files failure', file=sys.stderr)
+			sys.exit(1)
 		pr_num = int(m_files.group(1))
 		pr = None
 		for item in store.get('prs', []):
@@ -2210,7 +2215,7 @@ if args[0] == 'api':
 				break
 		files = []
 		if pr is not None:
-			files = [{'filename': f} for f in pr.get('files', [])]
+			files = [f if isinstance(f, dict) else {'filename': f} for f in pr.get('files', [])]
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-r', jq], input=json.dumps(files), capture_output=True, text=True)
@@ -2254,6 +2259,7 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		pr.setdefault('changed_files', len(next((item.get('files', []) for item in store.get('prs', []) if item.get('number') == pr_num), [])))
 		if any('application/vnd.github.diff' in arg for arg in args) and 'diff' in pr:
 			print(pr.get('diff', ''), end='')
 			sys.exit(0)
@@ -2786,6 +2792,10 @@ if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCES
 	store_path.write_text(json.dumps(store), encoding='utf-8')
 	sys.exit(0)
 
+if args and args[0] == 'commit' and any('[orchestrator-fix]' in arg for arg in args[1:]):
+	store.setdefault('review_blocked_fix_commit_calls', []).append(args[1:])
+	store_path.write_text(json.dumps(store), encoding='utf-8')
+
 if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
 	sys.exit(1)
 # Combined-mode branch prep now creates a judge worktree instead of
@@ -2920,8 +2930,8 @@ except Exception:
 
 output = os.environ.get('MOCK_CODEX_JSON', '{}')
 parsed = json.loads(output)
-touch_file = os.environ.get('MOCK_CODEX_TOUCH_FILE', '')
-if touch_file:
+for touch_file in os.environ.get('MOCK_CODEX_TOUCH_FILE', '').splitlines():
+	os.makedirs(os.path.dirname(os.path.abspath(touch_file)), exist_ok=True)
 	with open(touch_file, 'a', encoding='utf-8') as fh:
 		fh.write("mock change\\n")
 print(json.dumps(parsed))
@@ -3422,6 +3432,7 @@ sys.exit(proc.returncode)
 				"REAL_JQ_BIN": real_jq,
 				"REAL_PYTHON_BIN": real_python,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
+				"MOCK_PR_FILES_FAIL": "true" if pr_files_fail else "false",
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
 				"MOCK_GIT_CHECKOUT_FAIL": "true" if mock_git_checkout_fail else "false",
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
@@ -9423,6 +9434,7 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 				"mergeable_state": "clean",
 				"title": "Test PR",
 				"body": "Body",
+				"files": ["sandbox_fix.txt"],
 			},
 		],
 		existing_branches=["main", "orchestrator/project-192"],
@@ -9566,6 +9578,7 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 				"mergeable_state": "clean",
 				"title": "Test PR",
 				"body": "Body",
+				"files": ["sandbox_fix.txt"],
 			},
 		],
 		existing_branches=["main", "orchestrator/project-192"],
@@ -9641,6 +9654,7 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 				"mergeable_state": "clean",
 				"title": "Test PR",
 				"body": "Body",
+				"files": ["sandbox_fix.txt"],
 			},
 		],
 		existing_branches=["main"],
@@ -9658,6 +9672,205 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
 	assert any(pr.get("baseRefName") == "main" for pr in followup_prs)
+
+
+def _review_blocked_fix_scope_case(
+	*, touch: str, files: list[str | dict], description: str = "patched",
+	remaining: list[dict] | None = None, pr_files_fail: bool = False,
+	pr_changed_file_count: int | None = None,
+	env_overrides: dict[str, str] | None = None,
+) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		prs=[{
+			"number": 901, "state": "open", "merged": False,
+			"baseRefName": "main", "headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10", "mergeable": True,
+			"mergeable_state": "clean", "title": "Test PR",
+			"body": "Body", "files": files,
+			"changed_files": len(files) if pr_changed_file_count is None else pr_changed_file_count,
+		}],
+		codex_json={
+			"action": "fix", "justification": "apply fixes",
+			"fix_description": description,
+			"remaining_issues_summary": "remaining",
+			"remaining_issues": remaining or [],
+		},
+		codex_touch_file=touch,
+		mock_git_push_success=True,
+		capture_telegram_calls=True,
+		pr_files_fail=pr_files_fail,
+		env_overrides=env_overrides,
+	)
+
+
+def test_review_blocked_fix_scope_accepts_pr_file():
+	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+	assert "ai:review-blocked" not in result["issues"]["10"]["labels"]
+	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" in agents_text
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in agents_text
+
+
+def test_review_blocked_fix_scope_rejects_unrelated_file():
+	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["other.txt"])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_empty_staged_set():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/prompts/excluded.txt", files=[".github/prompts/excluded.txt"],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=no_staged_changes" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/excluded.sh", files=["scripts/excluded.sh"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=workflow_edits_disabled rejected=1 paths=scripts/excluded.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/a.sh", files=["scripts/a.sh", "scripts/b.sh"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "false", "MOCK_CODEX_TOUCH_FILE": "scripts/a.sh\nscripts/b.sh"},
+	)
+	assert "reason=workflow_edits_disabled rejected=2 paths=scripts/a.sh,scripts/b.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any("scripts/a.sh,scripts/b.sh" in n.get("message", "") for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_accepts_non_protected_judge_citation():
+	result = _review_blocked_fix_scope_case(
+		touch="docs/new.md", files=["other.txt"],
+		remaining=[{"file": "docs/new.md"}],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_accepts_fix_description_citation():
+	result = _review_blocked_fix_scope_case(
+		touch="docs/new.md", files=["other.txt"], description="Updated `docs/new.md`",
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_accepts_extensionless_citation():
+	result = _review_blocked_fix_scope_case(
+		touch="Makefile", files=["other.txt"], description="Updated `Makefile`",
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_rejects_protected_judge_citation():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/evil.sh", files=["other.txt"],
+		remaining=[{"file": "scripts/evil.sh"}],
+	)
+	assert "reason=protected_not_in_pr" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_accepts_protected_pr_file():
+	result = _review_blocked_fix_scope_case(touch="scripts/foo.sh", files=["scripts/foo.sh"])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_accepts_renamed_pr_source():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/old.sh",
+		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_rejects_capped_pr_listing():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=[f"docs/file-{n}.md" for n in range(3000)],
+	)
+	assert "reason=pr_files_unavailable" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_rejects_incomplete_pr_listing():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_changed_file_count=2,
+	)
+	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_ignores_invalid_citations():
+	result = _review_blocked_fix_scope_case(
+		touch="escape.txt", files=["other.txt"],
+		remaining=[{"file": "../escape.txt"}, {"file": ".git/config"}],
+	)
+	assert "reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_fails_closed_on_pr_listing_failure():
+	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_files_fail=True)
+	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_rejects_merged_followup():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	open_pr = {
+		"number": 901, "state": "open", "merged": False,
+		"baseRefName": "main", "headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10", "mergeable": True,
+		"mergeable_state": "clean", "body": "Body",
+	}
+	merged_pr = {**open_pr, "state": "closed", "merged": True, "merged_at": "2026-04-15T00:00:00Z"}
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+		pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [merged_pr]},
+		prs=[{**merged_pr, "files": ["other.txt"]}],
+		existing_branches=["main", "orchestrator/project-192"],
+		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+	)
+	assert "reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert len(result["prs"]) == 1
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
 def test_review_blocked_followup_refusal_increments_retry_counter():
@@ -9718,6 +9931,7 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 				"mergeable_state": "clean",
 				"title": "Test PR",
 				"body": "Body",
+				"files": ["sandbox_fix.txt"],
 			},
 		],
 		existing_branches=["main", "orchestrator/project-192"],
