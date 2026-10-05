@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:172-180 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `claude_finish` can wait indefinitely for `progress_pid` or `broker_pid` during cleanup.\n  WHY: If a subprocess hangs, cleanup can stall the overall job and potentially orphan resources.\n- scripts/review_untrusted_sandbox.sh:185 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The progress monitor PID might leak if `docker run` fails or is interrupted before cleanup runs.\n  WHY: An orphaned process might continue running and writing progress updates to stale files.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace Claude Code sessions with the Claude CLI engine as defined in the plan Phase 5c (orchestrator decomposer, judges, and review write roles); when `claude` is resolved, strictly use the sandbox for all four review write roles (Editor, Consolidator, Conflict Resolver, RB Judge).\n  expected_change_site: All orchestrator judge sites and review write roles, including `scripts/review_apply_fixes.sh`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `scripts/review_apply_fixes.sh` and other review write roles have a conditional fallback mechanism (`if [ \"${AI_ENGINE_RESOLVED_...:-codex}\" = \"claude\" ]`); ensure that when `claude` is resolved, it strictly uses the sandbox for ALL four review write roles (Editor, Consolidator, Conflict Resolver, RB Judge).\n- requirement: \u201cEvery call keeps its unchanged codex or OpenCode command as the exit-75 fallback in the same attempt.\u201d\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, `poller_judge_isolated()` and the `SECURITY_JUDGE`, `INTEGRATION_JUDGE`, `STALL_JUDGE`, `WAVE_JUDGE`, and `RB_JUDGE` call sites.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: When Claude returns 75, `poller_judge_isolated()` retries via `_poller_rb_judge_sandbox_attempt codex`. That path runs isolated OpenCode; it does not preserve or invoke the original Codex commands replaced at the five judge call sites.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_sandbox.sh:185 | confidence=3\n  PROBLEM: The progress monitor PID (`progress_pid`) might leak if `docker run` fails or is interrupted unexpectedly before `trap` execution or `claude_finish` is called.\n  WHY: An orphaned process might continue running, leaking resources or attempting to write progress updates to stale files. While `claude_finish` is in `trap EXIT`, an `INT` or unhandled signal could bypass it depending on signal handling logic.\n- scripts/review_untrusted_sandbox.sh:172-180 | confidence=3\n  PROBLEM: The script `claude_finish` attempts to kill `progress_pid` and `broker_pid`, but uses `wait` without a timeout if they are unresponsive.\n  WHY: If the `progress_pid` (the progress monitor loop) deadlocks or hangs in an uninterruptible state, `claude_finish` will hang indefinitely during cleanup, causing the overall job to timeout and potentially orphan resources.\n- TASK_GAP\n  Requirement: Replace Claude Code sessions with the Claude CLI engine as defined in the plan Phase 5c (orchestrator decomposer, judges, and review write roles).\n  Expected change site: All orchestrator judge sites and review write roles.\n  Evidence of absence: The PR description states \"All four Claude review roles run in a network-isolated sandbox\", but `scripts/review_apply_fixes.sh` and other review write roles have a conditional fallback mechanism (`if [ \"${AI_ENGINE_RESOLVED_...:-codex}\" = \"claude\" ]`). While the intent for fallback is valid (exit 75), ensure that when `claude` is resolved, it strictly uses the sandbox for ALL four review write roles (Editor, Consolidator, Conflict Resolver, RB Judge).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTION\n  File: scripts/review_untrusted_sandbox.sh\n  Location: 172-180 (claude_finish)\n  Issue: Lack of timeout when waiting for subprocesses during cleanup.\n  Suggested minimal fix: Use `timeout` with `wait` or a loop to ensure `claude_finish` completes.\n  HARDENING_RISK_SCORE: 2\n- HARDENING_SUGGESTION\n  File: scripts/orchestrate_poll_process.sh\n  Location: 90 (poller_judge_isolated)\n  Issue: Potential stderr leakage if `log_file` is not handled robustly in concurrent judge calls.\n  Suggested minimal fix: Use `mktemp` for per-call log files rather than potentially shared locations to guarantee isolation.\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cEvery call keeps its unchanged codex or OpenCode command as the exit-75 fallback in the same attempt.\u201d\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `poller_judge_isolated()` and the `SECURITY_JUDGE`, `INTEGRATION_JUDGE`, `STALL_JUDGE`, `WAVE_JUDGE`, and `RB_JUDGE` call sites.\n  Evidence of absence: When Claude returns 75, `poller_judge_isolated()` retries via `_poller_rb_judge_sandbox_attempt codex`. That path runs isolated OpenCode; it does not preserve or invoke the original Codex commands replaced at the five judge call sites.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c42315235e9d818a70f080dc82923b62b0602eb7d893cd6f4cf7ab617ac8f90e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37376836392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37376836392",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005215040_17316f8e0e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37376836392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T21:50:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
