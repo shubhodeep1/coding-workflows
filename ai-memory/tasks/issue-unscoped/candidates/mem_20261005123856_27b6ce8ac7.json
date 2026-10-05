@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cRemove the human-only latches\u2019 \u2018wait forever\u2019 branches. The stall-ladder `escalate_human` path becomes the block label.\u201d\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, the stall-ladder `escalate_human` handling\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The poller diff contains no change to the stall-ladder `escalate_human` path, so that stop is not handed to the unblock scan as required.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_unblock_judge.py:around line 1371-1382 | HARDENING_RISK_SCORE=1\n  PROBLEM: `_project_comments_for_item(12, status=\"failed\")` and the companion assertion rely on a string literal being in sync between the fixture builder and the test.\n  WHY: If a future refactor renames the status token, both call sites must change together; a typo in one would silently flip what the test exercises.\n  Suggested minimal fix: add a one-line comment on the test stating the status token must match the stop id in `unblock_ledger.py:stop_for_labels` (the `project-failed` branch returns `PROJECT_FAILED_STOP = \"project-failed\"` for project items, so the fixture status should be whatever the V2 state body carries \u2014 the test now uses `failed`, which matches the `status` field in the V2 manifest, not the stop id itself). No code change needed if the existing comment already names the contract.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cRemove the human-only latches\u2019 \u2018wait forever\u2019 branches. The stall-ladder `escalate_human` path becomes the block label.\u201d\n  Expected change site: `scripts/orchestrate_poll_process.sh`, the stall-ladder `escalate_human` handling.\n  Evidence of absence: The PR adds the unblock scan and hand-overs for project-judge output failures, merge deferrals, review-blocked judge exits, and workflow-failure heal escalation. The poller diff contains no change to the stall-ladder `escalate_human` path, so that stop is not handed to the unblock scan as required.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3a7022ad85781ae1c8dda86381139468b513de63a53e5818a75953fab9246291",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37306566478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37306566478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005123856_27b6ce8ac7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37306566478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T12:38:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
