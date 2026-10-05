@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6263,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6263\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6266\",\"pr_number\":6266,\"branch\":\"ai/issue-6263\",\"run_id\":\"37252617544\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37252617544\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".claude/hooks/pr_merge_status_guard.py\",\"changelog.d/6263-push-guard-destination-repo.md\",\"tests/test_pr_merge_status_guard.py\",\"workflow-templates/.claude/hooks/pr_merge_status_guard.py\"]}",
+  "fingerprint": "fea21170899e6a8e2b74064eed014173826d496478b82e7fe219421c160c684b",
+  "lineage": {
+    "issue_number": 6263,
+    "parent_ids": [],
+    "pr_number": 6266,
+    "run_id": "37252617544",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37252617544",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6266"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005020104_1e58c690da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6263,
+    "level": "run",
+    "pr_number": 6266,
+    "run_id": "37252617544"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6263: https://github.com/shubhodeep1/coding-workflows/pull/6266",
+  "timestamps": {
+    "created_at": "2026-10-05T02:01:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
