@@ -109,6 +109,10 @@ def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) 
 	"Verification would not be performed", "Verification should not be performed",
 	"Verification must not be performed", "Verification could not be performed",
 	"Verification is not going to be performed", "Security review is not being performed",
+	"Verification isn't required", "Security checks aren't required", "The audit wasn't performed",
+	"Verification won't run", "The review won't be verified", "Won't be verified", "The review wouldn't be performed",
+	"Verification doesn't require a check", "Doesn't require verification", "Verification doesn't verify the PR",
+	"Security checks don't require approval", "Checks didn't verify the PR head",
 ])
 def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL for verification\n- B — {fallback}\n"
@@ -145,6 +149,9 @@ def test_no_fallback_preserves_original_decision(tmp_path: Path) -> None:
 	"Check whether the feature flag is disabled", "Validate optional fields against schema",
 	"Test optional parameters", "Verify the debug toggle is disabled", "Omit author metadata",
 	"Proceed without author attribution", "Do not enforce author attribution",
+	"Don't skip verification", "Doesn't skip verification", "Won't skip checks", "Security checks shouldn't be skipped",
+	"Security checks mustn't be omitted", "Verification isn't optional",
+	"Check whether the feature flag isn't disabled",
 ])
 def test_control_preserving_and_diagnostic_options_remain_available(tmp_path: Path, option: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL\n- B — {option}\n"

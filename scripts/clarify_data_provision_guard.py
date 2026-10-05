@@ -70,16 +70,26 @@ _WEAKENS_CONTROL_PATTERNS = [
 	re.compile(
 		r"\b(?:security\s+)?(?:verification|validation|checks?|signatures?|authorization|authentication|reviews?|approvals?|audits?|scans?|tests?|gates?|guards?|controls?)\s+"
 		r"(?:will|would|shall|should|must|could|is|are|was|were)\s+not\s+"
-		r"(?:(?:going\s+to\s+)?(?:be|being)\s+)?(?:performed|run|executed|done|carried\s+out)\b",
+		r"(?:(?:going\s+to\s+)?(?:be|being)\s+)?(?:performed|run|executed|done|carried\s+out|verif\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(
-		r"\b(?:do\s+not|don't|never|no|refuse\s+to|stop)\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|auth(?:oriz\w*|entic\w*|[nz])?\b|review\w*|approv\w*|audit\w*|scan\w*|test\w*|guard\w*)\b",
+		r"\b(?:do\s+not|does\s+not|did\s+not|don't|never|no|refuse\s+to|stop)\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|auth(?:oriz\w*|entic\w*|[nz])?\b|review\w*|approv\w*|audit\w*|scan\w*|test\w*|guard\w*)\b",
+		re.IGNORECASE,
+	),
+	re.compile(
+		r"\b(?:will|would|should|could|must)\s+not\s+(?:be\s+)?(?:verif\w*|validat\w*|check\w*|review\w*|approv\w*|audit\w*|scan\w*|test\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(r"\b(?:unverified|unvalidated|unchecked|unauthenticated|unreviewed|untested)\b", re.IGNORECASE),
 	re.compile(r"\b(?:do\s+not|don't|never)\s+enforce\b.{0,40}\b(?:security|verif\w*|validat\w*|check\w*|auth(?:oriz\w*|entic\w*|[nz])?\b|gate\w*|guard\w*)\b", re.IGNORECASE),
 ]
+_CONTRACTION_EXPANSIONS = {
+	"isn't": "is not", "aren't": "are not", "wasn't": "was not", "weren't": "were not",
+	"won't": "will not", "wouldn't": "would not", "shouldn't": "should not",
+	"mustn't": "must not", "couldn't": "could not", "doesn't": "does not",
+	"don't": "do not", "didn't": "did not",
+}
 _DATA_EVIDENCE_PATTERNS = {
 	"url": (re.compile(r"\b(?:URL|link|http|deployment)\b", re.IGNORECASE), re.compile(r"https?://\S+", re.IGNORECASE)),
 	"pr": (re.compile(r"\b(?:PR|pull\s+request)\b", re.IGNORECASE), re.compile(r"/pull/\d+\b|\bPR\s*#?\d+\b", re.IGNORECASE)),
@@ -157,7 +167,12 @@ def _option_requires_data(option_text: str) -> bool:
 
 def _option_weakens_control(text: str) -> bool:
 	text = re.sub(
-		r"\b(?:do\s+not|don't|never)\s+(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|drop\w*|remov\w*|relax\w*)\b",
+		r"\b(?:isn|aren|wasn|weren|won|wouldn|shouldn|mustn|couldn|doesn|don|didn)['’]t\b",
+		lambda contraction_match: _CONTRACTION_EXPANSIONS[contraction_match.group().lower().replace("’", "'")],
+		text, flags=re.IGNORECASE,
+	)
+	text = re.sub(
+		r"\b(?:(?:do|does|did|will|would|should|must|could)\s+not|never)\s+(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|drop\w*|remov\w*|relax\w*)\b",
 		"", text, flags=re.IGNORECASE,
 	)
 	return any(pattern.search(text) for pattern in _WEAKENS_CONTROL_PATTERNS)
