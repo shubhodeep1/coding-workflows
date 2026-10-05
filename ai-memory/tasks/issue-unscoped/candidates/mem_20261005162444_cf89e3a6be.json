@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:lines 989-1001 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The README's standard-profile additions omit `ai-orchestrate-clarify-respond.yml`, although `workflow-templates/profiles/standard.txt`, the profile contract test, and `agents.md` include it.\n  WHY: This is documentation/contract drift, not a runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The `core` and `standard` workflow profiles must include `ai-orchestrate-clarify-respond.yml`, and the guardrails test must enforce this inclusion.\n  expected_change_site: `tests/test_update_workflows_guardrails.py`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `core` and `standard` lists in `tests/test_update_workflows_guardrails.py` do not include `ai-orchestrate-clarify-respond.yml`, despite it being added to the `core.txt` manifest.\n- requirement: PR description: \"The `core` install profile now includes the issue-comment responder wrapper, so its default delegation does not silently leave standalone questions unanswered.\" The implied intent is that `ai-orchestrate-clarify-respond.yml` lives in core and is inherited by standard via the `core + extras` composition.\n  expected_change_site: `workflow-templates/profiles/standard.txt`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `workflow-templates/profiles/standard.txt` was NOT touched in the original PR or in the LAST RUN DIFF. `pr_changed_files.txt` does not list it. The LAST RUN added the wrapper to `core.txt` (line 7) and updated `tests/test_update_workflows_guardrails.py` to expect the wrapper still at position 9 in standard (i.e. duplicated in the standard extras after `ai-orchestrate-poll.yml`). The README change in the LAST RUN removed the wrapper from the standard additions list, but the file/test/agents.md still have it. So either (a) `standard.txt` should have lost the wrapper line (matching the README's new prose and the \"core + extras\" model), or (b) the README's standard bullet should be re-instated to list the wrapper (matching the actual file, the test, and `agents.md` line 777). Whichever direction is intended, the LAST RUN landed in an inconsistent state.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: The `core` and `standard` workflow profiles must include `ai-orchestrate-clarify-respond.yml`, and the guardrails test must enforce this inclusion.\n  Expected change site: `tests/test_update_workflows_guardrails.py`\n  Evidence of absence: The `core` and `standard` lists in `tests/test_update_workflows_guardrails.py` do not include `ai-orchestrate-clarify-respond.yml`, despite it being added to the `core.txt` manifest.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:lines 989-1001 | severity=low | confidence=4\n  PROBLEM: The LAST RUN updated the \"standard\" profile bullet to remove `ai-orchestrate-clarify-respond.yml` from the listed standard additions:\n  ```\n  `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`, `ai-validate.yml`, and\n  `review_rb_judge_dispatch.yml`.\n  ```\n  But the actual `workflow-templates/profiles/standard.txt` still contains `ai-orchestrate-clarify-respond.yml` at line 9, as a standard addition (after `ai-orchestrate-poll.yml`, before `ai-validate.yml`). The updated `tests/test_update_workflows_guardrails.py::test_profile_manifests_match_contracts` (LAST RUN DIFF) builds the expected standard as `core[:-1] + [extras]` where the extras include `core[-1]` (the wrapper) \u2014 i.e. it explicitly asserts the wrapper at position 9 in standard. `agents.md` line 777 (NOT changed in the LAST RUN) also still lists the wrapper at position 9. The test passes against the actual file; the README is the only artifact that says the wrapper is not a standard addition.\n  WHY: It does not fail at runtime. It fails the documentation contract: a reader cross-checking README against the file and the contract test will see the README's \"standard\" list disagrees with both, and the LAST RUN also lost `ai-sync-labels.yml` from the README's standard additions (it was missing before too, so the LAST RUN did not introduce that gap, but the LAST RUN touched this exact line and could have fixed it). This is a documentation/contract drift, not a runtime failure.\n- Requirement: PR description: \"The `core` install profile now includes the issue-comment responder wrapper, so its default delegation does not silently leave standalone questions unanswered.\" The implied intent is that `ai-orchestrate-clarify-respond.yml` lives in core and is inherited by standard via the `core + extras` composition.\n  Expected change site: `workflow-templates/profiles/standard.txt`\n  Evidence of absence: `workflow-templates/profiles/standard.txt` was NOT touched in the original PR or in the LAST RUN DIFF. `pr_changed_files.txt` does not list it. The LAST RUN added the wrapper to `core.txt` (line 7) and updated `tests/test_update_workflows_guardrails.py` to expect the wrapper still at position 9 in standard (i.e. duplicated in the standard extras after `ai-orchestrate-poll.yml`). The README change in the LAST RUN removed the wrapper from the standard additions list, but the file/test/agents.md still have it. So either (a) `standard.txt` should have lost the wrapper line (matching the README's new prose and the \"core + extras\" model), or (b) the README's standard bullet should be re-instated to list the wrapper (matching the actual file, the test, and `agents.md` line 777). Whichever direction is intended, the LAST RUN landed in an inconsistent state.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "eb1bba448dd2c98ca1cf14940ca6ab69d8b762b0c2970d8720c7bc99dd4f0f52",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6283,
+    "run_id": "37337597233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37337597233",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005162444_cf89e3a6be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6283,
+    "run_id": "37337597233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T16:24:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
