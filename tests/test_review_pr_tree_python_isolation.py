@@ -206,11 +206,12 @@ def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 	assert serena.count("serena_python - <<'PY'") == 2
 	assert serena.count("serena_uv tool install") == 2
 	assert "UV_NO_CONFIG=1 uv" in serena
-	# The server keeps the project cwd for --project-from-cwd, while safe-path
-	# and a cleared PYTHONPATH prevent imports from that checkout.
+	# The server keeps the project cwd for --project-from-cwd, but only the
+	# trusted probe needs safe-path; server scripts may import sibling modules.
 	probe = serena.split("probe_mcp_handshake()", 1)[1].split("\nmain()", 1)[0]
 	assert '"${SERENA_UV_PYTHON_BIN}" "${SCRIPT_DIR}/mcp_handshake_probe.py"' in probe
 	assert "env -u PYTHONPATH PYTHONSAFEPATH=1" in probe
+	assert '-- /usr/bin/env -u PYTHONSAFEPATH "${serena_bin}"' in probe
 	assert 'cd -- "${serena_neutral_dir}"' not in probe
 
 	workflow = (ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")

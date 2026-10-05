@@ -499,8 +499,8 @@ a new value, add it to the appropriate overrides file with a
   requires a Python that honors `PYTHONSAFEPATH`. The Semble and Serena
   bootstrap import probes run from private neutral directories; Serena's
   trusted absolute-path handshake probe retains the project cwd for
-  `--project-from-cwd` while clearing `PYTHONPATH` and passing safe-path to its
-  server subprocess.
+  `--project-from-cwd` while clearing `PYTHONPATH` and using safe-path for
+  the probe only. Its installed server keeps script-directory imports.
   Serena requires an absolute `HOME` for Codex config writes; a relative or
   missing `HOME` leaves the tool unavailable rather than writing under the PR tree.
   Other pre-review `python3 -c`, `-m` and stdin calls set `PYTHONSAFEPATH=1`
