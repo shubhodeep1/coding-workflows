@@ -33,8 +33,7 @@
 #             pushes a [judge-fix] after the pass ran out, so that fix is
 #             audited too.
 #           A dispatch that fails (for example a consumer wrapper without the
-#           `pr_number` input) logs a warning and returns hold=false, the
-#           behaviour before this port.
+#           `pr_number` input) holds the merge for a later retry.
 #   status  Read-only: runs the gate's checks with no label, comment,
 #           dispatch or GITHUB_OUTPUT write, and prints
 #           SINGLE_ISSUE_SECURITY_PASS_STATE=<skip|unverifiable|clean|pending|
@@ -219,7 +218,7 @@ single_pass_gate()
 	local exhausted_head_limit="${SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS:-2}" exhausted_retry="false" head_attempts=0
 	local pattern="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
-	local cycles_used next_cycle age_hours workflow body extensions effective_max
+	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
 	[[ "${exhausted_head_limit}" =~ ^[1-9][0-9]*$ ]] || exhausted_head_limit=2
@@ -291,6 +290,7 @@ single_pass_gate()
 	latest_created="$(printf '%s' "${latest}" | cut -f1)"
 	latest_status="$(printf '%s' "${latest}" | cut -f3)"
 	latest_head="$(printf '%s' "${latest}" | cut -f4)"
+	completed_findings="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" '$3 == "findings" && $4 == h' | tail -n 1)"
 	if [ "${latest_status}" = "clean" ] && [ "${latest_head}" = "${head_sha}" ]; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean"
 		single_pass_state clean
@@ -318,15 +318,15 @@ single_pass_gate()
 		return 0
 	fi
 	if [ "${cycles_used}" -ge "${effective_max}" ]; then
-		if [ "${latest_status}" != "findings" ] || [ "${latest_head}" != "${head_sha}" ]; then
-			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" '$3 == "pending" && $4 == h { n++ } END { print n + 0 }')"
+		if [ -z "${completed_findings}" ]; then
+			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${effective_max}" '$3 == "pending" && $4 == h && $5 + 0 > cap { n++ } END { print n + 0 }')"
 			if [ "${head_attempts}" -lt "${exhausted_head_limit}" ]; then
 				exhausted_retry="true"
 			fi
 		fi
 		if [ "${exhausted_retry}" != "true" ]; then
 			if [ "${SINGLE_PASS_STATUS_ONLY}" = "true" ]; then
-				if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ]; then
+				if [ -n "${completed_findings}" ]; then
 					single_pass_log "mode=status pr=${PR_NUMBER} head=${head_sha} outcome=exhausted cycle=${cycles_used} max=${effective_max}"
 					single_pass_state exhausted
 					echo "SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=${head_sha}"
@@ -342,7 +342,7 @@ single_pass_gate()
 					single_pass_output true
 					return 1
 				fi
-				if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ]; then
+				if [ -n "${completed_findings}" ]; then
 					body="## Single-issue security pass exhausted
 
 The security audit of this PR has used ${cycles_used} of ${effective_max} cycles, so auto-merge stays off. The PR is labelled \`ai:security-pass-failed\`. The review-blocked judge may merge with medium/low findings open, fix blocking high/critical/unrated findings while retries remain, or hold the PR for a clean audit or human decision."
@@ -354,7 +354,7 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 				gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
 					|| echo "::warning::Could not post the security-pass exhaustion comment on PR #${PR_NUMBER}."
 			fi
-			if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ]; then
+			if [ -n "${completed_findings}" ]; then
 				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=cycles_exhausted cycle=${cycles_used}"
 				single_pass_output true
 				single_pass_exhausted_output
@@ -374,12 +374,11 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 	if ! gh workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}" >/dev/null 2>&1; then
 		if [ "${exhausted_retry}" = "true" ]; then
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed_exhausted cycle=${next_cycle}"
-			single_pass_output true
-			return 0
+		else
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed workflow=${workflow} cycle=${next_cycle}"
 		fi
-		echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; merging without the single-issue security pass (the pre-port behaviour)."
-		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=skip reason=dispatch_failed workflow=${workflow}"
-		single_pass_output false
+		echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; holding the merge until an audit can run."
+		single_pass_output true
 		return 0
 	fi
 	if [ "${exhausted_retry}" = "true" ]; then
