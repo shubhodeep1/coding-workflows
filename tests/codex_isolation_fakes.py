@@ -162,6 +162,7 @@ def isolation_support_files(scripts_dir: Path) -> list[str]:
 		"codex_isolated_exec.sh",
 		"codex_isolated_workspace.py",
 		"clarify_openrouter_broker.py",
+		"dependency_registry_proxy.py",
 		"write_codex_config.sh",
 		"codex_model_catalog.json",
 		"claude_anthropic_relay.py",

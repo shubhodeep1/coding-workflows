@@ -1,10 +1,12 @@
 """The integration judge may publish only verified merge resolutions."""
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
+from review_autofix_step_scripts import expanded_review_autofix_text
 
 
 POLL_SCRIPT = (Path(__file__).resolve().parent.parent / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
@@ -33,7 +35,9 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 	git(root, "init", "-b", "main")
 	git(root, "config", "user.name", "test")
 	git(root, "config", "user.email", "test@example.invalid")
-	if request.param == "newline":
+	if isinstance(request.param, tuple):
+		conflict_path = request.param[1]
+	elif request.param == "newline":
 		conflict_path = "lines\nbreak.txt"
 	else:
 		conflict_path = ".github/workflows/ci.yml" if request.param else "conflict.txt"
@@ -127,6 +131,63 @@ def test_protected_conflict_rejects_invented_content_or_mode(judge_repo, change)
 	assert result.returncode != 0
 	assert "reason=protected_path_provenance" in result.stderr
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", [("path", path) for path in (
+	"scripts/helper.sh", "prompts/mode-x.txt", ".claude/hooks/guard.py",
+	"workflow-templates/ai-x.yml", "docs/nested/AGENTS.md", "package.json",
+	"src/Makefile", ".GitHub/Workflows/ci.yml",
+)], indirect=True)
+@pytest.mark.parametrize("change", ["invented", "duplicate", "reorder"])
+def test_other_protected_conflicts_reject_unverified_lines(judge_repo, change):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	content = {
+		"invented": "first\nours\ntheirs\nnew executable line\nlast\n",
+		"duplicate": "first\nours\nours\ntheirs\nlast\n",
+		"reorder": "last\nours\ntheirs\nfirst\n",
+	}[change]
+	(wt / conflict_path).write_text(content)
+	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
+	assert result.returncode != 0
+	assert "reason=protected_path_provenance" in result.stderr
+	assert f"path='{conflict_path}'" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", [("path", "scripts/helper.sh")], indirect=True)
+def test_protected_script_accepts_interleaved_side_lines(judge_repo):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text("first\nours\ntheirs\nlast\n")
+	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "outcome=accepted" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() != before
+
+
+@pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)
+def test_unprotected_source_can_synthesize_lines(judge_repo):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text("first\nours\ntheirs\nnew line\nlast\n")
+	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() != before
+
+
+def test_protected_path_patterns_match_review_skip_gate():
+	gate_patterns = re.findall(
+		r'^\s*([^\n]+)\)\n\s*PROTECTED_SKIP_SUPPRESSED="true" ;;',
+		expanded_review_autofix_text(), flags=re.MULTILINE,
+	)
+	assert len(gate_patterns) == 4
+	verifier = _extract_bash_function("_integration_judge_verify_scope() {")
+	for constant, gate_pattern in zip((
+		"PROTECTED_BASENAMES", "PROTECTED_PATH_GLOBS", "PROTECTED_BASENAME_GLOBS",
+		"PROTECTED_ROOT_BASENAME_GLOBS",
+	), gate_patterns):
+		match = re.search(rf'^{constant} = \(\n    "([^"]+)"\n\)\.split\("\|"\)', verifier, flags=re.MULTILINE)
+		assert match, constant
+		assert match.group(1) == gate_pattern.strip(), constant
+	assert "if not is_protected_conflict_path(path):" in verifier
 
 
 @pytest.mark.parametrize("judge_repo", [True], indirect=True)

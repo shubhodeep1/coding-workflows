@@ -293,11 +293,13 @@ def test_prepare_deps_networked_container_sees_no_source(sandbox):
 	try:
 		(runner,) = docker_runs(sandbox["docker_log"])
 		argv = runner["argv"]
-		assert "--network" not in argv
+		assert argv[argv.index("--network") + 1] == "none"
 		assert argv[argv.index("--workdir") + 1] == "/codex-deps"
 		mounts = mounts_of(runner)
-		assert len(mounts) == 2
+		assert len(mounts) == 4
 		assert any(f"src={root}/deps-stage,dst=/codex-deps" in m for m in mounts)
+		assert any(m.endswith("dst=/socket") for m in mounts)
+		assert any(m.endswith("dst=/support/dependency_registry_proxy.py,readonly") for m in mounts)
 		assert not any(f"src={root}/work" in m or f"dst={sandbox['repo']}" in m for m in mounts)
 		assert "src/app.py" not in json.dumps(runner)
 		assert not (root / "deps-stage").exists()
@@ -312,7 +314,7 @@ def test_prepare_deps_pyproject_source_install_is_offline(sandbox):
 	root = Path(prep.stdout.strip())
 	try:
 		networked, offline = docker_runs(sandbox["docker_log"])
-		assert "--network" not in networked["argv"]
+		assert networked["argv"][networked["argv"].index("--network") + 1] == "none"
 		assert "--network" in offline["argv"]
 		assert offline["argv"][offline["argv"].index("--network") + 1] == "none"
 		assert "--read-only" in offline["argv"] and "--tmpfs" in offline["argv"]
@@ -349,6 +351,35 @@ def test_prepare_deps_failure_remains_unverified_warning(sandbox):
 	root = Path(prep.stdout.strip())
 	assert (root / "manifest.json").exists()
 	assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+def test_dependency_prepare_has_only_allowlisted_proxy_egress(sandbox):
+	(sandbox["repo"] / "requirements.txt").write_text("example==1\n")
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]), "--deps")
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	runs = docker_runs(sandbox["docker_log"])
+	assert len(runs) == 1
+	argv = runs[0]["argv"]
+	assert argv[argv.index("--network") + 1] == "none"
+	assert any(f"src={root}/deps-stage,dst=/codex-deps" in mount for mount in mounts_of(runs[0]))
+	assert not any(f"src={root}/work" in mount for mount in mounts_of(runs[0]))
+	assert any(mount.endswith("dst=/socket") for mount in mounts_of(runs[0]))
+	assert any(mount.endswith("dst=/support/dependency_registry_proxy.py,readonly") for mount in mounts_of(runs[0]))
+	assert "HTTPS_PROXY=http://127.0.0.1:3128" in argv
+	assert "proxy=on" in prep.stderr
+	assert not (root / "socket" / "registry.sock").exists()
+	assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+def test_missing_proxy_skips_dependency_container(sandbox):
+	(sandbox["scripts"] / "dependency_registry_proxy.py").unlink()
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]), "--deps")
+	assert prep.returncode == 0, prep.stderr
+	assert "deps_skipped reason=proxy_support_missing" in prep.stderr
+	assert "proxy=skipped" in prep.stderr
+	assert not docker_runs(sandbox["docker_log"])
+	assert run_helper(sandbox, "cleanup", "--root", prep.stdout.strip()).returncode == 0
 
 
 def test_foreign_root_is_rejected(sandbox, tmp_path):

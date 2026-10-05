@@ -18,9 +18,9 @@
 #       Workspace mode only. Create a persistent sandbox root for a job that
 #       runs several agent attempts on DIR, and print its path. With
 #       --deps, install third-party dependencies from filtered manifests in
-#       a credential-free networked container without the source tree. Source
-#       installation runs separately without network access. Dependency
-#       output stays in the sandbox and is never copied back.
+#       a credential-free, network-isolated container through the allowlisted
+#       registry proxy. Source installation runs separately without network
+#       access. Dependency output stays in the sandbox and is never copied back.
 #   codex_isolated_exec.sh run --mode read-only|workspace [--root DIR]
 #                              [--workdir DIR] [--include PATH]...
 #                              [--codex-home DIR] [--reasoning LEVEL]
@@ -278,23 +278,68 @@ cpu_limit()
 
 if [ "${action}" = prepare ]; then
 	root="$(new_root)"
-	trap 'remove_root_containers "${root}"; rm -rf -- "${root}"' EXIT
+	deps_broker_pid=""
+	stop_deps_broker()
+	{
+		if [ -n "${deps_broker_pid}" ]; then
+			kill "${deps_broker_pid}" 2>/dev/null || true
+			wait "${deps_broker_pid}" 2>/dev/null || true
+			deps_broker_pid=""
+		fi
+		rm -f -- "${root}/socket/registry.sock"
+	}
+	trap 'stop_deps_broker; remove_root_containers "${root}"; rm -rf -- "${root}"' EXIT
 	workspace_py snapshot-workspace "${workdir}" "${root}/work" "${root}/manifest.json" || fail "workspace snapshot failed"
+	proxy_state="skipped"
 	if [ "${want_deps}" = true ]; then
 		stage="${root}/deps-stage"
 		mkdir -m 0755 "${stage}"
 		if workspace_py stage-deps "${root}/work" "${stage}"; then
+			if [ ! -f "${support_dir}/dependency_registry_proxy.py" ] || [ -L "${support_dir}/dependency_registry_proxy.py" ]; then
+				echo "::warning::CODEX_ISOLATION deps_skipped reason=proxy_support_missing" >&2
+			else
+				install -m 0644 "${support_dir}/dependency_registry_proxy.py" "${root}/support/dependency_registry_proxy.py"
+				env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 "${python_bin}" "${root}/support/dependency_registry_proxy.py" broker "${root}/socket/registry.sock" "${DEPENDENCY_PROXY_ALLOWED_HOSTS:-}" &
+				deps_broker_pid=$!
+				for _ in $(seq 1 50); do
+					[ -S "${root}/socket/registry.sock" ] && break
+					kill -0 "${deps_broker_pid}" 2>/dev/null || break
+					command -p sleep 0.1
+				done
+				if [ ! -S "${root}/socket/registry.sock" ]; then
+					echo "::warning::CODEX_ISOLATION deps_skipped reason=proxy_unavailable" >&2
+					stop_deps_broker
+				else
+					proxy_state="on"
+				fi
+			fi
+		else
+			echo "::warning::CODEX_ISOLATION dependency staging failed; the agent runs without preinstalled dependencies." >&2
+		fi
+		if [ "${proxy_state}" = on ]; then
 			image="$(build_image)"
-			# No source, config files, broker or runner environment enter the
-			# networked container; only allowlisted manifests and the venv do.
+			# Only filtered manifests, the restricted proxy and the venv enter
+			# this network-isolated container, never the source tree.
 			timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --init \
 				--name "codex-isolated-deps-$$" --label "coding-workflows.codex-isolated.root=${root}" \
-				--user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+				--user "$(id -u):$(id -g)" --network none --cap-drop ALL --security-opt no-new-privileges \
 				--pids-limit 512 --memory 6g --cpus "$(cpu_limit 4)" \
 				--mount "type=bind,src=${stage},dst=/codex-deps" \
 				--mount "type=bind,src=${root}/venv,dst=/opt/codex-venv" \
+				--mount "type=bind,src=${root}/socket,dst=/socket" \
+				--mount "type=bind,src=${root}/support/dependency_registry_proxy.py,dst=/support/dependency_registry_proxy.py,readonly" \
+				--env HTTPS_PROXY=http://127.0.0.1:3128 --env https_proxy=http://127.0.0.1:3128 \
+				--env HTTP_PROXY=http://127.0.0.1:3128 --env http_proxy=http://127.0.0.1:3128 \
+				--env npm_config_https_proxy=http://127.0.0.1:3128 --env npm_config_proxy=http://127.0.0.1:3128 \
+				--env YARN_HTTPS_PROXY=http://127.0.0.1:3128 --env YARN_HTTP_PROXY=http://127.0.0.1:3128 \
+				--env PIP_PROXY=http://127.0.0.1:3128 --env NO_PROXY= --env no_proxy= \
 				--env HOME=/tmp/agent-home --env PYTHONDONTWRITEBYTECODE=1 --workdir /codex-deps "${image}" /bin/bash -c '
 					set -u
+					python3 /support/dependency_registry_proxy.py bridge /socket/registry.sock 3128 &
+					bridge_pid=$!
+					trap "kill ${bridge_pid} 2>/dev/null || true" EXIT
+					python3 -c "import socket,time; [(time.sleep(.1) if s.connect_ex((\"127.0.0.1\",3128)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)" \
+						|| { echo "::warning::CODEX_ISOLATION dependency proxy bridge unavailable" >&2; exit 0; }
 					install_failed=false
 					python3 -m venv --system-site-packages /opt/codex-venv || exit 1
 					export PATH=/opt/codex-venv/bin:$PATH
@@ -305,8 +350,8 @@ if [ "${action}" = prepare ]; then
 						pnpm) npx --yes pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true ;;
 						npm-install) npm install --ignore-scripts 2>&1 || install_failed=true ;;
 					esac
-				case "$(cat .codex-deps/python)" in
-					requirements) pip install -r .codex-deps/requirements.txt 2>&1 || install_failed=true ;;
+					case "$(cat .codex-deps/python)" in
+						requirements) pip install -r .codex-deps/requirements.txt 2>&1 || install_failed=true ;;
 						pyproject) pip install -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
 							|| pip install -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || install_failed=true ;;
 					esac
@@ -315,6 +360,7 @@ if [ "${action}" = prepare ]; then
 					fi
 					[ "${install_failed}" = false ] || echo "::warning::Some project dependencies could not be installed in the isolated dependency phase; the agent marks validations it cannot run as UNVERIFIED."
 				' >&2 || echo "::warning::CODEX_ISOLATION dependency phase failed; the agent runs without preinstalled dependencies." >&2
+			stop_deps_broker
 			if [ -d "${stage}/node_modules" ] && [ ! -L "${stage}/node_modules" ] && [ ! -e "${root}/work/node_modules" ] && [ ! -L "${root}/work/node_modules" ]; then
 				mv -- "${stage}/node_modules" "${root}/work/node_modules" || echo "::warning::CODEX_ISOLATION node_modules hand-off failed" >&2
 			elif [ -e "${stage}/node_modules" ] || [ -L "${stage}/node_modules" ]; then
@@ -335,14 +381,12 @@ if [ "${action}" = prepare ]; then
 						pip install --no-deps --no-build-isolation --no-index -e .
 					' >&2 || echo "::warning::CODEX_ISOLATION offline source install failed; the agent marks validations it cannot run as UNVERIFIED." >&2
 			fi
-		else
-			echo "::warning::CODEX_ISOLATION dependency staging failed; the agent runs without preinstalled dependencies." >&2
 		fi
 		rm -rf -- "${stage}"
 		workspace_py prep-finalize "${workdir}" "${root}/work" "${root}/manifest.json" || fail "dependency phase output rejected"
 	fi
 	trap - EXIT
-	echo "CODEX_ISOLATION prepare root=${root} workdir=${workdir} deps=${want_deps}" >&2
+	echo "CODEX_ISOLATION prepare root=${root} workdir=${workdir} deps=${want_deps} proxy=${proxy_state}" >&2
 	printf '%s\n' "${root}"
 	exit 0
 fi
