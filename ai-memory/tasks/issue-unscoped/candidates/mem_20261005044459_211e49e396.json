@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: The root and template `audit-plans.md` commands differ, causing `test_template_parity` to fail.\n  WHY: The failure leaves `tests-hooks-and-orchestrator` and its dependent `lint` job red; reviewers agree it is a blocker, while noting it also fails on `main` and is pre-existing.\n- scripts/unblock_judge.sh:169-172 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: The case-sensitive `grep -q 'HTTP 404'` check could fail to recognize an already-absent label if `gh` output casing changes.\n  WHY: Reviewers describe this as forward-compatibility risk only, not a current failure; the source rates it NIT, and no higher severity was reported.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR must satisfy required CI check-runs, including producing a green `lint` job, before it can merge.\n  expected_change_site: `.claude/commands/audit-plans.md`\n  confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, z-ai_glm-5_2]\n  EVIDENCE: `tests/test_audit_plans_command.py:29-30` fails because `.claude/commands/audit-plans.md` differs from `workflow-templates/.claude/commands/audit-plans.md`; neither file appears in the PR changed files or last-run changed files, and CI reports `tests-hooks-and-orchestrator` and dependent `lint` failures.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_judge.sh:169-172 | severity=NIT | confidence=2\n  PROBLEM: The grep for 'HTTP 404' uses case-sensitive matching.\n  WHY: This is not a current defect because `gh` currently emits uppercase \"HTTP NNN\", but a future output-format change could cause an already-absent label to block the resume command. Suggested minimal fix: change `grep -q 'HTTP 404'` to `grep -qi 'HTTP 404'`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_audit_plans_command.py: lines 29-30 (test_template_parity) | severity=BLOCKER | confidence=5\n  PROBLEM: The test asserts byte-for-byte equality between workflow-templates/.claude/commands/audit-plans.md and .claude/commands/audit-plans.md, but the root file contains stale in-session phrasing.\n  WHY: `test_template_parity` fails with an AssertionError during CI execution, causing the required aggregate lint check-run to fail and blocking the PR from merging.\n- TASK_GAP\n  Requirement: The PR must satisfy required CI check-runs (specifically tests-hooks-and-orchestrator and the dependent lint job) before it can merge.\n  Expected change site: .claude/commands/audit-plans.md (lines 1, 29, 103, 126, 127)\n  Evidence of absence: Check-run context shows tests-hooks-and-orchestrator and lint failed on the current head SHA b7c675dbb0afc480dd0dc93069153a54add133ef due to test_audit_plans_command.py::test_template_parity. The PR diff and last-run diff do not synchronize .claude/commands/audit-plans.md with workflow-templates/.claude/commands/audit-plans.md, leaving the required check broken.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: BLOCKER\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_audit_plans_command.py: 29-30 (`test_template_parity`) | severity=BLOCKER | confidence=5\n  PROBLEM: The root and template `audit-plans.md` commands differ, so the parity assertion fails.\n  WHY: `tests-hooks-and-orchestrator` fails on the current head, leaving the dependent `lint` job red. The PR description notes this also fails on `main`; this is a pre-existing check failure, not a defect introduced by the latest autofix.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/unblock_judge.sh: Location: remove_label case, line ~166-174\n  PROBLEM: The `grep -q 'HTTP 404'` match is case-sensitive.\n  WHY: While `gh` CLI consistently outputs uppercase \"HTTP 404\" today, a locale variant or future `gh` version could output different casing, causing a concurrent label removal to be treated as a real failure and blocking the resume command. Suggested minimal fix: Use `grep -qi 'http 404'` instead of `grep -q 'HTTP 404'`.\n- TASK_GAP\n  Requirement: The PR must produce a green `lint` job in CI before it can merge. The PR description states \"Lint - actionlint, yamllint and shellcheck are clean on the new files. No findings beyond the base branch's on the changed ones.\"\n  Expected change site: `.claude/commands/audit-plans.md` (root) must be synchronized with `workflow-templates/.claude/commands/audit-plans.md` (template) to pass `test_template_parity` in `tests/test_audit_plans_command.py:29-30`.\n  Evidence of absence: Neither `.claude/commands/audit-plans.md` nor `workflow-templates/.claude/commands/audit-plans.md` appears in PR CHANGED FILES or LAST RUN CHANGED FILES. The template file has Phase 2 retirement wording (\"legacy `/implement-plan-claude`\", \"Claude-engine orchestrator hand-off\") at lines 1, 29, 32, 103, 126-127 that the root file lacks. CI confirms `tests-hooks-and-orchestrator: failure` with `1 failed, 8 passed` on head `b7c675d`, cascading to `lint: failure`. Multiple prior editor summaries (PR comments entries 11, 15, 16, 18, 22, 28) log this as a persistent blocker that the review sandbox cannot transfer because `scripts/review_untrusted_workspace.py` excludes `.claude/commands/` from snapshot and transfer.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: BLOCKER\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "40e86e4e768a6e00d5234a19ad82f45a862404ba97317667e55248ade60993f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37262201447",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37262201447",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005044459_211e49e396",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37262201447"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T04:44:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
