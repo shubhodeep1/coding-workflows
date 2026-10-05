@@ -65,6 +65,18 @@ def test_restore_does_not_send_token_to_an_editor_changed_origin(tmp_path: Path)
 	assert "newsecret" not in (repo / ".git" / "config").read_text()
 
 
+def test_restore_validates_an_origin_without_embedded_auth(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "remote", "set-url", "origin", "https://github.com/attacker/repo.git")
+	assert subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True).returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
 def test_restore_rejects_editor_changed_push_url(tmp_path: Path) -> None:
 	repo = tmp_path / "repo"
 	repo.mkdir()
@@ -202,10 +214,13 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert repair.count('editor_git_credentials.sh" restore') == 2
 	assert repair.index('editor_git_credentials.sh" restore') < repair.index('echo "::warning::Post-Codex repair attempt')
 	assert implement.count('env -u GH_TOKEN -u GH_PAT') == 2
-	assert implement.count('-u HEAL_EVIDENCE_DIR \\') == 2
+	assert implement.count('-u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \\') == 2
 	plan_runner = (ROOT / "scripts" / "run_plan_codex.sh").read_text()
-	assert 'ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR' in plan_runner
-	assert '-u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR codex' in plan_runner
+	assert 'ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR GITHUB_ENV GITHUB_PATH' in plan_runner
+	assert '-u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH codex' in plan_runner
+	assert 'git -c core.hooksPath=/dev/null commit' in (ROOT / "scripts" / "implement_commit_changes.sh").read_text()
+	assert implement.count('git -c core.hooksPath=/dev/null push') == 2
+	assert 'git -c core.hooksPath=/dev/null rebase' in implement
 
 
 def test_review_workspace_accepts_only_the_known_helper_path() -> None:
@@ -215,14 +230,29 @@ def test_review_workspace_accepts_only_the_known_helper_path() -> None:
 	assert not allowed("scripts/other_credentials.sh")
 
 
+def test_credentialed_commit_disables_editor_written_hook(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "config", "user.email", "test@example.invalid")
+	_git(repo, "config", "user.name", "test")
+	(repo / "README.md").write_text("safe\n")
+	_git(repo, "add", "README.md")
+	hook = repo / ".git" / "hooks" / "pre-commit"
+	hook.write_text("#!/bin/sh\nexit 1\n")
+	hook.chmod(0o755)
+	_git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "safe")
+	assert _git(repo, "show", "--format=", "--name-only", "HEAD") == "README.md"
+
+
 def test_editor_credential_scrub_retains_model_and_thread_settings(tmp_path: Path) -> None:
 	command = (
 		"CODEX_THREAD_REUSE_STATE_KEY=implement env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN "
 		"-u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN "
 		"-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR "
-		"env | grep -E '^(GH_TOKEN|GH_PAT|TG_BOT_SECRET|ACTIONS_RUNTIME_TOKEN|HEAL_EVIDENCE_DIR|OPENROUTER_API_KEY|CODEX_THREAD_REUSE_STATE_KEY)='"
+		"-u GITHUB_ENV -u GITHUB_PATH env | grep -E '^(GH_TOKEN|GH_PAT|TG_BOT_SECRET|ACTIONS_RUNTIME_TOKEN|HEAL_EVIDENCE_DIR|GITHUB_ENV|GITHUB_PATH|OPENROUTER_API_KEY|CODEX_THREAD_REUSE_STATE_KEY)='"
 	)
-	env = dict(os.environ, GH_TOKEN="test", GH_PAT="test", TG_BOT_SECRET="test", ACTIONS_RUNTIME_TOKEN="test", HEAL_EVIDENCE_DIR="/tmp/untrusted", OPENROUTER_API_KEY="model")
+	env = dict(os.environ, GH_TOKEN="test", GH_PAT="test", TG_BOT_SECRET="test", ACTIONS_RUNTIME_TOKEN="test", HEAL_EVIDENCE_DIR="/tmp/untrusted", GITHUB_ENV="/tmp/runner-env", GITHUB_PATH="/tmp/runner-path", OPENROUTER_API_KEY="model")
 	proc = subprocess.run(["bash", "-c", command], env=env, cwd=tmp_path, capture_output=True, text=True)
 	assert proc.returncode == 0
 	assert proc.stdout.splitlines() == ["OPENROUTER_API_KEY=model", "CODEX_THREAD_REUSE_STATE_KEY=implement"] or set(proc.stdout.splitlines()) == {"OPENROUTER_API_KEY=model", "CODEX_THREAD_REUSE_STATE_KEY=implement"}

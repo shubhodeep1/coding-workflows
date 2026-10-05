@@ -215,7 +215,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     artifact files are not linked in those prompts, and free-form step names
     and error signatures are represented only by SHA-256 fingerprints. Their
     editor launches scrub GitHub/Telegram credentials and the raw-evidence
-    directory pointer, and temporarily hide checkout git auth.
+    directory and runner environment-file pointers, and temporarily hide checkout
+    git auth. Post-editor implementation commits and pushes disable Git hooks.
     Hiding/restoring git auth fails the editor step on error; restoration
     verifies the workflow repository identity, not merely the GitHub host.
     Heal-evidence implement runs pin the issue/plan scope allowlist before the

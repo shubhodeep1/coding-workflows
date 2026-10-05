@@ -394,7 +394,7 @@ def test_codex_engine_runs_the_unchanged_codex_call() -> None:
 	assert not (runtime_dir / "claude-run.log").exists()
 	runner = PLAN_RUNNER.read_text(encoding="utf-8")
 	assert (
-		'env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true '
+		'env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true '
 		'exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" '
 		'2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?'
 	) in runner

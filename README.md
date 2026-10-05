@@ -1414,7 +1414,9 @@ through `clarify → plan → implement → review`.
   Implement runs with heal evidence also pin the issue/plan file allowlist
   before the editor and block out-of-scope commits even when the normal guard
   or per-run override is disabled. This is not a process isolation boundary:
-  the parent step environment remains readable to same-uid children.
+  the parent step environment remains readable to same-uid children. The editor
+  also loses the runner's environment/path-file pointers; later implementation
+  commits and pushes disable repository Git hooks, including during push retries.
   Budget: 400 KB in total and 60 KB per file (reviewer outputs, then other
   artifact files, then job logs of the oldest run are dropped first); about
   20 REST calls for the first stage and about 5 for a later one, since

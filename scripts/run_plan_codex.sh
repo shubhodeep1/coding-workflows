@@ -294,7 +294,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
   plan_rc=0
   bash scripts/editor_git_credentials.sh hide
   if [ "${PLAN_ENGINE}" = "claude" ]; then
-    ( unset GH_TOKEN GH_PAT GITHUB_TOKEN TG_BOT_SECRET TG_CHAT_ID TG_ADMIN_CHAT_ID ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR
+    ( unset GH_TOKEN GH_PAT GITHUB_TOKEN TG_BOT_SECRET TG_CHAT_ID TG_ADMIN_CHAT_ID ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR GITHUB_ENV GITHUB_PATH
       AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
         claude_run PLAN "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) ) || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
@@ -303,7 +303,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     fi
   fi
   if [ "${PLAN_ENGINE}" != "claude" ]; then
-    env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
+    env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
   fi
   bash scripts/editor_git_credentials.sh restore
   if [ "${plan_rc}" -eq 0 ]; then
