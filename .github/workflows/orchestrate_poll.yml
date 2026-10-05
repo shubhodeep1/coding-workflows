@@ -712,10 +712,10 @@ jobs:
         run: |
           set -euo pipefail
           any_claude=false
-          if jq -e 'any(.[]; any(.labels[]?; .name == "ai:engine-claude"))' "${RUNTIME_DIR}/tracking_issues.json" >/dev/null; then
+          if jq -e 'any(.[]; any(.labels[]?; .name == "ai:engine-claude") and (any(.labels[]?; .name == "ai:codex") | not))' "${RUNTIME_DIR}/tracking_issues.json" >/dev/null; then
             any_claude=true
           fi
-          if [ -f scripts/ai_engine.sh ]; then
+          if [ -f scripts/ai_engine.sh ] && jq -e 'any(.[]; all(.labels[]?; .name != "ai:codex"))' "${RUNTIME_DIR}/tracking_issues.json" >/dev/null; then
             # shellcheck source=/dev/null
             source scripts/ai_engine.sh
             for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE; do

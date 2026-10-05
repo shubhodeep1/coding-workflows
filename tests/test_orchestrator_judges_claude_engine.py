@@ -583,7 +583,8 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	assert resolve["id"] == "ai_engine"
 	assert resolve["env"]["AI_ENGINE_LABELS"] == ""
 	assert '--json number,title,labels' in steps[names.index("Find active tracking issues")]["run"]
-	assert 'any(.[]; any(.labels[]?; .name == "ai:engine-claude"))' in resolve["run"]
+	assert 'any(.[]; any(.labels[]?; .name == "ai:engine-claude") and (any(.labels[]?; .name == "ai:codex") | not))' in resolve["run"]
+	assert 'any(.[]; all(.labels[]?; .name != "ai:codex"))' in resolve["run"]
 	assert "for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE; do" in resolve["run"]
 	for name, uses in (
 		("Install Claude Code CLI", "./.codex-workflow-src/.github/actions/install-claude"),
@@ -610,12 +611,27 @@ def test_poll_preflight_installs_for_label_even_with_global_codex(tmp_path: Path
 	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "codex", "AI_ENGINE_LABELS": ""}
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"):
 		env[f"AI_ENGINE_{role}"] = ""
-	for labels, expected in ((["ai:engine-claude"], "true"), (["ai:codex"], "false")):
+	for engine, labels, expected in (
+		("codex", ["ai:engine-claude"], "true"),
+		("codex", ["ai:codex"], "false"),
+		("codex", ["ai:engine-claude", "ai:codex"], "false"),
+		("claude", ["ai:codex"], "false"),
+	):
+		env["AI_ENGINE"] = engine
 		issue_file.write_text(json.dumps([{"number": 1, "labels": [{"name": label} for label in labels]}]), encoding="utf-8")
 		output_file.write_text("", encoding="utf-8")
 		result = subprocess.run(["bash", "-c", preflight], cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
 		assert result.returncode == 0, result.stderr
 		assert output_file.read_text(encoding="utf-8").strip() == f"any_claude={expected}"
+	issue_file.write_text(json.dumps([
+		{"number": 1, "labels": [{"name": "ai:codex"}]},
+		{"number": 2, "labels": [{"name": "ai:engine-claude"}]},
+	]), encoding="utf-8")
+	env["AI_ENGINE"] = "codex"
+	output_file.write_text("", encoding="utf-8")
+	result = subprocess.run(["bash", "-c", preflight], cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert output_file.read_text(encoding="utf-8").strip() == "any_claude=true"
 
 
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"

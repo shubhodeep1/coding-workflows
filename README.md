@@ -1945,15 +1945,16 @@ engine for the role. Only when it is `claude` do "Install Claude Code CLI" and
 on Claude (`claude_run`, or the clarify sandbox's Claude branch). When Claude
 cannot start (no CLI, no credential, clarify image build failure or every
 account gated: exit `75`, logged
-`AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call, and
-the rest of the job stays on codex. `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
+`AI_ENGINE_FALLBACK`), the same attempt runs its codex/OpenCode fallback.
+Poller judges retry OpenCode in a fresh isolated sandbox, never host Codex.
+`AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
 Review write roles read PR labels from the existing PR-state lookup, including
 `workflow_dispatch` runs; if that lookup cannot verify labels, those roles use
 OpenCode rather than selecting Claude from a default. The orchestrator poller
 includes tracking-issue labels in its existing issue listing, so a project
 labeled `ai:engine-claude` triggers CLI and credential setup even when the
-global engine variable selects codex.
+global engine variable selects codex, unless `ai:codex` is also present.
 Implementation attempts on Claude honor the same `CODEX_THREAD_REUSE_TIMEOUT_SECS`
 wall-clock bound as codex attempts; diagnosis is bounded to 300 seconds on
 either engine. An exit-75 implementation fallback remains on codex for later

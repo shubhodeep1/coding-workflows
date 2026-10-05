@@ -684,9 +684,10 @@ model variable only when that value starts with `claude-`, else Opus 5.5
 (`claude-opus-5-5`), or Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`,
 `RETRO`, `MATERIALITY`, `SUMMARISER` and `BEHAVIOURAL_SMOKE`; the reasoning
 column is the effort (`none` / `minimal` → `low`). The reviewer rows have no
-engine switch. When Claude is unavailable (`claude_run` exit 75,
-`AI_ENGINE_FALLBACK`), the run uses the codex/OpenCode path unchanged. The
-pinned CLI is `@anthropic-ai/claude-code` `cli_version` from the same file,
+engine switch. When Claude is unavailable (exit 75, `AI_ENGINE_FALLBACK`),
+poller judges retry OpenCode in a fresh isolated sandbox; other roles use
+their codex/OpenCode fallback. The pinned CLI is `@anthropic-ai/claude-code`
+`cli_version` from the same file,
 installed by `.github/actions/install-claude`.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
