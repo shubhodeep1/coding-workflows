@@ -9,4 +9,4 @@ Two merged PRs updated a template under `workflow-templates/.claude/` without th
 | Live copies synced in this change | 5 (1 hook, 4 commands) |
 | Command files allowlisted as maintained separately | 6 |
 
-What this means for operators: CI on new PRs stops failing for reasons the PR did not cause. If a sync PR from `ai/sync-claude-live-copies` appears, it only copies template text into `.claude/`; it goes through the normal review. To keep a file intentionally different, add it to `.github/ai/claude_template_divergence.json` with a reason.
+What this means for operators: CI on new PRs stops failing for reasons the PR did not cause. If a sync PR from `ai/sync-claude-live-copies` appears, it copies template content and executable mode into `.claude/`; it goes through the normal review. To keep a file intentionally different, add it to `.github/ai/claude_template_divergence.json` with a reason.

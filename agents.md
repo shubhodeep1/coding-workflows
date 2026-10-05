@@ -749,9 +749,9 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
 `main` that way. Three pieces keep the pairs in step:
 
 - `tests/test_claude_template_live_parity.py` (own `ci.yml` step) fails when a
-  template and its live copy differ, unless the file is listed in
-  `.github/ai/claude_template_divergence.json` with a reason. Six command
-  files are listed today; both copies of those are edited by hand.
+  template and its live copy differ in content or executable bits, unless the
+  file is listed in `.github/ai/claude_template_divergence.json` with a reason.
+  Six command files are listed today; both copies of those are edited by hand.
 - `scripts/sync_claude_live_copies.py` runs from
   `.github/workflows/sync-claude-live-copies.yml` on every push to `main` that
   touches `workflow-templates/.claude/**`. When the push changed a template
@@ -769,9 +769,10 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
 - A push that changed only the live copy is left to the parity test.
 
 New templates without a live copy are also treated as drift and copied into
-`.claude/` (including new subdirectories). A later template push recovers an
-earlier failed or superseded sync only if the template's most recent change
-is newer than the live file's; an equal or newer live edit is left untouched.
+`.claude/` (including new subdirectories) with their executable permissions.
+A later template push recovers an earlier failed or superseded sync only if
+the template's most recent change is newer than the live file's; an equal or
+newer live edit is left untouched.
 An unusable `before` commit still skips the sync, so CI reports any drift.
 
 ---

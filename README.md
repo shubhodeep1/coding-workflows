@@ -1057,8 +1057,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > This includes new templates without a live file and template changes missed
 > by a failed or superseded sync run. An intentional newer live-file edit, or
 > a file listed in `.github/ai/claude_template_divergence.json`, is not
-> overwritten. An unusable push `before` SHA skips syncing; the parity CI test
-> still reports missing or differing live files.
+> overwritten. Copies preserve executable permissions; parity CI checks both
+> contents and execute bits. An unusable push `before` SHA skips syncing; the
+> parity CI test still reports missing or differing live files.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest

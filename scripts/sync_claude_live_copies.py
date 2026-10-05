@@ -9,7 +9,7 @@ twice in two days (#6133 changed the template copy of the merged-PR guard,
 
 Every template file must have a live copy. Copies not listed as intentionally
 divergent in `.github/ai/claude_template_divergence.json` must match byte for
-byte.
+byte and in executable permissions.
 
 Subcommands:
   check   Exit 1 and list missing or differing live files not allowlisted.
@@ -89,6 +89,8 @@ def mismatched(root: Path) -> list[str]:
 		and (
 			not (root / LIVE_PREFIX / relative).is_file()
 			or not filecmp.cmp(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative, shallow=False)
+			or ((root / TEMPLATE_PREFIX / relative).stat().st_mode & 0o111)
+			!= ((root / LIVE_PREFIX / relative).stat().st_mode & 0o111)
 		)
 	]
 
@@ -193,7 +195,7 @@ def sync(root: Path, before: str, after: str, *, dry_run: bool) -> int:
 			return 1
 	for relative in paths:
 		(root / LIVE_PREFIX / relative).parent.mkdir(parents=True, exist_ok=True)
-		shutil.copyfile(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative)
+		shutil.copy2(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative)
 		log(f"copied path={LIVE_PREFIX}{relative}")
 	if dry_run:
 		return 0
@@ -207,9 +209,13 @@ def sync(root: Path, before: str, after: str, *, dry_run: bool) -> int:
 		+ "".join(f"- .claude/{relative}\n" for relative in paths)
 		+ "\nCopied by scripts/sync_claude_live_copies.py (sync-claude-live-copies.yml).\n"
 	)
-	_git(root, "checkout", "-B", branch)
-	_git(root, "add", "--", *[LIVE_PREFIX + relative for relative in paths])
-	_git(root, "-c", "user.name=github-actions[bot]", "-c", "user.email=github-actions[bot]@users.noreply.github.com", "commit", "-q", "-m", message)
+	try:
+		_git(root, "checkout", "-B", branch)
+		_git(root, "add", "--", *[LIVE_PREFIX + relative for relative in paths])
+		_git(root, "-c", "user.name=github-actions[bot]", "-c", "user.email=github-actions[bot]@users.noreply.github.com", "commit", "-q", "-m", message)
+	except subprocess.CalledProcessError:
+		log("error reason=git_stage_failed")
+		return 1
 	try:
 		_git(root, "push", f"--force-with-lease=refs/heads/{branch}:{previous_sha}", "origin", f"HEAD:refs/heads/{branch}")
 	except subprocess.CalledProcessError:

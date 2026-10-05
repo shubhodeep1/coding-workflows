@@ -2,8 +2,9 @@
 
 The pipeline's editors cannot edit `.claude/**`, so an AI fix that changes a
 template leaves this repo's own copy behind; #6133 and #6176 broke main that
-way. Every template file with a live copy must match it, except the files
-`.github/ai/claude_template_divergence.json` lists as maintained separately.
+way. Every template file needs a live copy matching its content and executable
+mode, except files `.github/ai/claude_template_divergence.json` lists as
+maintained separately.
 The tests also run scripts/sync_claude_live_copies.py's `plan` and `sync`
 against a scratch repository.
 """
@@ -121,8 +122,29 @@ def test_sync_commits_missing_live_copy(tmp_path: Path, monkeypatch) -> None:
 	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 7}])
 	(root / "workflow-templates/.claude/commands").mkdir()
 	before, after = _commit(root, "workflow-templates/.claude/commands/new.md", "new command\n")
+	(root / "workflow-templates/.claude/commands/new.md").chmod(0o755)
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "executable template")
+	after = _git(root, "rev-parse", "HEAD")
 	assert sync_mod.sync(root, before, after, dry_run=False) == 0
 	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/commands/new.md") == "new command"
+	assert _git(remote, "ls-tree", "ai/sync-claude-live-copies", ".claude/commands/new.md").startswith("100755 blob ")
+
+
+def test_executable_mode_only_drift_is_detected_and_repaired(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	template = root / "workflow-templates/.claude/hooks/guard.py"
+	live = root / ".claude/hooks/guard.py"
+	before = _git(root, "rev-parse", "HEAD")
+	template.chmod(0o755)
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "executable template")
+	after = _git(root, "rev-parse", "HEAD")
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+	assert sync_mod.plan(root, before, after) == ["hooks/guard.py"]
+	assert sync_mod.sync(root, before, after, dry_run=True) == 0
+	assert template.stat().st_mode & 0o111 == live.stat().st_mode & 0o111
+	assert sync_mod.mismatched(root) == []
 
 
 def test_plan_recovers_superseded_push_without_overwriting_live_edits(tmp_path: Path) -> None:
@@ -216,6 +238,25 @@ def test_sync_reports_api_error_after_push(tmp_path: Path, monkeypatch, capsys) 
 	assert sync_mod.sync(root, before, after, dry_run=False) == 1
 	assert "CLAUDE_LIVE_SYNC error reason=api_failed stage=lookup" in capsys.readouterr().err
 	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/guard.py") == "v2"
+
+
+def test_sync_reports_git_stage_error(tmp_path: Path, monkeypatch, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	remote = tmp_path / "remote.git"
+	_git(tmp_path, "init", "-q", "--bare", str(remote))
+	_git(root, "remote", "add", "origin", str(remote))
+	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	git_sync_call = sync_mod._git
+
+	def fail_checkout(*args, **kwargs):
+		if args[1] == "checkout":
+			raise subprocess.CalledProcessError(1, ["git", "checkout"])
+		return git_sync_call(*args, **kwargs)
+
+	monkeypatch.setattr(sync_mod, "_git", fail_checkout)
+	assert sync_mod.sync(root, before, after, dry_run=False) == 1
+	assert "CLAUDE_LIVE_SYNC error reason=git_stage_failed" in capsys.readouterr().err
 
 
 def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
