@@ -76,6 +76,7 @@ Check-run context collection retries malformed or stale-head snapshots within th
 configured wait budget, then reports `collection_status: api_error` rather than
 `ready` if they never recover. A wait budget of 60 seconds or less skips the
 branch-protection lookup because it cannot shorten that budget.
+Complete paginated listings of 1,000 or more check-runs remain valid.
 
 | Variable | Required | Default | Used By | Description |
 |---|---|---|---|---|

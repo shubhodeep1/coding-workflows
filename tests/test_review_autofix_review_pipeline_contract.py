@@ -3484,6 +3484,11 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 	assert "collection_status: ready" in context and sleeps == [20] and lookups == 0
 	context, log, sleeps, lookups = run_case([{"check_runs": [completed]}])
 	assert "collection_status: api_error" in context and sum(sleeps) == 300 and lookups == 0
+	bulk_runs = [{**completed, "id": idx + 1, "head_sha": "a" * 64} for idx in range(1000)]
+	bulk_pages = [{"total_count": 1000, "check_runs": bulk_runs[idx:idx + 100]} for idx in range(0, 1000, 100)]
+	assert module._short_wait_eligibility(json.dumps(bulk_pages), "A" * 64, "", frozenset({"CI"}), base_time)[:2] == (
+		False, "lookup_skipped",
+	)
 
 
 def test_check_runs_wait_diagnostics_are_bounded() -> None:
@@ -3762,12 +3767,12 @@ def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-writer-error-") as td:
 		tmp = Path(td)
 		pr_payload_file = tmp / "pr_payload.json"
-		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "a" * 40}}), encoding="utf-8")
 		context_file = tmp / "pr_check_runs_context.txt"
 		context_file.write_text("stale-context\n", encoding="utf-8")
 
 		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
-			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"check_runs": []}]', stderr="")
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"total_count": 0, "check_runs": []}]', stderr="")
 
 		def _boom(*, raw_text: str, head_sha: str, final_status: str) -> str:
 			raise RuntimeError("boom")
@@ -3801,7 +3806,7 @@ def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 		assert returncode == 0
 		assert context_file.read_text(encoding="utf-8") == (
 			"PR_CHECK_RUNS_CONTEXT\n"
-			"head_sha: abc123\n"
+			"head_sha: " + "a" * 40 + "\n"
 			"collection_status: writer_error\n"
 			"total_check_runs: 0\n"
 			"failed_count: 0\n"
@@ -3811,7 +3816,7 @@ def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 		)
 		assert "stale-context" not in context_file.read_text(encoding="utf-8")
 		assert "RuntimeError: boom" in stderr.getvalue()
-		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
+		assert f"::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha={'a' * 40} writer_ok=False" in stdout.getvalue()
 
 
 def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None:
@@ -3823,7 +3828,7 @@ def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None
 	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-top-level-") as td:
 		tmp = Path(td)
 		pr_payload_file = tmp / "pr_payload.json"
-		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "a" * 40}}), encoding="utf-8")
 		context_file = tmp / "pr_check_runs_context.txt"
 		context_file.write_text("stale-context\n", encoding="utf-8")
 
@@ -3862,7 +3867,7 @@ def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None
 		assert returncode == 0
 		assert context_file.read_text(encoding="utf-8") == (
 			"PR_CHECK_RUNS_CONTEXT\n"
-			"head_sha: abc123\n"
+			"head_sha: " + "a" * 40 + "\n"
 			"collection_status: writer_error\n"
 			"total_check_runs: 0\n"
 			"failed_count: 0\n"
@@ -3872,7 +3877,7 @@ def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None
 		)
 		assert "stale-context" not in context_file.read_text(encoding="utf-8")
 		assert "RuntimeError: wait-view boom" in stderr.getvalue()
-		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
+		assert f"::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha={'a' * 40} writer_ok=False" in stdout.getvalue()
 
 
 def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> None:
@@ -8426,6 +8431,9 @@ def main() -> int:
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_closes_direct_log_redirect_response()
 	test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion()
+	test_check_runs_wait_budgets_and_late_unknown()
+	test_check_runs_wait_diagnostics_are_bounded()
+	test_check_runs_protection_lookup_and_zero_wait()
 	test_post_review_snapshot_ignores_only_its_own_incomplete_check()
 	test_pending_and_startup_failure_checks_cannot_look_clean()
 	test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list()

@@ -236,7 +236,7 @@ def _short_wait_eligibility(
 		pages = _parse_pages(raw_text)
 	except ValueError:
 		return False, "malformed_snapshot", []
-	if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+	if not re.fullmatch(r"[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?", head_sha):
 		return False, "stale_head", []
 	runs: list[dict[str, Any]] = []
 	seen_ids: set[int] = set()
@@ -244,7 +244,7 @@ def _short_wait_eligibility(
 	for page in pages:
 		page_total = page.get("total_count")
 		page_runs = page["check_runs"]
-		if (type(page_total) is not int or page_total < 0 or page_total >= 1000
+		if (type(page_total) is not int or page_total < 0
 			or (total is not None and total != page_total) or len(page_runs) > 100
 			or (not page_runs and (len(pages) != 1 or page_total != 0))):
 			return False, "malformed_snapshot", []
@@ -256,7 +256,8 @@ def _short_wait_eligibility(
 			runs.append(run)
 	if total != len(runs):
 		return False, "malformed_snapshot", []
-	if any(run.get("head_sha") not in (None, head_sha) for run in runs):
+	if any(run.get("head_sha") is not None and (not isinstance(run["head_sha"], str)
+		or run["head_sha"].lower() != head_sha.lower()) for run in runs):
 		return False, "stale_head", []
 	pending_runs = [run for run in runs if (run.get("status") != "completed" or run.get("conclusion") is None)
 		and not (self_run_id.isdigit() and f"/actions/runs/{self_run_id}/job/" in str(run.get("details_url") or ""))]
@@ -300,7 +301,7 @@ def _emit_wait_diag(
 	if len(pending) > 10:
 		checks += f",+{len(pending) - 10}"
 	print(f"CHECK_RUNS_WAIT_V1 phase={phase} budget_secs={budget} legacy_budget_secs={legacy_budget} "
-		f"reason={reason} head={head_sha[:12] if re.fullmatch(r'[0-9a-f]{40}', head_sha) else '-'} "
+		f"reason={reason} head={head_sha[:12] if re.fullmatch(r'[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?', head_sha) else '-'} "
 		f"head_match={'false' if reason in ('stale_head', 'malformed_snapshot') else 'true'} "
 		f"elapsed_secs={max(0, int(elapsed))} pending={len(pending)} checks={checks or '-'}"
 		+ (f" final_status={final_status}" if phase == "outcome" else ""))
