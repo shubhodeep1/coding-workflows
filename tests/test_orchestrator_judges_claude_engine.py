@@ -240,7 +240,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	steps = _poll_steps()
 	names = [step.get("name") for step in steps]
 	stage = steps[names.index("Stage workflow support files")]["run"]
-	assert "security_dependency.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl codex_stall_guard.sh; do" in stage
+	assert "security_dependency.py ai_engine.sh claude_engine.py claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py claude_settings.json.tmpl codex_stall_guard.sh; do" in stage
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in stage
 	resolve = steps[names.index("Resolve AI engine")]
 	assert resolve["id"] == "ai_engine"

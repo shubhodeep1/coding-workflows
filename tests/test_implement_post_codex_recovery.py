@@ -1945,7 +1945,7 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py; do" in stage_block
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py; do" in stage_block
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
 	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"'
