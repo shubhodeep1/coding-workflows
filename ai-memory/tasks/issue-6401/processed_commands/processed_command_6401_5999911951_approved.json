@@ -5,13 +5,30 @@
   "entry_id": "processed_command_6401_5999911951_approved",
   "issue_number": 6401,
   "metadata": {
+    "branch": "ai/issue-6401",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/6401-single-issue-security-pass-completed-audit.md",
+      "scripts/review_rb_judge_security_pass.sh",
+      "scripts/review_single_issue_security_pass.sh",
+      "tests/test_review_rb_judge_security_pass.py",
+      "tests/test_single_issue_security_pass.py"
+    ],
+    "issue_number": 6401,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6401",
+    "pr_number": 6409,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6409",
+    "run_attempt": "1",
+    "run_id": "37350879872",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37350879872"
   },
   "run_attempt": 1,
   "run_id": "37350879872",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-05T17:51:36Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T18:11:01Z",
   "workflow": "implement"
 }
