@@ -801,7 +801,22 @@ def test_total_size_limit_drops_oldest_extras_first(tmp_path: Path) -> None:
 	second_manifest = _collector(tmp_path, second, max_total_bytes=12_000, max_file_bytes=6000).collect(_issue(), [_occurrence(222)], issue_repo=REPO)
 	assert {"part": f"{run_dir}__111/job-11.txt", "reason": "cached_file_missing"} in second_manifest["skipped"]
 	assert {"part": f"{run_dir}__111/artifact-codex-review-autofix-failure-logs-111-1/editor_attempt_1.err", "reason": "cached_file_missing"} in second_manifest["skipped"]
-	assert f"{run_dir}__111/job-11.txt: cached_file_missing" in (out / "INDEX.md").read_text()
+	second_index = (out / "INDEX.md").read_text()
+	assert f"{run_dir}__111/job-11.txt: cached_file_missing" in second_index
+	assert any(
+		'job "review / codex-agent" (success), failing step: none (focus job)' in rendered_cache_job_entry
+		and rendered_cache_job_entry.endswith("(missing from cache)")
+		for rendered_cache_job_entry in second_index.splitlines()
+	)
+	assert not any("/actions/jobs/" in path for path in second.paths)
+
+
+def test_current_budget_drop_is_not_a_cache_miss(tmp_path: Path) -> None:
+	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	second = FakeGh()
+	manifest = _collector(tmp_path, second, max_total_bytes=1000).collect(_issue(), [], issue_repo=REPO)
+	assert not any(item["reason"] == "cached_file_missing" for item in manifest["skipped"])
+	assert "(dropped: size limit)" in (tmp_path / "evidence/INDEX.md").read_text()
 	assert not any("/actions/jobs/" in path for path in second.paths)
 
 

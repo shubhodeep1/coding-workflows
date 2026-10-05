@@ -1129,17 +1129,19 @@ class Collector:
 		self._write_json("lineage.json", lineage)
 		self._write_json("timeline.json", timeline)
 		self._write_json("environment.json", environment)
+		for run in runs:
+			for job in run.get("jobs") or []:
+				if run.get("reused") and job.get("file") and not (self.out / job["file"]).is_file():
+					self._skip(job["file"], "cached_file_missing")
+			if run.get("reused"):
+				for cached_artifact_path in run.get("artifacts") or []:
+					if not (self.out / cached_artifact_path).is_file():
+						self._skip(cached_artifact_path, "cached_file_missing")
 		self._enforce_total_budget(runs)
 		for run in runs:
 			for job in run.get("jobs") or []:
 				job["present"] = bool(job.get("file")) and (self.out / job["file"]).is_file()
-				if run.get("reused") and job.get("file") and not job["present"]:
-					self._skip(job["file"], "cached_file_missing")
 			run["present_artifacts"] = [rel for rel in run.get("artifacts") or [] if (self.out / rel).is_file()]
-			if run.get("reused"):
-				for cached_artifact_path in run.get("artifacts") or []:
-					if cached_artifact_path not in run["present_artifacts"]:
-						self._skip(cached_artifact_path, "cached_file_missing")
 		index = render_index(
 			display_root=self.display_root,
 			issue_number=issue.get("number"),
@@ -1235,7 +1237,9 @@ def render_index(
 			f"- {run.get('url')} | workflow: {run.get('workflow_name') or '?'} | branch: {run.get('head_branch') or '?'} | head: {run.get('head_sha') or '?'}{' | reused from an earlier stage' if run.get('reused') else ''}"
 		)
 		for job in run.get("jobs") or []:
-			where = f"`{root}/{job.get('file')}`" if job.get("present", True) else "(dropped: size limit)"
+			where = (f"`{root}/{job.get('file')}`" if job.get("present", True) else
+				"(missing from cache)" if any(missing_entry["part"] == job.get("file") and missing_entry["reason"] == "cached_file_missing" for missing_entry in skipped) else
+				"(dropped: size limit)")
 			lines.append(f"  - job \"{job.get('name')}\" ({job.get('conclusion')}), failing step: {job.get('failing_step') or ('none (job failed)' if job.get('conclusion') in FAILED_CONCLUSIONS else 'none (focus job)')} → {where}")
 		present = [rel for rel in run.get("artifacts") or [] if rel in (run.get("present_artifacts") or [])]
 		if present:

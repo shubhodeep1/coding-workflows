@@ -1407,8 +1407,9 @@ through `clarify → plan → implement → review`.
   20 REST calls for the first stage and about 5 for a later one, since
   actions/cache (`heal-evidence-<issue>-…`) carries finished runs between
   stages and only runs not yet fetched are read; missing cached files are
-  recorded under `skipped` without re-fetching size-limited runs. When fewer
-  than 500 core calls remain, artifacts, the run timeline and lineage compares are skipped
+  recorded under `skipped` without re-fetching completed runs. Files removed
+  by this stage's size budget are reported separately. When fewer than 500
+  core calls remain, artifacts, the run timeline and lineage compares are skipped
   (`GET /rate_limit` is free). Every part fails open: what could not be
   fetched is listed under `skipped` and the stage carries on. Log prefix
   `WORKFLOW_HEAL_EVIDENCE` (`collected issue=… runs=… reused=… api_calls=…
