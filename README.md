@@ -1061,13 +1061,25 @@ not delete wrappers that are already present in `.github/workflows/`.
 > consumer. The merged-PR guard checks a numeric push refspec even when output
 > is redirected; only an adjacent, unquoted descriptor is removed from the
 > parsed command.
+> For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
+> the merged-PR guard ignores the unresolved value and checks the session checkout.
+> If that check does not block, it asks for confirmation because the pushed
+> repository may differ. Other unresolved push directories follow the same rule.
 > When a `git push` source cannot be resolved locally (for example,
 > a shell-expanded source), the merged-PR guard asks for confirmation rather
 > than using the session checkout as a substitute for the pushed commit.
 > A push with a destination that cannot be resolved locally (such as
 > `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
 > If `--repo` and a positional remote are both supplied, the guard checks the
-> refspecs after that remote, not the remote name as a branch.
+> refspecs after that remote, not the remote name as a branch. If the local
+> remote-config lookup cannot identify the positional repository (including an
+> unconfigured path or URL), the guard asks instead of treating it as a refspec.
+
+> The merged-PR guard checks numeric push refspecs before a separate output
+> redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
+> or option leaves the destination unknown, it requests confirmation rather
+> than checking an unrelated current branch. A push with no refspec keeps the
+> existing current-branch check.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
@@ -2652,7 +2664,18 @@ and resolver chains, a failed project) now goes to the unblock judge
   Isolation failures do not fall back to host Codex. Claude uses the read-only tool profile.
   A failed ledger-history read skips action for that run. The item verdict
   is recorded before action; a failed project marker is repaired if the item
-  remains blocked for a later run.
+  remains blocked for a later run. An unlabeled tracking issue is judged as a
+  failed project only while its latest trusted V2 state is `failed`. That state
+  is rechecked before recording the verdict and before applying the terminal
+  `ai:unblock-closed` label; a newer incomplete or malformed V2 write cannot
+  fall back to an older `failed` state for this decision. A failed read or late
+  resume withholds the label, though a resume after verdict recording can leave
+  an unacted-on verdict.
+  Scope overrides must match the trusted guard rejection exactly. Bulk-delete
+  overrides may approve a non-empty subset of its rejected paths only when the
+  failed implement run's matching Actions artifact verifies the same issue,
+  run and attempt; the next implement run rechecks the artifact before spending
+  the one-shot override. Missing or expired evidence keeps the guard in force.
 - **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
   then carried out with the existing commands: on a tracking issue
   `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on
@@ -2668,10 +2691,18 @@ and resolver chains, a failed project) now goes to the unblock judge
   closes the newly created fix-up instead of leaving an untracked open issue;
   a failed close is logged for recovery. A failed scope edit cannot be followed by `/approved`. A PR `reissue`
   creates a standalone replacement before closing the PR;
+  a standalone `ai:security` issue reissue copies its finding marker and label
+  to the replacement before closing the original. If the marker is invalid or
+  missing, or the issue belongs to a project, the original finding stays open.
   PR project fix-ups and verdict history use the GitHub-reported
   `orchestrator/project-<n>` base. Issue project fix-ups require the
   `ai:orchestrator-managed` label and membership in the project's state;
   missing or unverifiable state skips actuation until it can be confirmed.
+  For PRs with an untrusted author or head, issue-creating verdicts create
+  no issue: the judge explains the rejection, closes the PR, and warns via
+  Telegram. A fork PR targeting a project is never bound to project state;
+  its non-issue-creating, non-close verdicts are skipped. If the explanation write fails,
+  closure still proceeds and a failed close sends a failure WARNING.
   `operator_step` also writes the `ai:operator-step` issue and sends a
   Telegram WARNING. New operator steps are appended as keyed comments, never
   written back into the shared issue body. The newest trusted comment for a
@@ -2692,6 +2723,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   only when its newest pipeline-authored verdict marker for that project is
   `close` and still matches its blocked state (or it is already `abandoned`
   and the close needs retrying). A label without that authorization is ignored.
+  An `ai:security` finding instead remains open with its block label and
+  `ai:unblock-closed`, receives an explanation and a CRITICAL alert; the scan
+  skips it until a linked fix is verified merged or a person triages it.
   For an issue or PR, a failed close leaves the terminal label unset so a
   later scan can retry. If the close succeeds but adding the label fails,
   the judge logs the failure and still sends the CRITICAL alert; the closed

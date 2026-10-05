@@ -8,16 +8,16 @@ contract is validated against workflow behavior, not reimplemented logic.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
 import tempfile
 import textwrap
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
@@ -141,6 +141,7 @@ def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subproc
 		text=True,
 		capture_output=True,
 		timeout=60,
+		check=False,
 	)
 
 
@@ -2310,6 +2311,7 @@ def _run_guard_handler_case(
 	staged_support_reason: str = "",
 	staged_support_auto_release_safe: bool = False,
 	mock_issue_edit_failure: bool = False,
+	guard_overrides: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
 	repo_dir = tmp_path / "repo"
 	runtime_dir = tmp_path / "runtime"
@@ -2342,6 +2344,9 @@ def _run_guard_handler_case(
 			"MOCK_CURL_CALLS_FILE": str(curl_calls_file),
 			"GITHUB_REPOSITORY": repository,
 			"GITHUB_RUN_ID": "777",
+			"GITHUB_RUN_ATTEMPT": "1",
+			"GITHUB_OUTPUT": str(runtime_dir / "step_output.txt"),
+			"RUNTIME_DIR": str(runtime_dir),
 			"GITHUB_SERVER_URL": "https://github.example.test",
 			"ISSUE_NUMBER": "948",
 			"GH_TOKEN": "test-token",
@@ -2363,6 +2368,7 @@ def _run_guard_handler_case(
 		},
 		cwd=repo_dir,
 	)
+	env.update(guard_overrides or {})
 	proc = subprocess.run(
 		["bash", str(runtime_helper)],
 		cwd=str(repo_dir),
@@ -2382,7 +2388,8 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 	cases = (
 		("canonical", "shubhodeep1/coding-workflows", "canonical-source", "", "", "ai:destructive-blocked", "canonical workflow-source file deletion"),
 		("unsafe-manifest", "owner/consumer", "unsafe-fetched-manifest", "", "", "ai:destructive-blocked", "artifact-cleanup manifest contained unsafe path(s)"),
-		("files-touched", "shubhodeep1/coding-workflows", "", "files-touched", "", "ai:scope-blocked", "files_touched scope guard rejected"),
+		("bulk-delete", "owner/consumer", "bulk-delete", "", "", "ai:destructive-blocked", "bulk deletion exceeded"),
+		("files-touched", "shubhodeep1/coding-workflows", "", "out-of-scope", "", "ai:scope-blocked", "files_touched scope guard rejected"),
 		("scope-lock", "owner/consumer", "", "scope-lock-label", "", "ai:scope-blocked", "Issue scope-lock rejected"),
 		("staged-support", "shubhodeep1/coding-workflows", "", "", "true", "ai:needs-human", "Staged-support restore failed"),
 	)
@@ -2407,6 +2414,15 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 			}], f"case={case_name}"
 			assert gh_state["issue_comments"][0]["repo"] == repository, f"case={case_name}"
 			assert expected_comment in gh_state["issue_comments"][0]["body"], f"case={case_name}"
+			comment_lines = gh_state["issue_comments"][0]["body"].splitlines()
+			if case_name != "staged-support":
+				assert comment_lines[-1].startswith("<!-- ai:guard-rejection:v1 item=948 ")
+				assert " run=777 count=1 truncated=false paths=" in comment_lines[-1]
+				assert f"guard={'scope-lock' if case_name == 'scope-lock' else 'scope' if case_name == 'files-touched' else 'destructive'}" in comment_lines[-1]
+				assert json.loads(base64.b64decode(comment_lines[-1].split("paths=")[1].split(" -->")[0])) == (
+					["README.md"] if scope_reason else ["agents.md"])
+			else:
+				assert "ai:guard-rejection:v1" not in gh_state["issue_comments"][0]["body"]
 			assert len(curl_calls) == 1, f"case={case_name}"
 			curl_text = " ".join(curl_calls[0])
 			assert "CRITICAL:" in curl_text, f"case={case_name}"
@@ -2414,6 +2430,62 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 			assert f"run: https://github.example.test/{repository}/actions/runs/777" in curl_text, f"case={case_name}"
 		finally:
 			shutil.rmtree(case_dir)
+
+
+def test_bulk_delete_handler_records_snapshot_only_for_bulk_rejection(tmp_path: Path) -> None:
+	for reason in ("bulk-delete", "canonical-source", ""):
+		case_dir = tmp_path / (reason or "scope")
+		case_dir.mkdir()
+		proc, state, _ = _run_guard_handler_case(case_dir, repository="owner/consumer",
+			destructive_reason=reason, scope_reason="files-touched" if not reason else "")
+		assert proc.returncode != 0
+		snapshot_path = case_dir / "runtime/destructive_rejection/destructive_rejection.json"
+		assert snapshot_path.exists() == (reason == "bulk-delete")
+		if reason == "bulk-delete":
+			assert json.loads(snapshot_path.read_text()) == {
+				"schema": "destructive_rejection.v1", "issue": 948, "run_id": 777,
+				"run_attempt": 1, "reason": "bulk-delete", "paths": ["agents.md"],
+			}
+			assert "rejection_snapshot=true" in (case_dir / "runtime/step_output.txt").read_text()
+			assert "<!-- ai:destructive-rejection:v1 item=948 run=777 attempt=1 -->" in state["issue_comments"][0]["body"]
+		else:
+			assert not (case_dir / "runtime/step_output.txt").exists()
+
+
+def test_destructive_snapshot_upload_wiring() -> None:
+	handler = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	upload = _step_block_text("Upload destructive-rejection snapshot")
+	assert "id: handle_guard_block" in handler
+	assert "always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'" in upload
+	assert "uses: actions/upload-artifact@v6" in upload
+	assert "name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}" in upload
+	assert "path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json" in upload
+	assert "retention-days: 30" in upload and "continue-on-error: true" in upload
+	assert "unblock_ledger.py" in _step_block_text("Stage workflow support files")
+
+
+def test_guard_handler_omits_marker_for_incomplete_path_list() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_partial_rejection_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(Path(td), repository="owner/consumer", scope_reason="out-of-scope",
+			guard_overrides={"SVB_COUNT": "2"})
+		assert proc.returncode != 0
+		assert "ai:guard-rejection:v1" not in gh_state["issue_comments"][0]["body"]
+
+
+def test_guard_handler_marks_capped_and_unidentified_rejections() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_capped_rejection_") as td:
+		paths = [f"src/{index}.py" for index in range(100)]
+		proc, gh_state, _ = _run_guard_handler_case(Path(td), repository="owner/consumer", scope_reason="out-of-scope",
+			guard_overrides={"SVB_COUNT": "100", "SVB_FILES": "\n".join(paths)})
+		assert proc.returncode != 0
+		marker_line = gh_state["issue_comments"][0]["body"].splitlines()[-1]
+		assert "count=100 truncated=true" in marker_line
+		assert json.loads(base64.b64decode(marker_line.split("paths=")[1].split(" -->")[0])) == paths
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_missing_run_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(Path(td), repository="owner/consumer", scope_reason="out-of-scope",
+			guard_overrides={"GITHUB_RUN_ID": "unknown"})
+		assert proc.returncode != 0
+		assert "ai:guard-rejection:v1" not in gh_state["issue_comments"][0]["body"]
 
 
 def test_staged_support_guard_reports_failed_human_latch() -> None:
