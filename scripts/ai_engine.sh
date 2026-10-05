@@ -58,6 +58,7 @@
 #                           (read-profile Claude children receive no GitHub,
 #                           Telegram, OpenRouter or Actions OIDC credentials)
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
+#   AI_ENGINE_READ_EXTRA_DIRS  optional colon-separated absolute snapshot roots
 #   AI_ENGINE_ISOLATED_READ_PATHS  WORKFLOW_HEAL only: colon-separated heal_src
 #                                   and heal_branch_tip under RUNTIME_DIR; filtered snapshots,
 #                                   never raw host mounts. Other paths fall back.
@@ -189,6 +190,31 @@ _ai_engine_instructions_file()
 	return 1
 }
 
+_ai_engine_read_path_valid()
+{
+	[[ "${1:-}" == /* && "${1}" != *[$'\001'-$'\037',:\"\'\$\`\\]* && "${1}" != *","* && "${1}" != *"="* && "${1}" != *".."* ]] &&
+		[ -d "$1" ] && [ "$(realpath -e -- "$1" 2>/dev/null)" = "$1" ]
+}
+
+_ai_engine_read_path_sensitive()
+{
+	local candidate="$1" private_root home_root
+	for private_root in "$2" "$3"; do
+		[ -n "${private_root}" ] || continue
+		case "${private_root}/" in "${candidate%/}/"*) return 0 ;; esac
+		case "${candidate}/" in "${private_root%/}/"*) return 0 ;; esac
+	done
+	# Do not snapshot HOME itself (or a parent); heal worktrees may be below HOME.
+	home_root="$(realpath -e -- "${HOME:-}" 2>/dev/null)" || return 0
+	case "${home_root}/" in "${candidate%/}/"*) return 0 ;; esac
+	return 1
+}
+
+_ai_engine_snapshot_summary()
+{
+	python3 -c 'import json,sys; d=json.loads(sys.argv[1]); (type(d["files"]) is int and d["files"] >= 0 and d["git"] in ("copied", "omitted", "none") and d["reason"] in ("", "alternates", "filtered_history")) or sys.exit(1); print(d["files"], d["git"], d["reason"] or "none")' "$1"
+}
+
 _ai_engine_support_finish()
 {
 	local run_dir="$1" role="$2" status=0
@@ -209,7 +235,7 @@ _ai_engine_isolation_preflight()
 	AI_ENGINE_ISOLATION_FAILURE=""
 	command -v docker >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_docker_missing; return 1; }
 	command -v python3 >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_python_missing; return 1; }
-	for entry in setsid ps git realpath sha256sum; do
+	for entry in setsid ps git realpath sha256sum timeout; do
 		command -v "${entry}" >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_support_missing; return 1; }
 	done
 	if [ ! -f "${_AI_ENGINE_DIR}/claude_anthropic_relay.py" ] || [ ! -f "${_AI_ENGINE_DIR}/clarify_sandbox/Dockerfile" ]; then
@@ -313,14 +339,42 @@ _ai_engine_git_mask_configs()
 _ai_engine_claude_run_isolated()
 {
 	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" session_id="$5" model="$6" effort="$7" instructions="$8" pool_dir="$9" run_dir="${10}" hide_claude_md="${11}"
-	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root snapshot_dir snapshot_result git_objects snapshot_files_used snapshot_bytes_used snapshot_files_limit snapshot_bytes_limit extra_snapshot
-	local -a mounts=() session_args=() cmd=() accounts=() snapshot_args=()
+	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root snapshot_dir snapshot_result snapshot_summary snapshot_files snapshot_git snapshot_reason extra_files
+	local extra_snapshot_dir extra_source extra_dest extra_summary extra_existing run_dir_real extra_overlaps extra_details read_max_secs
+	local -a mounts=() session_args=() cmd=() accounts=() snapshot_args=() extra_sources=() extra_roots=()
+	local git_objects snapshot_files_used snapshot_bytes_used snapshot_files_limit snapshot_bytes_limit extra_snapshot
 	local AI_ENGINE_ISOLATION_WORKDIR AI_ENGINE_ISOLATION_FAILURE AI_ENGINE_ISOLATION_GUARD
 	local -a AI_ENGINE_ISOLATION_PATHS=() AI_ENGINE_ISOLATION_MASKS=()
 	AI_ENGINE_ISOLATION_WORKDIR="${workdir}"
 	if ! _ai_engine_isolation_preflight "${pool_dir}" "${workdir}" "${prompt_file}" "${instructions}" "${role}"; then
 		ai_engine_fallback "${role}" "${AI_ENGINE_ISOLATION_FAILURE}"; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
+	pool_mount_root="$(realpath -e -- "${pool_dir}")" && run_dir_real="$(realpath -e -- "${run_dir}")" || {
+		ai_engine_fallback "${role}" isolation_pool_unavailable; return "${_AI_ENGINE_EXIT_FALLBACK}"
+	}
+	# Extra worktrees are data, never bind mounts of the caller's source tree.
+	IFS=: read -r -a extra_sources <<< "${AI_ENGINE_READ_EXTRA_DIRS:-}"
+	for extra_source in "${extra_sources[@]}"; do
+		[ -n "${extra_source}" ] || continue
+		if ! _ai_engine_read_path_valid "${extra_source}" ||
+			_ai_engine_read_path_sensitive "${extra_source}" "${run_dir_real}" "${pool_mount_root}" ||
+			[[ "${extra_source}/" == "${workdir}/"* || "${workdir}/" == "${extra_source}/"* ]]; then
+			echo '::warning::Claude read isolation: invalid extra directory skipped' >&2
+			continue
+		fi
+		extra_overlaps=0
+		for extra_existing in "${extra_roots[@]}"; do
+			if [[ "${extra_source}/" == "${extra_existing}/"* || "${extra_existing}/" == "${extra_source}/"* ]]; then
+				extra_overlaps=1
+				break
+			fi
+		done
+		if [ "${extra_overlaps}" -eq 1 ]; then
+			echo '::warning::Claude read isolation: overlapping extra directory skipped' >&2
+			continue
+		fi
+		extra_roots+=("${extra_source}")
+	done
 	guard_hook="${AI_ENGINE_ISOLATION_GUARD}"
 	if ! _ai_engine_py settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile read --guard-hook /guard.py --read-guard-hook /read-guard.py; then
 		ai_engine_fallback "${role}" policy_unavailable; return "${_AI_ENGINE_EXIT_FALLBACK}"
@@ -331,23 +385,17 @@ _ai_engine_claude_run_isolated()
 	fi
 	snapshot_dir="${run_dir}/source-snapshot"
 	if [ "${hide_claude_md}" = true ]; then
-		snapshot_args+=(--omit-claude-md)
+		snapshot_args+=(--omit-root-claude-md --omit-claude-md)
 	fi
-	if ! mkdir -m 0700 -- "${snapshot_dir}" ||
-	   ! snapshot_result="$(_ai_engine_py read-snapshot --source "${workdir}" --dest "${snapshot_dir}" "${snapshot_args[@]}")"; then
+	if ! snapshot_result="$(_ai_engine_py read-snapshot --workdir "${workdir}" --dest "${snapshot_dir}" "${snapshot_args[@]}")" ||
+	   ! snapshot_summary="$(_ai_engine_snapshot_summary "${snapshot_result}")"; then
+		echo "CLAUDE_READ_ISOLATION role=${role} outcome=rejected reason=isolation_snapshot_failed files=0 git=none extra_dirs=0" >&2
 		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
+	read -r snapshot_files snapshot_git snapshot_reason <<< "${snapshot_summary}"
 	mounts=(--mount "type=bind,src=${snapshot_dir},dst=${workdir},readonly")
-	git_objects="$(printf '%s' "${snapshot_result}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("git_objects", ""))')" || {
-		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
-	}
-	if [ -n "${git_objects}" ]; then
-		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
-	fi
-	# Each auxiliary checkout gets the same credential filter and a synthetic Git
-	# commit. Share the main snapshot's file/byte budget across all three roots.
-	snapshot_files_limit="${CLAUDE_READ_SNAPSHOT_MAX_FILES:-20000}"
-	snapshot_bytes_limit="${CLAUDE_READ_SNAPSHOT_MAX_BYTES:-268435456}"
+	snapshot_files_limit="${CLAUDE_READ_SNAPSHOT_MAX_FILES:-50000}"
+	snapshot_bytes_limit="${CLAUDE_READ_SNAPSHOT_MAX_BYTES:-1073741824}"
 	if [[ ! "${snapshot_files_limit}" =~ ^[0-9]+$ || ! "${snapshot_bytes_limit}" =~ ^[0-9]+$ ]]; then
 		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
@@ -355,6 +403,31 @@ _ai_engine_claude_run_isolated()
 	snapshot_bytes_limit=$((10#${snapshot_bytes_limit}))
 	snapshot_files_used="$(_ai_engine_json_field "${snapshot_result}" files)" || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
 	snapshot_bytes_used="$(_ai_engine_json_field "${snapshot_result}" bytes)" || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
+	extra_snapshot_dir="${run_dir}/extra-snapshots"
+	for extra_source in "${extra_roots[@]}"; do
+		extra_dest="${extra_snapshot_dir}/${#mounts[@]}"
+		if [ "${snapshot_files_limit}" -le "${snapshot_files_used}" ] || [ "${snapshot_bytes_limit}" -le "${snapshot_bytes_used}" ] ||
+		   ! mkdir -p -- "${extra_snapshot_dir}" ||
+		   ! extra_summary="$(CLAUDE_READ_SNAPSHOT_MAX_FILES="$((snapshot_files_limit - snapshot_files_used))" \
+			CLAUDE_READ_SNAPSHOT_MAX_BYTES="$((snapshot_bytes_limit - snapshot_bytes_used))" \
+			_ai_engine_py read-snapshot --workdir "${extra_source}" --dest "${extra_dest}" "${snapshot_args[@]}")" ||
+		   ! extra_details="$(_ai_engine_snapshot_summary "${extra_summary}")"; then
+			echo "CLAUDE_READ_ISOLATION role=${role} outcome=rejected reason=isolation_snapshot_failed files=${snapshot_files} git=${snapshot_git} extra_dirs=$((${#mounts[@]} / 2 - 1))" >&2
+			ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
+		fi
+		extra_files="${extra_details%% *}"
+		snapshot_files=$((snapshot_files + extra_files))
+		snapshot_files_used=$((snapshot_files_used + extra_files))
+		snapshot_bytes_used=$((snapshot_bytes_used + $(_ai_engine_json_field "${extra_summary}" bytes)))
+		mounts+=(--mount "type=bind,src=${extra_dest},dst=${extra_source},readonly")
+	done
+	git_objects="$(printf '%s' "${snapshot_result}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("git_objects", ""))')" || {
+		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
+	}
+	if [ -n "${git_objects}" ]; then
+		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
+	fi
+	# Legacy auxiliary checkouts use the same remaining budget.
 	for i in "${!AI_ENGINE_ISOLATION_PATHS[@]}"; do
 		extra_snapshot="${run_dir}/source-snapshot-${i}"
 		if [ "${snapshot_files_limit}" -le "${snapshot_files_used}" ] || [ "${snapshot_bytes_limit}" -le "${snapshot_bytes_used}" ] ||
@@ -366,6 +439,7 @@ _ai_engine_claude_run_isolated()
 		fi
 		git_objects="$(_ai_engine_json_field "${snapshot_result}" git_objects)" || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
 		[ -z "${git_objects}" ] || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
+		snapshot_files=$((snapshot_files + $(_ai_engine_json_field "${snapshot_result}" files)))
 		snapshot_files_used=$((snapshot_files_used + $(_ai_engine_json_field "${snapshot_result}" files)))
 		snapshot_bytes_used=$((snapshot_bytes_used + $(_ai_engine_json_field "${snapshot_result}" bytes)))
 		mounts+=(--mount "type=bind,src=${extra_snapshot},dst=${AI_ENGINE_ISOLATION_PATHS[i]},readonly")
@@ -386,8 +460,14 @@ _ai_engine_claude_run_isolated()
 		mounts+=(--mount "type=bind,src=${session_mount_root},dst=/home/agent/.claude/projects")
 	fi
 	probe_model="$(_ai_engine_py config --key probe_model)" || { ai_engine_fallback "${role}" policy_unavailable; return 75; }
+	read_max_secs="${CLAUDE_READ_ISOLATION_MAX_SECS:-14400}"
+	if [[ ! "${read_max_secs}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+		echo '::warning::invalid CLAUDE_READ_ISOLATION_MAX_SECS; using 14400' >&2
+		read_max_secs=14400
+	fi
 	mapfile -t accounts < <(ai_engine_accounts)
 	echo "CLAUDE_ISOLATION role=${role} profile=read mode=container" >&2
+	echo "CLAUDE_READ_ISOLATION role=${role} outcome=ready reason=${snapshot_reason} files=${snapshot_files} git=${snapshot_git} extra_dirs=$((${#extra_roots[@]} + ${#AI_ENGINE_ISOLATION_PATHS[@]}))" >&2
 	for name in "${accounts[@]}"; do
 		attempt=$((attempt + 1))
 		token_file="${pool_dir}/tokens/${name}"
@@ -399,7 +479,7 @@ _ai_engine_claude_run_isolated()
 		broker_pid=$!
 		# Start the reaper before waiting for the socket: SIGKILL skips shell traps.
 		# shellcheck disable=SC2016 # This is the reaper's shell, not the caller's.
-		setsid bash -c 'parent=$1; container=$2; broker=$3; snapshot=$4; while kill -0 "$parent" 2>/dev/null && [ "$(ps -o stat= -p "$parent" 2>/dev/null)" != Z ]; do sleep 1; done; docker rm -f "$container" >/dev/null 2>&1; kill "$broker" 2>/dev/null; rm -rf -- "$snapshot" "${snapshot}"-*' _ "${parent_pid}" "${container_name}" "${broker_pid}" "${snapshot_dir}" >/dev/null 2>&1 < /dev/null &
+		setsid bash -c 'parent=$1; container=$2; broker=$3; snapshot=$4; extras=$5; while kill -0 "$parent" 2>/dev/null && [ "$(ps -o stat= -p "$parent" 2>/dev/null)" != Z ]; do sleep 1; done; docker rm -f "$container" >/dev/null 2>&1; kill "$broker" 2>/dev/null; rm -rf -- "$snapshot" "${snapshot}"-* "$extras"' _ "${parent_pid}" "${container_name}" "${broker_pid}" "${snapshot_dir}" "${extra_snapshot_dir}" >/dev/null 2>&1 < /dev/null &
 		reaper_pid=$!
 		for ((i=0; i<50; i++)); do
 			[ -S "${run_dir}/sock/provider.sock" ] && break
@@ -448,10 +528,10 @@ _ai_engine_claude_run_isolated()
 		stderr_file="${run_dir}/stderr-${name}.txt"
 		attempt_rc=0
 		if [ -f "${_AI_ENGINE_DIR}/codex_stall_guard.sh" ]; then
-			bash "${_AI_ENGINE_DIR}/codex_stall_guard.sh" --phase "${role,,}" --engine claude \
+			timeout --signal=TERM --kill-after=30s "${read_max_secs}s" bash "${_AI_ENGINE_DIR}/codex_stall_guard.sh" --phase "${role,,}" --engine claude \
 				--stdout-file "${transcript}" --stderr-file "${stderr_file}" -- "${cmd[@]}" < "${prompt_file}" || attempt_rc=$?
 		else
-			"${cmd[@]}" < "${prompt_file}" > "${transcript}" 2> "${stderr_file}" || attempt_rc=$?
+			timeout --signal=TERM --kill-after=30s "${read_max_secs}s" "${cmd[@]}" < "${prompt_file}" > "${transcript}" 2> "${stderr_file}" || attempt_rc=$?
 		fi
 		env -i PATH="${PATH}" docker rm -f "${container_name}" >/dev/null 2>&1 || true
 		kill "${broker_pid}" "${reaper_pid}" 2>/dev/null || true
@@ -554,11 +634,11 @@ claude_run()
 		echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=locked files=${locked_files}" >&2
 		old_int_trap="$(trap -p INT)"
 		old_term_trap="$(trap -p TERM)"
-		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; rm -rf -- "${run_dir}/source-snapshot" "${run_dir}"/source-snapshot-[0-9]*; exit 130' INT
-		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; rm -rf -- "${run_dir}/source-snapshot" "${run_dir}"/source-snapshot-[0-9]*; exit 143' TERM
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; rm -rf -- "${run_dir}/source-snapshot" "${run_dir}"/source-snapshot-[0-9]* "${run_dir}/extra-snapshots"; exit 130' INT
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; rm -rf -- "${run_dir}/source-snapshot" "${run_dir}"/source-snapshot-[0-9]* "${run_dir}/extra-snapshots"; exit 143' TERM
 		_ai_engine_claude_run_isolated "${role}" "${prompt_file}" "${out_file}" "${workdir}" "${session_id}" "${model}" "${effort}" "${instructions}" "${pool_dir}" "${run_dir}" "${hide_claude_md}" || rc=$?
 		_ai_engine_support_finish "${run_dir}" "${role}" || rc="${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
-		rm -rf -- "${run_dir}/source-snapshot" "${run_dir}"/source-snapshot-[0-9]*
+		rm -rf -- "${run_dir}/source-snapshot" "${run_dir}"/source-snapshot-[0-9]* "${run_dir}/extra-snapshots"
 		trap - INT TERM
 		[ -z "${old_int_trap}" ] || eval "${old_int_trap}"
 		[ -z "${old_term_trap}" ] || eval "${old_term_trap}"

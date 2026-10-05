@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """scripts/ai_engine.sh: engine selection, D1 fallback and claude_run.
 
-claude_run is exercised against a fake `claude` executable that behaves
-according to the account token it receives (success, usage limit, rejected
-token, crash) and records its argv, stdin and environment. The real CLI is
-never called. Also covers the `--engine` log label of the codex wrappers.
+Write-profile calls use a fake `claude` executable; read-profile calls use a
+fake Docker CLI and the real host-side relay. Neither runs the real model.
+Also covers the `--engine` log label of the codex wrappers.
 """
 
 from __future__ import annotations
@@ -73,7 +72,7 @@ emit({"type": "result", "subtype": "success", "is_error": False, "result": "done
 '''
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, subprocess, sys
 from pathlib import Path
 log = Path(__DOCKER_LOG__)
 argv = sys.argv[1:]
@@ -86,6 +85,8 @@ if argv[0] == "run":
 			snapshot = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
 			record["snapshot_files"] = sorted(str(p.relative_to(snapshot)) for p in snapshot.rglob("*") if p.is_file())
 			record["snapshot_config"] = (snapshot / ".git" / "config").read_text() if (snapshot / ".git" / "config").exists() else ""
+			if (snapshot / ".git").is_dir():
+				record["snapshot_head"] = subprocess.check_output(["git", "-C", str(snapshot), "log", "-1", "--format=%s"], text=True).strip()
 		if arg.startswith("type=bind,src=") and "/source-snapshot-" in arg:
 			snapshot = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
 			destination = arg.split(",dst=", 1)[1].removesuffix(",readonly")
@@ -94,6 +95,10 @@ if argv[0] == "run":
 		if arg.startswith("type=bind,src=") and ",dst=/home/agent/.claude/projects" in arg:
 			session_mount = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
 			record["session_files"] = sorted(str(p.relative_to(session_mount)) for p in session_mount.rglob("*") if p.is_file())
+		if arg.startswith("type=bind,src=") and "/extra-snapshots/" in arg:
+			extra_mount = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
+			record["extra_snapshot_files"] = sorted(str(p.relative_to(extra_mount)) for p in extra_mount.rglob("*") if p.is_file())
+			record["extra_snapshot_config"] = (extra_mount / ".git" / "config").read_text() if (extra_mount / ".git" / "config").exists() else ""
 with log.open("a", encoding="utf-8") as handle:
 	handle.write(json.dumps(record) + "\n")
 if argv[:2] == ["image", "inspect"]:
@@ -187,8 +192,7 @@ def sandbox(tmp_path: Path):
 	env = {
 		key: value
 		for key, value in os.environ.items()
-		if not key.startswith(("AI_ENGINE", "CLAUDE_", "ANTHROPIC_", "SUPPORT_", "TG_", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH", "ALLOW_WORKFLOW_EDITS"))
-		and key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")
+		if key not in {"ALLOW_WORKFLOW_EDITS", "BASH_ENV", "ENV", "WORKSPACE_PATH"} and not key.startswith(("AI_ENGINE", "CLAUDE_", "ANTHROPIC_", "SUPPORT_", "TG_", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH"))
 	}
 	env.update(
 		{
@@ -408,6 +412,7 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	(sandbox["work"] / ".env").write_text("PRIVATE=do-not-mount\n")
 	(sandbox["work"] / "file.txt").write_text("safe\n")
+	(sandbox["work"] / "untracked.json").write_text('{"token": "secret"}\n')
 	subprocess.run(["git", "-C", str(sandbox["work"]), "init", "-q"], check=True)
 	subprocess.run(["git", "-C", str(sandbox["work"]), "add", "file.txt"], check=True)
 	subprocess.run(["git", "-C", str(sandbox["work"]), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"], check=True)
@@ -429,12 +434,17 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert call["stdin"] == "do the thing\n"
 	assert (sandbox["tmp"] / "out.txt").read_text() == "done"
 	assert "CLAUDE_ISOLATION role=SECURITY_AUDIT profile=read mode=container" in result.stderr
+	assert "CLAUDE_ISOLATION role=SECURITY_AUDIT profile=read mode=container" in result.stderr.splitlines()
+	assert "CLAUDE_READ_ISOLATION role=SECURITY_AUDIT outcome=ready reason=none files=1 git=copied extra_dirs=0" in result.stderr
 	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=locked" in result.stderr
 	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=verified" in result.stderr
 	snapshot_mount = next(arg for arg in argv if arg.startswith("type=bind,src=") and f",dst={sandbox['work']},readonly" in arg)
 	snapshot = Path(snapshot_mount.split("src=", 1)[1].split(",dst=", 1)[0])
 	assert snapshot != sandbox["work"] and "file.txt" in call["snapshot_files"]
 	assert ".env" not in call["snapshot_files"]
+	assert "CLAUDE.md" not in call["snapshot_files"]
+	assert "untracked.json" not in call["snapshot_files"]
+	assert call["snapshot_head"] == "base"
 	assert "hidden" not in call["snapshot_config"]
 	assert not any("dst=/git-objects" in arg or f"src={sandbox['work'] / '.git' / 'objects'}" in arg for arg in argv)
 	assert not snapshot.exists()
@@ -708,6 +718,121 @@ def test_read_isolation_missing_support_falls_back(sandbox: dict) -> None:
 	assert _calls(sandbox) == []
 
 
+def test_read_isolation_relay_unavailable_and_account_rotation(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK", B="TOK_OK")
+	(sandbox["pool"] / "tokens" / "A").chmod(0o644)  # The host relay refuses insecure token files.
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 0, result.stderr
+	assert "reason=relay_unavailable" in result.stderr
+	run_dir = Path(next(line[8:] for line in result.stdout.splitlines() if line.startswith("RUN_DIR=")))
+	assert (run_dir / "successful-transcript.jsonl").resolve() == run_dir / "transcript-B.jsonl"
+	(sandbox["pool"] / "tokens" / "A").chmod(0o600)
+	(sandbox["tmp"] / "docker-mode").write_text("limit-once")
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 0, result.stderr
+	assert "outcome=usage_limit" in result.stderr
+	assert _calls(sandbox) == []
+
+
+def test_read_isolation_all_relays_unavailable_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["pool"] / "tokens" / "A").chmod(0o644)
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 75
+	assert "reason=relay_unavailable" in result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_relay_unavailable" in result.stderr
+	assert _calls(sandbox) == []
+
+
+def test_read_isolation_hides_claude_md_without_moving_host_file(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	support = sandbox["tmp"] / "support"
+	(support / ".github" / "ai").mkdir(parents=True)
+	(support / ".github" / "ai" / "claude_engine.json").write_text('{"hide_claude_md": true}', encoding="utf-8")
+	result = _claude_run(sandbox, "SECURITY_AUDIT", SUPPORT_ROOT_DIR=str(support))
+	assert _rc(result) == 0, result.stderr
+	assert (sandbox["work"] / "CLAUDE.md").read_text(encoding="utf-8") == "checkout CLAUDE.md\n"
+	assert "CLAUDE.md" not in _docker_calls(sandbox)[0]["snapshot_files"]
+
+
+def test_read_isolation_mounts_only_sanitized_extra_directories(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	extra = sandbox["tmp"] / "heal_source"
+	extra.mkdir()
+	(extra / "source.txt").write_text("safe\n", encoding="utf-8")
+	(extra / "private.key").write_text("secret\n", encoding="utf-8")
+	subprocess.run(["git", "init", "-q", str(extra)], check=True)
+	subprocess.run(["git", "-C", str(extra), "add", "source.txt"], check=True)
+	subprocess.run(["git", "-C", str(extra), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "heal-source"], check=True)
+	subprocess.run(["git", "-C", str(extra), "config", "http.extraheader", "AUTHORIZATION: hidden"], check=True)
+	(extra / "untracked.json").write_text("secret\n", encoding="utf-8")
+	result = _claude_run(sandbox, "WORKFLOW_HEAL", AI_ENGINE_READ_EXTRA_DIRS=f"{extra}:{sandbox['pool']}")
+	assert _rc(result) == 0, result.stderr
+	assert "extra_dirs=1" in result.stderr
+	call = _docker_calls(sandbox)[0]
+	assert "source.txt" in call["extra_snapshot_files"]
+	assert "private.key" not in call["extra_snapshot_files"]
+	assert "untracked.json" not in call["extra_snapshot_files"]
+	assert "extraheader" not in call["extra_snapshot_config"]
+	argv = call["argv"]
+	assert f"dst={extra},readonly" in " ".join(argv)
+	assert str(sandbox["pool"]) not in " ".join(argv)
+
+
+def test_read_isolation_hides_claude_md_in_extra_directories(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	extra = sandbox["tmp"] / "heal_source"
+	extra.mkdir()
+	(extra / "CLAUDE.md").write_text("private marker\n", encoding="utf-8")
+	(extra / "source.txt").write_text("safe\n", encoding="utf-8")
+	support = sandbox["tmp"] / "support"
+	(support / ".github" / "ai").mkdir(parents=True)
+	(support / ".github" / "ai" / "claude_engine.json").write_text('{"hide_claude_md": true}', encoding="utf-8")
+	result = _claude_run(sandbox, "WORKFLOW_HEAL", AI_ENGINE_READ_EXTRA_DIRS=str(extra), SUPPORT_ROOT_DIR=str(support))
+	assert _rc(result) == 0, result.stderr
+	assert "CLAUDE.md" not in _docker_calls(sandbox)[0]["extra_snapshot_files"]
+	assert (extra / "CLAUDE.md").read_text(encoding="utf-8") == "private marker\n"
+
+
+@pytest.mark.parametrize("limit_name, limit_value", [
+	("CLAUDE_READ_SNAPSHOT_MAX_FILES", "2"),
+	("CLAUDE_READ_SNAPSHOT_MAX_BYTES", "24"),
+])
+def test_read_isolation_shares_snapshot_budget_with_extra_directories(sandbox: dict, limit_name: str, limit_value: str) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	first = sandbox["tmp"] / "first-source"
+	second = sandbox["tmp"] / "second-source"
+	for source in (first, second):
+		source.mkdir()
+		(source / "source.txt").write_text("safe\n", encoding="utf-8")
+	result = _claude_run(sandbox, "WORKFLOW_HEAL", AI_ENGINE_READ_EXTRA_DIRS=f"{first}:{second}", **{limit_name: limit_value})
+	assert _rc(result) == 75, result.stderr
+	assert "outcome=rejected reason=isolation_snapshot_failed files=2 git=none extra_dirs=1" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_reports_prepared_extras_on_snapshot_failure(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	first = sandbox["tmp"] / "first-source"
+	first.mkdir()
+	(first / "source.txt").write_text("safe\n", encoding="utf-8")
+	second = sandbox["tmp"] / "broken-source"
+	(second / ".git").mkdir(parents=True)
+	result = _claude_run(sandbox, "WORKFLOW_HEAL", AI_ENGINE_READ_EXTRA_DIRS=f"{first}:{second}")
+	assert _rc(result) == 75, result.stderr
+	assert "outcome=rejected reason=isolation_snapshot_failed files=2 git=none extra_dirs=1" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_enforces_container_timeout(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["tmp"] / "docker-mode").write_text("hang")
+	result = _claude_run(sandbox, "SECURITY_AUDIT", CLAUDE_READ_ISOLATION_MAX_SECS="1")
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_container_start_failed" in result.stderr
+	assert _docker_calls(sandbox)
+
+
 def test_read_isolation_relay_failure_falls_back(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
@@ -735,6 +860,8 @@ def test_read_isolation_masks_checkout_credential_and_claude_md(sandbox: dict) -
 		assert "NESTED_SECRET" in (checkout_path / ".git" / "config").read_text()
 	for push_url in ("https://user:PASS_ONE@example.com/repo", "https://user:PASS_TWO@example.com/repo"):
 		subprocess.run(["git", "-C", str(sandbox["work"]), "config", "--add", "remote.origin.pushurl", push_url], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "add", "CLAUDE.md"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"], check=True)
 	support = sandbox["tmp"] / "support"
 	(support / ".github" / "ai").mkdir(parents=True)
 	(support / ".github" / "ai" / "claude_engine.json").write_text('{"hide_claude_md": true}')
@@ -873,7 +1000,9 @@ def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: s
 		assert call["gh_config_dir"] == str(inherited_gh_config)
 	else:
 		assert _calls(sandbox) == []
-		assert all(name not in _docker_calls(sandbox)[0]["env"] for name in credential_names)
+		calls = _docker_calls(sandbox)
+		assert calls and all(not any(name in call["env"] for name in credential_names) for call in calls)
+		assert all(str(sandbox["pool"]) not in " ".join(call["argv"]) for call in calls)
 
 
 @pytest.mark.parametrize("value, tools, mode", [

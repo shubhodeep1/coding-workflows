@@ -449,6 +449,219 @@ def test_read_profile_settings_have_a_bash_guard_without_changing_write_settings
 			ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook=path)
 
 
+def test_settings_cli_accepts_container_read_guard_hook(tmp_path: Path) -> None:
+	result = _run("settings", "--checkout", str(tmp_path), "--out", str(tmp_path / "settings.json"),
+		"--profile", "read", "--guard-hook", "/opt/gh.py", "--read-guard-hook", "/opt/engine.py")
+	assert result.returncode == 0, result.stderr
+	settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/opt/engine.py" guard-read-bash'
+	assert "FROM node:22.16.0-bookworm-slim" in _run("read-sandbox-dockerfile").stdout
+
+
+def test_read_snapshot_copies_tracked_files_and_sanitized_git_history(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	def git(*args: str, cwd: Path = repo) -> str:
+		return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+	git("init", "-q")
+	git("config", "user.email", "test@example.invalid")
+	git("config", "user.name", "Test")
+	git("config", "http.https://github.com/.extraheader", "AUTHORIZATION: secret")
+	(repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+	(repo / "CLAUDE.md").write_text("private marker\n", encoding="utf-8")
+	(repo / ".git-credentials").write_text("https://user:secret@example.invalid\n", encoding="utf-8")
+	(repo / ".claude").mkdir()
+	(repo / ".claude" / "settings.json").write_text('{"key":"secret"}\n', encoding="utf-8")
+	git("add", "tracked.txt", "CLAUDE.md", ".git-credentials", ".claude/settings.json")
+	git("commit", "-qm", "initial")
+	git("update-ref", "refs/remotes/origin/main", "HEAD")
+	(repo / "secret.txt").write_text("secret\n", encoding="utf-8")
+	(repo / "tracked-link").symlink_to(repo / "secret.txt")
+	git("add", "tracked-link")
+	(repo / ".codex-workflow-src" / ".git").mkdir(parents=True)
+	(repo / ".codex-workflow-src" / ".git" / "config").write_text("extraheader=secret", encoding="utf-8")
+	worktree = tmp_path / "linked"
+	git("worktree", "add", "-q", "--detach", str(worktree), "HEAD")
+	for source in (repo, worktree):
+		dest = tmp_path / f"snapshot-{source.name}"
+		result = _run("read-snapshot", "--workdir", str(source), "--dest", str(dest), "--omit-root-claude-md",
+			env={"GIT_DIR": str(tmp_path / "not-the-repo"), "GIT_WORK_TREE": str(tmp_path / "wrong-worktree"),
+				"GIT_INDEX_FILE": str(tmp_path / "host-index")})
+		assert result.returncode == 0, result.stderr
+		assert not (tmp_path / "host-index").exists()
+		assert json.loads(result.stdout)["git"] == "omitted"
+		assert json.loads(result.stdout)["reason"] == "filtered_history"
+		assert not (dest / "CLAUDE.md").exists()
+		assert not (dest / ".git-credentials").exists()
+		assert not (dest / ".claude").exists()
+		assert not (dest / ".git").exists()
+		assert (dest / "tracked.txt").read_text(encoding="utf-8") == "tracked\n"
+		assert not (dest / "secret.txt").exists()
+		assert not (dest / "tracked-link").exists()
+		assert not (dest / ".codex-workflow-src").exists()
+		assert subprocess.run(["git", "-C", str(dest), "show", "HEAD:.git-credentials"], capture_output=True).returncode != 0
+
+
+def test_read_snapshot_preserves_history_without_filtered_paths(tmp_path: Path) -> None:
+	repo = tmp_path / "clean"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "safe.txt").write_text("safe\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "safe.txt"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "safe history"], check=True)
+	dest = tmp_path / "snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["git"] == "copied"
+	assert subprocess.check_output(["git", "-C", str(dest), "log", "-1", "--format=%s"], text=True).strip() == "safe history"
+	assert (dest / ".git/config").is_file()
+
+
+def test_read_snapshot_omits_shared_detached_history(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "safe.txt").write_text("safe\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "safe.txt"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "safe"], check=True)
+	linked = tmp_path / "linked"
+	subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(linked)], check=True)
+	(linked / ".env").write_text("token=hidden\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(linked), "add", ".env"], check=True)
+	subprocess.run(["git", "-C", str(linked), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "detached secret"], check=True)
+	for source in (repo, linked):
+		dest = tmp_path / f"snapshot-{source.name}"
+		result = _run("read-snapshot", "--workdir", str(source), "--dest", str(dest))
+		assert result.returncode == 0, result.stderr
+		assert json.loads(result.stdout)["git"] == "omitted"
+		assert not (dest / ".git").exists()
+		assert not (dest / ".env").exists()
+
+
+def test_read_snapshot_omits_unreachable_fetched_commit(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	source = tmp_path / "source"
+	for checkout in (repo, source):
+		checkout.mkdir()
+		subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+		(checkout / "safe.txt").write_text("safe\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(checkout), "add", "safe.txt"], check=True)
+		subprocess.run(["git", "-C", str(checkout), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "safe"], check=True)
+	(source / ".env").write_text("token=hidden\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(source), "add", ".env"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "secret"], check=True)
+	subprocess.run(["git", "-C", str(repo), "fetch", "-q", "--no-tags", str(source), "HEAD"], check=True)
+	dest = tmp_path / "snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["git"] == "omitted"
+	assert not (dest / ".git").exists()
+	assert (dest / "safe.txt").read_text(encoding="utf-8") == "safe\n"
+
+
+def test_read_snapshot_hides_claude_md_from_git_history(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "CLAUDE.md").write_text("private marker\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "CLAUDE.md"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "instructions"], check=True)
+	dest = tmp_path / "snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest), "--omit-root-claude-md")
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["reason"] == "filtered_history"
+	assert not (dest / ".git").exists()
+	assert not (dest / "CLAUDE.md").exists()
+
+
+def test_read_snapshot_omits_credentials_removed_from_current_tree(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "server.pem").write_text("old credential\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "server.pem"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "credential"], check=True)
+	subprocess.run(["git", "-C", str(repo), "rm", "-q", "server.pem"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "remove credential"], check=True)
+	dest = tmp_path / "snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["reason"] == "filtered_history"
+	assert not (dest / ".git").exists()
+
+
+def test_read_snapshot_deduplicates_unmerged_index_paths(tmp_path: Path) -> None:
+	repo = tmp_path / "conflicted"
+	repo.mkdir()
+	def git(*args: str) -> subprocess.CompletedProcess[str]:
+		return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True)
+	git("init", "-q")
+	git("config", "user.email", "test@example.invalid")
+	git("config", "user.name", "Test")
+	(repo / "shared.txt").write_text("base\n", encoding="utf-8")
+	git("add", "shared.txt")
+	git("commit", "-qm", "base")
+	git("checkout", "-qb", "other")
+	(repo / "shared.txt").write_text("other\n", encoding="utf-8")
+	git("commit", "-qam", "other")
+	git("checkout", "-q", "-")
+	(repo / "shared.txt").write_text("ours\n", encoding="utf-8")
+	git("commit", "-qam", "ours")
+	merge = subprocess.run(["git", "-C", str(repo), "merge", "other"], capture_output=True, text=True)
+	assert merge.returncode == 1
+	assert len(git("ls-files", "--cached").stdout.splitlines()) == 3
+	dest = tmp_path / "conflict-snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["files"] == 1
+	assert (dest / "shared.txt").read_text(encoding="utf-8") == (repo / "shared.txt").read_text(encoding="utf-8")
+
+
+def test_read_snapshot_limits_non_git_and_alternates(tmp_path: Path) -> None:
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	(plain / "safe.txt").write_text("data", encoding="utf-8")
+	(plain / "private.pem").write_text("private", encoding="utf-8")
+	result = _run("read-snapshot", "--workdir", str(plain), "--dest", str(tmp_path / "plain-copy"))
+	assert json.loads(result.stdout) == {"files": 1, "bytes": 4, "git": "none", "reason": ""}
+	assert not (tmp_path / "plain-copy/private.pem").exists()
+	result = _run("read-snapshot", "--workdir", str(plain), "--dest", str(tmp_path / "too-small"),
+		env={"CLAUDE_READ_SNAPSHOT_MAX_BYTES": "1"})
+	assert result.returncode != 0
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "file.txt").write_text("a", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "file.txt"], check=True)
+	(repo / ".git/objects/info/alternates").write_text("/tmp/nonexistent\n", encoding="utf-8")
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(tmp_path / "no-history"))
+	assert json.loads(result.stdout)["git"] == "omitted"
+	assert not (tmp_path / "no-history/.git").exists()
+
+
+def test_read_snapshot_rejects_symlinked_roots(tmp_path: Path) -> None:
+	real = tmp_path / "real"
+	real.mkdir()
+	(tmp_path / "alias").symlink_to(real, target_is_directory=True)
+	result = _run("read-snapshot", "--workdir", str(tmp_path / "alias"), "--dest", str(tmp_path / "copy"))
+	assert result.returncode == 2
+	assert not (tmp_path / "copy").exists()
+
+
+def test_read_snapshot_rejects_symlinked_tracked_parent(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "code").mkdir()
+	(repo / "code" / "tracked.txt").write_text("safe", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "code/tracked.txt"], check=True)
+	(repo / "code").rename(repo / "old-code")
+	(repo / "code").symlink_to(tmp_path, target_is_directory=True)
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(tmp_path / "copy"))
+	assert result.returncode == 2
+	assert "snapshot rejected" in result.stderr or "unsafe snapshot parent" in result.stderr
+
+
 @pytest.mark.parametrize("command", [
 	"git log --oneline -5", "git show HEAD:scripts/x.sh", "git diff --stat a..b -- 'p q'",
 	"git diff --text", "git diff --no-ext-diff", "git grep -n foo",

@@ -697,6 +697,15 @@ installed by `.github/actions/install-claude`.
 Read-profile `claude_run` calls use a `--network none` container with a placeholder token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token. Isolation failures fall back with `AI_ENGINE_FALLBACK reason=isolation_*`.
 Session reuse rejects a pool path overlapping the mounted session directory with `reason=isolation_pool_overlap` before starting the container.
 
+Read-profile calls through `scripts/ai_engine.sh::claude_run` (including
+`AI_ENGINE_READ_ONLY=true`) run in a network-less, read-only Docker container.
+The host-side Anthropic relay retains OAuth credentials; the container sees
+only tracked-file snapshots, sanitized git metadata when history contains no
+filtered paths, shared worktrees or unreachable objects (otherwise no git
+metadata), the prompt and trusted support,
+with an optional `AI_ENGINE_READ_EXTRA_DIRS` snapshot for the heal worktrees.
+Missing isolation returns exit 75, never host Claude.
+
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production
 `review_autofix.yml`, which warms the models.dev cache before the complete
@@ -1263,6 +1272,7 @@ and shipped:
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
 - `AI_ENGINE_SUPPORT_LOCK` (`scripts/ai_engine.sh`: `role= outcome=locked|verified|tampered`; tampering exits 86 without codex fallback)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
+- `CLAUDE_READ_ISOLATION` (`scripts/ai_engine.sh`: `role= outcome=ready|rejected reason= files= git= extra_dirs=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
 - `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. If result publication fails, report skips review re-dispatch so it cannot run without the marker.)
@@ -1468,6 +1478,7 @@ LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
 LOG_PREFIX.name=AI_ENGINE_SUPPORT_LOCK
 LOG_PREFIX.name=CLAUDE_POOL
+LOG_PREFIX.name=CLAUDE_READ_ISOLATION
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL
 LOG_PREFIX.name=SINGLE_ISSUE_SECURITY_PASS
