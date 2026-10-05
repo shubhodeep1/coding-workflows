@@ -285,6 +285,8 @@ _ai_engine_claude_run_isolated()
 	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" session_id="$5" model="$6" effort="$7" instructions="$8" pool_dir="$9" run_dir="${10}" hide_claude_md="${11}"
 	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root
 	local -a mounts=() session_args=() cmd=() accounts=()
+	local AI_ENGINE_ISOLATION_WORKDIR AI_ENGINE_ISOLATION_FAILURE AI_ENGINE_ISOLATION_GUARD
+	local -a AI_ENGINE_ISOLATION_PATHS=() AI_ENGINE_ISOLATION_MASKS=()
 	AI_ENGINE_ISOLATION_WORKDIR="${workdir}"
 	if ! _ai_engine_isolation_preflight "${pool_dir}" "${workdir}" "${prompt_file}" "${instructions}"; then
 		ai_engine_fallback "${role}" "${AI_ENGINE_ISOLATION_FAILURE}"; return "${_AI_ENGINE_EXIT_FALLBACK}"

@@ -444,10 +444,13 @@ def test_read_isolation_rejects_session_mount_containing_pool(sandbox: dict) -> 
 def test_read_isolation_missing_docker_falls_back(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
-	result = _bash(sandbox, f'command() {{ if [ "$1" = -v ] && [ "$2" = docker ]; then return 1; fi; builtin command "$@"; }}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"')
+	script = f'command() {{ if [ "$1" = -v ] && [ "$2" = docker ]; then return 1; fi; builtin command "$@"; }}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"; '
+	script += 'for name in AI_ENGINE_ISOLATION_WORKDIR AI_ENGINE_ISOLATION_FAILURE AI_ENGINE_ISOLATION_GUARD AI_ENGINE_ISOLATION_PATHS AI_ENGINE_ISOLATION_MASKS; do if declare -p "$name" >/dev/null 2>&1; then echo "leaked=$name"; fi; done'
+	result = _bash(sandbox, script)
 	assert _rc(result) == 75
 	assert "reason=isolation_docker_missing" in result.stderr
 	assert _calls(sandbox) == []
+	assert "leaked=" not in result.stdout
 
 
 def test_read_isolation_missing_python_falls_back(sandbox: dict) -> None:
