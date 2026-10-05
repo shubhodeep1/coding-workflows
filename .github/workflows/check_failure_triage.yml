@@ -459,11 +459,15 @@ jobs:
           import sys
           import re
           import unicodedata
-          value = "".join(" " if unicodedata.category(char) in ("Cc", "Zl", "Zp") else char for char in sys.argv[1])
-          value = value.replace("`", "\u0027").replace("<!--", "&lt;!--")
+          value = "".join(" " if unicodedata.category(char).startswith("C") or unicodedata.category(char) in ("Zl", "Zp") else char for char in sys.argv[1])
+          value = " ".join(value.split()).replace("`", "\u0027").replace("<", "&lt;")
+          keys = ("integration branch", "target branch", "tracking issue", "depends on",
+              "local id", "managed by", "prior_pr_baseline_branch", "files_touched")
+          key_pattern = re.compile(r"\b(" + "|".join(re.escape(key).replace(r"\ ", r"\s+") for key in keys) + r")(\s*\**\s*):", re.IGNORECASE)
+          value = key_pattern.sub(r"\1 (untrusted)\2:", value)
           value = re.sub(r"Re-issued from\s*#", "Re-issued from (untrusted) #", value, flags=re.IGNORECASE)
           value = re.sub(r"review-blocked-reissue", "review-blocked (untrusted) reissue", value, flags=re.IGNORECASE)
-          print(" ".join(value.split())[:200])
+          print(value[:200] or "(unnamed check)")
           ' "${CHECK_NAME}")"
           triage_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
             --title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}" \
