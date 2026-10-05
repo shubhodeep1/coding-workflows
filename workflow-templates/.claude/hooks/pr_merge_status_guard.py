@@ -15,8 +15,9 @@ a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
 when the source is a detached HEAD. Unknown directories fall back to the
-session checkout with a warning; unresolved push sources or destinations
-request confirmation. Repeated targets share a PR snapshot
+session checkout with a warning; pushes from those directories also request
+confirmation if the checkout check does not block. Unresolved push sources or
+destinations request confirmation. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 
 Detection rule — all three conditions must hold before the command is blocked:
@@ -1310,6 +1311,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "push" and invocation.warning:
+			unresolved_push_sources.append(
+				"could not resolve git push repository; the session checkout may not be the pushed repository."
+			)
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]

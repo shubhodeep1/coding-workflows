@@ -1051,6 +1051,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (see the retired-files paragraph below). Nothing to configure in the
 > consumer. For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
 > the merged-PR guard ignores the unresolved value and checks the session checkout.
+> If that check does not block, it asks for confirmation because the pushed
+> repository may differ. Other unresolved push directories follow the same rule.
 > When a `git push` source cannot be resolved locally (for example,
 > a shell-expanded source), the merged-PR guard asks for confirmation rather
 > than using the session checkout as a substitute for the pushed commit.

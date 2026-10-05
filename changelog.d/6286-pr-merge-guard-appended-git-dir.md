@@ -1,6 +1,6 @@
 <!-- changelog: security -->
-- **The merged-PR guard no longer uses the value of an appended `GIT_DIR+=` or `GIT_WORK_TREE+=` override.** With `GIT_DIR+=<path> git push`, the guard already treated the working directory as unknown, but it still checked the repository at `<path>`. Bash appends that value to the existing variable, so the guard could check a different repository, and allow a push onto a merged branch.
+- **The merged-PR guard asks for confirmation when a push's effective repository cannot be resolved.** With `GIT_DIR+=<path> git push`, Bash may push from a different repository than the session checkout. The guard already discarded the appended value, but could allow that push based on the checkout's branch instead.
 
-The guard in `.claude/hooks/pr_merge_status_guard.py` and its `workflow-templates/` copy now ignores the unresolved value. It falls back to the session checkout, as it already did for any other directory it cannot resolve, and blocks a push from a branch whose pull request has merged. `tests/test_pr_merge_status_guard.py` covers both variables.
+Both guard copies still check the session checkout and block if its branch has a merged pull request. Otherwise an unresolved push directory prompts for confirmation, rather than treating the checkout's open or default branch as proof that the pushed branch is safe. `tests/test_pr_merge_status_guard.py` covers both appended variables.
 
 What this means for consumer repos: the fix reaches them on the next `@stable` sync, and nothing needs configuring.
