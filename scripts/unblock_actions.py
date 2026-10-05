@@ -10,13 +10,15 @@ the network; the shell only executes.
   plan --verdict-file PATH --context-file PATH
       PATH of --verdict-file is `unblock_ledger.py validate` output. The
       context is `{"repo", "kind", "item", "stop", "labels", "tracking",
-      "has_plan", "linked_issue", "title", "pr_trusted", "pr_author",
-      "pr_head_repo", "pr_head_sha"}` (`tracking` is the project's
-      tracking issue number for a project item or a child issue, else null;
-      `has_plan` is true when the issue already has an implementation plan).
-      PR provenance is validated again here; missing or malformed fields fail
-      closed for issue-creating PR verdicts. Trusted PR-derived issue bodies
-      carry an audit-only `ai:unblock-provenance:v1` marker.
+       "has_plan", "linked_issue", "title", "security_finding_id",
+       "pr_trusted", "pr_author",
+       "pr_head_repo", "pr_head_sha"}` (`tracking` is the project's
+       tracking issue number for a project item or a child issue, else null;
+       `has_plan` is true when the issue already has an implementation plan;
+       `security_finding_id` is optional and validated before reuse).
+       PR provenance is validated again here; missing or malformed fields fail
+       closed for issue-creating PR verdicts. Trusted PR-derived issue bodies
+       carry an audit-only `ai:unblock-provenance:v1` marker.
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
@@ -64,6 +66,9 @@ PROJECT_VALIDATION_STOPS = ("validation-failed", "validate-failed", "harness-bro
 CLARIFY_STOPS = ("clarify-failed", "clarify-respond-failed", "plan-failed")
 GUARD_STOPS = ("scope-blocked", "destructive-blocked")
 CLOSED_LABEL = "ai:unblock-closed"
+SECURITY_LABEL = "ai:security"
+SECURITY_FINDING_MARKER_PREFIX = "<!-- ai:security-finding:"
+SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 MAX_COMMAND_TEXT = 300
 
 
@@ -109,6 +114,9 @@ def _context(raw: object) -> dict:
 	labels = raw.get("labels") or []
 	if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
 		raise UsageError("context 'labels' must be a list of strings")
+	finding_id = raw.get("security_finding_id")
+	if not isinstance(finding_id, str) or not SECURITY_FINDING_ID_RE.fullmatch(finding_id):
+		finding_id = None
 	pr_author = raw.get("pr_author")
 	pr_head_repo = raw.get("pr_head_repo")
 	pr_head_sha = raw.get("pr_head_sha")
@@ -133,6 +141,7 @@ def _context(raw: object) -> dict:
 		"has_plan": raw.get("has_plan") is True,
 		"linked_issue": linked,
 		"title": _one_line(raw.get("title") or ""),
+		"security_finding_id": finding_id,
 		"pr_trusted": pr_trusted,
 		"pr_author": pr_author if pr_trusted else "",
 		"pr_head_repo": pr_head_repo if pr_trusted else "",
@@ -168,6 +177,10 @@ def _untrusted_pr_ops(ctx: dict, verdict_name: str) -> list[dict]:
 
 def _stop_label(stop: str) -> str:
 	return f"ai:{stop}" if stop and stop != "project-failed" else ""
+
+
+def _is_security_issue(ctx: dict) -> bool:
+	return ctx["kind"] == "issue" and SECURITY_LABEL in ctx["labels"]
 
 
 def _approve(issue: int, labels: list[str], drop: str) -> list[dict]:
@@ -315,6 +328,10 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	elif name == "reissue":
 		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
+		security_issue = _is_security_issue(ctx)
+		if security_issue and not ctx["tracking"] and ctx.get("security_finding_id"):
+			body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['security_finding_id']} -->\n{body}"
+		labels = [SECURITY_LABEL] if security_issue else []
 		if ctx["kind"] == "pr":
 			# PR body lineage is author-controlled; never route its reissue
 			# into an unverified project or reapprove an issue the close event closes.
@@ -335,10 +352,15 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 					),
 				}
 			)
-			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
+			if not security_issue:
+				ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
 		else:
-			ops.append({"op": "create_issue", "title": title, "body": body, "labels": [], "wait_on": None})
-			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
+			ops.append({"op": "create_issue", "title": title, "body": body, "labels": labels, "wait_on": None})
+			if not security_issue or ctx.get("security_finding_id"):
+				ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
+		if security_issue and (ctx["tracking"] or not ctx.get("security_finding_id")):
+			location = f"the re-issue request recorded on tracking issue #{ctx['tracking']}" if ctx["tracking"] else "the newest issue that links this one"
+			ops.append({"op": "comment", "issue": item, "body": f"This security finding stays open; it is tracked here until a linked fix is merged. Re-issue: see {location}."})
 	elif name == "accept_with_followup":
 		followup_body = "\n".join([f"Accepted with this follow-up by the unblock judge (#{item}).", "", f"Follow-up: {verdict['instructions']}"])
 		if ctx["kind"] == "pr":
@@ -354,6 +376,11 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		)
 		ops += reset_ops(ctx, f"accepted with a follow-up issue: {verdict['reason']}")
 	elif name == "close":
+		if _is_security_issue(ctx):
+			ops.append({"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]})
+			ops.append({"op": "comment", "issue": item, "body": "The unblock judge has no verdicts left for this security finding. It stays open until a linked fix is merged.\n\nWhy: " + _one_line(verdict["reason"])})
+			ops.append({"op": "telegram", "level": "CRITICAL", "text": f"Unblock judge kept security finding #{item} open ({ctx['stop']}): {_one_line(verdict['reason'])}; a person must fix or triage it"})
+			return ops
 		if ctx["kind"] != "project":
 			# A project's tracking issue is closed by the poller, which also
 			# sets its state to abandoned (the close goes through the API, §19).

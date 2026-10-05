@@ -328,6 +328,10 @@ PY
 				if [ "${ops_failed}" = "true" ] && [ "${close_succeeded}" != "true" ]; then
 					if [ "${ITEM_KIND}" = "project" ] && [ "$(jq -r ".ops[${idx}].level" "${ops_file}")" = "CRITICAL" ]; then
 						unblock_tg "CRITICAL" "Unblock judge could not complete closure of project #${ITEM}; inspect the failed operation in the workflow log (${REPOSITORY})."
+					elif [ "${ITEM_KIND}" = "issue" ] && [ "$(jq -r ".ops[${idx}].level" "${ops_file}")" = "CRITICAL" ] \
+						&& jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
+						# A failed terminal-label write cannot hide an unresolved finding.
+						unblock_tg "CRITICAL" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
 					elif [ "${ITEM_KIND}" = "pr" ] && jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; then
 						unblock_tg "WARNING" "Unblock judge could not close untrusted PR #${ITEM}; a write failed (${REPOSITORY})."
 					fi
@@ -427,9 +431,12 @@ unblock_main()
 	fi
 
 	# The project an item belongs to, and a PR's linked issue.
-	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref="" head_repo="" binding_issue=""
+	local tracking="" linked="" finding="" body_text pr_json="" head_sha="" head_ref="" head_repo="" binding_issue=""
 	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo="" untrusted_project_pr="false"
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
+	if [ "${ITEM_KIND}" = "issue" ]; then
+		finding="$(jq -r '(.body // "") | [match("<!-- ai:security-finding:([^>]+) -->").captures[0].string] | first // "" | gsub("^\\s+|\\s+$"; "")' "${RUNTIME_DIR}/item.json")"
+	fi
 	if [ "${ITEM_KIND}" = "project" ]; then
 		tracking="${ITEM}"
 	elif [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:orchestrator-managed")' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
@@ -506,10 +513,10 @@ unblock_main()
 		has_plan="true"
 	fi
 	jq -n --arg repo "${REPOSITORY}" --arg kind "${ITEM_KIND}" --argjson item "${ITEM}" --arg stop "${ITEM_STOP}" \
-		--slurpfile labels "${RUNTIME_DIR}/labels.json" --arg tracking "${tracking}" --arg linked "${linked}" \
+		--slurpfile labels "${RUNTIME_DIR}/labels.json" --arg tracking "${tracking}" --arg linked "${linked}" --arg finding "${finding}" \
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
 		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
-		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
+		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
