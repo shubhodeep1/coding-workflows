@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:602 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The jq extraction retains only the first run ID found in a comment instead of flattening all scan results, so the newest-first three-candidate selection cannot process multiple cited IDs as intended.\n  WHY: The reviewers disagree on the exact resulting candidate representation, but both report that a comment containing multiple run IDs does not yield the expected newest three candidates and causes the corresponding test assertions to fail.\n- scripts/unblock_judge.sh:636, 640 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The issue and project title fallback accepts an `issues` or `issue_comment` run based on matching `display_title` without verifying an item-specific association such as the issue number.\n  WHY: A pipeline-authored comment citing a run from another issue with the same title can pass metadata validation and have its failed logs included in the judge prompt; severity is highest at major, while qwen_qwen3_7-plus rates it nit because of the pipeline-login comment filter.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh | severity=high | confidence=3\n  PROBLEM: The issue and project fallback branches accept an `issues` or `issue_comment` event run whose `display_title` matches the item's current public title, without requiring a specific branch, PR, or item number.\n  WHY: Once a pipeline-login comment cites such a run ID, a same-title run from another issue can be accepted and its failed logs can enter the judge prompt.\n- scripts/unblock_judge.sh | severity=critical | confidence=5\n  PROBLEM: The jq expression applies `.[0]` to the captures returned by `scan`, so a comment with multiple run IDs contributes only the first capture as a candidate.\n  WHY: The reviewers' reported runtime interpretations differ, but the test expects candidates 444, 333, and 222 in that order, while this expression does not produce that candidate list.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:636 and 640 | severity=high | confidence=3\n  PROBLEM: For issue and project items, a run is accepted when its event is `issues` or `issue_comment` and its `display_title` matches the item's title, without verifying the issue number.\n  WHY: A pipeline-authored comment containing a run link from another issue with the same title lets that run pass metadata validation and have its failed logs included in the judge prompt.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh:636 and :640 | severity=low | confidence=2\n  PROBLEM: The title-fallback binding branch binds an issue or project run based only on a matching public title and an `issues` or `issue_comment` event.\n  WHY: This is a defense-in-depth concern rather than a concrete vulnerability in the reviewer's assessment, because only run IDs cited by pipeline-authored comments are considered.\n- scripts/unblock_judge.sh:602 | severity=critical | confidence=5\n  PROBLEM: The `| .[0]` at the end of the inner pipeline takes only the first scan match per comment.\n  WHY: For a comment containing five run IDs, the candidate list contains only the first ID, so the expected three-candidate count and metadata-call order assertions fail.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7b7103918cb4af1f259955b54b154a41b38b234a3b399efa50beaf3dce43fbda",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6243,
+    "run_id": "37250291279",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37250291279",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005013414_cc43447c21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6243,
+    "run_id": "37250291279"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T01:34:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
