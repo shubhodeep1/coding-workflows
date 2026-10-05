@@ -180,7 +180,14 @@ def test_broker_rejects_client_authorization(chain) -> None:
 	# A caller on the socket cannot bring its own credential.
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	body = json.dumps({"model": MODEL}).encode()
-	connection.request("POST", "/v1/messages", body, {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	# The broker rejects these headers before reading the body. Sending it
+	# races the broker's close and can raise BrokenPipeError on the client.
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", str(len(body)))
+	connection.endheaders()
+	connection.sock.settimeout(5)
 	assert connection.getresponse().status == 400
 	connection.close()
 	assert _Upstream.seen == []
