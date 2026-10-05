@@ -288,7 +288,7 @@ WORKFLOW_JOBS = {
 	"validation-refresh.yml": [("refresh", ["VALIDATION_REFRESH"], "./.github/actions/")],
 	"workflow-log-analysis.yml": [
 		("weekly-retro", ["RETRO"], "./.github/actions/"),
-		("analyze-commit-notify", ["LOG_ANALYSIS"], "./.github/actions/"),
+		("analyze-commit-notify", ["LOG_ANALYSIS", "LOG_SUMMARY"], "./.github/actions/"),
 		("deep-audit", ["LOG_AUDIT"], "./.github/actions/"),
 		("api-redundancy", ["LOG_ANALYSIS"], "./.github/actions/"),
 	],
@@ -515,3 +515,14 @@ def test_review_job_resolves_materiality_and_defaults_the_check_on() -> None:
 	assert "for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE SUMMARISER BEHAVIOURAL_SMOKE MATERIALITY; do" in text
 	assert "AI_ENGINE_MATERIALITY: ${{ vars.AI_ENGINE_MATERIALITY || '' }}" in text
 	assert text.count("AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '1' }}") == 2
+
+
+def test_log_summary_engine_is_resolved_before_the_summary_step() -> None:
+	steps = _job_steps("workflow-log-analysis.yml", "analyze-commit-notify")
+	names = [step.get("name") for step in steps]
+	summary_at = names.index("Summarize unselected runs (gpt-6-luna)")
+	for name in ("Resolve AI engine", "Install Claude Code CLI", "Resolve Claude credential"):
+		assert names.index(name) < summary_at, name
+	env = steps[summary_at]["env"]
+	assert env["WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS"] == "${{ vars.WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS || '900' }}"
+	assert env["OPENROUTER_API_KEY"] == "${{ secrets.OPENROUTER_API_KEY }}"

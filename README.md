@@ -1892,9 +1892,14 @@ poller's security pass), `CHECK_TRIAGE` (`check_failure_triage.yml`),
 `SUMMARISER` and `BEHAVIOURAL_SMOKE` (read-only tool profile; `SUMMARISER`
 also writes `implement.yml`'s AI issue summary PR comment), and
 `MATERIALITY` (the Claude review in `scripts/review_agents_md_materiality.sh`,
-read-only). Still on `codex`: `LOG_SUMMARY` (an OpenRouter HTTP call, not a
-CLI call), plus `ACTIVATION_VERIFY` and `UNBLOCK_JUDGE`, which their own
-phases wire.
+read-only), and `LOG_SUMMARY` (`scripts/summarize_unselected_runs.py`, one
+read-only Claude call per unselected run). `LOG_SUMMARY` falls back to its
+OpenRouter HTTP call: on exit 75 for the rest of the batch, and when
+`WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS` (default `900`) runs out, which keeps
+the Claude calls inside the `analyze-commit-notify` job's 60-minute cap. It
+runs without `OPENROUTER_API_KEY`, and then runs left over stay
+unsummarized. Still on `codex`: `ACTIVATION_VERIFY` and `UNBLOCK_JUDGE`,
+which their own phases wire.
 
 These sites call `claude_run_selected <ROLE>` (`scripts/ai_engine.sh`),
 which runs `claude_run` only when the job's "Resolve AI engine" step
