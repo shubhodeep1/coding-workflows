@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:7443 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `poller_claude_judge` writes sandbox failure reasons to the hardcoded `rb_judge_isolation_reason` path regardless of `judge_role`.\n  WHY: For non-RB_JUDGE roles, this may fail to update the role-specific isolation reason; other reviewers say the write uses `judge_reason_file` and the paths match, so this finding is disputed.\n- scripts/orchestrate_poll_process.sh:10455-10470 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_record_judge_isolation_failure` escalates repeated sandbox failures to `ai:needs-human`.\n  WHY: The reviewer says transient infrastructure failures may cause unnecessary operator intervention; other reviewers say escalation is bounded and intentional, so this finding is disputed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Run the wave, stall, integration, and security judges in read-only, credential-free isolation, with no host fallback.\n  expected_change_site: scripts/orchestrate_poll_process.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The updated `poller_judge_isolated` function still references `poller_rb_judge_isolated` (or `_poller_rb_judge_sandbox_attempt`), which uses `rb_support_dir` defaulting to `\"${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts\"`; the reviewer says isolation and prevention of host fallback need verification across all four judge roles and caller functions.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:7443 | severity=high | confidence=[4]\n  PROBLEM: `poller_claude_judge` writes the sandbox failure reason to a hardcoded path `\"${RUNTIME_DIR}/rb_judge_isolation_reason\"` regardless of the `judge_role`.\n  WHY: For non-RB_JUDGE roles (like INTEGRATION_JUDGE, WAVE_JUDGE, etc.), the function correctly determines `judge_reason_file` as `\"${RUNTIME_DIR}/judge_isolation_reason\"`, but the write operation in `poller_claude_judge` (called from `poller_judge_isolated`) still uses the `rb_judge_isolation_reason` path, potentially overwriting or failing to update the correct isolation reason for the specific role being diagnosed, leading to incorrect isolation diagnostics.\n- scripts/orchestrate_poll_process.sh:10455-10470 | severity=high | confidence=[3]\n  PROBLEM: `_record_judge_isolation_failure` escalates transient sandbox failures to `ai:needs-human` and labels the tracking issue.\n  WHY: Repeated failures in the read-only sandbox\u2014caused by transient network issues, resource constraints, or temporary sandbox infrastructure unavailability\u2014should be deferred rather than causing an immediate human-escalation. Escalating these automatically causes unnecessary label-repair contention and operator intervention for issues that would likely self-heal on a later poll tick.\n- TASK_GAP\n  Requirement: Run the wave, stall, integration, and security judges in read-only, credential-free isolation, with no host fallback.\n  Expected change site: scripts/orchestrate_poll_process.sh\n  Evidence of absence: The updated `poller_judge_isolated` function still references `poller_rb_judge_isolated` (or `_poller_rb_judge_sandbox_attempt`), which uses `rb_support_dir` defaulting to `\"${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts`. The orchestrator-side orchestrate_poll_process.sh must be verified to correctly utilize isolation for all four judge roles (WAVE, STALL, INTEGRATION, SECURITY) and avoid any host fallback logic in the caller functions. The code structure shows `poller_judge_isolated` handling the logic, but the consistency of the fallback/transfer prevention needs verification across all call sites.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4d2f28ad76bd7dbf9024c77f2cd8b85878e8a6e18fed27d7bea7549d662c9d89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6385,
+    "run_id": "37335056644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37335056644",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005162017_102824a59f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6385,
+    "run_id": "37335056644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T16:20:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
