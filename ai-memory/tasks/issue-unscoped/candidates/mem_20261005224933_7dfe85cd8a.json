@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_github_facts.py:extract_refs(), branch-reference filter: `if (is_integration and \"..\" not in token) or _is_branch(token, checkout):` | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Explicitly qualified branches in another repository can be filtered using the current checkout\u2019s filesystem, causing their references to be omitted.\n  WHY: If a question references a branch such as `feature/x` in an allowed consumer repository and the current checkout contains a `feature/` path, the collector omits the reference and `build_query()` never checks that branch; no severity disagreement was reported.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_github_facts.py:extract_refs(), branch-reference filter: `if (is_integration and \"..\" not in token) or _is_branch(token, checkout):` | severity=high | confidence=4\n  PROBLEM: Explicitly qualified branches in another repository are filtered using the current checkout\u2019s filesystem. `_is_branch()` rejects a token when its path, or its first path component, exists in that checkout.\n  WHY: If a question references a branch such as `feature/x` in an allowed consumer repository and the current checkout contains a `feature/` path, the collector omits the reference. `build_query()` then never checks that branch, so the worker receives no fact about it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e7e68e0dbb3657bab160a3c2db49f1221c0a862c8b34d6a87c6ae6baf157ad3d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6283,
+    "run_id": "37379766911",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37379766911",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005224933_7dfe85cd8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6283,
+    "run_id": "37379766911"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T22:49:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
