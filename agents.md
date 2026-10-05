@@ -636,9 +636,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   of checking the session checkout. Append assignments to `GIT_DIR` or
   `GIT_WORK_TREE` also ask before a push, and leading redirections, including
   those after environment assignments, do not bypass commit/push detection.
-  A numeric argument next to a redirection is
-  checked as a possible branch and asks for confirmation when no block is found,
-  since `2 >out` and `2>out` look identical after shell tokenization. An
+  A digit word separated from a redirection (`2 >out`, `'2'>out`) is checked
+  as a possible branch and asks for confirmation when no block is found; digits
+  glued to it (`2>&1`) are a file descriptor and need no confirmation. An
   unresolved push source asks rather than checking the session checkout's HEAD.
 - **No MCP tools inside.** Serena (and any other MCP server) is not configured
   in the container, so isolated prompts carry no Serena hints. Semble results

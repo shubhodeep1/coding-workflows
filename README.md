@@ -1245,9 +1245,10 @@ location or an `env -S` command cannot be resolved, the guard asks instead
 of checking the session checkout. An unresolved append to `GIT_DIR` or
 `GIT_WORK_TREE` also asks before a push; leading shell redirections, including
 those following environment assignments, do not bypass the merged-PR check.
-A numeric push argument immediately before a
-redirection is checked as a possible branch and also requires confirmation
-when safe, since shell tokenization cannot distinguish `2 >out` from `2>out`.
+A digit word separated from a following
+redirection (`2 >out`, `'2'>out`) is checked as a possible branch and also
+requires confirmation when safe; digits glued to the redirection (`2>&1`,
+`2>/dev/null`) are a file descriptor, as in Bash, and need no confirmation.
 An unresolved push source also requires confirmation instead of checking the
 session checkout's unrelated HEAD.
 

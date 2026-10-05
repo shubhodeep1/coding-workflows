@@ -271,11 +271,11 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
 			if segment and segment[-1].isdigit():
-				if all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", word) for word in segment[:-1]):
-					segment.pop()  # Leading file descriptor, after any assignments.
+				if redirect_fd or all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", word) for word in segment[:-1]):
+					segment.pop()  # IO number glued to the operator (2>&1), or a leading one.
 				else:
-					# shlex loses the space: `push origin 2 >out` and `2>out`
-					# are indistinguishable. Check branch 2 AND ask about the redirect.
+					# A spaced, quoted or escaped digit (`2 >out`, `'2'>out`) is an
+					# argument. Check branch 2 AND ask about the redirect.
 					segment.append("<ambiguous-io-number>")
 			redirect_target = True
 			redirect_fd = False
