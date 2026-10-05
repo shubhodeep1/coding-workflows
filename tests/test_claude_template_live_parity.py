@@ -362,7 +362,7 @@ def test_sync_pushes_a_branch_and_opens_one_pr(tmp_path: Path) -> None:
 	bin_dir.mkdir()
 	calls = tmp_path / "gh_calls"
 	gh = bin_dir / "gh"
-	gh.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "' + str(calls) + '"\ncase "$*" in *"associatedPullRequests"*) echo \'{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":[{"number":12,"mergedAt":"2026-10-01T00:00:00Z","headRefName":"feature/approved","baseRefName":"main","headRepository":{"nameWithOwner":"octo/repo"},"author":{"login":"octo","__typename":"User"},"authorAssociation":"OWNER"}],"pageInfo":{"hasNextPage":false}}}}}}\' ;; *"pullRequest(number:"*) echo \'{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"message":"human change"}}],"totalCount":1,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\' ;; *"pullRequests(first:"*) echo \'{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}\' ;; *"-X POST"*) echo \'{"number":7}\' ;; *) echo "null" ;; esac\n', encoding="utf-8")
+	gh.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "' + str(calls) + '"\ncase "$*" in *"associatedPullRequests"*) echo \'{"data":{"repository":{"commit0":{"associatedPullRequests":{"nodes":[{"number":12,"mergedAt":"2026-10-01T00:00:00Z","headRefName":"feature/approved","baseRefName":"main","headRepository":{"nameWithOwner":"octo/repo"},"author":{"login":"octo","__typename":"User"},"authorAssociation":"OWNER"}],"pageInfo":{"hasNextPage":false}}}}}}\' ;; *"pullRequest(number:"*) echo \'{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"message":"human change"}}],"totalCount":1,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\' ;; *"pullRequests(first:"*) echo \'{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}\' ;; *"-X POST"*) echo \'{"number":7}\' ;; *) echo "null" ;; esac\n', encoding="utf-8")
 	gh.chmod(0o755)
 	env = {key: value for key, value in os.environ.items() if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT"}}
 	env.update(PATH=f"{bin_dir}:{env['PATH']}", GITHUB_REPOSITORY="octo/repo", PYTHONDONTWRITEBYTECODE="1")
@@ -372,6 +372,7 @@ def test_sync_pushes_a_branch_and_opens_one_pr(tmp_path: Path) -> None:
 	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/guard.py") == "v2"
 	lines = calls.read_text(encoding="utf-8").splitlines()
 	assert sum(line.startswith("api graphql ") for line in lines) == 3
+	assert any("commit0:object" in line for line in lines)
 	post = next(line for line in lines if line.startswith("api -X POST repos/octo/repo/pulls -f title=chore(.claude): sync live copies"))
 	assert "-f head=ai/sync-claude-live-copies -f base=main" in post
 	assert sum("api -X" in line and "repos/octo/repo/pulls" in line for line in lines) == 1
