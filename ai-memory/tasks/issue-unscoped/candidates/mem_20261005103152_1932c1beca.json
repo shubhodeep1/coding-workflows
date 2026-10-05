@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_evidence.py:141-142 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_HEAL_RUN_LINE_RE` is defined but no longer referenced, despite a comment implying it is retained for compatibility.\n  WHY: The reviewers report that no caller or external consumer uses the constant, which may mislead maintainers tracing its usage.\n- scripts/workflow_failure_heal_evidence.py:881-893 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The cached review-only rejection branch returns without deleting the cached run directory.\n  WHY: DeepSeek and MiniMax report that stale evidence remains after rejection; Qwen and Z-AI dispute this, reporting that `collect()` removes skipped run directories afterward.\n- scripts/workflow_failure_heal_evidence.py:905-907 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fresh-path review-only branch returns without cleaning a run directory when no focus jobs are selected.\n  WHY: MiniMax reports that stale non-review job logs can remain available through the next stage's `actions/cache` restore.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal_evidence.py:892-893 | severity=MAJOR | confidence=4\n  PROBLEM: When cached review_only evidence is rejected, collect_run returns {\"skipped\": True} without deleting the run_dir directory from disk.\n  WHY: A previous collect that built evidence for a failed run writes meta.json and job log files. A subsequent collect that sees the same run as review_only (e.g. the run concluded success with non-review jobs mixed in) rejects the cached evidence at lines 892-893 but leaves meta.json and orphaned job log files on disk. In production each workflow stage has its own evidence directory, so the stale files do not cross stages, but within-stage re-collection by the same Collector would encounter stale evidence.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_evidence.py:881-893 | severity=MAJOR | confidence=5\n  PROBLEM: When the cached review-only evidence is rejected by the new guard at lines 884-891, the function returns {\"skipped\": True} without removing the previously cached runs/<repo>__<run_id> directory.\n  WHY: The four tests `test_review_only_run_does_not_trust_malformed_cached_job_table`, `test_review_only_run_rejects_empty_cached_review_jobs`, `test_review_only_run_rejects_cached_non_review_log_even_with_review_job`, and `test_review_only_run_rejects_orphaned_cached_non_review_log` all assert `not run_dir.exists()` immediately after the cached rejection, but the code does not remove `run_dir` from `self.out`. The cached `meta.json` + leftover `job-*.txt` files also survive into the next stage through `actions/cache`, so a subsequent stage receives the same untrusted evidence the guard was meant to discard and burns a budget retry on a head that can never be re-collected.\n- scripts/workflow_failure_heal_evidence.py:142 | severity=NIT | confidence=4\n  PROBLEM: `_HEAL_RUN_LINE_RE` is defined with a \"retained for compatibility\" comment but `trusted_run_refs` no longer references it (it switched to `_runs_marker_urls(...)` on lines 574 and 614 in this PR). No other module imports it; the only match in the tree is the definition itself.\n  WHY: dead code \u2014 no runtime failure today \u2014 but future maintainers will trace a usage that does not exist, and the comment implies an external consumer that the diff did not preserve. Per \u00a76, the safest minimal fix is to delete the symbol (or move it next to a real caller).\n- scripts/workflow_failure_heal_evidence.py:905-907 | severity=MAJOR | confidence=4\n  PROBLEM: When the fresh path encounters a `review_only` run whose job list contains zero matching focus jobs (e.g. `test_review_only_run_with_only_failed_non_review_job_skips_evidence`), it returns without cleaning the run directory either.\n  WHY: the pre-existing `runs/<repo>__<run_id>/` dir from a prior non-`review_only` stage (or an earlier, different conclusion) stays on disk with stale `job-*.txt` files for jobs the review-only guard rejected. The next stage restores the same dir through `actions/cache` and the untrusted non-review logs survive into the trusted evidence folder.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_evidence.py:141-142 | severity=NIT | confidence=5\n  PROBLEM: `_HEAL_RUN_LINE_RE` is defined but never referenced anywhere in the codebase. The comment says \"Retained for compatibility; free-text run lines are not an authority for fetching logs\" but grep confirms zero usages.\n  WHY: This is dead code that will mislead maintainers into tracing a usage that does not exist. The compatibility comment suggests external consumers use it, but no import path references it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal_evidence.py:142, `_HEAL_RUN_LINE_RE`\n  PROBLEM: The regex `_HEAL_RUN_LINE_RE` is defined but never referenced anywhere in the codebase after `trusted_run_refs` stopped scanning `**Failed run:**` lines. The comment says \"Retained for compatibility\" but no external consumer imports or uses it.\n  WHY: A future maintainer may waste time tracing a usage that does not exist.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3029bd00ee017902e8bd03e388f0ad4d54de7f6016c398e9dbf345e374fa78c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6251,
+    "run_id": "37294230278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37294230278",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005103152_1932c1beca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6251,
+    "run_id": "37294230278"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T10:31:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
