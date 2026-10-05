@@ -185,7 +185,7 @@ class _GitInvocation(NamedTuple):
 class _GuardTarget(NamedTuple):
 	cwd: str
 	environment: dict[str, str]
-	branch: str
+	branch: str | None
 	tip: str
 	reaches_remote: bool
 	warning: str = ""
@@ -378,7 +378,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
-			if name in ("GIT_DIR", "GIT_WORK_TREE"):
+			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 			index += 1
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
@@ -517,8 +517,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		if branch == "":
 			continue
 		if branch is None:
-			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; destination branch is unknown"))
+			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
 	if bulk:
@@ -1318,12 +1317,19 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
 	unknown_destination_reasons: list[str] = []
+	unresolved_push_sources: list[str] = []
+	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
 		)
 		for target in targets:
+			if target.branch is None:
+				unresolved_push_destinations.append(
+					"could not resolve git push destination; shell expansion may change the pushed branch."
+				)
+				continue
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
 			if target.warning.startswith("could not resolve git push"):
@@ -1338,8 +1344,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						target.cwd, _GIT_TIMEOUT_SECONDS,
 					)
 				if code != 0:
-					_warn("could not resolve git push source; checking the session checkout instead")
-					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+					unresolved_push_sources.append(
+						f"could not resolve git push source for `{target.branch}`; "
+						"shell expansion may change the pushed commit."
+					)
+					continue
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
@@ -1396,13 +1405,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
+	unresolved_push_sources.extend(unresolved_push_destinations)
 	if bulk_reasons:
 		unknown_destination_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
-	if unknown_destination_reasons:
-		_request_confirmation("; ".join(sorted(set(unknown_destination_reasons))))
+	if unknown_destination_reasons or unresolved_push_sources:
+		_request_confirmation("; ".join(sorted(set(unknown_destination_reasons + unresolved_push_sources))))
 	return 0, ""
 
 
