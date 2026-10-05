@@ -1060,8 +1060,10 @@ not delete wrappers that are already present in `.github/workflows/`.
 > `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
 > If `--repo` and a positional remote are both supplied, the guard checks the
 > refspecs after that remote, not the remote name as a branch. If the local
-> remote-config lookup cannot identify the positional repository (including an
-> unconfigured path or URL), the guard asks instead of treating it as a refspec.
+> remote-config lookup cannot identify the positional repository as a GitHub
+> remote or URL (including an unconfigured path or non-GitHub URL), the guard
+> blocks the push instead of treating it as a refspec. A GitHub URL is checked
+> against its destination repository; an unavailable PR lookup asks for confirmation.
 
 > The merged-PR guard checks numeric push refspecs before a separate output
 > redirect (`git push origin 123 > /dev/null`). When an explicit push refspec

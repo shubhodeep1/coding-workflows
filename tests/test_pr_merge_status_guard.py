@@ -1149,8 +1149,10 @@ def test_positional_remote_probe_failure_requires_confirmation(merged_branch_rep
 	repo, _ = merged_branch_repo
 	_git(repo, "branch", "origin", "main")
 	actual_run = guard._run
+	history_probe_attempts: list[list[str]] = []
 	def timed_out_config(argv, cwd, timeout):
 		if argv == ["git", "config", "--get", "remote.origin.url"]:
+			history_probe_attempts.append(argv)
 			return 124, "", "timed out"
 		return actual_run(argv, cwd, timeout)
 	monkeypatch.setattr(guard, "_run", timed_out_config)
@@ -1158,6 +1160,7 @@ def test_positional_remote_probe_failure_requires_confirmation(merged_branch_rep
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": "git push --repo=upstream origin"}})
 	assert (code, message) == (0, "")
+	assert history_probe_attempts == [["git", "config", "--get", "remote.origin.url"]]
 	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
