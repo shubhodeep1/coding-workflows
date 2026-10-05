@@ -18433,6 +18433,14 @@ if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then
   exit 0
 fi
 
+# With no tracking issue, the workflow skips the full poller; this is the
+# only path that scans blocked standalone items on those ticks. The workflow's
+# complementary has_work gates keep it exclusive with the post-loop scan.
+if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
+  run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
+  exit 0
+fi
+
 # ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------
