@@ -32,6 +32,8 @@
 # Both engines run in a network-isolated container with a host-side provider relay;
 # its output is data, and verdicts containing literal or encoded credentials
 # are rejected before only ledger-approved operations are acted on.
+# A PR binds to a project only with a same-repository head, an ai/issue-<n>
+# head branch, and <n> in pipeline-authored project state.
 #
 # Never fails its caller: every problem is logged and the exit code is 0.
 # API budget (CLAUDE.md §15), per run: one `user` read, the item, its
@@ -160,7 +162,9 @@ unblock_run_ops()
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
 		issue="$(jq -r ".ops[${idx}].issue // empty" "${ops_file}")"
-		if [ "${ops_failed}" = "true" ] && [ "${op}" != "close" ] && [ "${op}" != "telegram" ]; then
+		if [ "${ops_failed}" = "true" ] && [ "${op}" != "close" ] && [ "${op}" != "telegram" ] \
+			&& ! { [ "${op}" = "add_labels" ] && [ "${close_succeeded}" = "true" ] && [ "${ITEM_KIND}" = "pr" ] \
+				&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; }; then
 			continue
 		fi
 		case "${op}" in
@@ -284,7 +288,8 @@ PY
 				fi
 				;;
 			close)
-				if [ "${ops_failed}" = "true" ]; then
+				if [ "${ops_failed}" = "true" ] && ! { [ "${ITEM_KIND}" = "pr" ] \
+					&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; }; then
 					unblock_log "item=${ITEM} op=close issue=${issue} outcome=skip reason=prerequisite_failed"
 					continue
 				fi
@@ -308,7 +313,9 @@ PY
 			telegram)
 				if [ "${ops_failed}" = "true" ] && [ "${close_succeeded}" != "true" ]; then
 					if [ "${ITEM_KIND}" = "project" ] && [ "$(jq -r ".ops[${idx}].level" "${ops_file}")" = "CRITICAL" ]; then
-						unblock_tg "CRITICAL" "Unblock judge could not mark project #${ITEM} for closure; label write failed (${REPOSITORY})."
+						unblock_tg "CRITICAL" "Unblock judge could not complete closure of project #${ITEM}; inspect the failed operation in the workflow log (${REPOSITORY})."
+					elif [ "${ITEM_KIND}" = "pr" ] && jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; then
+						unblock_tg "WARNING" "Unblock judge could not close untrusted PR #${ITEM}; a write failed (${REPOSITORY})."
 					fi
 					continue
 				fi
@@ -358,6 +365,13 @@ print(json.dumps(evidence))
 PY
 }
 
+# A project may only claim an issue that its authenticated V2 state lists.
+unblock_state_lists_issue()
+{
+	local bound_issue="$1" binding_json="$2"
+	jq -e --argjson issue "${bound_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${binding_json}" >/dev/null 2>&1
+}
+
 unblock_main()
 {
 	local now stop_json fp verdict_name round marker_line comment_body terminal ops_file wait
@@ -399,26 +413,57 @@ unblock_main()
 	fi
 
 	# The project an item belongs to, and a PR's linked issue.
-	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref=""
+	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref="" head_repo="" binding_issue=""
+	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo="" untrusted_project_pr="false"
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "project" ]; then
 		tracking="${ITEM}"
 	elif [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:orchestrator-managed")' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
 		tracking="$(printf '%s\n' "${body_text}" | sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*\(\*\*\)\{0,1\}Tracking issue:\(\*\*\)\{0,1\}[[:space:]]*#\([0-9][0-9]*\)[[:space:]]*$/\3/p' | head -n1)"
+		binding_issue="${ITEM}"
 	fi
 	if [ "${ITEM_KIND}" = "pr" ]; then
-		# PR body references are untrusted; only its GitHub-reported base can
-		# bind a fix-up and its verdict ledger to an orchestrator project.
+		# PR body references are untrusted; project binding also requires a
+		# same-repository head and trusted project-state membership below.
 		pr_json="$(gh api "repos/${REPOSITORY}/pulls/${ITEM}" 2>/dev/null || true)"
 		if ! jq -e --argjson item "${ITEM}" '.number == $item and (.base.ref | type == "string")' <<< "${pr_json}" >/dev/null 2>&1; then
 			unblock_log "item=${ITEM} outcome=skip reason=pr_unreadable"
 			return 0
 		fi
-		if [[ "$(jq -r '.base.ref' <<< "${pr_json}")" =~ ^orchestrator/project-([1-9][0-9]*)$ ]]; then
-			tracking="${BASH_REMATCH[1]}"
-		fi
 		head_sha="$(jq -r '.head.sha // ""' <<< "${pr_json}")"
 		head_ref="$(jq -r '.head.ref // ""' <<< "${pr_json}")"
+		pr_author="$(jq -r '.user.login // ""' <<< "${pr_json}")"
+		pr_assoc="$(jq -r '.author_association // ""' <<< "${pr_json}")"
+		pr_head_repo="$(jq -r '.head.repo.full_name // ""' <<< "${pr_json}")"
+		if jq -e --arg repo "${REPOSITORY}" --arg login "${UNBLOCK_LOGIN}" '
+			(.head.repo.full_name | type == "string")
+			and ((.head.repo.full_name | ascii_downcase) == ($repo | ascii_downcase))
+			and (.user.login | strings | test("^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$"))
+			and (.head.sha | strings | test("^[0-9a-f]{40}([0-9a-f]{24})?$"))
+			and ((.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))
+				or .user.login == $login or .user.login == "github-actions[bot]")
+		' <<< "${pr_json}" >/dev/null 2>&1; then
+			pr_trusted="true"
+		fi
+		unblock_log "item=${ITEM} kind=pr op=pr_provenance trusted=${pr_trusted} head_repo=$(printf '%s' "${pr_head_repo}" | tr '\r\n' '  ') assoc=$(printf '%s' "${pr_assoc}" | tr '\r\n' '  ')"
+		if [[ "$(jq -r '.base.ref' <<< "${pr_json}")" =~ ^orchestrator/project-([1-9][0-9]*)$ ]]; then
+			if [ "${pr_trusted}" != "true" ]; then
+				# Never bind an untrusted PR to project state; only its rejection may proceed.
+				untrusted_project_pr="true"
+			else
+				tracking="${BASH_REMATCH[1]}"
+				head_repo="$(jq -r '.head.repo.full_name // ""' <<< "${pr_json}")"
+				if [ -z "${head_repo}" ] || [ "${head_repo,,}" != "${REPOSITORY,,}" ]; then
+					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=fork_head"
+					return 0
+				fi
+				if [[ ! "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=head_ref"
+					return 0
+				fi
+				binding_issue="${BASH_REMATCH[1]}"
+			fi
+		fi
 		linked="$(printf '%s\n' "${body_text}" | grep -oiE '\b(refs|closes|close|closed|fixes|fix|fixed|resolves|resolve|resolved)[[:space:]]+#[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
 	fi
 
@@ -449,12 +494,14 @@ unblock_main()
 	jq -n --arg repo "${REPOSITORY}" --arg kind "${ITEM_KIND}" --argjson item "${ITEM}" --arg stop "${ITEM_STOP}" \
 		--slurpfile labels "${RUNTIME_DIR}/labels.json" --arg tracking "${tracking}" --arg linked "${linked}" \
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
-		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title}' \
+		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
+		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
 	local last_activity="" wait_id wait_fixup wait_state wait_at wait_updated fixup_json
-	wait="$(unblock_latest_wait)"
+	wait=""
+	[ "${untrusted_project_pr}" = "true" ] || wait="$(unblock_latest_wait)"
 	if [ -n "${wait}" ]; then
 		read -r wait_id wait_fixup wait_state wait_at wait_updated <<< "${wait}"
 		if [ "${wait_state}" = "done" ]; then
@@ -509,9 +556,13 @@ unblock_main()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=fingerprint_failed"
 		return 0
 	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" rejection --item "${ITEM}" --stop "${ITEM_STOP}" \
+		--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" > "${RUNTIME_DIR}/rejection.json"; then
+		echo '{"status":"none","reason":"unreadable"}' > "${RUNTIME_DIR}/rejection.json"
+	fi
 
 	local -a decide_args=(decide --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${fp}" --comments-file "${RUNTIME_DIR}/item_comments.json"
-		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}")
+		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}" --rejection-file "${RUNTIME_DIR}/rejection.json")
 	[ -n "${last_activity}" ] && decide_args+=(--last-activity "${last_activity}")
 	if [[ "${tracking}" =~ ^[0-9]+$ ]]; then
 		if [ "${tracking}" = "${ITEM}" ]; then
@@ -521,9 +572,16 @@ unblock_main()
 				unblock_log "item=${ITEM} outcome=skip reason=project_comments_unavailable"
 				return 0
 			fi
-			if [ "${ITEM_KIND}" = "issue" ]; then
-				if ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
-					|| ! jq -e --argjson issue "${ITEM}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${RUNTIME_DIR}/project_binding.json" >/dev/null 2>&1; then
+		fi
+		if ! jq -e --arg login "${UNBLOCK_LOGIN}" '[.[] | select((.user.login // "") == $login)]' \
+			"${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/project_state_comments.json"; then
+			unblock_log "item=${ITEM} outcome=skip reason=project_ledger_unreadable detail=state_filter"
+			return 0
+		fi
+		if [ "${tracking}" != "${ITEM}" ]; then
+			if [ "${ITEM_KIND}" = "issue" ] || [ "${ITEM_KIND}" = "pr" ]; then
+				if ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_state_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
+					|| ! unblock_state_lists_issue "${binding_issue}" "${RUNTIME_DIR}/project_binding.json"; then
 					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified"
 					return 0
 				fi
@@ -570,7 +628,8 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		unblock_ask_model || return 0
 	fi
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" validate --verdict-file "${RUNTIME_DIR}/verdict_raw.json" \
-		--decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" > "${RUNTIME_DIR}/verdict.json"; then
+		--decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" \
+		--rejection-file "${RUNTIME_DIR}/rejection.json" > "${RUNTIME_DIR}/verdict.json"; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} outcome=skip reason=invalid_verdict detail=$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" | tr ' ' '_' | cut -c1-120)"
 		gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="The unblock judge could not reach a valid verdict this time and will try again later.
 
@@ -578,6 +637,10 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		return 0
 	fi
 	verdict_name="$(jq -r '.verdict' "${RUNTIME_DIR}/verdict.json")"
+	if [ "${untrusted_project_pr}" = "true" ] && [[ ! "${verdict_name}" =~ ^(reissue|descope|operator_step|accept_with_followup|close)$ ]]; then
+		unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=untrusted_pr_verdict"
+		return 0
+	fi
 	round="$(jq -r '.round' "${RUNTIME_DIR}/verdict.json")"
 	local -a marker_args=(marker --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${fp}" --verdict "${verdict_name}" --round "${round}")
 	[ "$(jq -r '.override // ""' "${RUNTIME_DIR}/verdict.json")" = "bulk_delete" ] && marker_args+=(--override bulk_delete)
@@ -607,6 +670,7 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		+ (if (.answer // "") != "" then "Answer: " + .answer + "\n\n" else "" end)
 		+ (if (.paths // []) | length > 0 then "Paths: " + ((.paths // []) | map("`" + . + "`") | join(", ")) + "\n\n" else "" end)
 		+ (if (.override // "") == "bulk_delete" then "Approved deletions: " + (.paths | tojson) + "\n\n" else "" end)
+		+ (if (.rejection_run // "") != "" then "Bound to guard rejection from run " + .rejection_run + ".\n\n" else "" end)
 		+ (if (.placeholder // "") != "" then "Stays off behind `" + .placeholder + "` until the operator step is done.\n\n" else "" end)
 		+ $marker
 	' "${RUNTIME_DIR}/verdict.json")"
@@ -710,8 +774,8 @@ unblock_ask_model()
 	fi
 	echo '{}' > "${RUNTIME_DIR}/state_slice.json"
 	local spec=""
-	if [ -s "${RUNTIME_DIR}/project_comments.json" ] 2>/dev/null; then
-		if unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/state_full.json" 2>/dev/null; then
+	if [ -n "${tracking:-}" ] && [ -s "${RUNTIME_DIR}/project_state_comments.json" ]; then
+		if unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_state_comments.json" > "${RUNTIME_DIR}/state_full.json" 2>/dev/null; then
 			jq '{status, current_wave, integration_branch, judge_cycle, recovery_count, validation_last_raw_status, validation_failure_reason, security_pass_status, final_merge_status, waves: [(.waves // [])[] | {issues: [(.issues // [])[] | {id, github_issue, status}]}]}' \
 				"${RUNTIME_DIR}/state_full.json" > "${RUNTIME_DIR}/state_slice.json" 2>/dev/null || echo '{}' > "${RUNTIME_DIR}/state_slice.json"
 		fi
@@ -723,6 +787,7 @@ unblock_ask_model()
 		--slurpfile context "${RUNTIME_DIR}/context.json" \
 		--slurpfile decision "${RUNTIME_DIR}/decision.json" \
 		--slurpfile evidence "${RUNTIME_DIR}/evidence.json" \
+		--slurpfile rejection "${RUNTIME_DIR}/rejection.json" \
 		--slurpfile comments "${RUNTIME_DIR}/item_comments.json" \
 		--slurpfile state "${RUNTIME_DIR}/state_slice.json" \
 		--arg login "${UNBLOCK_LOGIN}" \
@@ -734,6 +799,7 @@ unblock_ask_model()
 			evidence: $evidence[0],
 			allowed: $decision[0].allowed,
 			used_for_this_fingerprint: $decision[0].used,
+			guard_rejection: (if $rejection[0].status == "ok" then ($rejection[0] | {guard, paths, run}) else null end),
 			rounds: {item: $decision[0].item_rounds, project: $decision[0].project_rounds},
 			prior_unblock_verdicts: [$comments[0][] | select((.user.login // "") == $login and ((.body // "") | test("<!-- ai:unblock:v1 "))) | {created_at, body: ((.body // "")[0:1500])}] | .[-5:],
 			last_comments: [$comments[0][-20:][] | {author: (.user.login // ""), created_at, body: ((.body // "")[0:2000])}],
