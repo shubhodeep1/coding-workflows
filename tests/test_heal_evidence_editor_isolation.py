@@ -91,6 +91,18 @@ def test_restore_rejects_a_repo_name_matching_regex_punctuation(tmp_path: Path) 
 	assert "newsecret" not in (repo / ".git" / "config").read_text()
 
 
+def test_restore_rejects_credentials_added_to_the_original_origin(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "remote", "set-url", "origin", "https://x-access-token:changed@github.com/owner/repo.git")
+	assert subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True).returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
 def test_restore_rejects_editor_changed_push_url(tmp_path: Path) -> None:
 	repo = tmp_path / "repo"
 	repo.mkdir()
@@ -151,6 +163,17 @@ def test_hide_rejects_preexisting_push_url_rewrite(tmp_path: Path) -> None:
 	result = subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True)
 	assert result.returncode != 0
 	assert "oldsecret" in (repo / ".git" / "config").read_text()
+
+
+def test_hide_does_not_record_a_secret_in_an_extraheader_key(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	_git(repo, "config", "--local", "http.https://x-access-token:oldsecret@github.com/.extraheader", "AUTHORIZATION: basic oldsecret")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	assert subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True).returncode != 0
+	assert not (tmp_path / "editor_git_credentials_hidden.txt").exists()
 
 
 def test_restore_rejects_editor_changed_push_url_rewrite(tmp_path: Path) -> None:
