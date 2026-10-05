@@ -312,11 +312,15 @@ printf '## Summary\\n%s %s\\n' "$MOCK_SECRET_GH" "$MOCK_SECRET_API"
 			env["CHECK_NAME"] = "CI / lint"
 			env["PR_NUMBER"] = "17"
 			env["CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH"] = "3"
+			env["TG_BOT_SECRET"] = "fake-telegram-token-long-enough"
+			with (root / "runtime" / "issue_body.md").open("a", encoding="utf-8") as issue_body_file:
+				issue_body_file.write(env["TG_BOT_SECRET"])
 			posted = subprocess.run(["bash", "-c", post_script], cwd=workspace, env=env, capture_output=True, text=True)
 			self.assertEqual(posted.returncode, 0, posted.stderr + posted.stdout)
 			self.assertIn("[redacted]", (root / "posted").read_text())
 			self.assertNotIn(env["GH_TOKEN"], (root / "posted").read_text())
 			self.assertNotIn(env["OPENROUTER_API_KEY"], (root / "posted").read_text())
+			self.assertNotIn(env["TG_BOT_SECRET"], (root / "posted").read_text())
 
 	def test_workflow_contract_gates_secrets_behind_minimal_prerequisite(self) -> None:
 		workflow = _workflow()

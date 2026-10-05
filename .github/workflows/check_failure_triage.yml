@@ -422,7 +422,7 @@ jobs:
 
           issue_body_path = pathlib.Path(sys.argv[1])
           issue_body_text = issue_body_path.read_text(encoding="utf-8")
-          for posting_token_value in {os.environ.get("GH_TOKEN", ""), os.environ.get("GITHUB_TOKEN", "")}:
+          for posting_token_value in {os.environ.get("GH_TOKEN", ""), os.environ.get("GITHUB_TOKEN", ""), os.environ.get("TG_BOT_SECRET", "")}:
               if len(posting_token_value) >= 8:
                   issue_body_text = issue_body_text.replace(posting_token_value, "[redacted]")
           issue_body_path.write_text(issue_body_text, encoding="utf-8")
