@@ -1205,6 +1205,84 @@ def test_cli_rejects_an_invalid_repo(tmp_path: Path) -> None:
 	assert proc.returncode == 2
 
 
+def test_github_delete_accepts_empty_204_and_rejects_failed_response() -> None:
+	commands = []
+
+	def runner(command, **_kwargs):
+		commands.append(command)
+		return subprocess.CompletedProcess(command, 0 if len(commands) == 1 else 403, b"", b"forbidden")
+
+	gh = ev.GitHub(runner, sleep=lambda _seconds: None)
+	assert gh.delete(f"repos/{REPO}/actions/caches/10") is True
+	assert gh.delete(f"repos/{REPO}/actions/caches/11") is False
+	assert commands == [
+		["gh", "api", "-X", "DELETE", f"repos/{REPO}/actions/caches/10"],
+		["gh", "api", "-X", "DELETE", f"repos/{REPO}/actions/caches/11"],
+	]
+
+
+def test_purge_legacy_evidence_caches_filters_keys_and_continues_after_delete_failure() -> None:
+	commands = []
+	cache_list_path = f"repos/{REPO}/actions/caches?key=heal-evidence-&per_page=100"
+	listing = {"actions_caches": [
+		{"key": "heal-evidence-1-2-3", "id": 1},
+		{"key": "heal-evidence-4-5-6", "id": 2},
+		{"key": "heal-evidence-7-8-9", "id": 3},
+		{"key": "heal-evidence-x", "id": 4},
+		{"key": "heal-evidence-1-2-3-extra", "id": 5},
+		{"key": "some-other-cache", "id": 6},
+		{"key": "heal-evidence-1-2-3", "id": True},
+		{"key": "heal-evidence-1-2-3", "id": 0},
+	]}
+
+	def runner(command, **_kwargs):
+		commands.append(command)
+		if command[-1] == cache_list_path:
+			return subprocess.CompletedProcess(command, 0, json.dumps(listing).encode(), b"")
+		return subprocess.CompletedProcess(command, 403 if command[-1].endswith("/2") else 0, b"", b"forbidden")
+
+	gh = ev.GitHub(runner, sleep=lambda _seconds: None)
+	assert ev.purge_legacy_evidence_caches(gh, REPO) == {
+		"listed": 8, "matched": 3, "deleted": 2, "failed": 1, "status": "ok",
+	}
+	assert commands == [["gh", "api", cache_list_path]] + [
+		["gh", "api", "-X", "DELETE", f"repos/{REPO}/actions/caches/{cache_id}"]
+		for cache_id in (1, 2, 3)
+	]
+
+
+@pytest.mark.parametrize("list_response,status,listed", [
+	(None, "list_failed", 0),
+	(b'{}', "list_failed", 0),
+	(b'{"actions_caches":[]}', "none", 0),
+])
+def test_purge_legacy_evidence_caches_handles_unavailable_and_empty_list(list_response, status, listed) -> None:
+	commands = []
+
+	def runner(command, **_kwargs):
+		commands.append(command)
+		return subprocess.CompletedProcess(command, 0 if list_response is not None else 403, list_response or b"", b"forbidden")
+
+	gh = ev.GitHub(runner, sleep=lambda _seconds: None)
+	assert ev.purge_legacy_evidence_caches(gh, REPO) == {
+		"listed": listed, "matched": 0, "deleted": 0, "failed": 0, "status": status,
+	}
+	assert commands == [["gh", "api", f"repos/{REPO}/actions/caches?key=heal-evidence-&per_page=100"]]
+
+
+def test_purge_legacy_cache_cli_prints_json_and_exits_zero(monkeypatch, capsys) -> None:
+	class StubGitHub:
+		def json(self, _path):
+			return {"actions_caches": []}
+
+	monkeypatch.setattr(ev, "GitHub", StubGitHub)
+	assert ev.main(["purge-legacy-cache", "--repo", REPO]) == 0
+	assert json.loads(capsys.readouterr().out) == {
+		"listed": 0, "matched": 0, "deleted": 0, "failed": 0, "status": "none",
+	}
+	assert ev.purge_legacy_evidence_caches(StubGitHub(), "not a slug")["status"] == "invalid_repo"
+
+
 # ---------------------------------------------------------------------------
 # Wiring contracts: clarify / plan / implement, the clarify sandbox, the docs
 # ---------------------------------------------------------------------------
@@ -1231,21 +1309,26 @@ def test_each_heal_stage_collects_evidence_before_its_agent(workflow: str, agent
 	staging = text[text.index("          for f in gh_helpers.sh "):]
 	staging = staging[: staging.index("; do")]
 	assert "workflow_failure_heal.py" in staging and "workflow_failure_heal_evidence.py" in staging
-	names = ["Gate workflow-heal evidence", "Restore workflow-heal evidence cache", "Collect workflow-heal evidence", "Save workflow-heal evidence cache"]
+	names = ["Gate workflow-heal evidence", "Collect workflow-heal evidence"]
 	positions = [text.index(f"      - name: {name}\n") for name in names]
 	assert positions == sorted(positions) and positions[-1] < text.index(f"      - name: {agent_step}\n")
+	assert "Restore workflow-heal evidence cache" not in text
+	assert "Save workflow-heal evidence cache" not in text
+	assert "runner.temp }}/heal-evidence" not in text
 	for name in names:
 		step = _step(text, name)
 		# Fail open: a broken evidence step never blocks the stage.
 		assert "continue-on-error: true" in step, (workflow, name)
+	gate = _step(text, "Gate workflow-heal evidence")
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in gate
+	assert 'purge-legacy-cache --repo "${GITHUB_REPOSITORY}" || true' in gate
+	assert 'if [ "${enabled}" = "true" ]; then' in gate
 	collect = _step(text, "Collect workflow-heal evidence")
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in collect
 	assert f"--display-root {display_root}" in collect
 	assert '--issue-json "${ISSUE_META_FILE}"' in collect and "--comments-json" in collect
 	assert 'echo "HEAL_EVIDENCE_DIR=${evidence_dir}" >> "$GITHUB_ENV"' in collect
-	assert "uses: actions/cache/restore@v4" in _step(text, "Restore workflow-heal evidence cache")
-	assert "uses: actions/cache/save@v4" in _step(text, "Save workflow-heal evidence cache")
-	assert "workflow_failure_heal_evidence.py eligible" in _step(text, "Gate workflow-heal evidence")
+	assert "workflow_failure_heal_evidence.py eligible" in gate
 	assert len(text.encode("utf-8")) < 480_000  # CLAUDE.md §27
 
 

@@ -1422,12 +1422,11 @@ through `clarify → plan → implement → review`.
   commits and pushes disable repository Git hooks, including during push retries.
   Budget: 400 KB in total and 60 KB per file (reviewer outputs, then other
   artifact files, then job logs of the oldest run are dropped first); about
-  20 REST calls for the first stage and about 5 for a later one, since
-  actions/cache (`heal-evidence-<issue>-…`) carries finished runs between
-  stages and only runs not yet fetched are read; missing cached files are
-  recorded under `skipped` without re-fetching completed runs. Files removed
-  by this stage's size budget are reported separately. When fewer than 500
-  core calls remain, artifacts, the run timeline and lineage compares are skipped
+  20 REST calls per stage, since each stage collects its own evidence. The
+  evidence is not cached between stages because Actions caches are readable
+  by pull-request runs. The gate makes a best-effort purge of old
+  `heal-evidence-*` caches (one list call plus one delete per matching entry).
+  When fewer than 500 core calls remain, artifacts, the run timeline and lineage compares are skipped
   (`GET /rate_limit` is free). Every part fails open: what could not be
   fetched is listed under `skipped` and the stage carries on. Log prefix
   `WORKFLOW_HEAL_EVIDENCE` (`collected issue=… runs=… reused=… api_calls=…
