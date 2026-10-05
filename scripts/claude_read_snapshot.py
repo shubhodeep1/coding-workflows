@@ -57,6 +57,30 @@ def _history(root, source, host_git, gitdir, copied, env):
 	objects = host_git / "objects"
 	if (objects / "info" / "alternates").exists() or (objects / "info" / "alternates").is_symlink() or objects.is_symlink() or not objects.is_dir():
 		return None
+	# An alternate object mount exposes all reachable and dangling objects,
+	# not just the paths copied into the working-tree snapshot.
+	if (host_git / "worktrees").exists() and any((host_git / "worktrees").iterdir()):
+		return None
+	with subprocess.Popen(["git", "log", "--all", "HEAD", "--format=", "--name-only", "-z", "--no-renames"],
+			cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as history_process:
+		assert history_process.stdout is not None
+		history_pending = b""
+		while history_chunk := history_process.stdout.read(65536):
+			history_paths = (history_pending + history_chunk).split(b"\0")
+			history_pending = history_paths.pop()
+			if len(history_pending) > 1048576 or any(os.fsdecode(path) not in copied for path in history_paths):
+				history_process.terminate()
+				return None
+		if history_pending or history_process.wait() != 0:
+			return None
+	with subprocess.Popen(["git", "fsck", "--unreachable", "--no-reflogs"],
+			cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as fsck_probe:
+		assert fsck_probe.stdout is not None
+		if fsck_probe.stdout.read(1):
+			fsck_probe.terminate()
+			return None
+		if fsck_probe.wait() != 0:
+			return None
 	sha = _git(["rev-parse", "HEAD"], root, env).decode().strip()
 	if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
 		return None

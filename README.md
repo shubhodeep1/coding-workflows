@@ -2105,11 +2105,12 @@ Effective read-profile calls, including calls narrowed by
 filtered copy of source and newly built credential-free Git metadata. The host
 Anthropic relay alone reads account tokens; the container sees a placeholder.
 Successful setup logs `CLAUDE_READ_ISOLATION role= outcome=ready reason=`;
-snapshot rejection logs `outcome=rejected`. If Docker, support, policy or
+snapshot rejection logs `outcome=rejected`. If Docker, relay, image, policy or
 snapshot setup fails, Claude is not run on the host: the call returns 75 with
 `AI_ENGINE_FALLBACK role= reason=<specific failure>` and the caller uses its
-existing fallback. Write-profile roles still run on the host and require a
-separate credential-isolation follow-up.
+existing fallback. A trusted-support lock or verification failure instead
+exits 86 without fallback. Write-profile roles still run on the host and
+require a separate credential-isolation follow-up.
 
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input

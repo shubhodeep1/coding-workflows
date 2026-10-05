@@ -2,8 +2,10 @@
 
 import json
 import os
+import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -22,6 +24,8 @@ import json, pathlib, sys
 root = pathlib.Path(__file__).parent
 with (root / "docker_calls.jsonl").open("a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1] == "image":
+    sys.exit(1)  # Force the production image-cache path to exercise build.
 if sys.argv[1] == "build":
     if (root / "docker_outcome.txt").exists() and (root / "docker_outcome.txt").read_text().strip() == "build-fail":
         sys.exit(1)
@@ -30,6 +34,7 @@ elif sys.argv[1] == "rm":
     (root / "docker_stopped").write_text("yes")
 elif sys.argv[1] == "run":
     outcome = (root / "docker_outcome.txt").read_text().strip() if (root / "docker_outcome.txt").exists() else "success"
+    print("CLAUDE_READ_CONTAINER_READY", file=sys.stderr)
     if outcome == "wait":
         import time
         while not (root / "docker_stopped").exists():
@@ -95,6 +100,61 @@ def test_git_snapshot_keeps_history_but_not_config_or_credentials(tmp_path: Path
 	assert _git(destination / "source", "log", "-2", "--format=%s", gitdir=destination / "gitdir").splitlines() == ["second", "first"]
 
 
+def test_filtered_git_history_cannot_recover_a_committed_secret(tmp_path: Path) -> None:
+	work = tmp_path / "work"
+	work.mkdir()
+	_git(work, "init", "-q")
+	(work / "safe.py").write_text("public\n")
+	(work / ".env").write_text("COMMITTED_SECRET=never\n")
+	_git(work, "add", "safe.py", ".env")
+	_git(work, "-c", "user.name=test", "-c", "user.email=test@invalid", "commit", "-qm", "first")
+	(work / ".env").unlink()
+	_git(work, "add", "-u")
+	_git(work, "-c", "user.name=test", "-c", "user.email=test@invalid", "commit", "-qm", "second")
+	destination = tmp_path / "dest"
+	result = _snapshot(work, destination)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ""
+	assert not (destination / "source/.env").exists()
+	assert not (destination / "gitdir").exists()
+	assert _git(destination / "source", "log", "-1", "--format=%s") == "snapshot"
+	assert subprocess.run(["git", "show", "HEAD:.env"], cwd=destination / "source", capture_output=True).returncode != 0
+
+
+def test_unreachable_git_objects_are_not_mounted(tmp_path: Path) -> None:
+	work = tmp_path / "work"
+	work.mkdir()
+	_git(work, "init", "-q")
+	(work / "safe.py").write_text("public\n")
+	_git(work, "add", "safe.py")
+	_git(work, "-c", "user.name=test", "-c", "user.email=test@invalid", "commit", "-qm", "first")
+	subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=work, input=b"DANGLING_SECRET", capture_output=True, check=True)
+	destination = tmp_path / "dest"
+	result = _snapshot(work, destination)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ""
+	assert not (destination / "gitdir").exists()
+	assert _git(destination / "source", "log", "-1", "--format=%s") == "snapshot"
+
+
+def test_history_path_with_leading_newline_is_not_aliased(tmp_path: Path) -> None:
+	work = tmp_path / "work"
+	work.mkdir()
+	_git(work, "init", "-q")
+	(work / "safe.py").write_text("public\n")
+	(work / "\nsafe.py").write_text("HIDDEN=never\n")
+	_git(work, "add", "safe.py", "\nsafe.py")
+	_git(work, "-c", "user.name=test", "-c", "user.email=test@invalid", "commit", "-qm", "first")
+	(work / "\nsafe.py").unlink()
+	_git(work, "add", "-u")
+	_git(work, "-c", "user.name=test", "-c", "user.email=test@invalid", "commit", "-qm", "second")
+	destination = tmp_path / "dest"
+	result = _snapshot(work, destination)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == ""
+	assert _git(destination / "source", "log", "-1", "--format=%s") == "snapshot"
+
+
 def test_nongit_snapshot_filters_hidden_and_symlinks(tmp_path: Path) -> None:
 	work = tmp_path / "work"
 	work.mkdir()
@@ -124,7 +184,9 @@ def test_pinned_git_worktree_and_hidden_claude_md(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert not (dest / "source/CLAUDE.md").exists()
 	assert (dest / "source/safe.py").exists()
-	assert "extraheader" not in (dest / "gitdir/config").read_text()
+	assert result.stdout == ""
+	assert not (dest / "gitdir").exists()
+	assert _git(dest / "source", "log", "-1", "--format=%s") == "snapshot"
 
 
 @pytest.fixture()
@@ -132,25 +194,32 @@ def isolated(tmp_path: Path):
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	log = fake_docker(bin_dir)
+	(bin_dir / "ps").write_text("#!/bin/sh\nexit 0\n")
+	(bin_dir / "ps").chmod(0o755)
 	(bin_dir / "claude").write_text("#!/bin/sh\necho host-claude-ran >> '" + str(tmp_path / "host-cli") + "'\nexit 1\n")
 	(bin_dir / "claude").chmod(0o755)
 	work = tmp_path / "work"
 	work.mkdir()
+	_git(work, "init", "-q")
 	(work / "source.py").write_text("public\n")
+	_git(work, "add", "source.py")
+	_git(work, "-c", "user.name=test", "-c", "user.email=test@invalid", "commit", "-qm", "fixture")
 	pool = tmp_path / "pool"
 	(pool / "tokens").mkdir(parents=True)
 	(pool / "order").write_text("A\n")
 	(pool / "tokens/A").write_text("TOK_OK\n")
 	(pool / "tokens/A").chmod(0o600)
-	runner = tmp_path / "runner"
-	runner.mkdir()
+	runner = Path(tempfile.mkdtemp(prefix="cr-", dir="/tmp"))
 	prompt = tmp_path / "prompt.txt"
 	prompt.write_text("Say done.\n")
 	env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "AI_ENGINE", "CLAUDE_", "SUPPORT_"))}
 	env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", HOME=str(tmp_path), RUNNER_TEMP=str(runner),
 		CLAUDE_ENGINE_POOL_DIR=str(pool), SUPPORT_INSTRUCTIONS_FILE=str(ROOT / "unattended_system_instructions.md"),
 		PYTHONDONTWRITEBYTECODE="1")
-	return tmp_path, work, pool, prompt, env, log
+	try:
+		yield tmp_path, work, pool, prompt, env, log
+	finally:
+		shutil.rmtree(runner)
 
 
 def _run_isolated(case, role="SECURITY_AUDIT", **overrides):
@@ -162,7 +231,7 @@ def _run_isolated(case, role="SECURITY_AUDIT", **overrides):
 def test_sandbox_success_has_no_real_token_in_docker_arguments(isolated) -> None:
 	result = _run_isolated(isolated)
 	assert result.returncode == 0 and "RC=0" in result.stdout, result.stderr
-	assert "CLAUDE_READ_ISOLATION role=SECURITY_AUDIT outcome=started" in result.stderr
+	assert "CLAUDE_READ_ISOLATION role=SECURITY_AUDIT outcome=ready" in result.stderr
 	assert (isolated[0] / "out.txt").read_text() == "done"
 	assert not (isolated[0] / "host-cli").exists()
 	args = [json.loads(row) for row in isolated[5].read_text().splitlines()]
@@ -180,10 +249,10 @@ def test_unavailable_and_all_accounts_fail_closed(isolated) -> None:
 	(inside / "tokens/A").write_text("TOK_OK\n")
 	(inside / "tokens/A").chmod(0o600)
 	result = _run_isolated(isolated, CLAUDE_ENGINE_POOL_DIR=str(inside))
-	assert "RC=75" in result.stdout and "reason=isolation_unavailable" in result.stderr
+	assert "RC=75" in result.stdout and "reason=isolation_pool_overlap" in result.stderr
 	assert not (isolated[0] / "host-cli").exists()
 	result = _run_isolated(isolated, SUPPORT_INSTRUCTIONS_FILE=str(isolated[2] / "tokens/A"))
-	assert "RC=75" in result.stdout and "reason=isolation_unavailable" in result.stderr
+	assert "RC=75" in result.stdout and "reason=isolation_pool_overlap" in result.stderr
 	(isolated[0] / "bin/docker_outcome.txt").write_text("limit")
 	result = _run_isolated(isolated)
 	assert "RC=75" in result.stdout and "reason=all_accounts_failed" in result.stderr
@@ -201,8 +270,7 @@ def test_image_build_failure_falls_back_without_host_claude(isolated) -> None:
 	(isolated[0] / "bin/docker_outcome.txt").write_text("build-fail")
 	result = _run_isolated(isolated)
 	assert "RC=75" in result.stdout
-	assert "CLAUDE_READ_ISOLATION role=SECURITY_AUDIT outcome=unavailable reason=image_build_failed" in result.stderr
-	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_unavailable" in result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_image_build_failed" in result.stderr
 	assert not (isolated[0] / "host-cli").exists()
 
 
