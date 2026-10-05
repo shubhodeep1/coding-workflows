@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:267-271; workflow-templates/.claude/hooks/pr_merge_status_guard.py:267-270 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The parser removes a numeric token before a redirection operator even when whitespace separates them, which can drop a numeric branch refspec from `git push`.\n  WHY: The guard then checks the current branch instead of the targeted branch, allowing a push to a merged-PR branch to bypass the guard.\n- scripts/claude_anthropic_relay.py:102-104, 117, 127; tests/test_claude_anthropic_relay.py:178-185 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The relay rejects requests from their headers and closes the connection without reading the request body, so the client can encounter `BrokenPipeError` while sending it.\n  WHY: This causes `test_broker_rejects_client_authorization` to fail before it can assert the 400 response, blocking the `tests-hooks-and-orchestrator` job and aggregate `lint` check; severity was rated MAJOR by openai_gpt-6-luna and BLOCKER by the other reviewers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/hooks/pr_merge_status_guard.py:267-271 | severity=MAJOR | confidence=5\n  PROBLEM: The parser removes a numeric token before a redirection operator without verifying that the token is adjacent to the operator, which can strip a numeric branch refspec.\n  WHY: The guard checks the current branch rather than the targeted branch, potentially allowing a push to a merged target branch.\n- scripts/claude_anthropic_relay.py:102-104, 117, 127; tests/test_claude_anthropic_relay.py:182 | severity=BLOCKER | confidence=5\n  PROBLEM: The handler closes the connection without draining the request body when rejecting a request during header validation.\n  WHY: The client can get `BrokenPipeError` while sending the body, causing the test and required CI checks to fail.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:267-270\n  PROBLEM: `_shell_segments_with_operators` removes a numeric token before `>` even when whitespace separates them.\n  WHY: In `git push origin 2 > /tmp/push.log`, `2` is a refspec, so dropping it makes the guard check the current branch instead; this behavior is pre-existing in the consumer template and the sync itself is correct.\n- scripts/claude_anthropic_relay.py:102-104,127; tests/test_claude_anthropic_relay.py:182\n  PROBLEM: The relay rejects an unauthorized request and closes the connection without reading its request body.\n  WHY: The client can encounter `BrokenPipeError` while sending the body; this is a pre-existing defect unrelated to the PR's changes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py:267-270 | severity=MAJOR | confidence=5\n  PROBLEM: The parser removes a numeric token before a redirection operator even when whitespace separates them, although the token can be a refspec.\n  WHY: The guard checks the current branch rather than branch `2`, so a push to a merged-PR branch can bypass the guard.\n- tests/test_claude_anthropic_relay.py:178-185; scripts/claude_anthropic_relay.py:102-104, 127 | severity=MAJOR | confidence=5\n  PROBLEM: The relay closes the connection before reading the request body when rejecting an unauthorized request.\n  WHY: The client may hit the closed socket while sending the body, failing the test before it can assert the expected 400 response.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_anthropic_relay.py:102-104, 127; tests/test_claude_anthropic_relay.py:178-185 | severity=BLOCKER | confidence=5\n  PROBLEM: The relay rejects unauthorized requests from their headers and closes the connection without reading the request body.\n  WHY: The client's body send can raise `BrokenPipeError`, causing the CI failure in `tests-hooks-and-orchestrator`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_anthropic_relay.py:102-104, 127; tests/test_claude_anthropic_relay.py:182 | severity=BLOCKER | confidence=5\n  PROBLEM: `_reject` closes the connection without reading the request body when `do_POST` rejects a request.\n  WHY: The client can get `BrokenPipeError` while sending the body, causing the test and required CI checks to fail.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3b38a1837d72ab57fa474758100ecbc1e57ea6d41b8d620fbe3b0f6d45997e8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37265880876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37265880876",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005054659_416ef0fdaa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37265880876"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T05:46:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
