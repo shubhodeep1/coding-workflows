@@ -5,13 +5,32 @@
   "entry_id": "processed_command_6247_5985701560_approved",
   "issue_number": 6247,
   "metadata": {
+    "branch": "ai/issue-6247",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/clarify.yml",
+      ".github/workflows/implement.yml",
+      ".github/workflows/plan.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/6055-heal-evidence-bundle.md",
+      "changelog.d/6247-heal-evidence-no-cache.md",
+      "docs/scripts-pending-removal.md",
+      "scripts/workflow_failure_heal_evidence.py",
+      "tests/test_workflow_failure_heal_evidence.py"
+    ],
+    "issue_number": 6247,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6247",
+    "pr_number": 6252,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6252",
+    "run_attempt": "1",
+    "run_id": "37244806747",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37244806747"
   },
   "run_attempt": 1,
   "run_id": "37244806747",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-04T23:46:35Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T00:03:11Z",
   "workflow": "implement"
 }
