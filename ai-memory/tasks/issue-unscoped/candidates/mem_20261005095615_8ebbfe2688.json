@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:91-106 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The trusted-state guard can accept an older complete `failed` state when a newer resumed-state write is incomplete.\n  WHY: The extractor returns the latest complete V2 chain, so an incomplete newer chain can leave the guard relying on stale state and proceeding to record a close verdict or apply the terminal label; see `scripts/orchestrate_state_v2.py:229-235, 276-294; scripts/orchestrate_poll_process.sh:2426-2429`.\n- scripts/unblock_judge.sh:179-193 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The terminal state recheck occurs before `ensure_label_exists` and the issue-label POST, leaving a window for the project to resume before the terminal label is applied.\n  WHY: If the project resumes during that interval, the stale `ai:unblock-closed` label can still be applied.\n- scripts/unblock_judge.sh:179-193 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The terminal recheck logs the same reason for comment-fetch failure, state-extraction failure, and a project no longer being failed.\n  WHY: Operators cannot distinguish a transient API or extraction failure from a resumed project using the final-gate log.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_judge.sh:91-106 | severity=high | confidence=[3]\n  PROBLEM: The trusted-project-status check can fall back to an older complete V2 state chain that says `failed` when a newer resumed-state write is incomplete.\n  WHY: All three checks read through the same extractor, so they can miss the partially posted resumed state and allow the judge to proceed.\n- scripts/unblock_judge.sh:182-193 | severity=high | confidence=[4]\n  PROBLEM: The terminal state recheck runs before `ensure_label_exists`, not immediately before the issue-label POST.\n  WHY: If the project resumes between the state check and either API call, the stale `ai:unblock-closed` label can still be applied.\n- scripts/unblock_judge.sh:186 | severity=low | confidence=[3]\n  PROBLEM: The terminal recheck uses one log reason for fetch failure, extraction failure, and a status other than `failed`.\n  WHY: Operators cannot distinguish a transient GitHub API failure from a project resume at the final gate.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:91-106 | severity=high | confidence=[5]\n  PROBLEM: The V2 extractor can return an older complete `failed` chain when the newest state write is partial, causing the guard to accept stale state.\n  WHY: The judge can treat a resumed project as failed, record a close verdict, and apply `ai:unblock-closed`.\n- scripts/unblock_judge.sh:179-193 | severity=high | confidence=[4]\n  PROBLEM: The terminal recheck happens before `ensure_label_exists` and the actual issue-label POST, rather than immediately before the POST.\n  WHY: A project can resume after the check but before the POST, allowing the terminal label to be applied.\n- scripts/unblock_judge.sh:179-193 | severity=low | confidence=[4]\n  PROBLEM: The terminal recheck's `||` chain uses one log reason for fetch failure, extraction failure, and a status other than `failed`.\n  WHY: Operators cannot distinguish a transient GitHub API issue from a resumed project.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_state_v2.py:229-235, 276-294; scripts/orchestrate_poll_process.sh:2426-2429 | severity=high | confidence=[5]\n  PROBLEM: The project-state guard uses the latest complete V2 chain, so an incomplete newer write can leave it reading an older complete `failed` state.\n  WHY: If a resumed project's newer write is incomplete, the guard can still read `failed` and proceed to record a close verdict and apply `ai:unblock-closed`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh:91-106 | severity=high | confidence=[5]\n  PROBLEM: If a resumed project's new V2 state write is incomplete, the extractor can fall back to the previous complete state, which may say `failed`.\n  WHY: The unblock judge then treats the resumed project as failed and applies the terminal label, authorizing the poller to abandon it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "39efae5e67dd7e536e93540d716d2ab3deb3b4d670dd325f1d75a62ff59bdab7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6284,
+    "run_id": "37287005947",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37287005947",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005095615_8ebbfe2688",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6284,
+    "run_id": "37287005947"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T09:56:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
