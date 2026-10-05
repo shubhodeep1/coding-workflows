@@ -624,7 +624,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `workflow-templates/` copy check origin PR history only for pushes to origin.
   An explicit `--repo` or positional remote naming a different or unverified
   destination requests human confirmation instead of silently checking the
-  checkout's origin. Remote URLs are never printed in the prompt (they may
+  checkout's origin. A positional repository overrides `--repo` when both
+  are supplied; without a positional repository, `--repo` is the fallback.
+  Remote URLs are never printed in the prompt (they may
   contain credentials). Pushes with `git -c`, `--config-env`, or inline
   `GIT_CONFIG_*` or `GIT_CONFIG` assignments, or an `env` wrapper, ask too:
   those per-command settings can affect the push destination, so the guard

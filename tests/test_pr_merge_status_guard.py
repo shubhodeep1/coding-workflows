@@ -916,8 +916,8 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 	"git push origin HEAD",
 	"COUNT+=1 git push origin HEAD:feature/x",
 	"git push --repo=origin",
-	"git push --repo origin HEAD:feature/x",
-	"git push --repo=origin HEAD:feature/x",
+	"git push --repo origin origin HEAD:feature/x",
+	"git push --repo=origin origin HEAD:feature/x",
 	"git push --repo=upstream origin",
 	"git push origin --repo=upstream",
 	"git push origin HEAD:feature/x --repo=upstream",
@@ -1008,7 +1008,10 @@ def test_appended_git_directory_push_asks_without_origin_lookup(merged_branch_re
 	"git push --repo=https://github.com/other/repo HEAD:feature/x",
 	"git push --rep https://github.com/other/repo HEAD:feature/x",
 	"git push https://github.com/other/repo HEAD:feature/x",
+	"git push --repo=upstream",
 	"git push --repo=upstream HEAD:feature/x",
+	"git push --repo=origin HEAD:feature/x",
+	"git push --repo origin HEAD:feature/x",
 	"git push --repo=https://github.com/other/repo --signed=if-asked HEAD:feature/x",
 	"git push --repo=https://x-access-token:private@github.com/other/repo HEAD:feature/x",
 ])
@@ -1210,7 +1213,7 @@ def test_explicit_origin_url_still_checks_origin_pr(merged_branch_repo, monkeypa
 		return [dict(MERGED_PR, headRefOid=merged_sha)]
 	monkeypatch.setattr(guard, "query_pull_requests", listing)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": "git push --repo=https://github.com/o/r.git HEAD:feature/x"}})
+		"tool_input": {"command": "git push --repo=https://github.com/other/repo https://github.com/o/r.git HEAD:feature/x"}})
 	assert code == 2 and "Branch `feature/x`" in message
 	assert lookups == [("o/r", "feature/x")]
 

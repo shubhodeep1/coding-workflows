@@ -552,12 +552,13 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; checking the current branch instead", remote=remote_value)]
-	if not remote_provided and positionals:
+	# A positional repository overrides --repo; only later positionals are refspecs.
+	if positionals:
 		remote_value = positionals[0]
 	if delete:
 		# No merged-PR check for deletions, but a foreign destination still asks.
 		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
-	refspecs = positionals if remote_provided else positionals[1:]
+	refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
 		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
 	if not refspecs:
