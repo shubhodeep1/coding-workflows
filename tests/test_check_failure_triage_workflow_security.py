@@ -863,6 +863,17 @@ esac
 			self.assertEqual(level, b"CRITICAL")
 			self.assertIn(b"$(touch", message)
 			self.assertNotIn(b"\n::error::forged", message)
+			self.assertNotIn(b"`", message)
+			env["CHECK_NAME"] = "CI\u2028<!-- marker -->\x85::warning::forged"
+			unicode_alert = subprocess.run(
+				["bash", "--noprofile", "--norc", "-c", script],
+				cwd=temp_path, env=env, capture_output=True, text=True, encoding="utf-8",
+			)
+			self.assertEqual(unicode_alert.returncode, 0, unicode_alert.stderr)
+			unicode_message = capture_path.read_bytes().split(b"\0", 1)[0].decode()
+			self.assertIn("CI &lt;!-- marker --> ::warning::forged", unicode_message)
+			self.assertNotIn("\u2028", unicode_message)
+			self.assertNotIn("\x85", unicode_message)
 			capture_path.unlink()
 			env.pop("CHECK_TRIAGE_TRUSTED_SUPPORT_DIR")
 			failed_stage = subprocess.run(

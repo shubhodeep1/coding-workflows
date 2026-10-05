@@ -494,9 +494,11 @@ jobs:
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR}" || exit 0
           source scripts/tg_helpers.sh 2>/dev/null || true
           type tg_send_msg >/dev/null 2>&1 || exit 0
-          safe_check_name="${CHECK_NAME//$'\r'/ }"
-          safe_check_name="${safe_check_name//$'\n'/ }"
-          safe_check_name="${safe_check_name:0:160}"
+          safe_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -c '
+          import sys, unicodedata
+          check_name_text = "".join(" " if unicodedata.category(char).startswith("C") or unicodedata.category(char) in ("Zl", "Zp") else char for char in sys.argv[1])
+          print(" ".join(check_name_text.split()).replace("`", "\u0027").replace("<", "&lt;")[:160] or "(unnamed check)")
+          ' "${CHECK_NAME}")"
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           notification="AI Check Failure Triage workflow itself failed for ${GITHUB_REPOSITORY} PR #${PR_NUMBER} (check '${safe_check_name}')."
           tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true

@@ -1249,7 +1249,9 @@ the way to a fix PR without human action.
   supported conclusions, and SHA shape, then confirms the PR head repository
   with read-only pull-request permission. Untrusted check names and URLs remain
   environment data, and log or Telegram display values are single-line and
-  bounded before the secret-bearing triage job starts.
+  bounded before the secret-bearing triage job starts. If triage itself fails,
+  its alert also flattens Unicode separators and escapes check-name markup;
+  missing trusted support does not prevent that alert.
 - **Diagnosis:** for same-repo PRs, the repo is checked out at the failing head
   SHA without persisted checkout credentials. The workflow collects PR metadata
   and logs with `GH_PAT` from a separate trusted support directory (so PR-head
