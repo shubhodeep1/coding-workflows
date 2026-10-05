@@ -10044,6 +10044,65 @@ def test_review_blocked_fix_scope_rejects_protected_judge_citation():
 	assert result.get("git_push_calls", []) == []
 
 
+def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/workflows/unrelated.yml", files=["sandbox_fix.txt"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/unrelated.sh", files=["sandbox_fix.txt"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/actions/x/action.yml", files=["sandbox_fix.txt"],
+		env_overrides={
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"MOCK_CODEX_TOUCH_FILE": ".github/actions/x/action.yml\n.claude/hooks/x.py",
+		},
+	)
+	assert "reason=protected_not_in_pr rejected=2" in result["stdout"]
+	assert any(
+		".github/actions/x/action.yml" in line and ".claude/hooks/x.py" in line
+		for line in result["stdout"].splitlines() if "REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in line
+	)
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		remaining=[{"file": ".github/workflows/unrelated.yml"}],
+		description="Updated `.github/workflows/unrelated.yml`",
+		env_overrides={
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\n.github/workflows/unrelated.yml",
+		},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
 def test_review_blocked_fix_scope_accepts_protected_pr_file():
 	result = _review_blocked_fix_scope_case(touch="scripts/foo.sh", files=["scripts/foo.sh"])
 	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
