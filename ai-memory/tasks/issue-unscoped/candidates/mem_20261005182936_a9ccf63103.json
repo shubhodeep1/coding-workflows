@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_anthropic_relay.py:180-189 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Explicitly calling `connection.connect()` before `connection.request()` may mask a broker issue involving request-header or body timing.\n  WHY: If broker behavior depends on connection timing or header availability, the test could pass while the production broker remains fragile.\n- .github/workflows/review_autofix.yml:655-670 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Failed PR-head checkout verification sets `SHOULD_RUN=\"false\"` rather than failing the workflow gate, potentially hiding verification misconfiguration as a silent review skip.\n  WHY: A consumer-repository misconfiguration could prevent verification and leave the branch unreviewed without an explicit workflow failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a regression test that a dispatched run's reviewer workspace is the PR-head checkout.\"\n  expected_change_site: tests/test_review_pr_tree_python_isolation.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: tests/test_review_pr_tree_python_isolation.py does not specifically verify that the reviewer process working directory contains checked-out PR-head files.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_claude_anthropic_relay.py:180-189 | confidence=2\n  PROBLEM: The test was modified to call `connection.connect()` explicitly before `connection.request()`. While this fixes the test failure, it masks the underlying issue where the broker might be attempting to read request headers or body prematurely or incorrectly.\n  WHY: If the broker implementation is sensitive to connection timing or header availability, this fix might pass the test while the actual production broker remains fragile. It should be verified if `connection.connect()` is necessary for a standard client-broker interaction.\n- .github/workflows/review_autofix.yml:655-670 | confidence=3\n  PROBLEM: The gate logic verifying the PR head repo and SHA relies on the authenticated PR metadata. While this correctly restricts execution to verified checkouts, the error handling (setting `SHOULD_RUN=\"false\"` and `SKIP_REASON=\"review_checkout_unverified\"`) is robust, but the lack of an explicit failure in the workflow gate (it sets should_run=false rather than failing the job) might cause the workflow to complete silently as skipped, potentially masking genuine issues with checkout verification in consumer repositories.\n  WHY: A misconfiguration in a consumer repo that prevents verification might lead to silent review skips, providing a false sense of security that the branch is reviewed.\n- TASK_GAP\n  Requirement: \"Add a regression test that a dispatched run's reviewer workspace is the PR-head checkout.\"\n  Expected change site: tests/test_review_pr_tree_python_isolation.py\n  Evidence of absence: The PR diff introduces `tests/test_review_pr_tree_python_isolation.py` which focuses on Python module import isolation, but it does not specifically verify that the working directory of the reviewer process is the one containing the checked-out PR-head files (e.g., verifying file existence/content of PR-added files from within the reviewer process).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- scripts/review_autofix.yml\n  Location: Checkout PR head branch step\n  Issue: The workflow relies on `${{ github.sha }}` for `github.sha` as a fallback in the checkout ref.\n  Suggested minimal fix: Ensure the fallback explicitly fails if it cannot determine the correct branch/sha to checkout, preventing a silent checkout of an incorrect branch.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b57ae2cac3a0d67715524c7b79561fabc7e6cffc0158c526d7cb0d5624f3c95f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6135,
+    "run_id": "37349588687",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37349588687",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005182936_a9ccf63103",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6135,
+    "run_id": "37349588687"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T18:29:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
