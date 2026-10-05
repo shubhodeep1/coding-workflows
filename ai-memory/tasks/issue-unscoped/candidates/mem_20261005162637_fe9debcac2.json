@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/sync_claude_live_copies.py:208-211 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_commit_authorization` accepts a non-empty but malformed `merged_at` string.\n  WHY: An improperly merged PR with malformed metadata can pass the truthiness check and be treated as valid; GLM and DeepSeek disputed this as an unrealistic API response.\n- scripts/sync_claude_live_copies.py:226-238 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `pr_commits_truncated` triggers at 250 commits even though pagination can fetch and inspect up to 300.\n  WHY: PRs with 250-299 commits are held as unverifiable despite all commit subjects being inspected; severity differs, with Gemini rating it major and DeepSeek and Qwen rating it nit.\n- scripts/sync_claude_live_copies.py:317-318 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: `_carry_forward` reads the template file without handling a potential `FileNotFoundError`.\n  WHY: If the file is missing when read, the script can terminate with a traceback instead of a structured error; GLM disputed that this path can be reached for deleted templates.\n- scripts/sync_claude_live_copies.py:362-371 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: If the push fails after an existing ready PR is converted to draft, the PR remains a draft with stale content.\n  WHY: The caller returns failure after the conversion, leaving the stale draft visible until a later successful sync.\n- .github/workflows/sync-claude-live-copies.yml:52 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The alert step runs only when `steps.sync.outputs.held == 'true'`, so a sync crash before `_write_outputs` produces no alert.\n  WHY: The held output is absent on that crash path, leaving the held-PR alert silent.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fail closed for settings, hooks, and commands unless the source commit passes automated, identity- and provenance-scoped authorization\".\n  expected_change_site: provenance check logic in scripts/sync_claude_live_copies.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `_commit_authorization` allows malformed merge metadata (non-empty `merged_at`) to authorize a path.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/sync_claude_live_copies.py:237 | severity=low | confidence=[4]\n  PROBLEM: `pr_commits_truncated` fires at `len(entries) >= 250` even though pagination can fetch up to 300 commits, unnecessarily rejecting PRs with 250-299 commits whose subjects were inspected.\n  WHY: The held-branch PR opens as a draft, triggering the operator alert, when every commit subject was actually verified across those pages.\n- scripts/sync_claude_live_copies.py:318 | severity=high | confidence=[4]\n  PROBLEM: `_carry_forward` reads the template file without a try/except, so a missing file can raise `FileNotFoundError`.\n  WHY: The exception propagates through `sync()` as a raw traceback instead of a structured error line, and no held-PR alert fires.\n- scripts/sync_claude_live_copies.py:362-371 | severity=low | confidence=[3]\n  PROBLEM: If the push fails its force-with-lease check after an existing ready PR is converted to draft, the PR remains a draft with stale content.\n  WHY: The stale state is visible until a later successful sync pushes fresh template content.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/sync_claude_live_copies.py:208-211 | severity=high | confidence=[4]\n  PROBLEM: `_commit_authorization` accepts a non-empty but malformed `merged_at` string.\n  WHY: An improperly-merged PR with `merged_at: \"invalid\"` passes the truthiness check and is treated as a valid merged PR, bypassing provenance checks.\n- scripts/sync_claude_live_copies.py:237 | severity=high | confidence=[4]\n  PROBLEM: `pr_commits_truncated` incorrectly triggers for valid PRs with 250-300 commits even though the code fetches up to 300.\n  WHY: Valid template changes are unnecessarily held as unverifiable.\n- scripts/sync_claude_live_copies.py:317-318 | severity=high | confidence=[4]\n  PROBLEM: `_carry_forward` reads the template file without handling a potential `FileNotFoundError`.\n  WHY: If a template file is deleted between identification and the read, the script crashes with a traceback instead of logging a structured error line.\n- .github/workflows/sync-claude-live-copies.yml:52 | severity=high | confidence=[3]\n  PROBLEM: The alert step only runs when `steps.sync.outputs.held == 'true'`.\n  WHY: If the sync step crashes before `_write_outputs`, the output is not produced, and the alert is silent, leaving the held PR unnoticed.\n- Requirement: \"Fail closed for settings, hooks, and commands unless the source commit passes automated, identity- and provenance-scoped authorization\".\n  Expected change site: provenance check logic in scripts/sync_claude_live_copies.py\n  Evidence of absence: The provenance check logic in `_commit_authorization` is loose because it allows malformed merge metadata (non-empty `merged_at`) to authorize a path, violating the \"provenance-scoped\" requirement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/sync_claude_live_copies.py:226-238 | severity=low | confidence=[4]\n  PROBLEM: The `pr_commits_truncated` check fires at `len(entries) >= 250`, although pagination fetches up to 300 and all commits are fetched for PRs with 250-299 commits.\n  WHY: The provenance gate holds paths as truncated even though every commit subject was verified; the reviewer describes the behavior as safe but incorrect.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e857e530fba6c7b7543f80c191537b1e448aa45a3dab983254eccfb9f14516fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6379,
+    "run_id": "37335311481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37335311481",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005162637_fe9debcac2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6379,
+    "run_id": "37335311481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T16:26:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
