@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_evidence.py:_cmd_scope_allowlist | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The heal-evidence scope allowlist accepts broad glob patterns such as `**/*.py`, which the scope guard interprets as matches for unrelated files.\n  WHY: A plan containing such a pattern can permit edits outside the intended heal-evidence scope and pass the scope check; reviewers rated this MAJOR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal_evidence.py:_cmd_scope_allowlist | severity=MAJOR | confidence=3\n  PROBLEM: If a heal plan's \"Files likely to change\" section declares a broad path like `scripts/**` or `**/*.py`, the scope-allowlist command accepts it as a valid entry, and the scope guard treats it as a glob, allowing edits to all matching files.\n  WHY: A plan that broadens scope to `scripts/**` would let the editor modify any file under `scripts/` \u2014 exactly what the heal-evidence scope lock is meant to prevent. This is a residual scope-bypass risk: the plan author (an AI agent) could inadvertently or adversarially widen scope.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/implement_commit_changes.sh | severity=MAJOR | confidence=4\n  PROBLEM: The scope guard treats allowlist entries as globs. If broad patterns such as **/*.py are included in the derived allowlist, unrelated files will be permitted for modification, violating the heal-evidence scope restriction.\n  WHY: The implementation scope enforcement is defeated by permissive glob matching, potentially allowing unauthorized or accidental edits outside the intended heal-evidence scope.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_evidence.py | severity=MAJOR | confidence=4\n  PROBLEM: The filter rejects only a few exact wildcard entries, so a plan entry such as `**/*.py` is retained in the heal-evidence allowlist.\n  WHY: `extract_paths_from_plan()` accepts slash-containing candidates like `**/*.py`, and `files_touched_scope_guard.py` interprets glob metacharacters using glob matching. The preflight and commit guards therefore accept changes to Python files throughout the repository, defeating the heal-evidence scope restriction.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_evidence.py | severity=MAJOR | confidence=4\n  PROBLEM: The scope-allowlist filter rejects only exact wildcard entries (`*`, `**`, `**/*`) but allows glob patterns like `**/*.py`, `scripts/**`, `*.py`, or `src/*` to pass through.\n  WHY: When a heal plan contains a path like `**/*.py`, the pre-editor scope allowlist receives that pattern. The scope guard (`files_touched_scope_guard.py:180-188`) interprets it as a glob and matches every Python file in the repository, allowing the heal-evidence implementation to modify unrelated Python files while passing the scope check. This defeats the heal-evidence scope lock that is supposed to restrict commits to the files declared in the issue or plan.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal_evidence.py | severity=MAJOR | confidence=3\n  PROBLEM: The heal-evidence scope-allowlist filter rejects only a handful of exact broad-glob literals (`*`, `**`, `**/*`) but lets through equally-broad patterns like `**/*.py`, `scripts/**`, or `*.sh`. Those entries are then handed to files_touched_scope_guard.py:184-185, which treats any entry containing a glob char (`_GLOB_CHARS = (\"*\", \"?\", \"[\")` at files_touched_scope_guard.py:91) as a glob via `_path_glob_matches`. A plan \"Files likely to change\" entry of `- **/*.py` is accepted by `extract_paths_from_plan` (`is_probable_path` passes it: it has `/` and a `.py` suffix in SAFE_EXTENSIONS, no `..`/empty parts), passes the filter, and then matches every Python file in the repo \u2014 defeating the heal-evidence scope lock, which is meant to be stricter than the normal guard (it blocks even when ENFORCE_FILES_TOUCHED=false and ALLOW_OUT_OF_SCOPE_FILES=true).\n  WHY: A heal-evidence implement run whose plan lists a broad glob like `**/*.py` would have that glob pinned as the scope allowlist; edits to unrelated Python files would pass the scope guard as in-scope and be committed, bypassing the strict lock the heal-evidence path is supposed to enforce.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "de4a0babfe4c51baab3652020843b8fadcab1c3a3d650603bb5201deb286876a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37376857436",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37376857436",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005215529_b1ccaa553a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37376857436"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T21:55:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
