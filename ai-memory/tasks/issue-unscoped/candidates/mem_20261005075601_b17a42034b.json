@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_data_provision_guard.py:87-95 | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: The decision-section termination check omits headers defined by the clarify-respond output format, allowing decision parsing to continue into later sections.\n  WHY: Missing DATA-PROVISION GUARD OVERRIDES, SETUP REQUIRED, or ESCALATE headers can leave parsing open; severity disagreement: deepseek rated the finding MAJOR and z-ai rated the related header gap NIT, so the highest severity is used.\n- scripts/clarify_data_provision_guard.py:97 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The decision regex does not accept Markdown emphasis around question IDs or answer tokens, so formatted decisions can be ignored by the data-provision guard.\n  WHY: The downstream parser accepts emphasized answers, but this guard can return the original response unchanged and skip the intended safety check; severity disagreement: openai and qwen rated this MAJOR while z-ai rated the related gap NIT, so the highest severity is used.\n- scripts/clarify_data_provision_guard.py:94 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A preamble line before the first recognized section header that matches the answer regex can be accepted as a decision.\n  WHY: The phantom decision can be posted before the data-provision guard runs, although the review says practical impact is limited and the fallback-remapping rules mitigate it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/clarify_data_provision_guard.py (LAST RUN DIFF lines 90-93) | severity=high | confidence=[3]\n  PROBLEM: A DATA-PROVISION GUARD OVERRIDES header written in mixed-case or formatted as a markdown heading would not terminate decision parsing, so a line in that section could be mistaken for a decision.\n  WHY: The review says an override line could be pushed as a decision, causing the guard or answer parser to use the wrong letter pair.\n- scripts/clarify_data_provision_guard.py (LAST RUN DIFF line 94) | severity=low | confidence=[2]\n  PROBLEM: A preamble line before the first recognized section header that matches the answer regex can be accepted as a decision.\n  WHY: The phantom decision is posted before the data-provision guard runs, though the review says practical impact is limited.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_data_provision_guard.py (Line or code reference: _parse_answers(), line 97) | severity=high | confidence=[4]\n  PROBLEM: The decision regex accepts only unformatted `Q1: A` lines and does not recognize Markdown-emphasized answers such as `**Q1**: **A**`.\n  WHY: If the worker emits an emphasized decision selecting an option that requires external data, the guard parses no answers and returns the original response unchanged, so the answer poster posts the choice without the intended fallback.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/clarify_data_provision_guard.py (Line or code reference: 97 - `m = re.match(r\"(Q\\d+):\\s*([A-Z](?:\\+[A-Z])*)\\s*$\", stripped)`) | severity=high | confidence=[3]\n  PROBLEM: The regex does not accept optional Markdown emphasis around question IDs or answer tokens, unlike the sibling parser.\n  WHY: Markdown-formatted decision lines can be silently ignored, allowing unsafe answers to pass without the intended data-provision check.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/clarify_data_provision_guard.py (Line or code reference: lines 87-95 (header detection in _parse_answers)) | severity=low | confidence=[2]\n  PROBLEM: The section-termination check does not recognize SETUP REQUIRED and ESCALATE headers; the review also notes the header gap for bold-formatted decision lines described below.\n  WHY: SETUP REQUIRED bullets do not match the Q-line regex and ESCALATE has structured fields, so the review describes the header gap as latent in the current prompt format.\n- scripts/clarify_data_provision_guard.py (Location: line 97, Q-line regex) | severity=low | confidence=[2]\n  PROBLEM: The regex does not accept optional Markdown emphasis around the Q-ID or answer token, unlike `auto_decisions.py`'s `ANSWER_RE`.\n  WHY: A bold-formatted decision line can be silently skipped, though the review describes this as a robustness gap rather than a demonstrable runtime failure.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4b083cdfdc0d9d123b001d9a5e1b755764a8f6ba58396ad75f85ddd9d8653aac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6283,
+    "run_id": "37277264959",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37277264959",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005075601_b17a42034b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6283,
+    "run_id": "37277264959"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:56:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
