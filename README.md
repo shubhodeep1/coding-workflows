@@ -1250,8 +1250,10 @@ the way to a fix PR without human action.
   with read-only pull-request permission. Untrusted check names and URLs remain
   environment data, and log or Telegram display values are single-line and
   bounded before the secret-bearing triage job starts. If triage itself fails,
-  its alert also flattens Unicode separators and escapes check-name markup;
-  missing trusted support does not prevent that alert.
+  its alert also flattens Unicode separators and escapes check-name markup.
+  If trusted support staging fails, the failure step sends the alert directly
+  without sourcing the PR checkout; it skips delivery when Telegram credentials
+  are absent or `ALERT_MSG_LEVEL=SILENT`, and ignores Telegram API failures.
 - **Diagnosis:** for same-repo PRs, the repo is checked out at the failing head
   SHA without persisted checkout credentials. The workflow collects PR metadata
   and logs with `GH_PAT` from a separate trusted support directory (so PR-head

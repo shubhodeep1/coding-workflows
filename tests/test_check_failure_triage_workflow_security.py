@@ -794,7 +794,7 @@ esac
 		script = _step(workflow["jobs"]["triage"], name="Log trigger context")["run"]
 		with tempfile.TemporaryDirectory(prefix="check-triage-log-") as temp_dir:
 			marker_path = Path(temp_dir) / "executed"
-			check_name = f"bad' `touch {marker_path}` $(touch {marker_path})\n::error::forged"
+			check_name = f"bad' `touch {marker_path}` $(touch {marker_path})\n::error::forged\u2028<!-- forged -->\x85"
 			env = os.environ.copy()
 			env.pop("BASH_ENV", None)
 			env.pop("ENV", None)
@@ -819,6 +819,8 @@ esac
 			self.assertFalse(marker_path.exists())
 			self.assertEqual(len(proc.stdout.splitlines()), 3)
 			self.assertIn("$(touch", proc.stdout.splitlines()[1])
+			self.assertIn("&lt;!-- forged -->", proc.stdout.splitlines()[1])
+			self.assertNotIn("`", proc.stdout.splitlines()[1])
 
 	def test_failure_notification_sanitizes_payload_without_evaluation(self) -> None:
 		workflow = _workflow()
@@ -847,6 +849,10 @@ esac
 					"GITHUB_RUN_ID": "123",
 					"PR_NUMBER": "17",
 					"TG_CAPTURE": str(capture_path),
+					"TG_BOT_SECRET": "test-bot-secret",
+					"TG_ADMIN_CHAT_ID": "1234",
+					"ALERT_MSG_LEVEL": "DEBUG",
+					"BASH_FUNC_curl%%": '() { printf "%s\\n" "$@" > "$TG_CAPTURE"; }',
 				}
 			)
 			proc = subprocess.run(
@@ -875,6 +881,7 @@ esac
 			self.assertNotIn("\u2028", unicode_message)
 			self.assertNotIn("\x85", unicode_message)
 			capture_path.unlink()
+			(temp_path / "unicodedata.py").write_text(f'open("{marker_path}", "w").write("ran")\n')
 			env.pop("CHECK_TRIAGE_TRUSTED_SUPPORT_DIR")
 			failed_stage = subprocess.run(
 				["bash", "--noprofile", "--norc", "-c", script],
@@ -882,6 +889,25 @@ esac
 			)
 			self.assertEqual(failed_stage.returncode, 0, failed_stage.stderr)
 			self.assertFalse(marker_path.exists())
+			self.assertTrue(capture_path.exists(), failed_stage.stderr)
+			self.assertIn("CI &lt;!-- marker --> ::warning::forged", capture_path.read_text())
+			self.assertIn("--data-urlencode", capture_path.read_text())
+			capture_path.unlink()
+			env["CHECK_TRIAGE_TRUSTED_SUPPORT_DIR"] = str(temp_path / "missing")
+			missing_support = subprocess.run(
+				["bash", "--noprofile", "--norc", "-c", script],
+				cwd=temp_path, env=env, capture_output=True, text=True,
+			)
+			self.assertEqual(missing_support.returncode, 0, missing_support.stderr)
+			self.assertTrue(capture_path.exists())
+			self.assertFalse(marker_path.exists())
+			capture_path.unlink()
+			env["ALERT_MSG_LEVEL"] = "silent"
+			no_alert = subprocess.run(
+				["bash", "--noprofile", "--norc", "-c", script],
+				cwd=temp_path, env=env, capture_output=True, text=True,
+			)
+			self.assertEqual(no_alert.returncode, 0, no_alert.stderr)
 			self.assertFalse(capture_path.exists())
 
 

@@ -133,8 +133,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     PR-head `agents.md` / `AGENTS.md` enters the prompt through a bounded,
     credential-free regular-file read that never follows symlinks.
     Untrusted check/workflow names are single-lined, length-capped, and have
-    backticks and markers escaped before display, including failure alerts
-    before trusted support staging completes; logs and model diagnosis
+    backticks and markers escaped before display, including a direct Telegram
+    failure alert when trusted support staging fails (never sourcing PR-head
+    helpers; suppressed without credentials or at `ALERT_MSG_LEVEL=SILENT`);
+    logs and model diagnosis
     text are neutralised before issue posting
     so they cannot spoof downstream routing metadata or triage markers.
     Check metadata is flattened for display while raw names remain in dedup keys;
