@@ -9,6 +9,7 @@ contract is validated against workflow behavior, not reimplemented logic.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -5625,7 +5626,12 @@ def main() -> int:
 	for func in test_funcs:
 		name = func.__name__
 		try:
-			func()
+			if "tmp_path" in inspect.signature(func).parameters:
+				# Mirror pytest's tmp_path fixture for the standalone runner.
+				with tempfile.TemporaryDirectory(prefix=f"{name}_") as td:
+					func(tmp_path=Path(td))
+			else:
+				func()
 			print(f"  PASS  {name}")
 			passed += 1
 		except Exception as e:
