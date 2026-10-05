@@ -359,7 +359,8 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			if not security_issue or ctx.get("security_finding_id"):
 				ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
 		if security_issue and (ctx["tracking"] or not ctx.get("security_finding_id")):
-			ops.append({"op": "comment", "issue": item, "body": "This security finding stays open; it is tracked here until a linked fix is merged. Re-issue: see the newest issue that links this one."})
+			location = f"the re-issue request recorded on tracking issue #{ctx['tracking']}" if ctx["tracking"] else "the newest issue that links this one"
+			ops.append({"op": "comment", "issue": item, "body": f"This security finding stays open; it is tracked here until a linked fix is merged. Re-issue: see {location}."})
 	elif name == "accept_with_followup":
 		followup_body = "\n".join([f"Accepted with this follow-up by the unblock judge (#{item}).", "", f"Follow-up: {verdict['instructions']}"])
 		if ctx["kind"] == "pr":

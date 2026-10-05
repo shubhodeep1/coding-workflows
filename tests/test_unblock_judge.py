@@ -497,6 +497,8 @@ def test_security_reissue_keeps_a_finding_open_or_transfers_its_marker() -> None
 	project_child = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels, tracking=12, security_finding_id="abc-1"))
 	assert [op["op"] for op in project_child] == ["comment", "comment"]
 	assert project_child[0]["issue"] == 12 and project_child[1]["issue"] == 7
+	assert "re-issue request recorded on tracking issue #12" in project_child[1]["body"]
+	assert "newest issue" not in project_child[1]["body"]
 
 
 @pytest.mark.parametrize("finding_id", ["abc -->", "abc def", "abc\ndef", "a" * 121, 42, None])
