@@ -1265,11 +1265,10 @@ class Collector:
 			candidates.extend(self.out / rel for rel in run.get("artifacts") or [] if "/artifact-reviewer-logs-" in rel)
 		for run in runs:
 			candidates.extend(self.out / rel for rel in run.get("artifacts") or [] if "/artifact-reviewer-logs-" not in rel)
-		# Under extreme budget pressure keep the newest failing job's log;
-		# structured diagnostics can be regenerated from that log on a later stage.
-		candidates.append(self.out / "diagnostics.json")
 		for run in runs:
 			candidates.extend(self.out / job["file"] for job in run.get("jobs") or [] if job.get("file"))
+		# Editor prompts use diagnostics.json, not the raw logs.
+		candidates.append(self.out / "diagnostics.json")
 		dropped = 0
 		current = size()
 		for path in candidates:

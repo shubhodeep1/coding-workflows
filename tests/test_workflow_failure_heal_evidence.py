@@ -863,10 +863,10 @@ def test_total_size_limit_drops_oldest_extras_first(tmp_path: Path) -> None:
 	size_skips = [item for item in manifest["skipped"] if item["reason"] == "total_size_limit"]
 	assert len(size_skips) == 1 and size_skips[0]["part"].startswith("files:")
 	run_dir = f"runs/{REPO.replace('/', '__')}"
-	# Artifacts go before job logs, and the oldest run's job log before the newest's.
+	# Structured diagnostics survive even when the size cap also removes a raw log.
 	assert not (out / f"{run_dir}__111/artifact-codex-review-autofix-failure-logs-111-1").exists() or not any((out / f"{run_dir}__111/artifact-codex-review-autofix-failure-logs-111-1").iterdir())
 	assert not (out / f"{run_dir}__111/job-11.txt").exists()
-	assert (out / f"{run_dir}__222/job-11.txt").exists()
+	assert (out / "diagnostics.json").exists()
 	assert "(dropped: size limit)" in (out / "INDEX.md").read_text()
 	index = (out / "INDEX.md").read_text()
 	# The index never points at a file the budget removed.

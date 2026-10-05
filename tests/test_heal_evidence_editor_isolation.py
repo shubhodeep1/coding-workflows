@@ -26,6 +26,8 @@ def test_git_credentials_hidden_and_restored_without_marker_secrets(tmp_path: Pa
 	_git(support, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/shubhodeep1/coding-workflows.git")
 	_git(support, "config", "--local", "http.https://github.com/.extraheader", "AUTHORIZATION: basic oldsecret")
 	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret", GIT_DIR=str(repo / ".git"), GIT_WORK_TREE=str(repo))
+	missing_marker = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert missing_marker.returncode == 0 and "reason=marker_missing" in missing_marker.stderr
 	hide = subprocess.run(["bash", str(HELPER), "hide", str(repo), str(support), str(tmp_path / "missing")], env=env, capture_output=True, text=True)
 	assert hide.returncode == 0
 	marker = tmp_path / "editor_git_credentials_hidden.txt"
@@ -220,6 +222,7 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert '-u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH codex' in plan_runner
 	assert 'git -c core.hooksPath=/dev/null commit' in (ROOT / "scripts" / "implement_commit_changes.sh").read_text()
 	assert implement.count('git -c core.hooksPath=/dev/null push') == 2
+	assert implement.count('git -c core.hooksPath=/dev/null fetch') == 2
 	assert 'git -c core.hooksPath=/dev/null rebase' in implement
 
 
