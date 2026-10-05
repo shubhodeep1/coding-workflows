@@ -498,6 +498,9 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 				["git", "config", "--get", f"remote.{positionals[0]}.url"],
 				invocation.cwd, _GIT_TIMEOUT_SECONDS,
 			)
+		if code not in (0, 1):
+			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+				"could not resolve git push positional repository; destination branch is unknown")]
 		refspecs = positionals[1:] if code == 0 else positionals
 	else:
 		refspecs = positionals[1:]

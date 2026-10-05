@@ -1021,6 +1021,22 @@ def test_unknown_explicit_push_target_requires_confirmation(merged_branch_repo, 
 	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
+def test_positional_remote_probe_failure_requires_confirmation(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "branch", "origin", "main")
+	actual_run = guard._run
+	def timed_out_config(argv, cwd, timeout):
+		if argv == ["git", "config", "--get", "remote.origin.url"]:
+			return 124, "", "timed out"
+		return actual_run(argv, cwd, timeout)
+	monkeypatch.setattr(guard, "_run", timed_out_config)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("destination unknown"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push --repo=upstream origin"}})
+	assert (code, message) == (0, "")
+	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
 @pytest.mark.parametrize("command", [
 	"git push origin HEAD:$DEST1 HEAD:$DEST2",
 	"git push origin HEAD:$DEST1 :",
