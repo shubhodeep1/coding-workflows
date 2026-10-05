@@ -54,6 +54,20 @@ if ! type rb_security_merge_gate >/dev/null 2>&1; then
   rb_security_merge_gate() { return 0; }
   rb_security_post_extension() { :; }
 fi
+RB_SECURITY_BLOCKING_COUNT=0
+RB_SECURITY_BLOCKING_ISSUES=""
+if ! type rb_security_severity_block >/dev/null 2>&1; then
+  # An older partial bundle may still detect exhaustion; never let it merge
+  # without the severity classifier and hold implementation.
+  rb_security_severity_block() {
+    if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then echo hold; else echo allow; fi
+  }
+  rb_security_block_hold() { return 1; }
+  rb_security_block_already_reported() { return 1; }
+fi
+if ! type rb_security_disable_auto_merge >/dev/null 2>&1; then
+  rb_security_disable_auto_merge() { return 1; }
+fi
 OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
 # shellcheck source=/dev/null
@@ -1051,10 +1065,21 @@ RB_SECURITY_FINDINGS_FILE="${RUNTIME_DIR}/rb_judge_security_findings.txt"
 rb_security_mode_detect
 if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
   if ! rb_security_findings_render "${TARGET_BRANCH:-$(jq -r '.head.ref // ""' "${PR_PAYLOAD_FILE:-/dev/null}" 2>/dev/null || true)}" "${RB_SECURITY_FINDINGS_FILE}"; then
+    # Unknown findings cannot justify leaving an earlier auto-merge active.
+    if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_disable_auto_merge "$(git rev-parse HEAD 2>/dev/null || true)"; then
+      echo "::error::Could not verify or disable auto-merge after the findings lookup failed."
+    fi
     echo "::error::Security-pass findings are incomplete; refusing a judge decision without them."
     exit 1
   fi
   echo "Security pass exhausted for PR #${PR_NUMBER}; the judge decides with the open findings."
+  if [ "${RB_SECURITY_BLOCKING_COUNT:-0}" -gt 0 ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
+    RB_SECURITY_EARLY_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+    if ! rb_security_disable_auto_merge "${RB_SECURITY_EARLY_HEAD_SHA}"; then
+      echo "::error::Could not withdraw or verify auto-merge before judging blocking security findings."
+      exit 1
+    fi
+  fi
 fi
 
 # -----------------------------------------------------------
@@ -1153,6 +1178,18 @@ fi
 # The checked-out commit is the code snapshot the judge can inspect. Live PR
 # metadata may advance after checkout, so it is not merge authorization.
 RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+if [ "${RB_SECURITY_MODE:-false}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] && [ "${IS_FINAL}" = "true" ] \
+  && { ! [[ "${RB_SECURITY_BLOCKING_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${RB_SECURITY_BLOCKING_COUNT}" -gt 0 ]; } \
+  && rb_security_block_already_reported "${RB_JUDGED_HEAD_SHA}"; then
+  if ! rb_security_disable_auto_merge "${RB_JUDGED_HEAD_SHA}"; then
+    echo "::error::Could not verify or disable auto-merge for blocked PR #${PR_NUMBER}."
+    exit 1
+  fi
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=security_blocked_pending" >> "$GITHUB_OUTPUT"
+  echo "RB_JUDGE_SECURITY_PASS mode=severity_block pr=${PR_NUMBER} outcome=hold reason=already_reported"
+  exit 0
+fi
 RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/rb_judge_prior_round_decisions.txt"
 if command -v render_review_rb_prior_round_decisions_file >/dev/null 2>&1; then
   render_review_rb_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}"
@@ -1335,7 +1372,7 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
   fi
   if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
     echo
-    rb_security_prompt_section "${RB_SECURITY_FINDINGS_FILE}" "${IS_FINAL}"
+    rb_security_prompt_section "${RB_SECURITY_FINDINGS_FILE}" "${IS_FINAL}" "${RB_SECURITY_BLOCKING_COUNT:-0}"
   fi
 } > "${RB_JUDGE_PROMPT}"
 _cleanup_prompt_budget
@@ -1706,6 +1743,28 @@ Leaving the linked issue in ai:review-blocked for operator review. Rerun the jud
   exit 0
 fi
 
+RB_SECURITY_ORIGINAL_ACTION=""
+RB_SECURITY_FORCED_FIX="false"
+RB_SECURITY_SEVERITY_DECISION="$(rb_security_severity_block "${RB_ACTION}" "${IS_FINAL}")"
+case "${RB_SECURITY_SEVERITY_DECISION}" in
+  allow) ;;
+  convert_fix)
+    RB_SECURITY_ORIGINAL_ACTION="${RB_ACTION}"
+    RB_ACTION="fix"
+    RB_SECURITY_FORCED_FIX="true"
+    RB_FIX_DESC="${RB_FIX_DESC:-Fix open high/critical security-audit findings: ${RB_SECURITY_BLOCKING_ISSUES}}"
+    ;;
+  *)
+    if ! [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" final_round || exit 1
+    exit 0
+    ;;
+esac
+
 # -----------------------------------------------------------
 # Post judge assessment to PR
 # -----------------------------------------------------------
@@ -1715,6 +1774,9 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
   echo "${JUDGE_COMMENT}"
   echo
   echo "**Decision:** ${RB_ACTION}"
+  if [ -n "${RB_SECURITY_ORIGINAL_ACTION}" ]; then
+    echo "**Converted:** judge chose ${RB_SECURITY_ORIGINAL_ACTION}; ${RB_SECURITY_BLOCKING_COUNT} open high/critical/unrated findings block the merge (${RB_SECURITY_BLOCKING_ISSUES})"
+  fi
   if [ -n "${RB_LOGICAL_REVIEW_STATE}" ]; then
     echo "**Logical review state:** ${RB_LOGICAL_REVIEW_STATE}"
   fi
@@ -1909,6 +1971,9 @@ case "${RB_ACTION}" in
         echo "You are on the PR branch (${TARGET_BRANCH})."
         echo "Apply the fixes you identified directly to the repository files."
         echo "Focus only on the issues that blocked the review."
+        if [ "${RB_SECURITY_FORCED_FIX}" = "true" ]; then
+          echo "The judge chose a merge, but the open security-audit findings marked [BLOCKS MERGE] above prevent it. Fix those findings now."
+        fi
         echo "Do not create new files unless absolutely required."
         echo "After applying fixes, output the same JSON with action='fix' and"
         echo "fix_description describing what you changed."
@@ -2115,6 +2180,10 @@ ${RB_FIX_DESC}"
             exit 1
           fi
         else
+          if [ "${RB_SECURITY_MODE:-false}" = "true" ] && { ! [[ "${RB_SECURITY_BLOCKING_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${RB_SECURITY_BLOCKING_COUNT}" -gt 0 ]; }; then
+            rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes || exit 1
+            exit 0
+          fi
           echo "Judge staged no effective changes. Treating as merge."
           if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
             echo "judge_handled=true" >> "$GITHUB_OUTPUT"
@@ -2131,6 +2200,10 @@ ${RB_FIX_DESC}"
           echo "judge_action=merge" >> "$GITHUB_OUTPUT"
         fi
       else
+        if [ "${RB_SECURITY_MODE:-false}" = "true" ] && { ! [[ "${RB_SECURITY_BLOCKING_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${RB_SECURITY_BLOCKING_COUNT}" -gt 0 ]; }; then
+          rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes || exit 1
+          exit 0
+        fi
         echo "Judge produced no file changes. Treating as merge."
         if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
           echo "judge_handled=true" >> "$GITHUB_OUTPUT"

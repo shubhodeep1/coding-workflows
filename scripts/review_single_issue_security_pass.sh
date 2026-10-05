@@ -329,7 +329,7 @@ single_pass_gate()
 			gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
 				-f body="## Single-issue security pass exhausted
 
-The security audit of this PR has used ${cycles_used} of ${effective_max} cycles, so auto-merge stays off. The PR is labelled \`ai:security-pass-failed\`, and the review-blocked judge decides next: merge (open findings stay as issues and are fixed against the default branch), fix, or close." >/dev/null 2>&1 \
+The security audit of this PR has used ${cycles_used} of ${effective_max} cycles, so auto-merge stays off. The PR is labelled \`ai:security-pass-failed\`. The review-blocked judge may merge with medium/low findings still open, fix blocking high/critical/unrated findings while retries remain, or hold the PR for a clean audit or human decision." >/dev/null 2>&1 \
 				|| echo "::warning::Could not post the security-pass exhaustion comment on PR #${PR_NUMBER}."
 		fi
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=cycles_exhausted cycle=${cycles_used}"

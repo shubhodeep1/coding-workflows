@@ -6627,6 +6627,11 @@ jobs:
                   echo "Review-blocked terminal recommendation is awaiting trusted human approval; suppressing duplicate alert."
                   exit 0
                 fi ;;
+              security_blocked)
+                MSG="Review-blocked judge held PR: open high/critical security findings after the security pass and judge fix retries were exhausted. Needs a clean audit of the head or a human decision." ;;
+              security_blocked_pending)
+                echo "Security findings already blocked this head; suppressing duplicate alert."
+                exit 0 ;;
               merge)
                 MSG="Review-blocked judge merged PR as-is" ;;
               fix)
