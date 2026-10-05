@@ -14,8 +14,9 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories or refspecs warn and
-fall back to the session checkout check. Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unknown directories fall back to the
+session checkout with a warning; unresolved push sources or destinations
+request confirmation. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 
 Detection rule — all three conditions must hold before the command is blocked:
@@ -184,7 +185,7 @@ class _GitInvocation(NamedTuple):
 class _GuardTarget(NamedTuple):
 	cwd: str
 	environment: dict[str, str]
-	branch: str
+	branch: str | None
 	tip: str
 	reaches_remote: bool
 	warning: str = ""
@@ -259,7 +260,19 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	result: list[tuple[str, list[str]]] = []
 	segment: list[str] = []
 	operator = ""
+	redirect_target = False
+	redirect_fd = False
 	for token in lexer:
+		if redirect_target:
+			redirect_target = False
+			redirect_fd = False
+			continue
+		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
+			if redirect_fd and segment:
+				segment.pop()
+			redirect_target = True
+			redirect_fd = False
+			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
 				result.append((operator, segment))
@@ -267,6 +280,11 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			operator = token
 		else:
 			segment.append(token)
+			# shlex has read one character ahead: only an adjacent, unquoted
+			# integer is an IO_NUMBER, not a numeric push refspec.
+			redirect_fd = bool(token.isdigit() and re.search(
+				r"(?:^|[\s;&|])\d+[<>]$", command[:lexer.instream.tell()]
+			))
 	if segment:
 		result.append((operator, segment))
 	return result
@@ -316,6 +334,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 	conditional_cd = False
 	invocations: list[_GitInvocation] = []
 	for operator, tokens in segments:
+		if operator == "||" and tokens[0] == "exit" and working_directory is not None:
+			# If this exit runs the following git cannot; otherwise cd succeeded.
+			continue
 		if operator not in ("", "&&") and conditional_cd:
 			working_directory = None
 			conditional_cd = False
@@ -336,8 +357,13 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			working_directory = None
 		index = 0
 		environment: dict[str, str] = {}
-		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
+			if name.endswith("+"):
+				# Appending to an existing Git override depends on the shell state.
+				name = name[:-1]
+				if name in ("GIT_DIR", "GIT_WORK_TREE"):
+					working_directory = None
 			if name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 			index += 1
@@ -408,6 +434,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if invocation.warning:
 		return [_GuardTarget(invocation.cwd, {}, "", "HEAD", True, invocation.warning)]
 	positionals: list[str] = []
+	remote_provided = False
 	bulk = ""
 	delete = False
 	tags = False
@@ -430,13 +457,16 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		elif word in ("--all", "--mirror", "--branches"):
 			bulk = word
 		elif word in _PUSH_VALUE_OPTIONS or word in ("--pu", "--push-o", "--rep", "--rece", "--e") or re.fullmatch(r"-[ufnqv]*o", word):
+			if word in ("--repo", "--rep"):
+				remote_provided = True
 			index += 1
 			if index >= len(arguments):
 				uncertain = True
 		elif re.fullmatch(r"-[ufnqv]*d[ufnqv]*", word):
 			delete = True
-		elif word.startswith(("--push-option=", "--repo=", "--receive-pack=", "--exec=", "--force-with-lease=")) or (word.startswith("-o") and word != "-o"):
-			pass
+		elif word.startswith(("--push-option=", "--push-o=", "--pu=", "--repo=", "--rep=", "--receive-pack=", "--rece=", "--exec=", "--e=", "--force-with-lease=")) or (word.startswith("-o") and word != "-o"):
+			if word.startswith(("--repo=", "--rep=")):
+				remote_provided = True
 		elif word.startswith("-"):
 			if word not in _PUSH_BOOLEAN_OPTIONS and not re.fullmatch(r"-[ufnqv]+", word):
 				uncertain = True
@@ -448,7 +478,12 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; checking the current branch instead")]
-	refspecs = positionals[1:] if positionals else []
+	# A positional repository always consumes the first positional, even
+	# with --repo; --repo alone supplies no positional refspecs.
+	if remote_provided and not positionals:
+		refspecs = []
+	else:
+		refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:
@@ -465,12 +500,15 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 				continue  # Branch deletion.
 		else:
 			source = destination = refspec
+			if destination == "HEAD":
+				# Git pushes the checked-out branch, not a branch named HEAD.
+				with _git_environment(invocation.environment):
+					destination = current_branch(invocation.cwd)
 		branch = _branch_ref(destination)
 		if branch == "":
 			continue
-		if branch is None or not re.fullmatch(r"[A-Za-z0-9_./-]+|HEAD", source):
-			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; checking the current branch instead"))
+		if branch is None:
+			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
 	if bulk:
@@ -618,7 +656,7 @@ def git_subcommands(command: str) -> set[str]:
 	for tokens in segments:
 		# Drop leading environment assignments (`GIT_DIR=... git commit`).
 		index = 0
-		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1
 		if index >= len(tokens):
 			continue
@@ -1269,25 +1307,37 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	unresolved_push_sources: list[str] = []
+	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
 		)
 		for target in targets:
+			if target.branch is None:
+				unresolved_push_destinations.append(
+					"could not resolve git push destination; shell expansion may change the pushed branch."
+				)
+				continue
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
 			if target.warning:
 				_warn(target.warning)
 			if target.tip != "HEAD":
 				with _git_environment(target.environment):
-					code, _, _ = _run(
+					code, resolved_source_sha, _ = _run(
 						["git", "rev-parse", "--verify", "--end-of-options", f"{target.tip}^{{commit}}"],
 						target.cwd, _GIT_TIMEOUT_SECONDS,
 					)
 				if code != 0:
-					_warn("could not resolve git push source; checking the session checkout instead")
-					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+					unresolved_push_sources.append(
+						f"could not resolve git push source for `{target.branch}`; "
+						"shell expansion may change the pushed commit."
+					)
+					continue
+				else:
+					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
 				branch = target.branch or current_branch(target.cwd)
 				if not branch:
@@ -1342,11 +1392,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
+	unresolved_push_sources.extend(unresolved_push_destinations)
 	if bulk_reasons:
-		_request_confirmation(
+		unresolved_push_sources.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
+	if unresolved_push_sources:
+		_request_confirmation(" ".join(unresolved_push_sources))
 	return 0, ""
 
 
