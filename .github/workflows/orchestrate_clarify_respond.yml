@@ -1145,9 +1145,16 @@ jobs:
           fi
 
           GUARDED_OUTPUT="${RUNTIME_DIR}/codex_output_guarded.txt"
+          EVIDENCE_ARGS=()
+          for evidence_file in "${RUNTIME_DIR}/issue_body.txt" "${RUNTIME_DIR}/github_facts.txt"; do
+            if [ -f "${evidence_file}" ]; then
+              EVIDENCE_ARGS+=(--evidence-file "${evidence_file}")
+            fi
+          done
           if python3 scripts/clarify_data_provision_guard.py \
             --clarification-file "${RUNTIME_DIR}/clarification_comment.txt" \
-            --answers-file "${CODEX_OUTPUT_FILE}" > "${GUARDED_OUTPUT}"; then
+            --answers-file "${CODEX_OUTPUT_FILE}" \
+            "${EVIDENCE_ARGS[@]}" > "${GUARDED_OUTPUT}"; then
             if ! diff -q "${CODEX_OUTPUT_FILE}" "${GUARDED_OUTPUT}" >/dev/null 2>&1; then
               echo "::warning::Data-provision guard overrode one or more answers to prevent circular clarification loop."
               echo "::group::Guard diff"

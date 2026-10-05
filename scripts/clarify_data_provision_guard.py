@@ -47,6 +47,28 @@ _FALLBACK_PATTERNS = re.compile(
 	r"best\s+effort|defer|omit|not\s+require)",
 	re.IGNORECASE,
 )
+_WEAKENS_CONTROL_PATTERNS = [
+	re.compile(
+		r"\b(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|turn\s+off|without|not\s+requir\w*|drop\w*|remov\w*|relax\w*|best\s+effort)\b"
+		r".{0,40}?\b(?:verif\w*|validat\w*|check\w*|signature\w*|auth\w*|security|review\w*|approv\w*|audit\w*|scan\w*|test\w*|gate\w*|guard\w*|control\w*)",
+		re.IGNORECASE,
+	),
+	re.compile(
+		r"\b(?:verif|validat|check|signature|auth|security|review|approv|audit|scan|test|gate|guard|control)\w*\b"
+		r".{0,40}?\b(?:skipped|disabled|bypassed|omitted|waived|optional|not\s+required|advisory|best\s+effort|relax\w*)\b",
+		re.IGNORECASE,
+	),
+]
+_DATA_EVIDENCE_PATTERNS = {
+	"url": (re.compile(r"\b(?:URL|link|http|deployment)\b", re.IGNORECASE), re.compile(r"https?://\S+", re.IGNORECASE)),
+	"pr": (re.compile(r"\b(?:PR|pull\s+request)\b", re.IGNORECASE), re.compile(r"/pull/\d+\b|\bPR\s*#?\d+\b", re.IGNORECASE)),
+	"sha": (re.compile(r"\b(?:SHA|commit)\b", re.IGNORECASE), re.compile(r"\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b", re.IGNORECASE)),
+	"branch": (re.compile(r"\bbranch\b", re.IGNORECASE), None),
+	"build output": (re.compile(r"\bbuild\s+output\b", re.IGNORECASE), None),
+	"test result": (re.compile(r"\btest\s+result\b", re.IGNORECASE), None),
+	"log": (re.compile(r"\blog\b", re.IGNORECASE), None),
+	"screenshot": (re.compile(r"\bscreenshot\b", re.IGNORECASE), None),
+}
 _LETTER_DECISION_RE = re.compile(r"\*{0,2}(Q\d+)\*{0,2}\s*:\s*\*{0,2}([A-Z](?:\+[A-Z])*)\*{0,2}")
 
 
@@ -112,31 +134,48 @@ def _option_requires_data(option_text: str) -> bool:
 	return False
 
 
-def _find_fallback(options: dict[str, str], exclude_letters: set[str]) -> str | None:
+def _option_weakens_control(text: str) -> bool:
+	return any(pattern.search(text) for pattern in _WEAKENS_CONTROL_PATTERNS)
+
+
+def _required_data_present(option_text: str, evidence_text: str) -> bool:
+	"""Unknown data kinds cannot be proven present by a textual match."""
+	requested = [detector for keyword, detector in _DATA_EVIDENCE_PATTERNS.values() if keyword.search(option_text)]
+	return bool(requested) and all(detector is not None and detector.search(evidence_text) for detector in requested)
+
+
+def _find_fallback(options: dict[str, str], exclude_letters: set[str]) -> tuple[str | None, str | None]:
 	"""Find the most conservative fallback option."""
 	# First pass: look for options matching fallback patterns
 	candidates = []
+	rejected_weakening = None
 	for letter, text in sorted(options.items()):
 		if letter in exclude_letters:
+			continue
+		if _option_weakens_control(text):
+			if not _option_requires_data(text):
+				rejected_weakening = letter
 			continue
 		if _FALLBACK_PATTERNS.search(text):
 			candidates.append(letter)
 
 	if candidates:
 		# Prefer the last candidate (typically the most conservative)
-		return candidates[-1]
+		return candidates[-1], rejected_weakening
 
 	# Second pass: pick the last available option that doesn't require data
 	for letter in sorted(options.keys(), reverse=True):
 		if letter in exclude_letters:
 			continue
+		if _option_weakens_control(options[letter]):
+			continue
 		if not _option_requires_data(options[letter]):
-			return letter
+			return letter, rejected_weakening
 
-	return None
+	return None, rejected_weakening
 
 
-def run_guard(clarification_file: Path, answers_file: Path) -> str:
+def run_guard(clarification_file: Path, answers_file: Path, evidence_files: tuple[Path, ...] | list[Path] = ()) -> str:
 	"""Run the data-provision guard and return (possibly patched) answers."""
 	clarification_text = clarification_file.read_text(encoding="utf-8", errors="replace")
 	answers_text = answers_file.read_text(encoding="utf-8", errors="replace")
@@ -147,8 +186,16 @@ def run_guard(clarification_file: Path, answers_file: Path) -> str:
 	if not questions or not answers:
 		return answers_text
 
+	# The question's own examples are not evidence. Strip decision lines so
+	# only the respondent's rationale/plan and supplied context can count.
+	evidence_text = "\n".join(line for line in answers_text.splitlines() if not _LETTER_DECISION_RE.fullmatch(line.strip()))
+	for evidence_file in evidence_files:
+		if evidence_file.exists():
+			evidence_text += "\n" + evidence_file.read_text(encoding="utf-8", errors="replace")
+
 	overrides: dict[str, str] = {}
 	override_reasons: list[str] = []
+	escalations: list[str] = []
 
 	for qid, selected_letters in answers.items():
 		if qid not in questions:
@@ -157,16 +204,27 @@ def run_guard(clarification_file: Path, answers_file: Path) -> str:
 		data_requiring_letters: set[str] = set()
 
 		for letter in selected_letters:
-			if letter in q_options and _option_requires_data(q_options[letter]):
+			if letter in q_options and _option_requires_data(q_options[letter]) and not _required_data_present(q_options[letter], evidence_text):
 				data_requiring_letters.add(letter)
 
 		if data_requiring_letters:
-			fallback = _find_fallback(q_options, data_requiring_letters)
+			fallback, rejected_weakening = _find_fallback(q_options, data_requiring_letters)
 			if fallback:
 				overrides[qid] = fallback
 				override_reasons.append(
 					f"{qid}: overrode {'+'.join(sorted(data_requiring_letters))} -> {fallback} "
 					f"(option requires external data the auto-responder cannot provide)"
+				)
+			elif rejected_weakening:
+				overrides[qid] = "ESCALATE"
+				override_reasons.append(
+					f"{qid}: escalated {'+'.join(sorted(data_requiring_letters))} "
+					"(option requires external data the auto-responder cannot provide; the only fallback weakens a verification/security control)"
+				)
+				escalations.append(
+					f"{qid}: Missing data required by option(s) {', '.join(sorted(data_requiring_letters))}: "
+					f"{'; '.join(q_options[letter] for letter in sorted(data_requiring_letters))}. "
+					f"Cannot use {rejected_weakening}: {q_options[rejected_weakening]} (weakens a control)."
 				)
 
 	if not overrides:
@@ -192,6 +250,10 @@ def run_guard(clarification_file: Path, answers_file: Path) -> str:
 	patched_lines.append("DATA-PROVISION GUARD OVERRIDES:")
 	for reason in override_reasons:
 		patched_lines.append(f"  {reason}")
+	if escalations:
+		patched_lines.append("")
+		patched_lines.append("ESCALATION:")
+		patched_lines.extend(escalations)
 
 	return "\n".join(patched_lines)
 
@@ -200,6 +262,7 @@ def main() -> int:
 	parser = argparse.ArgumentParser(description="Clarify data-provision guard")
 	parser.add_argument("--clarification-file", required=True, type=Path)
 	parser.add_argument("--answers-file", required=True, type=Path)
+	parser.add_argument("--evidence-file", action="append", type=Path, default=[])
 	args = parser.parse_args()
 
 	if not args.clarification_file.exists() or not args.answers_file.exists():
@@ -209,7 +272,7 @@ def main() -> int:
 		return 0
 
 	try:
-		result = run_guard(args.clarification_file, args.answers_file)
+		result = run_guard(args.clarification_file, args.answers_file, args.evidence_file)
 		print(result)
 		return 0
 	except Exception as exc:

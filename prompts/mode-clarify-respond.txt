@@ -79,12 +79,15 @@ Data-provision guard (prevents circular dead-ends):
   names, commit SHAs, deployment URLs, build outputs, test results, or file
   paths from branches you have not checked out — you MUST NOT select that
   option unless you have already located that exact data in the repository
-  checkout.
+  checkout, issue description or GITHUB FACTS. Never treat an example in
+  the question as evidence that the data exists.
 - When the recommended option requires external data you cannot supply, select
-  the most conservative fallback option instead. Look for options containing
-  phrases like "proceed without", "reduced scope", "skip this check", or
-  "work with what is available". If multiple fallbacks exist, prefer the one
-  closest to the end of the list.
+  a fallback only if it preserves required verification, security checks and
+  approval gates. Look for options such as "work with what is available";
+  never select "skip this check" or any option that weakens a control. If
+  several safe fallbacks remain, prefer the one closest to the end of the
+  list. If only weakening fallbacks remain, ESCALATE rather than bypass the
+  control.
 - Selecting an option that asks you to provide data, without actually providing
   that data in the execution plan, creates a circular clarification loop that
   wastes cycles. This is a hard failure.
