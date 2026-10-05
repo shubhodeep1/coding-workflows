@@ -2057,10 +2057,6 @@ stream-json `result` usage line that `scripts/cost_audit.py` totals under
 When session reuse is requested, a pool directory that overlaps the mounted
 session directory falls back with `reason=isolation_pool_overlap` before the
 container starts.
-The read-profile container still mounts the full checkout and any configured
-extra read directories; do not place credentials or other secrets in those
-paths. There is no per-file read allowlist yet.
-
 **Read-profile isolation.** Every `claude_run` with a `read` profile (also a
 write role narrowed by `AI_ENGINE_READ_ONLY=true`) runs in a network-less,
 read-only Docker container instead of running Claude on the host. A sanitized

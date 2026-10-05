@@ -209,6 +209,11 @@ _ai_engine_read_path_sensitive()
 	return 1
 }
 
+_ai_engine_snapshot_summary()
+{
+	python3 -c 'import json,sys; d=json.loads(sys.argv[1]); (type(d["files"]) is int and d["files"] >= 0 and d["git"] in ("copied", "omitted", "none") and d["reason"] in ("", "alternates")) or sys.exit(1); print(d["files"], d["git"], d["reason"] or "none")' "$1"
+}
+
 _ai_engine_support_finish()
 {
 	local run_dir="$1" role="$2" status=0
@@ -312,8 +317,8 @@ _ai_engine_git_mask_configs()
 _ai_engine_claude_run_isolated()
 {
 	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" session_id="$5" model="$6" effort="$7" instructions="$8" pool_dir="$9" run_dir="${10}" hide_claude_md="${11}"
-	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root snapshot_dir snapshot_result git_objects
-	local extra_snapshot_dir extra_source extra_dest extra_summary extra_existing run_dir_real extra_overlaps
+	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root snapshot_dir snapshot_result snapshot_summary snapshot_files snapshot_git snapshot_reason extra_files
+	local extra_snapshot_dir extra_source extra_dest extra_summary extra_existing run_dir_real extra_overlaps extra_details
 	local -a mounts=() session_args=() cmd=() accounts=() snapshot_args=() extra_sources=() extra_roots=()
 	local AI_ENGINE_ISOLATION_WORKDIR AI_ENGINE_ISOLATION_FAILURE AI_ENGINE_ISOLATION_GUARD
 	local -a AI_ENGINE_ISOLATION_PATHS=() AI_ENGINE_ISOLATION_MASKS=()
@@ -357,32 +362,26 @@ _ai_engine_claude_run_isolated()
 	fi
 	snapshot_dir="${run_dir}/source-snapshot"
 	if [ "${hide_claude_md}" = true ]; then
-		snapshot_args+=(--omit-claude-md)
+		snapshot_args+=(--omit-root-claude-md)
 	fi
-	if ! mkdir -m 0700 -- "${snapshot_dir}" ||
-	   ! snapshot_result="$(_ai_engine_py read-snapshot --source "${workdir}" --dest "${snapshot_dir}" "${snapshot_args[@]}")"; then
+	if ! snapshot_result="$(_ai_engine_py read-snapshot --workdir "${workdir}" --dest "${snapshot_dir}" "${snapshot_args[@]}")" ||
+	   ! snapshot_summary="$(_ai_engine_snapshot_summary "${snapshot_result}")"; then
+		echo "CLAUDE_READ_ISOLATION role=${role} outcome=rejected reason=isolation_snapshot_failed files=0 git=none extra_dirs=0" >&2
 		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
+	read -r snapshot_files snapshot_git snapshot_reason <<< "${snapshot_summary}"
 	mounts=(--mount "type=bind,src=${snapshot_dir},dst=${workdir},readonly")
-	git_objects="$(printf '%s' "${snapshot_result}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("git_objects", ""))')" || {
-		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
-	}
-	if [ -n "${git_objects}" ]; then
-		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
-	fi
 	extra_snapshot_dir="${run_dir}/extra-snapshots"
 	for extra_source in "${extra_roots[@]}"; do
 		extra_dest="${extra_snapshot_dir}/${#mounts[@]}"
-		if ! mkdir -p -- "${extra_dest}" ||
-		   ! extra_summary="$(_ai_engine_py read-snapshot --source "${extra_source}" --dest "${extra_dest}")"; then
+		if ! mkdir -p -- "${extra_snapshot_dir}" ||
+		   ! extra_summary="$(_ai_engine_py read-snapshot --workdir "${extra_source}" --dest "${extra_dest}")" ||
+		   ! extra_details="$(_ai_engine_snapshot_summary "${extra_summary}")"; then
+			echo "CLAUDE_READ_ISOLATION role=${role} outcome=rejected reason=isolation_snapshot_failed files=${snapshot_files} git=${snapshot_git} extra_dirs=0" >&2
 			ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 		fi
-		git_objects="$(printf '%s' "${extra_summary}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("git_objects", ""))')" || {
-			ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
-		}
-		if [ -n "${git_objects}" ]; then
-			ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
-		fi
+		extra_files="${extra_details%% *}"
+		snapshot_files=$((snapshot_files + extra_files))
 		mounts+=(--mount "type=bind,src=${extra_dest},dst=${extra_source},readonly")
 	done
 	if [ -n "${session_id}" ]; then
@@ -403,6 +402,7 @@ _ai_engine_claude_run_isolated()
 	probe_model="$(_ai_engine_py config --key probe_model)" || { ai_engine_fallback "${role}" policy_unavailable; return 75; }
 	mapfile -t accounts < <(ai_engine_accounts)
 	echo "CLAUDE_ISOLATION role=${role} profile=read mode=container extra_dirs=${#extra_roots[@]}" >&2
+	echo "CLAUDE_READ_ISOLATION role=${role} outcome=ready reason=${snapshot_reason} files=${snapshot_files} git=${snapshot_git} extra_dirs=${#extra_roots[@]}" >&2
 	for name in "${accounts[@]}"; do
 		attempt=$((attempt + 1))
 		token_file="${pool_dir}/tokens/${name}"

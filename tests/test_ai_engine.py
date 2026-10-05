@@ -71,7 +71,7 @@ emit({"type": "result", "subtype": "success", "is_error": False, "result": "done
 '''
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, subprocess, sys
 from pathlib import Path
 log = Path(__DOCKER_LOG__)
 argv = sys.argv[1:]
@@ -82,12 +82,15 @@ if argv[0] == "run":
 			snapshot = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
 			record["snapshot_files"] = sorted(str(p.relative_to(snapshot)) for p in snapshot.rglob("*") if p.is_file())
 			record["snapshot_config"] = (snapshot / ".git" / "config").read_text() if (snapshot / ".git" / "config").exists() else ""
+			if (snapshot / ".git").is_dir():
+				record["snapshot_head"] = subprocess.check_output(["git", "-C", str(snapshot), "log", "-1", "--format=%s"], text=True).strip()
 		if arg.startswith("type=bind,src=") and ",dst=/home/agent/.claude/projects" in arg:
 			session_mount = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
 			record["session_files"] = sorted(str(p.relative_to(session_mount)) for p in session_mount.rglob("*") if p.is_file())
 		if arg.startswith("type=bind,src=") and "/extra-snapshots/" in arg:
 			extra_mount = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
 			record["extra_snapshot_files"] = sorted(str(p.relative_to(extra_mount)) for p in extra_mount.rglob("*") if p.is_file())
+			record["extra_snapshot_config"] = (extra_mount / ".git" / "config").read_text() if (extra_mount / ".git" / "config").exists() else ""
 with log.open("a", encoding="utf-8") as handle:
 	handle.write(json.dumps(record) + "\n")
 if argv[:2] == ["image", "inspect"]:
@@ -401,6 +404,7 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	(sandbox["work"] / ".env").write_text("PRIVATE=do-not-mount\n")
 	(sandbox["work"] / "file.txt").write_text("safe\n")
+	(sandbox["work"] / "untracked.json").write_text('{"token": "secret"}\n')
 	subprocess.run(["git", "-C", str(sandbox["work"]), "init", "-q"], check=True)
 	subprocess.run(["git", "-C", str(sandbox["work"]), "add", "file.txt"], check=True)
 	subprocess.run(["git", "-C", str(sandbox["work"]), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"], check=True)
@@ -422,12 +426,16 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert call["stdin"] == "do the thing\n"
 	assert (sandbox["tmp"] / "out.txt").read_text() == "done"
 	assert "CLAUDE_ISOLATION role=SECURITY_AUDIT profile=read mode=container" in result.stderr
+	assert "CLAUDE_READ_ISOLATION role=SECURITY_AUDIT outcome=ready reason=none files=1 git=copied extra_dirs=0" in result.stderr
 	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=locked" in result.stderr
 	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=verified" in result.stderr
 	snapshot_mount = next(arg for arg in argv if arg.startswith("type=bind,src=") and f",dst={sandbox['work']},readonly" in arg)
 	snapshot = Path(snapshot_mount.split("src=", 1)[1].split(",dst=", 1)[0])
 	assert snapshot != sandbox["work"] and "file.txt" in call["snapshot_files"]
 	assert ".env" not in call["snapshot_files"]
+	assert "CLAUDE.md" not in call["snapshot_files"]
+	assert "untracked.json" not in call["snapshot_files"]
+	assert call["snapshot_head"] == "base"
 	assert "hidden" not in call["snapshot_config"]
 	assert not any("dst=/git-objects" in arg or f"src={sandbox['work'] / '.git' / 'objects'}" in arg for arg in argv)
 	assert not snapshot.exists()
@@ -666,12 +674,19 @@ def test_read_isolation_mounts_only_sanitized_extra_directories(sandbox: dict) -
 	extra.mkdir()
 	(extra / "source.txt").write_text("safe\n", encoding="utf-8")
 	(extra / "private.key").write_text("secret\n", encoding="utf-8")
+	subprocess.run(["git", "init", "-q", str(extra)], check=True)
+	subprocess.run(["git", "-C", str(extra), "add", "source.txt"], check=True)
+	subprocess.run(["git", "-C", str(extra), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "heal-source"], check=True)
+	subprocess.run(["git", "-C", str(extra), "config", "http.extraheader", "AUTHORIZATION: hidden"], check=True)
+	(extra / "untracked.json").write_text("secret\n", encoding="utf-8")
 	result = _claude_run(sandbox, "WORKFLOW_HEAL", AI_ENGINE_READ_EXTRA_DIRS=f"{extra}:{sandbox['pool']}")
 	assert _rc(result) == 0, result.stderr
 	assert "extra_dirs=1" in result.stderr
 	call = _docker_calls(sandbox)[0]
 	assert "source.txt" in call["extra_snapshot_files"]
 	assert "private.key" not in call["extra_snapshot_files"]
+	assert "untracked.json" not in call["extra_snapshot_files"]
+	assert "extraheader" not in call["extra_snapshot_config"]
 	argv = call["argv"]
 	assert f"dst={extra},readonly" in " ".join(argv)
 	assert str(sandbox["pool"]) not in " ".join(argv)
@@ -704,6 +719,8 @@ def test_read_isolation_masks_checkout_credential_and_claude_md(sandbox: dict) -
 		assert "NESTED_SECRET" in (checkout_path / ".git" / "config").read_text()
 	for push_url in ("https://user:PASS_ONE@example.com/repo", "https://user:PASS_TWO@example.com/repo"):
 		subprocess.run(["git", "-C", str(sandbox["work"]), "config", "--add", "remote.origin.pushurl", push_url], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "add", "CLAUDE.md"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"], check=True)
 	support = sandbox["tmp"] / "support"
 	(support / ".github" / "ai").mkdir(parents=True)
 	(support / ".github" / "ai" / "claude_engine.json").write_text('{"hide_claude_md": true}')

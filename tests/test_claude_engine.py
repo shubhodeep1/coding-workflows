@@ -454,7 +454,7 @@ def test_settings_cli_accepts_container_read_guard_hook(tmp_path: Path) -> None:
 		"--profile", "read", "--guard-hook", "/opt/gh.py", "--read-guard-hook", "/opt/engine.py")
 	assert result.returncode == 0, result.stderr
 	settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/opt/engine.py" read-guard'
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/opt/engine.py" guard-read-bash'
 	assert "FROM node:22.16.0-bookworm-slim" in _run("read-sandbox-dockerfile").stdout
 
 

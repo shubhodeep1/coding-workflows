@@ -1370,9 +1370,11 @@ def read_snapshot(workdir: Path, dest: Path, omit_root_claude_md: bool = False) 
 		git_workdir = _snapshot_git(workdir, "rev-parse", "--is-inside-work-tree").strip() == b"true"
 	except (OSError, subprocess.CalledProcessError):
 		pass
+	if not git_workdir and ((workdir / ".git").exists() or (workdir / ".git").is_symlink()):
+		raise EngineError("snapshot git metadata unavailable")
 	if git_workdir and _snapshot_git(workdir, "rev-parse", "--show-toplevel").strip() != os.fsencode(workdir):
 		raise EngineError("snapshot must start at git worktree root")
-	dest.mkdir(parents=True)
+	dest.mkdir(parents=True, mode=0o700)
 	try:
 		if git_workdir:
 			paths = [Path(os.fsdecode(path)) for path in _snapshot_git(workdir, "ls-files", "-z", "--cached").split(b"\0") if path]
