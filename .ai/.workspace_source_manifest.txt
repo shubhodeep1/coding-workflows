@@ -199,15 +199,19 @@ changelog.d/6118-phase-2-retire-claude-session-automation.md
 changelog.d/6118-phase-3-claude-engine-plumbing.md
 changelog.d/6118-phase-4-claude-pool-broker.md
 changelog.d/6118-phase-5a-clarify-plan-on-claude.md
+changelog.d/6118-phase-5b-implement-on-claude.md
 changelog.d/6118-phase-6-engine-label.md
 changelog.d/6118-phase-8a-single-issue-security-pass.md
 changelog.d/6118-phase-8b-standalone-auto-decide.md
 changelog.d/6118-phase-8c-activation-verification.md
 changelog.d/6118-phase-8d-retarget-merged-base.md
+changelog.d/6133-pr-merge-guard-live-copy-sync.md
 changelog.d/6181-review-transfer-failure-evidence.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
 changelog.d/6222-review-command-isolation.md
+changelog.d/6248-static-context-symlink-guard.md
+changelog.d/6249-merge-guard-ampersand-redirect.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
@@ -914,6 +918,7 @@ tests/test_stall_freshness_branch_fallback.py
 tests/test_stall_loop_and_churn_fixes.py
 tests/test_stall_recovery_pr_lookup.py
 tests/test_state_snapshot.py
+tests/test_static_context_symlink_guard.py
 tests/test_subissue_closing_pr.py
 tests/test_summarize_reviewer_consensus_prompt.py
 tests/test_summarize_reviewer_consensus_sandbox_pin.py

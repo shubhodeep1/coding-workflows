@@ -473,6 +473,11 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- The review `codex-agent` sets `PYTHONSAFEPATH=1` so host Python invoked
+  with `-`, `-c`, or `-m` cannot import PR-controlled modules from its working
+  directory (also after switching to `WORKSPACE_PATH`). Keep sibling imports
+  anchored to the trusted support directory; `workspace_init.sh` uses `-I -B`
+  independently of job env. Python older than 3.11 ignores `PYTHONSAFEPATH`.
 - Host-side static-context reads of checkout-controlled `README.md` and
   `agents.md` skip symbolic links rather than following them into prompt text.
   Required `unattended_system_instructions.md` and `ai_pipeline.md` symlinks

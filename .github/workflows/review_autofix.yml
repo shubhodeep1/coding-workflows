@@ -2418,6 +2418,9 @@ jobs:
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # Issue #6308: host Python must not import modules from the PR checkout
+      # (or its workspace copy) when running -c, -, or -m.
+      PYTHONSAFEPATH: "1"
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       # Head the gate evaluated; the review-autofix-failure:v1 marker on every
       # failure comment records it so the gate's identical-failure cap can
