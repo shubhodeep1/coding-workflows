@@ -346,7 +346,7 @@ def test_poll_job_resolves_the_security_pass_audit() -> None:
 def test_review_job_resolves_the_utility_roles() -> None:
 	steps = yaml.safe_load(_read(WORKFLOWS / "review_autofix.yml"))["jobs"]["codex-agent"]["steps"]
 	resolve = next(step for step in steps if step.get("name") == "Resolve AI engine")
-	assert "for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE SUMMARISER BEHAVIOURAL_SMOKE; do" in resolve["run"]
+	assert "for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE SUMMARISER BEHAVIOURAL_SMOKE MATERIALITY; do" in resolve["run"]
 
 
 # ---- implement issue summary (Q43: SUMMARISER) ----
@@ -425,3 +425,93 @@ def test_issue_summary_claude_crash_retries_without_codex(tmp_path: Path) -> Non
 	assert len(calls.splitlines()) == 3
 	assert codex_calls == ""
 	assert proc.stdout.count("::warning::Summary generation attempt") == 3
+
+
+# ---- AGENTS.md materiality on Claude (Q42) ----
+
+MATERIALITY_SCRIPT = SCRIPTS / "review_agents_md_materiality.sh"
+
+
+def _run_materiality(tmp_path: Path, *, paths: list[str], resolved: str = "claude", mode: str = "success", answer: str = "", flag: str = "1", agents_md_changed: bool = False) -> tuple[dict, str, str]:
+	support = tmp_path / "support"
+	support.mkdir()
+	(support / "ai_engine.sh").write_text(FAKE_ENGINE, encoding="utf-8")
+	workspace = tmp_path / "workspace"
+	workspace.mkdir()
+	(workspace / "agents.md").write_text("# agents\n", encoding="utf-8")
+	if agents_md_changed:
+		paths = [*paths, "agents.md"]
+	diff = "".join(f"diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1 +1 @@\n-old\n+new\n" for p in paths)
+	(tmp_path / "pr.diff").write_text(diff, encoding="utf-8")
+	(tmp_path / "changed.txt").write_text("\n".join(paths) + "\n", encoding="utf-8")
+	calls = tmp_path / "calls"
+	base_env = {key: value for key, value in os.environ.items() if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY"}}
+	env = dict(
+		base_env,
+		CALLS=str(calls),
+		MODE=mode,
+		CLAUDE_ANSWER=answer,
+		AI_ENGINE_RESOLVED_MATERIALITY=resolved,
+		SUPPORT_SCRIPTS_DIR=str(support),
+		AGENTS_MD_MATERIALITY_ENABLED="1",
+		AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED=flag,
+		AGENTS_MD_MATERIALITY_RESULT_FILE=str(tmp_path / "result.json"),
+		AGENTS_MD_MATERIALITY_COMMENT_FILE=str(tmp_path / "comment.md"),
+		PR_CHANGED_FILES_FILE=str(tmp_path / "changed.txt"),
+		PR_DIFF_FILE=str(tmp_path / "pr.diff"),
+		GITHUB_WORKSPACE=str(workspace),
+		REPOSITORY="octo/example",
+		PR_NUMBER="7",
+		GITHUB_RUN_ID="9",
+		BASE_BRANCH="",
+	)
+	proc = subprocess.run(["bash", str(MATERIALITY_SCRIPT)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=True)
+	import json as _json
+	result = _json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+	comment = (tmp_path / "comment.md").read_text(encoding="utf-8") if (tmp_path / "comment.md").exists() else ""
+	return result, comment, (calls.read_text(encoding="utf-8") if calls.exists() else "") + proc.stdout
+
+
+def test_materiality_claude_raises_a_low_rating(tmp_path: Path) -> None:
+	result, comment, log = _run_materiality(tmp_path, paths=["src/app.py"], answer='{"materiality": "high", "reason": "Adds env var FOO_TIMEOUT, ping @someone <!-- x -->"}')
+	assert f"MATERIALITY|prompt.txt|verdict.txt|{tmp_path / 'workspace'}|claude|true|unset" in log
+	assert (result["materiality"], result["advisory_required"], result["llm_fallback_used"], result["llm_fallback_status"]) == ("high", True, True, "ok")
+	assert "after a Claude review of the diff" in comment
+	assert "- Claude: Adds env var FOO_TIMEOUT, ping someone  x" in comment
+	assert "@someone" not in comment and "<!-- x" not in comment
+
+
+def test_materiality_claude_low_or_unavailable_keeps_the_rules_result(tmp_path: Path) -> None:
+	for index, (mode, answer, status) in enumerate((("success", '{"materiality": "low", "reason": "tests only"}', "ok"), ("unavailable", "", "unavailable"), ("crash", "", "failed_rc_1"), ("success", "not json", "unparseable"))):
+		work = tmp_path / str(index)
+		work.mkdir()
+		result, comment, _log = _run_materiality(work, paths=["src/app.py"], mode=mode, answer=answer)
+		assert (result["materiality"], result["advisory_required"], result["llm_fallback_used"], result["llm_fallback_status"]) == ("low", False, False, status), status
+		assert comment == ""
+
+
+def test_materiality_claude_runs_only_when_needed(tmp_path: Path) -> None:
+	cases = {
+		"flag_off": {"flag": "0"},
+		"role_on_codex": {"resolved": "codex"},
+		"agents_md_changed": {"agents_md_changed": True},
+		"rules_already_high": {"paths": ["package.json"]},
+	}
+	for name, kwargs in cases.items():
+		work = tmp_path / name
+		work.mkdir()
+		params = {"paths": ["src/app.py"], "answer": '{"materiality": "high", "reason": "x"}', **kwargs}
+		result, _comment, log = _run_materiality(work, **params)
+		assert "MATERIALITY|" not in log, name
+		assert result["llm_fallback_used"] is False, name
+		if name == "role_on_codex":
+			assert result["llm_fallback_status"] == "not_selected"
+		else:
+			assert "llm_fallback_status" not in result, name
+
+
+def test_review_job_resolves_materiality_and_defaults_the_check_on() -> None:
+	text = _read(WORKFLOWS / "review_autofix.yml")
+	assert "for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE SUMMARISER BEHAVIOURAL_SMOKE MATERIALITY; do" in text
+	assert "AI_ENGINE_MATERIALITY: ${{ vars.AI_ENGINE_MATERIALITY || '' }}" in text
+	assert text.count("AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '1' }}") == 2

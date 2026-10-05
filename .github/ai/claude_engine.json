@@ -152,7 +152,7 @@
       "profile": "write"
     },
     "MATERIALITY": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-sonnet-5-5",
       "profile": "write"
     },
