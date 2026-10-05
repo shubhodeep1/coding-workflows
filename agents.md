@@ -566,6 +566,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   integration-conflict judge work in separate git worktrees under
   `RUNTIME_DIR`; the poller (not the agent) fetches, merges, checks
   conflict markers and the merged sub-issue fingerprints, commits and pushes.
+  Before that push, it rejects judge changes outside the conflicted paths;
+  conflicted workflows/actions files may contain only lines from either side.
   Its push uses a one-shot credential helper instead of storing `GH_TOKEN` in
   the shared Git config of the judge worktree.
   A failed publication logs a warning but counts as a completed judge
@@ -1496,6 +1498,7 @@ and shipped:
 - `MODEL_CATALOG_BACKFILL`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `INTEGRATION_JUDGE_SCOPE`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1699,6 +1702,7 @@ LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=INTEGRATION_JUDGE_SCOPE
 
 ---
 

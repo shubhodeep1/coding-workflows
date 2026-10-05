@@ -208,6 +208,7 @@ changelog.d/6181-review-transfer-failure-evidence.md
 changelog.d/6187-isolated-codex-agents.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
+changelog.d/6230-security-audit-oversized-scoped-files.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
