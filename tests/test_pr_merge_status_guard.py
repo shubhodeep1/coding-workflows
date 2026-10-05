@@ -77,6 +77,7 @@ def test_guarded_commands_are_detected(command: str) -> None:
 		"git log --oneline -5",
 		"git fetch origin main",
 		"echo 'git commit -m x'",
+		'if true; then echo "git push origin"; fi',
 		"man git commit",
 		"grep -rn 'git push' scripts/",
 		"ls -la",
@@ -89,6 +90,17 @@ def test_unguarded_commands_are_ignored(command: str) -> None:
 
 def test_unbalanced_quotes_do_not_raise() -> None:
 	assert guard.git_subcommands("git commit -m 'unterminated") == set()
+
+
+@pytest.mark.parametrize("command", [
+	"if true; then git push origin; fi",
+	"if git push origin; then :; fi",
+	"for item in a b; do git push origin; done",
+	"case x in x) git push origin;; esac",
+	"case x in\nx) git push origin;; esac",
+])
+def test_shell_control_words_do_not_hide_push(command: str) -> None:
+	assert "push" in guard.git_subcommands(command)
 
 
 @pytest.mark.parametrize(("command", "expected"), [
@@ -1413,6 +1425,36 @@ def test_unknown_directory_push_asks_but_commit_warns(
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "could not resolve git command directory" in proc.stdout
 	assert (_ask_decision(proc) is not None) is asks
+
+
+@pytest.mark.parametrize("command", [
+	"if true; then git push origin; fi",
+	"if git push origin; then :; fi",
+	"for item in a b; do git push origin; done",
+	"case x in x) git push origin;; esac",
+	"case x in\nx) git push origin;; esac",
+])
+def test_shell_control_push_checks_merged_checkout(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+def test_shell_control_push_on_open_checkout_asks(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "main")
+	proc = _run_hook(repo, stub_bin, "if true; then git push origin; fi")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None
+
+
+def test_shell_control_commit_on_open_checkout_only_warns(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "main")
+	proc = _run_hook(repo, stub_bin, "if true; then git commit -m next; fi")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None
 
 
 # ──────────────────────────────────────────────────────────────────

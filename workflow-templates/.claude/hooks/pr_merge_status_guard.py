@@ -124,6 +124,7 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
 _FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", ">|", "<>", ">&", "<&", "<<", "<<<"})
+_SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "("})
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -323,6 +324,19 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	return [(operator, tokens) for operator, tokens, _ in _shell_segments_with_redirects(command)]
 
 
+def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
+	"""Expose a command behind shell control words without trusting its cwd."""
+	if tokens and tokens[0] in _SHELL_CONTROL_PREFIXES:
+		return tokens[1:], True
+	if tokens and tokens[0] == "case":
+		for position, word in enumerate(tokens[3:], start=3):
+			if word.endswith(")"):
+				return tokens[position + 1:], True
+	if tokens and tokens[0].endswith(")"):
+		return tokens[1:], True
+	return tokens, False
+
+
 @contextmanager
 def _git_environment(overrides: dict[str, str]):
 	state = _GIT_ENVIRONMENT.set(overrides or None)
@@ -367,6 +381,11 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 	conditional_cd = False
 	invocations: list[_GitInvocation] = []
 	for operator, tokens, redirect_may_fail in segments:
+		tokens, control_prefix = _command_after_control_prefix(tokens)
+		if control_prefix:
+			working_directory = None
+		if not tokens:
+			continue
 		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
 			# A failed builtin redirect means exit did not run (#6289).
@@ -682,8 +701,8 @@ def _api_write_requires_confirmation(command: str) -> bool:
 def git_subcommands(command: str) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
-	Only counts `git` when it is the first real token of a shell segment, after
-	any leading `VAR=value` assignments. That keeps `man git commit` and
+	Only counts `git` when it is the first real token of a shell segment after
+	control words and any leading `VAR=value` assignments. That keeps `man git commit` and
 	`echo "git commit"` from tripping the guard, at the cost of missing
 	wrapper-prefixed invocations like `sudo git commit` — an acceptable trade,
 	since a false block is more disruptive than a missed check on a rare form.
@@ -695,6 +714,7 @@ def git_subcommands(command: str) -> set[str]:
 		# Unbalanced quotes — the command is not something we can read.
 		return found
 	for tokens in segments:
+		tokens, _ = _command_after_control_prefix(tokens)
 		# Drop leading environment assignments (`GIT_DIR=... git commit`).
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
@@ -1457,6 +1477,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	confirmation_reasons: list[str] = []
 	if uncertain_push_reasons:
 		confirmation_reasons.append(
+			"could not resolve git push repository; the session checkout may not be the pushed repository. "
 			"could not determine the directory `git push` runs in (shell control flow or redirection); "
 			"checked the session checkout instead"
 		)

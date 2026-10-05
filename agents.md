@@ -10,6 +10,12 @@ Consumer repos define their own `agents.md` with their own architectural
 facts. The unattended pipeline loads this file as `agents_canonical.md` and
 the consumer's `agents.md` separately; both are inlined into the prompt.
 
+The interactive merged-PR hook (`.claude/hooks/pr_merge_status_guard.py` and
+its consumer template) recognizes guarded git commands after `if`, `then`,
+`do`, and simple `case` arms. Since their effective directory is uncertain,
+pushes check the session checkout and request confirmation unless blocked;
+commits in that context remain warning-only when not blocked.
+
 ---
 
 ## Workflow architecture
