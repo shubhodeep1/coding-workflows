@@ -248,6 +248,9 @@ profile. Container tool calls cannot reach GitHub; prompts carry the context.
 `AI_ENGINE_ISOLATED_READ_PATHS` is rejected for read-profile calls while
 additional paths cannot be filtered safely; they fall back instead of mounting
 arbitrary host directories.
+Git commands inside the read snapshot see only a synthetic commit of the
+filtered files, not the source repository's history or object store. Session
+reuse mounts only the selected session ID's transcript directory.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.
 

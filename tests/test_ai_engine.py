@@ -83,6 +83,9 @@ if argv[0] == "run":
 			snapshot = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
 			record["snapshot_files"] = sorted(str(p.relative_to(snapshot)) for p in snapshot.rglob("*") if p.is_file())
 			record["snapshot_config"] = (snapshot / ".git" / "config").read_text() if (snapshot / ".git" / "config").exists() else ""
+		if arg.startswith("type=bind,src=") and ",dst=/home/agent/.claude/projects" in arg:
+			session_mount = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
+			record["session_files"] = sorted(str(p.relative_to(session_mount)) for p in session_mount.rglob("*") if p.is_file())
 with log.open("a", encoding="utf-8") as handle:
 	handle.write(json.dumps(record) + "\n")
 if argv[:2] == ["image", "inspect"]:
@@ -425,7 +428,7 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert snapshot != sandbox["work"] and "file.txt" in call["snapshot_files"]
 	assert ".env" not in call["snapshot_files"]
 	assert "hidden" not in call["snapshot_config"]
-	assert f"type=bind,src={sandbox['work'] / '.git' / 'objects'},dst=/git-objects,readonly" in argv
+	assert not any("dst=/git-objects" in arg or f"src={sandbox['work'] / '.git' / 'objects'}" in arg for arg in argv)
 	assert not snapshot.exists()
 	assert all(f"src={sandbox['work']}," not in arg for arg in argv)
 	assert stat.S_IMODE(sandbox["support"].stat().st_mode) == 0o755
@@ -554,6 +557,35 @@ def test_read_isolation_rejects_session_mount_containing_pool(sandbox: dict) -> 
 	result = _bash(sandbox, script, CLAUDE_ENGINE_POOL_DIR=str(sandbox["pool"]))
 	assert _rc(result) == 75, result.stderr
 	assert "reason=isolation_pool_overlap" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_mounts_only_selected_session(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	session = "0123abcd-0000-4000-8000-00000000abcd"
+	sessions = sandbox["tmp"] / "rt" / "claude-read-sessions"
+	(sessions / "other-session" / "project").mkdir(parents=True)
+	(sessions / "other-session" / "project" / "private.jsonl").write_text("foreign transcript")
+	(sessions / session / "project").mkdir(parents=True)
+	(sessions / session / "project" / f"{session}.jsonl").write_text("own transcript")
+	result = _claude_run(sandbox, "SECURITY_AUDIT", session=session)
+	assert _rc(result) == 0, result.stderr
+	call = _docker_calls(sandbox)[0]
+	assert f"type=bind,src={sessions / session},dst=/home/agent/.claude/projects" in call["argv"]
+	assert call["session_files"] == [f"project/{session}.jsonl"]
+	assert call["argv"][-1] == session and call["argv"][-2] == "--resume"
+	assert "foreign transcript" not in json.dumps(call)
+
+
+def test_read_isolation_rejects_symlinked_session(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	session = "0123abcd-0000-4000-8000-00000000abcd"
+	sessions = sandbox["tmp"] / "rt" / "claude-read-sessions"
+	(sessions / "other-session").mkdir(parents=True)
+	(sessions / session).symlink_to(sessions / "other-session", target_is_directory=True)
+	result = _claude_run(sandbox, "SECURITY_AUDIT", session=session)
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_session_dir_unavailable" in result.stderr
 	assert not _docker_calls(sandbox)
 
 

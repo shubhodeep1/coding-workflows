@@ -519,6 +519,10 @@ def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, mon
 	(source / ".env").write_text("private", encoding="utf-8")
 	(source / "id.key").write_text("private", encoding="utf-8")
 	(source / "skip.pem").write_text("private", encoding="utf-8")
+	(source / ".claude").mkdir()
+	(source / ".claude" / ".credentials.json").write_text("private", encoding="utf-8")
+	(source / ".ssh").mkdir()
+	(source / ".ssh" / "config").write_text("private", encoding="utf-8")
 	(source / "link.txt").symlink_to(source / "ok.txt")
 	(source / "big.bin").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
 	(source / ".codex-workflow-src" / ".git").mkdir(parents=True)
@@ -528,22 +532,22 @@ def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, mon
 	monkeypatch.setenv("GIT_DIR", str(tmp_path / "bad-git-dir"))
 	monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "bad-work-tree"))
 	summary = ce.build_read_snapshot(source, dest, omit_claude_md=True)
-	assert summary["git"] == "present" and summary["git_objects"] == str(source / ".git" / "objects")
+	assert summary["git"] == "present" and summary["git_objects"] == ""
 	assert (dest / "ok.txt").read_text(encoding="utf-8") == "tracked"
 	assert (dest / "untracked.txt").read_text(encoding="utf-8") == "untracked"
 	assert (dest / "run.sh").stat().st_mode & stat.S_IXUSR
 	assert not (dest / "removed.txt").exists()
 	monkeypatch.delenv("GIT_DIR")
 	monkeypatch.delenv("GIT_WORK_TREE")
-	status = subprocess.check_output(["git", "-C", str(dest), "status", "--short"], text=True,
-		env={**os.environ, "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(source / ".git" / "objects")}).splitlines()
-	assert " D removed.txt" in status and "?? untracked.txt" in status
-	assert not any("run.sh" in line for line in status)
-	for path in ("CLAUDE.md", ".env", "id.key", "skip.pem", "link.txt", "big.bin", "ignored.txt", ".codex-workflow-src"):
+	status = subprocess.check_output(["git", "-C", str(dest), "status", "--short"], text=True).splitlines()
+	assert status == []
+	for path in ("CLAUDE.md", ".env", "id.key", "skip.pem", "link.txt", "big.bin", "ignored.txt", ".codex-workflow-src", ".claude", ".ssh"):
 		assert not (dest / path).exists(), path
 	assert "hidden" not in (dest / ".git" / "config").read_text(encoding="utf-8")
-	assert (dest / ".git" / "objects" / "info" / "alternates").read_text(encoding="ascii") == "/git-objects\n"
-	assert (dest / ".git" / "HEAD").read_text(encoding="ascii").strip() == git("rev-parse", "HEAD")
+	assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
+	assert subprocess.check_output(["git", "-C", str(dest), "show", "HEAD:ok.txt"], text=True) == "tracked"
+	assert subprocess.check_output(["git", "-C", str(dest), "log", "--format=%s"], text=True).strip() == "Isolated read snapshot"
+	assert git("rev-parse", "HEAD") != subprocess.check_output(["git", "-C", str(dest), "rev-parse", "HEAD"], text=True).strip()
 
 
 def test_read_snapshot_caps_and_alternates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -560,8 +564,26 @@ def test_read_snapshot_caps_and_alternates(tmp_path: Path, monkeypatch: pytest.M
 	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid",
 		"commit", "--allow-empty", "-qm", "base"], check=True)
 	(source / ".git" / "objects" / "info" / "alternates").write_text("/other/objects\n", encoding="utf-8")
-	assert ce.build_read_snapshot(source, dest)["git"] == "absent"
-	assert not (dest / ".git").exists()
+	assert ce.build_read_snapshot(source, dest)["git"] == "present"
+	assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
+
+
+def test_read_snapshot_does_not_expose_prior_committed_credentials(tmp_path: Path) -> None:
+	source, dest = tmp_path / "source", tmp_path / "snapshot"
+	source.mkdir()
+	dest.mkdir()
+	subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+	(source / ".env").write_text("HISTORICAL_TOKEN=private\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(source), "add", ".env"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "secret"], check=True)
+	secret = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD:.env"], text=True).strip()
+	(source / ".env").unlink()
+	subprocess.run(["git", "-C", str(source), "add", "-u"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "delete secret"], check=True)
+	assert ce.build_read_snapshot(source, dest)["git_objects"] == ""
+	assert not (dest / ".env").exists()
+	for spec in ("HEAD~1:.env", secret):
+		assert subprocess.run(["git", "-C", str(dest), "show", spec], capture_output=True).returncode != 0
 
 
 # --- transcripts ---------------------------------------------------------------

@@ -1210,9 +1210,8 @@ def cmd_settings(args: argparse.Namespace) -> int:
 def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, git_objects_mount: str = "/git-objects") -> dict[str, Any]:
 	"""Copy safe source files into an empty, bounded snapshot, never following links.
 
-	The source's git configuration, hooks, index and alternate object stores are
-	never copied. Git history is reconstructed only from an independent object
-	store and freshly initialized metadata.
+	The source's git configuration, hooks, index and object store are never
+	copied. A synthetic commit contains only the filtered snapshot files.
 	"""
 	if not git_objects_mount.startswith("/") or not re.fullmatch(r"/[A-Za-z0-9_/-]+", git_objects_mount):
 		raise EngineError("invalid git objects mount")
@@ -1270,7 +1269,7 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 	for entry in sorted(set(entries)):
 		parts = Path(entry).parts
 		if (not parts or Path(entry).is_absolute() or ".." in parts or
-			any(part.lower() == ".git" or part.lower().startswith((".codex-workflow-src", ".env"))
+			any(part.lower() in (".git", ".claude", ".ssh") or part.lower().startswith((".codex-workflow-src", ".env"))
 				or part.lower() in ("secrets", "credentials") for part in parts) or
 			parts[-1].lower() in (".git-credentials", ".netrc") or
 			Path(entry).suffix.lower() in (".pem", ".key", ".p12", ".pfx", ".keystore") or
@@ -1323,31 +1322,14 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 			os.close(parent_fd)
 		target.chmod(0o755 if info.st_mode & 0o111 else 0o644)
 
-	result: dict[str, Any] = {"files": files_copied, "bytes": bytes_copied, "git": "absent"}
+	result: dict[str, Any] = {"files": files_copied, "bytes": bytes_copied, "git": "absent", "git_objects": ""}
 	if git_root:
 		try:
-			common = Path(git_run(source, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip())
-			objects = common / "objects"
-			if (objects / "info" / "alternates").exists() or not objects.is_dir() or objects.is_symlink():
-				return result
-			try:
-				head = git_run(source, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
-			except subprocess.CalledProcessError:
-				return result
-			if not re.fullmatch(r"[0-9a-f]{40,64}", head):
-				return result
 			git_run(dest, "-c", "init.templateDir=/dev/null", "init", "-q")
-			refs = git_run(source, "for-each-ref", "--format=%(objectname) %(refname)",
-				"refs/heads", "refs/remotes", "refs/tags").stdout
-			commands = "".join(f"update {ref} {sha}\n" for sha, ref in
-				(line.split(" ", 1) for line in refs.splitlines()))
-			if commands:
-				git_run(dest, "update-ref", "--stdin", data=commands, alternate=str(objects))
-			(dest / ".git" / "HEAD").write_text(head + "\n", encoding="ascii")
-			git_run(dest, "read-tree", "HEAD", alternate=str(objects))
-			(dest / ".git" / "objects" / "info" / "alternates").write_text(git_objects_mount + "\n", encoding="ascii")
+			git_run(dest, "add", "-A", "-f")
+			git_run(dest, "-c", "user.name=Isolated Snapshot", "-c", "user.email=snapshot@example.invalid",
+				"commit", "--allow-empty", "--no-gpg-sign", "-qm", "Isolated read snapshot")
 			result["git"] = "present"
-			result["git_objects"] = str(objects.resolve())
 		except (subprocess.CalledProcessError, OSError, ValueError) as exc:
 			raise EngineError("read snapshot git metadata failed") from exc
 	return result

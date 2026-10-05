@@ -1966,8 +1966,11 @@ attempts of that role in the same job.
 
 Read-profile calls reject non-empty `AI_ENGINE_ISOLATED_READ_PATHS` instead of
 bind-mounting additional host paths; the caller falls back with
-`reason=isolation_read_path_invalid`. Only the filtered checkout snapshot,
-read-only Git object store, and trusted support inputs are mounted.
+`reason=isolation_read_path_invalid`. Only the filtered checkout snapshot and
+trusted support inputs are mounted. Its Git history is a synthetic commit of
+the filtered files; historical revisions and the source Git object store are
+not available to read-profile tools. Session reuse mounts only the selected
+session ID's transcript directory, not other sessions.
 
 **Which engine a role uses**, first match wins: `CLAUDE_FIXER_ENABLED=false`
 for the four review write roles, the work item's labels (`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),

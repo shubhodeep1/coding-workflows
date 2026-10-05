@@ -320,22 +320,22 @@ _ai_engine_claude_run_isolated()
 		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	}
 	if [ -n "${git_objects}" ]; then
-		# Git metadata in the snapshot is newly initialized; only objects are shared.
-		mounts+=(--mount "type=bind,src=${git_objects},dst=/git-objects,readonly")
+		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
 	if [ -n "${session_id}" ]; then
-		mkdir -p "${RUNNER_TEMP:-/tmp}/claude-read-sessions" && chmod 0700 "${RUNNER_TEMP:-/tmp}/claude-read-sessions" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
-		session_mount_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/claude-read-sessions")" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
+		[ ! -L "${RUNNER_TEMP:-/tmp}/claude-read-sessions/${session_id}" ] || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
+		mkdir -p "${RUNNER_TEMP:-/tmp}/claude-read-sessions/${session_id}" && chmod 0700 "${RUNNER_TEMP:-/tmp}/claude-read-sessions/${session_id}" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
+		session_mount_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/claude-read-sessions/${session_id}")" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
 		pool_mount_root="$(realpath -e -- "${pool_dir}")" || { ai_engine_fallback "${role}" isolation_pool_unavailable; return 75; }
 		if [[ "${session_mount_root}/" == "${pool_mount_root}/"* || "${pool_mount_root}/" == "${session_mount_root}/"* ]]; then
 			ai_engine_fallback "${role}" isolation_pool_overlap; return 75
 		fi
-		if compgen -G "${RUNNER_TEMP:-/tmp}/claude-read-sessions/*/${session_id}.jsonl" >/dev/null; then
+		if compgen -G "${session_mount_root}/*/${session_id}.jsonl" >/dev/null; then
 			session_args=(--resume "${session_id}")
 		else
 			session_args=(--session-id "${session_id}")
 		fi
-		mounts+=(--mount "type=bind,src=${RUNNER_TEMP:-/tmp}/claude-read-sessions,dst=/home/agent/.claude/projects")
+		mounts+=(--mount "type=bind,src=${session_mount_root},dst=/home/agent/.claude/projects")
 	fi
 	probe_model="$(_ai_engine_py config --key probe_model)" || { ai_engine_fallback "${role}" policy_unavailable; return 75; }
 	mapfile -t accounts < <(ai_engine_accounts)
