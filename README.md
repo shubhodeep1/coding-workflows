@@ -986,15 +986,16 @@ auto-creates by setting the `WORKFLOW_PROFILE` repository variable. Supported
 values are `core`, `standard`, and `full`; the default is `full`, which
 preserves today's behavior of installing every wrapper template.
 
-- `core` installs the six-wrapper manifest in
+- `core` installs the seven-wrapper manifest in
   [`workflow-templates/profiles/core.txt`](workflow-templates/profiles/core.txt):
   `ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`, `ai-review.yml`,
-  `ai-issue-pr-status.yml`, and `ai-cancel-on-pr-close.yml`.
+  `ai-issue-pr-status.yml`, `ai-cancel-on-pr-close.yml`, and
+  `ai-orchestrate-clarify-respond.yml`. The responder wrapper receives
+  standalone clarification questions even without the orchestrator poller.
 - `standard` installs `core` plus the orchestrator/validation additions listed
   in
   [`workflow-templates/profiles/standard.txt`](workflow-templates/profiles/standard.txt):
-  `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`,
-  `ai-orchestrate-clarify-respond.yml`, `ai-validate.yml`, and
+  `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`, `ai-validate.yml`, and
   `review_rb_judge_dispatch.yml`.
   The standard manifest also includes the optional `ai-sync-labels.yml`
   wrapper so stable-channel syncs can auto-install the label-sync entrypoint.
@@ -1007,7 +1008,7 @@ not delete wrappers that are already present in `.github/workflows/`.
 
 > **Terminology note:** the minimum manual-bootstrap wrappers are
 > `ai-clarify.yml`, `ai-plan.yml`, and `ai-implement.yml`. The `core` install
-> profile is a separate six-wrapper auto-install manifest used only by
+> profile is a separate seven-wrapper auto-install manifest used only by
 > `ai-update-workflows.yml`.
 
 > **Canonical audit-gate delivery contract:** `update_workflows.yml` applies
