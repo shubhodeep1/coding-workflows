@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_anthropic_relay.py:175-182 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `settimeout` assertion is embedded in `send_error.side_effect`, obscuring that it verifies a side effect of `_reject`.\n  WHY: The test verifies the behavior correctly, but a direct post-call assertion would make the intent clearer.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_claude_anthropic_relay.py:175-182 | severity=NIT | confidence=3\n  PROBLEM: The assertion `request.connection.settimeout.assert_called_once_with(1)` lives inside the `send_error.side_effect` lambda, which obscures that the assertion is testing a side-effect of `_reject` rather than the side-effect of `send_error`. A direct post-call assertion would be clearer:\n  WHY: It does not fail at runtime \u2014 the indirect assertion is functionally correct because Mock records the `settimeout(1)` call even when its side_effect raises, and if `_reject` did not swallow the OSError, `send_error` would never be called and the final `close_connection is True` check would still catch the regression. The behaviour is verified correctly; only the readability suffers.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ee94834e315dc1b937e297173543f1aa650fb41bd37c92dd54a1b278e72ac6cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6393,
+    "run_id": "37349712522",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37349712522",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005181953_b6da5b15fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6393,
+    "run_id": "37349712522"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T18:19:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
