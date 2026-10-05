@@ -160,6 +160,13 @@ def test_closed_by_judge_missing_details_and_unlabelled_items_are_skipped() -> N
 	assert result["skipped"] == {"closed_by_judge": 1, "no_details": 1, "no_block_label": 1}
 
 
+def test_spoofed_closed_label_does_not_hide_a_still_failed_project() -> None:
+	search = [_item(40, ["ai:orchestrator-tracking", "ai:blocked", "ai:unblock-closed"])]
+	details = {"40": _details("ai:blocked", 8)}
+	assert _select(search, details, failed=[40])["dispatch"] == [{"item": 40, "kind": "project"}]
+	assert _select(search, details)["skipped"] == {"closed_by_judge": 1}
+
+
 def test_cli_accepts_the_raw_api_shapes(tmp_path: Path) -> None:
 	(tmp_path / "search.json").write_text(json.dumps({"items": [_item(1, ["ai:blocked"])]}), encoding="utf-8")
 	(tmp_path / "details.json").write_text(json.dumps({"1": _details("ai:blocked", 5)}), encoding="utf-8")
@@ -202,12 +209,133 @@ def test_project_hooks_run_before_the_command_handlers() -> None:
 	hook = text.index("handle_unblock_judge_project_hooks || unblock_hook_rc=$?")
 	assert hook < text.index("# /security-pass-waive <finding_id>")
 	assert hook < text.index("# /re-security-pass — manual reset from security-pass exhaustion")
+	assert 'ai:unblock:v1 item=' in text
+	assert 'action=abandoned outcome=refused reason=' in text
 	assert 'echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}"' in text
 	assert 'capture("^<!-- ai:unblock-fixup-request:v1 item=' in text
 	assert 'id>unblock-[0-9]+-r[0-9]+) -->$")?' in text
 	assert 'split("\\n") | map(rtrimstr("\\r"))' in text
 	assert '($failed[0] | unique) as $all_projects' in text
 	assert '((now / 300 | floor) % ($all_projects | length)) as $offset' in text
+
+
+def _close_comment(comment_id: int, *, item: int = 40, stop: str = "project-failed",
+	verdict: str = "close", login: str = BOT, suffix: str = "") -> dict:
+	marker = (f"<!-- ai:unblock:v1 item={item} stop={stop} fingerprint=0123456789ab "
+		f"verdict={verdict} round=1 -->")
+	return {"id": comment_id, "user": {"login": login}, "created_at": _iso(1), "body": f"Judge verdict\n{marker}{suffix}"}
+
+
+def _run_close_hook(tmp_path: Path, comments: list[dict], labels: list[str], status: str,
+	login_ok: bool = True, comments_ok: bool = True) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
+	text = POLLER.read_text(encoding="utf-8")
+	hook_start = text.index("handle_unblock_judge_project_hooks() {")
+	has_label_start = text.index("has_label() {")
+	hook = text[hook_start:text.index("\n}\n", hook_start) + 3]
+	has_label = text[has_label_start:text.index("\n}\n", has_label_start) + 3]
+	state_file = tmp_path / "project.json"
+	state_file.write_text(json.dumps({"status": status}), encoding="utf-8")
+	patch_calls = tmp_path / "patch_calls"
+	state_posts = tmp_path / "state_posts"
+	harness = '''
+unblock_trusted_login() {
+	if [ "$LOGIN_OK" = "true" ]; then UNBLOCK_TRUSTED_LOGIN=pipeline-bot; else UNBLOCK_TRUSTED_LOGIN=""; fi
+}
+gh_retry() { printf '%s\\n' "$*" >> "$PATCH_CALLS_FILE"; }
+post_state_comment() { echo posted >> "$STATE_POSTS_FILE"; }
+''' + has_label + hook + '\nhandle_unblock_judge_project_hooks\n'
+	env = dict(os.environ, STATE_FILE=str(state_file), PATCH_CALLS_FILE=str(patch_calls),
+		STATE_POSTS_FILE=str(state_posts), LOGIN_OK="true" if login_ok else "false",
+		COMMENTS_FETCH_OK="true" if comments_ok else "false", COMMENTS=json.dumps(comments),
+		TRACKING_NUM="40", TRACKING_LABELS=json.dumps(labels), PROJECT_STATUS=status,
+		GITHUB_REPOSITORY="o/r", UNBLOCK_JUDGE_ENABLED="false")
+	result = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, check=False)
+	return (result, json.loads(state_file.read_text(encoding="utf-8")),
+		patch_calls.read_text().splitlines() if patch_calls.exists() else [],
+		state_posts.read_text().splitlines() if state_posts.exists() else [])
+
+
+@pytest.mark.parametrize(("comments", "status", "login_ok", "comments_ok", "reason"), [
+	([], "failed", True, True, "no_trusted_marker"),
+	([_close_comment(1, login="mallory")], "failed", True, True, "no_trusted_marker"),
+	([_close_comment(1, suffix="\nQuoted text")], "failed", True, True, "no_trusted_marker"),
+	([_close_comment(1, item=5)], "failed", True, True, "no_trusted_marker"),
+	([_close_comment(1), _close_comment(2, verdict="retry_budget")], "failed", True, True, "stale_marker"),
+	([_close_comment(1)], "in_progress", True, True, "state_mismatch"),
+	([_close_comment(1)], "failed", False, True, "login_unavailable"),
+	([_close_comment(1)], "failed", True, False, "comments_unavailable"),
+])
+def test_project_close_refuses_unverified_labels(tmp_path: Path, comments: list[dict], status: str,
+	login_ok: bool, comments_ok: bool, reason: str) -> None:
+	result, state, calls, posts = _run_close_hook(tmp_path, comments, ["ai:unblock-closed"], status, login_ok, comments_ok)
+	assert result.returncode == 0, result.stderr
+	assert f"action=abandoned outcome=refused reason={reason}" in result.stdout
+	assert state["status"] == status and calls == [] and posts == []
+
+
+@pytest.mark.parametrize(("status", "stop", "labels", "expected_posts"), [
+	("failed", "project-failed", ["ai:unblock-closed"], ["posted"]),
+	("failed", "security-pass-failed", ["ai:unblock-closed", "ai:security-pass-failed"], ["posted"]),
+	("abandoned", "project-failed", ["ai:unblock-closed"], []),
+])
+def test_project_close_requires_current_trusted_verdict_and_retries_failed_close(tmp_path: Path,
+	status: str, stop: str, labels: list[str], expected_posts: list[str]) -> None:
+	result, state, calls, posts = _run_close_hook(tmp_path, [_close_comment(1, stop=stop)], labels, status)
+	assert result.returncode == 10, result.stderr
+	assert "action=abandoned outcome=closed" in result.stdout
+	assert state["status"] == "abandoned" and posts == expected_posts
+	assert calls == ["gh api -X PATCH repos/o/r/issues/40 -f state=closed -f state_reason=not_planned"]
+
+
+def test_project_close_refuses_a_removed_stop_label(tmp_path: Path) -> None:
+	result, state, calls, posts = _run_close_hook(tmp_path, [_close_comment(1, stop="security-pass-failed")],
+		["ai:unblock-closed"], "failed")
+	assert result.returncode == 0, result.stderr
+	assert "outcome=refused reason=state_mismatch" in result.stdout
+	assert state["status"] == "failed" and calls == [] and posts == []
+
+
+@pytest.mark.parametrize("status", ["in_progress", "security-pass", "security-pass-fixing"])
+def test_project_close_refuses_a_resumed_project_even_with_stale_block_label(tmp_path: Path, status: str) -> None:
+	result, state, calls, posts = _run_close_hook(tmp_path, [_close_comment(1, stop="security-pass-failed")],
+		["ai:unblock-closed", "ai:security-pass-failed"], status)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=refused reason=state_mismatch" in result.stdout
+	assert state["status"] == status and calls == [] and posts == []
+
+
+def test_project_close_orders_same_timestamp_verdicts_by_comment_id(tmp_path: Path) -> None:
+	result, state, calls, posts = _run_close_hook(tmp_path,
+		[_close_comment(12), _close_comment(11, verdict="retry_budget")], ["ai:unblock-closed"], "failed")
+	assert result.returncode == 10, result.stderr
+	assert state["status"] == "abandoned" and len(calls) == 1 and posts == ["posted"]
+
+
+@pytest.mark.parametrize("state_header", ["<!-- ORCHESTRATOR_STATE_V1",
+	"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + "0" * 64 + " -->"])
+def test_project_close_refuses_a_verdict_before_a_later_failure_state(tmp_path: Path, state_header: str) -> None:
+	state_body = f"{state_header}\n{{}}"
+	if state_header.endswith("_V1"):
+		state_body += "\nORCHESTRATOR_STATE_V1 -->"
+	state_comment = {"id": 2, "user": {"login": BOT}, "body": state_body}
+	result, state, calls, posts = _run_close_hook(tmp_path,
+		[_close_comment(1), state_comment], ["ai:unblock-closed"], "failed")
+	assert result.returncode == 0, result.stderr
+	assert "outcome=refused reason=stale_marker" in result.stdout
+	assert state["status"] == "failed" and calls == [] and posts == []
+
+	result, state, calls, posts = _run_close_hook(tmp_path,
+		[state_comment, _close_comment(3)], ["ai:unblock-closed"], "failed")
+	assert result.returncode == 10, result.stderr
+	assert state["status"] == "abandoned" and len(calls) == 1 and posts == ["posted"]
+
+
+def test_project_close_retry_allows_its_own_abandoned_state_write(tmp_path: Path) -> None:
+	result, state, calls, posts = _run_close_hook(tmp_path,
+		[_close_comment(1), {"id": 2, "user": {"login": BOT}, "body": "<!-- ORCHESTRATOR_STATE_V1\n{}\nORCHESTRATOR_STATE_V1 -->"}],
+		["ai:unblock-closed"], "abandoned")
+	assert result.returncode == 10, result.stderr
+	assert state["status"] == "abandoned" and len(calls) == 1 and posts == []
 
 
 def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | None = None, state: dict | None = None,

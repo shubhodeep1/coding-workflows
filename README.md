@@ -2719,7 +2719,12 @@ and resolver chains, a failed project) now goes to the unblock judge
 - **Terminal.** When the caps are spent, or the item is still blocked 24
   hours after the last round, the judge closes it as not planned with a
   report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
-  poller then sets the state to `abandoned` and closes the tracking issue.
+  poller then sets the state to `abandoned` and closes the tracking issue
+  only when its newest pipeline-authored verdict marker for that project is
+  `close`, no newer pipeline-authored state write supersedes it, and it still
+  matches a `failed` project state and the stop label when present (or it is
+  already `abandoned` and the close needs retrying). A label without that
+  authorization cannot hide a still-failed project from the unblock scan.
   An `ai:security` finding instead remains open with its block label and
   `ai:unblock-closed`, receives an explanation and a CRITICAL alert; the scan
   skips it until a linked fix is verified merged or a person triages it.

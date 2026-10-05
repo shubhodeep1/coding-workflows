@@ -15743,10 +15743,12 @@ unblock_trusted_login() {
   printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"
 }
 
-# Per project, before any command handler. Returns 10 when the unblock judge
-# closed the project (label ai:unblock-closed): the state becomes `abandoned`,
-# the tracking issue is closed through the API (no auto-close keyword, §19)
-# and the caller moves on. Otherwise files every pending trusted
+# Per project, before any command handler. Returns 10 only when the
+# ai:unblock-closed label has the newest trusted close verdict for this project
+# bound to its current blocked state: the state becomes `abandoned`, the
+# tracking issue is closed through the API (no auto-close keyword, §19) and
+# the caller moves on. A refused label is logged and ignored. Otherwise files
+# every pending trusted
 # `<!-- ai:unblock-fixup-request:v1 item=<n> id=<local id> -->` comment as a
 # fix-up issue in the current wave (the same way judge fix-ups are filed),
 # posts the wait marker on item <n>, and resumes a `failed` project so the
@@ -15762,17 +15764,60 @@ unblock_trusted_login() {
 handle_unblock_judge_project_hooks() {
   local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
   local binding_pr_json binding_head_issue binding_reason binding_trusted_state_json="" binding_trusted_state_status="unset"
+  local close_reason close_marker close_stop
   if has_label "${TRACKING_LABELS}" "ai:unblock-closed"; then
-    if [ "${PROJECT_STATUS}" != "abandoned" ]; then
-      jq '.status = "abandoned"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment || true
-    fi
-    if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
-      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=closed"
+    # Finish a previously issued verdict even if UNBLOCK_JUDGE_ENABLED was switched off.
+    close_reason=""
+    unblock_trusted_login >/dev/null
+    login="${UNBLOCK_TRUSTED_LOGIN}"
+    if [ -z "${login}" ]; then
+      close_reason="login_unavailable"
+    elif [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
+      close_reason="comments_unavailable"
     else
-      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=close_failed"
+      if ! close_marker="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" --arg item "${TRACKING_NUM}" '
+        . as $comments
+        | [ .[] | select((.user.login // "") == $login and (.id | type) == "number" and .id > 0 and .id == (.id | floor))
+          | ((.body // "") | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | last // "") as $last
+          | ($last | capture("^<!-- ai:unblock:v1 item=(?<item>[1-9][0-9]*) stop=(?<stop>[a-z-]+) fingerprint=[0-9a-f]{12} verdict=(?<verdict>[a-z_]+) round=[1-9][0-9]*(?: override=[a-z_]+)? -->$")?) as $marker
+          | select($marker.item == $item)
+          | {id: .id, stop: $marker.stop, verdict: $marker.verdict} ]
+        | sort_by(.id) | last // empty
+        | . as $verdict
+        # A new state write after the verdict can represent a resume and a later failure.
+        | . + {state_after: any($comments[]; (.user.login // "") == $login and (.id | type) == "number" and .id > $verdict.id
+          and ((.body // "") | test("^<!-- ORCHESTRATOR_STATE_V(1\\r?\\n|2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->)")))}' 2>/dev/null)"; then
+        close_reason="comments_unavailable"
+      elif [ -z "${close_marker}" ]; then
+        close_reason="no_trusted_marker"
+      elif [ "$(printf '%s' "${close_marker}" | jq -r '.verdict')" != "close" ]; then
+        close_reason="stale_marker"
+      elif [ "${PROJECT_STATUS}" != "abandoned" ] && [ "$(printf '%s' "${close_marker}" | jq -r '.state_after')" != "false" ]; then
+        close_reason="stale_marker"
+      elif [ "${PROJECT_STATUS}" != "abandoned" ]; then
+        close_stop="$(printf '%s' "${close_marker}" | jq -r '.stop')"
+        if [ "${close_stop}" = "project-failed" ]; then
+          [ "${PROJECT_STATUS}" = "failed" ] || close_reason="state_mismatch"
+        elif [ "${PROJECT_STATUS}" != "failed" ] \
+          || ! printf '%s' "${TRACKING_LABELS}" | jq -e --arg label "ai:${close_stop}" 'type == "array" and index($label) != null' >/dev/null 2>&1; then
+          close_reason="state_mismatch"
+        fi
+      fi
     fi
-    return 10
+    if [ -n "${close_reason}" ]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=refused reason=${close_reason}"
+    else
+      if [ "${PROJECT_STATUS}" != "abandoned" ]; then
+        jq '.status = "abandoned"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+      fi
+      if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=closed"
+      else
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=close_failed"
+      fi
+      return 10
+    fi
   fi
   if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ] \
     || ! printf '%s' "${COMMENTS:-[]}" | jq -e 'any(.[]?; (.body // "") | startswith("<!-- ai:unblock-fixup-request:v1 "))' >/dev/null 2>&1; then
