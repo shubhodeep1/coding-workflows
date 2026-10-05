@@ -271,12 +271,33 @@ def test_fixup_hook_accepts_verified_same_repo_pr(tmp_path: Path) -> None:
 	assert state["issue_number_map"]["unblock-7-r1"] == 901
 
 
+def test_fixup_hook_uses_trusted_membership_for_known_issue(tmp_path: Path) -> None:
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 5, [], trusted_members=[5])
+	assert result.returncode == 0, result.stderr
+	assert calls == [] and creates == ["create"]
+	assert state["issue_number_map"]["unblock-5-r1"] == 901
+
+
 def test_fixup_hook_rejects_preexisting_request_with_only_untrusted_membership(tmp_path: Path) -> None:
 	pr = {"number": 7, "base": {"ref": "orchestrator/project-40"},
 		"head": {"ref": "ai/issue-5", "repo": {"full_name": "o/r"}}}
 	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, trusted_members=[])
 	assert result.returncode == 0, result.stderr
 	assert "outcome=binding_unverified reason=not_member" in result.stdout
+	assert state["unblock_fixup_rejected_ids"] == ["unblock-7-r1"]
+	assert calls == ["7"] and creates == []
+
+
+@pytest.mark.parametrize(("pr", "reason"), [
+	({"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "evil/r"}}}, "head_repo"),
+	({"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-99", "repo": {"full_name": "o/r"}}}, "not_member"),
+])
+def test_fixup_hook_does_not_treat_forged_state_pr_as_project_issue(tmp_path: Path, pr: dict, reason: str) -> None:
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5, 7, 99], pr, trusted_members=[5])
+	assert result.returncode == 0, result.stderr
+	assert f"outcome=binding_unverified reason={reason}" in result.stdout
 	assert state["unblock_fixup_rejected_ids"] == ["unblock-7-r1"]
 	assert calls == ["7"] and creates == []
 
@@ -288,10 +309,27 @@ def test_fixup_hook_retries_when_trusted_state_is_unavailable(tmp_path: Path) ->
 	assert result.returncode == 0, result.stderr
 	assert "outcome=binding_unavailable" in result.stdout
 	assert "unblock_fixup_rejected_ids" not in state
-	assert calls == ["7"] and creates == []
-	result, _, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, state, include_trusted_state_comment=False)
+	assert "reason=trusted_state" in result.stdout
+	assert calls == [] and creates == []
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, state)
 	assert result.returncode == 0, result.stderr
-	assert calls == ["7", "7"] and creates == []
+	assert calls == ["7"] and creates == ["create"]
+	assert state["issue_number_map"]["unblock-7-r1"] == 901
+
+
+def test_fixup_hook_forged_membership_defers_without_trusted_state(tmp_path: Path) -> None:
+	pr = {"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "evil/r"}}}
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5, 7], pr, trusted_members=[], include_trusted_state_comment=False)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unavailable reason=trusted_state" in result.stdout
+	assert "unblock_fixup_rejected_ids" not in state
+	assert calls == [] and creates == []
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5, 7], pr, state, trusted_members=[5])
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unverified reason=head_repo" in result.stdout
+	assert state["unblock_fixup_rejected_ids"] == ["unblock-7-r1"]
+	assert calls == ["7"] and creates == []
 
 
 @pytest.mark.parametrize(("pr", "reason"), [
@@ -328,6 +366,7 @@ def test_fixup_hook_retries_unavailable_pr_read(tmp_path: Path) -> None:
 	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5])
 	assert result.returncode == 0, result.stderr
 	assert "outcome=binding_unavailable" in result.stdout
+	assert "reason=pr_read" in result.stdout
 	assert "unblock_fixup_rejected_ids" not in state
 	assert calls == ["7"] and creates == []
 	result, _, calls, _ = _run_fixup_hook(tmp_path, 7, [5], state=state)
