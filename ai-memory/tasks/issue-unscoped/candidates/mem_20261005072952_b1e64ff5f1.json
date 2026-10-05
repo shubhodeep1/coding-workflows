@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6055-heal-evidence-bundle.md:lines 20-21 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The changelog fragment attributes consumer merge-guard changes to PR #6055 even though those changes were removed from this PR and shipped separately.\n  WHY: Changelog assembly will publish inaccurate release notes; reviewers disagree on severity (NIT vs MAJOR), with MAJOR highest.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Do not attribute consumer merge-guard template changes to this PR; those changes were removed and ship via main's #6260 and #6286.\n  expected_change_site: changelog.d/6055-heal-evidence-bundle.md\n  confidence=5\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: final paragraph (lines 20-21) describes consumer merge-guard template changes that are absent from this PR's diff; pr_changed_files.txt confirms no pr_merge_status_guard.py file is modified.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/6055-heal-evidence-bundle.md:line 21 | severity=low | confidence=5\n  PROBLEM: The changelog fragment still carries a paragraph about consumer merge guard template changes (distinguishing numeric file-descriptor prefixes from push refspecs) that this PR no longer ships.\n  WHY: When `scripts/assemble_changelog.py` runs at release time, it will publish inaccurate documentation attributing merge guard changes to this PR that were actually delivered separately.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/6055-heal-evidence-bundle.md:lines 20-21 | severity=high | confidence=5\n  PROBLEM: The changelog fragment retains a paragraph describing consumer merge guard template changes that this PR does not ship.\n  WHY: `scripts/assemble_changelog.py` will publish this paragraph under PR #6055's release notes, misattributing work that landed via main's #6260 and #6286.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/6055-heal-evidence-bundle.md:21 | severity=low | confidence=5\n  PROBLEM: The changelog attributes merged-PR guard behavior to this PR, although the latest commit context says those changes were removed and ship separately.\n  WHY: Changelog assembly will publish an inaccurate account of what PR #6055 delivered.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/6055-heal-evidence-bundle.md:line 21 | severity=high | confidence=5\n  PROBLEM: The changelog fragment retains a paragraph describing consumer merge guard template changes that this PR no longer ships.\n  WHY: When scripts/assemble_changelog.py folds this fragment into CHANGELOG.md at release time, it will publish inaccurate documentation attributing the merged-PR guard changes to PR #6055, though those changes shipped separately in #6260 and #6286.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\nRequirement: Do not attribute consumer merge-guard template changes to this PR; the guard changes were removed from this PR and ship via main's #6260 and #6286.\nExpected change site: changelog.d/6055-heal-evidence-bundle.md\nEvidence of absence: final paragraph (lines 20-21) describes consumer merge-guard template changes that this PR no longer ships; the current pr_changed_files.txt confirms no pr_merge_status_guard.py file is modified anywhere in this PR.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "12a0bc5485a6d45f3bd788105b5431a68f87a5e2914a39cc363fca898911ba0c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37273855356",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37273855356",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005072952_b1e64ff5f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37273855356"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:29:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
