@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6308,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6308\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6311\",\"pr_number\":6311,\"branch\":\"ai/issue-6308\",\"run_id\":\"37267500396\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37267500396\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"agents.md\",\"changelog.d/6308-review-host-python-safe-path.md\",\"scripts/ai_memory.py\",\"scripts/workspace_init.sh\",\"tests/test_review_host_python_safe_path.py\"]}",
+  "fingerprint": "e18de1cafa4753cf0fefafe2354d0e94cbe59cd43efc2ad4e7a1425d1efbd5d4",
+  "lineage": {
+    "issue_number": 6308,
+    "parent_ids": [],
+    "pr_number": 6311,
+    "run_id": "37267500396",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37267500396",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6311"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005054006_57a26a34aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6308,
+    "level": "run",
+    "pr_number": 6311,
+    "run_id": "37267500396"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6308: https://github.com/shubhodeep1/coding-workflows/pull/6311",
+  "timestamps": {
+    "created_at": "2026-10-05T05:40:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
