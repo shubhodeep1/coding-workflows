@@ -160,6 +160,8 @@ jobs:
 
   triage:
     needs: derive_check_name_key
+    permissions:
+      contents: read
     # Cost gate: enabled by default; a consumer opts OUT via
     # CHECK_FAILURE_TRIAGE_ENABLED=false. Only genuine failure conclusions on a
     # real PR proceed. The job is skipped (no checkout / no codex install) when
@@ -220,7 +222,7 @@ jobs:
         with:
           ref: ${{ inputs.head_sha || github.sha }}
           fetch-depth: 1
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ github.token }}
           persist-credentials: false
 
       - name: Install Codex CLI
@@ -273,7 +275,7 @@ jobs:
           mkdir -p scripts
 
           _fetched=()
-          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh; do
+          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               if [ "${f}" = "render_prompt.py" ]; then
@@ -288,12 +290,17 @@ jobs:
           done
 
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
-          if [ -f "${catalog_src}" ]; then
-            install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
-            _fetched+=(codex_model_catalog.json)
-          else
-            echo "::warning::Codex model catalog not found; apply_patch may not be registered for non-built-in models"
-          fi
+          sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"
+          for required_src in "${catalog_src}" "${sandbox_src}"; do
+            if [ ! -f "${required_src}" ]; then
+              echo "::error::Missing required isolation support ${required_src}"
+              exit 1
+            fi
+          done
+          install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
+          mkdir -p scripts/clarify_sandbox
+          install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile
+          _fetched+=(codex_model_catalog.json clarify_sandbox/)
 
           # Canonical repo-architecture facts for the diagnosis prompt.
           if [ -f ".codex-workflow-src/agents.md" ]; then
@@ -343,6 +350,12 @@ jobs:
           done
           install -m 0755 .codex-workflow-src/scripts/check_failure_triage.sh "${trusted_dir}/scripts/check_failure_triage.sh"
           install -m 0755 .codex-workflow-src/scripts/collect_pr_check_runs_context.py "${trusted_dir}/scripts/collect_pr_check_runs_context.py"
+          install -m 0755 .codex-workflow-src/scripts/clarify_isolated_run.sh "${trusted_dir}/scripts/clarify_isolated_run.sh"
+          install -m 0755 .codex-workflow-src/scripts/clarify_openrouter_broker.py "${trusted_dir}/scripts/clarify_openrouter_broker.py"
+          install -m 0755 .codex-workflow-src/scripts/write_codex_config.sh "${trusted_dir}/scripts/write_codex_config.sh"
+          install -m 0644 "${catalog_src}" "${trusted_dir}/scripts/codex_model_catalog.json"
+          mkdir -p "${trusted_dir}/scripts/clarify_sandbox"
+          install -m 0644 "${sandbox_src}" "${trusted_dir}/scripts/clarify_sandbox/Dockerfile"
           install -m 0755 .codex-workflow-src/scripts/render_prompt.sh "${trusted_dir}/scripts/render_prompt.sh"
           if [ -f .codex-workflow-src/scripts/render_prompt.py ]; then
             install -m 0755 .codex-workflow-src/scripts/render_prompt.py "${trusted_dir}/scripts/render_prompt.py"
@@ -387,6 +400,7 @@ jobs:
         id: diagnose_triage
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           CHECK_TRIAGE_STAGE: diagnose
           CHECK_TRIAGE_PREPARE_ONLY: "true"
           CHECK_TRIAGE_PR_NUMBER: ${{ inputs.pr_number }}
@@ -416,8 +430,10 @@ jobs:
           body_file="${RUNTIME_DIR}/issue_body.md"
           test -s "${body_file}"
           PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}" <<'PY'
+          import json
           import os
           import pathlib
+          import re
           import sys
 
           issue_body_path = pathlib.Path(sys.argv[1])
@@ -425,6 +441,13 @@ jobs:
           for posting_token_value in {os.environ.get("GH_TOKEN", ""), os.environ.get("GITHUB_TOKEN", ""), os.environ.get("TG_BOT_SECRET", "")}:
               if len(posting_token_value) >= 8:
                   issue_body_text = issue_body_text.replace(posting_token_value, "[redacted]")
+          expected_fingerprint = json.loads((issue_body_path.parent / "triage_metadata.json").read_text(encoding="utf-8"))["fingerprint"]
+          first_line = issue_body_text.split("\n", 1)[0]
+          if not isinstance(expected_fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_fingerprint) or first_line != f"<!-- check-failure-triage:fp={expected_fingerprint} -->":
+              sys.exit("::error::Invalid check-failure triage issue marker")
+          truncation_note = "\n\n_[triage body truncated]_"
+          if len(issue_body_text) > 60000:
+              issue_body_text = issue_body_text[:60000 - len(truncation_note)] + truncation_note
           issue_body_path.write_text(issue_body_text, encoding="utf-8")
           PY
           triage_post_fp="$(jq -er '.fingerprint' "${RUNTIME_DIR}/triage_metadata.json")"

@@ -40,7 +40,11 @@ jobs:
       check_conclusion: ${{ github.event.check_run.conclusion }}
       head_sha: ${{ github.event.check_run.head_sha }}
       details_url: ${{ github.event.check_run.details_url }}
-    secrets: inherit
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      CHECK_TRIAGE_ISSUES_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
 
   # GitHub never sends check_run events for checks created by GitHub Actions
   # ("to prevent recursive workflows"), so the job above never fires for
@@ -65,4 +69,8 @@ jobs:
       check_conclusion: ${{ github.event.workflow_run.conclusion }}
       head_sha: ${{ github.event.workflow_run.head_sha }}
       details_url: ${{ github.event.workflow_run.html_url }}
-    secrets: inherit
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      CHECK_TRIAGE_ISSUES_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

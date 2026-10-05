@@ -117,6 +117,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     The PR-head checkout does not persist credentials; collection uses a
     GitHub token before Codex runs from a trusted support directory in a
     separate, GitHub-token-free step. Missing trusted support fails closed.
+    Both wrappers pass only the four declared secrets, and diagnosis runs in
+    the credential-free, read-only clarify container with a host-side broker;
+    missing isolation falls back to a raw-context issue, never host Codex.
     Issue posting is separate and requires the `CHECK_TRIAGE_ISSUES_TOKEN`
     fine-grained PAT so `issues: opened` still fires without exposing `GH_PAT`.
 14. **workflow failure heal** (`workflow_failure_heal.yml`,
