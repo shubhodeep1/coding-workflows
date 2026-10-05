@@ -9508,6 +9508,7 @@ def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
 			"mergeable": True,
 			"mergeable_state": "clean",
 			"body": "ordinary PR body",
+			"headSha": "__default_head__",
 			"diff": huge_line,
 		}],
 		codex_json={
@@ -9543,6 +9544,7 @@ def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
 			"baseRefName": "main",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
+			"headSha": "__default_head__",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		}],
@@ -9773,6 +9775,7 @@ def test_review_blocked_fix_scope_accepts_pr_file():
 
 
 def test_review_blocked_fix_target_rejects_untrusted_pr():
+	failures = []
 	for pr_overrides, reason in (
 		({"headRepoFullName": "attacker/repo", "headRefName": "main", "headRefFromApi": "main", "body": "Refs #10"}, "cross_repository"),
 		({"headRepoFullName": None}, "head_repo_unavailable"),
@@ -9782,10 +9785,14 @@ def test_review_blocked_fix_target_rejects_untrusted_pr():
 		result = _review_blocked_fix_scope_case(
 			touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_overrides=pr_overrides,
 		)
-		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
-		assert result.get("git_push_calls", []) == []
-		assert result.get("review_blocked_fix_commit_calls", []) == []
-		assert "Judge decision for #10" not in result["stdout"]
+		try:
+			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			assert result.get("git_push_calls", []) == []
+			assert result.get("review_blocked_fix_commit_calls", []) == []
+			assert "Judge decision for #10" not in result["stdout"]
+		except AssertionError as exc:
+			failures.append((reason, str(exc)))
+	assert not failures, failures
 
 
 def test_review_blocked_fix_target_rejects_failed_fetch_without_local_fallback():
@@ -9825,6 +9832,7 @@ def test_review_blocked_fix_target_rejects_ref_change_before_checkout():
 
 
 def test_review_blocked_fix_target_rejects_head_move_during_judge():
+	failures = []
 	for changed_pr, reason in (
 		({"headSha": "__integration_head__"}, "head_moved"),
 		({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
@@ -9842,13 +9850,18 @@ def test_review_blocked_fix_target_rejects_head_move_during_judge():
 			# subsequent re-check must see the changed SHA.
 			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
 		)
-		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
-		assert result.get("git_push_calls", []) == []
-		assert result.get("review_blocked_fix_commit_calls", []) == []
-		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+		try:
+			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			assert result.get("git_push_calls", []) == []
+			assert result.get("review_blocked_fix_commit_calls", []) == []
+			assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+		except AssertionError as exc:
+			failures.append((reason, str(exc)))
+	assert not failures, failures
 
 
 def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
+	failures = []
 	for merged_overrides, reason in (
 		({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
 		({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
@@ -9875,10 +9888,14 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
 			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
 		)
-		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
-		assert result.get("git_push_calls", []) == []
-		assert result.get("review_blocked_fix_commit_calls", []) == []
-		assert len(result["prs"]) == 1
+		try:
+			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			assert result.get("git_push_calls", []) == []
+			assert result.get("review_blocked_fix_commit_calls", []) == []
+			assert len(result["prs"]) == 1
+		except AssertionError as exc:
+			failures.append((reason, str(exc)))
+	assert not failures, failures
 
 
 def test_review_blocked_rejects_unverified_open_pr_head():
