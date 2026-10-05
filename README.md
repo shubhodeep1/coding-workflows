@@ -1964,10 +1964,13 @@ attempts of that role in the same job.
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
-Read-profile calls reject non-empty `AI_ENGINE_ISOLATED_READ_PATHS` instead of
-bind-mounting additional host paths; the caller falls back with
-`reason=isolation_read_path_invalid`. Only the filtered checkout snapshot and
-trusted support inputs are mounted. Its Git history is a synthetic commit of
+Read-profile calls reject arbitrary `AI_ENGINE_ISOLATED_READ_PATHS` with
+`reason=isolation_read_path_invalid`. `WORKFLOW_HEAL` alone may request the
+`heal_src` and `heal_branch_tip` worktrees beneath its `RUNTIME_DIR`; these
+are filtered into separate read-only snapshots under the same aggregate
+20,000-file/256-MiB budget as the main checkout, not mounted from the host.
+An invalid path or exceeded budget falls back to Codex. Git history in each
+snapshot is a synthetic commit of
 the filtered files (including exclusion of standard extensionless SSH keys,
 such as `id_ed25519`, `id_ed25519_sk`, and `id_ecdsa_sk`); historical revisions
 and the source Git object store are not available to read-profile tools.
@@ -2057,9 +2060,7 @@ stream-json `result` usage line that `scripts/cost_audit.py` totals under
 When session reuse is requested, a pool directory that overlaps the mounted
 session directory falls back with `reason=isolation_pool_overlap` before the
 container starts.
-The read-profile container still mounts the full checkout and any configured
-extra read directories; do not place credentials or other secrets in those
-paths. There is no per-file read allowlist yet.
+The read-profile container mounts only filtered snapshots, not raw worktrees.
 
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input

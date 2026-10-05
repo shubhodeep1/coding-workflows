@@ -58,8 +58,9 @@
 #                           (read-profile Claude children receive no GitHub,
 #                           Telegram, OpenRouter or Actions OIDC credentials)
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
-#   AI_ENGINE_ISOLATED_READ_PATHS  must stay empty for read-profile calls;
-#                                   non-empty values fall back instead of mounting host paths
+#   AI_ENGINE_ISOLATED_READ_PATHS  WORKFLOW_HEAL only: colon-separated heal_src
+#                                   and heal_branch_tip under RUNTIME_DIR; filtered snapshots,
+#                                   never raw host mounts. Other paths fall back.
 #
 # Write-profile calls pass the OAuth token to the host CLI in a subshell.
 # Read-profile calls instead run in a networkless container with a placeholder
@@ -204,7 +205,7 @@ _ai_engine_support_finish()
 
 _ai_engine_isolation_preflight()
 {
-	local pool_dir="$1" workdir="$2" prompt_file="$3" instructions="$4" candidate pool_real
+	local pool_dir="$1" workdir="$2" prompt_file="$3" instructions="$4" role="$5" candidate pool_real runtime_real
 	AI_ENGINE_ISOLATION_FAILURE=""
 	command -v docker >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_docker_missing; return 1; }
 	command -v python3 >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_python_missing; return 1; }
@@ -218,17 +219,34 @@ _ai_engine_isolation_preflight()
 	[ -f "${AI_ENGINE_ISOLATION_GUARD}" ] || { AI_ENGINE_ISOLATION_FAILURE=policy_unavailable; return 1; }
 	AI_ENGINE_ISOLATION_PATHS=()
 	if [ -n "${AI_ENGINE_ISOLATED_READ_PATHS:-}" ]; then
-		# Arbitrary host bind mounts can reintroduce credentials outside the snapshot.
-		AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
+		if [ "${role}" != WORKFLOW_HEAL ] || [ -z "${RUNTIME_DIR:-}" ] || [[ "${AI_ENGINE_ISOLATED_READ_PATHS}" == *$'\n'* ]]; then
+			AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
+		fi
+		runtime_real="$(realpath -e -- "${RUNTIME_DIR}")" || { AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1; }
+		IFS=: read -r -a AI_ENGINE_ISOLATION_PATHS <<< "${AI_ENGINE_ISOLATED_READ_PATHS}"
+		if [ "${#AI_ENGINE_ISOLATION_PATHS[@]}" -gt 2 ] || [[ "${AI_ENGINE_ISOLATED_READ_PATHS}" == *: ]]; then
+			AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
+		fi
+		for candidate in "${AI_ENGINE_ISOLATION_PATHS[@]}"; do
+			if [ ! -d "${candidate}" ] || [ -L "${candidate}" ] ||
+			   { [ "${candidate}" != "${RUNTIME_DIR}/heal_src" ] && [ "${candidate}" != "${RUNTIME_DIR}/heal_branch_tip" ]; }; then
+				AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
+			fi
+		done
 	fi
 	pool_real="$(realpath -e -- "${pool_dir}")" || { AI_ENGINE_ISOLATION_FAILURE=isolation_pool_overlap; return 1; }
-	for candidate in "${workdir}" "${prompt_file}" "${instructions}"; do
+	for candidate in "${workdir}" "${prompt_file}" "${instructions}" "${AI_ENGINE_ISOLATION_PATHS[@]}"; do
 		candidate="$(realpath -e -- "${candidate}")" || { AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1; }
 		if [[ "${candidate}" == *,* || "${candidate}" == *$'\n'* ]]; then
 			AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
 		fi
 		if [[ "${candidate}/" == "${pool_real}/"* || "${pool_real}/" == "${candidate}/"* ]]; then
 			AI_ENGINE_ISOLATION_FAILURE=isolation_pool_overlap; return 1
+		fi
+	done
+	for candidate in "${AI_ENGINE_ISOLATION_PATHS[@]}"; do
+		if [ "$(realpath -e -- "${candidate}")" != "${runtime_real}/$(basename -- "${candidate}")" ]; then
+			AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
 		fi
 	done
 }
@@ -291,12 +309,12 @@ _ai_engine_git_mask_configs()
 _ai_engine_claude_run_isolated()
 {
 	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" session_id="$5" model="$6" effort="$7" instructions="$8" pool_dir="$9" run_dir="${10}" hide_claude_md="${11}"
-	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root snapshot_dir snapshot_result git_objects
+	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root snapshot_dir snapshot_result git_objects snapshot_files_used snapshot_bytes_used snapshot_files_limit snapshot_bytes_limit extra_snapshot
 	local -a mounts=() session_args=() cmd=() accounts=() snapshot_args=()
 	local AI_ENGINE_ISOLATION_WORKDIR AI_ENGINE_ISOLATION_FAILURE AI_ENGINE_ISOLATION_GUARD
 	local -a AI_ENGINE_ISOLATION_PATHS=() AI_ENGINE_ISOLATION_MASKS=()
 	AI_ENGINE_ISOLATION_WORKDIR="${workdir}"
-	if ! _ai_engine_isolation_preflight "${pool_dir}" "${workdir}" "${prompt_file}" "${instructions}"; then
+	if ! _ai_engine_isolation_preflight "${pool_dir}" "${workdir}" "${prompt_file}" "${instructions}" "${role}"; then
 		ai_engine_fallback "${role}" "${AI_ENGINE_ISOLATION_FAILURE}"; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
 	guard_hook="${AI_ENGINE_ISOLATION_GUARD}"
@@ -322,6 +340,32 @@ _ai_engine_claude_run_isolated()
 	if [ -n "${git_objects}" ]; then
 		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
+	# Each auxiliary checkout gets the same credential filter and a synthetic Git
+	# commit. Share the main snapshot's file/byte budget across all three roots.
+	snapshot_files_limit="${CLAUDE_READ_SNAPSHOT_MAX_FILES:-20000}"
+	snapshot_bytes_limit="${CLAUDE_READ_SNAPSHOT_MAX_BYTES:-268435456}"
+	if [[ ! "${snapshot_files_limit}" =~ ^[0-9]+$ || ! "${snapshot_bytes_limit}" =~ ^[0-9]+$ ]]; then
+		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
+	fi
+	snapshot_files_limit=$((10#${snapshot_files_limit}))
+	snapshot_bytes_limit=$((10#${snapshot_bytes_limit}))
+	snapshot_files_used="$(_ai_engine_json_field "${snapshot_result}" files)" || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
+	snapshot_bytes_used="$(_ai_engine_json_field "${snapshot_result}" bytes)" || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
+	for i in "${!AI_ENGINE_ISOLATION_PATHS[@]}"; do
+		extra_snapshot="${run_dir}/source-snapshot-${i}"
+		if [ "${snapshot_files_limit}" -le "${snapshot_files_used}" ] || [ "${snapshot_bytes_limit}" -le "${snapshot_bytes_used}" ] ||
+		   ! mkdir -m 0700 -- "${extra_snapshot}" ||
+		   ! snapshot_result="$(CLAUDE_READ_SNAPSHOT_MAX_FILES="$((snapshot_files_limit - snapshot_files_used))" \
+			CLAUDE_READ_SNAPSHOT_MAX_BYTES="$((snapshot_bytes_limit - snapshot_bytes_used))" \
+			_ai_engine_py read-snapshot --source "${AI_ENGINE_ISOLATION_PATHS[i]}" --dest "${extra_snapshot}" "${snapshot_args[@]}")"; then
+			ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
+		fi
+		git_objects="$(_ai_engine_json_field "${snapshot_result}" git_objects)" || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
+		[ -z "${git_objects}" ] || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
+		snapshot_files_used=$((snapshot_files_used + $(_ai_engine_json_field "${snapshot_result}" files)))
+		snapshot_bytes_used=$((snapshot_bytes_used + $(_ai_engine_json_field "${snapshot_result}" bytes)))
+		mounts+=(--mount "type=bind,src=${extra_snapshot},dst=${AI_ENGINE_ISOLATION_PATHS[i]},readonly")
+	done
 	if [ -n "${session_id}" ]; then
 		[ ! -L "${RUNNER_TEMP:-/tmp}/claude-read-sessions/${session_id}" ] || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
 		mkdir -p "${RUNNER_TEMP:-/tmp}/claude-read-sessions/${session_id}" && chmod 0700 "${RUNNER_TEMP:-/tmp}/claude-read-sessions/${session_id}" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
@@ -351,7 +395,7 @@ _ai_engine_claude_run_isolated()
 		broker_pid=$!
 		# Start the reaper before waiting for the socket: SIGKILL skips shell traps.
 		# shellcheck disable=SC2016 # This is the reaper's shell, not the caller's.
-		setsid bash -c 'parent=$1; container=$2; broker=$3; snapshot=$4; while kill -0 "$parent" 2>/dev/null && [ "$(ps -o stat= -p "$parent" 2>/dev/null)" != Z ]; do sleep 1; done; docker rm -f "$container" >/dev/null 2>&1; kill "$broker" 2>/dev/null; rm -rf -- "$snapshot"' _ "${parent_pid}" "${container_name}" "${broker_pid}" "${snapshot_dir}" >/dev/null 2>&1 < /dev/null &
+		setsid bash -c 'parent=$1; container=$2; broker=$3; snapshot=$4; while kill -0 "$parent" 2>/dev/null && [ "$(ps -o stat= -p "$parent" 2>/dev/null)" != Z ]; do sleep 1; done; docker rm -f "$container" >/dev/null 2>&1; kill "$broker" 2>/dev/null; rm -rf -- "$snapshot" "${snapshot}"-*' _ "${parent_pid}" "${container_name}" "${broker_pid}" "${snapshot_dir}" >/dev/null 2>&1 < /dev/null &
 		reaper_pid=$!
 		for ((i=0; i<50; i++)); do
 			[ -S "${run_dir}/sock/provider.sock" ] && break
@@ -506,11 +550,11 @@ claude_run()
 		echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=locked files=${locked_files}" >&2
 		old_int_trap="$(trap -p INT)"
 		old_term_trap="$(trap -p TERM)"
-		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; rm -rf -- "${run_dir}/source-snapshot"; exit 130' INT
-		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; rm -rf -- "${run_dir}/source-snapshot"; exit 143' TERM
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; rm -rf -- "${run_dir}/source-snapshot" "${run_dir}"/source-snapshot-[0-9]*; exit 130' INT
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; rm -rf -- "${run_dir}/source-snapshot" "${run_dir}"/source-snapshot-[0-9]*; exit 143' TERM
 		_ai_engine_claude_run_isolated "${role}" "${prompt_file}" "${out_file}" "${workdir}" "${session_id}" "${model}" "${effort}" "${instructions}" "${pool_dir}" "${run_dir}" "${hide_claude_md}" || rc=$?
 		_ai_engine_support_finish "${run_dir}" "${role}" || rc="${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
-		rm -rf -- "${run_dir}/source-snapshot"
+		rm -rf -- "${run_dir}/source-snapshot" "${run_dir}"/source-snapshot-[0-9]*
 		trap - INT TERM
 		[ -z "${old_int_trap}" ] || eval "${old_int_trap}"
 		[ -z "${old_term_trap}" ] || eval "${old_term_trap}"

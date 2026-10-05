@@ -16,6 +16,7 @@ import shlex
 import signal
 import stat
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -78,11 +79,18 @@ log = Path(__DOCKER_LOG__)
 argv = sys.argv[1:]
 record = {"argv": argv, "env": dict(os.environ), "stdin": sys.stdin.read() if argv[0] == "run" else ""}
 if argv[0] == "run":
+	record["auxiliary_snapshots"] = {}
+	record["auxiliary_configs"] = {}
 	for arg in argv:
 		if arg.startswith("type=bind,src=") and "/source-snapshot,dst=" in arg:
 			snapshot = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
 			record["snapshot_files"] = sorted(str(p.relative_to(snapshot)) for p in snapshot.rglob("*") if p.is_file())
 			record["snapshot_config"] = (snapshot / ".git" / "config").read_text() if (snapshot / ".git" / "config").exists() else ""
+		if arg.startswith("type=bind,src=") and "/source-snapshot-" in arg:
+			snapshot = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
+			destination = arg.split(",dst=", 1)[1].removesuffix(",readonly")
+			record["auxiliary_snapshots"][destination] = sorted(str(p.relative_to(snapshot)) for p in snapshot.rglob("*") if p.is_file())
+			record["auxiliary_configs"][destination] = (snapshot / ".git" / "config").read_text() if (snapshot / ".git" / "config").exists() else ""
 		if arg.startswith("type=bind,src=") and ",dst=/home/agent/.claude/projects" in arg:
 			session_mount = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
 			record["session_files"] = sorted(str(p.relative_to(session_mount)) for p in session_mount.rglob("*") if p.is_file())
@@ -501,6 +509,72 @@ def test_read_snapshot_limit_falls_back_without_mounting_checkout(sandbox: dict)
 	result = _bash(sandbox, f'_ai_engine_isolation_image() {{ printf "%s\\n" fake-image; }}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"', CLAUDE_READ_SNAPSHOT_MAX_BYTES="1")
 	assert _rc(result) == 75, result.stderr
 	assert "reason=isolation_snapshot_failed" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_heal_auxiliary_worktrees_are_filtered_and_mounted_from_snapshots(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	engine_config_path = sandbox["support"] / ".github" / "ai" / "claude_engine.json"
+	engine_config = json.loads(engine_config_path.read_text(encoding="utf-8"))
+	engine_config["hide_claude_md"] = True
+	engine_config_path.write_text(json.dumps(engine_config), encoding="utf-8")
+	runtime = sandbox["tmp"] / "heal-runtime"
+	runtime.mkdir()
+	for name in ("heal_src", "heal_branch_tip"):
+		checkout = runtime / name
+		checkout.mkdir()
+		(checkout / "code.sh").write_text("safe\n")
+		(checkout / ".env").write_text("secret\n")
+		(checkout / "id_ed25519").write_text("secret\n")
+		(checkout / "CLAUDE.md").write_text("hide me\n")
+		subprocess.run(["git", "-C", str(checkout), "init", "-q"], check=True)
+		subprocess.run(["git", "-C", str(checkout), "add", "code.sh", ".env"], check=True)
+		subprocess.run(["git", "-C", str(checkout), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"], check=True)
+		subprocess.run(["git", "-C", str(checkout), "config", "http.extraheader", "AUTHORIZATION: TEST_ONLY_CREDENTIAL"], check=True)
+	# AF_UNIX limits socket paths to 107 bytes; this test's pytest tmp name is long.
+	with tempfile.TemporaryDirectory(prefix="heal-", dir="/tmp") as short_temp:
+		result = _claude_run(sandbox, "WORKFLOW_HEAL", RUNNER_TEMP=short_temp, RUNTIME_DIR=str(runtime),
+			AI_ENGINE_ISOLATED_READ_PATHS=f"{runtime / 'heal_src'}:{runtime / 'heal_branch_tip'}")
+		assert _rc(result) == 0, result.stderr
+		call = _docker_calls(sandbox)[0]
+		for name in ("heal_src", "heal_branch_tip"):
+			checkout = runtime / name
+			files = call["auxiliary_snapshots"][str(checkout)]
+			assert "code.sh" in files and ".git/config" in files
+			assert not {".env", "id_ed25519", "CLAUDE.md"} & set(files)
+			assert "TEST_ONLY_CREDENTIAL" not in call["auxiliary_configs"][str(checkout)]
+			assert not any(f"src={checkout}," in arg for arg in call["argv"])
+		assert not list(Path(short_temp).glob("claude-run-*/source-snapshot-*"))
+
+
+def test_heal_auxiliary_snapshot_shares_file_budget(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	runtime = sandbox["tmp"] / "heal-runtime"
+	checkout = runtime / "heal_src"
+	checkout.mkdir(parents=True)
+	(checkout / "code.sh").write_text("safe\n")
+	result = _claude_run(sandbox, "WORKFLOW_HEAL", RUNTIME_DIR=str(runtime),
+		AI_ENGINE_ISOLATED_READ_PATHS=str(checkout), CLAUDE_READ_SNAPSHOT_MAX_FILES="1")
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_snapshot_failed" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+@pytest.mark.parametrize("invalid", ["other", "symlink", "extra_role"])
+def test_heal_auxiliary_paths_fail_closed_on_unapproved_mount(sandbox: dict, invalid: str) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	runtime = sandbox["tmp"] / "heal-runtime"
+	runtime.mkdir()
+	checkout = runtime / "heal_src"
+	if invalid == "symlink":
+		checkout.symlink_to(sandbox["work"], target_is_directory=True)
+	else:
+		checkout.mkdir()
+	path = sandbox["work"] if invalid == "other" else checkout
+	role = "SECURITY_AUDIT" if invalid == "extra_role" else "WORKFLOW_HEAL"
+	result = _claude_run(sandbox, role, RUNTIME_DIR=str(runtime), AI_ENGINE_ISOLATED_READ_PATHS=str(path))
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_read_path_invalid" in result.stderr
 	assert not _docker_calls(sandbox)
 
 
