@@ -1,0 +1,11 @@
+{
+  "_comment": "Files under workflow-templates/.claude/ whose live .claude/ copy in coding-workflows is maintained separately on purpose. Every other template file with a live copy must match it byte for byte (tests/test_claude_template_live_parity.py), and .github/workflows/sync-claude-live-copies.yml copies a template change to the live copy when a push to main changed only the template (scripts/sync_claude_live_copies.py).",
+  "divergent": {
+    "commands/analyze-log.md": "live copy carries coding-workflows-specific steps; both copies are edited together",
+    "commands/deploy-activate.md": "live copy carries coding-workflows-specific steps; both copies are edited together",
+    "commands/implement-issue-claude.md": "live copy describes this repo's cut-over engine; the template describes consumers before their stable sync",
+    "commands/investigate-issue.md": "live copy carries coding-workflows-specific steps; both copies are edited together",
+    "commands/validate-consumer-issue.md": "live copy carries coding-workflows-specific steps; both copies are edited together",
+    "commands/verify-activation.md": "live copy carries coding-workflows-specific steps; both copies are edited together"
+  }
+}
