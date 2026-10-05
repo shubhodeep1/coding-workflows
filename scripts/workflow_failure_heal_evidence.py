@@ -26,8 +26,8 @@ evidence to a folder the agents read:
 API budget (CLAUDE.md §15), per ``collect`` call:
   * intake provenance: 1 cached ``GET /user`` and 1 batched GraphQL query
     for the heal issue and up to 20 occurrence comments;
-  * cross-repo run identity: reuse the head-SHA timeline listing, falling
-    back to 1 run GET per selected cross-repo run not in that listing;
+  * run identity (including same-repo): reuse the head-SHA timeline listing,
+    falling back to 1 run GET per selected run not in that listing;
   * runs already in the out dir from an earlier stage (actions/cache) are
     reused; each new run costs 1 jobs call + 1 job-log call per selected job
     (at most ``--max-jobs``) + 1 artifact list + at most 2 artifact
@@ -794,8 +794,9 @@ class Collector:
 		return result
 
 	def _verify_run(self, ref: dict[str, str], issue_repo: str) -> tuple[bool, str]:
-		if ref["repo"] == issue_repo:
-			return True, "verified"
+		"""Bind a run in either repository to the intake's reported failure."""
+		# #6328: issue text can carry unrelated same-repo run links. Bind every
+		# run to API metadata before reading its jobs, logs or artifacts with GH_PAT.
 		if ref["source_repo"] != ref["repo"]:
 			return False, "run_no_verified_context"
 		sha = ref["head_sha"] if heal.is_valid_sha(ref["head_sha"]) else ""
