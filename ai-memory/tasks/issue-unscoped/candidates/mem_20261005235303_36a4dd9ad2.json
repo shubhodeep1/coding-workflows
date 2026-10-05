@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A reference to another repository gets one line saying it was 'not read (cross-repository)'.\" (PR description)\n  expected_change_site: `scripts/clarify_github_facts.py::extract_refs` and `collect`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `scripts/clarify_github_facts.py:140` silently drops cross-repository branch references without recording them in `cross_repo`; `collect` at `scripts/clarify_github_facts.py:236-240` emits cross-repository lines only for issues and runs, so no \"not read (cross-repository)\" line is emitted for cross-repo branches; `test_cross_repository_references_are_listed_not_read` covers issues and runs but has no branch case.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"A reference to another repository gets one line saying it was 'not read (cross-repository)'.\" (PR description). The linked issue more narrowly says \"Limit GitHub facts reads to the current repository, including issue, PR, and run references. Mark cross-repository references as 'not read (cross-repository)' rather than fetching their facts.\"\n  Expected change site: `scripts/clarify_github_facts.py::extract_refs` (branch loop at line 140) and `collect` (cross-repo output at line 236-240)\n  Evidence of absence: Cross-repo issue references (`add_issue` at line 108-111) and run references (line 126-129) are recorded in `cross_repo` and then emitted in `collect` at lines 236-240. But branch references to other repositories are silently discarded at line 140 (`if branch_repo not in allowed ...: continue`) without being added to `cross_repo`. The docstring at line 21-22 says \"Issue, PR and run references to other repositories are listed as 'not read (cross-repository)'\" and does not claim branch coverage, so the linked issue's explicit scope (issues, PRs, runs) is met. The PR description's blanket \"A reference to another repository\" is broader and technically unmet for branch-qualified-to-another-repo backtick references, but this is a rare edge case with no runtime impact since the branch is still never read.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"A reference to another repository gets one line saying it was 'not read (cross-repository)'.\" (PR description, AD-1 chosen option A.)\n  Expected change site: `scripts/clarify_github_facts.py::extract_refs` branch-handling loop and the `cross_repo` branch in `collect`.\n  Evidence of absence: At `scripts/clarify_github_facts.py:140`, the branch loop has `if branch_repo not in allowed or branch_ref in branches or token in (\"main\", \"stable\", \"master\") or token.lower() in allowed: continue`, which silently drops branch references qualified to other repositories without appending a `(\"branch\", slug, name)` tuple to `cross_repo`. The `collect` function at `scripts/clarify_github_facts.py:236-240` only handles `cross_kind == \"issue\"` and `cross_kind == \"run\"`, so no \"not read (cross-repository)\" line is emitted for cross-repo branches. No test covers a cross-repo branch reference; `test_cross_repository_references_are_listed_not_read` and `test_main_ignores_consumer_repos_file` only exercise issues and runs. The contract stated in AD-1 and `scripts/clarify_github_facts.py:21-25` (docstring says \"Issue, PR and run references to other repositories are listed as 'not read (cross-repository)' (at most 10)\") does not enumerate branch references \u2014 branches were already silently filtered before this PR and remain so \u2014 so a follow-up that adds a `(\"branch\", slug, name)` tuple to `cross_repo` plus a matching `elif cross_kind == \"branch\": lines.append(f\"- Branch `{cross_number}` in {cross_slug}: not read (cross-repository)\")` branch in `collect` would close the gap. The current security exposure is limited because cross-repo branches never trigger a GitHub read at any site (defensive `slug != repo.lower()` check at `collect:220` plus `build_query:149` filter), so this is a visibility/completeness gap rather than an information-disclosure regression.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cA reference to another repository gets one line saying it was \u2018not read (cross-repository)\u2019.\u201d\n  Expected change site: `scripts/clarify_github_facts.py::extract_refs` and `collect`\n  Evidence of absence: `extract_refs` recognizes repository-qualified branch references, but skips a branch whose repository is not in `allowed` without recording it in `cross_repo` (lines 136-143). `collect` emits cross-repository lines only for issues and runs (lines 236-240), so a reference such as `` `feature/x` in other/repo `` gets no line.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"A reference to another repository gets one line saying it was 'not read (cross-repository)'.\"\n  Expected change site: `scripts/clarify_github_facts.py::extract_refs` and `collect`\n  Evidence of absence: Cross-repository branch references (e.g. `other/repo:some-branch` matched by `BRANCH_REF_RE`) are silently discarded at `scripts/clarify_github_facts.py:140` \u2014 they fail the `_is_branch` check and are not appended to `branches`, but they are also never appended to the `cross_repo` list. Only issue and run references populate `cross_repo` (lines 106-112, 126-130). The `collect` function therefore emits no \"not read (cross-repository)\" line for foreign branch references. The test `test_cross_repository_references_are_listed_not_read` covers issues and runs but has no branch case.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a01045ee6c1cb5696ee1ac9611f8f08d98c7e586e240014e620b2e1b141ba54e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6351,
+    "run_id": "37389374462",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37389374462",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005235303_36a4dd9ad2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6351,
+    "run_id": "37389374462"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T23:53:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
