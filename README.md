@@ -531,6 +531,10 @@ jobs:
 > commit reachable from the audited branch head counts. If the checkout does
 > not match that head, the gate holds and the audit report skips publication.
 > Duplicate extension comments for the same fix commit still grant one cycle.
+> If a shallow checkout contains the fix commit but cannot verify its ancestry,
+> the gate fetches the complete branch history and checks again; a failed fetch
+> holds the gate. The read-only `status` check does not fetch and reports the
+> ancestry as unverifiable instead of declaring the pass exhausted.
 
 > **Warning — do NOT add a top-level `concurrency` block to this wrapper.**
 > The reusable workflow already manages concurrency at the job level. Adding a

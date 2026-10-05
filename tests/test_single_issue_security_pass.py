@@ -61,15 +61,21 @@ if args == ["rev-parse", "HEAD"]:
 	print(os.environ.get("FAKE_GIT_HEAD", "c" * 40))
 	sys.exit(0)
 if args == ["rev-parse", "--is-shallow-repository"]:
-	print(os.environ.get("FAKE_GIT_SHALLOW", "false"))
+	print("false" if os.path.exists(os.environ.get("FAKE_GIT_UNSHALLOW_MARKER", "")) else os.environ.get("FAKE_GIT_SHALLOW", "false"))
 	sys.exit(0)
 if args[:2] == ["cat-file", "-e"]:
 	sys.exit(0 if args[2].removesuffix("^{commit}") in os.environ.get("FAKE_GIT_ANCESTORS", "").split(",") else 1)
 if args[:2] == ["check-ref-format", "--branch"]:
 	sys.exit(0)
 if args[:3] == ["fetch", "--no-tags", "--unshallow"]:
-	sys.exit(1 if os.environ.get("FAKE_GIT_FETCH_FAIL") == "true" else 0)
+	if os.environ.get("FAKE_GIT_FETCH_FAIL") == "true":
+		sys.exit(1)
+	if os.environ.get("FAKE_GIT_UNSHALLOW_MARKER"):
+		open(os.environ["FAKE_GIT_UNSHALLOW_MARKER"], "w").close()
+	sys.exit(0)
 if args[:2] == ["merge-base", "--is-ancestor"]:
+	if os.environ.get("FAKE_GIT_INCOMPLETE_ANCESTRY") == "true" and not os.path.exists(os.environ.get("FAKE_GIT_UNSHALLOW_MARKER", "")):
+		sys.exit(1)
 	sys.exit(0 if args[2] in os.environ.get("FAKE_GIT_ANCESTORS", "").split(",") and args[3] == os.environ.get("FAKE_GIT_HEAD", "c" * 40) else 1)
 sys.exit(1)
 '''
@@ -131,7 +137,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		SUPPORT_SCRIPTS_DIR=str(support),
 		GITHUB_WORKSPACE=str(tmp_path),
 	)
-	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL"):
+	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
 		run_env.pop(name, None)
 	run_env.update(env or {})
 	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False)
@@ -313,6 +319,40 @@ def test_status_does_not_fetch_missing_shallow_extension(tmp_path: Path) -> None
 	assert result.returncode == 0 and output == ""
 	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_shallow_existing_extension_unshallows_before_exhaustion(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	marker_file = tmp_path / "unshallowed"
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={
+		"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_ANCESTORS": OLD,
+		"FAKE_GIT_INCOMPLETE_ANCESTRY": "true", "FAKE_GIT_UNSHALLOW_MARKER": str(marker_file),
+	})
+	assert marker_file.exists() and output == "hold=true\n"
+	assert "outcome=dispatched cycle=6" in result.stdout
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+
+
+@pytest.mark.parametrize("mode", ["gate", "status", "report"])
+def test_incomplete_shallow_extension_never_grants_or_denies_a_cycle(tmp_path: Path, mode: str) -> None:
+	comments = [_comment(_marker("pending" if mode == "report" else "findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	marker_file = tmp_path / "unshallowed"
+	env = {
+		"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_ANCESTORS": OLD,
+		"FAKE_GIT_INCOMPLETE_ANCESTRY": "true", "FAKE_GIT_UNSHALLOW_MARKER": str(marker_file),
+		"FAKE_GIT_FETCH_FAIL": "true" if mode != "status" else "false",
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "0",
+	}
+	result, calls, output = _run(tmp_path, mode, comments=comments, env=env)
+	assert result.returncode == 0 and "reason=extensions_unverifiable" in result.stdout
+	assert not marker_file.exists() and "exhausted=true" not in output
+	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
+	if mode == "status":
+		assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" in result.stdout
+		assert output == ""
+	else:
+		assert output == ("hold=true\n" if mode == "gate" else "")
 
 
 def test_extension_marker_from_another_author_is_ignored(tmp_path: Path) -> None:
