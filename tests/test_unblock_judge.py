@@ -515,6 +515,10 @@ if method == "POST" and endpoint.endswith("/labels"):
 	state["labels_added"].append([endpoint, f.get("labels[]")])
 	done("{}")
 if method == "DELETE":
+	if os.environ.get("FAKE_GH_FAIL_DELETE"):
+		json.dump(state, open(state_path, "w"))
+		print("gh: Not Found (HTTP " + os.environ["FAKE_GH_FAIL_DELETE"] + ")", file=sys.stderr)
+		sys.exit(1)
 	state["labels_removed"].append(endpoint)
 	done("{}")
 if method == "PATCH":
@@ -870,6 +874,19 @@ def test_failed_close_does_not_add_terminal_label(tmp_path: Path) -> None:
 	assert state["labels_added"] == []
 
 
+@pytest.mark.parametrize("delete_status,should_approve", [("404", True), ("500", False)])
+def test_label_removed_concurrently_does_not_block_approval(tmp_path: Path, delete_status: str, should_approve: bool) -> None:
+	blocked = dict(ISSUE, labels=[{"name": "ai:scope-blocked"}])
+	plan = _comment("Implementation plan", created_at="2026-10-04T10:00:00Z")
+	plan["author_association"] = "OWNER"
+	result, state = _judge(tmp_path, blocked, comments=[plan],
+		verdict={"verdict": "retry_budget", "reason": "retry safely", "instructions": "try once more"},
+		FAKE_GH_FAIL_DELETE=delete_status)
+	assert ("reason=actuation_failed" not in result.stdout) == should_approve
+	assert any(comment["body"] == "/approved" for comment in state["comments"]) == should_approve
+	assert any(label == "ai:awaiting-approval" for _, label in state["labels_added"]) == should_approve
+
+
 def test_closed_item_still_alerts_when_terminal_label_fails(tmp_path: Path) -> None:
 	support = tmp_path / "support"
 	(support / "scripts").mkdir(parents=True)
@@ -892,6 +909,26 @@ def test_closed_item_still_alerts_when_terminal_label_fails(tmp_path: Path) -> N
 		SUPPORT_DIR=str(support), FAKE_GH_FAIL_CLOSE="1", FAKE_TG_ALERTS=str(alerts))
 	assert "reason=actuation_failed" in result.stdout
 	assert alerts.read_text(encoding="utf-8").splitlines() == ["CRITICAL"]
+
+
+def test_project_label_failure_sends_critical_without_claiming_it_closed(tmp_path: Path) -> None:
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	(support / "prompts").mkdir()
+	for name in ("unblock_ledger.py", "unblock_actions.py"):
+		(support / "scripts" / name).symlink_to(ROOT / "scripts" / name)
+	(support / "prompts" / "mode-judge-unblock.txt").symlink_to(ROOT / "prompts" / "mode-judge-unblock.txt")
+	(support / "scripts" / "tg_helpers.sh").write_text(
+		'tg_send_msg() { printf "%s\\n" "$1" >> "$FAKE_TG_ALERTS"; }\n', encoding="utf-8",
+	)
+	alerts = tmp_path / "alerts.txt"
+	project = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, project, verdict={"verdict": "close", "reason": "nothing left"},
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts))
+	assert "op=add_labels issue=7 label=ai:unblock-closed outcome=failed" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
+	assert state["patched"] == []
+	assert "could not mark project #7 for closure" in alerts.read_text(encoding="utf-8")
 
 
 def test_judge_closes_without_the_model_when_the_caps_are_spent(tmp_path: Path) -> None:

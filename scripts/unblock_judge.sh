@@ -165,8 +165,12 @@ unblock_run_ops()
 				;;
 			remove_label)
 				label="$(jq -r ".ops[${idx}].label" "${ops_file}")"
-				gh api -X DELETE "repos/${REPOSITORY}/issues/${issue}/labels/$(jq -rn --arg l "${label}" '$l | @uri')" >/dev/null 2>&1 \
-					|| { ops_failed="true"; unblock_log "item=${ITEM} op=remove_label issue=${issue} label=${label} outcome=failed"; }
+				if ! gh api -X DELETE "repos/${REPOSITORY}/issues/${issue}/labels/$(jq -rn --arg l "${label}" '$l | @uri')" >/dev/null 2> "${RUNTIME_DIR}/remove_label_error.txt"; then
+					if ! grep -q 'HTTP 404' "${RUNTIME_DIR}/remove_label_error.txt"; then
+						ops_failed="true"
+						unblock_log "item=${ITEM} op=remove_label issue=${issue} label=${label} outcome=failed"
+					fi
+				fi
 				;;
 			create_issue)
 				local -a create_args=(-f "title=$(jq -r ".ops[${idx}].title" "${ops_file}")" -f "body=$(jq -r ".ops[${idx}].body" "${ops_file}")")
@@ -283,7 +287,12 @@ PY
 					|| { ops_failed="true"; unblock_log "item=${ITEM} op=dispatch_review pr=${number} outcome=failed"; }
 				;;
 			telegram)
-				[ "${ops_failed}" = "true" ] && [ "${close_succeeded}" != "true" ] && continue
+				if [ "${ops_failed}" = "true" ] && [ "${close_succeeded}" != "true" ]; then
+					if [ "${ITEM_KIND}" = "project" ] && [ "$(jq -r ".ops[${idx}].level" "${ops_file}")" = "CRITICAL" ]; then
+						unblock_tg "CRITICAL" "Unblock judge could not mark project #${ITEM} for closure; label write failed (${REPOSITORY})."
+					fi
+					continue
+				fi
 				unblock_tg "$(jq -r ".ops[${idx}].level" "${ops_file}")" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
 				;;
 			*)

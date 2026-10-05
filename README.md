@@ -2672,7 +2672,10 @@ and resolver chains, a failed project) now goes to the unblock judge
   For an issue or PR, a failed close leaves the terminal label unset so a
   later scan can retry. If the close succeeds but adding the label fails,
   the judge logs the failure and still sends the CRITICAL alert; the closed
-  item cannot be rediscovered by the open-item scan.
+  item cannot be rediscovered by the open-item scan. If a project's label
+  write fails, it remains blocked and a CRITICAL alert reports that closure
+  is pending; the poller cannot abandon it without the label. An already-absent
+  block label does not prevent the judge from posting the resume command.
 
 A person can still act on any blocked item at any time; the judge only
 picks up what is still blocked. `UNBLOCK_JUDGE_ENABLED=false` turns all of
