@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:389-399, 490-491, 1383-1391 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A `GIT_DIR+=... git push ...` prefix marks the Git directory uncertain, but the push path does not escalate that warning to confirmation.\n  WHY: The push can use the repository selected by the appended `GIT_DIR`, while the guard checks PR history for the session checkout and may allow a push to a merged branch in the selected repository.\n- .claude/hooks/pr_merge_status_guard.py:118, 233-248, 705-750, 1359-1371 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The updated redirect-aware parser is not used by the preliminary `git_subcommands` check.\n  WHY: That check tokenizes `>/tmp/out git commit -m x` as a segment beginning with the redirection target, so it does not recognize the guarded Git command; `_evaluate_bash` then returns before reaching the updated parser, allowing a commit or push with a leading redirection to bypass the PreToolUse merged-PR guard and execute without its authorization check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:389-399, 490-491, 1383-1391 | severity=high | confidence=5\n  PROBLEM: A `GIT_DIR+=... git push ...` prefix marks the Git directory uncertain, but the push path does not escalate that warning to confirmation.\n  WHY: The push can use the repository selected by the appended `GIT_DIR`, while the guard checks PR history for the session checkout and may allow a push to a merged branch in the selected repository.\n- .claude/hooks/pr_merge_status_guard.py:118, 233-248, 705-750, 1359-1371 | severity=high | confidence=5\n  PROBLEM: The updated redirect-aware parser is not used by the preliminary `git_subcommands` check.\n  WHY: That check tokenizes `>/tmp/out git commit -m x` as a segment beginning with the redirection target, so it does not recognize the guarded Git command; `_evaluate_bash` then returns before reaching the updated parser.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "759a25302b0ce2d57b1e3cebf49e1231142840b587c8cf96a0eb74ea94f420af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6187,
+    "run_id": "37254142395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37254142395",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005024311_4b895747aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6187,
+    "run_id": "37254142395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T02:43:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
