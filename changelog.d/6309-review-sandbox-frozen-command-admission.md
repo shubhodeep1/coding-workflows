@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Review autofix keeps Claude command admission fixed throughout an editor run.** A command's template twin must exist in both the PR worktree and the verified workflow-support checkout when the sandbox snapshot is taken. A PR-added twin absent from trusted support, or one added during a transfer, cannot make the command eligible on a later retry. Missing or malformed admission state stops the transfer with a specific error instead of falling back to the mutable host checkout.
