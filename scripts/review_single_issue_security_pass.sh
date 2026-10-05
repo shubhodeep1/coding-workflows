@@ -138,6 +138,7 @@ single_pass_markers()
 single_pass_extensions()
 {
 	local comments_file="$1" audited_head="$2" checkout="$3" branch_ref="$4" count=0 extension_line extension_sha extension_lines extension_ancestor_rc
+	local -A single_pass_extension_seen=()
 	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] || [ ! -s "${comments_file}" ] \
 		|| [ "$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" != "${audited_head}" ]; then
 		return 1
@@ -153,6 +154,10 @@ single_pass_extensions()
 	while IFS= read -r extension_line; do
 		if [[ "${extension_line}" =~ ${SECURITY_PASS_EXTENSION_MARKER_RE} ]]; then
 			extension_sha="${BASH_REMATCH[1]}"
+			if [ -n "${single_pass_extension_seen[${extension_sha}]:-}" ]; then
+				continue
+			fi
+			single_pass_extension_seen["${extension_sha}"]=1
 			if ! git -C "${checkout}" cat-file -e "${extension_sha}^{commit}" 2>/dev/null; then
 				if [ "$(git -C "${checkout}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
 					# An absent object in a shallow clone may be a real fix outside

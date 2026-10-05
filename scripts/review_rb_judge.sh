@@ -2167,6 +2167,11 @@ ${RB_FIX_DESC}"
             rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes || exit 1
             exit 0
           fi
+          if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
+            echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+            echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
@@ -2180,6 +2185,11 @@ ${RB_FIX_DESC}"
         echo "Judge produced no file changes. Treating as merge."
         if [ "${RB_SECURITY_MODE:-false}" = "true" ] && { ! [[ "${RB_SECURITY_BLOCKING_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${RB_SECURITY_BLOCKING_COUNT}" -gt 0 ]; }; then
           rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes || exit 1
+          exit 0
+        fi
+        if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
+          echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+          echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"

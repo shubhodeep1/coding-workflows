@@ -530,6 +530,7 @@ jobs:
 > A marker posted before a failed push does not grant a cycle: only a fix
 > commit reachable from the audited branch head counts. If the checkout does
 > not match that head, the gate holds and the audit report skips publication.
+> Duplicate extension comments for the same fix commit still grant one cycle.
 
 > **Warning — do NOT add a top-level `concurrency` block to this wrapper.**
 > The reusable workflow already manages concurrency at the job level. Adding a

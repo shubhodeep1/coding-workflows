@@ -39,6 +39,8 @@ args = sys.argv[1:]
 if args == ["api", "--paginate", "--slurp", "repos/o/r/issues?labels=ai:security&state=open&per_page=100"]:
 	if os.environ.get("FAKE_GH_FAIL") == "issues":
 		sys.exit(1)
+	if os.environ.get("FAKE_GH_FAIL") == "issues_once" and sum("issues?labels=ai:security" in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
+		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL") == "malformed_pages":
 		print('[[], {}]')
 	else:
@@ -55,8 +57,11 @@ if args == ["api", "--paginate", "--slurp", "repos/o/r/issues/42/comments?per_pa
 	sys.exit(0)
 if args[:2] == ["api", "repos/o/r/issues/42/labels"] and os.environ.get("FAKE_GH_FAIL") == "labels":
 	sys.exit(1)
-if args[:2] == ["api", "repos/o/r/issues/42/comments"] and os.environ.get("FAKE_GH_FAIL") == "comment":
-	sys.exit(1)
+if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
+	if os.environ.get("FAKE_GH_FAIL") == "comment":
+		sys.exit(1)
+	if os.environ.get("FAKE_GH_FAIL") == "comment_once" and sum("repos/o/r/issues/42/comments" in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
+		sys.exit(1)
 sys.exit(0)
 '''
 
@@ -113,7 +118,7 @@ def _run(tmp_path: Path, script: str, env: dict | None = None, with_pass: bool =
 	}
 	run_env.update(env or {})
 	result = subprocess.run(
-		["bash", "-c", f'set -euo pipefail; source "{HELPER}"; {script}'],
+		["bash", "-c", f'set -euo pipefail; gh_retry() {{ "$@" || "$@"; }}; source "{HELPER}"; {script}'],
 		capture_output=True, text=True, env=run_env, check=False,
 	)
 	gh_calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line]
@@ -159,6 +164,13 @@ def test_findings_lookup_failure_writes_a_note(tmp_path: Path) -> None:
 	result, _, _ = _run(tmp_path, f'rb_security_findings_render claude/heal-evidence-bundle "{out}"', {"FAKE_GH_FAIL": "issues"})
 	assert result.returncode != 0
 	assert "Could not list" in out.read_text(encoding="utf-8")
+
+
+def test_findings_lookup_retries_transient_failure(tmp_path: Path) -> None:
+	out = tmp_path / "findings.txt"
+	result, gh_calls, _ = _run(tmp_path, f'rb_security_findings_render claude/heal-evidence-bundle "{out}"', {"FAKE_GH_FAIL": "issues_once"})
+	assert result.returncode == 0 and "#6246" in out.read_text(encoding="utf-8")
+	assert len(gh_calls) == 2
 
 
 def test_findings_on_later_pages_are_included(tmp_path: Path) -> None:
@@ -342,6 +354,12 @@ def test_extension_marker_is_posted_for_the_fixed_head(tmp_path: Path) -> None:
 	assert body.rstrip().splitlines()[-1] == f"<!-- ai:single-issue-security-pass-extension:v1 head={HEAD} -->"
 
 
+def test_extension_marker_retries_transient_failure(tmp_path: Path) -> None:
+	result, gh_calls, _ = _run(tmp_path, f"rb_security_post_extension {HEAD}", {"FAKE_GH_FAIL": "comment_once"})
+	assert result.returncode == 0
+	assert len([call for call in gh_calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == 2
+
+
 def test_extension_marker_failure_only_warns(tmp_path: Path) -> None:
 	# Retain the existing test identifier; the failure is now fatal.
 	result, _, _ = _run(tmp_path, f"rb_security_post_extension {HEAD}; echo DONE", {"FAKE_GH_FAIL": "comment"})
@@ -376,6 +394,23 @@ def test_judge_script_wiring() -> None:
 	assert text.index('merged_pr_unsafe_action') < text.index('RB_SECURITY_SEVERITY_DECISION="$(rb_security_severity_block') < text.index('post_review_blocked_assessment \\') < gate_at
 	assert text.count('rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes') == 2
 	assert text.index('rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" final_round') < gate_at
+
+
+def test_noop_fix_merge_paths_hold_before_labelling_issues(tmp_path: Path) -> None:
+	text = JUDGE.read_text(encoding="utf-8")
+	for message in ("Judge staged no effective changes. Treating as merge.", "Judge produced no file changes. Treating as merge."):
+		branch = text.split(f'echo "{message}"\n', 1)[1].split('ensure_label_exists "ai:ready-to-merge"', 1)[0]
+		assert '! rb_security_merge_gate' in branch
+		assert 'echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"' in branch
+		assert 'exit 0' in branch
+		output = tmp_path / "judge_output"
+		output.write_text("", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", 'set -euo pipefail; rb_security_merge_gate() { return 1; }; ' + branch + 'echo LABELS_ALLOWED'],
+			env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(output)}, capture_output=True, text=True,
+		)
+		assert result.returncode == 0 and "LABELS_ALLOWED" not in result.stdout
+		assert output.read_text(encoding="utf-8") == "judge_handled=true\njudge_action=security_hold\n"
 
 
 def test_review_workflow_runs_the_judge_on_security_exhaustion() -> None:
