@@ -347,3 +347,81 @@ def test_review_job_resolves_the_utility_roles() -> None:
 	steps = yaml.safe_load(_read(WORKFLOWS / "review_autofix.yml"))["jobs"]["codex-agent"]["steps"]
 	resolve = next(step for step in steps if step.get("name") == "Resolve AI engine")
 	assert "for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE SUMMARISER BEHAVIOURAL_SMOKE; do" in resolve["run"]
+
+
+# ---- implement issue summary (Q43: SUMMARISER) ----
+
+def _implement_job_steps() -> list[dict]:
+	jobs = yaml.safe_load(_read(WORKFLOWS / "implement.yml"))["jobs"]
+	return next(spec["steps"] for spec in jobs.values() if any(step.get("name") == "Generate AI issue summary for PR comment" for step in spec.get("steps", [])))
+
+
+def test_implement_job_resolves_the_summariser() -> None:
+	steps = _implement_job_steps()
+	resolve = next(step for step in steps if step.get("name") == "Resolve AI engine")
+	assert "for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE SUMMARISER; do" in resolve["run"]
+	assert resolve["env"]["AI_ENGINE_SUMMARISER"] == "${{ vars.AI_ENGINE_SUMMARISER || '' }}"
+
+
+def _run_issue_summary(tmp_path: Path, *, resolved: str, mode: str) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	run = next(step for step in _implement_job_steps() if step.get("name") == "Generate AI issue summary for PR comment")["run"]
+	support = tmp_path / "support"
+	support.mkdir()
+	(support / "ai_engine.sh").write_text(FAKE_ENGINE, encoding="utf-8")
+	(support / "workspace_safety_check.sh").write_text("exit 0\n", encoding="utf-8")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	codex = bin_dir / "codex"
+	codex.write_text('#!/usr/bin/env bash\necho "codex $*" >> "${CALLS}.codex"\nprintf "### AI Issue Summary\\n- codex\\n"\n', encoding="utf-8")
+	codex.chmod(0o755)
+	sleep = bin_dir / "sleep"
+	sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	sleep.chmod(0o755)
+	(tmp_path / "issue.json").write_text('{"title": "T", "html_url": "u", "body": "B", "labels": []}', encoding="utf-8")
+	(tmp_path / "plan.md").write_text("plan\n", encoding="utf-8")
+	calls = tmp_path / "calls"
+	base_env = {key: value for key, value in os.environ.items() if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY"}}
+	env = dict(
+		base_env,
+		CALLS=str(calls),
+		MODE=mode,
+		CLAUDE_ANSWER="### AI Issue Summary\n- claude",
+		AI_ENGINE_RESOLVED_SUMMARISER=resolved,
+		IMPLEMENT_STAGED_SUPPORT_RUN_DIR=str(support),
+		ISSUE_SUMMARY_PROMPT_FILE=str(tmp_path / "summary_prompt.txt"),
+		ISSUE_SUMMARY_FILE=str(tmp_path / "summary.md"),
+		ISSUE_META_FILE=str(tmp_path / "issue.json"),
+		PLAN_FILE=str(tmp_path / "plan.md"),
+		RUNTIME_DIR=str(tmp_path),
+		MODEL_EDITOR="gpt-test",
+		PATH=f"{bin_dir}:{os.environ['PATH']}",
+	)
+	proc = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
+	return proc, (calls.read_text(encoding="utf-8") if calls.exists() else ""), (Path(f"{calls}.codex").read_text(encoding="utf-8") if Path(f"{calls}.codex").exists() else "")
+
+
+def test_issue_summary_on_claude_runs_read_only_and_never_codex(tmp_path: Path) -> None:
+	proc, calls, codex_calls = _run_issue_summary(tmp_path, resolved="claude", mode="success")
+	assert proc.returncode == 0, proc.stderr
+	assert calls.splitlines() == [f"SUMMARISER|issue_summary_combined_prompt.txt|summary.md|{tmp_path}|claude|true|unset"]
+	assert codex_calls == ""
+	assert (tmp_path / "summary.md").read_text(encoding="utf-8") == "### AI Issue Summary\n- claude\n"
+	assert "Summary generated on attempt 1." in proc.stdout
+
+
+def test_issue_summary_on_codex_or_unavailable_runs_the_unchanged_codex_call(tmp_path: Path) -> None:
+	for index, (resolved, mode) in enumerate((("codex", "success"), ("claude", "unavailable"))):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, _calls, codex_calls = _run_issue_summary(work, resolved=resolved, mode=mode)
+		assert proc.returncode == 0, proc.stderr
+		assert codex_calls.splitlines() == ["codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model gpt-test --sandbox danger-full-access"]
+		assert (work / "summary.md").read_text(encoding="utf-8") == "### AI Issue Summary\n- codex\n"
+
+
+def test_issue_summary_claude_crash_retries_without_codex(tmp_path: Path) -> None:
+	proc, calls, codex_calls = _run_issue_summary(tmp_path, resolved="claude", mode="crash")
+	assert proc.returncode == 0, proc.stderr
+	assert len(calls.splitlines()) == 3
+	assert codex_calls == ""
+	assert proc.stdout.count("::warning::Summary generation attempt") == 3

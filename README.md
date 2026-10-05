@@ -1888,7 +1888,8 @@ poller's security pass), `CHECK_TRIAGE` (`check_failure_triage.yml`),
 `WORKFLOW_HEAL` (`workflow-failure-heal-intake.yml`), `LOG_ANALYSIS`,
 `LOG_AUDIT` and `RETRO` (`workflow-log-analysis.yml` and
 `scripts/workflow_retro_fanout.sh`), and the review utility roles
-`SUMMARISER` and `BEHAVIOURAL_SMOKE` (read-only tool profile). Still on
+`SUMMARISER` and `BEHAVIOURAL_SMOKE` (read-only tool profile; `SUMMARISER`
+also writes `implement.yml`'s AI issue summary PR comment). Still on
 `codex`: `LOG_SUMMARY` (an OpenRouter HTTP call, not a CLI call) and
 `MATERIALITY` (no model call today), plus `ACTIVATION_VERIFY` and
 `UNBLOCK_JUDGE`, which their own phases wire.
