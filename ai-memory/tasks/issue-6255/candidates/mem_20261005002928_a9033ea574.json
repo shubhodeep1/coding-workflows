@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How far should the fix go beyond restoring parity between `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md`?\nChoices:\nA. Parity only, as the issue suggests. The regression check is the existing `test_template_parity`, run in a normal checkout. Risk: the editor sandbox still can't run that test, so the same failure can come back on any PR whose editor runs it.\nB. Parity, plus two hardening changes that keep the transfer rejection. First, the editor prompt in `scripts/review_apply_fixes.sh` lists the paths left out of the sandbox snapshot (such as `.claude/commands/`). It says a test that reads those paths fails for sandbox reasons and must not be \"fixed\" by creating them. Second, the `unsafe_directory` error names the rejected directory in a bounded, path-safe way (`scripts/review_untrusted_workspace.py`). Contract and regression tests cover both. (RECOMMENDED)\nC. Parity, plus a read-only copy of `.claude/commands/` inside the sandbox snapshot, so the test can run there. The enumerator drops that directory from the transfer instead of rejecting it. **Note:** this changes the isolation boundary, and the editor's edits under `.claude/commands/` would be dropped without any error.\nQ2: Which copy of `audit-plans.md` should be treated as correct when making the two match? (The root copy is not visible in this sandbox, so the direction can't be checked here.)\nChoices:\nA. Always copy the `workflow-templates/` version onto the root `.claude/commands/audit-plans.md`, as the issue says.\nB. Treat the copy PR #6208 intentionally changed on `claude/replace-claude-sessions-phase-5c` as correct, and copy it to the other location. Either way, the result must pass every assertion in `tests/test_audit_plans_command.py`. (RECOMMENDED)\nC. Merge the two by hand, keeping the content from each that the test file asserts.",
+  "fingerprint": "66fdb6c4a4059135de85efb9b9f7fb48cd0509890dc3115b875412b6ec1aedd5",
+  "lineage": {
+    "issue_number": 6255,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37247189319",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37247189319",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005002928_a9033ea574",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6255,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37247189319"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6255 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T00:29:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
