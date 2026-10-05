@@ -63,20 +63,34 @@ emit_system_instructions() {
 	echo
 }
 
+_static_context_regular_file() {
+	if [ -L "$1" ]; then
+		echo "::warning::$1 is a symbolic link; omitted from the static context." >&2
+		return 1
+	fi
+	[ -f "$1" ]
+}
+
 emit_agents_md() {
 	# Implement phase: include canonical-from-coding-workflows agents_canonical.md
 	# (staged from .codex-workflow-src) followed by the consumer repo's own
 	# agents.md if present. Other phases just emit the local agents.md.
 	# Guard RUNTIME_DIR explicitly under set -u.
+	local local_agents_regular
 	case "${phase}" in
 		implement)
-			if { [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; } || [ -f agents.md ]; then
+			if _static_context_regular_file agents.md; then
+				local_agents_regular=true
+			else
+				local_agents_regular=false
+			fi
+			if { [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; } || [ "$local_agents_regular" = true ]; then
 				echo "=== AGENTS.MD ==="
 				if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; then
 					cat "${RUNTIME_DIR}/agents_canonical.md"
 					echo
 				fi
-				if [ -f agents.md ]; then
+				if [ "$local_agents_regular" = true ]; then
 					echo "=== REPO-SPECIFIC AGENTS.MD ==="
 					cat agents.md
 					echo
@@ -84,7 +98,7 @@ emit_agents_md() {
 			fi
 			;;
 		*)
-			if [ -f agents.md ]; then
+			if _static_context_regular_file agents.md; then
 				echo "=== AGENTS.MD ==="
 				cat agents.md
 				echo
@@ -94,7 +108,7 @@ emit_agents_md() {
 }
 
 emit_readme_trimmed() {
-	if [ -f README.md ]; then
+	if _static_context_regular_file README.md; then
 		echo "=== README.MD (trimmed) ==="
 		# Keep overview/setup/conventions; exclude wrapper-workflow + automation runbooks.
 		awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md

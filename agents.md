@@ -471,6 +471,8 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- Host-side static-context reads of checkout-controlled `README.md` and
+  `agents.md` skip symbolic links rather than following them into prompt text.
 - The review gate's existing PR read validates the same-repository head and
   exports `review_checkout_sha` only for a 40-hex SHA. `Checkout repo` uses
   that SHA for every PR event, so reviewer and other `GITHUB_WORKSPACE` file
