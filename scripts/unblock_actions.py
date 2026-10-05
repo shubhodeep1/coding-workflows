@@ -10,9 +10,15 @@ the network; the shell only executes.
   plan --verdict-file PATH --context-file PATH
       PATH of --verdict-file is `unblock_ledger.py validate` output. The
       context is `{"repo", "kind", "item", "stop", "labels", "tracking",
-      "has_plan", "linked_issue", "title"}` (`tracking` is the project's
-      tracking issue number for a project item or a child issue, else null;
-      `has_plan` is true when the issue already has an implementation plan).
+       "has_plan", "linked_issue", "title", "security_finding_id",
+       "pr_trusted", "pr_author",
+       "pr_head_repo", "pr_head_sha"}` (`tracking` is the project's
+       tracking issue number for a project item or a child issue, else null;
+       `has_plan` is true when the issue already has an implementation plan;
+       `security_finding_id` is optional and validated before reuse).
+       PR provenance is validated again here; missing or malformed fields fail
+       closed for issue-creating PR verdicts. Trusted PR-derived issue bodies
+       carry an audit-only `ai:unblock-provenance:v1` marker.
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
@@ -51,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -59,6 +66,9 @@ PROJECT_VALIDATION_STOPS = ("validation-failed", "validate-failed", "harness-bro
 CLARIFY_STOPS = ("clarify-failed", "clarify-respond-failed", "plan-failed")
 GUARD_STOPS = ("scope-blocked", "destructive-blocked")
 CLOSED_LABEL = "ai:unblock-closed"
+SECURITY_LABEL = "ai:security"
+SECURITY_FINDING_MARKER_PREFIX = "<!-- ai:security-finding:"
+SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 MAX_COMMAND_TEXT = 300
 
 
@@ -104,6 +114,23 @@ def _context(raw: object) -> dict:
 	labels = raw.get("labels") or []
 	if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
 		raise UsageError("context 'labels' must be a list of strings")
+	finding_id = raw.get("security_finding_id")
+	if not isinstance(finding_id, str) or not SECURITY_FINDING_ID_RE.fullmatch(finding_id):
+		finding_id = None
+	pr_author = raw.get("pr_author")
+	pr_head_repo = raw.get("pr_head_repo")
+	pr_head_sha = raw.get("pr_head_sha")
+	pr_trusted = (
+		kind == "pr"
+		and raw.get("pr_trusted") is True
+		and isinstance(pr_author, str)
+		and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?", pr_author) is not None
+		and isinstance(pr_head_repo, str)
+		and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", pr_head_repo) is not None
+		and pr_head_repo.lower() == str(raw.get("repo") or "").lower()
+		and isinstance(pr_head_sha, str)
+		and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", pr_head_sha) is not None
+	)
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -114,11 +141,46 @@ def _context(raw: object) -> dict:
 		"has_plan": raw.get("has_plan") is True,
 		"linked_issue": linked,
 		"title": _one_line(raw.get("title") or ""),
+		"security_finding_id": finding_id,
+		"pr_trusted": pr_trusted,
+		"pr_author": pr_author if pr_trusted else "",
+		"pr_head_repo": pr_head_repo if pr_trusted else "",
+		"pr_head_sha": pr_head_sha if pr_trusted else "",
 	}
+
+
+def _provenance_line(ctx: dict) -> str:
+	if ctx["kind"] != "pr" or not ctx["pr_trusted"]:
+		return ""
+	return (
+		f"<!-- ai:unblock-provenance:v1 source_pr={ctx['item']} author={ctx['pr_author']} "
+		f"head_repo={ctx['pr_head_repo']} head_sha={ctx['pr_head_sha']} -->"
+	)
+
+
+def _untrusted_pr_ops(ctx: dict, verdict_name: str) -> list[dict]:
+	item = ctx["item"]
+	return [
+		{
+			"op": "comment", "issue": item,
+			"body": (
+				f"Unblock judge could not act on `{verdict_name}`: this PR's head or author "
+				"could not be verified as trusted. No issue was opened from its content; "
+				"the PR is being closed. A maintainer can reopen it or open an issue by hand."
+			),
+		},
+		{"op": "close", "issue": item, "reason": "not_planned", "pr": True},
+		{"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]},
+		{"op": "telegram", "level": "WARNING", "text": f"Unblock judge closed untrusted PR #{item} instead of acting on verdict {verdict_name}; no issue was created."},
+	]
 
 
 def _stop_label(stop: str) -> str:
 	return f"ai:{stop}" if stop and stop != "project-failed" else ""
+
+
+def _is_security_issue(ctx: dict) -> bool:
+	return ctx["kind"] == "issue" and SECURITY_LABEL in ctx["labels"]
 
 
 def _approve(issue: int, labels: list[str], drop: str) -> list[dict]:
@@ -190,6 +252,8 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 			" (a feature flag that defaults off, or a placeholder env var that makes the code skip safely).",
 		]
 	lines += ["", f"Why: {verdict['reason']}"]
+	if _provenance_line(ctx):
+		lines += ["", _provenance_line(ctx)]
 	return "\n".join(lines)
 
 
@@ -215,6 +279,8 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	name = verdict.get("verdict")
 	item = ctx["item"]
 	ops: list[dict] = []
+	if ctx["kind"] == "pr" and not ctx["pr_trusted"] and name in ("reissue", "descope", "operator_step", "accept_with_followup"):
+		return _untrusted_pr_ops(ctx, name)
 	if name == "retry_budget":
 		ops += [{"op": "comment", "issue": item, "body": f"Next attempt, per the unblock judge: {verdict['instructions']}"}]
 		ops += reset_ops(ctx, verdict["instructions"])
@@ -262,10 +328,14 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	elif name == "reissue":
 		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
+		security_issue = _is_security_issue(ctx)
+		if security_issue and not ctx["tracking"] and ctx.get("security_finding_id"):
+			body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['security_finding_id']} -->\n{body}"
+		labels = [SECURITY_LABEL] if security_issue else []
 		if ctx["kind"] == "pr":
 			# PR body lineage is author-controlled; never route its reissue
 			# into an unverified project or reapprove an issue the close event closes.
-			ops.append({"op": "create_issue", "title": title, "body": body, "labels": [], "wait_on": None})
+			ops.append({"op": "create_issue", "title": title, "body": body + "\n\n" + _provenance_line(ctx), "labels": [], "wait_on": None})
 			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": True})
 		elif ctx["tracking"]:
 			ops.append(
@@ -282,22 +352,35 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 					),
 				}
 			)
-			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
+			if not security_issue:
+				ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
 		else:
-			ops.append({"op": "create_issue", "title": title, "body": body, "labels": [], "wait_on": None})
-			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
+			ops.append({"op": "create_issue", "title": title, "body": body, "labels": labels, "wait_on": None})
+			if not security_issue or ctx.get("security_finding_id"):
+				ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
+		if security_issue and (ctx["tracking"] or not ctx.get("security_finding_id")):
+			location = f"the re-issue request recorded on tracking issue #{ctx['tracking']}" if ctx["tracking"] else "the newest issue that links this one"
+			ops.append({"op": "comment", "issue": item, "body": f"This security finding stays open; it is tracked here until a linked fix is merged. Re-issue: see {location}."})
 	elif name == "accept_with_followup":
+		followup_body = "\n".join([f"Accepted with this follow-up by the unblock judge (#{item}).", "", f"Follow-up: {verdict['instructions']}"])
+		if ctx["kind"] == "pr":
+			followup_body += "\n\n" + _provenance_line(ctx)
 		ops.append(
 			{
 				"op": "create_issue",
 				"title": f"Follow-up to #{item}: {ctx['title']}"[:240],
-				"body": "\n".join([f"Accepted with this follow-up by the unblock judge (#{item}).", "", f"Follow-up: {verdict['instructions']}"]),
+				"body": followup_body,
 				"labels": [],
 				"wait_on": None,
 			}
 		)
 		ops += reset_ops(ctx, f"accepted with a follow-up issue: {verdict['reason']}")
 	elif name == "close":
+		if _is_security_issue(ctx):
+			ops.append({"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]})
+			ops.append({"op": "comment", "issue": item, "body": "The unblock judge has no verdicts left for this security finding. It stays open until a linked fix is merged.\n\nWhy: " + _one_line(verdict["reason"])})
+			ops.append({"op": "telegram", "level": "CRITICAL", "text": f"Unblock judge kept security finding #{item} open ({ctx['stop']}): {_one_line(verdict['reason'])}; a person must fix or triage it"})
+			return ops
 		if ctx["kind"] != "project":
 			# A project's tracking issue is closed by the poller, which also
 			# sets its state to abandoned (the close goes through the API, §19).

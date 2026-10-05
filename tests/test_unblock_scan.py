@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
+import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -205,6 +208,197 @@ def test_project_hooks_run_before_the_command_handlers() -> None:
 	assert 'split("\\n") | map(rtrimstr("\\r"))' in text
 	assert '($failed[0] | unique) as $all_projects' in text
 	assert '((now / 300 | floor) % ($all_projects | length)) as $offset' in text
+
+
+def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | None = None, state: dict | None = None,
+	trusted_members: list[int] | None = None, include_trusted_state_comment: bool = True,
+	trusted_integration_branch: str | None = None) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index("handle_unblock_judge_project_hooks() {")
+	hook = text[start:text.index("\n}\n", start) + 3]
+	state_file = tmp_path / "project.json"
+	current = state or {"integration_branch": "orchestrator/project-40", "current_wave": 1,
+		"status": "failed", "issue_number_map": {f"issue-{n}": n for n in members}, "waves": [{"issues": []}]}
+	state_file.write_text(json.dumps(current), encoding="utf-8")
+	pr_calls = tmp_path / "pr_calls"
+	creates = tmp_path / "creates"
+	trusted_state = dict(current, issue_number_map={f"issue-{n}": n for n in (members if trusted_members is None else trusted_members)},
+		integration_branch=trusted_integration_branch or current["integration_branch"])
+	payload = json.dumps(trusted_state).encode("utf-8")
+	manifest = hashlib.sha256(payload).hexdigest()
+	comments = [{"user": {"login": BOT}, "body": f"<!-- ai:unblock-fixup-request:v1 item={item} id=unblock-{item}-r1 -->\n### Narrow the fix\nOnly this part."}]
+	if include_trusted_state_comment:
+		comments.insert(0, {"user": {"login": BOT}, "body": f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={manifest} -->\n{base64.b64encode(payload).decode('ascii')}\nORCHESTRATOR_STATE_V2 -->"})
+	if trusted_members is not None:
+		forged_payload = json.dumps(current).encode("utf-8")
+		forged_manifest = hashlib.sha256(forged_payload).hexdigest()
+		comments.insert(1, {"user": {"login": "mallory"},
+			"body": f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={forged_manifest} -->\n{base64.b64encode(forged_payload).decode('ascii')}\nORCHESTRATOR_STATE_V2 -->"})
+	harness = '''
+has_label() { return 1; }
+unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN=pipeline-bot; }
+_fetch_pr_json() { echo "$1" >> "$PR_CALLS_FILE"; printf '%s\\n' "$MOCK_PR_JSON"; }
+ensure_label_exists() { :; }
+engine_label_create_args() { :; }
+gh_retry() {
+	if [ "$1 $2 $3" = "gh issue create" ]; then
+		echo create >> "$CREATES_FILE"
+		echo https://github.com/o/r/issues/901
+	fi
+}
+post_state_comment() { :; }
+post_tracking_comment() { :; }
+''' + hook + '\nhandle_unblock_judge_project_hooks\n'
+	env = dict(os.environ, STATE_FILE=str(state_file), PR_CALLS_FILE=str(pr_calls), CREATES_FILE=str(creates),
+		MOCK_PR_JSON=json.dumps(pr) if pr is not None else "{}", TRACKING_NUM="40", TRACKING_LABELS="[]",
+		GITHUB_REPOSITORY="o/r", PROJECT_STATUS="failed", COMMENTS=json.dumps(comments), UNBLOCK_JUDGE_ENABLED="true")
+	result = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, check=False)
+	return result, json.loads(state_file.read_text(encoding="utf-8")), pr_calls.read_text().splitlines() if pr_calls.exists() else [], creates.read_text().splitlines() if creates.exists() else []
+
+
+@pytest.mark.parametrize("item,members", [(5, [5]), (40, [])])
+def test_fixup_hook_accepts_project_members_without_pr_read(tmp_path: Path, item: int, members: list[int]) -> None:
+	result, state, calls, creates = _run_fixup_hook(tmp_path, item, members)
+	assert result.returncode == 0, result.stderr
+	assert calls == [] and creates == ["create"]
+	assert state["issue_number_map"][f"unblock-{item}-r1"] == 901
+
+
+def test_fixup_hook_accepts_verified_same_repo_pr(tmp_path: Path) -> None:
+	pr = {"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "O/R"}}}
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr)
+	assert result.returncode == 0, result.stderr
+	assert calls == ["7"] and creates == ["create"]
+	assert state["issue_number_map"]["unblock-7-r1"] == 901
+
+
+def test_fixup_hook_uses_trusted_membership_for_known_issue(tmp_path: Path) -> None:
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 5, [], trusted_members=[5])
+	assert result.returncode == 0, result.stderr
+	assert calls == [] and creates == ["create"]
+	assert state["issue_number_map"]["unblock-5-r1"] == 901
+
+
+def test_fixup_hook_rejects_preexisting_request_with_only_untrusted_membership(tmp_path: Path) -> None:
+	pr = {"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "o/r"}}}
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, trusted_members=[])
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unverified reason=not_member" in result.stdout
+	assert state["unblock_fixup_rejected_ids"] == ["unblock-7-r1"]
+	assert calls == ["7"] and creates == []
+
+
+@pytest.mark.parametrize(("pr", "reason"), [
+	({"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "evil/r"}}}, "head_repo"),
+	({"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-99", "repo": {"full_name": "o/r"}}}, "not_member"),
+])
+def test_fixup_hook_does_not_treat_forged_state_pr_as_project_issue(tmp_path: Path, pr: dict, reason: str) -> None:
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5, 7, 99], pr, trusted_members=[5])
+	assert result.returncode == 0, result.stderr
+	assert f"outcome=binding_unverified reason={reason}" in result.stdout
+	assert state["unblock_fixup_rejected_ids"] == ["unblock-7-r1"]
+	assert calls == ["7"] and creates == []
+
+
+def test_fixup_hook_retries_when_trusted_state_is_unavailable(tmp_path: Path) -> None:
+	pr = {"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "o/r"}}}
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, include_trusted_state_comment=False)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unavailable" in result.stdout
+	assert "unblock_fixup_rejected_ids" not in state
+	assert "reason=trusted_state" in result.stdout
+	assert calls == [] and creates == []
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, state)
+	assert result.returncode == 0, result.stderr
+	assert calls == ["7"] and creates == ["create"]
+	assert state["issue_number_map"]["unblock-7-r1"] == 901
+
+
+def test_fixup_hook_forged_membership_defers_without_trusted_state(tmp_path: Path) -> None:
+	pr = {"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "evil/r"}}}
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5, 7], pr, trusted_members=[], include_trusted_state_comment=False)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unavailable reason=trusted_state" in result.stdout
+	assert "unblock_fixup_rejected_ids" not in state
+	assert calls == [] and creates == []
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5, 7], pr, state, trusted_members=[5])
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unverified reason=head_repo" in result.stdout
+	assert state["unblock_fixup_rejected_ids"] == ["unblock-7-r1"]
+	assert calls == ["7"] and creates == []
+
+
+@pytest.mark.parametrize(("pr", "reason"), [
+	({"number": 7, "base": {"ref": "orchestrator/project-40"}, "head": {"ref": "ai/issue-5", "repo": {"full_name": "evil/r"}}}, "head_repo"),
+	({"number": 7, "base": {"ref": "orchestrator/project-40"}, "head": {"ref": "ai/issue-5", "repo": None}}, "head_repo"),
+	({"number": 7, "base": {"ref": "orchestrator/project-40"}, "head": {"ref": "feature/x", "repo": {"full_name": "o/r"}}}, "head_ref"),
+	({"number": 7, "base": {"ref": "orchestrator/project-40"}, "head": {"ref": "ai/issue-99", "repo": {"full_name": "o/r"}}}, "not_member"),
+	({"number": 7, "base": {"ref": "main"}, "head": {"ref": "ai/issue-5", "repo": {"full_name": "o/r"}}}, "base"),
+])
+def test_fixup_hook_remembers_definitive_pr_rejection(tmp_path: Path, pr: dict, reason: str) -> None:
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr)
+	assert result.returncode == 0, result.stderr
+	assert f"outcome=binding_unverified reason={reason}" in result.stdout
+	assert state["unblock_fixup_rejected_ids"] == ["unblock-7-r1"]
+	assert calls == ["7"] and creates == []
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, state)
+	assert result.returncode == 0, result.stderr
+	assert calls == ["7"] and creates == []  # No new read on the next tick.
+
+
+def test_fixup_hook_rejects_integration_branch_drift(tmp_path: Path) -> None:
+	state = {"integration_branch": "orchestrator/project-99", "current_wave": 1, "status": "failed",
+		"issue_number_map": {"issue-5": 5}, "waves": [{"issues": []}]}
+	pr = {"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "o/r"}}}
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, state)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unverified reason=base" in result.stdout
+	assert state["unblock_fixup_rejected_ids"] == ["unblock-7-r1"]
+	assert calls == ["7"] and creates == []
+
+
+def test_fixup_hook_defers_working_state_drift_without_permanent_rejection(tmp_path: Path) -> None:
+	state = {"integration_branch": "orchestrator/project-99", "current_wave": 1, "status": "failed",
+		"issue_number_map": {"issue-5": 5}, "waves": [{"issues": []}]}
+	pr = {"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "o/r"}}}
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, state,
+		trusted_integration_branch="orchestrator/project-40")
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unavailable reason=state_drift" in result.stdout
+	assert "unblock_fixup_rejected_ids" not in state
+	assert calls == ["7"] and creates == []
+	state["integration_branch"] = "orchestrator/project-40"
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, state)
+	assert result.returncode == 0, result.stderr
+	assert calls == ["7", "7"] and creates == ["create"]
+	assert state["issue_number_map"]["unblock-7-r1"] == 901
+
+
+def test_fixup_hook_retries_unavailable_pr_read(tmp_path: Path) -> None:
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5])
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unavailable" in result.stdout
+	assert "reason=pr_read" in result.stdout
+	assert "unblock_fixup_rejected_ids" not in state
+	assert calls == ["7"] and creates == []
+	result, _, calls, _ = _run_fixup_hook(tmp_path, 7, [5], state=state)
+	assert result.returncode == 0 and calls == ["7", "7"]
+
+
+def test_fixup_hook_checks_head_and_remembers_rejected_ids() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index("handle_unblock_judge_project_hooks() {")
+	hook = text[start:text.index("\n}\n", start)]
+	assert "head.repo.full_name" in hook
+	assert "unblock_fixup_rejected_ids" in hook
 
 
 def test_hand_overs_add_a_scanned_label_or_failed_state() -> None:

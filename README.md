@@ -157,7 +157,9 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ENABLE_VALIDATION` | No | `true` | orchestrate_poll | When true, a `complete` judge verdict transitions the tracking issue into runtime validation (`ai:validating`) and completion occurs only after validation passes. |
 | `MAX_VALIDATE_CYCLES` | No | `3` | orchestrate_poll | Maximum runtime validation cycles (initial run + fix/revalidate loops) before forcing `ai:validation-failed`. |
 | `ENABLE_SECURITY_PASS` | No | `true` | orchestrate_poll | Mandatory current-integration-head security pass before validation or finalization. Every completion route must obtain a clean SHA-bound pass; set to `false` for the immediate operator kill switch. |
-| `MAX_SECURITY_PASS_CYCLES` | No | `5` | orchestrate_poll | Maximum completed consolidated security-fix cycles before persistent findings terminalize the project as `ai:security-pass-failed`. The counter resets to `0` when a recorded clean pass is invalidated by an advancing integration head, so findings in newly-synced code get their own budget. Re-audits after a merged fix are delta audits (files changed since the last audited commit plus files cited by earlier findings), so the budget is spent on findings that persist, not on fresh samples of unchanged code. |
+| `MAX_SECURITY_PASS_CYCLES` | No | `5` | orchestrate_poll, review_autofix | Maximum completed consolidated security-fix cycles before persistent findings terminalize the project as `ai:security-pass-failed`. The counter resets to `0` when a recorded clean pass is invalidated by an advancing integration head, so findings in newly-synced code get their own budget. Re-audits after a merged fix are delta audits (files changed since the last audited commit plus files cited by earlier findings), so the budget is spent on findings that persist, not on fresh samples of unchanged code. Also caps the single-issue security pass (`SINGLE_ISSUE_SECURITY_PASS_ENABLED`) per PR. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | No | `true` | review_autofix, security-audit | Single-issue security pass (port P1 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). Eligible standalone PRs into the default branch also bypass the deterministic doc-only/small-diff auto-merge path so they reach the audit gate after review. Same-repository heads that are not integration branches or `e2e-smoke-test` PRs wait until a security audit of the current head is clean; only a PR with exactly one linked issue may skip when that issue is a verified automation follow-up per `scripts/security_pass_skip.py`. It dispatches `security-audit.yml` (consumers: `ai-security-audit.yml`) with `ref` = the PR head branch and `pr_number`; the audit posts a `<!-- ai:single-issue-security-pass:v1 status=clean|findings|failed head=<sha> cycle=<n> -->` comment and re-runs the review on clean or failed. Its follow-up issues target the PR branch, so their merges start the next cycle. Only a result from the authenticated pipeline account for the live PR head is accepted; with `github.token` instead of `GH_PAT`, the expected account is `github-actions[bot]`. An audit without a findings summary, including `SECURITY_AUDIT_ENABLED=false`, reports `failed`, never `clean`. An unavailable account identity or comment history holds the merge. If the gate cannot write its hold decision to `GITHUB_OUTPUT`, the review job fails closed. After `MAX_SECURITY_PASS_CYCLES` cycles the PR is labelled `ai:security-pass-failed` for the planned Phase 7 unblock judge (not yet shipped); a failed label write fails the review run closed so workflow recovery can retry it. A failed audit dispatch (for example a consumer wrapper without the `pr_number` input) still logs a warning and merges as before. The audit workflow needs `pull-requests: read` to verify the PR and `actions: write` to re-dispatch review using `github.token` when `GH_PAT` is absent. Logs `SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=`. Set `false` to disable. |
+| `SECURITY_PASS_PENDING_STALE_HOURS` | No | `6` | review_autofix | Hours a same-head pending single-issue audit holds auto-merge before the next clean review re-dispatches the audit. Must be a positive integer; invalid values fall back to `6`. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | No | `2` | orchestrate_poll | Maximum times one consolidated security-fix issue that ended in `ai:implementation-failed` is closed and re-issued within a fix cycle before the pass fails as `ai:security-pass-failed` (recoverable via `/re-security-pass`). |
 | `SECURITY_PASS_CONFIDENCE_GATE` | No | `8` | orchestrate_poll | Minimum confidence score (1-10) for findings that block the project security pass. |
 | `SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED` | No | `true` | orchestrate_poll | When `MAX_SECURITY_PASS_CYCLES` is spent with findings still open, consult the security-pass exhaustion judge (`prompts/mode-judge-security-pass-exhaustion.txt`) instead of terminalizing. Per remaining finding it chooses `accept_with_followup` (waiver recorded in state plus one non-blocking `ai:security` follow-up issue; the project completes once nothing else blocks), `keep_fixing` (one more consolidated fix issue for those findings), or `fail` (the pre-judge terminal `ai:security-pass-failed`). Any judge failure falls back to the terminal path. Set `false` to restore terminal failure on exhaustion. |
@@ -1057,8 +1059,15 @@ not delete wrappers that are already present in `.github/workflows/`.
 > reminder, the permission-prompt logger and their helper scripts were retired
 > (see the retired-files paragraph below). Nothing to configure in the
 > consumer. The merged-PR guard checks a numeric push refspec even when output
-> is redirected (`git push origin 2 > out`); only an adjacent, unquoted
-> descriptor (`2>out`) is removed from the parsed command.
+> is redirected; only an adjacent, unquoted descriptor is removed from the
+> parsed command.
+> When a `git push` source cannot be resolved locally (for example,
+> a shell-expanded source), the merged-PR guard asks for confirmation rather
+> than using the session checkout as a substitute for the pushed commit.
+> A push with a destination that cannot be resolved locally (such as
+> `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
+> If `--repo` and a positional remote are both supplied, the guard checks the
+> refspecs after that remote, not the remote name as a branch.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
@@ -1736,6 +1745,8 @@ through `clarify → plan → implement → review`.
 | `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used by the dispatchable `opencode-live-smoke.yml` rollout gate and the complete production review/autofix model pipeline. |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-head project security pass before validation or finalization. Set to `false` for the immediate operator kill switch. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before terminal `ai:security-pass-failed`. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `true` | Hold a clean standalone PR's auto-merge until a security audit of its head is clean (see the repository variables table) |
+| `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | Hours before a pending single-issue audit is considered stale and retried on the next review run. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` security-fix issue per fix cycle before terminal `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 | `SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED` | `true` | Consult the security-pass exhaustion judge when the fix-cycle budget is spent instead of terminalizing; `false` restores terminal `ai:security-pass-failed` on exhaustion. |
@@ -1878,18 +1889,25 @@ The Actions pipelines can run a model role on the Claude Code CLI
 cutovers switch the defaults one group at a time. **On Claude today:**
 `CLARIFY` (`clarify.yml`), `CLARIFY_RESPOND` (`orchestrate_clarify_respond.yml`:
 the answer, the self-critique and the revision) and `PLAN` (`plan.yml` through
-`scripts/run_plan_codex.sh`), since Phase 5a. Every other role still defaults
-to `codex`.
+`scripts/run_plan_codex.sh`), since Phase 5a; `IMPLEMENT`, `IMPLEMENT_REPAIR`
+(`implement.yml` through `scripts/codex_thread_reuse.sh`, which resumes the
+role's Claude session across attempts the way it resumes a codex thread) and
+`IMPLEMENT_DIAGNOSE` (`scripts/implement_diagnose_post_codex_failure.sh`),
+since Phase 5b. Every other role still defaults to `codex`.
 
 **How a cut-over role runs.** The job's "Resolve AI engine" step picks the
 engine for the role. Only when it is `claude` do "Install Claude Code CLI" and
 "Resolve Claude credential" (the account pool) run. The model call then runs
 on Claude (`claude_run`, or the clarify sandbox's Claude branch). When Claude
 cannot start (no CLI, no credential, clarify image build failure or every
-account gated: exit `75`, logged `AI_ENGINE_FALLBACK`), the same attempt runs
-the unchanged codex call, and
-the rest of the job stays on codex. `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
+account gated: exit `75`, logged
+`AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call.
+`AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
+Implementation attempts on Claude honor the same `CODEX_THREAD_REUSE_TIMEOUT_SECS`
+wall-clock bound as codex attempts; diagnosis is bounded to 300 seconds on
+either engine. An exit-75 implementation fallback remains on codex for later
+attempts of that role in the same job.
 
 | Piece | What it does |
 |---|---|
@@ -2634,7 +2652,13 @@ and resolver chains, a failed project) now goes to the unblock judge
   Isolation failures do not fall back to host Codex. Claude uses the read-only tool profile.
   A failed ledger-history read skips action for that run. The item verdict
   is recorded before action; a failed project marker is repaired if the item
-  remains blocked for a later run.
+  remains blocked for a later run. An unlabeled tracking issue is judged as a
+  failed project only while its latest trusted V2 state is `failed`. That state
+  is rechecked before recording the verdict and before applying the terminal
+  `ai:unblock-closed` label; a newer incomplete or malformed V2 write cannot
+  fall back to an older `failed` state for this decision. A failed read or late
+  resume withholds the label, though a resume after verdict recording can leave
+  an unacted-on verdict.
 - **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
   then carried out with the existing commands: on a tracking issue
   `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on
@@ -2650,10 +2674,18 @@ and resolver chains, a failed project) now goes to the unblock judge
   closes the newly created fix-up instead of leaving an untracked open issue;
   a failed close is logged for recovery. A failed scope edit cannot be followed by `/approved`. A PR `reissue`
   creates a standalone replacement before closing the PR;
+  a standalone `ai:security` issue reissue copies its finding marker and label
+  to the replacement before closing the original. If the marker is invalid or
+  missing, or the issue belongs to a project, the original finding stays open.
   PR project fix-ups and verdict history use the GitHub-reported
   `orchestrator/project-<n>` base. Issue project fix-ups require the
   `ai:orchestrator-managed` label and membership in the project's state;
   missing or unverifiable state skips actuation until it can be confirmed.
+  For PRs with an untrusted author or head, issue-creating verdicts create
+  no issue: the judge explains the rejection, closes the PR, and warns via
+  Telegram. A fork PR targeting a project is never bound to project state;
+  its non-issue-creating, non-close verdicts are skipped. If the explanation write fails,
+  closure still proceeds and a failed close sends a failure WARNING.
   `operator_step` also writes the `ai:operator-step` issue and sends a
   Telegram WARNING. New operator steps are appended as keyed comments, never
   written back into the shared issue body. The newest trusted comment for a
@@ -2671,6 +2703,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   hours after the last round, the judge closes it as not planned with a
   report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
   poller then sets the state to `abandoned` and closes the tracking issue.
+  An `ai:security` finding instead remains open with its block label and
+  `ai:unblock-closed`, receives an explanation and a CRITICAL alert; the scan
+  skips it until a linked fix is verified merged or a person triages it.
   For an issue or PR, a failed close leaves the terminal label unset so a
   later scan can retry. If the close succeeds but adding the label fails,
   the judge logs the failure and still sends the CRITICAL alert; the closed
