@@ -69,41 +69,13 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 [ -f "${_POLLER_AI_ENGINE_SH}" ] || _POLLER_AI_ENGINE_SH="scripts/ai_engine.sh"
 
 # poller_claude_judge <ROLE> <prompt_file> <output_file> <log_file> [model_hint]
-# Runs one judge call on Claude when <ROLE> resolves to `claude` for the
-# current tracking issue: labels come from the cached TRACKING_LABELS (plan
-# D2; no API call; one tick spans many projects, so the job's event payload
-# is never used), the model hint defaults to MODEL_EDITOR and the effort hint
-# is MODEL_REASONING_EFFORT_JUDGE. The result text goes to <output_file>,
-# the file the codex call writes; stderr is appended to <log_file> and the
-# job log. Returns 75 when the role is on codex, ai_engine.sh is not staged
-# or Claude is unavailable, so the caller runs its unchanged codex command;
-# otherwise the runner's status (0 success, 76 rejected transfer, 77 isolation
-# required but sandbox preparation failed (no host fallback), 124 timeout,
-# other = crash).
-# RB_JUDGE never returns 75: it runs in the credential-free review sandbox
-# (Claude or OpenCode), or defers with 77 when isolation is unavailable.
+# All five poller judges run in the credential-free review sandbox. Engine
+# selection uses cached TRACKING_LABELS; 77 means isolation unavailable,
+# never a signal to run a credentialed host fallback.
 poller_claude_judge()
 {
   local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
-  local judge_engine="codex" judge_rc=0
-  if [ "${role}" = RB_JUDGE ]; then
-    poller_rb_judge_isolated "${prompt_file}" "${output_file}" "${log_file}"
-    return $?
-  fi
-  [ -f "${_POLLER_AI_ENGINE_SH}" ] || return 75
-  # shellcheck source=ai_engine.sh
-  source "${_POLLER_AI_ENGINE_SH}" || return 75
-  if [ "${log_file}" = /dev/null ]; then
-    judge_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
-      ai_engine_for_role "${role}" 2>/dev/null || echo codex)"
-  else
-    judge_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
-      ai_engine_for_role "${role}" 2> >(tee -a "${log_file}" >&2) || echo codex)"
-  fi
-  [ "${judge_engine}" = "claude" ] || return 75
-  AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
-    claude_run "${role}" "${prompt_file}" "${output_file}" "${PWD}" 2> >(tee -a "${log_file}" >&2) || judge_rc=$?
-  return "${judge_rc}"
+  poller_judge_isolated "${role}" "${prompt_file}" "${output_file}" "${log_file}" "${model_hint}"
 }
 
 # Each attempt owns a fresh snapshot; never reuse a root after Claude returns
@@ -111,12 +83,21 @@ poller_claude_judge()
 _poller_rb_judge_sandbox_attempt()
 {
     local rb_engine="$1" prompt_file="$2" output_file="$3" log_file="$4" rb_support_dir="$5"
+    local judge_role="${6:-RB_JUDGE}" rb_access="${7:-}" judge_reason_file="${RUNTIME_DIR:?}/judge_isolation_reason"
+    local judge_workspace_override="${GITHUB_WORKSPACE:-$PWD}"
     local rb_config=/dev/null rb_effort="${MODEL_REASONING_EFFORT_JUDGE:-high}" judge_rc=0
     # PR diffs and comments are untrusted. This role may not run with host
     # credentials; use the verified support checkout's isolated review runner.
-    local rb_sandbox_root="" rb_access=read
+    local rb_sandbox_root=""
     local rb_untracked_before_file="" rb_untracked_after_file="" rb_untracked_hash_file="" rb_untracked_path="" rb_cleanup_rc=0
-    [ "${RB_COMBINED_MODE:-false}" != true ] || rb_access=write
+    if [ "${judge_role}" = RB_JUDGE ]; then
+      judge_reason_file="${RUNTIME_DIR}/rb_judge_isolation_reason"
+      rb_access="read"
+      [ "${RB_COMBINED_MODE:-false}" != true ] || rb_access="write"
+    else
+      rb_access="read"
+      judge_workspace_override="$(pwd -P)"
+    fi
     if [ "${rb_access}" = write ]; then
       rb_untracked_before_file="$(mktemp "${RUNTIME_DIR:?}/rb-claude-untracked-before-XXXXXXXX")" || { echo '::error::Cannot inventory review-blocked workspace before Claude transfer.' >&2; exit 1; }
       if ! git ls-files --others --exclude-standard -z > "${rb_untracked_before_file}"; then
@@ -131,23 +112,24 @@ _poller_rb_judge_sandbox_attempt()
         exit 1
       fi
     fi
-    if ! rb_sandbox_root="$(SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
+    if ! rb_sandbox_root="$(GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
       [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}"
       [ -z "${rb_untracked_hash_file}" ] || rm -f -- "${rb_untracked_hash_file}"
       : > "${output_file}"
       # PR content can cause preparation to fail (#3576); never let it select
       # the credentialed host Codex fallback.
       if [ "${log_file}" = /dev/null ]; then
-        echo '::warning::RB_JUDGE sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick.' >&2
+        echo "::warning::${judge_role} sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick." >&2
       else
-        echo '::warning::RB_JUDGE sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick.' | tee -a "${log_file}" >&2
+        echo "::warning::${judge_role} sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick." | tee -a "${log_file}" >&2
       fi
-      printf '%s\n' sandbox_prepare_failed > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+      printf '%s\n' sandbox_prepare_failed > "${judge_reason_file}"
       return 77
     fi
     if [ "${rb_engine}" = codex ]; then
       rb_config="${RUNTIME_DIR}/rb_judge_opencode.json"
-      if ! bash "${rb_support_dir}/write_opencode_config.sh" --role writer --model "${MODEL_EDITOR}" \
+      if [ "${judge_role}" != RB_JUDGE ]; then rb_config="${RUNTIME_DIR}/poller_judge_opencode.json"; fi
+      if ! bash "${rb_support_dir}/write_opencode_config.sh" --role writer --model "${POLLER_JUDGE_MODEL_HINT:-${MODEL_EDITOR}}" \
         --project-path "$PWD" --config-path "${rb_config}" --serena off 2>>"${log_file}"; then
         # Cleanup is mandatory before any later issue or attempt may run.
         if ! SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
@@ -156,15 +138,15 @@ _poller_rb_judge_sandbox_attempt()
           exit 1
         fi
         [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}" "${rb_untracked_hash_file}"
-        printf '%s\n' opencode_config_failed > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+        printf '%s\n' opencode_config_failed > "${judge_reason_file}"
         return 77
       fi
     fi
     [ "${rb_effort}" != minimal ] || rb_effort=low
     : > "${output_file}"
-    SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
+    GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" run "${prompt_file}" "${output_file}" \
-        "${MODEL_EDITOR}" "${rb_effort}" "${rb_config}" "${rb_engine}" RB_JUDGE "${rb_access}" 2>>"${log_file}" || judge_rc=$?
+        "${POLLER_JUDGE_MODEL_HINT:-${MODEL_EDITOR}}" "${rb_effort}" "${rb_config}" "${rb_engine}" "${judge_role}" "${rb_access}" 2>>"${log_file}" || judge_rc=$?
     SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>>"${log_file}" || rb_cleanup_rc=$?
     if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ] || [ "${rb_cleanup_rc}" -ne 0 ]; then
@@ -205,51 +187,148 @@ _poller_rb_judge_sandbox_attempt()
     fi
     [ "${judge_rc}" -eq 0 ] || : > "${output_file}"
     if [ "${judge_rc}" -eq 2 ]; then
-      printf '%s\n' sandbox_helper_outdated > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+      printf '%s\n' sandbox_helper_outdated > "${judge_reason_file}"
       return 77
     fi
     return "${judge_rc}"
 }
 
-poller_rb_judge_isolated()
+poller_judge_isolated()
 {
-  local prompt_file="$1" output_file="$2" log_file="$3" rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts"
+  local judge_role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
+  local rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts" judge_reason_file="${RUNTIME_DIR:?}/judge_isolation_reason"
   local rb_engine=codex rb_rc=0
-  : > "${RUNTIME_DIR:?}/rb_judge_isolation_reason"
+  [ "${judge_role}" != RB_JUDGE ] || judge_reason_file="${RUNTIME_DIR}/rb_judge_isolation_reason"
+  : > "${judge_reason_file}"
   : > "${output_file}"
   if [ -f "${_POLLER_AI_ENGINE_SH}" ]; then
     # shellcheck source=ai_engine.sh
     if source "${_POLLER_AI_ENGINE_SH}"; then
-      rb_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
-        ai_engine_for_role RB_JUDGE 2> >(tee -a "${log_file}" >&2) || echo codex)"
+      if [ "${log_file}" = /dev/null ]; then
+        rb_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+          ai_engine_for_role "${judge_role}" 2>/dev/null || echo codex)"
+      else
+        rb_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+          ai_engine_for_role "${judge_role}" 2> >(tee -a "${log_file}" >&2) || echo codex)"
+      fi
     fi
   fi
   [ "${rb_engine}" = claude ] || rb_engine=codex
   [ -f "${rb_support_dir}/review_untrusted_sandbox.sh" ] || rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main/scripts"
   if [ ! -f "${rb_support_dir}/review_untrusted_sandbox.sh" ]; then
-    printf '%s\n' support_missing > "${RUNTIME_DIR}/rb_judge_isolation_reason"
-    echo 'RB_JUDGE_ISOLATION outcome=deferred reason=support_missing' >&2
+    printf '%s\n' support_missing > "${judge_reason_file}"
+    echo "${judge_role}_ISOLATION outcome=deferred reason=support_missing" >&2
     return 77
   fi
   # An older verified support commit ignores arg 9 for OpenCode and would
   # transfer verdict-only edits. Wait for the support update instead.
   if ! grep -Fq '# Arg 9 (read) applies to both engines; read-only roles never transfer edits back.' "${rb_support_dir}/review_untrusted_sandbox.sh" ||
-     [ "$(grep -Fc 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' "${rb_support_dir}/review_untrusted_sandbox.sh")" -lt 2 ]; then
-    printf '%s\n' sandbox_helper_outdated > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+     [ "$(grep -Fc 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' "${rb_support_dir}/review_untrusted_sandbox.sh")" -lt 2 ] ||
+     { [ "${judge_role}" != RB_JUDGE ] && ! grep -Fq '# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.' "${rb_support_dir}/review_untrusted_sandbox.sh"; }; then
+    printf '%s\n' sandbox_helper_outdated > "${judge_reason_file}"
     return 77
   fi
-  _poller_rb_judge_sandbox_attempt "${rb_engine}" "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" || rb_rc=$?
+  POLLER_JUDGE_MODEL_HINT="${model_hint}" _poller_rb_judge_sandbox_attempt "${rb_engine}" "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" "${judge_role}" || rb_rc=$?
   if [ "${rb_rc}" -eq 75 ] && [ "${rb_engine}" = claude ]; then
     # Claude unavailable inside isolation: retry OpenCode in a NEW root.
     rb_rc=0
-    _poller_rb_judge_sandbox_attempt codex "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" || rb_rc=$?
+    POLLER_JUDGE_MODEL_HINT="${model_hint}" _poller_rb_judge_sandbox_attempt codex "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" "${judge_role}" || rb_rc=$?
   fi
   if [ "${rb_rc}" -eq 75 ]; then
-    printf '%s\n' sandbox_helper_outdated > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+    printf '%s\n' sandbox_helper_outdated > "${judge_reason_file}"
     rb_rc=77
   fi
   [ "${rb_rc}" -eq 0 ] || : > "${output_file}"
   return "${rb_rc}"
+}
+poller_rb_judge_isolated()
+{
+  poller_judge_isolated RB_JUDGE "$1" "$2" "$3"
+}
+
+JUDGE_ISOLATION_MAX_FAILURES="${JUDGE_ISOLATION_MAX_FAILURES:-3}"
+if ! [[ "${JUDGE_ISOLATION_MAX_FAILURES}" =~ ^[0-9]{1,9}$ ]] || [ "${JUDGE_ISOLATION_MAX_FAILURES}" -lt 1 ]; then
+  echo '::warning::Invalid JUDGE_ISOLATION_MAX_FAILURES; using 3.' >&2
+  JUDGE_ISOLATION_MAX_FAILURES=3
+fi
+
+# The labels argument is the current issue's cycle-local snapshot, not the
+# model's output. A missing snapshot must never unlock an escalated judge.
+_judge_isolation_should_run()
+{
+  local role="$1" state_file="$2" issue="$3" labels="$4" entry escalated tracking_ref="-"
+  [ "${issue}" != "${TRACKING_NUM:-}" ] || tracking_ref="${issue}"
+  entry="$(jq -c --arg role "${role}" 'if (.judge_isolation_state | type) == "object" then .judge_isolation_state[$role] // {} else {} end' "${state_file}" 2>/dev/null)" || return 1
+  escalated="$(printf '%s' "${entry}" | jq -r '.escalated // false')"
+  [ "${escalated}" = true ] || return 0
+  if ! printf '%s' "${labels}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=skip reason=labels_unavailable count=0 max=${JUDGE_ISOLATION_MAX_FAILURES}"
+    return 1
+  fi
+  if printf '%s' "${labels}" | jq -e 'any(.[]; . == "ai:needs-human")' >/dev/null 2>&1; then
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=skip reason=escalated count=$(printf '%s' "${entry}" | jq -r '.count // 0') max=${JUDGE_ISOLATION_MAX_FAILURES}"
+    return 1
+  fi
+  _clear_judge_isolation_state "${role}" "${state_file}" "label_cleared" "${issue}"
+}
+
+_clear_judge_isolation_state()
+{
+  local role="$1" state_file="$2" reason="${3:-verdict}" issue="${4:-}" count tracking_ref="-"
+  [ "${issue}" != "${TRACKING_NUM:-}" ] || tracking_ref="${issue}"
+  count="$(jq -r --arg role "${role}" '.judge_isolation_state[$role].count // 0' "${state_file}" 2>/dev/null || echo 0)"
+  [ "${count}" != 0 ] || return 0
+  jq --arg role "${role}" '.judge_isolation_state = (if (.judge_isolation_state | type) == "object" then .judge_isolation_state else {} end | del(.[$role]))' "${state_file}" > "${state_file}.tmp" && mv "${state_file}.tmp" "${state_file}"
+  echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=reset reason=${reason} count=0 max=${JUDGE_ISOLATION_MAX_FAILURES}"
+}
+
+_judge_isolation_checkpoint()
+{
+  # The tracking comment, not the runner's transient STATE_FILE, is the
+  # authoritative state across cron ticks. Standalone state is published by
+  # its existing stall-recovery caller.
+  if [ "$1" = "${STATE_FILE:-}" ] && [ "$2" = "${TRACKING_NUM:-}" ]; then
+    post_state_comment || true
+  fi
+}
+
+_record_judge_isolation_failure()
+{
+  local role="$1" state_file="$2" issue="$3" labels="$4" reason count comment comment_id owned_label=false tracking_ref="-"
+  [ "${issue}" != "${TRACKING_NUM:-}" ] || tracking_ref="${issue}"
+  reason="$(cat "${RUNTIME_DIR}/judge_isolation_reason" 2>/dev/null || true)"
+  case "${reason}" in support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated) ;; *) reason=unknown ;; esac
+  count="$(jq -r --arg role "${role}" 'if (.judge_isolation_state | type) == "object" then .judge_isolation_state[$role].count // 0 else 0 end' "${state_file}" 2>/dev/null || echo 0)"
+  [[ "${count}" =~ ^[0-9]{1,9}$ ]] || count=0
+  count=$((count + 1))
+  jq --arg role "${role}" --arg reason "${reason}" --argjson count "${count}" \
+    '.judge_isolation_state = (if (.judge_isolation_state | type) == "object" then .judge_isolation_state else {} end) | .judge_isolation_state[$role] = {count:$count, reason:$reason, escalated:false, owned_label:false, comment_id:null}' \
+    "${state_file}" > "${state_file}.tmp" && mv "${state_file}.tmp" "${state_file}" || return 1
+  echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=deferred reason=${reason} count=${count} max=${JUDGE_ISOLATION_MAX_FAILURES}"
+  if [ "${count}" -ge "${JUDGE_ISOLATION_MAX_FAILURES}" ]; then
+    # No ownership is claimed for a pre-existing human latch. An unknown
+    # label snapshot cannot authorise escalation; retry next tick instead.
+    if ! printf '%s' "${labels}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      _judge_isolation_checkpoint "${state_file}" "${issue}"
+      return 0
+    fi
+    if ! printf '%s' "${labels}" | jq -e 'index("ai:needs-human") != null' >/dev/null 2>&1; then
+      ensure_label_exists 'ai:needs-human'
+      gh_retry gh issue edit "${issue}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null || {
+        _judge_isolation_checkpoint "${state_file}" "${issue}"
+        return 0
+      }
+      owned_label=true
+    fi
+    comment="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" -f body="$(printf '## Judge isolation unavailable\n\nRole: %s. Reason: %s. Failures: %s. Remove `ai:needs-human` after isolation is restored to retry.\n\n<!-- ai:judge-isolation-escalated role=%s reason=%s -->' "${role}" "${reason}" "${count}" "${role}" "${reason}")" 2>/dev/null || true)"
+    comment_id="$(printf '%s' "${comment}" | jq -r '.id // empty' 2>/dev/null || true)"
+    jq --arg role "${role}" --arg id "${comment_id}" --argjson owned "${owned_label}" \
+      '.judge_isolation_state[$role] |= (.escalated = true | .owned_label = $owned | .comment_id = ($id | tonumber?))' \
+      "${state_file}" > "${state_file}.tmp" && mv "${state_file}.tmp" "${state_file}" || return 1
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=escalated reason=${reason} count=${count} max=${JUDGE_ISOLATION_MAX_FAILURES}"
+    tg_notify "Judge isolation unavailable for issue #${issue} (${role}); escalated after ${count} failures. Reason: ${reason}." "CRITICAL"
+  fi
+  _judge_isolation_checkpoint "${state_file}" "${issue}"
 }
 # shellcheck source=scripts/semble_helpers.sh
 SEMBLE_HELPERS_AVAILABLE="false"
@@ -5130,7 +5209,8 @@ ensure_security_pass_repair_branch() {
 ensure_security_pass_state_fields() {
   [ -f "${STATE_FILE}" ] || return 1
   jq '
-    .security_pass_cycle = (
+    .judge_isolation_state = (if (.judge_isolation_state | type) == "object" then .judge_isolation_state else {} end)
+    | .security_pass_cycle = (
       if (.security_pass_cycle | type) == "number"
         and (.security_pass_cycle | floor) == .security_pass_cycle
         and .security_pass_cycle >= 0
@@ -6660,14 +6740,16 @@ security_pass_exhaustion_judge() {
     else
       sanitize_codex_prompt_file "${prompt_file}"
       local security_judge_rc=0
+      if ! _judge_isolation_should_run SECURITY_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}"; then
+        SECURITY_PASS_JUDGE_OUTCOME=deferred
+        return 0
+      fi
       poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?
-      if [ "${security_judge_rc}" -eq 75 ]; then
-        bash scripts/codex_heartbeat.sh \
-          --phase "orchestrate-security-pass-judge" \
-          --stdout-file "${output_file}" \
-          --stderr-file "${error_file}" \
-          -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
-            --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true
+      if [ "${security_judge_rc}" -eq 77 ]; then
+        _record_judge_isolation_failure SECURITY_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
+        SECURITY_PASS_JUDGE_OUTCOME=deferred
+        echo '::warning::Security-pass judge isolation unavailable; deferring to the next poll.' >&2
+        return 0
       fi
     fi
     judge_json="$(_robust_parse_json_file "${output_file}")"
@@ -6684,6 +6766,7 @@ security_pass_exhaustion_judge() {
       )
     ' >/dev/null 2>&1; then
       judge_success="true"
+      _clear_judge_isolation_state SECURITY_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
       break
     fi
     echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs exactly one valid decision, and fail cannot be mixed with non-fail actions)."
@@ -7351,6 +7434,9 @@ run_security_pass_inline() {
           return 0
           ;;
         fixing)
+          return 1
+          ;;
+        deferred)
           return 1
           ;;
       esac
@@ -8715,6 +8801,10 @@ invoke_judge_for_integration_conflict() {
   local default_branch="$3"
 
   [ -n "${final_pr}" ] || return 1
+  : > "${RUNTIME_DIR:?}/judge_isolation_reason"
+  if ! _judge_isolation_should_run INTEGRATION_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}"; then
+    return 2
+  fi
 
   echo "  [integration-heal] Escalating to judge for final PR #${final_pr} (${integration_branch} -> ${default_branch})."
 
@@ -8795,12 +8885,10 @@ invoke_judge_for_integration_conflict() {
     echo "mergeable state. Final PR #${final_pr} (${integration_branch} -> ${default_branch})"
     echo "is currently unmergeable."
     echo
-    echo "Your task: fetch both branches, resolve the merge conflicts in a"
-    echo "way that preserves the intent of every sub-issue already merged"
-    echo "into ${integration_branch}, push the resolution to"
-    echo "${integration_branch}, and then verify GitHub reports the final"
-    echo "PR as mergeable=true. Do NOT merge the PR yourself — the poller"
-    echo "will do that once mergeability is restored."
+    echo "Diagnose the conflict using only the context below. Do not fetch,"
+    echo "edit, push, or use credentials. The poller will dispatch the existing"
+    echo "isolated resolver if you select redispatch_resolver."
+    echo 'Return exactly one JSON object: {"action":"redispatch_resolver"|"fail","diagnosis":"<up to 2000 characters>","resolution_guidance":"<up to 4000 characters>"}.'
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -8823,9 +8911,9 @@ invoke_judge_for_integration_conflict() {
     echo "Each entry is keyed by GitHub issue number; \`must_contain\`"
     echo "patterns are regexes that MUST match in the post-resolve tree,"
     echo "\`must_not_contain\` patterns are regexes that MUST NOT match."
-    echo "After you push, \`scripts/verify_integration_fingerprints.py\`"
-    echo "is run against this exact JSON — every violation is a hard"
-    echo "rejection that returns the project to this judge cycle.  Use"
+    echo "The resolver runs \`scripts/verify_integration_fingerprints.py\`"
+    echo "against this JSON — every violation is a hard"
+    echo "rejection that returns the project to this judge cycle. Use"
     echo "this as the authoritative spec when reconciling conflicts;"
     echo "the truncated PR diff above is context, the fingerprints are"
     echo "the test."
@@ -8844,21 +8932,45 @@ invoke_judge_for_integration_conflict() {
     echo "   wholesale reverts to \`${default_branch}\`'s version are"
     echo "   the dominant failure mode the fingerprint contract is"
     echo "   designed to catch."
-    echo "5. If conflicts are semantic rather than textual, surface a"
-    echo "   short diagnosis in the commit message."
+    echo "5. If conflicts are semantic, explain them in resolution_guidance."
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
   local integration_judge_rc=0
   poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" || integration_judge_rc=$?
-  if [ "${integration_judge_rc}" -eq 75 ]; then
-    integration_judge_rc=0
-    cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log" || integration_judge_rc=$?
+  if [ "${integration_judge_rc}" -eq 77 ]; then
+    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+    return 2
   fi
   if [ "${integration_judge_rc}" -eq 0 ]; then
-    echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
-    return 0
+    local integration_verdict integration_action diagnosis guidance dispatch_rc
+    integration_verdict="$(_robust_parse_json_file "${output_file}" 2>/dev/null || true)"
+    if printf '%s' "${integration_verdict}" | jq -e 'type == "object" and (.action == "redispatch_resolver" or .action == "fail") and (.diagnosis | type == "string" and length <= 2000) and (.resolution_guidance | type == "string" and length <= 4000)' >/dev/null 2>&1; then
+      _clear_judge_isolation_state INTEGRATION_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
+      integration_action="$(printf '%s' "${integration_verdict}" | jq -r '.action')"
+      if [ "${integration_action}" = redispatch_resolver ]; then
+        # A trusted bot posts the verdict: neutralise marker delimiters and
+        # Markdown fences before relaying untrusted diagnosis into a comment.
+        diagnosis="$(printf '%s' "${integration_verdict}" | jq -r '.diagnosis | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("`"; "\u0027")')"
+        guidance="$(printf '%s' "${integration_verdict}" | jq -r '.resolution_guidance | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("`"; "\u0027")')"
+        post_tracking_comment "## Integration conflict diagnosis
+
+Diagnosis:
+\`\`\`text
+${diagnosis}
+\`\`\`
+
+Resolution guidance:
+\`\`\`text
+${guidance}
+\`\`\`" || true
+        dispatch_rc=0
+        _dispatch_review_for_conflicts "${final_pr}" "${integration_branch}" || dispatch_rc=$?
+        rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+        [ "${dispatch_rc}" -eq 0 ] || [ "${dispatch_rc}" -eq 2 ]
+        return $?
+      fi
+    fi
   fi
 
   echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
@@ -10343,7 +10455,16 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
   # Circuit breaker: after MAX retries, escalate to judge instead of
   # dispatching one more resolver run.
   if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then
-    if invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}"; then
+    local integration_judge_result=0
+    invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?
+    if [ "${integration_judge_result}" -eq 2 ]; then
+      if [ -s "${RUNTIME_DIR}/judge_isolation_reason" ]; then
+        _record_judge_isolation_failure INTEGRATION_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
+      fi
+      echo '::warning::Integration judge isolation unavailable; deferring without consuming conflict dispatch budget.' >&2
+      return 0
+    fi
+    if [ "${integration_judge_result}" -eq 0 ]; then
       # Reset unresolved ticks so the resolver loop can resume after
       # the judge's push. Keep dispatch_count as audit trail.
       # integration_conflict_total_dispatches counts judge invocations
@@ -10358,7 +10479,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       post_state_comment || true
       post_tracking_comment "## 🛠️ Integration judge invoked
 
-Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${effective_max_retries} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${effective_max_retries} automated resolver attempts. The judge diagnosed the conflict and re-dispatched the isolated resolver. The poller will retry merge on the next tick."
       return 0
     fi
     jq --arg err "judge escalation failed: ${error_msg}" \
@@ -14893,9 +15014,19 @@ invoke_stall_judge() {
       else
         sanitize_codex_prompt_file "${stall_judge_prompt_file}"
         local stall_judge_rc=0
+        local stall_isolation_labels="${STALL_JUDGE_LABELS:-${TRACKING_LABELS:-}}"
+        local stall_escalate_issue="${issue_num}"
+        if [ -n "${local_id}" ]; then stall_escalate_issue="${TRACKING_NUM}"; fi
+        if ! _judge_isolation_should_run STALL_JUDGE "${_judge_state_file}" "${stall_escalate_issue}" "${stall_isolation_labels}"; then
+          rm -f "${stall_judge_semble_query_file}"
+          return 1
+        fi
         poller_claude_judge STALL_JUDGE "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${RUNTIME_DIR}/stall_judge.log" || stall_judge_rc=$?
-        if [ "${stall_judge_rc}" -eq 75 ]; then
-          codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+        if [ "${stall_judge_rc}" -eq 77 ]; then
+          _record_judge_isolation_failure STALL_JUDGE "${_judge_state_file}" "${stall_escalate_issue}" "${stall_isolation_labels}" || true
+          echo "::warning::Stall judge isolation unavailable for issue #${issue_num}; deferring recovery." >&2
+          rm -f "${stall_judge_semble_query_file}"
+          return 1
         fi
       fi
       if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
@@ -14921,6 +15052,7 @@ invoke_stall_judge() {
     execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
     return $?
   fi
+  _clear_judge_isolation_state STALL_JUDGE "${_judge_state_file}" verdict "${issue_num}" || true
 
   local judge_action
   local judge_justification
@@ -16761,13 +16893,18 @@ PY
           echo "::warning::[standalone-stall] could not seed standalone judge state file for issue #${issue_num}; judge streak persistence may be skipped this cycle." >&2
         fi
         STALL_JUDGE_STATE_FILE_OVERRIDE="${_std_judge_state_file}"
-        if invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${elapsed_minutes}" ""; then
+        if STALL_JUDGE_LABELS="${labels_json}" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${elapsed_minutes}" ""; then
           took_action="true"
           action="${STALL_RECOVERY_EFFECTIVE_ACTION:-run_stall_judge}"
         fi
         unset STALL_JUDGE_STATE_FILE_OVERRIDE
         if [ -f "${_std_judge_state_file}" ]; then
-          updated_state="$(printf '%s' "${updated_state}" | jq -c --slurpfile judge_state "${_std_judge_state_file}" '.judge_escalate_streak = (($judge_state[0].judge_escalate_streak // {}) | if type == "object" then . else {} end)' 2>/dev/null || echo "${updated_state}")"
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --slurpfile judge_state "${_std_judge_state_file}" '
+            .judge_escalate_streak = (($judge_state[0].judge_escalate_streak // {}) | if type == "object" then . else {} end)
+            | if ($judge_state[0] | has("judge_isolation_state")) then
+                .judge_isolation_state = (($judge_state[0].judge_isolation_state // {}) | if type == "object" then . else {} end)
+              else . end
+          ' 2>/dev/null || echo "${updated_state}")"
           rm -f "${_std_judge_state_file}" 2>/dev/null || true
         fi
         ;;
@@ -17254,6 +17391,13 @@ REISSUE_EOF
         ;;
     esac
 
+    # An isolated judge can defer without taking a recovery action. Persist
+    # its counter/latch independently of stall_recovery_count so the next
+    # scheduled tick sees the failure and can escalate at the configured cap.
+    if [ "${took_action}" != "true" ] && [ "${action}" = "run_stall_judge" ] && [ "${updated_state}" != "${state_json}" ]; then
+      write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+    fi
+
 	    if [ "${took_action}" = "true" ] && [ "${action}" != "close_and_reissue" ]; then
 	      updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --arg should_increment "${STALL_RECOVERY_SHOULD_INCREMENT}" --argjson now "$(date +%s)" '
 			(if ($should_increment | ascii_downcase) == "true" then
@@ -17708,7 +17852,7 @@ recover_stalled_issue() {
   fi
 
   if [ "${action}" = "run_stall_judge" ]; then
-    invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${stall_minutes}" "${local_id}"
+    STALL_JUDGE_LABELS="${TRACKING_LABELS:-}" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${stall_minutes}" "${local_id}"
     return $?
   fi
   execute_stall_recovery_action "${issue_num}" "${phase}" "${action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
@@ -23316,6 +23460,8 @@ ${PR_DIFF}
   # Run judge via Codex
   JUDGE_SUCCESS=false
   JUDGE_JSON=""
+  wave_isolation_skipped=false
+  wave_judge_rc=0
   judge_silent_rounds=0
   max_attempts=2
   if nag_reminder_enabled; then
@@ -23353,11 +23499,19 @@ ${PR_DIFF}
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
     wave_judge_rc=0
-    poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?
-    if [ "${wave_judge_rc}" -eq 75 ]; then
-      cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    if ! _judge_isolation_should_run WAVE_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}"; then
+      wave_judge_rc=77
+      wave_isolation_skipped=true
+    else
+      poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?
     fi
     rm -f "${judge_attempt_prompt_file}"
+    if [ "${wave_judge_rc}" -eq 77 ]; then
+      if [ "${wave_isolation_skipped:-false}" != true ]; then
+        _record_judge_isolation_failure WAVE_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
+      fi
+      break
+    fi
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
     if [ -n "${judge_json_candidate}" ]; then
       JUDGE_JSON="${judge_json_candidate}"
@@ -23371,11 +23525,17 @@ ${PR_DIFF}
     fi
   done
 
+	  if [ "${wave_judge_rc:-0}" -eq 77 ]; then
+	    echo "::warning::Wave judge isolation unavailable for #${TRACKING_NUM}; deferring without changing wave state." >&2
+	    [ "${wave_isolation_skipped:-false}" = true ] || tg_notify "Wave judge isolation unavailable for #${TRACKING_NUM}; retrying next poll." "WARNING"
+	    continue
+	  fi
 	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
 	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
 	    tg_notify "Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
 	    continue
 	  fi
+	  _clear_judge_isolation_state WAVE_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
 	  archive_transcript "${GITHUB_RUN_ID:-local-run}" "judge" "${JUDGE_OUTPUT_FILE}"
 
 	  # ---------------------------------------------------------------

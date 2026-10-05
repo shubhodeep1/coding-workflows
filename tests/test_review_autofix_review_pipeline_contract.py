@@ -8061,7 +8061,8 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	assert "pip install" not in step and "npm ci" not in step
 	assert "--network none --read-only --cap-drop ALL" in helper
 	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run' in helper
-	assert '--mount "type=bind,src=${root}/source,dst=/source"' in helper
+	assert 'opencode_source_mount="type=bind,src=${root}/source,dst=/source"' in helper
+	assert '--mount "${opencode_source_mount}"' in helper
 	assert '--mount "type=bind,src=${workspace}' not in helper
 	assert '--env OPENROUTER_API_KEY=isolated-placeholder' in helper
 	assert 'review_untrusted_workspace.py" transfer' in helper

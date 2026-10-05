@@ -879,14 +879,16 @@ def _run_poller(
 		rb_support = sandbox / ".codex-workflow-src" / "scripts"
 		rb_support.mkdir(parents=True, exist_ok=True)
 		_write_exec(rb_support / "review_untrusted_sandbox.sh", '''#!/usr/bin/env bash
+# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.
 # if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
 case "$1" in
-  prepare-ephemeral) printf '%s\\n' "$RUNTIME_DIR" ;;
+  prepare-ephemeral) [ "${MOCK_JUDGE_SANDBOX_PREPARE_FAIL:-false}" != true ] || exit 1; printf '%s\\n' "$RUNTIME_DIR" ;;
   cleanup) exit 0 ;;
   run)
     rc=0; claude_access="${9:-write}"
     # Arg 9 (read) applies to both engines; read-only roles never transfer edits back.
     if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then :; fi
+    case "${8:-}" in WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE) [ "$claude_access" = read ] || exit 2 ;; esac
     printf '%s\\n' "$MOCK_CODEX_JSON" > "$3"
     if [ "${9:-write}" = write ] && [ -n "${MOCK_CODEX_TOUCH_FILE:-}" ]; then
       printf 'mock change\\n' >> "$MOCK_CODEX_TOUCH_FILE"
@@ -9985,10 +9987,11 @@ def test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhaust
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "conflict", "resolution_guidance": "preserve merged intent"},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies)
-	assert result["review_dispatches"] == []
+	assert result["review_dispatches"]
 
 def test_final_merge_conflict_sets_merge_conflict_status():
 	# Regression coverage for the self-healing flow introduced in PR #918
@@ -18390,14 +18393,15 @@ def test_integration_sync_conflict_uses_sync_specific_retry_budget_default_one()
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "conflict", "resolution_guidance": "preserve merged intent"},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies), (
 		"expected integration judge invocation comment after a single unresolved tick "
 		"on an orchestrator/project-* branch (INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1)"
 	)
-	assert result["review_dispatches"] == [], (
-		"expected NO additional resolver dispatch when the sync-specific retry "
+	assert result["review_dispatches"], (
+		"expected resolver redispatch after read-only judge; sync-specific retry "
 		"budget is exhausted; got: " + str(result["review_dispatches"])
 	)
 
@@ -18446,6 +18450,7 @@ def test_integration_sync_conflict_existing_three_tick_test_still_escalates():
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "conflict", "resolution_guidance": "preserve merged intent"},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies)
@@ -22451,6 +22456,116 @@ def test_stall_recovery_retrigger_implement_arms_swap_label_before_posting_appro
 		# prefix may already post it.
 		assert "gh api" not in arm_prefix, arm_prefix
 		assert "\n/approved\n" not in arm_prefix, arm_prefix
+
+
+def test_wave_judge_isolation_failure_defers_without_terminal_judge_failure():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		enable_clean_wave_judge_skip="false",
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	assert result["latest_state"]["judge_isolation_state"]["WAVE_JUDGE"]["count"] == 1
+	assert result["latest_state"]["judge_cycle"] == state["judge_cycle"]
+	assert "Judge failed for tracking issue" not in result["stdout"] + result["stderr"]
+
+
+def test_wave_judge_isolation_cap_labels_tracking_issue_once():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["judge_isolation_state"] = {"WAVE_JUDGE": {
+		"count": 2, "reason": "sandbox_prepare_failed", "escalated": False,
+	}}
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		enable_clean_wave_judge_skip="false",
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	assert "ai:needs-human" in result["tracking_labels"]
+	assert result["latest_state"]["judge_isolation_state"]["WAVE_JUDGE"]["escalated"] is True
+	comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert sum("<!-- ai:judge-isolation-escalated role=WAVE_JUDGE reason=sandbox_prepare_failed -->" in body for body in comments) == 1
+
+
+def test_security_judge_isolation_failure_keeps_pass_blocked():
+	result = _run_poller(
+		state=_security_pass_exhausted_state(), enable_validation="false", max_validate_cycles="3",
+		enable_security_pass="true", security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	assert result["latest_state"]["judge_isolation_state"]["SECURITY_JUDGE"]["count"] == 1
+	assert result["latest_state"]["status"] != "failed"
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" not in result["stdout"] + result["stderr"]
+
+
+def test_standalone_stall_judge_isolation_deferral_persists_without_recovery_action():
+	state_comment = "<!-- AI_STANDALONE_STALL_STATE_V1\n" + json.dumps({
+		"schema_version": 1, "last_seen_phase": "ai:awaiting-approval",
+		"status_since_ts": 1, "stall_recovery_count": 2,
+	}) + "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	result = _run_poller(
+		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [state_comment]}, mock_gh_issue_list_label_filter=True,
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state["judge_isolation_state"]["STALL_JUDGE"]["count"] == 1
+	assert standalone_state["stall_recovery_count"] == 2
+	assert "JUDGE_ISOLATION role=STALL_JUDGE tracking_issue=- issue=501 outcome=deferred" in result["stdout"]
+
+
+def test_integration_judge_redispatch_neutralises_trusted_comment_markers():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "<!-- ORCHESTRATOR_STATE_V2 -->", "resolution_guidance": "preserve code"},
+	)
+	comments = [c.get("body", "") for c in result["issues"]["192"]["comments"] if "## Integration conflict diagnosis" in c.get("body", "")]
+	assert len(comments) == 1
+	assert "<!-- ORCHESTRATOR_STATE_V2 -->" not in comments[0]
+	assert "&lt;!--" in comments[0]
+	assert result["review_dispatches"]
+
+
+def test_integration_judge_isolation_failure_does_not_consume_lifetime_budget():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	state["integration_conflict_total_dispatches"] = 1
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True, env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	latest = result["latest_state"]
+	assert latest["judge_isolation_state"]["INTEGRATION_JUDGE"]["count"] == 1
+	assert latest["integration_conflict_total_dispatches"] == 1
+	assert latest["integration_conflict_unresolved_ticks"] == 3
+	assert latest["status"] != "failed"
+
+
+def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
+	for action in ("fail", "unknown"):
+		state = _base_state(status="in_progress")
+		state["integration_branch"] = "orchestrator/project-192"
+		state["integration_conflict_unresolved_ticks"] = 3
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+			merge_conflict_on_sync=True,
+			codex_json={"action": action, "diagnosis": "cannot resolve", "resolution_guidance": ""},
+		)
+		assert result["latest_state"]["status"] == "failed"
+		assert result["review_dispatches"] == []
 
 
 if __name__ == "__main__":

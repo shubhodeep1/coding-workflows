@@ -797,6 +797,7 @@ jobs:
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
+          JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
           # Freshness window (minutes) the in-flight / zombie guards use for
           # review-family runs (AI Review / Internal Review / Review Autofix),

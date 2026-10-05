@@ -30,6 +30,12 @@ def test_role_and_access_are_allowlisted(tmp_path):
 	assert 'engine="${7:-codex}"' in text
 	assert 'claude_access="${9:-write}"' in text
 	assert '"${claude_role}" = REVIEW_CONSOLIDATOR' in text
+	assert '# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.' in text
+	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE"):
+		proc = subprocess.run(["bash", str(SANDBOX), "run", "prompt", "out", "model", "high", "/dev/null", "codex", role, "write"],
+			env=env, capture_output=True, text=True)
+		assert proc.returncode == 2, (role, proc.stderr)
+		assert role in text.split('case "${claude_role}" in', 1)[1].split('esac', 1)[0]
 
 
 def test_read_role_cannot_write_snapshot_or_transfer():
@@ -49,6 +55,8 @@ def test_read_role_cannot_write_snapshot_or_transfer():
 	opencode = text[text.index('[[ "${model}" =~'):]
 	assert 'claude_access="${9:-write}"' in text
 	assert 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' in opencode
+	assert "opencode_source_mount+=',readonly'" in opencode
+	assert 'config["snapshot"] = False' in opencode
 
 
 def test_prepare_ephemeral_skips_dependency_container(tmp_path):
