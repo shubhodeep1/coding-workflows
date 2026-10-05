@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_data_provision_guard.py:line ~63-68 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_WEAKENS_CONTROL_PATTERNS` does not recognize \u201cVerification will not be performed\u201d as weakening a control.\n  WHY: The unmatched option makes `_option_weakens_control()` return false and `_option_requires_data()` find no missing-data request, so `run_guard()` returns the answer unchecked; severity was MAJOR for five reviewers and BLOCKER for google_gemini-3_1-flash-lite.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Check whether required evidence is actually absent; never replace a required security verification with a skip option.\" (Issue #6338)\n  expected_change_site: scripts/clarify_data_provision_guard.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `_option_weakens_control()` relies entirely on regex patterns to detect weakening in fallbacks; a new, non-matching bypass phrase can still pass unchecked.\n- requirement: Never choose a fallback that skips or weakens a verification or security control.\n  expected_change_site: scripts/clarify_data_provision_guard.py \u2014 _WEAKENS_CONTROL_PATTERNS\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The pattern set does not match the construction \"<control-noun> will not be performed\" or \"<control-noun> is not performed\", although these are semantically equivalent to skipping the control.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/clarify_data_provision_guard.py | severity=MAJOR | confidence=5\n  PROBLEM: `_WEAKENS_CONTROL_PATTERNS[2]` does not recognize \u201cVerification will not be performed\u201d as weakening a control.\n  WHY: Pattern 3 lacks \u201cwill\u201d in its link words and \u201cperformed\u201d in its action words, and none of the other six patterns match; `_option_weakens_control()` and `_option_requires_data()` both return false, so `run_guard()` returns the answer unchanged.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/clarify_data_provision_guard.py | severity=BLOCKER | confidence=5\n  PROBLEM: `_WEAKENS_CONTROL_PATTERNS` misses common passive and equivalent phrases for skipping security checks, including \u201cVerification will not be performed.\u201d\n  WHY: The selected option is returned unchecked, allowing the workflow to proceed with a response that explicitly bypasses required verification or security controls.\n- Requirement: \"Check whether required evidence is actually absent; never replace a required security verification with a skip option.\" (Issue #6338)\n  Expected change site: scripts/clarify_data_provision_guard.py\n  Evidence of absence: The guard relies entirely on regex patterns to detect weakening in fallbacks; if `_option_weakens_control()` misses a sophisticated bypass phrase, the answer is returned unchecked.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/clarify_data_provision_guard.py (lines 35-75) | severity=MAJOR | confidence=5\n  PROBLEM: `_WEAKENS_CONTROL_PATTERNS` does not recognize \u201cVerification will not be performed\u201d or similar constructions such as \u201cTest will not be performed\u201d and \u201cScan will not be performed.\u201d\n  WHY: The wording does not match any pattern, so `_option_weakens_control()` returns false; `_option_requires_data()` finds no missing-data request and `run_guard()` allows the bypass.\n- Requirement: Never choose a fallback that skips or weakens a verification or security control.\n  Expected change site: scripts/clarify_data_provision_guard.py \u2014 _WEAKENS_CONTROL_PATTERNS\n  Evidence of absence: The patterns do not match \"<control-noun> will not be performed\" or \"<control-noun> is not performed\", although these are semantically equivalent to skipping the control.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_data_provision_guard.py | severity=MAJOR | confidence=5\n  PROBLEM: `_WEAKENS_CONTROL_PATTERNS` and `_option_weakens_control()` do not classify \u201cVerification will not be performed\u201d as weakening a control.\n  WHY: `_option_weakens_control()` and `_option_requires_data()` both return false, so `run_guard()` returns the answer unchanged and allows the workflow to post a verification bypass.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/clarify_data_provision_guard.py (patterns 3-4), line ~63-68 | severity=MAJOR | confidence=4\n  PROBLEM: The newly added passive-voice patterns do not recognize \u201cVerification will not be performed\u201d or similar future-tense negations as weakening a control.\n  WHY: Patterns 3 and 4 require a status word from their skip-word list after an optional status group that omits \u201cwill not be\u201d; the option therefore passes unchecked and the workflow posts a verification bypass.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/clarify_data_provision_guard.py | severity=MAJOR | confidence=5\n  PROBLEM: `_WEAKENS_CONTROL_PATTERNS` patterns 3 and 4 do not recognize \u201cVerification will not be performed\u201d as weakening a control.\n  WHY: \u201cwill not be\u201d is absent from the verb list and \u201cperformed\u201d from the status list, so `_option_weakens_control()` and `_option_requires_data()` return false and the workflow posts the bypass unchanged.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "aa8f75707b7eed88355cb690abbf3e7e015a2856384a6f612daefa887a4ac668",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6350,
+    "run_id": "37342510024",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37342510024",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005183040_caef676e54",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6350,
+    "run_id": "37342510024"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T18:30:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
