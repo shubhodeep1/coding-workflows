@@ -16,11 +16,12 @@ Subcommands:
       at MAX_READONLY_FILES / MAX_READONLY_TOTAL (exceeding fails closed).
       Falls back to walking HOST when it is not a git work tree.
 
-  export-oversized HOST SCOPE_FILE DEST MAX_FILE_BYTES MAX_TOTAL_BYTES
+  export-oversized HOST SCOPE_FILE DEST MAX_FILE_BYTES MAX_TOTAL_BYTES [SCOPE_MODE]
       Export scoped files omitted by snapshot-readonly as bounded chunks,
       using its same credential and hidden-path filters. Filtered files are
-      never exported; scoped filtered files reject the audit. Unscoped
-      oversized files are listed for coverage only.
+      never exported; scoped filtered files reject the audit. The default
+      explicit mode lists unscoped oversized files for coverage; all mode
+      exports every eligible oversized tracked file.
 
   snapshot-workspace HOST DEST MANIFEST
       Copy HOST except credential-looking paths and `.git` into DEST, keeping
@@ -278,7 +279,9 @@ def snapshot_readonly(host, dest):
 	log(f"snapshot mode=read-only source={source} files={count} bytes={total} skipped_large={skipped_large} skipped_other={skipped_other}")
 
 
-def export_oversized(host, scope_file, dest, max_file, max_total):
+def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="explicit"):
+	if scope_mode not in ("explicit", "all"):
+		raise Rejected("invalid oversized scope mode")
 	try:
 		file_cap, total_cap = int(str(max_file)), min(int(str(max_total)), MAX_INCLUDE_TOTAL)
 	except ValueError as exc:
@@ -323,7 +326,7 @@ def export_oversized(host, scope_file, dest, max_file, max_total):
 			continue
 		if info.st_size <= MAX_READONLY_FILE:
 			continue
-		if name not in scope:
+		if scope_mode == "explicit" and name not in scope:
 			unscoped.append({"path": name, "size": info.st_size})
 			continue
 		if info.st_size > file_cap:
@@ -375,10 +378,11 @@ def export_oversized(host, scope_file, dest, max_file, max_total):
 		exported.append({"path": name, "size": size, "sha256": digest.hexdigest(), "dir": folder, "chunks": chunks})
 	(dest / "manifest.json").write_text(json.dumps({
 		"schema_version": "oversized_readonly_export.v1", "threshold_bytes": MAX_READONLY_FILE,
+		"scope_mode": scope_mode,
 		"chunk_bytes": CHUNK, "scoped": exported, "unscoped_oversized": unscoped[:50],
 		"unscoped_oversized_count": len(unscoped),
 	}), encoding="utf-8")
-	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)}")
+	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)} mode={scope_mode}")
 
 
 def load_manifest(manifest):
@@ -799,10 +803,13 @@ def copy_include(source, target):
 def main():
 	command = sys.argv[1] if len(sys.argv) > 1 else ""
 	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "transfer": 3, "seed-git": 2, "copy-include": 2}
-	if command not in arity or len(sys.argv) != arity[command] + 2:
+	if command not in arity or (len(sys.argv) != arity[command] + 2
+		and not (command == "export-oversized" and len(sys.argv) == 8)):
 		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
 		raise SystemExit(2)
 	args = [Path(value) for value in sys.argv[2:]]
+	if command == "export-oversized" and len(args) == 6:
+		args[-1] = str(args[-1])
 	global HIDDEN_NAMES
 	try:
 		HIDDEN_NAMES = hidden_names()

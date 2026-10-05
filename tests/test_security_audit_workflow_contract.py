@@ -2089,7 +2089,7 @@ def test_security_audit_full_scan_chunks_explicit_prior_and_fix_cycle_files() ->
 			assert json.loads(result["security_audit_findings_output"])["coverage"]["scoped_oversized_chunked"] == ["large.py"]
 
 
-def test_security_audit_full_scan_reports_unscoped_oversized_file() -> None:
+def test_security_audit_full_scan_chunks_oversized_file() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-") as td:
 		repo_dir, _base_sha, head_sha = _oversized_fixture_repo(Path(td))
 		state = _security_audit_tracker_state()
@@ -2098,9 +2098,26 @@ def test_security_audit_full_scan_reports_unscoped_oversized_file() -> None:
 			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
 		})
 		assert proc.returncode == 0, proc.stderr
-		assert "Coverage note: 1 tracked files over 2 MiB" in result["issue_comment_bodies"][0]
-		assert "large.py" in result["issue_comment_bodies"][0]
+		assert "Oversized scoped files read in chunks: 1" in result["issue_comment_bodies"][0]
+		assert "Coverage note:" not in result["issue_comment_bodies"][0]
+		assert "large.py (" in result["codex_stdin"][0]
+		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in result["codex_mounts"][0])
 		assert any(head_sha in body for body in result["issue_edit_bodies"])
+
+
+def test_security_audit_full_scan_oversized_cap_fails_before_codex_or_tracker() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-cap-") as td:
+		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		})
+		assert proc.returncode != 0 and "phase=oversized-scope" in proc.stderr
+		assert not result.get("codex_calls")
+		assert not result.get("issue_comment_bodies")
+		assert not result.get("issue_edit_bodies")
 
 
 def test_security_audit_no_oversized_file_has_no_tracker_coverage_lines() -> None:
