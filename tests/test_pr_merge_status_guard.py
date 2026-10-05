@@ -921,9 +921,9 @@ def test_same_destination_different_sources_checks_each_tip(merged_branch_repo, 
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
 	original_blocking_pull_request = guard.blocking_pull_request
-	def check_tip(pull_requests, cwd, base, tip):
+	def check_tip(pull_requests, cwd, base, tip, remote="origin"):
 		checked_tips.append(tip)
-		return original_blocking_pull_request(pull_requests, cwd, base, tip)
+		return original_blocking_pull_request(pull_requests, cwd, base, tip, remote)
 	monkeypatch.setattr(guard, "blocking_pull_request", check_tip)
 	def listing(slug, branch, cwd):
 		calls.append(branch)
@@ -974,8 +974,6 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 	"git push origin HEAD",
 	"COUNT+=1 git push origin HEAD:feature/x",
 	"git push --repo=origin",
-	"git push --repo origin HEAD:feature/x",
-	"git push --repo=origin HEAD:feature/x",
 	"git push --repo=upstream origin",
 	"git push origin --repo=upstream",
 	"git push origin HEAD:feature/x --repo=upstream",
@@ -1001,6 +999,31 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 
 
 @pytest.mark.parametrize("command", [
+	"git push other HEAD:feature/x",
+	"git push https://github.com/p/q.git HEAD:feature/x",
+	"git push --repo=other",
+	"git push --repo other",
+	"git push --rep=other",
+])
+def test_push_looks_up_destination_repo(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "remote", "add", "other", "https://github.com/p/q.git")
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	lookups: list[tuple[str, str]] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "default_branch", lambda cwd, remote="origin": "main")
+	def listing(slug, branch, cwd):
+		lookups.append((slug, branch))
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert lookups == [("p/q", "feature/x")]
+
+
+@pytest.mark.parametrize("command", [
 	"git push origin 123 > /dev/null",
 	'git push origin "123">/dev/null',
 ])
@@ -1020,6 +1043,111 @@ def test_spaced_redirect_keeps_numeric_refspec(merged_branch_repo, monkeypatch, 
 		"tool_input": {"command": command}})
 	assert code == 2, message
 	assert lookups == ["123"]
+
+
+def test_default_push_remote_precedence(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "remote", "add", "other", "https://github.com/p/q.git")
+	_git(repo, "remote", "add", "upstream", "https://github.com/a/b.git")
+	_git(repo, "config", "branch.feature/x.remote", "upstream")
+	_git(repo, "config", "remote.pushDefault", "other")
+	assert guard._default_push_remote(str(repo)) == "other"
+	_git(repo, "config", "branch.feature/x.pushRemote", "upstream")
+	assert guard._default_push_remote(str(repo)) == "upstream"
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "default_branch", lambda cwd, remote="origin": "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: lookups.append(slug) or [OPEN_PR])
+	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push"}})[0] == 0
+	assert lookups == ["a/b"]
+	_git(repo, "config", "--unset", "branch.feature/x.pushRemote")
+	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push"}})[0] == 0
+	assert lookups == ["a/b", "p/q"]
+	_git(repo, "config", "--unset", "remote.pushDefault")
+	assert guard._default_push_remote(str(repo)) == "upstream"
+	_git(repo, "config", "--unset", "branch.feature/x.remote")
+	assert guard._default_push_remote(str(repo)) == "origin"
+	_git(repo, "remote", "remove", "origin")
+	_git(repo, "remote", "remove", "upstream")
+	assert guard._default_push_remote(str(repo)) == "other"
+	_git(repo, "remote", "remove", "other")
+	assert guard._default_push_remote(str(repo)) == "origin"
+
+
+@pytest.mark.parametrize("command", [
+	"git push /tmp/x HEAD:feature/x",
+	"git push nosuch HEAD:feature/x",
+	"git push git@gitlab.com:o/r HEAD:x",
+	"git push https://evilgithub.com/o/r HEAD:x",
+	"git push --repo=origin HEAD:feature/x",
+	"git push --repo origin HEAD:feature/x",
+])
+def test_unmappable_push_destination_blocks_without_lookup(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("no PR lookup expected"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2
+	assert "could not verify the push destination" in message
+
+
+@pytest.mark.parametrize("include_github_url", [False, True])
+def test_pushurls_all_must_map_and_credentials_are_redacted(
+	merged_branch_repo, monkeypatch, include_github_url: bool
+) -> None:
+	repo, _ = merged_branch_repo
+	if include_github_url:
+		_git(repo, "config", "--add", "remote.origin.pushurl", "https://github.com/o/r.git")
+	_git(repo, "config", "--add", "remote.origin.pushurl", "https://u:secret@example.com/o/r")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("no PR lookup expected"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 2
+	assert "secret" not in message
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push https://u:secret@example.com/o/r HEAD:feature/x"}})
+	assert code == 2
+	assert "secret" not in message
+
+
+def test_empty_pushurl_is_not_treated_as_fetch_url(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "config", "remote.origin.pushurl", "")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("no PR lookup expected"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 2
+	assert "could not verify the push destination" in message
+
+
+def test_multiple_github_pushurls_are_all_checked(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "config", "--add", "remote.origin.pushurl", "https://github.com/o/r.git")
+	_git(repo, "config", "--add", "remote.origin.pushurl", "https://github.com/p/q.git")
+	seen: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: seen.append(slug) or [OPEN_PR])
+	code, _ = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 0
+	assert seen == ["o/r", "p/q"]
+
+
+def test_different_pushurl_does_not_use_fetch_repository_history(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "config", "remote.origin.pushurl", "https://github.com/p/q.git")
+	assert guard._resolve_push_destination(str(repo), "origin").history_remote == ""
+	monkeypatch.setattr(guard, "default_branch", lambda cwd, remote="origin": "main")
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: (_ for _ in ()).throw(guard.LookupUnavailable("offline")))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 0, message
+	assert "no configured remote" in capsys.readouterr().out
 
 
 def test_unresolved_push_source_requests_confirmation(monkeypatch, merged_branch_repo, capsys) -> None:
@@ -1374,6 +1502,41 @@ def test_history_fallback_blocks_when_remote_branch_is_contained_in_main(merge_c
 	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push origin feature/x"))
 	assert proc.returncode == 2, proc.stdout + proc.stderr
 	assert "fully contained in origin/main" in proc.stderr
+
+
+def test_history_fallback_uses_push_destination_remote(merge_commit_repo, monkeypatch, capsys) -> None:
+	repo, _, _, _ = merge_commit_repo
+	bare = repo.parent / "origin.git"
+	_git(repo, "remote", "add", "other", "https://github.com/p/q.git")
+	_git(repo, "config", f"url.{bare}.insteadOf", "https://github.com/p/q.git")
+	_git(repo, "fetch", "other", "main", "feature/x")
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: (_ for _ in ()).throw(guard.LookupUnavailable("offline")))
+	observed: list[list[str]] = []
+	real_run = guard._run
+	def recording_run(argv, cwd, timeout):
+		observed.append(argv)
+		return real_run(argv, cwd, timeout)
+	monkeypatch.setattr(guard, "_run", recording_run)
+	code, message = guard.evaluate(_bash_payload("git push other feature/x") | {"cwd": str(repo)})
+	assert code == 2, message
+	assert "fully contained in other/main" in message
+	assert any(argv[:5] == ["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--heads"]
+		and argv[5] == "other" for argv in observed)
+	assert any(argv[:6] == ["env", "GIT_TERMINAL_PROMPT=0", "git", "fetch", "--quiet", "other"]
+		for argv in observed)
+	assert "origin/main" not in capsys.readouterr().out
+
+
+def test_raw_url_without_remote_asks_when_api_unavailable(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "default_branch", lambda cwd, remote="origin": "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: (_ for _ in ()).throw(guard.LookupUnavailable("offline")))
+	code, message = guard.evaluate(_bash_payload("git push https://github.com/p/q HEAD:feature/x") | {"cwd": str(repo)})
+	assert code == 0, message
+	assert "no configured remote" in capsys.readouterr().out
 
 
 def test_history_fallback_push_asks_when_inconclusive(merge_commit_repo) -> None:
