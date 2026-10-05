@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:2864-2872 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The contract test still asserts old eager OpenCode configuration patterns that were removed when configuration moved to lazy sandbox preparation.\n  WHY: Those assertions fail against the current implementation, causing the contract test and CI to fail.\n- scripts/review_rb_judge.sh:154-156 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The phase comparison uses an unquoted literal, which reviewers report is fragile to future phase values containing whitespace or glob characters.\n  WHY: The severity is low based on the reported nit; z-ai_glm-5_2 disagrees, saying the unquoted literal is safe for current and future phase values.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Maintain consistent sentence structure and grammar in Phase 14 description.\n  expected_change_site: agents.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: agents.md: the new sentence starts with a lowercase letter after a period in the preceding sentence.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_autofix_review_pipeline_contract.py: 2864, 2865, 2871, 2872 | severity=MAJOR | confidence=5\n  PROBLEM: Four assertions still expect text patterns from the old host-based OpenCode execution, including removed eager configuration calls.\n  WHY: The assertions fail against the current script, causing the contract test to fail.\n- agents.md: line 115\n  PROBLEM: The sentence beginning with lowercase \"the\" after the preceding period should begin with uppercase \"The\".\n  WHY: The sentence starts with a lowercase letter after a sentence boundary.\n- scripts/review_rb_judge.sh: line 156\n  PROBLEM: `[ \"${rb_oc_phase}\" != review_rb_judge ]` leaves the literal unquoted.\n  WHY: The comparison is reported as fragile to future phase values containing whitespace, glob characters, or a binary name collision.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh: 154 | severity=NIT | confidence=4\n  PROBLEM: Bash string comparison syntax uses an unquoted literal.\n  WHY: The comparison is reported as fragile to future changes involving whitespace or globs.\n- Requirement: Maintain consistent sentence structure and grammar in Phase 14 description.\n  Expected change site: agents.md\n  Evidence of absence: The new sentence added to the Phase 14 description starts with a lowercase letter (\"the\") after a period in the preceding sentence, breaking sentence flow.\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_review_pipeline_contract.py: lines 2864, 2871, 2872 | severity=MAJOR | confidence=5\n  PROBLEM: Three contract assertions check for literal strings removed by the refactoring, including eager verdict and fix configuration preparation.\n  WHY: The assertions will fail because the implementation moved configuration preparation into the lazy sandbox helper.\n- scripts/review_rb_judge.sh: line 156\n  PROBLEM: `[ \"${rb_oc_phase}\" != review_rb_judge ]` leaves the literal unquoted.\n  WHY: The comparison is reported as fragile to future phase values containing whitespace, glob characters, or a binary name collision.\n- agents.md: line 115\n  PROBLEM: The newly added sentence begins with lowercase \"the\" after the preceding period.\n  WHY: The sentence boundary requires an uppercase \"The\".\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_autofix_review_pipeline_contract.py: 2864, 2871-2872 | severity=MAJOR | confidence=5\n  PROBLEM: The contract test still asserts old literal reviewer/writer configuration calls and eager config-generation blocks.\n  WHY: `test_opencode_full_review_cutover_removes_codex_runtime` fails its string assertions against the current script, causing the test suite and CI check to fail.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_review_pipeline_contract.py: 2864, 2871, 2872 | severity=MAJOR | confidence=5\n  PROBLEM: The contract test expects eager OpenCode configuration calls that the implementation removed.\n  WHY: The assertions fail because configuration now happens lazily inside `review_rb_opencode_sandbox_prepare()`.\n- agents.md: Lines 114-115\n  PROBLEM: The sentence begins with lowercase \"the\" after the preceding period.\n  WHY: The sentence start should be capitalized.\n- scripts/review_rb_judge.sh: Line 156\n  PROBLEM: `[ \"${rb_oc_phase}\" != review_rb_judge ]` uses an unquoted literal.\n  WHY: The comparison is reported as fragile to future phase values with whitespace, glob characters, or binary name collisions.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_review_autofix_review_pipeline_contract.py: lines 2864, 2865, 2871, 2872 (function test_opencode_full_review_cutover_removes_codex_runtime) | severity=MAJOR | confidence=5\n  PROBLEM: The contract test still asserts the presence of removed OpenCode command arrays and eager configuration blocks.\n  WHY: The assertions raise `AssertionError` because the expected substrings no longer exist in `RB_JUDGE.read_text()`.\n- agents.md: lines 114-115\n  PROBLEM: The new sentence starts with lowercase \"the\" immediately after the period ending the preceding bullet.\n  WHY: The sentence start should be capitalized.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "28164e9f087f9f31f6cd3660bf8020fd421b48e5f70079c01751ef957182748d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6406,
+    "run_id": "37384258087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37384258087",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005230510_0784f8a2ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6406,
+    "run_id": "37384258087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T23:05:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
