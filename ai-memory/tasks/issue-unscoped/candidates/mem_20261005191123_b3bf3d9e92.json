@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:287-293 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The error message \"Unblock judge could not mark project #${ITEM} for closure; label write failed\" is sent whenever ops_failed is true for a project with a CRITICAL telegram, regardless of which operation actually failed.\n  WHY: A non-label failure can therefore mislead operators about the failure point; minimax_minimax-m3 and openai_gpt-6-luna state that the current code uses generic closure-failure wording.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh: Lines 287-293 in the telegram operation handler | severity=high | confidence=4\n  PROBLEM: The error message \"Unblock judge could not mark project #${ITEM} for closure; label write failed\" is sent whenever ops_failed is true for a project with a CRITICAL telegram, regardless of which operation actually failed.\n  WHY: When a non-label operation fails (e.g., create_issue or dispatch_review), the Telegram alert incorrectly attributes the failure to a label write, misleading operators during incident response about the actual failure point.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ca93c2c6bce01a7d907596762d2d636f57e7540f6d55728461c161debb037228",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6319,
+    "run_id": "37354215518",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37354215518",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005191123_b3bf3d9e92",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6319,
+    "run_id": "37354215518"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T19:11:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
