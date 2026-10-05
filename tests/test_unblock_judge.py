@@ -136,7 +136,7 @@ def _decision(stop: str = "scope-blocked") -> dict:
 	return ledger.decide(7, stop, FP, [], None, NOW)
 
 
-@pytest.mark.parametrize("path", [".github/workflows/ci.yml", ".claude/settings.json", "scripts/x.sh", "scripts", "./scripts/y.py"])
+@pytest.mark.parametrize("path", ["scripts/x.sh", "scripts", "./scripts/y.py"])
 def test_override_never_covers_protected_paths_in_coding_workflows(path: str) -> None:
 	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
 	with pytest.raises(ledger.UsageError):
@@ -223,13 +223,27 @@ def test_destructive_override_refuses_canonical_sources_everywhere() -> None:
 
 @pytest.mark.parametrize("path", [
 	".github/workflows/ci.yml", ".github/actions/x/action.yml", ".claude/settings.json",
-	"workflow-templates/ai-review.yml", ".GitHub/workflows/x.yml", ".github",
+	"workflow-templates/ai-review.yml", ".github/ai/claude_engine.json",
+	".GitHub/workflows/x.yml", ".Claude/settings.json", ".github", ".github/",
+	"workflow-templates", "./.github/workflows/x.yml",
 ])
-def test_destructive_override_refuses_protected_automation_in_consumer_repos(path: str) -> None:
+@pytest.mark.parametrize("stop", ["scope-blocked", "destructive-blocked"])
+@pytest.mark.parametrize("repo", ["acme/app", "shubhodeep1/coding-workflows"])
+def test_override_refuses_protected_automation_in_every_repo(path: str, stop: str, repo: str) -> None:
 	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
 	with pytest.raises(ledger.UsageError, match="protected automation path"):
-		ledger.validate(verdict, _decide("destructive-blocked"), "acme/app")
-	# A consumer may still need a scope override to edit its own automation.
+		ledger.validate(verdict, _decide(stop), repo)
+
+
+def test_scope_override_refuses_a_mixed_list_without_partial_approval() -> None:
+	verdict = {"verdict": "override_guard", "reason": "audited", "paths": ["src/a.py", ".github/actions/a/action.yml"]}
+	with pytest.raises(ledger.UsageError, match="protected automation path"):
+		ledger.validate(verdict, _decide("scope-blocked"), "o/consumer")
+
+
+@pytest.mark.parametrize("path", ["src/a.py", "docs/github.md", "my.github/x", "scripts/x.sh", "prompts/x.txt"])
+def test_consumer_scope_override_still_accepts_non_automation_paths(path: str) -> None:
+	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
 	assert ledger.validate(verdict, _decide("scope-blocked"), "o/consumer")["paths"] == [path]
 
 
@@ -502,6 +516,9 @@ if method == "POST" and endpoint.endswith("/comments"):
 	state["comments"].append({"endpoint": endpoint, "body": f.get("body", "")})
 	done("{}")
 if method == "POST" and endpoint.endswith("/labels"):
+	if os.environ.get("FAKE_GH_FAIL_LABEL"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	state["labels_added"].append([endpoint, f.get("labels[]")])
 	done("{}")
 if method == "DELETE":
@@ -748,10 +765,57 @@ def test_judge_clean_verdict_with_key_is_acted_on(tmp_path: Path) -> None:
 def test_codex_judge_uses_only_isolated_runner() -> None:
 	text = JUDGE.read_text(encoding="utf-8")
 	assert 'bash "${SUPPORT_DIR}/scripts/clarify_isolated_run.sh" "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/codex.err" codex UNBLOCK_JUDGE' in text
+	assert 'bash "${SUPPORT_DIR}/scripts/clarify_isolated_run.sh" "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/claude.err" claude UNBLOCK_JUDGE' in text
+	assert "claude_run" not in text
 	assert 'CLARIFY_ISOLATION_SUPPORT_DIR="${SUPPORT_DIR}/scripts"' in text
 	assert 'CLARIFY_ISOLATION_TIMEOUT_SECS="${UNBLOCK_JUDGE_TIMEOUT_SECS:-1500}"' in text
 	assert "write_codex_config.sh" not in text
 	assert "codex --ask-for-approval" not in text
+
+
+@pytest.mark.parametrize("claude_rc,expected_engines", [(0, ["claude"]), (75, ["claude", "codex"]), (1, ["claude"])])
+def test_claude_judge_only_runs_in_isolated_container(tmp_path: Path, claude_rc: int, expected_engines: list[str]) -> None:
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	(support / "prompts").mkdir()
+	for name in ("unblock_ledger.py", "unblock_actions.py"):
+		(support / "scripts" / name).symlink_to(ROOT / "scripts" / name)
+	(support / "prompts" / "mode-judge-unblock.txt").symlink_to(ROOT / "prompts" / "mode-judge-unblock.txt")
+	(support / "scripts" / "ai_engine.sh").write_text('ai_engine_for_role() { echo claude; }\n', encoding="utf-8")
+	(support / "scripts" / "clarify_isolated_run.sh").write_text('''#!/usr/bin/env bash
+printf '%s|%s|%s|%s|%s|%s|%s\\n' "$4" "$5" "${GH_TOKEN+set}" "${GITHUB_TOKEN+set}" "${TG_BOT_SECRET+set}" "${OPENROUTER_API_KEY+set}" "${CLARIFY_ISOLATION_TIMEOUT_SECS}" >> "${FAKE_ISOLATED_CALLS}"
+if [ "$4" = claude ] && [ "${FAKE_CLAUDE_RC}" -ne 0 ]; then exit "${FAKE_CLAUDE_RC}"; fi
+printf '%s\\n' "${FAKE_ISOLATED_VERDICT}" > "$2"
+''', encoding="utf-8")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	claude_shim_marker = tmp_path / "host_claude_called"
+	claude_shim = bin_dir / "claude"
+	claude_shim.write_text('printf called > "${FAKE_CLAUDE_SHIM_MARKER}"\n', encoding="utf-8")
+	claude_shim.chmod(0o755)
+	calls = tmp_path / "isolated_calls"
+	result, state = _judge(
+		tmp_path, ISSUE, SUPPORT_DIR=str(support), TARGET_DIR=str(tmp_path),
+		FAKE_CLAUDE_RC=str(claude_rc), FAKE_ISOLATED_CALLS=str(calls),
+		FAKE_ISOLATED_VERDICT=json.dumps({"verdict": "retry_budget", "reason": "flaky", "instructions": "retry"}),
+		FAKE_CLAUDE_SHIM_MARKER=str(claude_shim_marker), GH_TOKEN="gh-sentinel", GITHUB_TOKEN="github-sentinel",
+		TG_BOT_SECRET="tg-sentinel", OPENROUTER_API_KEY="openrouter-sentinel",
+	)
+	assert result.returncode == 0, result.stderr
+	call_lines = [line.split("|") for line in calls.read_text(encoding="utf-8").splitlines()]
+	assert [line[:2] for line in call_lines] == [[engine, "UNBLOCK_JUDGE"] for engine in expected_engines]
+	assert all(line[2:6] == (["", "", "", ""] if engine == "claude" else ["", "", "", "set"])
+		for line, engine in zip(call_lines, expected_engines))
+	assert all(line[6] == "1500" for line in call_lines)
+	assert not claude_shim_marker.exists()
+	if claude_rc == 1:
+		assert "outcome=model_failed reason=isolation_failed rc=1" in result.stdout
+		assert "reason=invalid_verdict" in result.stdout
+		assert len(state["comments"]) == 1 and "ai:unblock-wait:v1 item=7 reason=invalid_verdict" in state["comments"][0]["body"]
+		assert not state["labels_removed"]
+	else:
+		assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+		assert state["comments"][-1]["body"] == "/answer retry"
 
 
 def test_isolation_failure_never_runs_host_codex(tmp_path: Path) -> None:
@@ -906,6 +970,30 @@ def test_failed_close_does_not_add_terminal_label(tmp_path: Path) -> None:
 	assert "op=close issue=7 outcome=failed" in result.stdout
 	assert "reason=actuation_failed" in result.stdout
 	assert state["labels_added"] == []
+
+
+def test_closed_item_still_alerts_when_terminal_label_fails(tmp_path: Path) -> None:
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	(support / "prompts").mkdir()
+	for name in ("unblock_ledger.py", "unblock_actions.py"):
+		(support / "scripts" / name).symlink_to(ROOT / "scripts" / name)
+	(support / "prompts" / "mode-judge-unblock.txt").symlink_to(ROOT / "prompts" / "mode-judge-unblock.txt")
+	(support / "scripts" / "tg_helpers.sh").write_text(
+		'tg_send_msg() { printf "%s\\n" "$2" >> "$FAKE_TG_ALERTS"; }\n', encoding="utf-8",
+	)
+	alerts = tmp_path / "alerts.txt"
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "close", "reason": "nothing left"},
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts))
+	assert "op=add_labels issue=7 label=ai:unblock-closed outcome=failed" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
+	assert any(fields.get("state") == "closed" for _, fields in state["patched"])
+	assert state["labels_added"] == []
+	assert alerts.read_text(encoding="utf-8").splitlines() == ["CRITICAL"]
+	result, _ = _judge(tmp_path, ISSUE, verdict={"verdict": "close", "reason": "nothing left"},
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_CLOSE="1", FAKE_TG_ALERTS=str(alerts))
+	assert "reason=actuation_failed" in result.stdout
+	assert alerts.read_text(encoding="utf-8").splitlines() == ["CRITICAL"]
 
 
 def test_judge_closes_without_the_model_when_the_caps_are_spent(tmp_path: Path) -> None:
