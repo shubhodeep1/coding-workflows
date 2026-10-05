@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_check_failure_triage_workflow_security.py:line 20 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `scripts.security_dependency` import might fail if Python expects `scripts` to be a package and the `scripts/` directory lacks `__init__.py`.\n  WHY: CI runs the test directly, and the reviewer says imports without `__init__.py` could fail in a strict environment.\n- tests/test_check_failure_triage_workflow_security.py:20-21 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Inserting `REPO_ROOT` directly into `sys.path` does not provide a string path for importing `scripts.security_dependency`.\n  WHY: CI runs the test directly, leaving the script directory rather than the repository root on the import path, so the import fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Triage-linked PRs always run the security pass.\"\n  expected_change_site: `scripts/security_pass_skip.py`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The code changes in `scripts/security_pass_skip.py` do not explicitly force a security pass for triage-linked PRs; they only remove the triage label from the skippable markers, which is a necessary step but not sufficient to ensure the security pass workflow is triggered or that the PR is blocked from auto-merge without it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_check_failure_triage_workflow_security.py:line 20 | confidence=3\n  PROBLEM: `REPO_ROOT` is a `Path` object; `sys.path.insert(0, str(REPO_ROOT))` correctly adds a string, but the `scripts.security_dependency` import might fail if Python's `import` mechanism expects `scripts` as a package and the `scripts` directory lacks `__init__.py`.\n  WHY: CI runs this test as `python3 tests/test_check_failure_triage_workflow_security.py`. While inserting the repo root works, if the environment or Python version is strict about package boundaries, imports without `__init__.py` in the `scripts/` directory can fail.\n- Requirement: \"Triage-linked PRs always run the security pass.\"\n  Expected change site: `scripts/security_pass_skip.py`\n  Evidence of absence: The code changes in `scripts/security_pass_skip.py` do not explicitly force a security pass for triage-linked PRs. They only remove the triage label from the skippable markers, which is a necessary step but not sufficient to ensure the security pass workflow is triggered or that the PR is blocked from auto-merge without it. The linked issue description implies this requirement, but no implementation in the diff enforces it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_check_failure_triage_workflow_security.py:20-21 | severity=critical | confidence=5\n  PROBLEM: `REPO_ROOT` is a `Path` object, and inserting it directly into `sys.path` does not provide a string path for importing `scripts.security_dependency`.\n  WHY: CI runs this test directly with `python3 tests/test_check_failure_triage_workflow_security.py` (`.github/workflows/ci.yml:607-610`). The script directory, not the repository root, is on the import path, so the import on line 21 fails and the CI test step exits unsuccessfully.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bbbc2e318d3f6d2c7f1449c4c57c7cf01ddb7acfe3de4c7d4d745f4b8387c322",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37325042934",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37325042934",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005152812_fa4282962b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37325042934"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T15:28:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
