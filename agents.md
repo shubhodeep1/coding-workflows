@@ -770,12 +770,28 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   also carries forward still-drifted live copies from the existing sync branch
   only when that branch's copy matches the current template; a live copy
   changed on `main` since the earlier sync is left for the parity test.
+  The auto-merge-eligible branch accepts a path only when every template
+  commit since the last live-copy edit is associated with a merged PR from a
+  non-`ai/*`, non-`orchestrator/*`, non-`auto/*` branch, and neither its subject
+  nor any PR commit subject carries a pipeline marker or a squash `(#N)` suffix.
+  Unverifiable paths instead go to `ai/sync-claude-live-copies-held` as a draft
+  PR for human review, with a Telegram WARNING listing their source commits.
+  Malformed merge timestamps also fail authorization and hold the path.
+  A ready held PR is converted back to draft before a refresh pushes content.
+  Logs add `CLAUDE_LIVE_SYNC authorized`, `held`, and `converted_to_draft`;
+  the history cap defaults to 30 distinct commits per run
+  (`CLAUDE_LIVE_SYNC_MAX_PROVENANCE_COMMITS`).
   Branch replacement is lease-checked; push or PR API failures fail the job
   with a structured `CLAUDE_LIVE_SYNC error` line, leaving the branch for a
   later sync attempt.
   It fails open on an unusable `before` commit: no sync is attempted, and
-  the parity test still reports the drift. At most two REST calls per push,
-  only when something needs syncing. Log prefix `CLAUDE_LIVE_SYNC`.
+  the parity test still reports the drift. The API budget is at most one
+  association lookup per distinct template commit, 1-3 pages per distinct
+  merged PR, and two sync-PR lookups plus at most one create/convert per
+  nonempty group. `GH_PAT` remains broad to trigger CI/review; branch names
+  and commit subjects are not proof of human authorship, and marking a held PR
+  ready between conversion and push is a residual race. Log prefix
+  `CLAUDE_LIVE_SYNC`.
 - A push that changed only the live copy is left to the parity test.
 
 For PRs targeting `main`, the `tests-hooks-and-orchestrator` CI job runs
