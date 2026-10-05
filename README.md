@@ -1407,7 +1407,8 @@ through `clarify → plan → implement → review`.
   review job and the diagnostic files of the `codex-review-autofix-failure-logs-*`
   / `reviewer-logs-*` artifacts (editor attempts, `.err`, `status_*`);
   every run must match the reported repository, head SHA, workflow name and
-  branch or PR,
+  branch or PR (a matching branch cannot override a different PR explicitly
+  linked in the run metadata; those runs are skipped as `unverified_run_pr_mismatch`),
   and must have failed (a successful or unfinished run must have a review job);
   missing or mismatched workflow names are listed under `Skipped` before any
   run jobs or artifacts are fetched;

@@ -865,6 +865,27 @@ def test_same_repo_timeline_hit_needs_no_run_get(tmp_path: Path) -> None:
 	assert f"repos/{REPO}/actions/runs/111" not in fake.paths
 
 
+@pytest.mark.parametrize("timeline_hit", [True, False])
+@pytest.mark.parametrize("cached", [False, True])
+def test_matching_branch_cannot_override_different_linked_pr(tmp_path: Path, timeline_hit: bool, cached: bool) -> None:
+	if cached:
+		_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	fake = FakeGh()
+	timeline_path = f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"
+	run = fake.routes[timeline_path]["workflow_runs"][0]
+	run["name"] = "Internal: AI Review & Autofix"
+	run["pull_requests"] = [{"number": 7777}]
+	if not timeline_hit:
+		fake.routes[timeline_path] = {"workflow_runs": []}
+		fake.routes[f"repos/{REPO}/actions/runs/111"] = run
+	stale = tmp_path / "evidence/runs/acme__coding-workflows__111"
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:111", "reason": "unverified_run_pr_mismatch"} in manifest["skipped"]
+	assert f"run:{REPO}:111: unverified_run_pr_mismatch" in (tmp_path / "evidence/INDEX.md").read_text()
+	assert not any("/actions/runs/111/jobs" in path or "/actions/jobs/" in path or "/actions/runs/111/artifacts" in path for path in fake.paths)
+	assert not stale.exists()
+
+
 def test_same_repo_run_without_head_context_is_skipped_before_fetch(tmp_path: Path) -> None:
 	fake = FakeGh()
 	ref = {"repo": REPO, "run_id": "111", "source_repo": REPO, "source_number": "6133", "head_sha": "", "head_branch": "ai/issue-5144"}

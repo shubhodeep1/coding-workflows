@@ -876,6 +876,8 @@ class Collector:
 		pr_named = pr_number is not None and any(f"[pr:{pr_number}]" in (run.get(key) or "") for key in ("display_title", "name") if isinstance(run.get(key), str))
 		head_matches = sha and isinstance(run.get("head_sha"), str) and run["head_sha"].lower() == sha
 		branch_matches = branch and run.get("head_branch") == branch
+		if pr_number is not None and isinstance(pulls, list) and pulls and not pr_linked:
+			return False, "run_pr_mismatch"
 		if head_matches and (branch_matches or pr_linked or pr_named):
 			# A dispatch run-name can append the PR token to the workflow name.
 			if run.get("name") not in (workflow_name, f"{workflow_name} [pr:{pr_number}]" if pr_number is not None else workflow_name):
