@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -205,6 +206,23 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 	subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=isolated", "-c", "user.email=isolated@invalid", "commit", "--allow-empty", "-qm", "snapshot"], cwd=workspace, check=True, env=env)
 
 
+def _check_destination_parents(host, name, deleted_names):
+	parent = host
+	for part in PurePosixPath(name).parts[:-1]:
+		parent = parent / part
+		try:
+			info = parent.lstat()
+		except FileNotFoundError:
+			return
+		except NotADirectoryError:
+			raise ValueError("new result conflicts with host path") from None
+		if stat.S_ISDIR(info.st_mode):
+			continue
+		if stat.S_ISREG(info.st_mode) and parent.relative_to(host).as_posix() in deleted_names:
+			return
+		raise ValueError("new result conflicts with host path")
+
+
 def transfer(host, workspace, manifest):
 	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
@@ -227,24 +245,107 @@ def transfer(host, workspace, manifest):
 		if old is None and (host_file.exists() or host_file.is_symlink()):
 			raise ValueError("new result conflicts with host path")
 		changes.append((name, host_file, new))
-	# All preconditions are checked before the first host write.
+	deleted_names = {name for name, _, new in changes if new is None}
 	for name, host_file, new in changes:
 		if new is None:
-			host_file.unlink()
-			baseline.pop(name, None)
 			continue
-		host_file.parent.mkdir(parents=True, exist_ok=True)
-		fd, tmp = tempfile.mkstemp(dir=host_file.parent, prefix=".review-isolated-")
+		_check_destination_parents(host, name, deleted_names)
 		try:
-			with os.fdopen(fd, "wb") as out:
-				out.write(new[0])
-			os.chmod(tmp, new[1])
-			os.replace(tmp, host_file)
-			baseline[name] = [hashlib.sha256(new[0]).hexdigest(), new[1]]
-		finally:
-			if os.path.exists(tmp):
-				os.unlink(tmp)
-	manifest.write_text(json.dumps(baseline), encoding="utf-8")
+			info = host_file.lstat()
+		except FileNotFoundError:
+			pass
+		except NotADirectoryError:
+			# Only a baseline file scheduled for deletion may become a directory.
+			if not any(name.startswith(deleted + "/") for deleted in deleted_names):
+				raise ValueError("new result conflicts with host path") from None
+		else:
+			if not stat.S_ISREG(info.st_mode):
+				raise ValueError("new result conflicts with host path")
+	backups = {}
+	for name, host_file, _ in changes:
+		if name in baseline:
+			backups[name] = read_regular(host_file)
+			if [hashlib.sha256(backups[name][0]).hexdigest(), backups[name][1]] != baseline[name]:
+				raise ValueError("host baseline changed")
+	stage = Path(tempfile.mkdtemp(dir=host, prefix=".review-isolated-stage-"))
+	journal = []
+	try:
+		# Stage every payload before touching a destination.
+		for index, (_, _, new) in enumerate(changes):
+			if new is not None:
+				staged = stage / str(index)
+				fd = os.open(staged, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+				with os.fdopen(fd, "wb") as out:
+					out.write(new[0])
+				os.chmod(staged, new[1])
+		updated = baseline.copy()
+		try:
+			for index, (name, host_file, new) in enumerate(changes):
+				if new is None:
+					host_file.unlink()
+					journal.append(("deleted", host_file, *backups[name]))
+					updated.pop(name, None)
+					continue
+				missing = []
+				parent = host_file.parent
+				while parent != host and not parent.exists():
+					missing.append(parent)
+					parent = parent.parent
+				for directory in reversed(missing):
+					directory.mkdir()
+					journal.append(("mkdir", directory))
+				# Do not follow a parent that changed since prevalidation.
+				_check_destination_parents(host, name, set())
+				if name in backups:
+					os.replace(stage / str(index), host_file)
+					journal.append(("replaced", host_file, *backups[name]))
+				else:
+					os.link(stage / str(index), host_file, follow_symlinks=False)
+					journal.append(("created", host_file))
+				updated[name] = [hashlib.sha256(new[0]).hexdigest(), new[1]]
+			# Cleanup is part of the transaction: a cleanup failure must not
+			# report failure after publishing host edits and the manifest.
+			shutil.rmtree(stage)
+			# Publish the manifest atomically only after the entire host apply succeeds.
+			fd, manifest_tmp = tempfile.mkstemp(dir=manifest.parent, prefix=".review-isolated-")
+			try:
+				with os.fdopen(fd, "w", encoding="utf-8") as out:
+					json.dump(updated, out)
+				os.replace(manifest_tmp, manifest)
+			finally:
+				if os.path.exists(manifest_tmp):
+					os.unlink(manifest_tmp)
+		except Exception:
+			try:
+				for entry in reversed(journal):
+					kind, path, *original = entry
+					if kind == "mkdir":
+						path.rmdir()
+					elif kind == "created":
+						path.unlink()
+					else:
+						fd, restore_tmp = tempfile.mkstemp(dir=path.parent, prefix=".review-isolated-")
+						try:
+							with os.fdopen(fd, "wb") as out:
+								out.write(original[0])
+							os.chmod(restore_tmp, original[1])
+							os.replace(restore_tmp, path)
+						finally:
+							if os.path.exists(restore_tmp):
+								os.unlink(restore_tmp)
+			except Exception:  # noqa: BLE001 - any rollback failure invalidates atomicity
+				raise ValueError("transfer rollback failed") from None
+			raise
+	finally:
+		if stage.exists():
+			# Preserve the original apply/rollback failure if staging cleanup
+			# also fails; the sandbox marker still prevents a commit.
+			pending_error = sys.exc_info()[0]
+			try:
+				shutil.rmtree(stage)
+			except OSError:
+				if pending_error is None:
+					raise
 
 
 def refresh(host, workspace, manifest):
@@ -324,6 +425,7 @@ def main():
 			"workspace size limit exceeded": "workspace_size_limit",
 			"host baseline changed": "host_baseline_changed",
 			"new result conflicts with host path": "host_path_conflict",
+			"transfer rollback failed": "transfer_rollback_failed",
 			"unsafe result path": "unsafe_result_path",
 		}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "unknown"
 		directory_detail = f" dir={_log_safe_dir(exc.rejected_dir)}" if sys.argv[1] == "transfer" and isinstance(exc, UnsafeWorkspaceDirectory) else ""

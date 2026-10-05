@@ -105,7 +105,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    with validated transfer back to the workspace. The poller's review-blocked
    judge uses the same sandbox from the verified workflow support checkout,
    with read access for a verdict and validated transfer for a combined fix;
-   missing isolation falls back to Codex, while failed transfer discards the
+   transfer checks destination parents and stages all changes before writing,
+   rolling host changes back on failure. After a failed Claude fix or transfer
+   the judge neither commits/pushes nor treats it as merged
+   (`judge_skip_reason=fix_transfer_failed|fix_failed`). Missing isolation
+   falls back to Codex, while failed transfer discards the
    verdict and removes only newly untracked files. Cleanup/inventory failures
    stop the tick so another issue cannot stage a partial transfer. The
    `claude-fixer-auto-merge` job id is kept but never runs.
