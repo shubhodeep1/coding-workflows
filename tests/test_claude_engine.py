@@ -10,8 +10,10 @@ probe parsing and the least-used account order, and the smoke-run inspector.
 from __future__ import annotations
 
 import importlib.util
+import errno
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +34,134 @@ def _load():
 
 
 ce = _load()
+
+
+@pytest.mark.parametrize("command", [
+	"git show HEAD:a", "git log --format='%H|%s'", "git grep 'a|b' -- '*.py'",
+	"git diff --no-textconv", "gh pr view 5", "gh api repos/a/b",
+])
+def test_read_bash_allows_only_literal_read_forms(command: str) -> None:
+	assert ce.read_bash_denial(command) is None
+
+
+@pytest.mark.parametrize("command", [
+	"git show --output=../scripts/x HEAD:a", "git show --outp=x HEAD:a",
+	"git show --output x HEAD:a", 'git show "--outp""ut=x" HEAD:a',
+	"git diff --ext-diff", "git diff --textconv", "git diff --text",
+	"git grep -O vim x", "git grep -nOcat x", "git grep --open=sh x",
+	"git difftool -x sh", "git diff-tree HEAD", "git show-branch HEAD",
+	"git -C .. show HEAD", "git show HEAD > x", "git show $(id)",
+	"git show `id`", "git log *", "git log --outp{ut=x,}",
+	"gh pr checkout 5", "git show HEAD\nrm x", "git show HEAD && id",
+])
+def test_read_bash_denies_write_capable_forms(command: str) -> None:
+	assert ce.read_bash_denial(command)
+
+
+def test_read_bash_hook_protocol() -> None:
+	for payload, denied in (
+		({"tool_name": "Bash", "tool_input": {"command": "git show HEAD:x"}}, False),
+		({"tool_name": "Bash", "tool_input": {"command": "git show --output=x HEAD:x"}}, True),
+		({"tool_name": "Write", "tool_input": {"command": "git show HEAD:x"}}, True),
+		({"tool_name": "Bash", "tool_input": {}}, True),
+	):
+		result = _run("guard-read-bash", stdin=json.dumps(payload))
+		assert result.returncode == 0
+		assert (json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny") if denied else not result.stdout
+	assert json.loads(_run("guard-read-bash", stdin="not json").stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_support_lock_detects_changes_and_restores_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = tmp_path / "support"
+	scripts = root / "scripts"
+	scripts.mkdir(parents=True)
+	file = scripts / "helper.sh"
+	file.write_text("trusted\n", encoding="utf-8")
+	file.chmod(0o755)
+	workdir = scripts / "audit-data"
+	(workdir / "scripts").mkdir(parents=True)
+	(workdir / "scripts" / "untrusted.sh").write_text("data", encoding="utf-8")
+	monkeypatch.setattr(ce, "support_roots", lambda: [root])
+	manifest = tmp_path / "manifest.json"
+	args = type("Args", (), {"manifest": str(manifest), "workdir": str(workdir)})()
+	assert ce.cmd_support_lock(args) == 0
+	assert stat.S_IMODE(file.stat().st_mode) == 0o555
+	assert stat.S_IMODE(manifest.stat().st_mode) == 0o400
+	if os.geteuid() != 0:
+		with pytest.raises(PermissionError):
+			file.write_text("blocked", encoding="utf-8")
+	assert "scripts/audit-data/scripts/untrusted.sh" not in manifest.read_text(encoding="utf-8")
+	assert "scripts/helper.sh" in manifest.read_text(encoding="utf-8")
+	verify_args = type("Args", (), {"manifest": str(manifest)})()
+	assert ce.cmd_support_verify(verify_args) == 0
+	# The owner can undo chmod, so the hash check is required as well.
+	file.chmod(0o755)
+	file.write_text("changed\n", encoding="utf-8")
+	assert ce.cmd_support_verify(verify_args) == 1
+	assert ce.cmd_support_unlock(verify_args) == 0
+	assert stat.S_IMODE(file.stat().st_mode) == 0o755
+	assert ce.cmd_support_unlock(verify_args) == 0
+
+
+def test_support_lock_covers_support_nested_in_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	workdir = tmp_path / "consumer"
+	root = workdir / ".codex-workflow-src"
+	(root / "scripts").mkdir(parents=True)
+	support_file = root / "scripts" / "helper.sh"
+	support_file.write_text("trusted\n", encoding="utf-8")
+	support_file.chmod(0o755)
+	monkeypatch.setattr(ce, "support_roots", lambda: [root])
+	manifest = tmp_path / "manifest.json"
+	args = type("Args", (), {"manifest": str(manifest), "workdir": str(workdir)})()
+	assert ce.cmd_support_lock(args) == 0
+	assert stat.S_IMODE(support_file.stat().st_mode) == 0o555
+	assert "scripts/helper.sh" in manifest.read_text(encoding="utf-8")
+	assert ce.cmd_support_verify(args) == 0
+	support_file.chmod(0o755)
+	support_file.write_text("tampered\n", encoding="utf-8")
+	assert ce.cmd_support_verify(args) == 1
+	assert ce.cmd_support_unlock(args) == 0
+	assert stat.S_IMODE(support_file.stat().st_mode) == 0o755
+
+
+@pytest.mark.parametrize("mutation", ["added", "removed"])
+def test_support_lock_checks_directory_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str) -> None:
+	root = tmp_path / "root"
+	(root / "scripts").mkdir(parents=True)
+	file = root / "scripts" / "x.sh"
+	file.write_text("original", encoding="utf-8")
+	monkeypatch.setattr(ce, "support_roots", lambda: [root])
+	manifest = tmp_path / "manifest.json"
+	args = type("Args", (), {"manifest": str(manifest), "workdir": str(root)})()
+	assert ce.cmd_support_lock(args) == 0
+	(root / "scripts").chmod(0o755)
+	if mutation == "added":
+		(root / "scripts" / "new.sh").write_text("new", encoding="utf-8")
+	else:
+		file.unlink()
+	assert ce.cmd_support_verify(args) == 1
+	assert ce.cmd_support_unlock(args) == 0
+
+
+def test_support_lock_accepts_read_only_mount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = tmp_path / "support"
+	(root / "scripts").mkdir(parents=True)
+	file = root / "scripts" / "read.sh"
+	file.write_text("original", encoding="utf-8")
+	monkeypatch.setattr(ce, "support_roots", lambda: [root])
+	original_chmod = Path.chmod
+
+	def simulate_read_only_mount(path: Path, mode: int, **kwargs) -> None:
+		if path == file:
+			raise OSError(errno.EROFS, "read-only filesystem")
+		original_chmod(path, mode, **kwargs)
+
+	monkeypatch.setattr(Path, "chmod", simulate_read_only_mount)
+	manifest = tmp_path / "manifest.json"
+	args = type("Args", (), {"manifest": str(manifest), "workdir": str(root)})()
+	assert ce.cmd_support_lock(args) == 0
+	assert ce.cmd_support_verify(args) == 0
+	assert ce.cmd_support_unlock(args) == 0
 
 
 def _run(*args: str, env: dict[str, str] | None = None, stdin: str = "") -> subprocess.CompletedProcess:
@@ -307,7 +437,7 @@ def test_read_profile_settings_have_a_bash_guard_without_changing_write_settings
 	read = ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook="/trusted/claude_engine.py")
 	assert set(ce.READ_PROFILE_DENY) <= set(read["permissions"]["deny"])
 	assert read["hooks"]["PreToolUse"][1] == {
-		"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "/trusted/claude_engine.py" read-guard', "timeout": 30}],
+		"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "/trusted/claude_engine.py" guard-read-bash', "timeout": 30}],
 	}
 	for path in ("", "relative.py", '/bad"path', "/bad\npath"):
 		with pytest.raises(ce.EngineError):

@@ -36,7 +36,8 @@
 #       credential, no policy, or every account hit its usage limit or was
 #       rejected), after logging AI_ENGINE_FALLBACK, so the caller runs the
 #       codex path (D1); 124 on a timeout; any other non-zero status on a
-#       crash, which follows the role's existing retry rules.
+#       crash, which follows the role's existing retry rules; 86 if trusted
+#       support was changed (terminal: never fall back to codex).
 #       AI_ENGINE_LAST_RUN_DIR names the run directory afterwards; it holds
 #       transcript-<NAME>.jsonl and stderr-<NAME>.txt for each account tried.
 #
@@ -69,6 +70,7 @@ _AI_ENGINE_LOADED="true"
 
 _AI_ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _AI_ENGINE_EXIT_FALLBACK=75
+_AI_ENGINE_EXIT_SUPPORT_TAMPERED=86
 
 _ai_engine_py()
 {
@@ -184,6 +186,20 @@ _ai_engine_instructions_file()
 	return 1
 }
 
+_ai_engine_support_finish()
+{
+	local run_dir="$1" role="$2" status=0
+	# Run the pre-model copy: the installed verifier itself may have been
+	# overwritten by the model. Always restore modes, even on a mismatch.
+	PYTHONDONTWRITEBYTECODE=1 python3 "${run_dir}/claude_engine.py" support-verify --manifest "${run_dir}/support-lock.json" || status=1
+	PYTHONDONTWRITEBYTECODE=1 python3 "${run_dir}/claude_engine.py" support-unlock --manifest "${run_dir}/support-lock.json" || status=1
+	if [ "${status}" -ne 0 ]; then
+		echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=tampered" >&2
+		return "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
+	fi
+	echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=verified" >&2
+}
+
 _ai_engine_isolation_preflight()
 {
 	local pool_dir="$1" workdir="$2" prompt_file="$3" instructions="$4" entry
@@ -292,7 +308,7 @@ _ai_engine_claude_run_isolated()
 		ai_engine_fallback "${role}" "${AI_ENGINE_ISOLATION_FAILURE}"; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
 	guard_hook="${AI_ENGINE_ISOLATION_GUARD}"
-	if ! _ai_engine_py settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile read --guard-hook /guard.py; then
+	if ! _ai_engine_py settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile read --guard-hook /guard.py --read-guard-hook /read-guard.py; then
 		ai_engine_fallback "${role}" policy_unavailable; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
 	chmod 0644 "${run_dir}/claude-settings.json"
@@ -364,6 +380,7 @@ _ai_engine_claude_run_isolated()
 			"${mounts[@]}"
 			--mount "type=bind,src=${run_dir}/sock,dst=/socket,readonly"
 			--mount "type=bind,src=${_AI_ENGINE_DIR}/claude_anthropic_relay.py,dst=/relay.py,readonly"
+			--mount "type=bind,src=${_AI_ENGINE_DIR}/claude_engine.py,dst=/read-guard.py,readonly"
 			--mount "type=bind,src=${instructions},dst=/instructions.md,readonly"
 			--mount "type=bind,src=${run_dir}/claude-settings.json,dst=/settings.json,readonly"
 			--mount "type=bind,src=${guard_hook},dst=/guard.py,readonly"
@@ -395,6 +412,11 @@ _ai_engine_claude_run_isolated()
 		env -i PATH="${PATH}" docker rm -f "${container_name}" >/dev/null 2>&1 || true
 		kill "${broker_pid}" "${reaper_pid}" 2>/dev/null || true
 		wait "${broker_pid}" "${reaper_pid}" 2>/dev/null || true
+		# Do not run the checkout's classifier/extractor after the model if its
+		# trusted support changed. The caller will unlock and report the mismatch.
+		if ! PYTHONDONTWRITEBYTECODE=1 python3 "${run_dir}/claude_engine.py" support-verify --manifest "${run_dir}/support-lock.json"; then
+			return "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
+		fi
 		verdict="$(_ai_engine_py classify --transcript "${transcript}" --exit-code "${attempt_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
 		outcome="$(_ai_engine_json_field "${verdict}" outcome)"
 		reason="$(_ai_engine_json_field "${verdict}" reason)"
@@ -471,14 +493,31 @@ claude_run()
 		return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
 
-	local run_dir
+	local run_dir rc=0
 	run_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/claude-run-XXXXXXXX")" || return 1
 	# The caller may read the transcripts (transcript-<NAME>.jsonl) after the run.
 	# shellcheck disable=SC2034  # read by callers after claude_run returns
 	AI_ENGINE_LAST_RUN_DIR="${run_dir}"
 	if [ "${profile}" = read ]; then
-		_ai_engine_claude_run_isolated "${role}" "${prompt_file}" "${out_file}" "${workdir}" "${session_id}" "${model}" "${effort}" "${instructions}" "${pool_dir}" "${run_dir}" "${hide_claude_md}"
-		return $?
+		# Keep the verifier outside the checkout that the model reads.
+		local locked_files old_int_trap old_term_trap
+		if ! cp -- "${_AI_ENGINE_DIR}/claude_engine.py" "${run_dir}/claude_engine.py" ||
+		   ! locked_files="$(_ai_engine_py support-lock --manifest "${run_dir}/support-lock.json" --workdir "${workdir}")"; then
+			echo "::error::Claude read profile could not lock trusted support." >&2
+			echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=tampered" >&2
+			return "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
+		fi
+		echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=locked files=${locked_files}" >&2
+		old_int_trap="$(trap -p INT)"
+		old_term_trap="$(trap -p TERM)"
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; exit 130' INT
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; exit 143' TERM
+		_ai_engine_claude_run_isolated "${role}" "${prompt_file}" "${out_file}" "${workdir}" "${session_id}" "${model}" "${effort}" "${instructions}" "${pool_dir}" "${run_dir}" "${hide_claude_md}" || rc=$?
+		_ai_engine_support_finish "${run_dir}" "${role}" || rc="${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
+		trap - INT TERM
+		[ -z "${old_int_trap}" ] || eval "${old_int_trap}"
+		[ -z "${old_term_trap}" ] || eval "${old_term_trap}"
+		return "${rc}"
 	fi
 	local -a settings_args=(settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile "${profile}")
 	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
@@ -497,7 +536,6 @@ claude_run()
 		*) tools="Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch"; mode="bypassPermissions" ;;
 	esac
 
-	local rc=0
 	(
 		trap 'exit 130' INT
 		trap 'exit 143' TERM

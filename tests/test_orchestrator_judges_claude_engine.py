@@ -36,6 +36,7 @@ claude_run() {
   case "${FAKE_CLAUDE_MODE}" in
     success) printf 'claude verdict\n' > "$3"; return 0 ;;
     unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
+    tampered) return 86 ;;
     *) return 1 ;;
   esac
 }
@@ -77,6 +78,8 @@ def _run_helper(
 		+ 'echo "rc=${rc}"\n'
 	)
 	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE=engine, FAKE_CLAUDE_MODE=claude_mode)
+	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(key, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
 	return proc, calls
 
@@ -111,6 +114,26 @@ def test_claude_unavailable_returns_75_so_codex_runs(tmp_path: Path) -> None:
 def test_claude_crash_is_not_a_fallback(tmp_path: Path) -> None:
 	proc, _calls = _run_helper(tmp_path, engine="claude", claude_mode="crash")
 	assert "rc=1" in proc.stdout, proc.stderr
+
+
+def test_tampered_support_is_terminal_for_judge(tmp_path: Path) -> None:
+	proc, _calls = _run_helper(tmp_path, engine="claude", claude_mode="tampered")
+	assert proc.returncode == 86
+	assert "Trusted support changed" in proc.stderr
+
+
+def test_poll_job_verifies_support_before_running_followup_steps() -> None:
+	workflow = yaml.safe_load(POLL_WORKFLOW.read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["poll"]["steps"]
+	by_name = {step["name"]: step for step in steps}
+	names = list(by_name)
+	assert names.index("Record trusted support integrity") < names.index("Process each tracking issue")
+	assert names.index("Release staged-support latches without active projects") < names.index("Verify trusted support integrity") < names.index("Run worktree registry GC")
+	assert by_name["Verify trusted support integrity"]["id"] == "verify_support_integrity"
+	assert by_name["Verify trusted support integrity"]["if"] == "always()"
+	for name in ("Run worktree registry GC", "Build state snapshot", "Publish state snapshot branch", "Write run summary", "Record poll run end", "Notify Telegram on job failure"):
+		assert "steps.verify_support_integrity.outcome != 'failure'" in by_name[name]["if"]
+	assert 'if [ "${security_audit_run_rc}" -eq 86 ]' in POLLER.read_text(encoding="utf-8")
 
 
 def test_missing_ai_engine_returns_75(tmp_path: Path) -> None:
@@ -240,6 +263,8 @@ def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tupl
 		+ 'echo "rc=${decomposer_rc} engine=${ORCHESTRATE_ENGINE}"\n'
 	)
 	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE="claude", FAKE_CLAUDE_MODE=claude_mode, PATH=f"{bin_dir}:{os.environ['PATH']}")
+	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(key, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
 	return proc, calls
 

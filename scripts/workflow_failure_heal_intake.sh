@@ -699,6 +699,19 @@ if [ -f scripts/ai_engine.sh ]; then
 fi
 
 if [ "${heal_claude_rc}" -ne 75 ]; then
+	if [ "${heal_claude_rc}" -eq 86 ]; then
+		log "error support_tampered"
+		exit 86
+	fi
+	# The model read attacker-controlled job logs. Do not run any more
+	# support code from this checkout if its approved contents moved.
+	if ! heal_support_status="$(git status --porcelain --untracked-files=all 2>/dev/null)" ||
+	   [ -z "${HEAL_SUPPORT_SHA:-${GITHUB_SHA:-}}" ] ||
+	   [ "$(git rev-parse HEAD 2>/dev/null)" != "${HEAL_SUPPORT_SHA:-${GITHUB_SHA:-}}" ] ||
+	   [ -n "${heal_support_status}" ]; then
+		echo "::error::Workflow heal support checkout changed after the model run." >&2
+		exit 86
+	fi
 	if [ "${heal_claude_rc}" -ne 0 ]; then
 		log "warn claude_run_nonzero rc=${heal_claude_rc}"
 		DIAGNOSIS_FALLBACK_REASON="failed (Claude exited non-zero)"
