@@ -473,7 +473,7 @@ jobs:
       - name: Live .claude/ copies match their templates
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py tests/test_sync_claude_live_copies_workflow_contract.py
 
       - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
         # Drives scripts/review_merge_train.sh through a fake `gh` and pins

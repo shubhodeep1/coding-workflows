@@ -6,7 +6,9 @@
         "**"
       ],
       "blocked_globs": [
-        ".git/**"
+        ".git/**",
+        "scripts/sync_claude_live_copies.py",
+        ".github/workflows/sync-claude-live-copies.yml"
       ],
       "conditional_blocked_globs": [
         {
@@ -29,12 +31,25 @@
       ],
       "conditional_blocked_globs": []
     },
+    "conflict_resolver": {
+      "allowed_globs": [
+        "**"
+      ],
+      "blocked_globs": [
+        ".git/**",
+        "scripts/sync_claude_live_copies.py",
+        ".github/workflows/sync-claude-live-copies.yml"
+      ],
+      "conditional_blocked_globs": []
+    },
     "review_editor": {
       "allowed_globs": [
         "**"
       ],
       "blocked_globs": [
-        ".git/**"
+        ".git/**",
+        "scripts/sync_claude_live_copies.py",
+        ".github/workflows/sync-claude-live-copies.yml"
       ],
       "conditional_blocked_globs": [
         {
@@ -56,7 +71,9 @@
       "blocked_globs": [
         ".git/**",
         ".github/**",
-        "ai-memory/**"
+        "ai-memory/**",
+        "scripts/sync_claude_live_copies.py",
+        ".github/workflows/sync-claude-live-copies.yml"
       ],
       "conditional_blocked_globs": []
     }

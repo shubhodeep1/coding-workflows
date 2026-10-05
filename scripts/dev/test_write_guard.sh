@@ -186,6 +186,11 @@ test_config_parse_fail_open()
 	local repo_dir
 	repo_dir="$(make_temp_repo)"
 	printf '{invalid json\n' > "${repo_dir}/.github/ai/write_guards.v1.json"
+	(
+		unset_git_env
+		git -C "${repo_dir}" add .github/ai/write_guards.v1.json
+		git -C "${repo_dir}" commit -q -m 'invalid policy'
+	)
 	run_guard_capture "${repo_dir}" review_editor $'.github/workflows/test.yml\n' 'ALLOW_WORKFLOW_EDITS=false'
 	assert_eq "0" "${RUN_GUARD_STATUS}" 'config parse errors should fail open'
 	assert_contains 'WRITE_GUARD_CONFIG_ERROR: phase=review_editor config=.github/ai/write_guards.v1.json' "${RUN_GUARD_OUTPUT}" 'config parse failure should be logged'
@@ -197,11 +202,66 @@ test_config_parse_fail_open_from_fallback()
 	local repo_dir
 	repo_dir="$(make_temp_repo)"
 	mkdir -p "${repo_dir}/.codex-workflow-src/.github/ai"
-	rm -f "${repo_dir}/.github/ai/write_guards.v1.json"
+	(
+		unset_git_env
+		git -C "${repo_dir}" rm -q .github/ai/write_guards.v1.json
+		git -C "${repo_dir}" commit -q -m 'remove root policy'
+	)
 	printf '{invalid json\n' > "${repo_dir}/.codex-workflow-src/.github/ai/write_guards.v1.json"
 	run_guard_capture "${repo_dir}" review_editor $'.github/workflows/test.yml\n' 'ALLOW_WORKFLOW_EDITS=false'
 	assert_eq "0" "${RUN_GUARD_STATUS}" 'fallback config parse errors should fail open'
 	assert_contains 'WRITE_GUARD_CONFIG_ERROR: phase=review_editor config=.codex-workflow-src/.github/ai/write_guards.v1.json' "${RUN_GUARD_OUTPUT}" 'fallback config parse failure should log the resolved path'
+	rm -rf "${repo_dir}"
+}
+
+test_head_policy_blocks_worktree_loosen()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	python3 - "${repo_dir}/.github/ai/write_guards.v1.json" <<'PY'
+import json
+import pathlib
+import sys
+policy_path = pathlib.Path(sys.argv[1])
+policy = json.loads(policy_path.read_text())
+policy["phases"]["implement"]["blocked_globs"].remove("scripts/sync_claude_live_copies.py")
+policy_path.write_text(json.dumps(policy))
+PY
+	run_guard_capture "${repo_dir}" implement $'scripts/sync_claude_live_copies.py\n'
+	assert_eq "1" "${RUN_GUARD_STATUS}" 'HEAD must block paths despite worktree loosen'
+	assert_contains 'WRITE_GUARD_POLICY_HEAD: phase=implement config=.github/ai/write_guards.v1.json reason=worktree_differs' "${RUN_GUARD_OUTPUT}" 'worktree policy drift should be logged'
+	assert_contains 'WRITE_GUARD_BLOCK: phase=implement path=scripts/sync_claude_live_copies.py' "${RUN_GUARD_OUTPUT}" 'HEAD policy should block the protected script'
+	rm -rf "${repo_dir}"
+}
+
+test_head_policy_ignores_worktree_tighten()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	python3 - "${repo_dir}/.github/ai/write_guards.v1.json" <<'PY'
+import json
+import pathlib
+import sys
+policy_path = pathlib.Path(sys.argv[1])
+policy = json.loads(policy_path.read_text())
+policy["phases"]["implement"]["blocked_globs"].append("README.md")
+policy_path.write_text(json.dumps(policy))
+PY
+	run_guard_capture "${repo_dir}" implement $'README.md\n'
+	assert_eq "0" "${RUN_GUARD_STATUS}" 'worktree tightening should take effect only after commit'
+	assert_contains 'WRITE_GUARD_POLICY_HEAD: phase=implement config=.github/ai/write_guards.v1.json reason=worktree_differs' "${RUN_GUARD_OUTPUT}" 'worktree policy drift should be logged'
+	rm -rf "${repo_dir}"
+}
+
+test_head_policy_survives_worktree_deletion()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	rm -f "${repo_dir}/.github/ai/write_guards.v1.json"
+	run_guard_capture "${repo_dir}" implement $'scripts/sync_claude_live_copies.py\n'
+	assert_eq "1" "${RUN_GUARD_STATUS}" 'deleting worktree policy must not disable committed block'
+	assert_contains 'WRITE_GUARD_POLICY_HEAD: phase=implement config=.github/ai/write_guards.v1.json reason=worktree_missing' "${RUN_GUARD_OUTPUT}" 'missing worktree policy should be logged'
+	assert_contains 'WRITE_GUARD_BLOCK: phase=implement path=scripts/sync_claude_live_copies.py' "${RUN_GUARD_OUTPUT}" 'deleted policy should not allow protected script'
 	rm -rf "${repo_dir}"
 }
 
@@ -245,6 +305,9 @@ test_plan_repo_write_fails
 test_plan_bypass_env_audit
 test_config_parse_fail_open
 test_config_parse_fail_open_from_fallback
+test_head_policy_blocks_worktree_loosen
+test_head_policy_ignores_worktree_tighten
+test_head_policy_survives_worktree_deletion
 test_bypass_env_audit
 test_bypass_env_audit_sanitizes_value
 test_block_log_sanitizes_fields

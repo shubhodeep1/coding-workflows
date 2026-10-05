@@ -770,6 +770,15 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   also carries forward still-drifted live copies from the existing sync branch
   only when that branch's copy matches the current template; a live copy
   changed on `main` since the earlier sync is left for the parity test.
+  The workflow resolves and verifies the `stable` commit before executing its
+  sync script from `.codex-workflow-src`, never from the pushed `main` tree;
+  when stable lacks the script it warns and skips sync until the next release.
+  Neither checkout persists credentials. Only the pinned sync step receives
+  `GH_PAT` (for its API calls and a masked, step-local Git push header), and
+  the Telegram alert sources the pinned support helper. Implement, review,
+  validation and conflict-resolver write guards protect the sync script and
+  workflow paths; the guard evaluates the committed HEAD policy, not edits
+  made by the agent in the same run.
   The auto-merge-eligible branch accepts a path only when every template
   commit since the last live-copy edit is associated with a merged PR from a
   non-`ai/*`, non-`orchestrator/*`, non-`auto/*` branch targeting the sync base
@@ -1375,6 +1384,7 @@ and shipped:
 - `WRITE_GUARD_BLOCK`
 - `WRITE_GUARD_CONFIG_ERROR`
 - `WRITE_GUARD_BYPASS_ENV`
+- `WRITE_GUARD_POLICY_HEAD`
 - `DRIFT_SCAN_START`
 - `DRIFT_SCAN_RETRY`
 - `DRIFT_SCAN_DIFF`
@@ -1578,6 +1588,7 @@ LOG_PREFIX.name=BREAK_GLASS
 LOG_PREFIX.name=WRITE_GUARD_BLOCK
 LOG_PREFIX.name=WRITE_GUARD_CONFIG_ERROR
 LOG_PREFIX.name=WRITE_GUARD_BYPASS_ENV
+LOG_PREFIX.name=WRITE_GUARD_POLICY_HEAD
 LOG_PREFIX.name=DRIFT_SCAN_START
 LOG_PREFIX.name=DRIFT_SCAN_RETRY
 LOG_PREFIX.name=DRIFT_SCAN_DIFF

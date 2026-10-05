@@ -858,8 +858,8 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	on = data.get("on", data.get(True))
 	assert on == {"push": {"branches": ["main"], "paths": ["workflow-templates/.claude/**"]}}
 	assert data["permissions"] == {"contents": "read"}
-	step = next(step for step in data["jobs"]["sync"]["steps"] if "sync_claude_live_copies.py sync" in step.get("run", ""))
-	assert 'python3 scripts/sync_claude_live_copies.py sync --before "${PUSH_BEFORE}" --after "${PUSH_AFTER}"' in step["run"]
+	step = next(step for step in data["jobs"]["sync"]["steps"] if step.get("id") == "sync")
+	assert 'python3 "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/sync_claude_live_copies.py" --root "${GITHUB_WORKSPACE}/target" sync --before "${PUSH_BEFORE}" --after "${PUSH_AFTER}"' in step["run"]
 	assert step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
 	assert step["env"]["PUSH_BEFORE"] == "${{ github.event.before }}"
 	assert step["env"]["PUSH_AFTER"] == "${{ github.sha }}"

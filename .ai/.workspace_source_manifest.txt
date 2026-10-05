@@ -218,6 +218,8 @@ changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
 changelog.d/6321-merge-guard-empty-quote-fd.md
 changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6375-claude-live-sync-provenance-hold.md
+changelog.d/6391-sync-pr-lookup-verifies-base.md
+changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
