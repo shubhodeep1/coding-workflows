@@ -3,10 +3,11 @@
 
 The integration-sync resolver now persists a single hidden
 AUTOFIX_RESOLVER_RETRY_STATE_V1 block in the PR body after a
-fingerprint-verifier failure. The state is keyed by the current PR
-head SHA plus a stable sha256 over the sorted union of regressed and
-pre-existing-drift fp_keys, so only identical-signature failures on the
-same head count toward RESOLVER_ESCAPE_THRESHOLD_N.
+fingerprint-verifier or resolver-isolation failure. The state is keyed by
+the current PR head SHA plus a stable sha256 over the sorted union of
+regressed, pre-existing-drift, and synthetic isolation-failure fp_keys, so
+only identical-signature failures on the same head count toward
+RESOLVER_ESCAPE_THRESHOLD_N.
 
 The implementation lives inside scripts/review_conflict_resolve.sh as an
 embedded Python helper (source-of-truth for the JSON block + signature
@@ -141,6 +142,7 @@ def _build_artifact(
 	baseline_state: dict[str, object] | None = None,
 	threshold: int = 5,
 	max_items: int = 10,
+	isolation_failure_reason: str = "",
 ) -> dict[str, object]:
 	ns = _retry_state_namespace()
 	verifier_module = ns["load_verifier_module"](str(REPO_ROOT / "scripts"))
@@ -148,14 +150,15 @@ def _build_artifact(
 		return ns["build_resolver_retry_state_artifact"](
 			pr_payload=pr_payload,
 			pr_issue_comments=pr_issue_comments or [],
-			fingerprints=fingerprints or _sample_fingerprints(),
-			baseline_state=baseline_state or _sample_baseline_state(),
+			fingerprints=_sample_fingerprints() if fingerprints is None else fingerprints,
+			baseline_state=_sample_baseline_state() if baseline_state is None else baseline_state,
 			threshold=threshold,
 			repository="owner/repo",
 			pr_number="123",
 			run_url="https://github.com/owner/repo/actions/runs/1",
 			verifier_module=verifier_module,
 			max_items=max_items,
+			isolation_failure_reason=isolation_failure_reason,
 		)
 
 
@@ -192,6 +195,42 @@ def test_retry_state_identical_signature_increments(tmp_path: Path) -> None:
 	second = _build_artifact(tmp_path=tmp_path, pr_payload=pr_payload)
 	assert second["consecutive_failure_count"] == 3
 	assert second["retry_state"]["consecutive_failure_count"] == 3
+
+
+def test_retry_state_isolation_failure_uses_stable_synthetic_signature(tmp_path: Path) -> None:
+	ns = _retry_state_namespace()
+	first = _build_artifact(
+		tmp_path=tmp_path,
+		pr_payload=_pr_payload(head_sha="head-isolation"),
+		fingerprints={},
+		baseline_state={},
+		threshold=1,
+		isolation_failure_reason="sandbox_path_unsupported",
+	)
+	previous_state = dict(first["retry_state"])
+	previous_state["consecutive_failure_count"] = 3
+	second = _build_artifact(
+		tmp_path=tmp_path,
+		pr_payload=_pr_payload(
+			head_sha="head-isolation",
+			body=ns["upsert_retry_state_block"]("Initial PR body", previous_state),
+		),
+		fingerprints={},
+		baseline_state={},
+		threshold=1,
+		isolation_failure_reason="sandbox_path_unsupported",
+	)
+	assert first["ok"] is True
+	assert second["consecutive_failure_count"] == 4
+	assert second["escalated"] is True
+	assert second["retry_state"]["isolation_failure_reason"] == "sandbox_path_unsupported"
+	assert second["failure_signature_sha256"] == first["failure_signature_sha256"]
+	selection = ns["select_verification_tier_from_pr_payload"](
+		_pr_payload(head_sha="head-isolation", body=second["body"]),
+		2,
+	)
+	assert selection["tier"] == "strict"
+	assert selection["reason"] == "isolation_failure_count=4"
 
 
 def test_retry_state_resets_on_head_sha_change(tmp_path: Path) -> None:

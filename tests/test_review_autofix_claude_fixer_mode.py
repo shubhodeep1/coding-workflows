@@ -491,7 +491,7 @@ REVIEW_SITES = {
 		'			-- "${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}"; then',
 	),
 	"review_conflict_resolve.sh": (
-		'/dev/null claude CONFLICT_RESOLVER write \\',
+		'_resolver_sandbox_attempt claude || resolver_claude_rc=$?',
 		'elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then',
 		'        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \\',
 	),
@@ -518,24 +518,136 @@ FAKE_SANDBOX = r'''#!/usr/bin/env bash
 case "$1" in
   prepare-ephemeral)
     [ "${MODE}" != prepare_failed ] || exit 1
-    echo "${FAKE_ROOT}"
+    if [ "${MODE}" = prepare_partial_cleanup_failed ]; then echo "${FAKE_ROOT}"; exit 1; fi
+    if [ "${RESOLVER_TEST:-false}" = true ]; then
+      count=0
+      [ ! -f "${CALLS}" ] || count=$(grep -c '^prepare-ephemeral' "${CALLS}" || true)
+      echo "${FAKE_ROOT}-${count}"
+    else
+      echo "${FAKE_ROOT}"
+    fi
     echo prepare-ephemeral >> "${CALLS}"
     ;;
   run)
-    printf 'run|%s|%s|%s\n' "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
+    [ "$#" -eq 9 ] || exit 2
+    if [ "${RESOLVER_TEST:-false}" = true ]; then
+      printf 'run|%s|%s|%s|%s\n' "$7" "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
+    else
+      printf 'run|%s|%s|%s\n' "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
+    fi
     case "${MODE}" in
       success) printf 'verdict\n' > "$3" ;;
       transfer_failed) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
       unsafe_directory) printf '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n' > "${RUNTIME_DIR}/review_sandbox_transfer_reason_${3##*/}"; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
       marker_on_success) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed" ;;
       unavailable) exit 75 ;;
+      claude_unavailable) if [ "$7" = claude ]; then printf 'stale\n' > "$3"; exit 75; fi ;;
       outdated) exit 2 ;;
       *) exit 1 ;;
     esac
     ;;
-  cleanup) echo cleanup >> "${CALLS}" ;;
+  cleanup) echo cleanup >> "${CALLS}"; case "${MODE}" in cleanup_failed|prepare_partial_cleanup_failed) exit 1 ;; esac ;;
 esac
 '''
+
+
+def _resolver_claude_sections() -> str:
+	text = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	functions = ""
+	for name in ("_resolver_disable_opencode_snapshot", "_resolver_fail_closed", "_resolver_sandbox_attempt"):
+		match = re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.M | re.S)
+		assert match, name
+		functions += match.group(0) + "\n"
+	call = text[text.index('    resolver_claude_rc=75\n'):text.index('  resolver_clean_output="${tmp_output}.ansi-clean"')]
+	return functions + "\n" + call
+
+
+def _run_resolver_claude_section(tmp: Path, *, mode: str, engine: str = "claude", path: str = "scripts/a.py", config_fail: bool = False, helpers: bool = True):
+	scripts = tmp / "scripts"
+	scripts.mkdir()
+	if helpers:
+		(scripts / "review_untrusted_sandbox.sh").write_text(FAKE_SANDBOX, encoding="utf-8")
+		(scripts / "review_untrusted_workspace.py").write_bytes((REPO_ROOT / "scripts" / "review_untrusted_workspace.py").read_bytes())
+	config_writer = scripts / "config_writer.sh"
+	config_writer.write_text('#!/usr/bin/env bash\n[ "${CONFIG_FAIL:-false}" != true ] || exit 1\n'
+		'while [ "$#" -gt 0 ]; do\n'
+		'  if [ "$1" = --config-path ]; then printf \'{}\\n\' > "$2"; fi\n'
+		'  printf "%s\\n" "$1" >> "${CONFIG_ARGS}"\n  shift\ndone\n', encoding="utf-8")
+	(tmp / "paths.txt").write_text(path + "\n", encoding="utf-8")
+	(tmp / "prompt.txt").write_text("Resolve this conflict\n", encoding="utf-8")
+	if mode == "output_unavailable":
+		(tmp / "output.txt").symlink_to(scripts, target_is_directory=True)
+	# The call site is run after setup, with the host branch intact as a sentinel.
+	functions, call = _resolver_claude_sections().split('    resolver_claude_rc=75\n', 1)
+	script = ("set -euo pipefail\n" + functions + '\nemit_conflict_resolver_substate() { :; }\n'
+		'attempt=1\ntmp_output="${RUNTIME_DIR}/output.txt"\n_stall_status_file="${RUNTIME_DIR}/status.txt"\n'
+		'_effective_prompt_file="${RUNTIME_DIR}/prompt.txt"\n_current_reasoning_effort=high\n'
+		'CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/paths.txt"\nCONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=5\n'
+		'CODEX_STALL_GUARD_HELPER=/not/staged\nCODEX_HEARTBEAT_HELPER=/not/staged\n'
+		'resolver_opencode_cmd=(bash -c \'echo host >> "$RUNTIME_DIR/host"\')\n_codex_exit=0\n'
+		'if true; then\n' + '    resolver_claude_rc=75\n' + call + '\n'
+		'printf "codex_exit=%s\\n" "${_codex_exit}"\n')
+	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(scripts), OPENCODE_CONFIG_WRITER_PATH=str(config_writer),
+		MODEL_EDITOR="openai/gpt-6-sol", AI_ENGINE_RESOLVED_CONFLICT_RESOLVER=engine,
+		MODE=mode, RESOLVER_TEST="true", FAKE_ROOT=str(tmp / "root"), RUNTIME_DIR=str(tmp),
+		CONFIG_FAIL="true" if config_fail else "false", CONFIG_ARGS=str(tmp / "config_args"), CALLS=str(tmp / "calls"))
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(inherited, None)
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
+	return proc, (tmp / "calls").read_text(encoding="utf-8").splitlines() if (tmp / "calls").exists() else []
+
+
+def test_resolver_claude_isolation_failures_never_call_host(tmp_path):
+	for index, (mode, path, helpers, config_fail, reason) in enumerate((
+		("prepare_failed", "scripts/a.py", True, False, "sandbox_prepare_failed"),
+		("prepare_partial_cleanup_failed", "scripts/a.py", True, False, "sandbox_prepare_failed"),
+		("success", ".github/ai/WORKFLOW.md", True, False, "sandbox_path_unsupported"),
+		("success", "scripts/a.py", False, False, "sandbox_prepare_failed"),
+		("outdated", "scripts/a.py", True, False, "sandbox_helper_outdated"),
+		("cleanup_failed", "scripts/a.py", True, False, "sandbox_cleanup_failed"),
+		("transfer_failed", "scripts/a.py", True, False, "sandbox_transfer_failed"),
+		("output_unavailable", "scripts/a.py", True, False, "sandbox_output_unavailable"),
+		("claude_unavailable", "scripts/a.py", True, True, "opencode_config_failed"),
+		("unavailable", "scripts/a.py", True, False, "sandbox_opencode_unavailable"),
+	)):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, calls = _run_resolver_claude_section(work, mode=mode, path=path, helpers=helpers, config_fail=config_fail)
+		assert proc.returncode == 1, (reason, proc.stderr)
+		assert f"reason={reason} action=fail_closed" in proc.stderr
+		assert not (work / "host").exists()
+		if reason == "sandbox_path_unsupported":
+			assert calls == []
+		if reason == "opencode_config_failed":
+			assert calls[-1] == "cleanup"
+		if reason == "sandbox_output_unavailable":
+			assert calls == ["prepare-ephemeral", "cleanup"]
+		if reason == "sandbox_transfer_failed":
+			assert (work / "review_sandbox_transfer_failed").exists()
+
+
+def test_resolver_claude_retry_uses_distinct_sandboxes_and_no_host(tmp_path):
+	proc, calls = _run_resolver_claude_section(tmp_path, mode="claude_unavailable")
+	assert proc.returncode == 0, proc.stderr
+	assert "codex_exit=0" in proc.stdout
+	assert "reason=claude_unavailable action=sandbox_opencode" in proc.stderr
+	assert calls == ["prepare-ephemeral", f"run|claude|CONFLICT_RESOLVER|write|{tmp_path / 'root-0'}", "cleanup",
+		"prepare-ephemeral", f"run|codex|CONFLICT_RESOLVER|write|{tmp_path / 'root-1'}", "cleanup"]
+	assert not (tmp_path / "host").exists()
+	assert (tmp_path / "output.txt").read_text(encoding="utf-8") == ""
+	assert (tmp_path / "config_args").read_text(encoding="utf-8").splitlines()[-2:] == ["--serena", "off"]
+	assert json.loads((tmp_path / "resolver_sandbox_opencode.json").read_text(encoding="utf-8"))["snapshot"] is False
+
+
+def test_resolver_selected_engine_and_failed_transfer(tmp_path):
+	for mode, engine, expected_exit, host in (("success", "claude", 0, False), ("success", "codex", 0, True)):
+		work = tmp_path / (mode + engine)
+		work.mkdir()
+		proc, calls = _run_resolver_claude_section(work, mode=mode, engine=engine)
+		assert proc.returncode == 0, proc.stderr
+		assert f"codex_exit={expected_exit}" in proc.stdout
+		assert (work / "host").exists() is host
+		assert bool(calls) is not host
 
 
 def _rb_helper() -> str:

@@ -110,10 +110,29 @@ def test_check_paths(tmp_path, name, accepted):
 
 def test_resolver_path_check_precedes_sandbox_and_does_not_pass_host_git_index():
 	text = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
+	helper = SANDBOX.read_text(encoding="utf-8")
+	assert 'prepare|prepare-ephemeral|run|cleanup' in helper
+	assert '[ "$#" -ge 6 ] && [ "$#" -le 9 ]' in helper
+	attempt = text[text.index('_resolver_sandbox_attempt()'):text.index('# Source-repo only: the final touched-set gate')]
 	branch = text[text.index('resolver_claude_rc=75'):text.index('if [ "${resolver_claude_rc}" -ne 75 ]; then')]
-	assert branch.index('check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"') < branch.index('prepare-ephemeral')
-	assert branch.index('prepare-ephemeral') < branch.index('/dev/null claude CONFLICT_RESOLVER write') < branch.index('cleanup')
-	assert 'GIT_INDEX_FILE=' not in branch
+	assert branch.index('check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"') < branch.index('_resolver_sandbox_attempt claude')
+	assert attempt.index('prepare-ephemeral') < attempt.index('run "${_effective_prompt_file}"') < attempt.index('if ! REVIEW_SANDBOX_ROOT=')
+	assert 'GIT_INDEX_FILE=' not in attempt + branch
+
+
+def test_claude_resolver_isolation_failures_do_not_select_host_writer():
+	text = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
+	closed = text[text.index('_resolver_fail_closed()'):].split('\n}\n', 1)[0] + '\n}'
+	assert 'action=fail_closed' in closed
+	assert 'RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure' in closed
+	assert closed.rstrip().endswith('exit 1\n}')
+	branch = text[text.index('resolver_claude_rc=75'):text.index('if [ "${resolver_claude_rc}" -ne 75 ]; then')]
+	assert branch.count('AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER') == 1
+	assert 'reason=claude_unavailable action=sandbox_opencode' in branch
+	for reason in ('sandbox_prepare_failed', 'sandbox_path_unsupported', 'sandbox_opencode_unavailable'):
+		assert f'_resolver_fail_closed {reason}' in branch
+	assert '_resolver_fail_closed "${resolver_sandbox_failure_reason}"' in branch
+	assert branch.index('resolver_claude_rc=0\n    fi') > branch.index('_codex_exit="${resolver_claude_rc}"')
 
 
 def test_progress_monitor_stops_without_waiting_for_its_sleep(tmp_path):
