@@ -564,8 +564,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   synthetic `.git` whose `HEAD` contains only allowed blobs from the host's
   `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
-  dependencies once per job in a credential-free container with `--network none`
-  (`npm ci --ignore-scripts`, `pip install` into `/opt/codex-venv`). A host-side
+  dependencies once per job. The network-isolated, credential-free container sees
+  only staged Node manifests and filtered third-party Python requirements
+  from both `requirements.txt` and `pyproject.toml` when present,
+  never the source tree. A host-side
   `scripts/dependency_registry_proxy.py` accepts only HTTPS CONNECT tunnels to
   allowlisted public registry hosts, vets all resolved IPs and connects by IP.
   The review dependency container uses the same proxy; the default allowlist is
@@ -573,7 +575,13 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   A missing proxy skips dependency installation without restoring direct
   container network access; review preparation continues, but validations
   needing those dependencies may be unverified.
-  Their output stays in the sandbox ("prep roots") and is never copied back.
+  An editable source install runs separately with `--network none` for
+  parsed `pyproject.toml` projects or requirements with a regular `setup.py`,
+  including Node/Python hybrids. Requirements-only projects without an
+  installable source skip that step; a failed dev dependency install warns
+  even when retrying base dependencies succeeds.
+  `prep-finalize` restores source files and keeps dependency output in the
+  sandbox ("prep roots"), never copying it back.
   The agent itself has no network: it marks validators it cannot run
   UNVERIFIED instead of installing them.
 - **Trusted copies.** The helper reads its support files from its own
@@ -598,7 +606,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   A failed publication logs a warning but counts as a completed judge
   invocation; the next poll tick rechecks mergeability rather than terminalizing
   the project. An already-up-to-date merge creates no empty commit.
-  The poller's review-blocked `fix` path checks every staged path before commit:
+  The poller's review-blocked `fix` path prepares a fix only for the issue's
+  implementation PR with a same-repo head, verifies the fetched branch tip
+  against the PR head SHA, and rechecks the head before pushing; failed
+  provenance checks skip the fix. It checks every staged path before commit:
   protected paths (`.github/workflows/`, `.github/actions/`, `.github/ai/`,
   `scripts/`, `prompts/`, `.claude/`) must occur in the PR's paginated changed-file
   list; other paths may also come from validated judge citations. An unavailable
@@ -609,6 +620,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `.github/ai/`, or `.github/workflows/` reject through that same path even
   if present in the PR's file list; `.github/prompts/` and `.github/scripts/`
   remain excluded from staging and forbidden when pre-staged.
+  The review-blocked poller rejects a selected PR whose head repository is
+  not the origin before its diff reaches the judge. For open PRs, branch
+  preparation also requires the fetched origin tip to match the PR head SHA;
+  identity, ref, or fetch failures defer the judge without consuming a fix
+  retry, so the next poll tick can check again.
   The review-blocked judge's OpenCode fix writer runs in
   `scripts/review_untrusted_sandbox.sh`.
 - **Sites.** plan, implement (attempts, post-Codex repair, diagnose, PR issue
@@ -1415,6 +1431,9 @@ and shipped:
 - `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
 - `REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED`
 - `REVIEW_BLOCKED_FIX_SCOPE_REJECTED`
+- `REVIEW_BLOCKED_FIX_TARGET_VERIFIED`
+- `REVIEW_BLOCKED_FIX_TARGET_REJECTED`
+- `REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED`
 - `REISSUE_ORCHESTRATOR_METADATA_CARRIED`
 - `REISSUE_ORCHESTRATOR_METADATA_ABSENT`
 - `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
@@ -1623,6 +1642,9 @@ LOG_PREFIX.name=REISSUE_FILES_TOUCHED_UNION
 LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS
 LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED
 LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_REJECTED
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_VERIFIED
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_REJECTED
+LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_CARRIED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_ABSENT
 LOG_PREFIX.name=FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1

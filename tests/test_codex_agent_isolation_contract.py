@@ -205,7 +205,7 @@ def test_workflows_stage_the_isolation_support_files(workflow):
 	[
 		"plan.yml", "implement.yml", "orchestrate.yml", "orchestrate_poll.yml", "check_failure_triage.yml",
 		"validate.yml", "workflow-log-analysis.yml", "validation-refresh.yml", "security-audit.yml",
-		"workflow-failure-heal-intake.yml",
+		"workflow-failure-heal-intake.yml", "issue_pr_status.yml",
 	],
 )
 def test_workflows_pin_the_sandbox_codex_version(workflow):

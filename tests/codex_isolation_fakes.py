@@ -47,6 +47,7 @@ if command != "run":
 mounts = []
 container_env = {}
 workdir = None
+container_name = ""
 index = 1
 while index < len(args):
 	arg = args[index]
@@ -61,6 +62,8 @@ while index < len(args):
 			container_env[key] = val
 		elif arg == "--workdir":
 			workdir = value
+		elif arg == "--name":
+			container_name = value
 		index += 2
 		continue
 	if arg.startswith("-"):
@@ -79,6 +82,12 @@ for mount in mounts:
 		host_cwd = mount.get("src")
 	if mount.get("dst") == "/socket":
 		socket_dir = mount.get("src")
+if container_name.startswith("codex-isolated-deps"):
+	if PASSTHROUGH.get("FAKE_DEPS_CREATE_NODE_MODULES") and workdir == "/codex-deps" and host_cwd:
+		os.makedirs(os.path.join(host_cwd, "node_modules"), exist_ok=True)
+		with open(os.path.join(host_cwd, "node_modules", "marker"), "w") as handle:
+			handle.write("installed\n")
+	sys.exit(1 if PASSTHROUGH.get("FAKE_DEPS_FAIL") else 0)
 env = dict(container_env)
 env.update(PASSTHROUGH)
 env["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")

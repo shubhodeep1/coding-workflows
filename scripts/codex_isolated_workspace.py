@@ -35,6 +35,12 @@ Subcommands:
       a prep root and restore every snapshotted path from HOST, so build
       backends cannot change the files the agent starts from.
 
+  stage-deps WORK STAGE
+       Stage allowlisted Node manifests and filtered Python requirement lists
+       from the credential-filtered WORK copy. Only STAGE (not WORK) is
+       mounted in the network-isolated dependency container, alongside the
+       allowlisted registry proxy.
+
   transfer HOST DEST MANIFEST
       Apply the agent's changes in DEST to HOST (answer Q5 A): changed or new
       regular files are written atomically with mode 0644/0755, removed files
@@ -71,6 +77,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 
 
 MAX_READONLY_FILE = 2 * 1024 * 1024
@@ -82,8 +89,13 @@ MAX_WORKSPACE_FILE = 512 * 1024 * 1024
 MAX_TRANSFER_FILES = 50000
 MAX_TRANSFER_TOTAL = 2 * 1024 * 1024 * 1024
 MAX_INCLUDE_TOTAL = 256 * 1024 * 1024
+MAX_DEPS_MANIFEST_BYTES = 64 * 1024 * 1024
+MAX_DEPS_REQUIREMENTS = 5000
 CHUNK = 1024 * 1024
 BINARY_SNIFF_BYTES = 8192
+
+DEPS_NAME_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?=$|[\s\[<>=!~;])")
+DEPS_HASH_RE = re.compile(r"--hash=(?:sha256|sha384|sha512):[a-fA-F0-9]+$")
 
 # Read-only snapshots never include support checkouts, Codex state, env files
 # or anything that looks like a credential store (clarify's rules, Q11 A).
@@ -563,6 +575,169 @@ def prep_finalize(host, dest, manifest):
 	log(f"prep-finalize prep_roots={len(data['prep_roots'])}")
 
 
+def deps_manifest(work, name):
+	"""Read a bounded, non-symlink manifest from the filtered workspace."""
+	path = work / name
+	try:
+		path = walk_no_follow(work, name)
+		info = path.lstat()
+	except FileNotFoundError:
+		return None
+	except (NotADirectoryError, Rejected):
+		log(f"stage-deps skipped={name} reason=missing_or_unsafe_parent")
+		return None
+	if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_DEPS_MANIFEST_BYTES:
+		log(f"stage-deps skipped={name} reason=type_or_size")
+		return None
+	try:
+		fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+		with os.fdopen(fd, "rb") as source:
+			opened = os.fstat(source.fileno())
+			if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+				raise Rejected("manifest changed during read")
+			data = source.read(MAX_DEPS_MANIFEST_BYTES + 1)
+			if len(data) > MAX_DEPS_MANIFEST_BYTES:
+				log(f"stage-deps skipped={name} reason=size")
+				return None
+			return data
+	except (OSError, Rejected):
+		log(f"stage-deps skipped={name} reason=read_failed")
+		return None
+
+
+def deps_normalize_name(value):
+	return re.sub(r"[-_.]+", "-", value).lower()
+
+
+def deps_filter(lines, project_name="", max_entries=MAX_DEPS_REQUIREMENTS):
+	"""Accept only third-party distribution specifications, never pip directives."""
+	accepted = []
+	joined = []
+	continuation = ""
+	for raw in lines:
+		if not isinstance(raw, str):
+			log("stage-deps dropped requirement reason=non_string")
+			continue
+		part = raw.strip()
+		if part.endswith("\\"):
+			continuation += part[:-1] + " "
+			continue
+		joined.append(continuation + part)
+		continuation = ""
+	if continuation:
+		joined.append(continuation)
+	for index, raw in enumerate(joined):
+		# A fragment in an HTTPS URL is not a comment. Only whitespace-#
+		# comments are removed; credentials and arbitrary URL schemes are refused.
+		line = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+		if not line:
+			continue
+		reason = ""
+		parts = line.split()
+		match = DEPS_NAME_RE.match(line)
+		if len(accepted) >= max_entries:
+			reason = "entry_limit"
+		elif any(ord(char) < 32 or ord(char) == 127 for char in line):
+			reason = "control_character"
+		elif line.startswith("-") or "file:" in line.lower():
+			reason = "option_or_file_url"
+		elif line[0] in "./~" or not match:
+			reason = "not_distribution"
+		elif project_name and deps_normalize_name(match.group(1)) == deps_normalize_name(project_name):
+			reason = "self_reference"
+		else:
+			# Pip's requirements-file syntax accepts options after a package.
+			# Whitelist only hashes and a single HTTPS direct reference.
+			for token in parts[1:]:
+				if token.startswith("-") and not DEPS_HASH_RE.fullmatch(token):
+					reason = "per_requirement_option"
+					break
+			if not reason:
+					if " @ " in line:
+						url_tokens = line.split(" @ ", 1)[1].split()
+						url = url_tokens[0] if url_tokens else ""
+						parsed = urlsplit(url.removeprefix("git+"))
+						if (not (url.startswith("https://") or url.startswith("git+https://"))
+							or parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+							or any(token != "@" and not DEPS_HASH_RE.fullmatch(token) for token in url_tokens[1:])):
+							reason = "unsafe_direct_reference"
+					elif "@" in line or "/" in line or "\\" in line or "${" in line:
+						reason = "unsafe_requirement"
+		if reason:
+			# Requirement text may contain tokens or URL credentials: never log it.
+			log(f"stage-deps dropped requirement index={index} reason={reason}")
+		else:
+			accepted.append(line)
+	return accepted
+
+
+def stage_deps(work, stage):
+	"""Stage fixed filenames only; neither parse nor execute source code."""
+	meta = stage / ".codex-deps"
+	meta.mkdir(parents=True, exist_ok=True)
+	package = deps_manifest(work, "package.json")
+	locks = (("package-lock.json", "npm-ci"), ("yarn.lock", "yarn"), ("pnpm-lock.yaml", "pnpm"))
+	node_mode = "none"
+	if (work / "node_modules").exists() or (work / "node_modules").is_symlink():
+		node_mode = "present"
+	elif package is not None:
+		(stage / "package.json").write_bytes(package)
+		node_mode = "npm-install"
+		for name, selected_mode in locks:
+			lock = deps_manifest(work, name)
+			if lock is not None:
+				(stage / name).write_bytes(lock)
+				node_mode = selected_mode
+				break
+	(meta / "node").write_text(node_mode + "\n", encoding="ascii")
+
+	python_mode = "none"
+	requirements = deps_manifest(work, "requirements.txt")
+	pyproject = deps_manifest(work, "pyproject.toml")
+	project = None
+	remaining = MAX_DEPS_REQUIREMENTS
+	if pyproject is not None:
+		try:
+			import tomllib
+			project = tomllib.loads(pyproject.decode("utf-8"))
+		except (ImportError, ValueError, UnicodeError):
+			log("stage-deps skipped=pyproject.toml reason=parse_failed")
+	if requirements is not None:
+		try:
+			lines = requirements.decode("utf-8").splitlines()
+		except UnicodeError:
+			log("stage-deps skipped=requirements.txt reason=decode_failed")
+		else:
+			project_name = project.get("project", {}).get("name", "") if isinstance(project, dict) and isinstance(project.get("project"), dict) else ""
+			filtered = deps_filter(lines, project_name if isinstance(project_name, str) else "", remaining)
+			remaining -= len(filtered)
+			(meta / "requirements.txt").write_text("\n".join(filtered) + "\n", encoding="utf-8")
+			python_mode = "requirements"
+	if pyproject is not None and project is not None:
+		project_info = project.get("project", {})
+		optional = project_info.get("optional-dependencies", {}) if isinstance(project_info, dict) else {}
+		build_info = project.get("build-system", {})
+		name = project_info.get("name", "") if isinstance(project_info, dict) else ""
+		if not isinstance(name, str):
+			name = ""
+		for filename, values in (("build.txt", build_info.get("requires", []) if isinstance(build_info, dict) else []),
+				("base.txt", project_info.get("dependencies", []) if isinstance(project_info, dict) else []),
+				("dev.txt", optional.get("dev", []) if isinstance(optional, dict) else [])):
+			filtered = deps_filter(values if isinstance(values, list) else [], name, remaining)
+			remaining -= len(filtered)
+			(meta / filename).write_text("\n".join(filtered) + "\n", encoding="utf-8")
+		python_mode = "both" if python_mode == "requirements" else "pyproject"
+	if (python_mode in ("pyproject", "both") and ("project" in project or "build-system" in project)
+		or python_mode != "none" and deps_manifest(work, "setup.py") is not None):
+		(meta / "source-install").touch()
+	(meta / "python").write_text(python_mode + "\n", encoding="ascii")
+	if (any(deps_manifest(work, name) is not None for name in ("pytest.ini", "conftest.py", "tests/conftest.py"))
+		or isinstance(project, dict) and isinstance(project.get("tool"), dict)
+		and isinstance(project["tool"].get("pytest"), dict) and "ini_options" in project["tool"]["pytest"]):
+		(meta / "want-pytest").touch()
+	log(f"stage-deps node={node_mode} python={python_mode}")
+
+
 def host_matches(host_path, expected):
 	try:
 		info = host_path.lstat()
@@ -834,10 +1009,10 @@ def copy_include(source, target):
 
 def main():
 	command = sys.argv[1] if len(sys.argv) > 1 else ""
-	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "transfer": 3, "seed-git": 2, "copy-include": 2}
+	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "stage-deps": 2, "transfer": 3, "seed-git": 2, "copy-include": 2}
 	if command not in arity or (len(sys.argv) != arity[command] + 2
 		and not (command == "export-oversized" and len(sys.argv) == 8)):
-		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
+		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|stage-deps|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
 		raise SystemExit(2)
 	args = [Path(value) for value in sys.argv[2:]]
 	if command == "export-oversized" and len(args) == 6:
@@ -853,6 +1028,8 @@ def main():
 			snapshot_workspace(*args)
 		elif command == "prep-finalize":
 			prep_finalize(*args)
+		elif command == "stage-deps":
+			stage_deps(*args)
 		elif command == "transfer":
 			transfer(*args)
 		elif command == "seed-git":
