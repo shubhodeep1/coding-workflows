@@ -57,6 +57,7 @@ import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -171,6 +172,23 @@ def plan(root: Path, before: str, after: str) -> list[str]:
 def _gh_json(*args: str) -> object:
 	result = subprocess.run(["gh", "api", *args], capture_output=True, text=True, check=True)
 	return json.loads(result.stdout or "null")
+
+
+def _is_sync_pr(pr: object, repository: str, branch: str, base: str) -> bool:
+	if not isinstance(pr, dict):
+		return False
+	head = pr.get("head")
+	pr_base = pr.get("base")
+	if not isinstance(head, dict) or not isinstance(pr_base, dict) or not isinstance(head.get("repo"), dict):
+		return False
+	head_repo = head["repo"].get("full_name")
+	return (
+		isinstance(head_repo, str)
+		and head_repo.casefold() == repository.casefold()
+		and head.get("ref") == branch
+		and pr_base.get("ref") == base
+		and pr.get("state", "open") == "open"
+	)
 
 
 def _template_commits(root: Path, relative: str, after: str) -> list[tuple[str, str]] | None:
@@ -383,13 +401,38 @@ def _open_or_refresh_pr(repository: str, owner: str, branch: str, base: str, tit
 	if not draft and not push():
 		return None
 	try:
-		open_prs = _gh_json(f"repos/{repository}/pulls?state=open&head={owner}:{branch}&per_page=1")
+		open_prs = _gh_json(
+			f"repos/{repository}/pulls?state=open&head={quote(owner, safe='')}:{quote(branch, safe='/')}"
+			f"&base={quote(base, safe='')}&per_page=100"
+		)
 	except (subprocess.CalledProcessError, OSError, ValueError):
 		log("error reason=api_failed stage=lookup")
 		return None
-	if not isinstance(open_prs, list) or (open_prs and not isinstance(open_prs[0], dict)):
+	if not isinstance(open_prs, list):
 		log("error reason=api_failed stage=lookup_invalid_response")
 		return None
+	matches = [pr for pr in open_prs if _is_sync_pr(pr, repository, branch, base)]
+	for pr in open_prs:
+		if _is_sync_pr(pr, repository, branch, base):
+			continue
+		pr_number = pr.get("number") if isinstance(pr, dict) else None
+		pr_number = pr_number if isinstance(pr_number, int) and not isinstance(pr_number, bool) else "unknown"
+		if not isinstance(pr, dict) or not isinstance(pr.get("head"), dict) or not isinstance(pr.get("base"), dict):
+			reason = "invalid_entry"
+		elif (
+			not isinstance(pr["head"].get("repo"), dict)
+			or not isinstance(pr["head"]["repo"].get("full_name"), str)
+			or pr["head"]["repo"]["full_name"].casefold() != repository.casefold()
+		):
+			reason = "head_repo_mismatch"
+		elif pr["head"].get("ref") != branch:
+			reason = "head_ref_mismatch"
+		elif pr["base"].get("ref") != base:
+			reason = "base_mismatch"
+		else:
+			reason = "invalid_entry"
+		log(f"ignored_pr pr={pr_number} reason={reason}")
+	open_prs = matches
 	if draft and open_prs:
 		pr = open_prs[0]
 		if not isinstance(pr.get("draft"), bool) or not isinstance(pr.get("node_id"), str):
@@ -414,7 +457,7 @@ def _open_or_refresh_pr(repository: str, owner: str, branch: str, base: str, tit
 		if draft:
 			log(f"held branch={branch} pr={number} paths={len(relatives)}")
 		else:
-			log(f"updated pr={number} branch={branch} paths={len(relatives)}")
+			log(f"updated pr={number} branch={branch} base={base} paths={len(relatives)}")
 		return number
 	try:
 		created = _gh_json(
