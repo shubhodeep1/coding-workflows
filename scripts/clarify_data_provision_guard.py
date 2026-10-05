@@ -49,8 +49,12 @@ _FALLBACK_PATTERNS = re.compile(
 )
 _WEAKENS_CONTROL_PATTERNS = [
 	re.compile(
-		r"\b(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|turn\s+off|without|not\s+requir\w*|drop\w*|remov\w*|relax\w*|best\s+effort)\b"
+		r"\b(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|turn\s+off|not\s+requir\w*|drop\w*|remov\w*|relax\w*|best\s+effort)\b"
 		r".{0,40}?\b(?:verif\w*|validat\w*|check\w*|signature\w*|auth\w*|security|review\w*|approv\w*|audit\w*|scan\w*|test\w*|gate\w*|guard\w*|control\w*)",
+		re.IGNORECASE,
+	),
+	re.compile(
+		r"\bwithout\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|signature\w*|auth\w*|security|review\w*|approv\w*|audit\w*|scan\w*|test\w*|gate\w*|guard\w*|control\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(
@@ -84,8 +88,8 @@ def _parse_questions(clarification_text: str) -> dict[str, dict[str, str]]:
 	current_qid = ""
 
 	for line in clarification_text.splitlines():
-		# Detect question header: **Q1: ...** or Q1: ...
-		qid_match = re.match(r"\s*\*{0,2}(Q\d+)\s*:", line)
+		# Detect question header: > **Q1: ...** or Q1: ...
+		qid_match = re.match(r"\s*(?:>\s*)*\*{0,2}(Q\d+)\*{0,2}\s*:", line)
 		if qid_match:
 			current_qid = qid_match.group(1)
 			questions[current_qid] = {}
@@ -96,7 +100,7 @@ def _parse_questions(clarification_text: str) -> dict[str, dict[str, str]]:
 
 		# Detect option line: - **A** — description  OR  - A — description  OR  - A: description
 		opt_match = re.match(
-			r"\s*-\s+\*{0,2}([A-Z])\*{0,2}\s*(?:—|--|-|:)\s*(.*)", line
+			r"\s*(?:>\s*)*[-*]\s+\*{0,2}([A-Z])\*{0,2}\s*(?:—|–|--|-|:)\s*(.*)", line
 		)
 		if opt_match:
 			letter = opt_match.group(1)
@@ -211,6 +215,13 @@ def run_guard(clarification_file: Path, answers_file: Path, evidence_files: tupl
 		if qid not in questions or any(letter not in questions[qid] for letter in selected_letters):
 			raise ValueError(f"cannot match selected options for {qid}")
 		q_options = questions[qid]
+		weakening_selected_letters = [letter for letter in selected_letters if _option_weakens_control(q_options[letter])]
+		if weakening_selected_letters:
+			overrides[qid] = "ESCALATE"
+			override_reasons.append(f"{qid}: escalated {'+'.join(weakening_selected_letters)} (selected option weakens a verification/security control)")
+			escalations.append(f"{qid}: Cannot use {'+'.join(weakening_selected_letters)}: "
+				f"{'; '.join(q_options[letter] for letter in weakening_selected_letters)} (weakens a control).")
+			continue
 		data_requiring_letters: set[str] = set()
 
 		for letter in selected_letters:

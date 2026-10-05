@@ -51,6 +51,22 @@ def test_question_example_is_not_evidence(tmp_path: Path) -> None:
 	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions)
 
 
+@pytest.mark.parametrize("questions", [
+	"> **Q1: How should the PR be checked?**\n> Choices:\n> - **A** — Require the PR URL and verify its head (RECOMMENDED)\n> - **B** — Skip this verification\n",
+	"> **Q1**: How should the PR be checked?\n> * **A** – Require the PR URL and verify its head\n> * **B** – Skip this verification\n",
+])
+def test_blockquoted_questions_are_guarded(tmp_path: Path, questions: str) -> None:
+	result = _run_guard(tmp_path, questions=questions)
+	assert auto_decisions.from_answers(questions, result)["answers"] == "Q1: ESCALATE\n"
+
+
+@pytest.mark.parametrize("answer", ["DECISIONS:\nQ1: B\n", "**DECISIONS:**\n**Q1**: **B**\n"])
+def test_directly_selected_skip_escalates(tmp_path: Path, answer: str) -> None:
+	result = _run_guard(tmp_path, answer=answer)
+	assert auto_decisions.from_answers(QUESTIONS, result)["answers"] == "Q1: ESCALATE\n"
+	assert "selected option weakens a verification/security control" in result
+
+
 def test_evidence_file_requires_a_matching_datum(tmp_path: Path) -> None:
 	evidence = tmp_path / "evidence.txt"
 	evidence.write_text("PR https://github.com/o/r/pull/12", encoding="utf-8")
@@ -64,7 +80,10 @@ def test_evidence_file_requires_a_matching_datum(tmp_path: Path) -> None:
 	assert "Q1: ESCALATE" in _run_guard(tmp_path, evidence_files=(evidence,))
 
 
-@pytest.mark.parametrize("fallback", ["Proceed without the URL using available information", "Use default scope"])
+@pytest.mark.parametrize("fallback", [
+	"Proceed without the URL using available information", "Use default scope",
+	"Proceed without the PR URL, run local checks", "Proceed without external logs, test with unit tests",
+])
 def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL\n- B — {fallback}\n"
 	result = _run_guard(tmp_path, questions=questions)
