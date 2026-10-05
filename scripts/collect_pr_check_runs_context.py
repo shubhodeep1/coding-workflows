@@ -600,7 +600,7 @@ def main() -> int:
 		backoff_cap = max(BACKOFF_CAP_SECS, poll_interval)
 		repository = os.environ.get("GITHUB_REPOSITORY", "")
 		self_run_id = os.environ.get("SELF_RUN_ID", "")
-		base_ref = _load_base_ref(payload_path) if not strict_merge and wait_timeout > 0 else ""
+		base_ref = _load_base_ref(payload_path) if not strict_merge and wait_timeout > KNOWN_REQUIRED_WAIT_CAP_SECS else ""
 		start = int(time.time())
 		deadline = start + wait_timeout
 		last_wait_view: list[dict[str, Any]] | None = None
@@ -633,7 +633,7 @@ def main() -> int:
 					) else "not_ready"
 				break
 			try:
-				pages = _parse_pages(raw_text)
+				_parse_pages(raw_text)
 			except ValueError as exc:
 				deadline = start + wait_timeout
 				effective_budget = wait_timeout
@@ -655,7 +655,7 @@ def main() -> int:
 			eligible, wait_reason, wait_pending = _short_wait_eligibility(
 				raw_text, head_sha, self_run_id, required_names, time.time(),
 			)
-			if (in_flight and wait_timeout > 0 and wait_reason == "no_required_set"
+			if (in_flight and wait_timeout > KNOWN_REQUIRED_WAIT_CAP_SECS and wait_reason == "no_required_set"
 				and not lookup_attempted and base_ref):
 				lookup_attempted = True
 				required_names = _lookup_protected_required_names(
@@ -670,10 +670,17 @@ def main() -> int:
 			deadline = start + effective_budget
 			_emit_wait_diag("decision", effective_budget, wait_timeout, wait_reason, head_sha,
 				time.time() - start, wait_pending)
-			# A partial paginated response cannot establish that checks finished.
-			if wait_reason == "malformed_snapshot" and any("total_count" in page for page in pages):
-				final_status = "api_error"
-				break
+			# Neither a partial listing nor a stale-head response can establish readiness.
+			if wait_reason in ("malformed_snapshot", "stale_head"):
+				now = int(time.time())
+				if now >= deadline:
+					final_status = "api_error"
+					break
+				time.sleep(min(poll_interval, deadline - now))
+				if int(time.time()) >= deadline:
+					final_status = "api_error"
+					break
+				continue
 			if last_wait_view is not None and wait_view == last_wait_view:
 				unchanged_wait_snapshots += 1
 			else:

@@ -3336,11 +3336,12 @@ def test_collect_pr_check_runs_helper_closes_direct_log_redirect_response() -> N
 
 def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion() -> None:
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}},
+		pr_payload={"head": {"sha": "a" * 40}},
 		self_run_id="777",
 		check_runs_responses=[{
 			"json": [
 				{
+					"total_count": 2,
 					"check_runs": [
 						{
 							"id": 41,
@@ -3355,6 +3356,7 @@ def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusio
 					],
 				},
 				{
+					"total_count": 2,
 					"check_runs": [
 						{
 							"id": 99,
@@ -3397,7 +3399,8 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 	required["started_at"] = __import__("datetime").datetime.fromtimestamp(
 		base_time - 600, __import__("datetime").timezone.utc).isoformat()
 
-	def run_case(pages: list[list[dict]], *, timeout: int = 300, lookup: frozenset[str] | None = frozenset({"CI"}),
+	def run_case(pages: list[list[dict] | dict[str, object]], *, timeout: int = 300,
+		lookup: frozenset[str] | None = frozenset({"CI"}),
 		self_id: str = "") -> tuple[str, str, list[int], int]:
 		clock = [base_time]
 		sleeps: list[int] = []
@@ -3408,7 +3411,8 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 			index = min(reads[0], len(pages) - 1)
 			reads[0] += 1
 			runs = pages[index]
-			return subprocess.CompletedProcess(["gh"], 0, json.dumps([{"total_count": len(runs), "check_runs": runs}]), "")
+			page = runs if isinstance(runs, dict) else {"total_count": len(runs), "check_runs": runs}
+			return subprocess.CompletedProcess(["gh"], 0, json.dumps([page]), "")
 
 		def sleep(seconds: int) -> None:
 			sleeps.append(seconds)
@@ -3445,8 +3449,7 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 		[{**required, "status": "completed", "conclusion": None}],
 		[{**required, "started_at": None}], [{**required, "started_at": "2999-01-01T00:00:00Z"}],
 		[{**required, "started_at": __import__("datetime").datetime.fromtimestamp(
-			base_time - 30, __import__("datetime").timezone.utc).isoformat()}],
-		[{**required, "head_sha": "b" * 40}]):
+			base_time - 30, __import__("datetime").timezone.utc).isoformat()}]):
 		context, log, sleeps, lookups = run_case([runs])
 		assert "collection_status: timeout" in context and "budget_secs=300" in log
 		assert sum(sleeps) == 300 and sleeps[:3] == [20, 40, 80], sleeps
@@ -3455,7 +3458,9 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 	context, log, sleeps, lookups = run_case([[required]], lookup=None)
 	assert "reason=no_required_set" in log and "budget_secs=300" in log and sum(sleeps) == 300 and lookups == 1
 	context, log, sleeps, lookups = run_case([[required]], timeout=30)
-	assert "budget_secs=30" in log and sum(sleeps) == 30 and lookups == 1
+	assert "budget_secs=30" in log and sum(sleeps) == 30 and lookups == 0
+	context, log, sleeps, lookups = run_case([[required]], timeout=60)
+	assert "budget_secs=60" in log and sum(sleeps) == 60 and lookups == 0
 	context, log, sleeps, lookups = run_case([[required], [required, unknown]])
 	assert "budget_secs=60" in log and "budget_secs=300" in log
 	assert sum(sleeps) == 300 and lookups == 1
@@ -3465,6 +3470,20 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 	self_run = {**unknown, "details_url": "https://github.com/owner/repo/actions/runs/999/job/1"}
 	context, log, sleeps, lookups = run_case([[required, self_run]], self_id="999")
 	assert "budget_secs=60" in log and lookups == 1
+	completed = {**required, "status": "completed", "conclusion": "success"}
+	for page in ({"check_runs": []}, {"check_runs": [completed]},
+		{"total_count": 2, "check_runs": [completed]}):
+		context, log, sleeps, lookups = run_case([page], timeout=0)
+		assert "collection_status: api_error" in context and "reason=malformed_snapshot" in log
+		assert not sleeps and lookups == 0
+	context, log, sleeps, lookups = run_case([[{**completed, "head_sha": "b" * 40}]], timeout=0)
+	assert "collection_status: api_error" in context and "reason=stale_head" in log
+	context, log, sleeps, lookups = run_case([{"total_count": 2, "check_runs": [completed]}, [completed]])
+	assert "collection_status: ready" in context and sleeps == [20] and lookups == 0
+	context, log, sleeps, lookups = run_case([[{**completed, "head_sha": "b" * 40}], [completed]])
+	assert "collection_status: ready" in context and sleeps == [20] and lookups == 0
+	context, log, sleeps, lookups = run_case([{"check_runs": [completed]}])
+	assert "collection_status: api_error" in context and sum(sleeps) == 300 and lookups == 0
 
 
 def test_check_runs_wait_diagnostics_are_bounded() -> None:
@@ -3552,8 +3571,8 @@ def test_post_review_snapshot_ignores_only_its_own_incomplete_check() -> None:
 		{"id": 2, "name": "ci", "status": "completed", "conclusion": "success"},
 	]
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}}, self_run_id="777", exclude_self_from_context="true",
-		check_runs_responses=[{"json": [{"check_runs": runs}]}],
+		pr_payload={"head": {"sha": "a" * 40}}, self_run_id="777", exclude_self_from_context="true",
+		check_runs_responses=[{"json": [{"total_count": 2, "check_runs": runs}]}],
 	)
 	assert "collection_status: ready\n" in result["context_text"]
 	assert "total_check_runs: 1\n" in result["context_text"]
@@ -3608,8 +3627,8 @@ def test_strict_merge_snapshot_requires_complete_same_head_evidence() -> None:
 
 def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
-		check_runs_responses=[{"json": [{"check_runs": [
+		pr_payload={"head": {"sha": "a" * 40}}, wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"total_count": 3, "check_runs": [
 			{"id": 1, "name": "ci", "status": "pending"},
 			{"id": 2, "name": "lint", "status": "completed", "conclusion": "startup_failure"},
 			{"id": 3, "name": "unknown", "status": "completed", "conclusion": None},
@@ -3622,8 +3641,8 @@ def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
 
 def test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list() -> None:
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}},
-		check_runs_responses=[{"json": [{"check_runs": []}]}],
+		pr_payload={"head": {"sha": "a" * 40}},
+		check_runs_responses=[{"json": [{"total_count": 0, "check_runs": []}]}],
 	)
 	assert result["returncode"] == 0, result
 	assert "collection_status: ready\n" in result["context_text"]
@@ -3660,8 +3679,8 @@ def test_collect_pr_check_runs_helper_rejects_malformed_successful_output() -> N
 
 def test_collect_pr_check_runs_helper_recovers_from_malformed_snapshot() -> None:
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="15", poll_interval_secs="5",
-		check_runs_responses=[{"stdout": "garbage"}, {"json": [{"check_runs": [
+		pr_payload={"head": {"sha": "a" * 40}}, wait_timeout_secs="15", poll_interval_secs="5",
+		check_runs_responses=[{"stdout": "garbage"}, {"json": [{"total_count": 1, "check_runs": [
 			{"id": 1, "name": "ci", "status": "completed", "conclusion": "success"},
 		]}]}],
 	)
@@ -3690,10 +3709,10 @@ def test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout() -> Non
 		for idx in range(4)
 	]
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}}, gh_retry_max_attempts="2",
+		pr_payload={"head": {"sha": "a" * 40}}, gh_retry_max_attempts="2",
 		check_runs_responses=[
 			{"exit_code": 1, "stdout": '{"message":"FAILED-ATTEMPT-BODY"}', "stderr": "gh: HTTP 502: Bad Gateway"},
-			{"json": [{"check_runs": runs}]},
+			{"json": [{"total_count": 4, "check_runs": runs}]},
 		],
 	)
 	assert result["returncode"] == 0, result
