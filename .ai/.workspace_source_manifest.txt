@@ -205,9 +205,13 @@ changelog.d/6118-phase-8a-single-issue-security-pass.md
 changelog.d/6118-phase-8b-standalone-auto-decide.md
 changelog.d/6118-phase-8c-activation-verification.md
 changelog.d/6118-phase-8d-retarget-merged-base.md
+changelog.d/6133-pr-merge-guard-live-copy-sync.md
 changelog.d/6181-review-transfer-failure-evidence.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
+changelog.d/6237-isolate-claude-review-roles.md
+changelog.d/6238-claude-read-profile-no-shell.md
+changelog.d/6255-review-sandbox-transfer-diagnostics.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
@@ -893,6 +897,7 @@ tests/test_review_reject_verify.py
 tests/test_review_rereview_and_approval_rubric.py
 tests/test_review_resolve_review_threads.py
 tests/test_review_reviewer_attempt_prompt_isolation.py
+tests/test_review_sandbox_claude_roles.py
 tests/test_review_semble_contract.py
 tests/test_review_surface_prompt_hardening.py
 tests/test_review_synthesise_smoke.py

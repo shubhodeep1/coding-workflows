@@ -375,7 +375,8 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}"
 		opencode run --dir /source -m "openrouter/${MODEL}" --agent writer --variant "${VARIANT}" --title coding-workflows-agent-run --print-logs --log-level INFO --auto < /prompt
 	' > "${output}" || rc=$?
 	# Never transfer on a failed model invocation or a swapped host baseline.
-	if [ "${rc}" -eq 0 ]; then
+	# Arg 9 (read) applies to both engines; read-only roles never transfer edits back.
+	if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
 		# The marker survives a killed/incomplete transfer. The editor wrapper
 		# fails the step instead of treating a partial host edit as a retry.
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"

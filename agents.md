@@ -98,7 +98,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    with validated transfer back to the workspace. The poller's review-blocked
    judge uses the same sandbox from the verified workflow support checkout,
    with read access for a verdict and validated transfer for a combined fix;
-   missing isolation falls back to Codex, while failed transfer discards the
+   missing isolation defers and escalates after three failures on the same
+   head (configurable with `RB_JUDGE_ISOLATION_MAX_FAILURES`); unavailable
+   Claude retries OpenCode in a fresh sandbox, never host Codex. Failed transfer discards the
    verdict and removes only newly untracked files. Cleanup/inventory failures
    stop the tick so another issue cannot stage a partial transfer. The
    `claude-fixer-auto-merge` job id is kept but never runs.
@@ -1384,6 +1386,7 @@ and shipped:
 - `AUTOFIX_FAILURE_HEADLINE`
 - `MODEL_CATALOG_BACKFILL`
 - `CLAUDE_FIXER_AUTO_MERGE`
+- `RB_JUDGE_ISOLATION`
 - `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -1586,6 +1589,7 @@ LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
+LOG_PREFIX.name=RB_JUDGE_ISOLATION
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---
