@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_evidence.py:879-880 | severity=critical | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The PR-mismatch guard treats the source number as a pull-request number, so it rejects valid issue-origin run evidence when the implementation PR number differs from the source issue number.\n  WHY: The guard returns `run_pr_mismatch` before the matching head and branch can allow the run; severity differs between reviewers (critical and MAJOR), so the higher severity is used.\n- tests/test_workflow_failure_heal_evidence.py:868-888\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The `cached=True` test path does not create stale evidence for run 111 before asserting that the stale directory is gone.\n  WHY: The cache-purge assertion is vacuously true and would not catch cache purging silently stopping for `run_pr_mismatch`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal_evidence.py:_verify_run | severity=critical\n  PROBLEM: The new `pr_number` guard rejects an issue-origin run linked to its implementation PR when the source issue ID differs from the PR number, even when the head SHA and branch match.\n  WHY: It fires before the `branch_matches` fallthrough.\n- tests/test_workflow_failure_heal_evidence.py:test_matching_branch_cannot_override_different_linked_pr\n  PROBLEM: The `cached=True` path never populates `tmp_path / \"evidence/runs/acme__coding-workflows__111\"` before asserting the stale directory is gone.\n  WHY: The cache-purge assertion is vacuously true and would pass if cache purging for `run_pr_mismatch` stopped removing stale evidence directories.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_evidence.py:879-880 | severity=MAJOR | confidence=4\n  PROBLEM: The PR-mismatch guard treats the source number as a pull-request number, including for issue-origin reports.\n  WHY: When an issue\u2019s run is associated with its implementation PR, the PR number can differ from the source issue number. The guard returns `run_pr_mismatch` before checking the matching head and branch, so it rejects valid run evidence.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_failure_heal_evidence.py:868-888\n  PROBLEM: The `cached=True` test path does not create stale evidence for run 111 before the second collector runs, so the assertion `assert not stale.exists()` does not verify that cached evidence is actually purged when `run_pr_mismatch` is detected.\n  WHY: The test verifies cache purging only if the stale evidence directory is created before the second collector runs. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "00345c9fdd0bb9fc8bf8ba18c5ef979c301ffa27dadd625e0e409101571fbc24",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6345,
+    "run_id": "37329141083",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37329141083",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005155413_2515e260cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6345,
+    "run_id": "37329141083"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T15:54:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
