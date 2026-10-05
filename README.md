@@ -2671,6 +2671,11 @@ and resolver chains, a failed project) now goes to the unblock judge
   fall back to an older `failed` state for this decision. A failed read or late
   resume withholds the label, though a resume after verdict recording can leave
   an unacted-on verdict.
+  Scope overrides must match the trusted guard rejection exactly. Bulk-delete
+  overrides may approve a non-empty subset of its rejected paths only when the
+  failed implement run's matching Actions artifact verifies the same issue,
+  run and attempt; the next implement run rechecks the artifact before spending
+  the one-shot override. Missing or expired evidence keeps the guard in force.
 - **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
   then carried out with the existing commands: on a tracking issue
   `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on

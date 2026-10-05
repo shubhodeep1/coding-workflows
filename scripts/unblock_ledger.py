@@ -77,6 +77,7 @@ import hashlib
 import json
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 # Labels a pipeline stop leaves on an item that only a human used to clear.
@@ -146,6 +147,12 @@ MAX_OVERRIDE_PATHS = 20
 MAX_TEXT = 1200
 OPERATOR_PLACEHOLDER_SUFFIX = "_UNSET_OPERATOR_STEP"
 ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
+REJECTION_MAX_BYTES = 1024 * 1024
+IMPLEMENT_WORKFLOW_PATHS = {
+	".github/workflows/implement.yml",
+	".github/workflows/internal-implement.yml",
+	".github/workflows/ai-implement.yml",
+}
 
 EVIDENCE_LIST_KEYS = ("checks", "findings", "issues", "paths")
 EVIDENCE_SCALAR_KEYS = ("reason", "validation_class", "validation_status", "pr")
@@ -405,7 +412,7 @@ def decide(
 	]
 	if stop not in GUARD_STOPS or not isinstance(rejection, dict) or rejection.get("status") != "ok" \
 		or rejection.get("guard") != GUARD_FOR_STOP.get(stop) or not isinstance(rejection.get("paths"), list) \
-		or not 0 < len(rejection["paths"]) <= MAX_OVERRIDE_PATHS \
+		or not rejection["paths"] or (stop == "scope-blocked" and len(rejection["paths"]) > MAX_OVERRIDE_PATHS) \
 		or (stop == "scope-blocked" and rejection.get("reason") != "out-of-scope") \
 		or (stop == "destructive-blocked" and rejection.get("reason") not in OVERRIDABLE_DESTRUCTIVE_REASONS):
 		allowed = [verdict for verdict in allowed if verdict != "override_guard"]
@@ -475,7 +482,64 @@ def _clean_path(value: object) -> str:
 	return path
 
 
-def validate(verdict: object, decision: object, repo: str, rejection: dict | None = None) -> dict:
+def rejection_snapshot(run: object, artifact: object, zip_path: str, item: int, repo: str, approved: object = None) -> dict:
+	"""Verify an Actions artifact against the failed implement run, not comment text."""
+	if not isinstance(run, dict) or not isinstance(artifact, dict):
+		raise UsageError("rejection run and artifact must be objects")
+	run_id = run.get("id")
+	if type(run_id) is not int or run_id < 1 or any(
+		(not isinstance(run.get(key), dict) or run[key].get("full_name") != repo)
+		for key in ("repository", "head_repository")
+	) or not isinstance(run.get("path"), str) or run["path"] not in IMPLEMENT_WORKFLOW_PATHS \
+		or run.get("status") != "completed" or run.get("conclusion") != "failure":
+		raise UsageError("rejection run is not a failed same-repository implement run")
+	artifact_id = artifact.get("id")
+	artifact_size = artifact.get("size_in_bytes")
+	if (
+		type(artifact_id) is not int or artifact_id < 1
+		or artifact.get("name") != f"destructive-rejection-issue-{item}"
+		or artifact.get("expired") is not False
+		or not isinstance(artifact.get("workflow_run"), dict)
+		or type(artifact["workflow_run"].get("id")) is not int
+		or artifact["workflow_run"].get("id") != run_id
+		or type(artifact_size) is not int or not 0 < artifact_size <= REJECTION_MAX_BYTES
+	):
+		raise UsageError("rejection artifact provenance or size is invalid")
+	try:
+		if Path(zip_path).stat().st_size > REJECTION_MAX_BYTES:
+			raise UsageError("rejection zip exceeds size limit")
+		with zipfile.ZipFile(zip_path) as archive:
+			entries = archive.infolist()
+			if len(entries) != 1 or entries[0].filename != "destructive_rejection.json" or entries[0].file_size > REJECTION_MAX_BYTES:
+				raise UsageError("rejection zip must contain exactly one bounded JSON file")
+			with archive.open(entries[0]) as stream:
+				data = stream.read(REJECTION_MAX_BYTES + 1)
+			if len(data) > REJECTION_MAX_BYTES:
+				raise UsageError("rejection JSON exceeds size limit")
+			snapshot = json.loads(data)
+	except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, EOFError) as exc:
+		raise UsageError("rejection zip is unreadable") from exc
+	if not isinstance(snapshot, dict) or (
+		snapshot.get("schema") != "destructive_rejection.v1"
+		or type(snapshot.get("issue")) is not int or snapshot["issue"] != item
+		or type(snapshot.get("run_id")) is not int or snapshot["run_id"] != run_id
+		or type(snapshot.get("run_attempt")) is not int or snapshot["run_attempt"] < 1
+		or snapshot["run_attempt"] != run.get("run_attempt")
+		or snapshot.get("reason") != "bulk-delete"
+	):
+		raise UsageError("rejection snapshot does not match the issue and run")
+	paths = snapshot.get("paths")
+	if not isinstance(paths, list) or not paths or any(not isinstance(path, str) or not path for path in paths):
+		raise UsageError("rejection paths must be a non-empty list of strings")
+	if approved is not None:
+		if not isinstance(approved, list) or not approved or any(not isinstance(path, str) for path in approved):
+			raise UsageError("approved deletions must be a non-empty list of strings")
+		if not set(approved) <= set(paths):
+			raise UsageError("approved_paths_not_rejected")
+	return {"run_id": run_id, "reason": "bulk-delete", "paths": paths}
+
+
+def validate(verdict: object, decision: object, repo: str, rejection: dict | None = None, rejected: object = None) -> dict:
 	"""Refuse anything outside the menu or the hard limits; return the normalised verdict."""
 	if not isinstance(verdict, dict) or not isinstance(decision, dict):
 		raise UsageError("verdict and decision must be JSON objects")
@@ -515,6 +579,13 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 			for path in cleaned:
 				if CANONICAL_SOURCE_RE.match(path):
 					raise UsageError(f"override_guard never allows deleting the canonical workflow source {path!r}")
+			if not isinstance(rejected, dict) or rejected.get("reason") != "bulk-delete" \
+				or type(rejected.get("run_id")) is not int or rejected["run_id"] < 1 \
+				or not isinstance(rejected.get("paths"), list) or not rejected["paths"]:
+				raise UsageError("override_guard on destructive-blocked needs a verified rejected-deletion snapshot")
+			for path in cleaned:
+				if path not in rejected["paths"]:
+					raise UsageError(f"approved path was not rejected: {path!r}")
 			normalised["override"] = "bulk_delete"
 		if not isinstance(rejection, dict) or rejection.get("status") != "ok" \
 			or rejection.get("guard") != GUARD_FOR_STOP.get(decision.get("stop")) \
@@ -527,11 +598,17 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 			rejected_paths = {_clean_path(path) for path in rejection["paths"]}
 		except UsageError as exc:
 			raise UsageError("invalid guard-rejected paths") from exc
-		if set(cleaned) != rejected_paths:
+		if decision.get("stop") == "destructive-blocked" and not set(cleaned) <= rejected_paths:
+			raise UsageError(f"override paths must be within guard-rejected paths; additional: {sorted(set(cleaned) - rejected_paths)}")
+		if decision.get("stop") != "destructive-blocked" and set(cleaned) != rejected_paths:
 			raise UsageError(
 				f"override paths must equal the guard-rejected paths; missing: {sorted(rejected_paths - set(cleaned))}, "
 				f"additional: {sorted(set(cleaned) - rejected_paths)}"
 			)
+		if decision.get("stop") == "destructive-blocked":
+			if rejected["run_id"] != int(rejection["run"]):
+				raise UsageError("rejected-deletion snapshot does not match the guard rejection run")
+			normalised["rejected_run"] = rejected["run_id"]
 		normalised["rejection_run"] = rejection["run"]
 		normalised["paths"] = cleaned
 	if name == "operator_step":
@@ -587,6 +664,14 @@ def build_parser() -> argparse.ArgumentParser:
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
 	validate_cmd.add_argument("--repo", required=True)
+	validate_cmd.add_argument("--rejected-deletions-file")
+	rejection_cmd = sub.add_parser("rejection-snapshot")
+	rejection_cmd.add_argument("--run-file", required=True)
+	rejection_cmd.add_argument("--artifact-file", required=True)
+	rejection_cmd.add_argument("--zip-file", required=True)
+	rejection_cmd.add_argument("--item", required=True)
+	rejection_cmd.add_argument("--repo", required=True)
+	rejection_cmd.add_argument("--approved-json")
 	validate_cmd.add_argument("--rejection-file")
 	rejection_cmd = sub.add_parser("rejection")
 	rejection_cmd.add_argument("--item", required=True)
@@ -640,6 +725,16 @@ def run(argv: list[str] | None = None) -> dict:
 			_read_json(args.decision_file, "--decision-file"),
 			args.repo,
 			_read_json(args.rejection_file, "--rejection-file") if args.rejection_file else None,
+			_read_json(args.rejected_deletions_file, "--rejected-deletions-file") if args.rejected_deletions_file else None,
+		)
+	if args.command == "rejection-snapshot":
+		try:
+			approved = json.loads(args.approved_json) if args.approved_json is not None else None
+		except ValueError as exc:
+			raise UsageError("--approved-json is not JSON") from exc
+		return rejection_snapshot(
+			_read_json(args.run_file, "--run-file"), _read_json(args.artifact_file, "--artifact-file"),
+			args.zip_file, _check_item(args.item), args.repo, approved,
 		)
 	item = _check_item(args.item)
 	return {

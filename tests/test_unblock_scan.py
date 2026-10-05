@@ -444,4 +444,11 @@ def test_bulk_override_spend_and_judge_log_reference_extract_scalar_captures() -
 	assert 'last // "" | rtrimstr("\\r")' in implement
 	assert 'capture("(?m)^Approved deletions: (?<paths>\\\\[[^\\\\r\\\\n]*\\\\])\\\\r?$")' in implement
 	judge = (ROOT / "scripts/unblock_judge.sh").read_text(encoding="utf-8")
+	assert 'reason=rejection_run_unbound' in implement
+	assert 'reason=rejection_snapshot_unverified' in implement
+	assert 'actions/runs/${rejection_run_id}/artifacts?per_page=100' in implement
+	assert 'reason=approved_paths_not_rejected' in implement
+	assert '--approved-json "${approved_deletions}"' in implement
+	assert '(.created_at | type == "string") and .created_at <= $approved_at' in implement
+	assert implement.index('--approved-json "${approved_deletions}"') < implement.index('ai:unblock-override-used:v1 comment=${override_comment_id}')
 	assert 'scan("/actions/runs/([0-9]+)") | .[0]' in judge
