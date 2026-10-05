@@ -3,6 +3,8 @@
 
 Until now a standalone issue's questions were answered by picking each question's RECOMMENDED letter. That pick could not check GitHub state, and it posted dead answers when the RECOMMENDED option asked a human to "provide" something. `clarify.yml` also sent the `🚨 CRITICAL` "Clarification required" Telegram alert after its own auto-decide step had already answered, which is what happened on issue #6262 (run 37251621451). Now `clarify.yml` hands the questions to `orchestrate_clarify_respond.yml` and skips the alert. The worker answers from the repository plus a GITHUB FACTS block, the state of the PRs, issues, branches and runs the issue references, read on the host before the network-isolated model runs. A credential, token, account or other setup the work needs is decided as an UPPER_SNAKE_CASE placeholder secret or variable: the code reads it with no default and skips or fails closed until it is set. The placeholder is listed under "Setup required" in the `<!-- ai:auto-decisions:v1 -->` comment and in the PR body. If the worker fails, each question's RECOMMENDED option is posted instead.
 
+The `core` install profile now includes the issue-comment responder wrapper, so its default delegation does not silently leave standalone questions unanswered. Existing core-profile repositories receive the wrapper on their next automatic workflow sync.
+
 | The numbers that matter | Value |
 | --- | --- |
 | Clarification questions surveyed (19 Apr to 5 Oct 2026, excluding the release-gate fixture) | 136 on 72 issues |

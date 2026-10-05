@@ -4508,9 +4508,9 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 
 
 def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_models() -> None:
-	"""Reduced tiers leave out the two most expensive panel models by default."""
+	"""Reduced tiers leave out the two full-panel-only models by default."""
 	reviewer_models = _workflow_reviewer_models()
-	expensive = {"google/gemini-3.8-flash", "z-ai/glm-5.2"}
+	expensive = {"google/gemini-3.1-flash-lite", "z-ai/glm-5.2"}
 	default_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
 	assert expensive <= set(reviewer_models)
 	assert set(default_standard) <= set(reviewer_models)
@@ -4937,7 +4937,7 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 
 	assert sorted(mapped) == [
 		"deepseek/deepseek-v4-pro",
-		"google/gemini-3.8-flash",
+		"google/gemini-3.1-flash-lite",
 		"minimax/minimax-m3",
 		"openai/gpt-6-luna",
 		"qwen/qwen3.7-plus",
@@ -4945,6 +4945,7 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 	]
 	assert sorted(unmapped) == []
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
+	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
 	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
 	assert chains["openai/gpt-6-luna"] == ["openai/gpt-5.6-luna"]
@@ -8154,6 +8155,7 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 		valid_reason = "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
 		for diagnostic, expected in (
 			(valid_reason, "host_baseline_changed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=admitted_inventory_missing\n", "admitted_inventory_missing"),
 			(None, "unknown"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=forged\n", "unknown"),
 			(valid_reason + "secret second line\n", "unknown"),
@@ -8180,6 +8182,9 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	helper_text = workspace_helper.read_text()
+	assert helper_text.count("commands = load_admitted_commands(manifest)") == 2
+	assert "allowed(name, host)" not in helper_text.split("def transfer(", 1)[1].split("def refresh(", 1)[0]
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)
 		host = root / "host"
@@ -8192,31 +8197,90 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(host / ".claude/hooks").mkdir(parents=True)
 		(host / ".claude/hooks/gh_api_write_guard.py").write_text("before\n")
 		(host / ".claude/hooks/other.py").write_text("operator hook\n")
+		(host / ".claude/commands").mkdir(parents=True)
+		(host / ".claude/commands/audit-plans.md").write_text("before\n")
+		(host / ".claude/commands/other.md").write_text("operator command\n")
+		(host / ".claude/commands/apply-url.md").write_text("before\n")
+		# A live command needs a twin in both the PR and verified support checkouts.
+		(host / "workflow-templates/.claude/commands").mkdir(parents=True)
+		(host / "workflow-templates/.claude/commands/audit-plans.md").write_text("template\n")
+		(host / "workflow-templates/.claude/commands/apply-url.md").write_text("template\n")
+		(host / "workflow-templates/.claude/commands/pr-new.md").write_text("PR template\n")
+		trusted_checkout = root / "verified" / ".codex-workflow-src" / "workflow-templates/.claude/commands"
+		trusted_checkout.mkdir(parents=True)
+		(trusted_checkout / "audit-plans.md").write_text("trusted template\n")
+		(trusted_checkout / "apply-url.md").write_text("trusted template\n")
+		admission_spec = importlib.util.spec_from_file_location("review_workspace_admission", workspace_helper)
+		assert admission_spec and admission_spec.loader
+		admission_module = importlib.util.module_from_spec(admission_spec)
+		admission_spec.loader.exec_module(admission_module)
+		assert not admission_module.allowed(".claude/commands/pr-new.md", host)
+		assert admission_module.allowed(".claude/commands/audit-plans.md", commands={".claude/commands/audit-plans.md"})
 		(host / "scripts").mkdir()
 		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
-		subprocess.run(["git", "add", ".github", ".claude", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github", ".claude", "workflow-templates", "scripts"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
 				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "verified")},
 				capture_output=True, text=True, check=False,
 			)
 		assert run("snapshot").returncode == 0
+		inventory_path = manifest.with_name(manifest.name + ".admitted_commands.json")
+		assert json.loads(inventory_path.read_text()) == [".claude/commands/apply-url.md", ".claude/commands/audit-plans.md"]
+		# A PR-added twin before snapshot cannot authorize a new command.
+		(source / ".claude/commands/pr-new.md").write_text("PR command\n")
+		assert run("transfer").returncode == 0
+		assert not (host / ".claude/commands/pr-new.md").exists()
+		(source / ".claude/commands/pr-new.md").unlink()
 		assert not (source / ".github/ai/WORKFLOW.md").exists()
 		assert (source / ".claude/hooks/gh_api_write_guard.py").exists()
 		assert not (source / ".claude/hooks/other.py").exists()
+		assert (source / ".claude/commands/audit-plans.md").exists()
+		assert (source / ".claude/commands/apply-url.md").exists()
+		assert not (source / ".claude/commands/other.md").exists()
 		assert (source / "scripts/claude_settings.json.tmpl").exists()
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
 		(source / ".github/ai/claude_engine.json").write_text("after\n")
 		(source / ".claude/hooks/gh_api_write_guard.py").write_text("after\n")
+		(source / ".claude/commands/audit-plans.md").write_text("after\n")
+		(source / ".claude/commands/apply-url.md").write_text("after\n")
 		(source / "scripts/claude_settings.json.tmpl").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
 		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
 		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
+		assert (host / ".claude/commands/audit-plans.md").read_text() == "after\n"
+		assert (host / ".claude/commands/apply-url.md").read_text() == "after\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		# A command without a host template twin stays out: the write is dropped.
+		(source / ".claude/commands/other.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".claude/commands/other.md").read_text() == "operator command\n"
+		(source / ".claude/commands/other.md").unlink()
+		# Creating the twin in the same transfer does not admit a new command.
+		(source / "workflow-templates/.claude/commands/new.md").write_text("template\n")
+		(source / ".claude/commands/new.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / "workflow-templates/.claude/commands/new.md").read_text() == "template\n"
+		assert not (host / ".claude/commands/new.md").exists()
+		(source / ".claude/commands/new.md").unlink()
+		# A retry cannot widen admission after the first transfer adds the twin.
+		(source / ".claude/commands/new.md").write_text("untrusted retry\n")
+		(source / ".claude/commands/scratch.txt").write_text("untrusted retry scratch\n")
+		(source / ".claude/commands/broken.md").symlink_to("missing.md")
+		assert run("transfer").returncode == 0
+		assert (source / ".claude/commands/scratch.txt").exists()
+		assert (source / ".claude/commands/broken.md").is_symlink()
+		assert not (host / ".claude/commands/new.md").exists()
+		assert not (host / ".claude/commands/scratch.txt").exists()
+		assert run("refresh").returncode == 0
+		assert not (source / ".claude/commands/new.md").exists()
+		assert not (source / ".claude/commands/scratch.txt").exists()
+		assert not (source / ".claude/commands/broken.md").is_symlink()
 		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/ai/WORKFLOW.md").read_text() == "operator config\n"
@@ -8225,6 +8289,36 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(source / ".github/untrusted/result.yml").write_text("untrusted\n")
 		assert run("transfer").returncode != 0
 		assert not (host / ".github/untrusted/result.yml").exists()
+		shutil.rmtree(source / ".github/untrusted")
+		# A new .claude/ directory outside the admitted ones still fails closed.
+		(source / ".claude/skills").mkdir()
+		(source / ".claude/skills/result.md").write_text("untrusted\n")
+		assert run("transfer").returncode != 0
+		assert not (host / ".claude/skills").exists()
+		# Missing or corrupt authorization state cannot fall back to the live host.
+		shutil.rmtree(source / ".claude/skills")
+		inventory_path.write_text('{"not": "a list"}')
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert "reason=admitted_inventory_missing" in rejection.stderr
+		inventory_path.unlink()
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert "reason=admitted_inventory_missing" in rejection.stderr
+		assert run("refresh").returncode != 0
+		assert not (host / ".claude/commands/new.md").exists()
+		# No verified support checkout means no command path is admitted.
+		no_support_source = root / "without-support" / "source"
+		no_support_source.mkdir(parents=True)
+		no_support_manifest = root / "without-support" / "baseline.json"
+		no_support_snapshot = subprocess.run(
+			[sys.executable, str(workspace_helper), "snapshot", str(host), str(no_support_source), str(no_support_manifest)],
+			env={**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "without-support")},
+			capture_output=True, text=True, check=False,
+		)
+		assert no_support_snapshot.returncode == 0
+		assert json.loads(no_support_manifest.with_name(no_support_manifest.name + ".admitted_commands.json").read_text()) == []
+		assert not (no_support_source / ".claude/commands/audit-plans.md").exists()
 
 
 def test_review_isolation_transfers_into_active_work_tree() -> None:

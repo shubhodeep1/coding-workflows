@@ -52,11 +52,12 @@ def test_profile_manifests_match_contracts() -> None:
 		"ai-review.yml",
 		"ai-issue-pr-status.yml",
 		"ai-cancel-on-pr-close.yml",
+		"ai-orchestrate-clarify-respond.yml",
 	]
-	standard = core + [
+	standard = core[:-1] + [
 		"ai-orchestrate.yml",
 		"ai-orchestrate-poll.yml",
-		"ai-orchestrate-clarify-respond.yml",
+		core[-1],
 		"ai-validate.yml",
 		"ai-sync-labels.yml",
 		"review_rb_judge_dispatch.yml",
