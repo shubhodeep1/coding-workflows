@@ -5,28 +5,28 @@ Moved from `.claude/scripts/` when the session-based Claude automation was
 retired (docs/plans/replace-claude-sessions-with-cli-engine-plan.md); the
 single-issue security pass of that plan's Phase 8a reuses these rules, so a
 follow-up of a follow-up does not recurse. A skip label alone
-(`ai:security`, `ai:check-triage`, `ai:workflow-heal`) proves nothing: anyone
+(`ai:security`, `ai:workflow-heal`) proves nothing: anyone
 who can label an issue can add one (security finding
 `mutable-label-skips-security-pass`, issue #4623). The skip is allowed only
 when, for one skip label the issue carries:
 
   1. the issue author is the automation that files these issues: the
      `github-actions[bot]` Bot, or a User whose `author_association` is
-     `OWNER` (the account whose GH_PAT the security audit, check-failure
-     triage, and workflow-heal workflows use);
+     `OWNER` (the account whose GH_PAT the security audit and workflow-heal
+     workflows use);
   2. that author applied the label: its first `labeled` event came from the
      author within LABEL_AT_CREATION_WINDOW_SECONDS of the issue's creation,
      and no other account ever applied it;
   3. the body carries the marker line that label's producer writes
      (`<!-- ai:security-finding:<id> -->`,
-     `<!-- check-failure-triage:fp=<fp> -->`,
      `<!-- workflow-failure-heal:fp=<fp> -->`);
   4. for `ai:security` only, the body's `Refs #T` names the audit tracker:
      an issue labelled `ai:security-audit` whose body carries
      `<!-- ai:security-audit-tracker:v1 -->` and whose author is the
      follow-up's author.
 
-Anything else, including a read failure, means the security pass runs.
+Triage-linked PRs always run the security pass. Anything else, including a
+read failure, means the security pass runs.
 
 Usage:
 
@@ -58,9 +58,11 @@ from typing import Any, Callable
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 # Checked in this order; the first label that verifies wins.
+# ai:check-triage is intentionally absent: owner-filed triage issues derive
+# from contributor-controlled failure logs, so author, label and marker do
+# not establish that a fix is safe (triage-issue-launders-security-pass-exemption).
 SKIP_LABEL_MARKERS: dict[str, re.Pattern[str]] = {
 	"ai:security": re.compile(r"(?m)^<!-- ai:security-finding:\S+ -->[ \t]*$"),
-	"ai:check-triage": re.compile(r"(?m)^<!-- check-failure-triage:fp=\S+ -->[ \t]*$"),
 	"ai:workflow-heal": re.compile(r"(?m)^<!-- workflow-failure-heal:fp=\S+ -->[ \t]*$"),
 }
 SECURITY_LABEL = "ai:security"
