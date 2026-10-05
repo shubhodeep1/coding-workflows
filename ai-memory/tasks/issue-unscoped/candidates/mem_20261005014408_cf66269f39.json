@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:267-274 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: Handling of `>|` may leave the adjacent numeric file-descriptor prefix in the parsed Git arguments, causing the guard to check branch `123` instead of the current branch for `git push origin 123>|/dev/null`.\n  WHY: The highest reported severity is MAJOR; the reviewers disagree on whether the `token == \">|\"` branch is unreachable but harmless or whether the offset check misses `>|` and permits a push from a branch whose PR has merged.\n- tests/test_pr_merge_status_guard.py:test_clobber_redirect_checks_current_branch | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The test relies on the current checkout being `feature/x` but does not explicitly check out that branch.\n  WHY: If a preceding test leaves the repository on another branch, the guard may find no merged PR for the current branch and return `code == 0`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Treat `&>` and `&>>` separately from file-descriptor redirects; retain the preceding numeric argument and fail closed when redirect parsing is ambiguous\" (issue #6249)\n  expected_change_site: .claude/hooks/pr_merge_status_guard.py near _shell_segments_with_operators and _evaluate_bash\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The reviewer reports the diff adds `_FD_PREFIX_REDIRECT_OPERATORS` excluding `&>` and `&>>`, the `if token in _FD_PREFIX_REDIRECT_OPERATORS` guard, and the `ValueError` catch in `_evaluate_bash`; the reviewer states all three sub-requirements appear addressed in the diffs.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py | severity=NIT | confidence=3\n  PROBLEM: The `token == \">|\"` branch in the redirect detection condition is unreachable while `|` remains in `_SHELL_PUNCTUATION_CHARS`; the `>` token alone handles fd-stripping.\n  WHY: It does not fail; the branch is harmless belt-and-suspenders but adds complexity.\n- tests/test_pr_merge_status_guard.py | severity=NIT | confidence=2\n  PROBLEM: The test `test_clobber_redirect_checks_current_branch` depends on the current branch being `feature/x` but does not call `_git(repo, \"checkout\", ...)`.\n  WHY: If a preceding test leaves the repo on another branch, the guard could check a different current branch and return `code == 0`.\n- TASK_GAP\n  Requirement: \"Treat `&>` and `&>>` separately from file-descriptor redirects; retain the preceding numeric argument and fail closed when redirect parsing is ambiguous\" (issue #6249)\n  Expected change site: .claude/hooks/pr_merge_status_guard.py near _shell_segments_with_operators and _evaluate_bash\n  Evidence of absence: The diff does add `_FD_PREFIX_REDIRECT_OPERATORS` which excludes `&>` and `&>>` (the \"treat separately\" directive) and the `if token in _FD_PREFIX_REDIRECT_OPERATORS` guard (the \"retain preceding numeric\" directive). It also adds the `ValueError` catch in `_evaluate_bash` for the \"fail closed when ambiguous\" directive. All three sub-requirements appear to be addressed in the diffs.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py; _shell_segments_with_operators, lines 267-274; the `lexer.instream.tell() - len(token)` offset check | severity=MAJOR | confidence=5\n  PROBLEM: The numeric file-descriptor prefix is not removed for `>|` when the lexer has read and pushed back the following character.\n  WHY: For `git push origin 123>|/dev/null`, the offset check misses `>|`, leaving `123` among the parsed Git arguments. Bash treats `123` as the redirect\u2019s file descriptor, so Git pushes the current branch; the guard instead checks branch `123` and can allow the push from a branch whose PR has already merged. The regression test added for `123>|f` expects the prefix to be removed, but this parser logic does not do so.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "5373f0315a235da6238e5de84f835c3d1723ce3e0af27fbfbe21b4ac742ae958",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6250,
+    "run_id": "37248686922",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37248686922",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005014408_cf66269f39",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6250,
+    "run_id": "37248686922"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T01:44:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
