@@ -63,6 +63,7 @@ def _evaluate(expression: str, event_name: str, event: dict, variables: dict | N
 
 def _run_event(name: str, *, conclusion: str = "failure", event: str = "pull_request", prs: int = 1, branch: str = "feature", path: str = ".github/workflows/test.yml") -> dict:
 	return {
+		"workflow": {"path": path.split("@", 1)[0]},
 		"workflow_run": {
 			"name": name,
 			"path": path,
@@ -128,14 +129,17 @@ def test_consumer_wrapper_listens_to_every_workflow_but_its_own() -> None:
 	assert names and all(name.startswith("AI ") for name in names), sorted(names)
 	paths = {f".github/workflows/{path.name}" for path in (REPO_ROOT / "workflow-templates").glob("*.yml")}
 	excluded_names_match = re.search(
-		r"!contains\(fromJson\('([^']+)'\), github\.event\.workflow_run\.path\)", condition,
+		r"!contains\(fromJson\('([^']+)'\), github\.event\.workflow\.path\)", condition,
 	)
 	assert excluded_names_match
 	assert set(json.loads(excluded_names_match.group(1))) == paths
 	for own in paths:
 		assert not _evaluate(condition, "workflow_run", _run_event("Any name", path=own)), own
+		assert not _evaluate(condition, "workflow_run", _run_event("Any name", path=f"{own}@refs/heads/main")), own
+	assert not _evaluate(condition, "workflow_run", {**_run_event("Tests"), "workflow": {}})
 	assert _evaluate(condition, "workflow_run", _run_event("AI Clarify"))
 	assert _evaluate(condition, "workflow_run", _run_event("ai clarify"))
+	assert _evaluate(condition, "workflow_run", _run_event("AI Review", path=".github/workflows/custom.yml@refs/heads/main"))
 	assert not _evaluate("!contains(fromJson('[\"AI Clarify\"]'), github.event.workflow_run.name)", "workflow_run", _run_event("ai clarify"))
 
 
