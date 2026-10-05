@@ -5,13 +5,28 @@
   "entry_id": "processed_command_6308_5988613105_approved",
   "issue_number": 6308,
   "metadata": {
+    "branch": "ai/issue-6308",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "agents.md",
+      "changelog.d/6308-review-host-python-safe-path.md",
+      "scripts/ai_memory.py",
+      "scripts/workspace_init.sh",
+      "tests/test_review_host_python_safe_path.py"
+    ],
+    "issue_number": 6308,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6308",
+    "pr_number": 6311,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6311",
+    "run_attempt": "1",
+    "run_id": "37267500396",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37267500396"
   },
   "run_attempt": 1,
   "run_id": "37267500396",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-05T05:26:58Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T05:41:12Z",
   "workflow": "implement"
 }
