@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which Claude roles should this fix isolate?\nChoices:\nA) Only `MATERIALITY`, the role named in the exploit scenario (`scripts/review_agents_md_materiality.sh`).\nB) Every role whose engine profile resolves to `read`, by isolating centrally inside `claude_run` / `claude_run_selected` in `scripts/ai_engine.sh`. This covers MATERIALITY, SUMMARISER, LOG_SUMMARY, SECURITY_AUDIT, CHECK_TRIAGE, WORKFLOW_HEAL, BEHAVIOURAL_SMOKE, the RB_JUDGE read call and other read-profile callers. (RECOMMENDED)\nC) Every Claude role, including write-profile roles such as IMPLEMENT, REVIEW_EDITOR and CONFLICT_RESOLVER. These need workspace write-back, so this is a much larger change.\n**Note:** choosing C makes Q2:B insufficient on its own.\nQ2: What isolation mechanism should read-profile runs use?\nChoices:\nA) Generalise clarify's existing setup for `claude_run` when the profile is `read`: a network-isolated container, read-only, with the OAuth token kept on the host relay and a placeholder inside the container. The container gets a sanitised copy of the workdir in which `.git` is kept but credential-bearing config (for example `http.*.extraheader`) is stripped. It never mounts `${RUNNER_TEMP}`, `$HOME` or the token pool. (RECOMMENDED)\nB) No container. Add `permissions.deny` rules and read-guard path blocks for the token pool, `.git/config`, `~/.git-credentials` and runner files. This is smaller, but it does not meet the audit's container recommendation.\nC) Option A plus option B's deny rules as defence in depth.\nQ3: When the container or relay cannot start (no Docker, image build failure, relay unavailable), what should a read-profile run do?\nChoices:\nA) Fail closed into the existing `claude_run` exit 75 path (`AI_ENGINE_FALLBACK`), so each caller keeps its current fallback. For example, MATERIALITY keeps its deterministic result and SUMMARISER falls back to OpenCode. Never run Claude unisolated on the host. (RECOMMENDED)\nB) Fail the calling step hard.\nC) Run Claude on the host without isolation and log a `::warning::`.\n**Note:** C reintroduces the vulnerability; it is incompatible with closing this finding.",
+  "fingerprint": "7c84385d30271ea21dc4d131b06264e4695483efa4c9aa1fcf01bd1a9e66898e",
+  "lineage": {
+    "issue_number": 6282,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37256793398",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37256793398",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005025435_010c424551",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6282,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37256793398"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6282 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T02:54:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
