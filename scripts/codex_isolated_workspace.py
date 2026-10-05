@@ -83,6 +83,7 @@ MAX_TRANSFER_FILES = 50000
 MAX_TRANSFER_TOTAL = 2 * 1024 * 1024 * 1024
 MAX_INCLUDE_TOTAL = 256 * 1024 * 1024
 CHUNK = 1024 * 1024
+BINARY_SNIFF_BYTES = 8192
 
 # Read-only snapshots never include support checkouts, Codex state, env files
 # or anything that looks like a credential store (clarify's rules, Q11 A).
@@ -279,6 +280,16 @@ def snapshot_readonly(host, dest):
 	log(f"snapshot mode=read-only source={source} files={count} bytes={total} skipped_large={skipped_large} skipped_other={skipped_other}")
 
 
+def _looks_binary(node):
+	"""True when a file's first bytes hold a NUL, git's binary heuristic."""
+	try:
+		fd = os.open(node, os.O_RDONLY | os.O_NOFOLLOW)
+	except OSError:
+		return True  # Unreadable: never chunk it as text.
+	with os.fdopen(fd, "rb") as handle:
+		return b"\0" in handle.read(BINARY_SNIFF_BYTES)
+
+
 def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="explicit"):
 	if scope_mode not in ("explicit", "all"):
 		raise Rejected("invalid oversized scope mode")
@@ -299,6 +310,8 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 		names = list(walk_paths(host))
 	scoped = []
 	unscoped = []
+	explicit_candidates = []
+	extra_candidates = []
 	total = 0
 	for name in sorted(set(names)):
 		if not readonly_allowed(name):
@@ -326,9 +339,14 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 			continue
 		if info.st_size <= MAX_READONLY_FILE:
 			continue
-		if scope_mode == "explicit" and name not in scope:
-			unscoped.append({"path": name, "size": info.st_size})
-			continue
+		if name in scope:
+			explicit_candidates.append((name, node, info))
+		elif scope_mode == "all":
+			extra_candidates.append((name, node, info))
+		else:
+			unscoped.append({"path": name, "size": info.st_size, "reason": "outside_scope"})
+	# Explicitly scoped files fail closed and take the cap budget first.
+	for name, node, info in explicit_candidates:
 		if info.st_size > file_cap:
 			raise Rejected(f"scoped oversized file exceeds cap (path={name} size={info.st_size} cap={file_cap})")
 		total += info.st_size
@@ -338,6 +356,20 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 				f"(files={len(scoped) + 1} total={total} cap={total_cap} last_path={name})"
 			)
 		scoped.append((name, node, info))
+	# Full-audit extras never fail the audit: binaries and files past the caps
+	# are reported as not inspected instead.
+	for name, node, info in extra_candidates:
+		if info.st_size > file_cap:
+			unscoped.append({"path": name, "size": info.st_size, "reason": "over_file_cap"})
+		elif total + info.st_size > total_cap:
+			unscoped.append({"path": name, "size": info.st_size, "reason": "over_total_cap"})
+		elif _looks_binary(node):
+			unscoped.append({"path": name, "size": info.st_size, "reason": "binary"})
+		else:
+			total += info.st_size
+			scoped.append((name, node, info))
+	scoped.sort(key=lambda item: item[0])
+	unscoped.sort(key=lambda entry: entry["path"])
 
 	remove_node(dest)
 	dest.mkdir(parents=True)

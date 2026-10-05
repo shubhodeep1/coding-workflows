@@ -2105,7 +2105,9 @@ def test_security_audit_full_scan_chunks_oversized_file() -> None:
 		assert any(head_sha in body for body in result["issue_edit_bodies"])
 
 
-def test_security_audit_full_scan_oversized_cap_fails_before_codex_or_tracker() -> None:
+def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
+	# Q24: in a full scan an unscoped file past the cap is listed as not
+	# inspected; it does not fail the audit.
 	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-cap-") as td:
 		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
 		state = _security_audit_tracker_state()
@@ -2114,10 +2116,11 @@ def test_security_audit_full_scan_oversized_cap_fails_before_codex_or_tracker() 
 			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
 			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
 		})
-		assert proc.returncode != 0 and "phase=oversized-scope" in proc.stderr
-		assert not result.get("codex_calls")
-		assert not result.get("issue_comment_bodies")
-		assert not result.get("issue_edit_bodies")
+		assert proc.returncode == 0, proc.stderr
+		assert "phase=oversized-scope" not in proc.stderr
+		assert result.get("codex_calls")
+		comment = result["issue_comment_bodies"][0]
+		assert "Coverage note: 1 tracked files over 2 MiB were not inspected" in comment and "`large.py`" in comment
 
 
 def test_security_audit_no_oversized_file_has_no_tracker_coverage_lines() -> None:
