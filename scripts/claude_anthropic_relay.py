@@ -108,7 +108,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 				# Let a sending client finish without letting an incomplete body stall the relay.
 				previous_timeout = self.connection.gettimeout()
 				deadline = time.monotonic() + 1
-				body_remaining = int(length)
+				body_remaining = getattr(self, "_unread_body_bytes", int(length))
 				try:
 					while body_remaining and (seconds_left := deadline - time.monotonic()) > 0:
 						self.connection.settimeout(seconds_left)
@@ -169,6 +169,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			self.connection.settimeout(previous_timeout)
 		self._request_body_consumed = body_remaining == 0
 		if body_remaining:
+			self._unread_body_bytes = body_remaining
 			return self._reject(400)
 		body = b"".join(body_parts)
 		if mode == "broker":

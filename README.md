@@ -1216,8 +1216,8 @@ the way to a fix PR without human action.
   `triage-workflow-run`). GitHub sends no `check_run` event for a check that
   GitHub Actions created ("to prevent recursive workflows"), so before this
   job the triage never ran for Actions CI. This repo's wrapper listens to the
-  `CI` workflow; the consumer wrapper omits the workflow-name filter to listen
-  to every workflow and skips the pipeline's own `AI …` workflows, so each
+  `CI` workflow; the consumer wrapper uses `workflows: ["*"]` to listen to
+  every workflow and skips the pipeline's own `AI …` workflows, so each
   finished workflow also leaves a skipped wrapper run in the Actions tab. Each failed run is evaluated,
   but an existing open triage issue for the same PR and workflow suppresses a
   duplicate; the diagnosis reads every failing check on the PR head. The

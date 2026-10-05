@@ -115,7 +115,7 @@ def test_workflow_run_dedup_reuses_open_issue_per_pr_and_workflow() -> None:
 
 def test_consumer_wrapper_listens_to_every_workflow_but_its_own() -> None:
 	data = _load(CONSUMER)
-	assert _on(data)["workflow_run"] == {"types": ["completed"]}
+	assert _on(data)["workflow_run"] == {"workflows": ["*"], "types": ["completed"]}
 	condition = data["jobs"]["triage-workflow-run"]["if"]
 	assert _evaluate(condition, "workflow_run", _run_event("Tests"))
 	for own in ("AI Review", "AI Check Failure Triage", "AI Implement"):

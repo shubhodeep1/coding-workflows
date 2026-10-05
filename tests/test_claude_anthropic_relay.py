@@ -242,6 +242,27 @@ def test_rejection_drain_has_a_total_deadline_and_restores_socket_timeout(monkey
 	handler.send_error.assert_called_once_with(400, "Request rejected")
 
 
+def test_rejection_drains_only_the_unread_body_after_partial_read() -> None:
+	handler = relay.Relay.__new__(relay.Relay)
+	handler.command = "POST"
+	handler.server = Mock(mode="bridge")
+	handler.path = "/v1/messages"
+	handler.headers = {
+		"Host": "localhost", "Authorization": "Bearer isolated-placeholder",
+		"Content-Type": "application/json", "Content-Length": "5",
+	}
+	handler.connection = Mock()
+	handler.rfile = Mock()
+	handler.rfile.read1.side_effect = [b"ab", b"", b"xyz"]
+	handler.send_error = Mock()
+
+	handler.do_POST()
+
+	assert handler.rfile.read1.call_args_list[-1].args == (3,)
+	assert handler.rfile.read1.call_count == 3
+	handler.send_error.assert_called_once_with(400, "Request rejected")
+
+
 def test_bridge_rejects_an_oversized_length_with_valid_other_headers(chain) -> None:
 	connection = http.client.HTTPConnection("127.0.0.1", chain["bridge_port"], timeout=3)
 	connection.putrequest("POST", "/v1/messages")
