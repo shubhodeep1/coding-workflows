@@ -83,7 +83,12 @@ def test_internal_wrapper_listens_to_ci_and_keeps_check_run() -> None:
 def test_workflow_run_job_triages_one_failed_pull_request_run(path: Path, ref: str) -> None:
 	job = _load(path)["jobs"]["triage-workflow-run"]
 	assert job["uses"] == f"shubhodeep1/coding-workflows/.github/workflows/check_failure_triage.yml@{ref}"
-	assert job["secrets"] == "inherit"
+	assert job["secrets"] == {
+		name: "${{ secrets." + name + " }}"
+		for name in ("GH_PAT", "CHECK_TRIAGE_ISSUES_TOKEN", "OPENROUTER_API_KEY", "TG_BOT_SECRET")
+	}
+	assert _load(path)["jobs"]["triage"]["secrets"] == job["secrets"]
+	assert "inherit" not in path.read_text(encoding="utf-8")
 	assert job["with"] == {
 		"pr_number": "${{ github.event.workflow_run.pull_requests[0].number }}",
 		"check_run_id": "",
