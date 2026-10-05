@@ -768,6 +768,12 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   only when something needs syncing. Log prefix `CLAUDE_LIVE_SYNC`.
 - A push that changed only the live copy is left to the parity test.
 
+New templates without a live copy are also treated as drift and copied into
+`.claude/` (including new subdirectories). A later template push recovers an
+earlier failed or superseded sync only if the template's most recent change
+is newer than the live file's; an equal or newer live edit is left untouched.
+An unusable `before` commit still skips the sync, so CI reports any drift.
+
 ---
 
 ## Repo-specific batching helpers

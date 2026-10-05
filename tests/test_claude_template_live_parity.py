@@ -44,6 +44,7 @@ def test_allowlist_names_real_divergent_pairs() -> None:
 	divergent = json.loads((REPO_ROOT / sync_mod.ALLOWLIST_PATH).read_text(encoding="utf-8"))["divergent"]
 	for relative, reason in divergent.items():
 		assert relative in pairs, f"{relative} has no template/live pair"
+		assert (REPO_ROOT / sync_mod.LIVE_PREFIX / relative).is_file(), f"{relative} has no live copy"
 		assert isinstance(reason, str) and reason.strip(), relative
 
 
@@ -80,7 +81,7 @@ def test_plan_picks_template_only_changes(tmp_path: Path) -> None:
 	assert sync_mod.plan(root, before, after) == ["hooks/guard.py"]
 	# An allowlisted file never syncs.
 	before, after = _commit(root, "workflow-templates/.claude/hooks/own.py", "changed\n")
-	assert sync_mod.plan(root, before, after) == []
+	assert sync_mod.plan(root, before, after) == ["hooks/guard.py"]
 	# A push that changed the live copy too is left to the parity test.
 	before = _git(root, "rev-parse", "HEAD")
 	(root / ".claude" / "hooks" / "guard.py").write_text("v3\n", encoding="utf-8")
@@ -95,6 +96,49 @@ def test_plan_fails_open_without_a_usable_before_commit(tmp_path: Path) -> None:
 	_before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
 	assert sync_mod.plan(root, "0" * 40, after) == []
 	assert sync_mod.plan(root, "f" * 40, after) == []
+
+
+def test_sync_creates_missing_live_copy(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	template = root / "workflow-templates/.claude/commands/new.md"
+	template.parent.mkdir(parents=True)
+	before, after = _commit(root, "workflow-templates/.claude/commands/new.md", "new command\n")
+	assert "commands/new.md" in sync_mod.mismatched(root)
+	assert sync_mod.plan(root, before, after) == ["commands/new.md"]
+	before, after = _commit(root, "workflow-templates/.claude/hooks/own.py", "changed\n")
+	assert sync_mod.plan(root, before, after) == ["commands/new.md"]
+	assert sync_mod.sync(root, before, after, dry_run=True) == 0
+	assert (root / ".claude/commands/new.md").read_text(encoding="utf-8") == "new command\n"
+
+
+def test_sync_commits_missing_live_copy(tmp_path: Path, monkeypatch) -> None:
+	root = _scratch_repo(tmp_path)
+	remote = tmp_path / "remote.git"
+	_git(tmp_path, "init", "-q", "--bare", str(remote))
+	_git(root, "remote", "add", "origin", str(remote))
+	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+	monkeypatch.delenv("SYNC_BRANCH", raising=False)
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 7}])
+	(root / "workflow-templates/.claude/commands").mkdir()
+	before, after = _commit(root, "workflow-templates/.claude/commands/new.md", "new command\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/commands/new.md") == "new command"
+
+
+def test_plan_recovers_superseded_push_without_overwriting_live_edits(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	for prefix in (".claude", "workflow-templates/.claude"):
+		(root / prefix / "hooks/second.py").write_text("v1\n", encoding="utf-8")
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "second pair")
+	_commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	before, after = _commit(root, "workflow-templates/.claude/hooks/second.py", "v2\n")
+	assert sync_mod.plan(root, before, after) == ["hooks/guard.py", "hooks/second.py"]
+	assert sync_mod.sync(root, before, after, dry_run=True) == 0
+	assert (root / ".claude/hooks/guard.py").read_text(encoding="utf-8") == "v2\n"
+	_commit(root, ".claude/hooks/guard.py", "custom\n")
+	before, after = _commit(root, "workflow-templates/.claude/hooks/second.py", "v3\n")
+	assert sync_mod.plan(root, before, after) == ["hooks/second.py"]
 
 
 def test_sync_pushes_a_branch_and_opens_one_pr(tmp_path: Path) -> None:
@@ -137,7 +181,7 @@ def test_sync_refresh_keeps_earlier_unmerged_live_copies(tmp_path: Path, monkeyp
 	assert sync_mod.sync(root, before, after, dry_run=False) == 0
 	_git(root, "checkout", "main")
 	before, after = _commit(root, "workflow-templates/.claude/hooks/second.py", "v2\n")
-	assert sync_mod.plan(root, before, after) == ["hooks/second.py"]
+	assert sync_mod.plan(root, before, after) == ["hooks/guard.py", "hooks/second.py"]
 	assert sync_mod.sync(root, before, after, dry_run=False) == 0
 	for name in ("guard.py", "second.py"):
 		assert _git(remote, "show", f"ai/sync-claude-live-copies:.claude/hooks/{name}") == "v2"

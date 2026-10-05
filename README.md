@@ -1051,6 +1051,15 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (see the retired-files paragraph below). Nothing to configure in the
 > consumer.
 
+> **Source-repo `.claude/` parity:** On pushes to `main` that change
+> `workflow-templates/.claude/**`, `sync-claude-live-copies.yml` opens or
+> refreshes a PR copying template-only changes into this repo's `.claude/`.
+> This includes new templates without a live file and template changes missed
+> by a failed or superseded sync run. An intentional newer live-file edit, or
+> a file listed in `.github/ai/claude_template_divergence.json`, is not
+> overwritten. An unusable push `before` SHA skips syncing; the parity CI test
+> still reports missing or differing live files.
+
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
 > `workflow-templates/retired_files.txt`, which lists `.claude/` files that

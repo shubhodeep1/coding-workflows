@@ -1,7 +1,7 @@
 <!-- changelog: fixed -->
 - **`main` CI is green again, and a template-only change under `workflow-templates/.claude/` now gets synced to this repo's own `.claude/` copy automatically.** `main` had failed CI on every push since 2026-10-03 09:51 UTC.
 
-Two merged PRs updated a template under `workflow-templates/.claude/` without the live copy under `.claude/`: #6133 (the merged-PR guard hook `pr_merge_status_guard.py`) and #6176 (the `audit-plans`, `apply-url`, `implement-plan-ai` and `implement-issue-claude` commands). The pipeline's editors cannot edit `.claude/**`, so AI fixes leave the live copy behind. This change syncs those five copies. A new CI test fails whenever a template and its live copy differ, unless the file is listed in `.github/ai/claude_template_divergence.json` with a reason. A new workflow, `sync-claude-live-copies.yml`, opens a PR on `ai/sync-claude-live-copies` whenever a push to `main` changes only the template.
+Two merged PRs updated a template under `workflow-templates/.claude/` without the live copy under `.claude/`: #6133 (the merged-PR guard hook `pr_merge_status_guard.py`) and #6176 (the `audit-plans`, `apply-url`, `implement-plan-ai` and `implement-issue-claude` commands). The pipeline's editors cannot edit `.claude/**`, so AI fixes leave the live copy behind. This change syncs those five copies. A new CI test fails for missing or differing live files unless they are listed in `.github/ai/claude_template_divergence.json` with a reason. The new `sync-claude-live-copies.yml` workflow opens a PR on `ai/sync-claude-live-copies` for template-only changes, including new files and changes missed by a failed or superseded run, without overwriting newer live-file edits.
 
 | The numbers that matter | Value |
 | --- | --- |

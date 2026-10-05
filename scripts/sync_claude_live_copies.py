@@ -7,16 +7,15 @@ AI fix that changes a template leaves the live copy behind. That broke `main`
 twice in two days (#6133 changed the template copy of the merged-PR guard,
 #6176 four command templates), because parity tests compare the pairs.
 
-Every template file with a live copy must match it byte for byte, except the
-files `.github/ai/claude_template_divergence.json` lists as maintained
-separately on purpose.
+Every template file must have a live copy. Copies not listed as intentionally
+divergent in `.github/ai/claude_template_divergence.json` must match byte for
+byte.
 
 Subcommands:
-  check   Exit 1 and list every pair that differs and is not allowlisted.
+  check   Exit 1 and list missing or differing live files not allowlisted.
   plan    --before SHA --after SHA: print the relative paths (under `.claude/`)
-          whose template changed in that push while the live copy did not,
-          that differ now and are not allowlisted. These are the ones `sync`
-          copies.
+          whose template changed in that push (or a missed earlier push) while
+          the live copy did not, that differ now and are not allowlisted.
   sync    plan, carry forward still-drifted copies from the previous sync
           branch when they match their current templates, and commit the copies
           on SYNC_BRANCH (default `ai/sync-claude-live-copies`, recreated from
@@ -70,15 +69,14 @@ def load_divergent(root: Path) -> set[str]:
 
 
 def paired_paths(root: Path) -> list[str]:
-	"""Relative paths (under `.claude/`) that exist as both a template and a live file."""
+	"""Template paths (under `.claude/`) expected to have a live file."""
 	template_root = root / TEMPLATE_PREFIX
 	pairs: list[str] = []
 	for template in sorted(template_root.rglob("*")):
 		if not template.is_file():
 			continue
 		relative = template.relative_to(template_root).as_posix()
-		if (root / LIVE_PREFIX / relative).is_file():
-			pairs.append(relative)
+		pairs.append(relative)
 	return pairs
 
 
@@ -88,7 +86,10 @@ def mismatched(root: Path) -> list[str]:
 		relative
 		for relative in paired_paths(root)
 		if relative not in divergent
-		and not filecmp.cmp(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative, shallow=False)
+		and (
+			not (root / LIVE_PREFIX / relative).is_file()
+			or not filecmp.cmp(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative, shallow=False)
+		)
 	]
 
 
@@ -115,13 +116,27 @@ def plan(root: Path, before: str, after: str) -> list[str]:
 	if changed is None:
 		return []
 	drifted = set(mismatched(root))
-	return [
-		relative
-		for relative in paired_paths(root)
-		if relative in drifted
-		and TEMPLATE_PREFIX + relative in changed
-		and LIVE_PREFIX + relative not in changed
-	]
+	paths: list[str] = []
+	for relative in paired_paths(root):
+		if relative not in drifted or LIVE_PREFIX + relative in changed:
+			continue
+		if TEMPLATE_PREFIX + relative in changed:
+			paths.append(relative)
+			continue
+		# A queued push may be superseded or an earlier sync may fail. Only
+		# recover drift when the template was changed after the live copy.
+		template_revision = _git(root, "log", "-1", "--format=%H", after, "--", TEMPLATE_PREFIX + relative, check=False)
+		live_revision = _git(root, "log", "-1", "--format=%H", after, "--", LIVE_PREFIX + relative, check=False)
+		if template_revision.returncode != 0 or live_revision.returncode != 0:
+			continue
+		template_sha = template_revision.stdout.strip()
+		live_sha = live_revision.stdout.strip()
+		if template_sha and (not live_sha or (
+			live_sha != template_sha
+			and _git(root, "merge-base", "--is-ancestor", live_sha, template_sha, check=False).returncode == 0
+		)):
+			paths.append(relative)
+	return paths
 
 
 def _gh_json(*args: str) -> object:
@@ -177,6 +192,7 @@ def sync(root: Path, before: str, after: str, *, dry_run: bool) -> int:
 			log("error reason=sync_branch_lookup_failed")
 			return 1
 	for relative in paths:
+		(root / LIVE_PREFIX / relative).parent.mkdir(parents=True, exist_ok=True)
 		shutil.copyfile(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative)
 		log(f"copied path={LIVE_PREFIX}{relative}")
 	if dry_run:
