@@ -13,8 +13,8 @@ Input: one or more `--text-file` paths (the issue body and the clarification
 questions). References are extracted from them:
   - issues and PRs: `#123`, `owner/repo#123`, and
     `https://github.com/owner/repo/(issues|pull|pulls)/123`;
-  - branches: backticked names that contain `/` and are not a path in the
-    checkout (`orchestrator/project-857`, `ai/issue-4329`), plus the value
+  - branches: backticked names that contain `/` and, for the current repo,
+    are not a path in the checkout (`orchestrator/project-857`, `ai/issue-4329`), plus the value
     of an `Integration branch:` line. Bare names belong to `--repo`;
     `feature/x` in (or exists in) `owner/repo` belongs to that repo;
   - workflow runs: `.../owner/repo/actions/runs/<id>` URLs.
@@ -82,10 +82,10 @@ def _title(value: object) -> str:
 	return text[:MAX_TITLE] + ("…" if len(text) > MAX_TITLE else "")
 
 
-def _is_branch(token: str, checkout: Path) -> bool:
+def _is_branch(token: str, checkout: Path, check_checkout_paths: bool = True) -> bool:
 	if not BRANCH_RE.match(token) or ".." in token or token.endswith((".lock", "/")):
 		return False
-	if (checkout / token).exists() or (checkout / token.split("/", 1)[0]).exists():
+	if check_checkout_paths and ((checkout / token).exists() or (checkout / token.split("/", 1)[0]).exists()):
 		return False
 	last = token.rsplit("/", 1)[-1]
 	return not re.search(r"\.[A-Za-z0-9]{1,5}$", last)
@@ -124,7 +124,7 @@ def extract_refs(text: str, repo: str, allowed: set[str], issue_number: int, che
 		branch_ref = (branch_repo, token)
 		if branch_repo not in allowed or branch_ref in branches or token in ("main", "stable", "master") or token.lower() in allowed:
 			continue
-		if (is_integration and ".." not in token) or _is_branch(token, checkout):
+		if (is_integration and ".." not in token) or _is_branch(token, checkout, branch_repo == repo.lower()):
 			branches.append(branch_ref)
 	return {"issues": issues[:MAX_ISSUES], "branches": branches[:MAX_BRANCHES], "runs": runs[:MAX_RUNS]}
 

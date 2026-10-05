@@ -72,6 +72,16 @@ def test_explicit_consumer_branch_is_read_from_its_own_repo() -> None:
 	assert stats == {"graphql_calls": 1, "rest_calls": 0, "errors": 0}
 
 
+def test_consumer_branch_is_not_filtered_by_source_checkout_paths(tmp_path: Path) -> None:
+	(tmp_path / "feature").mkdir()
+	refs = facts.extract_refs("`feature/x` in other/repo; `feature/x` in owner/repo", REPO,
+		{REPO, "other/repo"}, 6262, tmp_path)
+	assert refs["branches"] == [("other/repo", "feature/x")]
+	query, _ = facts.build_query(REPO, refs["issues"], refs["branches"])
+	assert 'repository(owner: "other", name: "repo")' in query
+	assert 'ref(qualifiedName: "refs/heads/feature/x")' in query
+
+
 def test_unreadable_consumer_repo_does_not_report_branch_as_missing() -> None:
 	refs = _refs("`feature/x` in other/repo", {REPO, "other/repo"})
 	lines, _ = facts.collect(refs, REPO, _Runner((1, json.dumps({"data": {"r0": None}}))))
