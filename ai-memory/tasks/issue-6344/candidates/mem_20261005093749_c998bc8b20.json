@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6344,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6344\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6353\",\"pr_number\":6353,\"branch\":\"ai/issue-6344\",\"run_id\":\"37288928446\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37288928446\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6344-resolver-private-index-reconcile.md\",\"scripts/review_conflict_resolve.sh\",\"tests/test_review_conflict_resolve_retry_prelude_render.py\"]}",
+  "fingerprint": "b3cbf1b87fc6d1f2232e58ec163ae6435d22a937d0750bc3ee317981f6f074da",
+  "lineage": {
+    "issue_number": 6344,
+    "parent_ids": [],
+    "pr_number": 6353,
+    "run_id": "37288928446",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37288928446",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6353"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005093749_c998bc8b20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6344,
+    "level": "run",
+    "pr_number": 6353,
+    "run_id": "37288928446"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6344: https://github.com/shubhodeep1/coding-workflows/pull/6353",
+  "timestamps": {
+    "created_at": "2026-10-05T09:37:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
