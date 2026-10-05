@@ -8,12 +8,12 @@ the container are trusted, including directory entries and file modes.
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+import re
 import stat
 import subprocess
 import sys
 import tempfile
-
+from pathlib import Path, PurePosixPath
 
 MAX_FILE = 2 * 1024 * 1024
 MAX_TOTAL = 64 * 1024 * 1024
@@ -21,6 +21,7 @@ MAX_FILES = 5000
 EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox", ".nox", "dist", "build", "coverage", ".next", ".turbo", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials"}
 ROOT_FILES = {"README.md", "agents.md", "AGENTS.md", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "pyproject.toml", "requirements.txt", "setup.cfg", "pytest.ini", "tox.ini", "go.mod", "Cargo.toml"}
 SUFFIXES = {".py", ".sh", ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", ".mts", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql", ".lock", ".cfg", ".ini"}
+COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
 
 
 def git_env(manifest):
@@ -31,7 +32,7 @@ def git_env(manifest):
 		"GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
 
 
-def allowed(name, host=None):
+def allowed(name, host=None, commands=None):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return False
@@ -39,14 +40,11 @@ def allowed(name, host=None):
 		return False
 	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):
 		return True
-	# A live command whose workflow-templates/ copy exists in the host checkout
-	# must match it in CI, so the editor needs it to repair a parity failure.
-	# The twin is read from the host, never from the editor's workspace.
-	if host is not None and len(parts) == 3 and parts[:2] == (".claude", "commands") and parts[2].endswith(".md") and not parts[2].startswith("."):
-		try:
-			return checked_path(host, "workflow-templates/" + name).is_file()
-		except ValueError:
-			return False
+	# Only snapshot may consult the host; refresh/transfer use its frozen inventory.
+	if len(parts) == 3 and parts[:2] == (".claude", "commands") and parts[2].endswith(".md") and not parts[2].startswith("."):
+		if commands is None and host is not None:
+			commands = template_command_inventory(host)
+		return commands is not None and name in commands
 	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
 		return False
 	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile"
@@ -59,6 +57,35 @@ def checked_path(root, name):
 		if path.is_symlink():
 			raise ValueError("symlink in workspace path")
 	return path
+
+
+def admitted_commands_path(manifest):
+	return manifest.with_name(manifest.name + ".admitted_commands.json")
+
+
+def template_command_inventory(host):
+	try:
+		directory = checked_path(host, COMMAND_TWIN_DIR)
+	except ValueError:
+		return frozenset()
+	if not directory.is_dir():
+		return frozenset()
+	commands = set()
+	for entry in directory.iterdir():
+		name = ".claude/commands/" + entry.name
+		if entry.is_file() and not entry.is_symlink() and allowed(name, commands={name}):
+			commands.add(name)
+	return frozenset(commands)
+
+
+def load_admitted_commands(manifest):
+	try:
+		inventory = json.loads(admitted_commands_path(manifest).read_text(encoding="utf-8"))
+	except (OSError, ValueError, UnicodeError):
+		raise ValueError("admitted command inventory missing") from None
+	if not isinstance(inventory, list) or any(not isinstance(name, str) or not re.fullmatch(r"\.claude/commands/[^/.][^/]*\.md", name) or not allowed(name, commands={name}) for name in inventory):
+		raise ValueError("admitted command inventory missing")
+	return frozenset(inventory)
 
 
 def read_regular(path):
@@ -81,7 +108,7 @@ def fingerprint(path):
 	return [hashlib.sha256(data).hexdigest(), mode]
 
 
-def enumerate_workspace(root, host=None):
+def enumerate_workspace(root, host=None, commands=None):
 	count = 0
 	total = 0
 	entries = 0
@@ -102,7 +129,7 @@ def enumerate_workspace(root, host=None):
 			if entries > 10000:
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
-			if not allowed(name, host):
+			if not allowed(name, host, commands):
 				# Build products and cached dependencies are not editor output.
 				if name in ROOT_FILES or rel == Path("."):
 					raise ValueError("unsafe workspace result path")
@@ -127,10 +154,11 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 		git += ["--git-dir", str(host_git_dir), "--work-tree", str(host)]
 	for cmd in (git + ["ls-files", "-z"], git + ["ls-files", "--others", "--exclude-standard", "-z"]):
 		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p)
+	commands = template_command_inventory(host)
 	baseline = {}
 	total = 0
 	for name in sorted(paths):
-		if not allowed(name, host):
+		if not allowed(name, host, commands):
 			continue
 		if (host / name).is_symlink():
 			continue  # Existing tracked symlinks are not in the editor snapshot.
@@ -147,6 +175,7 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 			out.write(data)
 		os.chmod(target, mode)
 		baseline[name] = [hashlib.sha256(data).hexdigest(), mode]
+	admitted_commands_path(manifest).write_text(json.dumps(sorted(commands)), encoding="utf-8")
 	manifest.write_text(json.dumps(baseline), encoding="utf-8")
 	# A local, unauthenticated Git database supports editor diff commands.
 	# It is synthetic, and is never copied back to the host.
@@ -157,8 +186,9 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 
 
 def transfer(host, workspace, manifest):
+	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace, host))
+	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands)}
 	changes = []
 	# Even an untouched result must not conceal a host-side update made since
 	# the snapshot (including a write by another workflow process).
@@ -171,7 +201,7 @@ def transfer(host, workspace, manifest):
 		new = results.get(name)
 		if new is not None and old == [hashlib.sha256(new[0]).hexdigest(), new[1]]:
 			continue
-		if not allowed(name, host):
+		if not allowed(name, None, commands):
 			raise ValueError("unsafe result path")
 		host_file = checked_path(host, name)
 		if old is None and (host_file.exists() or host_file.is_symlink()):
@@ -199,12 +229,19 @@ def transfer(host, workspace, manifest):
 
 def refresh(host, workspace, manifest):
 	"""Discard PR build-backend source writes before giving the writer access."""
+	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace, host))
+	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands)}
 	for name, old in baseline.items():
 		host_file = checked_path(host, name)
 		if not host_file.exists() or fingerprint(host_file) != old:
 			raise ValueError("host baseline changed before editor")
+	# Excluded command writes are not in results, but must not survive a retry.
+	command_dir = checked_path(workspace, ".claude/commands")
+	if command_dir.is_dir():
+		for target in command_dir.iterdir():
+			if target.name.endswith(".md") and not target.name.startswith(".") and ".claude/commands/" + target.name not in commands:
+				target.unlink()
 	for name in sorted(set(baseline) | set(results)):
 		target = checked_path(workspace, name)
 		if name not in baseline:
@@ -234,6 +271,7 @@ def main():
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
 		# Only fixed, path-free transfer reasons may cross into workflow logs.
 		reason_code = {
+			"admitted command inventory missing": "admitted_inventory_missing",
 			"symlink in workspace path": "symlink_path",
 			"unsafe file type or size": "unsafe_file",
 			"file changed during read": "file_changed",

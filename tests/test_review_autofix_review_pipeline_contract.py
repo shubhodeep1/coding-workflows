@@ -8180,6 +8180,9 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	helper_text = workspace_helper.read_text()
+	assert helper_text.count("commands = load_admitted_commands(manifest)") == 2
+	assert "allowed(name, host)" not in helper_text.split("def transfer(", 1)[1].split("def refresh(", 1)[0]
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)
 		host = root / "host"
@@ -8196,7 +8199,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(host / ".claude/commands/audit-plans.md").write_text("before\n")
 		(host / ".claude/commands/other.md").write_text("operator command\n")
 		(host / ".claude/commands/apply-url.md").write_text("before\n")
-		# Only a live command with a template twin in the host is admitted.
+		# Only a live command with a template twin at snapshot time is admitted.
 		(host / "workflow-templates/.claude/commands").mkdir(parents=True)
 		(host / "workflow-templates/.claude/commands/audit-plans.md").write_text("template\n")
 		(host / "workflow-templates/.claude/commands/apply-url.md").write_text("template\n")
@@ -8211,6 +8214,8 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 				capture_output=True, text=True, check=False,
 			)
 		assert run("snapshot").returncode == 0
+		inventory_path = manifest.with_name(manifest.name + ".admitted_commands.json")
+		assert json.loads(inventory_path.read_text()) == [".claude/commands/apply-url.md", ".claude/commands/audit-plans.md"]
 		assert not (source / ".github/ai/WORKFLOW.md").exists()
 		assert (source / ".claude/hooks/gh_api_write_guard.py").exists()
 		assert not (source / ".claude/hooks/other.py").exists()
@@ -8244,6 +8249,12 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (host / "workflow-templates/.claude/commands/new.md").read_text() == "template\n"
 		assert not (host / ".claude/commands/new.md").exists()
 		(source / ".claude/commands/new.md").unlink()
+		# A retry cannot widen admission after the first transfer adds the twin.
+		(source / ".claude/commands/new.md").write_text("untrusted retry\n")
+		assert run("transfer").returncode == 0
+		assert not (host / ".claude/commands/new.md").exists()
+		assert run("refresh").returncode == 0
+		assert not (source / ".claude/commands/new.md").exists()
 		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/ai/WORKFLOW.md").read_text() == "operator config\n"
@@ -8258,6 +8269,18 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(source / ".claude/skills/result.md").write_text("untrusted\n")
 		assert run("transfer").returncode != 0
 		assert not (host / ".claude/skills").exists()
+		# Missing or corrupt authorization state cannot fall back to the live host.
+		shutil.rmtree(source / ".claude/skills")
+		inventory_path.write_text('{"not": "a list"}')
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert "reason=admitted_inventory_missing" in rejection.stderr
+		inventory_path.unlink()
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert "reason=admitted_inventory_missing" in rejection.stderr
+		assert run("refresh").returncode != 0
+		assert not (host / ".claude/commands/new.md").exists()
 
 
 def test_review_isolation_transfers_into_active_work_tree() -> None:

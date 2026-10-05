@@ -72,9 +72,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `.claude/hooks/pr_merge_status_guard.py`, and
    `scripts/claude_settings.json.tmpl`. It also admits each
    `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md`
-   twin already exists in the host checkout (checked on the host, never in
-   the editor's workspace), so the editor can repair a template parity
-   failure; other `.github/ai/` and `.claude/` files remain excluded from
+   twin exists in the host checkout when the snapshot is taken (checked on
+   the host, never in the editor's workspace). The admitted command set is
+   fixed for the whole run; later transfers and retries cannot widen it.
+   The editor can still repair a template parity failure; other `.github/ai/`
+   and `.claude/` files remain excluded from
    snapshot and transfer. An editor write to an excluded file in an
    admitted directory is dropped; a new directory outside the admitted ones
    fails the transfer (`reason=unsafe_directory`) and the editor step with it. Its
