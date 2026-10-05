@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_data_provision_guard.py:60-82 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The guard fails to classify \u201cSecurity checks won't be required\u201d as weakening a control after contraction expansion, allowing it to be selected as a safe fallback.\n  WHY: The fallback can be posted instead of escalating and bypass required security verification; severity was rated BLOCKER by four reviewers and MAJOR by z-ai_glm-5_2.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Check whether required evidence is actually absent; never replace a required security verification with a skip option. Fail closed if verification cannot run.\" (issue #6338 recommendation)\n  expected_change_site: scripts/clarify_data_provision_guard.py `_WEAKENS_CONTROL_PATTERNS`\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No pattern in `_WEAKENS_CONTROL_PATTERNS` matches \"Security checks will not be required\"; tests/test_clarify_data_provision_guard.py:test_weakening_fallbacks_are_rejected includes \"Verification is no longer required\" and \"Verification isn't required\" but not \"won't be required\" / \"will not be required\".\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/clarify_data_provision_guard.py:70-74, 80-82 | severity=critical | confidence=5\n  PROBLEM: \u201cSecurity checks won't be required\u201d expands to \u201cSecurity checks will not be required\u201d but passes all nine weakening patterns because their relevant verb or auxiliary groups do not cover this phrasing.\n  WHY: `_option_weakens_control` returns false, allowing the answer to be posted or used as a fallback and bypassing the security check required by issue #6338.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/clarify_data_provision_guard.py:61-71 | severity=critical | confidence=5\n  PROBLEM: The weakening patterns miss \u201cSecurity checks won't be required\u201d and related \u201cnot be required\u201d phrasing after contraction expansion.\n  WHY: `_find_fallback` can treat the option as safe because `_option_weakens_control` returns false, then the orchestrator posts it without an `ESCALATE` decision.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_data_provision_guard.py:61-73, 168-178, 211-218 | severity=critical | confidence=5\n  PROBLEM: The guard does not recognize \u201cSecurity checks won\u2019t be required\u201d as weakening a control after contraction expansion.\n  WHY: `_find_fallback` can select the option when a PR URL is unavailable, passing it onward instead of escalating.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/clarify_data_provision_guard.py:61-78, 168-180 | severity=critical | confidence=5\n  PROBLEM: \u201cSecurity checks won't be required\u201d expands to \u201cSecurity checks will not be required,\u201d which bypasses every weakening pattern.\n  WHY: `_find_fallback` can select and post it as a safe fallback, publishing a verification bypass without an `ESCALATE` decision.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/clarify_data_provision_guard.py: _WEAKENS_CONTROL_PATTERNS, patterns [3] (line 62), [5] (line 72-73), [7] (line 81) at PR head | severity=high | confidence=4\n  PROBLEM: \u201cSecurity checks won't be required\u201d is not detected as control-weakening by any pattern after contraction expansion.\n  WHY: `_find_fallback` can select it as a safe fallback and post a security-control bypass instead of escalating.\n\n- Requirement: \"Check whether required evidence is actually absent; never replace a required security verification with a skip option. Fail closed if verification cannot run.\" (issue #6338 recommendation)\n  Expected change site: scripts/clarify_data_provision_guard.py `_WEAKENS_CONTROL_PATTERNS`\n  Evidence of absence: No pattern in `_WEAKENS_CONTROL_PATTERNS` matches \"Security checks will not be required\". The test parametrize list in tests/test_clarify_data_provision_guard.py:test_weakening_fallbacks_are_rejected includes \"Verification is no longer required\" and \"Verification isn't required\" but not \"won't be required\" / \"will not be required\". The bypass remains open at the PR head.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "eb4b94de557c1e13a7d68c85eafd6ce8dc07a1c10314a6bbf12557e5197a43c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6350,
+    "run_id": "37378778771",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37378778771",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005224651_6bc8b32dd5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6350,
+    "run_id": "37378778771"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T22:46:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
