@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh: approx line 20987 and approx line 21001 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The isolation recovery comment searches use `last` on paginated comments without explicitly sorting by creation time, which can select stale evidence if the API returns newest comments first.\n  WHY: Deepseek reports that the API default is newest-first and `last` selects the oldest matching comment; other reviewers characterize the ordering as ascending or the concern as a consistency risk, and qwen disputes that this is a runtime defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: Two comment-fetch sites in the RB_JUDGE isolation management block \u2014 the escalated-handler comment search at approx line 20987 and the latch-clearing comment-recovery search at approx line 21001 (location from the original PR diff; both are in last_run_changed_files) | severity=high | confidence=4\n  PROBLEM: Both `gh api --paginate --slurp` calls to `/issues/*/comments?per_page=100` omit an explicit `sort=created&direction=asc`. GitHub REST API issue-comments endpoint defaults to direction=desc (newest first). With `--slurp`, the resulting paginated array of arrays flattens newest-to-oldest under `.[][]`, so the jq `last` selector that follows picks the oldest matching comment, not the newest.\n  WHY: In the escalated-handler path, if multiple isolation markers match the same head (due to comment-response recovery creating a duplicate post), `last` selects the oldest matching ID instead of the newest, and the comment_id stored in state points to stale evidence. In the latch-clearing recovery path, if a lost POST left one marker from a prior run and a subsequent run posted another, the verification step examines the older comment and its `created_at` instead of the newest, and the ownership check can fail even though a valid newer marker exists \u2014 leaving `ai:needs-human` set indefinitely on a new-head PR that should resume. The fix is adding `sort=created&direction=asc` to both `gh api` URLs, matching the existing pattern at line 13602.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/orchestrate_poll_process.sh, lines 20965 and 20987\n  PROBLEM: Issue comment pagination calls rely on GitHub's default ascending chronological sort order rather than pinning it in the query string.\n  WHY: Suggested minimal fix: Add sort=created&direction=asc to the query parameters in both comments endpoint URLs. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh, Lost-comment recovery jq filters (~line 20987-21007 and 21020-21026 in the new code) that use `[.[][] | select(...)] | last` on paginated `gh api --paginate --slurp` output for issue comments and events\n  PROBLEM: The new RB_JUDGE isolation recovery code relies on `| last` to select the newest comment/event without explicit jq `sort_by(.created_at)`.\n  WHY: GitHub's API returns issue comments and events in ascending chronological order by default, so `last` = newest in practice, but the inconsistency is fragile if API behavior or pagination ordering ever changes. Suggested minimal fix: Add `| sort_by(.created_at // \"\")` before `| last` in the three jq filters that use `[.[][] | select(...)] | last` in the isolation latch recovery path, matching the pattern used at line 15867. The review states this is a consistency concern, not a runtime bug.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "646966471ae351ab4e5ae650bf44258a42ab6ecfc1fb1d8144c9fbf704d608fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6349,
+    "run_id": "37301412539",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37301412539",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005120329_835ec4ffd9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6349,
+    "run_id": "37301412539"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T12:03:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
