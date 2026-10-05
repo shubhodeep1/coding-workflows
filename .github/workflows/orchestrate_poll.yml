@@ -661,6 +661,23 @@ jobs:
             echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
 
+      - name: Record trusted support integrity
+        id: record_support_integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="${RUNNER_TEMP}/trusted_support.sha256"
+          paths="${manifest}.paths"
+          support_dirs=()
+          for dir in scripts prompts ai-memory/schemas .codex-workflow-src .codex-workflow-src-main; do
+            [ ! -d "${dir}" ] || support_dirs+=("${dir}")
+          done
+          [ "${#support_dirs[@]}" -gt 0 ] || exit 1
+          find "${support_dirs[@]}" -path '*/.git' -prune -o -type f -print0 | sort -z > "${paths}"
+          xargs -0 -r sha256sum < "${paths}" > "${manifest}"
+          chmod 0444 "${manifest}" "${paths}"
+          echo "SUPPORT_INTEGRITY_MANIFEST=${manifest}" >> "$GITHUB_ENV"
+
       - name: Record poll run start
         if: always()
         shell: bash
@@ -895,11 +912,31 @@ jobs:
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
+      - name: Verify trusted support integrity
+        id: verify_support_integrity
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPPORT_INTEGRITY_MANIFEST:-}" ]; then
+            [ "${{ steps.record_support_integrity.outcome }}" != "success" ] || exit 1
+            exit 0
+          fi
+          [ -r "${SUPPORT_INTEGRITY_MANIFEST}" ] && [ -r "${SUPPORT_INTEGRITY_MANIFEST}.paths" ] || exit 1
+          sha256sum --quiet --strict -c "${SUPPORT_INTEGRITY_MANIFEST}"
+          support_dirs=()
+          for dir in scripts prompts ai-memory/schemas .codex-workflow-src .codex-workflow-src-main; do
+            [ ! -d "${dir}" ] || support_dirs+=("${dir}")
+          done
+          [ "${#support_dirs[@]}" -gt 0 ] || exit 1
+          cmp -s "${SUPPORT_INTEGRITY_MANIFEST}.paths" <(find "${support_dirs[@]}" -path '*/.git' -prune -o -type f -print0 | sort -z)
+
       - name: Run worktree registry GC
+        if: steps.verify_support_integrity.outcome != 'failure'
         run: bash scripts/worktree_gc.sh
 
       - name: Build state snapshot
-        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        if: ${{ always() && steps.verify_support_integrity.outcome != 'failure' && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -937,7 +974,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish state snapshot branch
-        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
+        if: ${{ always() && steps.verify_support_integrity.outcome != 'failure' && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1014,7 +1051,7 @@ jobs:
           fi
 
       - name: Write run summary
-        if: always()
+        if: ${{ always() && steps.verify_support_integrity.outcome != 'failure' }}
         run: |
           set -euo pipefail
           {
@@ -1032,7 +1069,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record poll run end
-        if: always()
+        if: ${{ always() && steps.verify_support_integrity.outcome != 'failure' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1059,7 +1096,7 @@ jobs:
             --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"job_status\":\"${{ job.status }}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work || 'false' }}\"}" || true
 
       - name: Notify Telegram on job failure
-        if: failure()
+        if: ${{ failure() && steps.verify_support_integrity.outcome != 'failure' }}
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}

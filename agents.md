@@ -639,6 +639,15 @@ a new value, add it to the appropriate overrides file with a
 
 The **Engine · Claude role** column names today's engine and the role name
 `scripts/ai_engine.sh` resolves for that row (README "Claude engine").
+Host read-profile Claude runs (including SECURITY_AUDIT, SECURITY_JUDGE and
+WORKFLOW_HEAL) use an exact-command PreToolUse Bash guard and temporarily
+remove write bits from trusted support while recording hashes and directory
+entries. Verification precedes unlock; a mismatch returns 86 without a codex
+fallback. The security-audit report, heal intake and poller also verify their
+support checkout or staged manifest before executing further support code.
+On self-hosted runners, a job killed before unlocking may leave support
+directories read-only; restore them with `claude_engine.py support-unlock`
+against the leftover per-run manifest before reusing that workspace.
 Every role's default in `.github/ai/claude_engine.json` is `codex`
 until its cutover (Phase 5a moved `CLARIFY`, `CLARIFY_RESPOND` and `PLAN`
 to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, Phase 5c `ORCHESTRATE`, the four orchestrator judges and the review write roles `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER` and `RB_JUDGE`, Phase 5d `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`, `SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `LOG_ANALYSIS`, `LOG_AUDIT`, `RETRO`, `SUMMARISER` and `BEHAVIOURAL_SMOKE`; a missing config file still means codex for every role);
@@ -1217,6 +1226,7 @@ and shipped:
 - `STANDALONE_AUTO_DECIDE` (`clarify.yml` "Standalone auto-decide": `issue= outcome=answered|skip|failed reason= decisions=`)
 - `AI_ENGINE_SELECTED` (`scripts/ai_engine.sh`: `role= engine= model= effort= source=`)
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
+- `AI_ENGINE_SUPPORT_LOCK` (`scripts/ai_engine.sh`: `role= outcome=locked|verified|tampered`; tampering exits 86 without codex fallback)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
@@ -1420,6 +1430,7 @@ LOG_PREFIX.name=RETARGET_MERGED_BASE
 LOG_PREFIX.name=STANDALONE_AUTO_DECIDE
 LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
+LOG_PREFIX.name=AI_ENGINE_SUPPORT_LOCK
 LOG_PREFIX.name=CLAUDE_POOL
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL

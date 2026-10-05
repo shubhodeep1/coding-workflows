@@ -1292,6 +1292,10 @@ if [ -f "${security_audit_engine_sh}" ]; then
 		2> "${CODEX_ERROR_FILE}" || security_audit_claude_rc=$?
 fi
 
+if [ "${security_audit_claude_rc}" -eq 86 ]; then
+	security_audit_emit_failure "claude-support-integrity" "claude" "trusted support changed during the read-only model run"
+	exit 86
+fi
 if [ "${security_audit_claude_rc}" -eq 75 ] && [ "${AI_ENGINE_RESOLVED_SECURITY_AUDIT:-codex}" = "claude" ]; then
 	security_audit_require_directory "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}"
 	security_audit_require_file "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}/config.toml"

@@ -86,6 +86,10 @@ def test_guard_hook_runs_on_every_bash_call() -> None:
 	assert _render(profile="read")["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == (
 		'python3 "/support/.claude/hooks/gh_api_write_guard.py" --read-only'
 	)
+	read_hooks = _render(profile="read")["hooks"]["PreToolUse"]
+	assert read_hooks[1]["matcher"] == "Bash"
+	assert read_hooks[1]["hooks"][0]["command"] == f'python3 "{SCRIPT}" guard-read-bash'
+	assert len(_render(profile="write")["hooks"]["PreToolUse"]) == 1
 
 
 def test_read_profile_requires_guard_command() -> None:

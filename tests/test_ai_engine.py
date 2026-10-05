@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import shlex
 import stat
 import subprocess
@@ -60,6 +61,11 @@ if token.startswith("TOK_CRASH"):
 if token.startswith("TOK_WRITE_MD"):
 	with open("CLAUDE.md", "w", encoding="utf-8") as handle:
 		handle.write("new instructions\n")
+if token.startswith("TOK_TAMPER"):
+	path = os.environ["FAKE_SUPPORT_FILE"]
+	os.chmod(path, 0o755)
+	with open(path, "a", encoding="utf-8") as handle:
+		handle.write("# tampered\n")
 emit({"type": "result", "subtype": "success", "is_error": False, "result": "done", "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 2}})
 '''
 
@@ -82,10 +88,21 @@ def sandbox(tmp_path: Path):
 	prompt.write_text("do the thing\n", encoding="utf-8")
 	pool = tmp_path / "pool"
 	(pool / "tokens").mkdir(parents=True)
+	# A read-profile lock must never chmod the live repository in a test.
+	support = tmp_path / "trusted-support"
+	(support / "scripts").mkdir(parents=True)
+	(support / ".claude" / "hooks").mkdir(parents=True)
+	(support / ".github" / "ai").mkdir(parents=True)
+	for filename in ("ai_engine.sh", "claude_engine.py", "claude_settings.json.tmpl", "codex_stall_guard.sh"):
+		shutil.copy2(REPO_ROOT / "scripts" / filename, support / "scripts" / filename)
+	shutil.copy2(REPO_ROOT / ".claude/hooks/gh_api_write_guard.py", support / ".claude/hooks/gh_api_write_guard.py")
+	shutil.copy2(REPO_ROOT / ".github/ai/claude_engine.json", support / ".github/ai/claude_engine.json")
+	shutil.copy2(INSTRUCTIONS, support / "unattended_system_instructions.md")
 	env = {
 		key: value
 		for key, value in os.environ.items()
-		if not key.startswith(("AI_ENGINE", "CLAUDE_", "ANTHROPIC_", "SUPPORT_", "TG_", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH"))
+		if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "ALLOW_WORKFLOW_EDITS")
+		and not key.startswith(("AI_ENGINE", "CLAUDE_", "ANTHROPIC_", "SUPPORT_", "TG_", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH"))
 	}
 	env.update(
 		{
@@ -95,12 +112,13 @@ def sandbox(tmp_path: Path):
 			"CLAUDE_ENGINE_POOL_DIR": str(pool),
 			"SUPPORT_INSTRUCTIONS_FILE": str(INSTRUCTIONS),
 			"FAKE_CLAUDE_LOG": str(tmp_path / "calls.jsonl"),
+			"FAKE_SUPPORT_FILE": str(support / "scripts" / "ai_engine.sh"),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"CODEX_HEARTBEAT_INTERVAL_SECS": "30",
 			"ANTHROPIC_API_KEY": "must-not-reach-the-cli",
 		}
 	)
-	return {"tmp": tmp_path, "env": env, "pool": pool, "work": work, "prompt": prompt, "home": home, "bin": fake_bin}
+	return {"tmp": tmp_path, "env": env, "pool": pool, "work": work, "prompt": prompt, "home": home, "bin": fake_bin, "support": support}
 
 
 def _accounts(sandbox: dict, **tokens: str) -> None:
@@ -114,7 +132,7 @@ def _accounts(sandbox: dict, **tokens: str) -> None:
 def _bash(sandbox: dict, script: str, **extra_env: str) -> subprocess.CompletedProcess:
 	env = dict(sandbox["env"], **extra_env)
 	return subprocess.run(
-		["bash", "-c", f"set -euo pipefail; source {shlex.quote(str(AI_ENGINE))}; {script}"],
+		["bash", "-c", f"set -euo pipefail; source {shlex.quote(str(sandbox['support'] / 'scripts/ai_engine.sh'))}; {script}"],
 		capture_output=True,
 		text=True,
 		env=env,
@@ -303,6 +321,34 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob,Bash"
 	assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
 	assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=locked" in result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=verified" in result.stderr
+	assert stat.S_IMODE((sandbox["support"] / "scripts/ai_engine.sh").stat().st_mode) == stat.S_IMODE(AI_ENGINE.stat().st_mode)
+
+
+def test_read_role_tamper_stops_without_fallback(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_TAMPER")
+	result = _claude_run(sandbox, "WORKFLOW_HEAL")
+	assert _rc(result) == 86, result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=WORKFLOW_HEAL outcome=tampered" in result.stderr
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
+
+
+def test_read_role_lock_failure_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	# An untrusted symlink in a trusted tree makes the lock fail closed.
+	(sandbox["support"] / "scripts" / "unexpected").symlink_to(sandbox["prompt"])
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 75, result.stderr
+	assert "reason=support_lock_failed" in result.stderr
+	assert _calls(sandbox) == []
+
+
+def test_write_role_never_locks_support(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, "IMPLEMENT")
+	assert _rc(result) == 0, result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK" not in result.stderr
 
 
 @pytest.mark.parametrize("role, read_only", [

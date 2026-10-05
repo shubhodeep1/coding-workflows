@@ -1172,6 +1172,41 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 DIAG_WORKFLOW_DEFECT = "## Classification\nworkflow-defect\n\n## Summary\nThe resolver rejects a missing integration branch instead of falling back.\n\n## Evidence\n```\n::error::resolve_integration_ref.sh\n```\n"
 
 
+def test_heal_claude_integrity_gate_blocks_tamper_and_moved_head(tmp_path: Path) -> None:
+	source = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	start = source.index('if [ "${heal_claude_rc}" -ne 75 ]; then')
+	end = source.index('\tif [ "${heal_claude_rc}" -ne 0 ]; then', start)
+	gate = source[start:end] + '\techo safe\nfi\n'
+	work = tmp_path / "work"
+	work.mkdir()
+	subprocess.run(["git", "init", "-q", str(work)], check=True)
+	(work / "tracked.txt").write_text("original", encoding="utf-8")
+	subprocess.run(["git", "-C", str(work), "add", "tracked.txt"], check=True)
+	subprocess.run(["git", "-C", str(work), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "original"], check=True)
+	sha = subprocess.check_output(["git", "-C", str(work), "rev-parse", "HEAD"], text=True).strip()
+	env = dict(os.environ, HEAL_SUPPORT_SHA=sha, GITHUB_SHA=sha)
+	env.pop("BASH_ENV", None)
+	def run_gate(rc: int) -> subprocess.CompletedProcess:
+		return subprocess.run(["bash", "-c", f'log() {{ echo "WORKFLOW_HEAL $*"; }}; heal_claude_rc={rc}; {gate}'], cwd=work, env=env, capture_output=True, text=True, check=False)
+	assert run_gate(0).stdout.strip() == "safe"
+	assert run_gate(86).returncode == 86
+	assert "support_tampered" in run_gate(86).stdout
+	(work / "tracked.txt").write_text("changed", encoding="utf-8")
+	assert run_gate(0).returncode == 86
+	assert "safe" not in run_gate(0).stdout
+	(work / "tracked.txt").write_text("original", encoding="utf-8")
+	env["HEAL_SUPPORT_SHA"] = "a" * 40
+	assert run_gate(0).returncode == 86
+	assert "HEAL_SUPPORT_SHA=$(git rev-parse HEAD)" in (REPO_ROOT / ".github/workflows/workflow-failure-heal-intake.yml").read_text(encoding="utf-8")
+
+
+def test_heal_failure_notifier_checks_support_before_sourcing() -> None:
+	workflow = _yaml(INTAKE_WORKFLOW)
+	step = next(step for step in workflow["jobs"]["intake"]["steps"] if step["name"] == "Notify on intake workflow failure")
+	assert step["run"].index("git status --porcelain") < step["run"].index("source scripts/tg_helpers.sh")
+	assert '"$(git rev-parse HEAD 2>/dev/null)" != "${HEAL_SUPPORT_SHA}"' in step["run"]
+
+
 def test_intake_opens_upstream_hotfix_issue_for_workflow_defect() -> None:
 	result, state, prompt = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
