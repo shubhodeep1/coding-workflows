@@ -1939,7 +1939,8 @@ resolve_orchestrator_engine_sha() {
   source="env"
   if ! [[ "${candidate}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
     candidate=""
-    if [ -d .codex-workflow-src ]; then
+    # A plain support directory inherits the consumer checkout's HEAD from git.
+    if [ -e .codex-workflow-src/.git ]; then
       candidate="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)"
       source="support_checkout"
     fi

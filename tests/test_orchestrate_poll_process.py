@@ -4835,6 +4835,38 @@ def test_security_pass_failed_project_auto_reset_kill_switch_and_unresolved_engi
 	assert unresolved["security_audit_capture"] is None
 
 
+def test_engine_sha_requires_own_support_checkout() -> None:
+	"""A plain support directory must not inherit the consumer's Git HEAD."""
+	resolver = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "resolve_orchestrator_engine_sha() {")
+	with tempfile.TemporaryDirectory(prefix="poller-engine-sha-") as tmp:
+		parent = Path(tmp)
+		support_checkout = parent / ".codex-workflow-src"
+		support_checkout.mkdir()
+		git_env = _git_test_env()
+		for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+			git_env.pop(key, None)
+		git_env["ORCHESTRATE_ENGINE_SHA"] = ""
+		def commit_empty(checkout: Path) -> str:
+			subprocess.run(["git", "-C", str(checkout), "init", "-q"], env=git_env, check=True)
+			subprocess.run([
+				"git", "-C", str(checkout), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+				"commit", "--allow-empty", "-qm", f"initial {checkout.name}",
+			], env=git_env, check=True)
+			return subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], env=git_env, text=True).strip()
+
+		parent_sha = commit_empty(parent)
+		def resolve() -> str:
+			result = subprocess.run([
+				"bash", "-c", 'ORCHESTRATOR_ENGINE_SHA=""\n' + resolver + "\nresolve_orchestrator_engine_sha",
+			], cwd=parent, env=git_env, capture_output=True, text=True, check=True)
+			return result.stdout.strip()
+
+		assert resolve() == "ORCHESTRATOR_ENGINE_SHA sha=unknown source=unresolved"
+		support_sha = commit_empty(support_checkout)
+		assert support_sha != parent_sha
+		assert resolve() == f"ORCHESTRATOR_ENGINE_SHA sha={support_sha} source=support_checkout"
+
+
 def test_manual_re_security_pass_takes_precedence_over_engine_auto_reset() -> None:
 	state = _security_pass_failed_state_for_auto_reset("a" * 40)
 	result = _run_failed_project_tick(
