@@ -37,8 +37,8 @@
 #
 # Never fails its caller: every problem is logged and the exit code is 0.
 # API budget (CLAUDE.md §15), per run: one `user` read, the item, its
-# comments (paginated; one fresh read before recording a `project-failed`
-# verdict), the tracking issue's comments for a project's item,
+# comments (paginated; fresh reads before recording a `project-failed`
+# verdict and before its terminal label), the tracking issue's comments for a project's item,
 # at most one linked-issue read, one fix-up read while waiting, the PR diff,
 # at most three run-metadata reads to bind a run cited in a pipeline-authored
 # comment to this item, then that run's log, one verdict comment (two for a
@@ -157,7 +157,7 @@ PY
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false"
+	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" terminal_project_status
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -178,6 +178,14 @@ unblock_run_ops()
 					[ -n "${label}" ] || continue
 					if [ "${close_failed}" = "true" ] && [ "${label}" = "ai:unblock-closed" ]; then
 						continue
+					fi
+					if [ "${project_failed_guard}" = "true" ] && [ "${label}" = "ai:unblock-closed" ]; then
+						if ! unblock_fetch_comments "${ITEM}" "${RUNTIME_DIR}/item_comments_terminal.json" \
+							|| ! terminal_project_status="$(unblock_trusted_project_status "${RUNTIME_DIR}/item_comments_terminal.json" "${RUNTIME_DIR}/project_state_trusted.json")" \
+							|| [ "${terminal_project_status}" != "failed" ]; then
+							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_changed_before_terminal_label"
+							return 1
+						fi
 					fi
 					if declare -F ensure_label_exists >/dev/null 2>&1; then
 						ensure_label_exists "${label}" "${REPOSITORY}" >/dev/null 2>&1 || true
@@ -687,7 +695,7 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		return 0
 	fi
 	local actuation_failed="false"
-	if ! unblock_run_ops "${ops_file}"; then
+	if ! unblock_run_ops "${ops_file}" "${project_failed_substituted}"; then
 		actuation_failed="true"
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=actuation_failed"
 	fi

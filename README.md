@@ -2652,7 +2652,11 @@ and resolver chains, a failed project) now goes to the unblock judge
   Isolation failures do not fall back to host Codex. Claude uses the read-only tool profile.
   A failed ledger-history read skips action for that run. The item verdict
   is recorded before action; a failed project marker is repaired if the item
-  remains blocked for a later run.
+  remains blocked for a later run. An unlabeled tracking issue is judged as a
+  failed project only while its latest trusted V2 state is `failed`. That state
+  is rechecked before recording the verdict and before applying the terminal
+  `ai:unblock-closed` label; a failed read or late resume withholds the label,
+  though a resume after verdict recording can leave an unacted-on verdict.
 - **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
   then carried out with the existing commands: on a tracking issue
   `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on

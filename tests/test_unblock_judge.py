@@ -689,6 +689,12 @@ if endpoint.endswith("/comments?per_page=100"):
 		done(os.environ.get("FAKE_GH_PROJECT_COMMENTS", "[]"))
 	if endpoint == "repos/o/r/issues/7/comments?per_page=100":
 		state["item_comments_reads"] = state.get("item_comments_reads", 0) + 1
+		if state["item_comments_reads"] > 2:
+			if os.environ.get("FAKE_GH_FAIL_TERMINAL_RECHECK"):
+				json.dump(state, open(state_path, "w"))
+				sys.exit(1)
+			if os.environ.get("FAKE_GH_ITEM_COMMENTS_TERMINAL_RECHECK"):
+				done(os.environ["FAKE_GH_ITEM_COMMENTS_TERMINAL_RECHECK"])
 		if state["item_comments_reads"] > 1:
 			if os.environ.get("FAKE_GH_FAIL_RECHECK"):
 				json.dump(state, open(state_path, "w"))
@@ -919,9 +925,26 @@ def test_unlabeled_failed_project_still_closes(tmp_path: Path) -> None:
 	result, state = _judge(tmp_path, project, comments=[_project_state_comment("failed")],
 		verdict={"verdict": "close", "reason": "still failed"})
 	assert "verdict=close round=1 outcome=acted" in result.stdout, result.stderr
-	assert state["item_comments_reads"] == 2
+	assert state["item_comments_reads"] == 3
 	assert state["comments"][0]["body"].splitlines()[-1].startswith("<!-- ai:unblock:v1")
 	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
+
+
+@pytest.mark.parametrize("terminal_comments,fail_terminal", [
+	([_project_state_comment("failed"), _project_state_comment("in_progress")], False),
+	([_project_state_comment("failed", login="mallory")], False),
+	([], True),
+])
+def test_unlabeled_project_does_not_label_after_late_resume(tmp_path: Path, terminal_comments: list, fail_terminal: bool) -> None:
+	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, project, comments=[_project_state_comment("failed")],
+		FAKE_GH_ITEM_COMMENTS_TERMINAL_RECHECK=json.dumps(terminal_comments),
+		FAKE_GH_FAIL_TERMINAL_RECHECK="1" if fail_terminal else "",
+		verdict={"verdict": "close", "reason": "stale"})
+	assert "reason=project_state_changed_before_terminal_label" in result.stdout, result.stderr
+	assert state["item_comments_reads"] == 3
+	assert len(state["comments"]) == 1 and "ai:unblock:v1" in state["comments"][0]["body"]
+	assert not state["labels_added"] and not state["patched"]
 
 
 def test_labeled_project_is_not_subject_to_failed_state_check(tmp_path: Path) -> None:
