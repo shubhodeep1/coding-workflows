@@ -716,6 +716,27 @@ def test_compose_issue_body_and_title() -> None:
 	assert f"{heal.MARKER_PREFIX}occurrence" in occurrence
 
 
+def test_workflow_run_heal_issue_intro_distinguishes_ci_from_release() -> None:
+	for workflow_name, expected_intro, unexpected_intro in (
+		("CI", "A CI run on the default branch failed.",
+		 "A release / promotion workflow run failed."),
+		("Mark Stable Release", "A release / promotion workflow run failed.",
+		 "A CI run on the default branch failed."),
+	):
+		workflow_run_payload = heal.validate_payload(heal.build_workflow_run_payload(
+			repo=SELF_REPO,
+			workflow_run={"id": 7, "name": workflow_name, "conclusion": "failure", "head_sha": SHA_A, "head_branch": "main"},
+		))
+		for classification in ("workflow-defect", "inconclusive"):
+			issue_body = heal.compose_issue_body(
+				payload=workflow_run_payload, diagnosis="test diagnosis", fp=FP_HEX, gen=1,
+				root=FP_HEX, classification=classification, target_branch="main",
+				max_depth=3, intake_run_url="u", run_summaries=[],
+			)
+			assert expected_intro in issue_body
+			assert unexpected_intro not in issue_body
+
+
 def test_filter_log_keeps_signal_lines_and_bounds_size() -> None:
 	lines = [f"line {i}" for i in range(1000)]
 	lines[10] = "::error::early failure"

@@ -105,7 +105,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
 13. **check failure triage** (`check_failure_triage.yml`,
     `internal-check-failure-triage.yml`, `scripts/check_failure_triage.sh`,
     `prompts/mode-check-failure-triage.txt`) — triggers on `check_run:
-    completed` failures on a PR; the diagnosis model analyses the failing
+    completed` for non-Actions checks or failed `workflow_run: completed`
+    pull-request runs of Actions CI; the diagnosis model analyses the failing
     check's logs and opens a GitHub issue (label `ai:check-triage`) describing
     the root cause + suggested fix, which the clarify→…→review pipeline then
     picks up. On by default; disable per repo via

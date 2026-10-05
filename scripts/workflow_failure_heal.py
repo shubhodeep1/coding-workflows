@@ -461,7 +461,7 @@ def build_issue_payload(
 
 
 def build_workflow_run_payload(*, repo: str, workflow_run: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
-	"""Build the payload for a failed release / promotion run in this repo."""
+	"""Build the payload for a failed release, promotion, or CI run in this repo."""
 	now = now or _utc_now()
 	run_id = _positive_int(workflow_run.get("id"))
 	head_sha = str(workflow_run.get("head_sha") or "").lower()
@@ -1694,9 +1694,13 @@ def compose_issue_body(
 			parts.append(f"Refs #{tracking_issue}")
 	elif classification in UPSTREAM_ISSUE_CLASSIFICATIONS:
 		if payload.get("source_kind") == "workflow_run":
-			intro = (
-				"A release / promotion workflow run failed. This issue was filed automatically for the "
-				"clarify -> plan -> implement -> review pipeline to fix the cause."
+			if payload.get("workflow_name") in MAIN_CI_WORKFLOW_NAMES:
+				intro = "A CI run on the default branch failed."
+			else:
+				intro = "A release / promotion workflow run failed."
+			intro += (
+				" This issue was filed automatically for the clarify -> plan -> implement -> "
+				"review pipeline to fix the cause."
 			)
 		elif payload.get("source_kind") == "autofix_failure":
 			intro = (
