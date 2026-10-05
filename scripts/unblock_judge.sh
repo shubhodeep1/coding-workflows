@@ -100,7 +100,7 @@ unblock_trusted_project_status()
 		if type == "array" then [.[] | select(.user.login == $login)] else empty end
 	' "${comments_file}" > "${RUNTIME_DIR}/project_state_comments.json" 2>/dev/null || return 1
 	unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract \
-		--comments-json "${RUNTIME_DIR}/project_state_comments.json" > "${out_state_file}" 2>/dev/null || return 1
+		--require-latest --comments-json "${RUNTIME_DIR}/project_state_comments.json" > "${out_state_file}" 2>/dev/null || return 1
 	jq -er 'if type == "object" and (.status | type == "string") then .status else empty end' \
 		"${out_state_file}" 2>/dev/null
 }
@@ -179,16 +179,22 @@ unblock_run_ops()
 					if [ "${close_failed}" = "true" ] && [ "${label}" = "ai:unblock-closed" ]; then
 						continue
 					fi
-					if [ "${project_failed_guard}" = "true" ] && [ "${label}" = "ai:unblock-closed" ]; then
-						if ! unblock_fetch_comments "${ITEM}" "${RUNTIME_DIR}/item_comments_terminal.json" \
-							|| ! terminal_project_status="$(unblock_trusted_project_status "${RUNTIME_DIR}/item_comments_terminal.json" "${RUNTIME_DIR}/project_state_trusted.json")" \
-							|| [ "${terminal_project_status}" != "failed" ]; then
-							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_changed_before_terminal_label"
-							return 1
-						fi
-					fi
 					if declare -F ensure_label_exists >/dev/null 2>&1; then
 						ensure_label_exists "${label}" "${REPOSITORY}" >/dev/null 2>&1 || true
+					fi
+					if [ "${project_failed_guard}" = "true" ] && [ "${label}" = "ai:unblock-closed" ]; then
+						if ! unblock_fetch_comments "${ITEM}" "${RUNTIME_DIR}/item_comments_terminal.json"; then
+							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_terminal_recheck_unavailable"
+							return 1
+						fi
+						if ! terminal_project_status="$(unblock_trusted_project_status "${RUNTIME_DIR}/item_comments_terminal.json" "${RUNTIME_DIR}/project_state_trusted.json")"; then
+							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_terminal_unverified"
+							return 1
+						fi
+						if [ "${terminal_project_status}" != "failed" ]; then
+							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_changed_before_terminal_label status=$(printf '%s' "${terminal_project_status}" | tr -cd 'a-z_-' | cut -c1-40)"
+							return 1
+						fi
 					fi
 					gh api -X POST "repos/${REPOSITORY}/issues/${issue}/labels" -f "labels[]=${label}" >/dev/null 2>&1 \
 						|| { ops_failed="true"; unblock_log "item=${ITEM} op=add_labels issue=${issue} label=${label} outcome=failed"; }

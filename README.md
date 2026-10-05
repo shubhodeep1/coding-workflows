@@ -2655,8 +2655,10 @@ and resolver chains, a failed project) now goes to the unblock judge
   remains blocked for a later run. An unlabeled tracking issue is judged as a
   failed project only while its latest trusted V2 state is `failed`. That state
   is rechecked before recording the verdict and before applying the terminal
-  `ai:unblock-closed` label; a failed read or late resume withholds the label,
-  though a resume after verdict recording can leave an unacted-on verdict.
+  `ai:unblock-closed` label; a newer incomplete or malformed V2 write cannot
+  fall back to an older `failed` state for this decision. A failed read or late
+  resume withholds the label, though a resume after verdict recording can leave
+  an unacted-on verdict.
 - **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
   then carried out with the existing commands: on a tracking issue
   `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on
