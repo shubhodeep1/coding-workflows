@@ -463,7 +463,8 @@ class ClaudeSummarizer:
 	Each call is one `claude_run_selected LOG_SUMMARY` with the read-only tool
 	profile, in an empty working directory, with GitHub and OpenRouter
 	credentials removed from its environment: the logs are untrusted text.
-	Raises ClaudeUnavailable on exit 75 and RuntimeError on any other failure.
+	Raises ClaudeUnavailable on exit 75, TimeoutError on timeout, and
+	RuntimeError on other failures.
 	"""
 
 	def __init__(self, engine_sh: Path, *, model: str, max_output_tokens: int) -> None:
