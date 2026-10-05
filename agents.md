@@ -564,8 +564,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   synthetic `.git` whose `HEAD` contains only allowed blobs from the host's
   `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
-  dependencies once per job in a credential-free container with `--network none`
-  (`npm ci --ignore-scripts`, `pip install` into `/opt/codex-venv`). A host-side
+  dependencies once per job. The network-isolated, credential-free container sees
+  only staged Node manifests and filtered third-party Python requirements
+  from both `requirements.txt` and `pyproject.toml` when present,
+  never the source tree. A host-side
   `scripts/dependency_registry_proxy.py` accepts only HTTPS CONNECT tunnels to
   allowlisted public registry hosts, vets all resolved IPs and connects by IP.
   The review dependency container uses the same proxy; the default allowlist is
@@ -573,7 +575,13 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   A missing proxy skips dependency installation without restoring direct
   container network access; review preparation continues, but validations
   needing those dependencies may be unverified.
-  Their output stays in the sandbox ("prep roots") and is never copied back.
+  An editable source install runs separately with `--network none` for
+  parsed `pyproject.toml` projects or requirements with a regular `setup.py`,
+  including Node/Python hybrids. Requirements-only projects without an
+  installable source skip that step; a failed dev dependency install warns
+  even when retrying base dependencies succeeds.
+  `prep-finalize` restores source files and keeps dependency output in the
+  sandbox ("prep roots"), never copying it back.
   The agent itself has no network: it marks validators it cannot run
   UNVERIFIED instead of installing them.
 - **Trusted copies.** The helper reads its support files from its own
