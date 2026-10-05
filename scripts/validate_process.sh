@@ -3015,6 +3015,12 @@ if is_tracking_run; then
   INTEGRATION_BRANCH="$(sed -n 's/^\*\*Integration branch:\*\* `\([^`]*\)`$/\1/p' "${PROJECT_SPEC_FILE}" | head -n1 | tr -d '\r')"
 fi
 
+VALIDATE_README_CONTEXT="$(mktemp "${RUNTIME_DIR:-/tmp}/validate-readme.XXXXXX")"
+if ! bash scripts/build_static_context.sh readme "${VALIDATE_README_CONTEXT}"; then
+  rm -f "${VALIDATE_README_CONTEXT}"
+  exit 1
+fi
+
 {
   if [ -f unattended_system_instructions.md ]; then
     echo "=== SYSTEM INSTRUCTIONS ==="
@@ -3035,17 +3041,14 @@ fi
     cat agents.md
     echo
   fi
-  if [ -f README.md ]; then
-    echo "=== README.MD ==="
-    cat README.md
-    echo
-  fi
+  cat "${VALIDATE_README_CONTEXT}"
   if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
     echo "=== OVERFLOW REFERENCE ==="
     echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
     echo
   fi
 } > "${STATIC_CONTEXT_FILE}"
+rm -f "${VALIDATE_README_CONTEXT}"
 
 
 # ---------------------------------------------------------------

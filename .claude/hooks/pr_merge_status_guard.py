@@ -14,8 +14,9 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories or refspecs warn and
-fall back to the session checkout check. Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unknown directories fall back to the
+session checkout with a warning; unresolved push sources or destinations
+request confirmation. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 A `cd` or `exit` with a redirect that might fail (anything but a plain
 `/dev/null` target) makes the directory unknown. After checking the session
@@ -188,7 +189,7 @@ class _GitInvocation(NamedTuple):
 class _GuardTarget(NamedTuple):
 	cwd: str
 	environment: dict[str, str]
-	branch: str
+	branch: str | None
 	tip: str
 	reaches_remote: bool
 	warning: str = ""
@@ -508,7 +509,12 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; checking the current branch instead")]
-	refspecs = positionals if remote_provided else positionals[1:]
+	# A positional repository always consumes the first positional, even
+	# with --repo; --repo alone supplies no positional refspecs.
+	if remote_provided and not positionals:
+		refspecs = []
+	else:
+		refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:
@@ -533,8 +539,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		if branch == "":
 			continue
 		if branch is None:
-			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; checking the current branch instead"))
+			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
 	if bulk:
@@ -1340,6 +1345,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
 	uncertain_push_reasons: list[str] = []
+	unresolved_push_sources: list[str] = []
+	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
@@ -1348,6 +1355,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
 		)
 		for target in targets:
+			if target.branch is None:
+				unresolved_push_destinations.append(
+					"could not resolve git push destination; shell expansion may change the pushed branch."
+				)
+				continue
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
 			if target.warning:
@@ -1359,8 +1371,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						target.cwd, _GIT_TIMEOUT_SECONDS,
 					)
 				if code != 0:
-					_warn("could not resolve git push source; checking the session checkout instead")
-					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+					unresolved_push_sources.append(
+						f"could not resolve git push source for `{target.branch}`; "
+						"shell expansion may change the pushed commit."
+					)
+					continue
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
@@ -1423,6 +1438,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			"could not determine the directory `git push` runs in (shell control flow or redirection); "
 			"checked the session checkout instead"
 		)
+	confirmation_reasons.extend(unresolved_push_sources)
+	confirmation_reasons.extend(unresolved_push_destinations)
 	if bulk_reasons:
 		confirmation_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
