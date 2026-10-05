@@ -422,6 +422,25 @@ def test_read_isolation_rejects_invalid_mounts(sandbox: dict, reason: str, env: 
 	assert _calls(sandbox) == []
 
 
+def test_read_isolation_rejects_session_mount_containing_pool(sandbox: dict) -> None:
+	sandbox["pool"] = sandbox["tmp"] / "rt"
+	(sandbox["pool"] / "tokens").mkdir()
+	_accounts(sandbox, A="TOK_OK")
+	args = " ".join(shlex.quote(str(part)) for part in (
+		"SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"],
+		"0123abcd-0000-4000-8000-00000000abcd",
+	))
+	script = (
+		'command() { if [ "$1" = -v ] && [ "$2" = ps ]; then return 0; fi; builtin command "$@"; }; '
+		'_ai_engine_isolation_image() { printf "%s\\n" test-image; }; '
+		f'rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"'
+	)
+	result = _bash(sandbox, script, CLAUDE_ENGINE_POOL_DIR=str(sandbox["pool"]))
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_pool_overlap" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
 def test_read_isolation_missing_docker_falls_back(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))

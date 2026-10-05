@@ -653,6 +653,7 @@ engine switch. When Claude is unavailable (`claude_run` exit 75,
 pinned CLI is `@anthropic-ai/claude-code` `cli_version` from the same file,
 installed by `.github/actions/install-claude`.
 Read-profile `claude_run` calls use a `--network none` container with a placeholder token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token. Isolation failures fall back with `AI_ENGINE_FALLBACK reason=isolation_*`.
+Session reuse rejects a pool path overlapping the mounted session directory with `reason=isolation_pool_overlap` before starting the container.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production

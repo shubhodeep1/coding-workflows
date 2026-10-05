@@ -281,7 +281,7 @@ _ai_engine_git_mask_configs()
 _ai_engine_claude_run_isolated()
 {
 	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" session_id="$5" model="$6" effort="$7" instructions="$8" pool_dir="$9" run_dir="${10}" hide_claude_md="${11}"
-	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i
+	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root
 	local -a mounts=() session_args=() cmd=() accounts=()
 	AI_ENGINE_ISOLATION_WORKDIR="${workdir}"
 	if ! _ai_engine_isolation_preflight "${pool_dir}" "${workdir}" "${prompt_file}" "${instructions}"; then
@@ -309,6 +309,10 @@ _ai_engine_claude_run_isolated()
 	fi
 	if [ -n "${session_id}" ]; then
 		mkdir -p "${RUNNER_TEMP:-/tmp}/claude-read-sessions" && chmod 0700 "${RUNNER_TEMP:-/tmp}/claude-read-sessions" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
+		session_mount_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/claude-read-sessions")" && pool_mount_root="$(realpath -e -- "${pool_dir}")" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
+		if [[ "${session_mount_root}/" == "${pool_mount_root}/"* || "${pool_mount_root}/" == "${session_mount_root}/"* ]]; then
+			ai_engine_fallback "${role}" isolation_pool_overlap; return 75
+		fi
 		if compgen -G "${RUNNER_TEMP:-/tmp}/claude-read-sessions/*/${session_id}.jsonl" >/dev/null; then
 			session_args=(--resume "${session_id}")
 		else

@@ -2022,6 +2022,12 @@ returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
 which only adds `engine=claude` to its log lines, and every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
+When session reuse is requested, a pool directory that overlaps the mounted
+session directory falls back with `reason=isolation_pool_overlap` before the
+container starts.
+The read-profile container still mounts the full checkout and any configured
+extra read directories; do not place credentials or other secrets in those
+paths. There is no per-file read allowlist yet.
 
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input
