@@ -114,6 +114,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
+    The PR-head checkout does not persist credentials; collection uses a
+    GitHub token before Codex runs from a trusted support directory in a
+    separate, GitHub-token-free step. Missing trusted support fails closed.
+    Issue posting is separate and requires the `CHECK_TRIAGE_ISSUES_TOKEN`
+    fine-grained PAT so `issues: opened` still fires without exposing `GH_PAT`.
 14. **workflow failure heal** (`workflow_failure_heal.yml`,
     `internal-workflow-failure-heal.yml`, `workflow-failure-heal-intake.yml`,
     `scripts/workflow_failure_heal_report.sh`,
