@@ -184,7 +184,7 @@ if [ "${engine}" = claude ]; then
 	claude_source_mount="type=bind,src=${root}/source,dst=/source"
 	if [ "${claude_access}" = read ]; then
 		claude_home="$(mktemp -d "${root}/home-read-XXXXXXXX")"
-		claude_tools='Read,Grep,Glob,Bash'
+		claude_tools='Read,Grep,Glob'
 		claude_permissions=dontAsk
 		claude_source_mount+=',readonly'
 	fi

@@ -36,7 +36,7 @@ def test_read_role_cannot_write_snapshot_or_transfer():
 	text = SANDBOX.read_text(encoding="utf-8")
 	claude = text[text.index('if [ "${engine}" = claude ]; then'):text.index('[[ "${model}" =~')]
 	assert 'settings_args=(settings --checkout /source --out "${root}/claude-settings.json" --profile "${claude_access}"' in claude
-	assert "claude_tools='Read,Grep,Glob,Bash'" in claude
+	assert "claude_tools='Read,Grep,Glob'" in claude
 	assert 'claude_permissions=dontAsk' in claude
 	assert "claude_source_mount+=',readonly'" in claude
 	assert 'mktemp -d "${root}/home-read-XXXXXXXX"' in claude
