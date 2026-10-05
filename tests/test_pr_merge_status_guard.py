@@ -828,6 +828,15 @@ def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch
 	assert "could not resolve git command directory" in proc.stdout
 
 
+def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "main")
+	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "could not resolve git push repository" in proc.stdout
+	assert '"permissionDecision": "ask"' in proc.stdout
+
+
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
 def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, monkeypatch, override: str) -> None:
 	repo, _ = merged_branch_repo
@@ -848,6 +857,19 @@ def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, 
 		"tool_input": {"command": command}})
 	assert code == 2, message
 	assert "Branch `feature/x`" in message
+
+
+@pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
+def test_appended_git_override_asks_when_checkout_is_not_merged(merged_branch_repo, override: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	worktree = repo.parent / "merged"
+	_git(repo, "checkout", "main")
+	_git(repo, "worktree", "add", str(worktree), "feature/x")
+	value = worktree / ".git" if override == "GIT_DIR" else worktree
+	proc = _run_hook(repo, stub_bin, f"{override}+={value} git push origin HEAD")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "could not resolve git push repository" in proc.stdout
+	assert '"permissionDecision": "ask"' in proc.stdout
 
 
 def test_explicit_source_tip_and_multiple_destinations(merged_branch_repo) -> None:

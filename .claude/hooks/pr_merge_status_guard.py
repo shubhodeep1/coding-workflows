@@ -1331,6 +1331,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "push" and invocation.warning:
+			unresolved_push_sources.append(
+				"could not resolve git push repository; the session checkout may not be the pushed repository."
+			)
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
