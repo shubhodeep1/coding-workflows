@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:1059-1064 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The README says an unmappable push destination asks for confirmation, but the updated guard blocks it.\n  WHY: Users following the documented confirmation flow are denied the push and must use `CLAUDE_PR_MERGE_GUARD=off` instead; severity was reported as NIT by deepseek and openai, and MAJOR by minimax and qwen.\n- scripts/orchestrate_poll_process.sh:7080 | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The guard condition short-circuits the subsequent integrity checks when `security_audit_run_rc` is 86.\n  WHY: If the audit run indicates tampering, the independent audit-integrity check is skipped and a mismatch could be bypassed or masked.\n- tests/test_pr_merge_status_guard.py:1148-1161 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `test_positional_remote_probe_failure_requires_confirmation` has stale probe mocking and an assertion that does not match the described confirmation outcome.\n  WHY: The reviewers disagree on whether the test passes or fails, but report that its `--get` monkeypatch does not intercept the updated `--get-all` probe and/or that the confirmation path returns a non-empty message instead of the asserted empty message; severity was reported as NIT by deepseek and MAJOR by minimax and qwen.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace Codex/OpenCode with the Claude Code CLI engine for all eleven specified roles.\n  expected_change_site: `orchestrate_poll.yml` SUMMARISER resolution\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `implement.yml` lines 5201-5222 uses `AI_ENGINE_RESOLVED_SUMMARISER`, but `orchestrate_poll.yml` does not fully integrate SUMMARISER resolution like other roles; `AI_ENGINE_FALLBACK` may not be fully transparent for all roles when `SUPPORT_ROOT_DIR` is unset.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_pr_merge_status_guard.py:lines 1152-1156 | severity=NIT | confidence=4\n  PROBLEM: The test monkeypatch intercepts `[\"git\", \"config\", \"--get\", \"remote.origin.url\"]`, but the updated destination-resolution path calls `git config --get-all remote.origin.pushurl` and `git config --get-all remote.origin.url`.\n  WHY: The monkeypatch no longer controls the probe it was written to control, so a fixture change could alter the outcome without the monkeypatch catching it.\n- README.md:README.md lines referencing unmappable-push-destination behavior (approximately the guard paragraph citing CLAUDE.md \u00a721.C) | severity=NIT | confidence=5\n  PROBLEM: The README says an unresolvable push destination asks for confirmation, but the new guard blocks unmappable destinations.\n  WHY: Operators following the documented confirmation flow receive a hard block and must use `CLAUDE_PR_MERGE_GUARD=off` to proceed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:7080 | confidence=4\n  PROBLEM: The new guard condition `[ \"${security_audit_run_rc}\" -eq 86 ] || { [ ! -r \"${SUPPORT_INTEGRITY_MANIFEST}\" ] || ... }` improperly short-circuits the check logic.\n  WHY: If `security_audit_run_rc` is 86, the subsequent check block is skipped, so an integrity mismatch could be bypassed or masked.\n\n- Requirement: Replace Codex/OpenCode with the Claude Code CLI engine for all eleven specified roles.\n  Expected change site: All workflow files and scripts for these roles.\n  Evidence of absence: The PR implements most roles, but the `SUMMARISER` role implementation in `implement.yml` (line 5201-5222) uses `AI_ENGINE_RESOLVED_SUMMARISER` but the `orchestrate_poll.yml` orchestration logic does not fully integrate `SUMMARISER` resolution in the same way as other roles. Additionally, the `AI_ENGINE_FALLBACK` mechanism might not be fully transparent for all roles when `SUPPORT_ROOT_DIR` is unset.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_pr_merge_status_guard.py:lines 1148-1161 (test_positional_remote_probe_failure_requires_confirmation) | severity=MAJOR | confidence=5\n  PROBLEM: The test asserts `(code, message) == (0, \"\")`, but the described unreachable-outcome path returns code 0 with a non-empty confirmation reason.\n  WHY: The assertion does not match the described API-failure and unavailable-git-history outcome.\n- README.md:lines 1059-1064 | severity=MAJOR | confidence=5\n  PROBLEM: The README says an unresolved positional repository asks for confirmation, but the updated guard blocks unmappable push destinations.\n  WHY: A user following the documented confirmation flow is denied the push and must use the `CLAUDE_PR_MERGE_GUARD=off` override.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:1061-1064; `.claude/hooks/pr_merge_status_guard.py` `_push_targets` and `_evaluate_bash` | severity=NIT | confidence=5\n  PROBLEM: The README says an unconfigured positional repository triggers confirmation, but the latest change routes that case to a hard block.\n  WHY: An unconfigured `mirror` fails destination resolution and is blocked instead of allowing the operator to confirm, contrary to the documented behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- README.md:1059-1064 | severity=MAJOR | confidence=5\n  PROBLEM: The README says an unresolved push destination asks for confirmation, but the updated guard blocks unmappable destinations.\n  WHY: Users following the documented confirmation flow are denied the push and must use the `CLAUDE_PR_MERGE_GUARD=off` override.\n- tests/test_pr_merge_status_guard.py:1152-1157, test `test_positional_remote_probe_failure_requires_confirmation` | severity=MAJOR | confidence=4\n  PROBLEM: The test monkeypatch intercepts the `--get` probe, but the updated `_remote_push_urls` function calls `--get-all`, so the probe is not intercepted.\n  WHY: The destination resolves and PR lookup proceeds; the test no longer exercises the intended probe-failure path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9dd8124a70f7ef825e26eafd79fafeac633a5062ecf2e3fbcff19abbf5a3cb9a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37322750469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37322750469",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005154411_d0dd770016",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37322750469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T15:44:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
