@@ -758,6 +758,10 @@ def main(argv: list[str] | None = None) -> int:
 		summary_model = model
 		summary = ""
 		tokens_used = 0
+		if claude_summarizer is not None and time.monotonic() >= claude_deadline:
+			_warn("Claude time budget spent during log fetch; remaining runs go over OpenRouter" if summarizer is not None else "Claude time budget spent during log fetch; remaining runs stay unsummarized")
+			stats["claude_fallback_reason"] = "time_budget"
+			claude_summarizer = None
 		if claude_summarizer is not None:
 			try:
 				summary, tokens_used = claude_summarizer.summarize(run, logs_text, timeout_seconds=min(CLAUDE_CALL_TIMEOUT_SECONDS, claude_deadline - time.monotonic()))
