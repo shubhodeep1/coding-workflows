@@ -811,6 +811,10 @@ to pass, even when the editor cannot write the live file.
 Changes to both halves that still differ remain test failures. Push CI and
 PRs targeting `stable` check the committed tree without preparation, so drift
 on `main` is still reported while the post-merge sync PR is pending.
+Both release gates' `validate-scripts` jobs also run
+`tests/test_claude_template_live_parity.py` on the committed tree: drift,
+including a pending or held sync PR, blocks the `stable` release until both
+copies match or the file is allowlisted.
 
 New templates without a live copy are also treated as drift and copied into
 `.claude/` (including new subdirectories) with their executable permissions.

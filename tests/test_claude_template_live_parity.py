@@ -7,6 +7,7 @@ mode, except files `.github/ai/claude_template_divergence.json` lists as
 maintained separately.
 The tests also run scripts/sync_claude_live_copies.py's `plan` and `sync`
 against a scratch repository.
+Both release gates run this suite against the committed tree without preparation.
 """
 
 from __future__ import annotations
@@ -884,3 +885,18 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
 	assert 'sync --dry-run --before "${PR_BASE_SHA}" --after HEAD' in prepare["run"]
 	assert "--keep-committed-security-paths" in prepare["run"]
+
+
+def test_release_gates_check_committed_tree_parity() -> None:
+	for workflow in ("mark-stable.yml", "test-and-mark-stable.yml"):
+		jobs = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8"))["jobs"]
+		steps = jobs["validate-scripts"]["steps"]
+		asset_steps = [step for step in steps if step.get("name") == "Claude asset tests (CLAUDE.md, .claude hooks, scripts, commands)"]
+		assert len(asset_steps) == 1, workflow
+		assert "tests/test_claude_template_live_parity.py" in asset_steps[0]["run"], workflow
+		assert all("sync_claude_live_copies.py" not in step.get("run", "") for step in steps), workflow
+		if workflow == "mark-stable.yml":
+			assert "validate-scripts" in jobs["release"]["needs"]
+		else:
+			assert "validate-scripts" in jobs["validate"]["needs"]
+			assert "needs.validate-scripts.result == 'success'" in jobs["validate"]["if"]
