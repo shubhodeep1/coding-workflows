@@ -59,12 +59,12 @@ _WEAKENS_CONTROL_PATTERNS = [
 	),
 	re.compile(
 		r"\b(?:verification|validation|checks?|signatures?|authorization|authentication|security|reviews?|approvals?|audits?|scans?|test\s+is|tests\s+are|gates?|guards?|controls?)\b"
-		r"\s+(?:(?:is|are|was|were|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived|defer\w*|postpon\w*|optional|not\s+required|no\s+longer\s+(?:required|needed)|advisory|best\s+effort|relax\w*)\b",
+		r"\s+(?:(?:is|are|was|were|has\s+been|have\s+been|had\s+been|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived|defer\w*|postpon\w*|optional|not\s+required|no\s+longer\s+(?:required|needed)|advisory|best\s+effort|relax\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(
 		r"\b(?:(?:security|verification|validation|checks?|audits?|reviews?|controls?)\s+)?(?:tests?|scans?|checks?|gates?|guards?|reviews?|audits?)\s+"
-		r"(?:(?:is|are|was|were|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived)\b",
+		r"(?:(?:is|are|was|were|has\s+been|have\s+been|had\s+been|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived|defer\w*|postpon\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(

@@ -118,6 +118,8 @@ def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) 
 	"Defer verification until after merge", "Postpone the security check until after merge",
 	"Defer signature validation until later", "Verification is deferred until after merge",
 	"Approval gate is postponed until after merge", "Security scan is deferred until after merge",
+	"Security test deferred until after merge", "Verification has been deferred until after merge",
+	"Security scans have been postponed until after merge", "Security audit had been deferred until after merge",
 ])
 def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL for verification\n- B — {fallback}\n"
