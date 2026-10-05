@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6404,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6404\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6414\",\"pr_number\":6414,\"branch\":\"ai/issue-6404\",\"run_id\":\"37353667341\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37353667341\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6404-claude-live-sync-pr-provenance.md\",\"scripts/sync_claude_live_copies.py\",\"tests/test_claude_template_live_parity.py\"]}",
+  "fingerprint": "56e28f9f3e70dd154014fee6c7c0059b6e9a784c31905559496f8c5669a373c1",
+  "lineage": {
+    "issue_number": 6404,
+    "parent_ids": [],
+    "pr_number": 6414,
+    "run_id": "37353667341",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37353667341",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6414"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005182323_609408d292",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6404,
+    "level": "run",
+    "pr_number": 6414,
+    "run_id": "37353667341"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6404: https://github.com/shubhodeep1/coding-workflows/pull/6414",
+  "timestamps": {
+    "created_at": "2026-10-05T18:23:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
