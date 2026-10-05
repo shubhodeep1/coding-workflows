@@ -2688,7 +2688,10 @@ and resolver chains, a failed project) now goes to the unblock judge
 - **Terminal.** When the caps are spent, or the item is still blocked 24
   hours after the last round, the judge closes it as not planned with a
   report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
-  poller then sets the state to `abandoned` and closes the tracking issue.
+  poller then sets the state to `abandoned` and closes the tracking issue
+  only when its newest pipeline-authored verdict marker for that project is
+  `close` and still matches its blocked state (or it is already `abandoned`
+  and the close needs retrying). A label without that authorization is ignored.
   For an issue or PR, a failed close leaves the terminal label unset so a
   later scan can retry. If the close succeeds but adding the label fails,
   the judge logs the failure and still sends the CRITICAL alert; the closed
