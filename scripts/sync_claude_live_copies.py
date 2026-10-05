@@ -30,9 +30,12 @@ force push, shallow history) syncs nothing and logs why; the CI parity test
 still reports any drift on the next pull request.
 
 The auto-merge-eligible branch accepts only template history attributable to
-merged, non-pipeline PRs with clean commit subjects. Other changes go to a
-separate draft PR for human review. GH_PAT is still a broad write credential;
-branch provenance is a conservative signal, not proof of a human author.
+merged, non-pipeline PRs targeting the sync base from this repository, authored
+by non-bot OWNER/MEMBER/COLLABORATOR accounts, with clean commit subjects.
+Other changes go to a separate draft PR for human review. GH_PAT is still a
+broad write credential; branch provenance is a conservative signal, not proof
+of a human author (a trusted collaborator can still submit AI-written content).
+A ready held PR can race with draft conversion before the next push.
 
 API budget (CLAUDE.md §15): per run, at most one association lookup per
 distinct template commit (30 by default), 1-3 pages per distinct merged PR,
@@ -68,6 +71,7 @@ PIPELINE_HEAD_RE = re.compile(r"^(ai|orchestrator|auto)/")
 PIPELINE_MARKER_RE = re.compile(r"^\[(ai-autofix|judge-fix|ai-merge-resolve|claude-[a-z0-9-]+)\]")
 SQUASHED_PR_RE = re.compile(r"\(#\d+\)\s*$")
 DEFAULT_MAX_PROVENANCE_COMMITS = 30
+TRUSTED_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 def log(message: str) -> None:
@@ -198,9 +202,11 @@ def _template_commits(root: Path, relative: str, after: str) -> list[tuple[str, 
 def _commit_authorization(
 	repository: str, sha: str, subject: str,
 	pr_cache: dict[str, object], commit_cache: dict[int, object],
+	base_branch: str | None = None,
 ) -> tuple[bool, str, str]:
 	if PIPELINE_MARKER_RE.match(subject):
 		return False, "pipeline_commit_marker", "none"
+	base_branch = base_branch or os.environ.get("BASE_BRANCH") or "main"
 	try:
 		# The sync-branch PR lookup cannot establish the source commit's provenance.
 		if sha not in pr_cache:
@@ -224,6 +230,26 @@ def _commit_authorization(
 				raise ValueError("invalid merged PR")
 			if PIPELINE_HEAD_RE.match(head["ref"]):
 				return False, "pipeline_branch", str(number)
+			base = pr.get("base")
+			if not isinstance(base, dict) or not isinstance(base.get("ref"), str):
+				raise ValueError("invalid PR base")  # noqa: TRY004 - malformed API data holds the path
+			if base["ref"] != base_branch:
+				return False, "base_mismatch", str(number)
+			head_repo = head.get("repo")
+			if not isinstance(head_repo, dict):
+				return False, "foreign_head_repo", str(number)
+			if not isinstance(head_repo.get("full_name"), str):
+				raise ValueError("invalid head repository")  # noqa: TRY004 - malformed API data holds the path
+			if head_repo["full_name"].casefold() != repository.casefold():
+				return False, "foreign_head_repo", str(number)
+			user = pr.get("user")
+			if not isinstance(user, dict) or not isinstance(user.get("login"), str):
+				raise ValueError("invalid PR author")  # noqa: TRY004 - malformed API data holds the path
+			if user.get("type") == "Bot" or user["login"].lower().endswith("[bot]"):
+				return False, "bot_author", str(number)
+			association = pr.get("author_association")
+			if not isinstance(association, str) or association not in TRUSTED_AUTHOR_ASSOCIATIONS:
+				return False, "untrusted_author", str(number)
 		for pr in merged:
 			number = pr["number"]
 			if number not in commit_cache:
@@ -256,7 +282,7 @@ def _commit_authorization(
 	return True, "", str(merged[0]["number"])
 
 
-def _classify_paths(root: Path, paths: list[str], after: str, repository: str) -> tuple[list[str], dict[str, tuple[str, str, str]]]:
+def _classify_paths(root: Path, paths: list[str], after: str, repository: str, base_branch: str | None = None) -> tuple[list[str], dict[str, tuple[str, str, str]]]:
 	authorized: list[str] = []
 	held: dict[str, tuple[str, str, str]] = {}
 	pr_cache: dict[str, object] = {}
@@ -281,7 +307,7 @@ def _classify_paths(root: Path, paths: list[str], after: str, repository: str) -
 		else:
 			seen.update(sha for sha, _ in commits)
 			for sha, subject in commits:
-				ok, reason, pr_number = _commit_authorization(repository, sha, subject, pr_cache, commit_cache)
+				ok, reason, pr_number = _commit_authorization(repository, sha, subject, pr_cache, commit_cache, base_branch=base_branch)
 				if not ok:
 					sha12 = sha[:12]
 					break
@@ -467,7 +493,7 @@ def sync(root: Path, before: str, after: str, *, dry_run: bool, keep_committed_s
 			return 1
 		previous_shas[target_branch], additional = carried
 		paths.extend(path for path in additional if path not in paths)
-	authorized, held = _classify_paths(root, paths, after, repository)
+	authorized, held = _classify_paths(root, paths, after, repository, base_branch=base)
 	short_after = after[:12]
 	owner = repository.split("/", 1)[0]
 	if authorized:

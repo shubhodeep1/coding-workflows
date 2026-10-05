@@ -77,10 +77,23 @@ def _commit(root: Path, path: str, text: str) -> tuple[str, str]:
 	return before, _git(root, "rev-parse", "HEAD")
 
 
+def _merged_pr(head_ref="feature/approved", **overrides):
+	pr = {
+		"number": 12,
+		"merged_at": "2026-10-01T00:00:00Z",
+		"head": {"ref": head_ref, "repo": {"full_name": "octo/repo"}},
+		"base": {"ref": "main"},
+		"user": {"login": "octo", "type": "User"},
+		"author_association": "OWNER",
+	}
+	pr.update(overrides)
+	return pr
+
+
 def _authorized_api(*args):
 	endpoint = args[0]
 	if "/commits/" in endpoint and "/pulls?" in endpoint:
-		return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": "feature/approved"}}]
+		return [_merged_pr()]
 	if "/pulls/12/commits?" in endpoint:
 		return [{"commit": {"message": "feat: human change"}}]
 	if "-X" in args:
@@ -290,7 +303,7 @@ def test_sync_pushes_a_branch_and_opens_one_pr(tmp_path: Path) -> None:
 	bin_dir.mkdir()
 	calls = tmp_path / "gh_calls"
 	gh = bin_dir / "gh"
-	gh.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "' + str(calls) + '"\ncase "$*" in *"/commits/"*"/pulls?"*) echo \'[{"number":12,"merged_at":"2026-10-01T00:00:00Z","head":{"ref":"feature/approved"}}]\' ;; *"/pulls/12/commits?"*) echo \'[{"commit":{"message":"human change"}}]\' ;; *"-X POST"*) echo \'{"number":7}\' ;; *) echo "[]" ;; esac\n', encoding="utf-8")
+	gh.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "' + str(calls) + '"\ncase "$*" in *"/commits/"*"/pulls?"*) echo \'[{"number":12,"merged_at":"2026-10-01T00:00:00Z","head":{"ref":"feature/approved","repo":{"full_name":"octo/repo"}},"base":{"ref":"main"},"user":{"login":"octo","type":"User"},"author_association":"OWNER"}]\' ;; *"/pulls/12/commits?"*) echo \'[{"commit":{"message":"human change"}}]\' ;; *"-X POST"*) echo \'{"number":7}\' ;; *) echo "[]" ;; esac\n', encoding="utf-8")
 	gh.chmod(0o755)
 	env = {key: value for key, value in os.environ.items() if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT"}}
 	env.update(PATH=f"{bin_dir}:{env['PATH']}", GITHUB_REPOSITORY="octo/repo", PYTHONDONTWRITEBYTECODE="1")
@@ -451,33 +464,100 @@ def test_unassociated_change_goes_only_to_draft_and_reports_source(tmp_path: Pat
 def test_pipeline_provenance_is_held(head, subject, pr_subject, reason, monkeypatch) -> None:
 	def api(*args):
 		if "/commits/" in args[0]:
-			return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": head}}]
+			return [_merged_pr(head_ref=head)]
 		return [{"commit": {"message": pr_subject}}]
 	monkeypatch.setattr(sync_mod, "_gh_json", api)
 	ok, actual, _pr = sync_mod._commit_authorization("octo/repo", "a" * 40, subject, {}, {})
 	assert not ok and actual == reason
 
 
+@pytest.mark.parametrize(
+	("overrides", "reason"),
+	[
+		({"base": {"ref": "stable"}}, "base_mismatch"),
+		({"head": {"ref": "claude/fix-x", "repo": None}}, "foreign_head_repo"),
+		({"head": {"ref": "claude/fix-x", "repo": "unknown"}}, "foreign_head_repo"),
+		({"head": {"ref": "claude/fix-x", "repo": {"full_name": "evil/repo"}}}, "foreign_head_repo"),
+		({"user": {"login": "octo", "type": "Bot"}}, "bot_author"),
+		({"user": {"login": "renovate[bot]", "type": "User"}}, "bot_author"),
+		({"author_association": "CONTRIBUTOR"}, "untrusted_author"),
+		({"author_association": "NONE"}, "untrusted_author"),
+		({"author_association": None}, "untrusted_author"),
+	],
+)
+def test_untrusted_pr_provenance_is_held_before_commit_fetch(overrides, reason, monkeypatch) -> None:
+	calls = []
+	def api(*args):
+		calls.append(args)
+		return [_merged_pr(**overrides)]
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {}) == (False, reason, "12")
+	assert len(calls) == 1
+	assert "/commits/" in calls[0][0] and "/pulls?" in calls[0][0]
+
+
+@pytest.mark.parametrize("overrides", [
+	{"base": None},
+	{"base": "main"},
+	{"user": None},
+	{"head": {"ref": "feature/x", "repo": {"full_name": 1}}},
+])
+def test_malformed_pr_provenance_fails_closed(overrides, monkeypatch) -> None:
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [_merged_pr(**overrides)])
+	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
+
+
+@pytest.mark.parametrize("missing_key,reason", [
+	("base", "api_failed"),
+	("user", "api_failed"),
+	("author_association", "untrusted_author"),
+])
+def test_missing_pr_provenance_is_held(missing_key, reason, monkeypatch) -> None:
+	pr = _merged_pr()
+	pr.pop(missing_key)
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [pr])
+	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == reason
+
+
+def test_trusted_claude_pr_and_case_insensitive_repo_match(monkeypatch) -> None:
+	def api(*args):
+		if "/commits/" in args[0] and "/pulls?" in args[0]:
+			return [_merged_pr(head={"ref": "claude/fix-x", "repo": {"full_name": "Octo/Repo"}})]
+		return [{"commit": {"message": "human change"}}]
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {}) == (True, "", "12")
+
+
+def test_all_associated_merged_prs_must_be_trusted(monkeypatch) -> None:
+	calls = []
+	def api(*args):
+		calls.append(args)
+		return [_merged_pr(), _merged_pr(number=13, head={"ref": "claude/x", "repo": {"full_name": "fork/repo"}})]
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {}) == (False, "foreign_head_repo", "13")
+	assert len(calls) == 1
+
+
 def test_provenance_truncation_and_malformed_api_fail_closed(monkeypatch) -> None:
 	def too_many(*args):
 		if "/commits/" in args[0]:
-			return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": "feature/x"}}]
+			return [_merged_pr()]
 		return [{"commit": {"message": "normal"}}] * 100
 	monkeypatch.setattr(sync_mod, "_gh_json", too_many)
 	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "pr_commits_truncated"
 	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: {"error": "unavailable"})
 	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
-	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 12, "merged_at": True, "head": {"ref": "feature/x"}}])
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [_merged_pr(merged_at=True)])
 	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
 	for invalid_timestamp in ("invalid", "2026-13-01T00:00:00Z", "2026-10-01T00:00:00", ""):
-		monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 12, "merged_at": invalid_timestamp, "head": {"ref": "feature/x"}}])
+		monkeypatch.setattr(sync_mod, "_gh_json", lambda *args, timestamp=invalid_timestamp: [_merged_pr(merged_at=timestamp)])
 		assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
 
 
 def test_pr_commit_pagination_inspects_later_pages(monkeypatch) -> None:
 	def api(*args):
 		if "/commits/" in args[0] and "/pulls?" in args[0]:
-			return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": "feature/x"}}]
+			return [_merged_pr()]
 		if "&page=1" in args[0]:
 			return [{"commit": {"message": "human"}}] * 100
 		return [{"commit": {"message": "[judge-fix] hidden edit"}}]
@@ -519,6 +599,23 @@ def test_mixed_paths_are_isolated_by_branch(tmp_path: Path, monkeypatch) -> None
 	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/second.py") == "v1"
 	assert _git(remote, "show", "ai/sync-claude-live-copies-held:.claude/hooks/second.py") == "v2"
 	assert _git(remote, "show", "ai/sync-claude-live-copies-held:.claude/hooks/guard.py") == "v1"
+
+
+@pytest.mark.parametrize("pr_base,authorized", [("develop", True), ("main", False)])
+def test_sync_threads_base_branch_into_provenance(tmp_path: Path, monkeypatch, pr_base: str, authorized: bool) -> None:
+	root, remote = _sync_repo(tmp_path, monkeypatch)
+	monkeypatch.setenv("BASE_BRANCH", "develop")
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	def api(*args):
+		if "/commits/" in args[0] and "/pulls?" in args[0]:
+			return [_merged_pr(base={"ref": pr_base})]
+		if "/pulls/12/commits?" in args[0]:
+			return [{"commit": {"message": "human change"}}]
+		return {"number": 7} if "-X" in args else []
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	branch = "ai/sync-claude-live-copies" if authorized else "ai/sync-claude-live-copies-held"
+	assert _git(remote, "show", f"{branch}:.claude/hooks/guard.py") == "v2"
 
 
 def test_held_ready_pr_converted_before_push_and_failure_does_not_push(tmp_path: Path, monkeypatch, capsys) -> None:

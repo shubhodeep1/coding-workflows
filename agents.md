@@ -772,8 +772,11 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   changed on `main` since the earlier sync is left for the parity test.
   The auto-merge-eligible branch accepts a path only when every template
   commit since the last live-copy edit is associated with a merged PR from a
-  non-`ai/*`, non-`orchestrator/*`, non-`auto/*` branch, and neither its subject
-  nor any PR commit subject carries a pipeline marker or a squash `(#N)` suffix.
+  non-`ai/*`, non-`orchestrator/*`, non-`auto/*` branch targeting the sync base
+  from a same-repository head, authored by an OWNER/MEMBER/COLLABORATOR
+  non-bot account, and neither its subject nor any PR commit subject carries
+  a pipeline marker or a squash `(#N)` suffix. A trusted collaborator's
+  account or session can still submit AI-written content.
   Unverifiable paths instead go to `ai/sync-claude-live-copies-held` as a draft
   PR for human review, with a Telegram WARNING listing their source commits.
   Malformed merge timestamps also fail authorization and hold the path.
