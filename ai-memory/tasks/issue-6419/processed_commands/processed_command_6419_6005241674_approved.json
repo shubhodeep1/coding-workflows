@@ -5,13 +5,32 @@
   "entry_id": "processed_command_6419_6005241674_approved",
   "issue_number": 6419,
   "metadata": {
+    "branch": "ai/issue-6419",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/ai/write_guards.v1.json",
+      ".github/workflows/ci.yml",
+      ".github/workflows/sync-claude-live-copies.yml",
+      "agents.md",
+      "changelog.d/6419-sync-live-copies-trusted-support.md",
+      "scripts/dev/test_write_guard.sh",
+      "scripts/review_conflict_resolve.sh",
+      "scripts/write_guard.sh",
+      "tests/test_claude_template_live_parity.py",
+      "tests/test_sync_claude_live_copies_workflow_contract.py"
+    ],
+    "issue_number": 6419,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6419",
+    "pr_number": 6422,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6422",
+    "run_attempt": "1",
+    "run_id": "37387729008",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37387729008"
   },
   "run_attempt": 1,
   "run_id": "37387729008",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-05T23:21:18Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T23:41:54Z",
   "workflow": "implement"
 }
