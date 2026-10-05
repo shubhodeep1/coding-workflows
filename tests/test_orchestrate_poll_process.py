@@ -62,7 +62,9 @@ def _git_test_env() -> dict[str, str]:
 	return env
 
 
-def _make_poller_sandbox(target: Path) -> None:
+def _make_poller_sandbox(
+	target: Path, origin_url: str = "https://github.com/test-harness/poller-sandbox.git",
+) -> None:
 	"""Populate ``target`` with a minimal copy of the coding-workflows tree
 	the poller expects at runtime and initialize a throwaway git repo
 	inside it.
@@ -189,7 +191,7 @@ def _make_poller_sandbox(target: Path) -> None:
 	subprocess.run(
 		[
 			"git", "-C", str(target), "remote", "add",
-			"origin", "https://github.com/test-harness/poller-sandbox.git",
+			"origin", origin_url,
 		],
 		check=True,
 		env=git_env,
@@ -786,6 +788,8 @@ def _run_poller(
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
 	env_overrides: dict[str, str] | None = None,
+	# A coding-workflows origin skips the consumer artifact cleanup.
+	sandbox_origin_url: str | None = None,
 	mock_store_extra: dict | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -866,7 +870,10 @@ def _run_poller(
 		home_dir = tmp / "home"
 		runtime_dir = tmp / "runtime"
 		store_file = tmp / "gh_store.json"
-		_make_poller_sandbox(sandbox)
+		if sandbox_origin_url:
+			_make_poller_sandbox(sandbox, sandbox_origin_url)
+		else:
+			_make_poller_sandbox(sandbox)
 		sandbox_sha_aliases = {
 			"__integration_head__": subprocess.run(
 				["git", "-C", str(sandbox), "rev-parse", "refs/heads/orchestrator/project-192"],
@@ -2318,6 +2325,7 @@ if args[0] == 'api':
 				'merged': pr.get('merged', False),
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
 				'merge_commit_sha': pr.get('merge_commit_sha'),
+				'changed_files': pr.get('changed_files', 0),
 				'labels': [{'name': label} for label in pr.get('labels', [])],
 				'title': pr.get('title', ''),
 				'body': pr.get('body', ''),
@@ -9679,6 +9687,7 @@ def _review_blocked_fix_scope_case(
 	remaining: list[dict] | None = None, pr_files_fail: bool = False,
 	pr_changed_file_count: int | None = None,
 	env_overrides: dict[str, str] | None = None,
+	sandbox_origin_url: str | None = None,
 ) -> dict:
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
@@ -9707,6 +9716,7 @@ def _review_blocked_fix_scope_case(
 		capture_telegram_calls=True,
 		pr_files_fail=pr_files_fail,
 		env_overrides=env_overrides,
+		sandbox_origin_url=sandbox_origin_url,
 	)
 
 
@@ -9731,8 +9741,11 @@ def test_review_blocked_fix_scope_rejects_unrelated_file():
 
 
 def test_review_blocked_fix_scope_rejects_empty_staged_set():
+	# Consumer repos delete .github/prompts before staging; only the
+	# coding-workflows checkout keeps it, so only there can staging exclude it.
 	result = _review_blocked_fix_scope_case(
 		touch=".github/prompts/excluded.txt", files=[".github/prompts/excluded.txt"],
+		sandbox_origin_url="https://github.com/test-harness/coding-workflows.git",
 	)
 	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=no_staged_changes" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
