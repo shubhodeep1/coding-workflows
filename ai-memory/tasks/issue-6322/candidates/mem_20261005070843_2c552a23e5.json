@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: When the guard cannot tell which repository a `git push` goes to (for example `GIT_DIR+=`, `GIT_WORK_TREE+=`, a `cd` to a variable path, or `pushd`/`eval`), what should it do once it prints only one JSON object?\nChoices:\nA. Hard block: exit 2 with a message telling Claude to re-run the push with a literal directory (for example `git -C <path> push` or `GIT_DIR=<path>/.git`) so the repository can be checked. This changes behavior: any push the guard can't resolve now fails until it is rewritten.\nB. Keep today's behavior of asking the user to confirm. Combine the warnings and confirmation reasons from all targets into one JSON object that carries `permissionDecision: ask`, so Claude Code always receives the prompt. (RECOMMENDED)\nC. Hybrid: hard block only when an append-style override (`GIT_DIR+=` / `GIT_WORK_TREE+=`) or `eval`/`source` makes the repository unresolvable. Every other unresolved case (unresolved destination or source, bulk push, variable `cd`) keeps the single combined `ask`.\n**Note:** with every option, every exit path of the hook prints at most one JSON object. A and C only change which unresolved cases end with exit 2 instead of `ask`.",
+  "fingerprint": "1ccf27fca16a217b3cc5b91e4b7b1be41e92a082d12d61a6f9a65850fd467c1c",
+  "lineage": {
+    "issue_number": 6322,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37275256759",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37275256759",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005070843_2c552a23e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6322,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37275256759"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6322 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T07:08:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
