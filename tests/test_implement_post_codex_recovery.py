@@ -2432,24 +2432,24 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 			shutil.rmtree(case_dir)
 
 
-def test_bulk_delete_handler_records_snapshot_only_for_bulk_rejection(tmp_path: Path) -> None:
+def test_bulk_delete_handler_records_snapshot_only_for_bulk_rejection() -> None:
 	for reason in ("bulk-delete", "canonical-source", ""):
-		case_dir = tmp_path / (reason or "scope")
-		case_dir.mkdir()
-		proc, state, _ = _run_guard_handler_case(case_dir, repository="owner/consumer",
-			destructive_reason=reason, scope_reason="files-touched" if not reason else "")
-		assert proc.returncode != 0
-		snapshot_path = case_dir / "runtime/destructive_rejection/destructive_rejection.json"
-		assert snapshot_path.exists() == (reason == "bulk-delete")
-		if reason == "bulk-delete":
-			assert json.loads(snapshot_path.read_text()) == {
-				"schema": "destructive_rejection.v1", "issue": 948, "run_id": 777,
-				"run_attempt": 1, "reason": "bulk-delete", "paths": ["agents.md"],
-			}
-			assert "rejection_snapshot=true" in (case_dir / "runtime/step_output.txt").read_text()
-			assert "<!-- ai:destructive-rejection:v1 item=948 run=777 attempt=1 -->" in state["issue_comments"][0]["body"]
-		else:
-			assert not (case_dir / "runtime/step_output.txt").exists()
+		with tempfile.TemporaryDirectory(prefix="test_bulk_delete_snapshot_") as td:
+			case_dir = Path(td)
+			proc, state, _ = _run_guard_handler_case(case_dir, repository="owner/consumer",
+				destructive_reason=reason, scope_reason="files-touched" if not reason else "")
+			assert proc.returncode != 0
+			snapshot_path = case_dir / "runtime/destructive_rejection/destructive_rejection.json"
+			assert snapshot_path.exists() == (reason == "bulk-delete")
+			if reason == "bulk-delete":
+				assert json.loads(snapshot_path.read_text()) == {
+					"schema": "destructive_rejection.v1", "issue": 948, "run_id": 777,
+					"run_attempt": 1, "reason": "bulk-delete", "paths": ["agents.md"],
+				}
+				assert "rejection_snapshot=true" in (case_dir / "runtime/step_output.txt").read_text()
+				assert "<!-- ai:destructive-rejection:v1 item=948 run=777 attempt=1 -->" in state["issue_comments"][0]["body"]
+			else:
+				assert not (case_dir / "runtime/step_output.txt").exists()
 
 
 def test_destructive_snapshot_upload_wiring() -> None:
