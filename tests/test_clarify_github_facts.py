@@ -48,6 +48,16 @@ def test_cross_repository_references_are_listed_not_read() -> None:
 	assert refs["cross_repo"] == [("issue", "other/repo", 5), ("run", "other/repo", 9)]
 
 
+def test_cross_repository_branches_are_listed_not_read() -> None:
+	refs = _refs("Check `feature/x` in other/repo; Integration branch: `ai/issue-9` in other/repo; `feature/x` in owner/repo.")
+	assert refs["branches"] == [(REPO, "feature/x")]
+	assert refs["cross_repo"] == [("branch", "other/repo", "ai/issue-9"), ("branch", "other/repo", "feature/x")]
+	assert facts.collect(refs, REPO, _Runner((0, json.dumps({"data": {"r0": {"b0": None}}}))))[0][-2:] == [
+		"- Branch `ai/issue-9` in other/repo: not read (cross-repository)",
+		"- Branch `feature/x` in other/repo: not read (cross-repository)",
+	]
+
+
 def test_explicit_consumer_branch_is_read_from_its_own_repo() -> None:
 	refs = _refs("Check if `feature/x` exists in other/repo; `feature/x` in owner/repo. "
 		"Integration branch: `ai/issue-9` in other/repo. Skip `secret/x` in private/repo.",
@@ -69,7 +79,7 @@ def test_explicit_consumer_branch_is_read_from_its_own_repo() -> None:
 	lines, stats = facts.collect(refs, REPO, runner)
 	assert "- Branch `feature/x` in other/repo: exists at abcdefabcdef" in lines
 	assert "- Branch `feature/x` in owner/repo: does not exist" in lines
-	assert not any("private/repo" in line for line in lines)
+	assert "- Branch `secret/x` in private/repo: not read (cross-repository)" in lines
 	assert stats == {"graphql_calls": 1, "rest_calls": 0, "errors": 0}
 
 
@@ -225,7 +235,7 @@ def test_query_and_collect_never_read_foreign_repositories() -> None:
 
 def test_only_cross_repository_refs_make_no_api_calls(tmp_path: Path, capsys) -> None:
 	text = tmp_path / "t.txt"
-	text.write_text("other/repo#5 https://github.com/other/repo/actions/runs/9", encoding="utf-8")
+	text.write_text("other/repo#5 https://github.com/other/repo/actions/runs/9 `feature/x` in other/repo `feature/x` in other/repo", encoding="utf-8")
 	output = tmp_path / "facts.txt"
 	runner = _Runner((0, "{}"))
 	assert facts.main(["--repo", REPO, "--text-file", str(text), "--output", str(output)], runner) == 0
@@ -233,8 +243,9 @@ def test_only_cross_repository_refs_make_no_api_calls(tmp_path: Path, capsys) ->
 	assert output.read_text(encoding="utf-8").splitlines()[1:] == [
 		"- other/repo#5: not read (cross-repository)",
 		"- Run other/repo 9: not read (cross-repository)",
+		"- Branch `feature/x` in other/repo: not read (cross-repository)",
 	]
-	assert json.loads(capsys.readouterr().out)["cross_repo"] == 2
+	assert json.loads(capsys.readouterr().out)["cross_repo"] == 3
 
 
 def test_cli_rejects_a_bad_repo_and_survives_a_missing_gh(tmp_path: Path) -> None:

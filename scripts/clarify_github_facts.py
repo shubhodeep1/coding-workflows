@@ -18,7 +18,7 @@ questions). References are extracted from them:
     of an `Integration branch:` line. Bare names belong to `--repo`;
     `feature/x` in (or exists in) `owner/repo` belongs to that repo;
   - workflow runs: `.../owner/repo/actions/runs/<id>` URLs.
-Only the current repository (`--repo`) is read. Issue, PR and run references
+Only the current repository (`--repo`) is read. Issue, PR, branch and run references
 to other repositories are listed as "not read (cross-repository)" (at most
 10). `--consumer-repos-file` is accepted but ignored for compatibility:
 issue authors must not be able to make the shared token read repositories
@@ -101,7 +101,7 @@ def extract_refs(text: str, repo: str, allowed: set[str], issue_number: int, che
 	issues: list[tuple[str, int]] = []
 	branches: list[tuple[str, str]] = []
 	runs: list[tuple[str, int]] = []
-	cross_repo: list[tuple[str, str, int]] = []
+	cross_repo: list[tuple[str, str, int | str]] = []
 
 	def add_issue(slug: str, number: int) -> None:
 		slug = slug.lower()
@@ -137,10 +137,14 @@ def extract_refs(text: str, repo: str, allowed: set[str], issue_number: int, che
 		qualified = BRANCH_REPO_RE.match(text[end:])
 		branch_repo = qualified.group(1).lower() if qualified else repo.lower()
 		branch_ref = (branch_repo, token)
-		if branch_repo not in allowed or branch_ref in branches or token in ("main", "stable", "master") or token.lower() in allowed:
+		if branch_ref in branches or token in ("main", "stable", "master") or token.lower() in allowed:
 			continue
 		if (is_integration and ".." not in token) or _is_branch(token, checkout, branch_repo == repo.lower()):
-			branches.append(branch_ref)
+			if branch_repo not in allowed:
+				if ("branch", branch_repo, token) not in cross_repo and len(cross_repo) < MAX_CROSS_REPO:
+					cross_repo.append(("branch", branch_repo, token))
+			else:
+				branches.append(branch_ref)
 	return {"issues": issues[:MAX_ISSUES], "branches": branches[:MAX_BRANCHES], "runs": runs[:MAX_RUNS], "cross_repo": cross_repo}
 
 
@@ -238,6 +242,8 @@ def collect(refs: dict, repo: str, runner: Runner) -> tuple[list[str], dict]:
 			lines.append(f"- {cross_slug}#{cross_number}: not read (cross-repository)")
 		elif cross_kind == "run":
 			lines.append(f"- Run {cross_slug} {cross_number}: not read (cross-repository)")
+		elif cross_kind == "branch":
+			lines.append(f"- Branch `{cross_number}` in {cross_slug}: not read (cross-repository)")
 	return lines, stats
 
 
