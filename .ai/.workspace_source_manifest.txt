@@ -216,6 +216,7 @@ changelog.d/6255-review-sandbox-transfer-diagnostics.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
 changelog.d/6293-numeric-push-refspec-redirect.md
 changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
+changelog.d/6321-merge-guard-empty-quote-fd.md
 changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6337-rb-judge-no-host-fallback.md
 changelog.d/6357-rb-judge-sandbox-fail-closed.md
@@ -289,6 +290,7 @@ docs/plans/replace-claude-sessions-with-cli-engine-plan.md
 docs/plans/review-autofix-deterministic-editor-failure-resume-plan.md
 docs/plans/review-blocked-approval-gate-trust-scope-plan.md
 docs/plans/security-pass-convergence-plan.md
+docs/plans/semble-overflow-off-lazy-bootstrap-plan.md
 docs/plans/symphony-inspired-improvements-plan.md
 docs/postmortems/2026-05-18-project-2734-stall.md
 docs/scripts-pending-removal.md

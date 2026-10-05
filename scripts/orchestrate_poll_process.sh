@@ -254,18 +254,33 @@ fi
 
 # The labels argument is the current issue's cycle-local snapshot, not the
 # model's output. A missing snapshot must never unlock an escalated judge.
+# judge-isolation-latch-cleared-on-label-fetch-failure: as in the RB-judge
+# gate, a cycle snapshot may skip a judge but cannot prove a human cleared a latch.
 _judge_isolation_should_run()
 {
-  local role="$1" state_file="$2" issue="$3" labels="$4" entry escalated tracking_ref="-"
+  local role="$1" state_file="$2" issue="$3" labels="$4" entry escalated tracking_ref="-" fresh_labels_json live_has_label
   [ "${issue}" != "${TRACKING_NUM:-}" ] || tracking_ref="${issue}"
   entry="$(jq -c --arg role "${role}" 'if (.judge_isolation_state | type) == "object" then .judge_isolation_state[$role] // {} else {} end' "${state_file}" 2>/dev/null)" || return 1
   escalated="$(printf '%s' "${entry}" | jq -r '.escalated // false')"
   [ "${escalated}" = true ] || return 0
-  if ! printf '%s' "${labels}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=skip reason=labels_unavailable count=0 max=${JUDGE_ISOLATION_MAX_FAILURES}"
+  if printf '%s' "${labels}" | jq -e 'if type == "array" then any(.[]; . == "ai:needs-human") else false end' >/dev/null 2>&1; then
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=skip reason=escalated count=$(printf '%s' "${entry}" | jq -r '.count // 0') max=${JUDGE_ISOLATION_MAX_FAILURES}"
     return 1
   fi
-  if printf '%s' "${labels}" | jq -e 'any(.[]; . == "ai:needs-human")' >/dev/null 2>&1; then
+  if [[ "${issue}" =~ ^[0-9]+$ ]]; then
+    # TRACKING_LABELS / STALL_JUDGE_LABELS can contain [] after a failed fetch;
+    # candidate-details and linked-PR caches cannot prove label removal either.
+    # Read the full issue object (not the paginated /labels endpoint) before reset.
+    fresh_labels_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue}" --jq '{labels: (if (.labels | type) == "array" then [.labels[].name] else null end)}' 2>/dev/null || true)"
+  else
+    fresh_labels_json=''
+  fi
+  if ! printf '%s' "${fresh_labels_json}" | jq -e '(.labels | type == "array" and all(.[]; type == "string"))' >/dev/null 2>&1; then
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=skip reason=labels_unavailable count=$(printf '%s' "${entry}" | jq -r '.count // 0') max=${JUDGE_ISOLATION_MAX_FAILURES}"
+    return 1
+  fi
+  live_has_label="$(printf '%s' "${fresh_labels_json}" | jq -r '.labels | index("ai:needs-human") != null')"
+  if [ "${live_has_label}" = true ]; then
     echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=skip reason=escalated count=$(printf '%s' "${entry}" | jq -r '.count // 0') max=${JUDGE_ISOLATION_MAX_FAILURES}"
     return 1
   fi
@@ -2019,7 +2034,7 @@ resolve_orchestrator_engine_sha() {
   if ! [[ "${candidate}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
     candidate=""
     # A plain support directory inherits the consumer checkout's HEAD from git.
-    if [ -e .codex-workflow-src/.git ]; then
+    if [ ! -L .codex-workflow-src ] && [ -e .codex-workflow-src/.git ]; then
       candidate="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)"
       source="support_checkout"
     fi

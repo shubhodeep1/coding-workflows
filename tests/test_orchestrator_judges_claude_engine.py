@@ -543,7 +543,7 @@ def test_judge_isolation_defers_escalates_once_and_resets_on_label_removal(tmp_p
 		+ f'JUDGE_ISOLATION_MAX_FAILURES=2\nSTATE_FILE={state}\nGITHUB_REPOSITORY=owner/repo\n'
 		+ 'ensure_label_exists() { :; }\n'
 		+ 'post_state_comment() { :; }\n'
-		+ 'gh_retry() { printf "%s\\n" "$*" >> gh_calls; if [ "$1 $2" = "gh api" ]; then printf \'{"id":42}\\n\'; fi; }\n'
+		+ 'gh_retry() { printf "%s\\n" "$*" >> gh_calls; if [ "$1" = _safe_gh_jq ]; then printf \'{"labels":[]}\\n\'; elif [ "$1 $2" = "gh api" ]; then printf \'{"id":42}\\n\'; fi; }\n'
 		+ 'tg_notify() { printf "%s\\n" "$*" >> alerts; }\n'
 		+ '_record_judge_isolation_failure WAVE_JUDGE "$STATE_FILE" 12 \'[]\'\n'
 		+ '_record_judge_isolation_failure WAVE_JUDGE "$STATE_FILE" 12 \'[]\'\n'
@@ -558,7 +558,52 @@ def test_judge_isolation_defers_escalates_once_and_resets_on_label_removal(tmp_p
 	assert "outcome=reset reason=label_cleared" in result.stdout
 	assert _read(tmp_path / "gh_calls").count("gh issue edit") == 1
 	assert _read(tmp_path / "gh_calls").count("gh api") == 1
+	assert _read(tmp_path / "gh_calls").count("_safe_gh_jq repos/owner/repo/issues/12 --jq") == 1
 	assert _read(tmp_path / "alerts").count("CRITICAL") == 1
+
+
+@pytest.mark.parametrize("snapshot, live_labels, issue, escalated, expected_rc, reason, api_calls", [
+	('[]', '{"labels":[]}', '12', True, 0, 'label_cleared', 1),
+	('[]', '', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":[{"name":"ai:needs-human"}]}', '12', True, 1, 'escalated', 1),
+	('["ai:needs-human"]', '', '12', True, 1, 'escalated', 0),
+	('null', '{"labels":[]}', '12', True, 0, 'label_cleared', 1),
+	('[]', '{"number":12}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":null}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":{}}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":[{}]}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":[{"name":1}]}', '12', True, 1, 'labels_unavailable', 1),
+	('[]', 'not json', '12', True, 1, 'labels_unavailable', 1),
+	('[]', '{"labels":[]}', 'not-a-number', True, 1, 'labels_unavailable', 0),
+	('[]', '', '12', False, 0, None, 0),
+])
+def test_judge_isolation_requires_live_label_removal(
+	tmp_path: Path, snapshot: str, live_labels: str, issue: str, escalated: bool,
+	expected_rc: int, reason: str | None, api_calls: int,
+) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	functions = "\n".join(re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL).group(0)
+		for name in ("_judge_isolation_should_run", "_clear_judge_isolation_state"))
+	state = tmp_path / "state.json"
+	state.write_text(json.dumps({"judge_isolation_state": {"WAVE_JUDGE": {"count": 3, "escalated": escalated}}}), encoding="utf-8")
+	script = (
+		"set -euo pipefail\n" + functions
+		+ 'GITHUB_REPOSITORY=owner/repo\nJUDGE_ISOLATION_MAX_FAILURES=3\n'
+		+ f'STATE_FILE={state}\n'
+		+ 'gh_retry() { printf "%s\\n" "$*" >> gh_calls; '
+		+ (f"printf '%s\\n' '{live_labels}' | jq \"$4\"" if live_labels else "return 1")
+		+ '; }\n'
+		+ f'rc=0; _judge_isolation_should_run WAVE_JUDGE "$STATE_FILE" {issue} \'{snapshot}\' || rc=$?\n'
+		+ 'printf "rc=%s\\n" "$rc"\n'
+	)
+	env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")}
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert f"rc={expected_rc}" in result.stdout
+	if reason is not None:
+		assert f"reason={reason}" in result.stdout
+	assert _read(tmp_path / "gh_calls").count("_safe_gh_jq") == api_calls
+	assert ("WAVE_JUDGE" in json.loads(state.read_text(encoding="utf-8"))["judge_isolation_state"]) is (reason != "label_cleared")
 
 
 def _poll_steps() -> list[dict]:
@@ -632,6 +677,19 @@ def test_poll_preflight_installs_for_label_even_with_global_codex(tmp_path: Path
 	result = subprocess.run(["bash", "-c", preflight], cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	assert output_file.read_text(encoding="utf-8").strip() == "any_claude=true"
+
+
+def test_poll_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path: Path) -> None:
+	preflight = next(step["run"] for step in _poll_steps() if step.get("name") == "Resolve AI engine")
+	(tmp_path / "tracking_issues.json").write_text('[{"number":1,"labels":[]}]', encoding="utf-8")
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "ai_engine.sh").write_text("return 42\n", encoding="utf-8")
+	output_file = tmp_path / "github_output"
+	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "claude"}
+	result = subprocess.run(["bash", "-c", preflight], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert output_file.read_text(encoding="utf-8").strip() == "any_claude=false"
+	assert "Failed to source scripts/ai_engine.sh; continuing with codex defaults." in result.stderr
 
 
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
@@ -727,3 +785,17 @@ def test_orchestrate_job_resolves_the_engine_from_the_engine_input() -> None:
 		assert steps[name]["if"] == "steps.ai_engine.outputs.engine == 'claude'"
 		assert names.index("Resolve AI engine") < names.index(name) < names.index("Run Codex (decomposer)")
 	assert "write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl; do" in steps["Stage workflow support files"]["run"]
+
+
+def test_decomposer_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path: Path) -> None:
+	preflight = _orchestrate_steps()["Resolve AI engine"]["run"]
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "ai_engine.sh").write_text("return 42\n", encoding="utf-8")
+	output_file = tmp_path / "github_output"
+	env = {**os.environ, "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "claude"}
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(inherited, None)
+	result = subprocess.run(["bash", "-c", preflight], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert output_file.read_text(encoding="utf-8").strip() == "engine=codex"
+	assert "Failed to source scripts/ai_engine.sh; continuing with codex defaults." in result.stderr

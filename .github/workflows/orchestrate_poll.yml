@@ -717,12 +717,15 @@ jobs:
           fi
           if [ -f scripts/ai_engine.sh ] && jq -e 'any(.[]; all(.labels[]?; .name != "ai:codex"))' "${RUNTIME_DIR}/tracking_issues.json" >/dev/null; then
             # shellcheck source=/dev/null
-            source scripts/ai_engine.sh
-            for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE; do
-              if [ "$(ai_engine_for_role "${role}" || echo codex)" = "claude" ]; then
-                any_claude=true
-              fi
-            done
+            if source scripts/ai_engine.sh; then
+              for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE; do
+                if [ "$(ai_engine_for_role "${role}" || echo codex)" = "claude" ]; then
+                  any_claude=true
+                fi
+              done
+            else
+              echo "::warning::Failed to source scripts/ai_engine.sh; continuing with codex defaults." >&2
+            fi
           fi
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 

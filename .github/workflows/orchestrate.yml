@@ -566,8 +566,11 @@ jobs:
           engine="codex"
           if [ -f scripts/ai_engine.sh ]; then
             # shellcheck disable=SC1091
-            source scripts/ai_engine.sh
-            engine="$(ai_engine_for_role ORCHESTRATE || echo codex)"
+            if source scripts/ai_engine.sh; then
+              engine="$(ai_engine_for_role ORCHESTRATE || echo codex)"
+            else
+              echo "::warning::Failed to source scripts/ai_engine.sh; continuing with codex defaults." >&2
+            fi
           fi
           [ "${engine}" = "claude" ] || engine="codex"
           echo "engine=${engine}" >> "$GITHUB_OUTPUT"
