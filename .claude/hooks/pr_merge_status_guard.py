@@ -1463,6 +1463,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				unverified_destinations.add("could not resolve git push options or refspec")
 				continue
 			if target.remote and target.remote != "origin":
+				# Even a matching explicit URL may be rewritten by url.*.insteadOf.
+				if "://" in target.remote or target.remote.startswith("git@"):
+					unverified_destinations.add("explicit push URL may be rewritten by Git configuration")
+					continue
 				with _git_environment(target.environment):
 					checkout_slug = repo_slug(target.cwd)
 				push_slug = extract_repo_slug(target.remote)

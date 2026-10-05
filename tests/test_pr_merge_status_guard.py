@@ -832,6 +832,7 @@ def test_commit_in_merged_worktree_is_not_judged_from_main_checkout(merged_branc
 
 
 def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch_repo) -> None:
+	"""Legacy name: unresolved worktrees now require confirmation, not checkout fallback."""
 	repo, stub_bin = merged_branch_repo
 	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD:feature/open")
 	assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -1097,6 +1098,10 @@ def test_appended_git_directory_push_asks_without_origin_lookup(merged_branch_re
 	"git push --repo=https://github.com/other/repo HEAD:feature/x",
 	"git push --rep https://github.com/other/repo HEAD:feature/x",
 	"git push https://github.com/other/repo HEAD:feature/x",
+	"git push https://github.com/o/r.git HEAD:feature/x",
+	"git push --repo=origin https://github.com/o/r.git HEAD:feature/x",
+	"git push --repo=https://github.com/o/r.git",
+	"git push git@github.com:o/r.git HEAD:feature/x",
 	"git push --repo=upstream",
 	"git push --repo upstream",
 	"git push --rep upstream",
@@ -1115,6 +1120,8 @@ def test_push_to_unverified_repository_requires_confirmation(merged_branch_repo,
 	decision = json.loads(output.splitlines()[-1])
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
 	assert "private" not in output
+	if "github.com/o/r.git" in command:
+		assert "explicit push URL may be rewritten" in output
 
 
 @pytest.mark.parametrize("command", [
@@ -1283,7 +1290,7 @@ def test_deletion_and_tag_only_pushes_to_other_repository_ask(merged_branch_repo
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
-@pytest.mark.parametrize("remote", ["origin", "https://github.com/o/r.git"])
+@pytest.mark.parametrize("remote", ["origin"])
 def test_deletion_on_origin_does_not_check_merged_pr(merged_branch_repo, monkeypatch, capsys, remote: str) -> None:
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("deletions must not check PR history"))
@@ -1293,7 +1300,18 @@ def test_deletion_on_origin_does_not_check_merged_pr(merged_branch_repo, monkeyp
 	assert "permissionDecision" not in capsys.readouterr().out
 
 
-def test_explicit_origin_url_still_checks_origin_pr(merged_branch_repo, monkeypatch) -> None:
+@pytest.mark.parametrize("args", [":feature/x", "--delete feature/x", "--tags"])
+def test_same_slug_explicit_url_asks_for_deletion_and_tags(merged_branch_repo, monkeypatch, capsys, args: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *unused: pytest.fail("must not query origin"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"git push https://github.com/o/r.git {args}"}})
+	assert code == 0 and message == ""
+	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_explicit_origin_url_still_checks_origin_pr(merged_branch_repo, monkeypatch, capsys) -> None:
+	"""Legacy name: even a matching explicit URL now asks without an origin lookup."""
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
 	lookups: list[tuple[str, str]] = []
@@ -1305,8 +1323,9 @@ def test_explicit_origin_url_still_checks_origin_pr(merged_branch_repo, monkeypa
 	monkeypatch.setattr(guard, "query_pull_requests", listing)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": "git push --repo=https://github.com/other/repo https://github.com/o/r.git HEAD:feature/x"}})
-	assert code == 2 and "Branch `feature/x`" in message
-	assert lookups == [("o/r", "feature/x")]
+	assert code == 0 and message == ""
+	assert lookups == []  # URL rewriting means origin's PR history cannot authorize this push.
+	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
 @pytest.mark.parametrize("command", [

@@ -1256,6 +1256,9 @@ repository with `--repo` or a positional remote asks for confirmation rather
 than treating the checkout's origin PR history as proof that the push is safe.
 When both are supplied, Git uses the positional repository; the guard checks
 that destination, not the `--repo` fallback.
+An explicit push URL asks even when its slug matches `origin`: Git may rewrite
+the URL with `url.*.insteadOf` or `pushInsteadOf`. The guard does not query
+origin PR history for that push, including deletion-only or tag-only pushes.
 Pushes with per-command Git configuration (`git -c` or `--config-env`) also ask:
 an override can redirect `origin`, so the guard does not use its stored PR history.
 The same confirmation applies to inline `GIT_CONFIG_*` or `GIT_CONFIG`

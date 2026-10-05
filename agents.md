@@ -656,6 +656,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   destination requests human confirmation instead of silently checking the
   checkout's origin. A positional repository overrides `--repo` when both
   are supplied; without a positional repository, `--repo` is the fallback.
+  Explicit URL destinations request confirmation even when their slug matches
+  origin, since Git's `url.*.insteadOf` or `pushInsteadOf` can rewrite the URL.
+  Deletion-only and tag-only pushes to such URLs follow the same rule.
   Remote URLs are never printed in the prompt (they may
   contain credentials). Pushes with `git -c`, `--config-env`, or inline
   `GIT_CONFIG_*` or `GIT_CONFIG` assignments, or an `env` wrapper, ask too:
