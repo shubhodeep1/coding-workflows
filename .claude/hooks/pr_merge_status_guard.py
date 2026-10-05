@@ -14,10 +14,9 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories fall back to the
-session checkout with a warning; pushes from those directories also request
-confirmation if the checkout check does not block. Unresolved push sources or
-destinations request confirmation. Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unknown directories warn and fall back to
+the session checkout check; unresolvable explicit push targets require
+confirmation. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 
 Detection rule — all three conditions must hold before the command is blocked:
@@ -248,6 +247,13 @@ def _shell_segments(command: str) -> list[list[str]]:
 	return segments
 
 
+def _is_unquoted_fd_prefix(command: str, digits: str, operator: str) -> bool:
+	"""Only recognize a literal descriptor immediately before a redirect."""
+	return re.search(
+		r"(?:^|[\s;&|()])" + re.escape(digits) + re.escape(operator[0]) + r"$", command
+	) is not None
+
+
 def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	"""Return simple commands and the operator preceding each one.
 
@@ -262,30 +268,37 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
-	redirect_fd = False
+	last_token_attached_redirect = False
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
-			redirect_fd = False
+			last_token_attached_redirect = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			if redirect_fd and segment:
+			if (
+				segment and token[0] in "<>" and last_token_attached_redirect
+			):
 				segment.pop()
 			redirect_target = True
-			redirect_fd = False
+			last_token_attached_redirect = False
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
 				result.append((operator, segment))
 				segment = []
 			operator = token
+			last_token_attached_redirect = False
 		else:
 			segment.append(token)
-			# shlex has read one character ahead: only an adjacent, unquoted
-			# integer is an IO_NUMBER, not a numeric push refspec.
-			redirect_fd = bool(token.isdigit() and re.search(
-				r"(?:^|[\s;&|])\d+[<>]$", command[:lexer.instream.tell()]
-			))
+			# shlex has read the next punctuation character by the time it
+			# returns a word; anchor to that position, not another redirect.
+			last_token_attached_redirect = (
+				bool(re.fullmatch(r"[0-9]+", token))
+				and (
+					_is_unquoted_fd_prefix(command[:lexer.instream.tell()], token, ">")
+					or _is_unquoted_fd_prefix(command[:lexer.instream.tell()], token, "<")
+				)
+			)
 	if segment:
 		result.append((operator, segment))
 	return result
@@ -478,11 +491,17 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		return []  # Deletes do not strand new commits on a branch.
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
-			"could not resolve git push options; checking the current branch instead")]
-	# A positional repository always consumes the first positional, even
-	# with --repo; --repo alone supplies no positional refspecs.
-	if remote_provided and not positionals:
-		refspecs = []
+			"could not resolve git push options; destination branch is unknown")]
+	if remote_provided and positionals:
+		with _git_environment(invocation.environment):
+			code, _, _ = _run(
+				["git", "config", "--get", f"remote.{positionals[0]}.url"],
+				invocation.cwd, _GIT_TIMEOUT_SECONDS,
+			)
+		if code not in (0, 1):
+			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+				"could not resolve git push positional repository; destination branch is unknown")]
+		refspecs = positionals[1:] if code == 0 else positionals
 	else:
 		refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
@@ -1308,6 +1327,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
@@ -1327,6 +1347,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				continue
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
+			if target.warning.startswith("could not resolve git push"):
+				unknown_destination_reasons.append(target.warning)
+				continue
 			if target.warning:
 				_warn(target.warning)
 			if target.tip != "HEAD":
@@ -1399,12 +1422,12 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		return 2, "\n\n".join(blocks)
 	unresolved_push_sources.extend(unresolved_push_destinations)
 	if bulk_reasons:
-		unresolved_push_sources.append(
+		unknown_destination_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
-	if unresolved_push_sources:
-		_request_confirmation(" ".join(unresolved_push_sources))
+	if unknown_destination_reasons or unresolved_push_sources:
+		_request_confirmation("; ".join(sorted(set(unknown_destination_reasons + unresolved_push_sources))))
 	return 0, ""
 
 

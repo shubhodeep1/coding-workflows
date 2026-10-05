@@ -1059,7 +1059,15 @@ not delete wrappers that are already present in `.github/workflows/`.
 > A push with a destination that cannot be resolved locally (such as
 > `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
 > If `--repo` and a positional remote are both supplied, the guard checks the
-> refspecs after that remote, not the remote name as a branch.
+> refspecs after that remote, not the remote name as a branch. If the local
+> remote-config lookup errors rather than reporting no such remote, the guard
+> asks instead of guessing which branch the push targets.
+
+> The merged-PR guard checks numeric push refspecs before a separate output
+> redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
+> or option leaves the destination unknown, it requests confirmation rather
+> than checking an unrelated current branch. A push with no refspec keeps the
+> existing current-branch check.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
