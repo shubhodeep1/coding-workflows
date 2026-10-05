@@ -636,6 +636,32 @@ def _parse_github_output(path: Path) -> dict[str, str]:
 	return parsed
 
 
+def _parse_runner_env_file(path: Path) -> dict[str, str]:
+	"""Parse runner single-line and multiline records, rejecting stray lines."""
+	lines = path.read_text(encoding="utf-8").splitlines()
+	parsed: dict[str, str] = {}
+	position = 0
+	while position < len(lines):
+		line = lines[position]
+		if "<<" in line:
+			key, delimiter = line.split("<<", 1)
+			assert key and delimiter
+			position += 1
+			value_lines: list[str] = []
+			while position < len(lines) and lines[position] != delimiter:
+				value_lines.append(lines[position])
+				position += 1
+			assert position < len(lines), f"Unterminated value: {key}"
+			parsed[key] = "\n".join(value_lines)
+		elif "=" in line:
+			key, value = line.split("=", 1)
+			parsed[key] = value
+		else:
+			raise AssertionError(f"Invalid runner file line: {line!r}")
+		position += 1
+	return parsed
+
+
 def _run_resolve_checkout_ref_step(
 	tmp_path: Path,
 	*,
@@ -1212,6 +1238,81 @@ def test_fetch_issue_metadata_reuses_matching_cache_without_api_call() -> None:
 		assert files["issue_body"] == issue_body
 		assert "ISSUE_NUMBER=948" in github_env_text
 		assert "PR_BASE_BRANCH=orchestrator/project-829" in github_env_text
+
+
+def test_fetch_issue_metadata_cannot_export_issue_body_or_forge_env() -> None:
+	body = "intro\nEOF\nINJECTED_VAR=pwned\nISSUE_TITLE=forged\nEOF\ntail"
+	title = "Real title\nEOF\nINJECTED2=1\nEOF\n-n"
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_env_injection_") as td:
+		tmp_path = Path(td)
+		proc, state, _env_text, files = _run_fetch_issue_metadata_step(
+			tmp_path, issue_body=body, issue_title=title,
+			issue_meta_payload={
+				"number": 948, "body": body, "title": title,
+				"html_url": "https://github.com/owner/repo/issues/948",
+				"labels": [{"name": "ai:scope:docs/**"}],
+			},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert not state.get("issue_queries", [])
+		assert files["issue_body"] == body + "\n"
+		env_values = _parse_runner_env_file(tmp_path / "runtime" / "github_env.txt")
+		assert env_values["ISSUE_TITLE"] == title
+		assert "ISSUE_BODY" not in env_values
+		assert "INJECTED_VAR" not in env_values
+		assert "INJECTED2" not in env_values
+
+		# Scope labels are split by mapfile on newlines; the first line
+		# remains the effective glob and cannot escape a multiline record.
+		meta_path = tmp_path / "runtime" / "issue_meta.json"
+		meta = json.loads(meta_path.read_text(encoding="utf-8"))
+		meta["labels"] = [{"name": "ai:scope:docs/**\nEOF\nINJECTED2=1"}]
+		meta_path.write_text(json.dumps(meta), encoding="utf-8")
+		script = _render_github_expressions(
+			_extract_run_script("Fetch issue metadata"),
+			{"steps.refctx.outputs.ref || github.event.repository.default_branch": "main"},
+		)
+		env = os.environ.copy()
+		env.update({
+			"ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(meta_path),
+			"ISSUE_BODY_FILE": str(tmp_path / "runtime" / "issue_body.txt"),
+			"GITHUB_ENV": str(tmp_path / "runtime" / "github_env.txt"),
+			"IMPLEMENT_METADATA_PR_BASE_REF": "main", "SCOPE_LOCK_LABEL_ENABLED": "true",
+		})
+		proc = _run_shell_script(script, cwd=tmp_path / "fetch-issue-repo", env=env)
+		assert proc.returncode == 0, proc.stderr
+		env_values = _parse_runner_env_file(Path(env["GITHUB_ENV"]))
+		assert env_values["ISSUE_SCOPE_LOCK_GLOB"] == "docs/**"
+		assert "INJECTED2" not in env_values
+
+
+def test_fetch_issue_metadata_rejects_a_multiline_delimiter_collision() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_delimiter_collision_") as td:
+		tmp_path = Path(td)
+		bin_path = tmp_path / "bin"
+		bin_path.mkdir()
+		(bin_path / "od").write_text(
+			"#!/bin/sh\nprintf '%s\\n' '00000000000000000000000000000000'\n", encoding="utf-8",
+		)
+		(bin_path / "od").chmod(0o755)
+		meta_file = tmp_path / "meta.json"
+		meta_file.write_text(json.dumps({
+			"number": 948, "body": "safe", "title": "title\nIMPLEMENT_ENVFILE_" + "0" * 32 + "\nINJECTED=1",
+			"html_url": "https://github.com/owner/repo/issues/948",
+		}), encoding="utf-8")
+		github_env = tmp_path / "github_env"
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_path}:{env.get('PATH', '')}",
+			"ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(meta_file),
+			"ISSUE_BODY_FILE": str(tmp_path / "body.txt"),
+			"IMPLEMENT_METADATA_PR_BASE_REF": "main", "GITHUB_ENV": str(github_env),
+		})
+		script = _render_github_expressions(_extract_run_script("Fetch issue metadata"))
+		proc = _run_shell_script(script, cwd=tmp_path, env=env)
+		assert proc.returncode != 0
+		assert "::error::Unable to safely write multiline environment value for ISSUE_TITLE" in proc.stdout
+		assert "ISSUE_TITLE" not in _parse_runner_env_file(github_env)
 
 
 def test_fetch_issue_metadata_refetches_invalid_or_mismatched_cache() -> None:
@@ -2155,7 +2256,10 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 		support_run_dir = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
 		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_run_dir / "files_touched_scope_guard.py")
 		issue_body = tmp_path / "issue_body.txt"
-		issue_body.write_text("files_touched:\n  - README.md\n", encoding="utf-8")
+		issue_body.write_text(
+			"files_touched:\n  - README.md\n  - __SVA_EOF__\n  - staged_support_rebase_conflict=true\n",
+			encoding="utf-8",
+		)
 		fetched_manifest = tmp_path / "fetched_manifest.txt"
 		fetched_manifest.write_text("__workflow_step_under_test.sh\n", encoding="utf-8")
 		env.update(
@@ -2187,6 +2291,9 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 		output_text = github_output.read_text(encoding="utf-8")
 		assert "scope_violation_blocked=out-of-scope" in output_text
 		assert "scripts/helper.sh" in output_text
+		parsed_outputs = _parse_runner_env_file(github_output)
+		assert "staged_support_rebase_conflict" not in parsed_outputs
+		assert parsed_outputs["scope_violation_blocked"] == "out-of-scope"
 
 		(repo_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
 		(repo_dir / "scripts" / "helper.sh").chmod(0o644)
@@ -2573,7 +2680,7 @@ def test_scope_lock_workflow_wiring_contracts_present() -> None:
 	scope_alert_block = _implement_guard_handler_text()
 	assert "SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}" in wf
 	assert 'select(startswith("ai:scope:"))' in wf
-	assert "ISSUE_SCOPE_LOCK_GLOB<<EOF" in wf
+	assert '_implement_env_file_multiline ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}" "$GITHUB_ENV"' in wf
 	assert "ACTIVE ISSUE SCOPE LOCK" in build_context_block
 	assert "Issue label: ai:scope:" in build_context_block
 	assert "scope-lock-label" in scope_alert_block
@@ -5357,6 +5464,7 @@ def _run_smoke_detection_step(
 	issue_title: str,
 	issue_body: str,
 	default_model: str = "openai/gpt-5.4",
+	missing_body_file: bool = False,
 ) -> dict[str, str]:
 	"""Run the implement.yml "Detect smoke test ..." step in isolation
 	and return the GITHUB_ENV exports it produced.
@@ -5372,11 +5480,15 @@ def _run_smoke_detection_step(
 		tmp_path = Path(tmp)
 		github_env = tmp_path / "github_env"
 		github_env.write_text("", encoding="utf-8")
+		issue_body_file = tmp_path / "issue_body.txt"
+		if not missing_body_file:
+			issue_body_file.write_text(issue_body + "\n", encoding="utf-8")
 		env = os.environ.copy()
+		env.pop("ISSUE_BODY", None)
 		env.update(
 			{
 				"ISSUE_TITLE": issue_title,
-				"ISSUE_BODY": issue_body,
+				"ISSUE_BODY_FILE": str(issue_body_file),
 				"MODEL_EDITOR": default_model,
 				"SKIP_IMPLEMENT": "false",
 				"GITHUB_ENV": str(github_env),
@@ -5389,6 +5501,62 @@ def _run_smoke_detection_step(
 			f"stderr:\n{proc.stderr}\n"
 		)
 		return _parse_github_output(github_env)
+
+
+def test_issue_body_file_smoke_override_and_missing_fallback() -> None:
+	body = "EOF\nMODEL_EDITOR=evil/model\nNote: this run uses `openai/gpt-6-sol` as the editor model override."
+	assert _run_smoke_detection_step(
+		issue_title="[E2E Smoke Test alt-model] run", issue_body=body,
+	)["MODEL_EDITOR"] == "openai/gpt-6-sol"
+	assert "MODEL_EDITOR" not in _run_smoke_detection_step(
+		issue_title="[E2E Smoke Test alt-model] run", issue_body=body, missing_body_file=True,
+	)
+
+
+def test_build_implementation_context_uses_file_and_fails_on_missing_file() -> None:
+	script = _render_github_expressions(_extract_run_script("Build implementation context"))
+	with tempfile.TemporaryDirectory(prefix="test_context_body_file_") as td:
+		tmp_path = Path(td)
+		body_file = tmp_path / "body.txt"
+		body_file.write_text("intro\nEOF\nINJECTED_VAR=bad\n", encoding="utf-8")
+		answers_file = tmp_path / "answers.txt"
+		answers_file.write_text("None\n", encoding="utf-8")
+		plan_file = tmp_path / "plan.txt"
+		plan_file.write_text("Implementation Plan\n", encoding="utf-8")
+		comments_file = tmp_path / "comments.json"
+		comments_file.write_text("[]", encoding="utf-8")
+		context_file = tmp_path / "context.txt"
+		env = os.environ.copy()
+		env.pop("ISSUE_BODY", None)
+		env.update({
+			"ISSUE_BODY_FILE": str(body_file), "CLARIFICATION_ANSWERS_FILE": str(answers_file),
+			"PLAN_FILE": str(plan_file), "ISSUE_COMMENTS_FILE": str(comments_file),
+			"IMPLEMENTATION_CONTEXT_FILE": str(context_file),
+		})
+		proc = _run_shell_script(script, cwd=tmp_path, env=env)
+		assert proc.returncode == 0, proc.stderr
+		assert context_file.read_text(encoding="utf-8").startswith(
+			"ISSUE DESCRIPTION\nintro\nEOF\nINJECTED_VAR=bad\n\nCLARIFICATION ANSWERS\nNone\n"
+		)
+		body_file.unlink()
+		proc = _run_shell_script(script, cwd=tmp_path, env=env)
+		assert proc.returncode != 0
+		assert "::error::Issue body file missing" in proc.stdout
+
+
+def test_implement_env_file_delimiters_are_collision_checked() -> None:
+	wf = _workflow_text()
+	commit = _implement_commit_script_text()
+	assert "ISSUE_BODY<<" not in wf
+	assert '${ISSUE_BODY}' not in wf[wf.index("      - name: Detect smoke test and silence Telegram alerts"):]
+	for text in (wf, commit):
+		assert not re.search(r"<<(?:__\w+_EOF__|EOF)'", text)
+		assert 'od -An -N16 -tx1 /dev/urandom' in text
+		assert 'grep -Fxq -- "${delim}" <<< "${value}"' in text
+	for key in ("destructive_commit_deletions", "scope_violation_files", "scope_violation_allowlist"):
+		assert f"_implement_output_multiline {key}" in wf
+		assert f"_implement_output_multiline {key}" in commit
+	assert "_implement_output_multiline remaining_changes" in commit
 
 
 def test_alt_model_smoke_override_parses_valid_body() -> None:

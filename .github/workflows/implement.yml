@@ -1615,23 +1615,26 @@ jobs:
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
-          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
-          # issue. It is passed via heredoc (not shell expansion) to prevent injection
-          # into shell commands. Downstream consumers must treat it as untrusted input.
+          # TRUST BOUNDARY: issue prose is untrusted. Only pass the body via
+          # ISSUE_BODY_FILE; never export it to every later step's environment.
+          _implement_env_file_multiline() {
+            local key="$1" value="$2" target_file="$3" delim hex collision_rc=0
+            hex="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')" || hex=""
+            delim="IMPLEMENT_ENVFILE_${hex}"
+            grep -Fxq -- "${delim}" <<< "${value}" || collision_rc=$?
+            if ! [[ "${hex}" =~ ^[0-9a-f]{32}$ ]] || [ "${collision_rc}" -ne 1 ]; then
+              echo "::error::Unable to safely write multiline environment value for ${key}."
+              exit 1
+            fi
+            printf '%s<<%s\n%s\n%s\n' "${key}" "${delim}" "${value}" "${delim}" >> "${target_file}"
+          }
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
             echo "PR_BASE_BRANCH=${PR_BASE_BRANCH}"
-            echo 'ISSUE_SCOPE_LOCK_GLOB<<EOF'
-            echo "${ISSUE_SCOPE_LOCK_GLOB}"
-            echo 'EOF'
-            echo 'ISSUE_TITLE<<EOF'
-            echo "${ISSUE_TITLE}"
-            echo 'EOF'
-            echo 'ISSUE_BODY<<EOF'
-            echo "${ISSUE_BODY}"
-            echo 'EOF'
           } >> "$GITHUB_ENV"
+          _implement_env_file_multiline ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}" "$GITHUB_ENV"
+          _implement_env_file_multiline ISSUE_TITLE "${ISSUE_TITLE}" "$GITHUB_ENV"
 
       - name: Detect smoke test and silence Telegram alerts
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1699,7 +1702,7 @@ jobs:
             # real issue body can never smuggle an override into a
             # production implement.
             #
-            # TRUST BOUNDARY: ISSUE_BODY is user-controlled. Validate the
+            # TRUST BOUNDARY: ISSUE_BODY_FILE holds user-controlled prose. Validate the
             # extracted token against the same shape regex the dispatcher
             # enforces (test-and-mark-stable.yml: ALT_EDITOR_MODEL
             # validation) and the same 128-char length cap before
@@ -1707,7 +1710,7 @@ jobs:
             # falls back to the workflow-level default MODEL_EDITOR
             # rather than failing the implement.
             if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test alt-model\]'; then
-              alt_model="$(printf '%s' "${ISSUE_BODY}" | grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
+              alt_model="$(grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' "${ISSUE_BODY_FILE:-/dev/null}" 2>/dev/null | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
               if [ -n "${alt_model:-}" ] \
                   && [ "${#alt_model}" -le 128 ] \
                   && printf '%s' "${alt_model}" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
@@ -1960,9 +1963,14 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
+          if [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
+            echo "::error::Issue body file missing"
+            exit 1
+          fi
           {
             echo "ISSUE DESCRIPTION"
-            printf '%s\n\n' "${ISSUE_BODY}"
+            cat "${ISSUE_BODY_FILE}"
+            echo
             echo "CLARIFICATION ANSWERS"
             cat "${CLARIFICATION_ANSWERS_FILE}"
             echo
@@ -3345,6 +3353,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          _implement_output_multiline() {
+            local key="$1" value="$2" hex delim collision_rc=0
+            hex="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')" || hex=""
+            delim="IMPLEMENT_ENVFILE_${hex}"
+            grep -Fxq -- "${delim}" <<< "${value}" || collision_rc=$?
+            if ! [[ "${hex}" =~ ^[0-9a-f]{32}$ ]] || [ "${collision_rc}" -ne 1 ]; then
+              echo "::error::Unable to safely write multiline output for ${key}."
+              return 1
+            fi
+            printf '%s<<%s\n%s\n%s\n' "${key}" "${delim}" "${value}" "${delim}" >> "$GITHUB_OUTPUT"
+          }
+
           TEMP_INDEX_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-index.XXXXXX")"
           VIRTUAL_CLEANUP_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-cleanup.XXXXXX")"
           cleanup() {
@@ -3502,10 +3522,8 @@ jobs:
               {
                 echo "destructive_commit_blocked=canonical-source"
                 echo "destructive_commit_count=${total_deletions}"
-                echo 'destructive_commit_deletions<<__DCD_EOF__'
-                printf '%s\n' "${deleted_staged}"
-                echo '__DCD_EOF__'
               } >> "$GITHUB_OUTPUT"
+              _implement_output_multiline destructive_commit_deletions "${deleted_staged}"
               exit 1
             fi
 
@@ -3518,10 +3536,8 @@ jobs:
                 echo "destructive_commit_count=${total_deletions}"
                 echo "destructive_commit_threshold_label=${threshold_label}"
                 echo "destructive_commit_effective_threshold=${effective_threshold}"
-                echo 'destructive_commit_deletions<<__DCD_EOF__'
-                printf '%s\n' "${deleted_staged}"
-                echo '__DCD_EOF__'
               } >> "$GITHUB_OUTPUT"
+              _implement_output_multiline destructive_commit_deletions "${deleted_staged}"
               exit 1
             fi
           fi
@@ -3629,13 +3645,9 @@ jobs:
                     {
                       echo "scope_violation_blocked=out-of-scope"
                       echo "scope_violation_count=${scope_count}"
-                      echo 'scope_violation_files<<__SVF_EOF__'
-                      printf '%s\n' "${scope_violations}" | sed '/^$/d'
-                      echo '__SVF_EOF__'
-                      echo 'scope_violation_allowlist<<__SVA_EOF__'
-                      printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
-                      echo '__SVA_EOF__'
                     } >> "$GITHUB_OUTPUT"
+                    _implement_output_multiline scope_violation_files "$(printf '%s\n' "${scope_violations}" | sed '/^$/d')"
+                    _implement_output_multiline scope_violation_allowlist "$(printf '%s\n' "${scope_allowlist}" | sed '/^$/d')"
                     rm -f "${scope_allowlist_file}"
                     exit 1
                   fi

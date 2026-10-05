@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Issue prose can no longer inject implementation job environment variables.** The implement workflow keeps the issue body in its existing file instead of exporting it to every later step, including the editor. The smoke override and implementation context read that file; remaining multiline issue-derived environment and guard outputs use collision-checked random delimiters.
