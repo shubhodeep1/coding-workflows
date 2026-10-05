@@ -6772,7 +6772,7 @@ run_security_pass_inline() {
   local verified_analysis_sha="${4:-}"
   local verified_recheck_refspec="${5:-}"
   local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
-  local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model
+  local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model security_audit_selected_engine
   local required_security_asset
 
   prior_security_status="$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
@@ -7045,9 +7045,14 @@ run_security_pass_inline() {
   set_tracking_phase_label "ai:security-pass"
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
 
+  security_audit_selected_engine="codex"
+  if [ -f "${_POLLER_AI_ENGINE_SH}" ] && source "${_POLLER_AI_ENGINE_SH}"; then
+    security_audit_selected_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" ai_engine_for_role SECURITY_AUDIT || echo codex)"
+  fi
+  [ "${security_audit_selected_engine}" = "claude" ] || security_audit_selected_engine="codex"
   effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
   if ! bash scripts/write_codex_config.sh --model "${effective_security_model}" --reasoning xhigh >/dev/null 2>"${audit_error_file}"; then
-    if [ "${AI_ENGINE_RESOLVED_SECURITY_AUDIT:-codex}" != "claude" ]; then
+    if [ "${security_audit_selected_engine}" != "claude" ]; then
       security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
       return 1
     fi
@@ -7055,7 +7060,9 @@ run_security_pass_inline() {
   fi
 
   local security_audit_run_rc=0
-  SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
+  AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \
+    AI_ENGINE_RESOLVED_SECURITY_AUDIT="${security_audit_selected_engine}" \
+    SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
     SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \

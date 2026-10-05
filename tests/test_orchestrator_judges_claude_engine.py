@@ -138,27 +138,39 @@ def test_poll_job_verifies_support_before_running_followup_steps() -> None:
 
 def test_security_pass_codex_config_failure_only_blocks_codex_selected_audit(tmp_path: Path) -> None:
 	text = POLLER.read_text(encoding="utf-8")
-	start = text.index('  effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"\n')
+	start = text.index('  security_audit_selected_engine="codex"\n')
 	end = text.index('  local security_audit_run_rc=0\n', start)
 	(tmp_path / "scripts").mkdir()
 	(tmp_path / "scripts" / "write_codex_config.sh").write_text("exit 1\n", encoding="utf-8")
+	(tmp_path / "scripts" / "ai_engine.sh").write_text(
+		'ai_engine_for_role() {\n'
+		'  if [[ "${AI_ENGINE_LABELS}" == *ai:codex* ]] || [ "${AI_ENGINE_SECURITY_AUDIT:-}" = codex ]; then echo codex; else echo claude; fi\n'
+		'}\n', encoding="utf-8")
 	script = (
 		"set -euo pipefail\n"
 		"security_pass_fail_closed() { echo \"$1\" > failure.txt; }\n"
+		"_POLLER_AI_ENGINE_SH=scripts/ai_engine.sh\n"
 		"check_audit_setup() {\nprior_security_status=pending\naudit_error_file=config.err\n"
 		+ text[start:end]
 		+ "}\ncheck_audit_setup\n"
 	)
-	for engine, expected_rc in (("claude", 0), ("codex", 1)):
+	for labels, override, expected_engine, expected_rc in (
+		('["ai:engine-claude"]', "", "claude", 0),
+		('["ai:codex","ai:engine-claude"]', "", "codex", 1),
+		('["ai:engine-claude"]', "codex", "codex", 1),
+	):
 		proc = subprocess.run(["bash", "-c", script], cwd=tmp_path,
-			env={**os.environ, "AI_ENGINE_RESOLVED_SECURITY_AUDIT": engine},
+			env={**os.environ, "TRACKING_LABELS": labels, "AI_ENGINE_SECURITY_AUDIT": override,
+				"AI_ENGINE_RESOLVED_SECURITY_AUDIT": "claude"},
 			capture_output=True, text=True, check=False)
 		assert proc.returncode == expected_rc, proc.stderr
-		if engine == "claude":
+		if expected_engine == "claude":
 			assert "Codex fallback will fail preflight" in proc.stdout
 			assert not (tmp_path / "failure.txt").exists()
 		else:
 			assert (tmp_path / "failure.txt").read_text(encoding="utf-8").strip() == "engine_unavailable"
+	assert 'AI_ENGINE_RESOLVED_SECURITY_AUDIT="${security_audit_selected_engine}" \\' in text
+	assert 'AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \\' in text
 
 
 def test_missing_ai_engine_returns_75(tmp_path: Path) -> None:
@@ -246,6 +258,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	process_env = steps[names.index("Process each tracking issue")]["env"]
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"):
 		assert process_env[f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
+	assert process_env["AI_ENGINE_SECURITY_AUDIT"] == "${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}"
 	assert process_env["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
 
 

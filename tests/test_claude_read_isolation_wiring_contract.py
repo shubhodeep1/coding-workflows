@@ -23,7 +23,8 @@ def test_smoke_accepts_filtered_history_snapshot() -> None:
 
 def test_heal_passes_only_created_worktrees_to_read_snapshot() -> None:
 	heal = (ROOT / "scripts/workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
-	assert 'AI_ENGINE_READ_EXTRA_DIRS="${heal_read_extra_dirs}"' in heal
+	assert 'RUNTIME_DIR="${RUNTIME_DIR}"' in heal
+	assert 'AI_ENGINE_ISOLATED_READ_PATHS="${heal_read_extra_dirs}"' in heal
 	assert '"${HEAL_SOURCE_NOTE:-unavailable (diagnose against the working directory)}" != "unavailable (diagnose against the working directory)"' in heal
 	assert '"${HEAL_BRANCH_TIP_NOTE:-unavailable}" != "unavailable"' in heal
-	assert heal.index('AI_ENGINE_READ_EXTRA_DIRS="${heal_read_extra_dirs}"') < heal.index("claude_run_selected WORKFLOW_HEAL")
+	assert heal.index('AI_ENGINE_ISOLATED_READ_PATHS="${heal_read_extra_dirs}"') < heal.index("claude_run_selected WORKFLOW_HEAL")

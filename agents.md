@@ -703,7 +703,10 @@ The host-side Anthropic relay retains OAuth credentials; the container sees
 only tracked-file snapshots, sanitized git metadata when history contains no
 filtered paths, shared worktrees or unreachable objects (otherwise no git
 metadata), the prompt and trusted support.
-The heal intake passes successfully checked-out `heal_src` / `heal_branch_tip`
+The poller resolves `SECURITY_AUDIT` from each tracking issue's cached labels
+and forwards that choice to the audit subprocess; the job-level choice only
+controls CLI and credential preparation. The heal intake passes successfully
+checked-out `heal_src` / `heal_branch_tip`
 through `AI_ENGINE_ISOLATED_READ_PATHS` so the strict WORKFLOW_HEAL path check
 applies; an unavailable checkout is not included. A failed Codex-config setup
 does not stop a Claude-selected orchestrator security audit, but the Codex
