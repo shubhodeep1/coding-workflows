@@ -264,8 +264,9 @@ _ai_engine_git_mask_configs()
 				keys_file="${run_dir}/git-mask/${count}/keys"
 				local git_rc=0
 				# Remote URLs can themselves contain an embedded username/password.
-				git config --file "${run_dir}/git-mask/${count}/config" --name-only --get-regexp '^(http\..*\.extraheader|credential\.|url\..*\.insteadof|include\.|includeif\.|remote\..*\.(url|pushurl))' > "${keys_file}" || git_rc=$?
+				git config --file "${run_dir}/git-mask/${count}/config" --name-only --get-regexp '^(http(\..*)?\.extraheader|credential\.|url\..*\.insteadof|include\.|includeif\.|remote\..*\.(url|pushurl))' > "${keys_file}" || git_rc=$?
 				case "${git_rc}" in 0|1) ;; *) return 1 ;; esac
+				sort -u -o "${keys_file}" "${keys_file}" || return 1
 				while IFS= read -r key; do
 					[ -n "${key}" ] || continue
 					git config --file "${run_dir}/git-mask/${count}/config" --unset-all "${key}" || return 1

@@ -442,6 +442,9 @@ def test_read_isolation_masks_checkout_credential_and_claude_md(sandbox: dict) -
 	_accounts(sandbox, A="TOK_OK")
 	subprocess.run(["git", "init", "-q", str(sandbox["work"])], check=True)
 	subprocess.run(["git", "-C", str(sandbox["work"]), "config", "http.https://github.com/.extraheader", "AUTHORIZATION: basic SECRET"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "config", "http.extraheader", "AUTHORIZATION: basic TOP_LEVEL_SECRET"], check=True)
+	for push_url in ("https://user:PASS_ONE@example.com/repo", "https://user:PASS_TWO@example.com/repo"):
+		subprocess.run(["git", "-C", str(sandbox["work"]), "config", "--add", "remote.origin.pushurl", push_url], check=True)
 	support = sandbox["tmp"] / "support"
 	(support / ".github" / "ai").mkdir(parents=True)
 	(support / ".github" / "ai" / "claude_engine.json").write_text('{"hide_claude_md": true}')
@@ -450,11 +453,14 @@ def test_read_isolation_masks_checkout_credential_and_claude_md(sandbox: dict) -
 	argv = _docker_calls(sandbox)[0]["argv"]
 	assert "SECRET" not in json.dumps(_docker_calls(sandbox))
 	assert "SECRET" in (sandbox["work"] / ".git" / "config").read_text()
+	assert "PASS_TWO" in (sandbox["work"] / ".git" / "config").read_text()
 	assert (sandbox["work"] / "CLAUDE.md").read_text() == "checkout CLAUDE.md\n"
 	assert any("empty-claude-md,dst=" in arg for arg in argv)
 	masks = [arg for arg in argv if "/git-mask/" in arg and "dst=" in arg]
 	assert len(masks) == 1
-	assert "extraheader" not in Path(masks[0].split("src=", 1)[1].split(",dst=", 1)[0]).read_text().lower()
+	masked_config = Path(masks[0].split("src=", 1)[1].split(",dst=", 1)[0]).read_text().lower()
+	assert "extraheader" not in masked_config
+	assert "pass_one" not in masked_config and "pass_two" not in masked_config
 
 
 def test_read_isolation_fails_closed_if_git_config_cannot_be_masked(sandbox: dict) -> None:
