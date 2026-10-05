@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: When cycles are exhausted and a high or critical finding is still open, what should happen once the bounded fix and re-audit budget is also spent? The budget is the existing `fix` retries, capped by `MAX_REVIEW_BLOCKED_RETRIES`, and each fix earns one more audit cycle.\nChoices:\nA) Hold the PR and never merge it. Turn a judge `merge` / `merge_with_followup` into `fix` while fix retries remain. In the final round, label the PR `ai:security-pass-failed` plus `ai:review-blocked`, send a CRITICAL alert, and leave the PR open until a clean audit of the current head or a human decision. (RECOMMENDED)\nB) Same as A while retries remain, but in the final round automatically use `close_and_reissue`, so a replacement issue starts again from the preserved baseline.\nC) Never auto-fix. Only refuse the merge (`judge_action=security_hold`) and leave the next step to the judge's other options or to a human.\nQ2: Which findings should block the merge?\nChoices:\nA) `high` and `critical`, plus any finding whose severity is missing or not recognised (fail closed). `medium` and `low` can still merge, with follow-up issues as they do today. (RECOMMENDED)\nB) Only findings that state `high` or `critical`. Unknown severity is treated as non-blocking.\nC) Every open finding, whatever its severity. The audit must be clean before any merge.\nQ3: Should this change also cover the orchestrator's project-level exhaustion judge? That judge can use `accept_with_followup` to waive high or critical findings (`security_pass_exhaustion_judge` in `scripts/orchestrate_poll_process.sh`, plus `MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS`, which turns `keep_fixing` into `accept_with_followup`).\nChoices:\nA) No. Limit the change to the single-issue review-blocked judge path the finding cites (`scripts/review_rb_judge_security_pass.sh` / `scripts/review_rb_judge.sh`), and file the orchestrator path as a separate issue if needed. (RECOMMENDED)\nB) Yes. Apply the same severity block to the orchestrator path in the same change, so the exhaustion judge and the keep-fixing cap can never waive high or critical findings.",
+  "fingerprint": "6a6ddf9d71768aec21f515be1da597a267d184e08767c0177d1a70da9770d44f",
+  "lineage": {
+    "issue_number": 6400,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37349159521",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37349159521",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005174044_5bf4676620",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6400,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37349159521"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6400 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T17:40:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
