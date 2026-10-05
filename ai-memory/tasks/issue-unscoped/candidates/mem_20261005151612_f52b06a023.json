@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_anthropic_relay.py:181-194 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The test declares a nonzero Content-Length but does not send the request body.\n  WHY: A server honoring Content-Length may wait for the declared bytes; severity differed (BLOCKER vs MAJOR), so the higher severity is retained, though other reviewers report this broker rejects on headers before reading the body.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_claude_anthropic_relay.py:181-190 | severity=BLOCKER | confidence=5\n  PROBLEM: The manually constructed HTTP request sets Content-Length but fails to send the request body.\n  WHY: The broker will likely wait indefinitely for the body or fail with a protocol error.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_claude_anthropic_relay.py:181-194 | severity=MAJOR | confidence=4\n  PROBLEM: The test declares Content-Length for the body but never sends the body itself.\n  WHY: A server that respects Content-Length waits for the declared bytes; this test currently terminates because the broker apparently validates headers and closes before reading the body.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7eea8d4bb2dd120ba2a803982cd55703352a7f9a4ef0b231aba376ae0935df3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6283,
+    "run_id": "37323660566",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37323660566",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005151612_f52b06a023",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6283,
+    "run_id": "37323660566"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T15:16:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
