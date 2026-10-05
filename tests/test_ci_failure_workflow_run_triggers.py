@@ -35,6 +35,9 @@ def _evaluate(expression: str, event_name: str, event: dict, variables: dict | N
 	"""Evaluate the small GitHub expression subset these `if:` blocks use."""
 	text = " ".join(expression.split())
 
+	def contains_ci(haystack, needle):
+		return str(needle).lower() in (str(item).lower() for item in haystack)
+
 	def lookup(path: str):
 		root, *rest = path.split(".")
 		value = {"github": {"event_name": event_name, "event": event}, "vars": variables or {}}[root]
@@ -48,20 +51,21 @@ def _evaluate(expression: str, event_name: str, event: dict, variables: dict | N
 		return value
 
 	python = text
-	python = re.sub(r"!contains\(fromJson\('(\[[^\]]*\])'\), ([\w.\[\]]+)\)", lambda m: f"(not (lookup('{m.group(2)}') in {m.group(1)}))", python)
-	python = re.sub(r"contains\(fromJson\('(\[[^\]]*\])'\), ([\w.\[\]]+)\)", lambda m: f"(lookup('{m.group(2)}') in {m.group(1)})", python)
+	python = re.sub(r"!contains\(fromJson\('(\[[^\]]*\])'\), ([\w.\[\]]+)\)", lambda m: f"(not contains_ci({m.group(1)}, lookup('{m.group(2)}')))", python)
+	python = re.sub(r"contains\(fromJson\('(\[[^\]]*\])'\), ([\w.\[\]]+)\)", lambda m: f"contains_ci({m.group(1)}, lookup('{m.group(2)}'))", python)
 	python = re.sub(r"!startsWith\(([\w.\[\]]+), '([^']*)'\)", lambda m: f"(not str(lookup('{m.group(1)}') or '').startswith('{m.group(2)}'))", python)
 	python = re.sub(r"!contains\(([\w.\[\]]+), '([^']*)'\)", lambda m: f"(not ('{m.group(2)}' in str(lookup('{m.group(1)}') or '')))", python)
 	python = re.sub(r"(?<!lookup\(')\b(github\.[\w.\[\]]+)", lambda m: f"lookup('{m.group(1)}')", python)
 	python = python.replace("&&", " and ").replace("||", " or ").replace("!= null", "is not None")
 	python = python.replace("'false'", "'false'")
-	return bool(eval(python, {"lookup": lookup}))  # noqa: S307 - test-only evaluator over checked-in YAML
+	return bool(eval(python, {"lookup": lookup, "contains_ci": contains_ci}))  # noqa: S307 - test-only evaluator over checked-in YAML
 
 
-def _run_event(name: str, *, conclusion: str = "failure", event: str = "pull_request", prs: int = 1, branch: str = "feature") -> dict:
+def _run_event(name: str, *, conclusion: str = "failure", event: str = "pull_request", prs: int = 1, branch: str = "feature", path: str = ".github/workflows/test.yml") -> dict:
 	return {
 		"workflow_run": {
 			"name": name,
+			"path": path,
 			"conclusion": conclusion,
 			"event": event,
 			"head_branch": branch,
@@ -122,13 +126,17 @@ def test_consumer_wrapper_listens_to_every_workflow_but_its_own() -> None:
 	assert _evaluate(condition, "workflow_run", _run_event("AI Integration Tests"))
 	names = {_load(path)["name"] for path in (REPO_ROOT / "workflow-templates").glob("*.yml")}
 	assert names and all(name.startswith("AI ") for name in names), sorted(names)
+	paths = {f".github/workflows/{path.name}" for path in (REPO_ROOT / "workflow-templates").glob("*.yml")}
 	excluded_names_match = re.search(
-		r"!contains\(fromJson\('([^']+)'\), github\.event\.workflow_run\.name\)", condition,
+		r"!contains\(fromJson\('([^']+)'\), github\.event\.workflow_run\.path\)", condition,
 	)
 	assert excluded_names_match
-	assert set(json.loads(excluded_names_match.group(1))) == names
-	for own in names:
-		assert not _evaluate(condition, "workflow_run", _run_event(own)), own
+	assert set(json.loads(excluded_names_match.group(1))) == paths
+	for own in paths:
+		assert not _evaluate(condition, "workflow_run", _run_event("Any name", path=own)), own
+	assert _evaluate(condition, "workflow_run", _run_event("AI Clarify"))
+	assert _evaluate(condition, "workflow_run", _run_event("ai clarify"))
+	assert not _evaluate("!contains(fromJson('[\"AI Clarify\"]'), github.event.workflow_run.name)", "workflow_run", _run_event("ai clarify"))
 
 
 def test_heal_intake_takes_ci_only_for_pushes_to_the_default_branch() -> None:

@@ -12,7 +12,7 @@ on:
   check_run:
     types: [completed]
   # GitHub Actions CI (see the triage-workflow-run job). The wildcard listens
-  # to every workflow; the job skips the pipeline's own named workflows and
+  # to every workflow; the job skips the pipeline's own workflow paths and
   # anything that is not a failed pull-request run.
   workflow_run:
     workflows: ["*"]
@@ -49,7 +49,7 @@ jobs:
   # GitHub never sends check_run events for checks created by GitHub Actions
   # ("to prevent recursive workflows"), so the job above never fires for
   # Actions CI. This job triages the failed workflow run instead (any
-  # workflow but the pipeline's own named ones): the check name is the
+  # workflow but the pipeline's own wrapper paths): the check name is the
   # workflow name, so repeated failures share one open issue per PR and
   # workflow. The diagnosis reads every failing check on the PR head.
   triage-workflow-run:
@@ -60,7 +60,7 @@ jobs:
        github.event.workflow_run.conclusion == 'timed_out') &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.pull_requests[0] != null &&
-      !contains(fromJson('["AI Cancel on PR Close","AI Check Failure Triage","AI Clarify","AI Implement","AI Issue PR Status","AI Memory Maintenance","AI Orchestrate Clarify Respond","AI Orchestrate Poller","AI Orchestrate","AI Plan","AI Review","AI Security Audit","AI Sync Labels","AI Update Workflows","AI Validate","AI Workflow Failure Heal","AI Review-Blocked Judge Dispatch"]'), github.event.workflow_run.name)
+      !contains(fromJson('[".github/workflows/ai-cancel-on-pr-close.yml",".github/workflows/ai-check-failure-triage.yml",".github/workflows/ai-clarify.yml",".github/workflows/ai-implement.yml",".github/workflows/ai-issue-pr-status.yml",".github/workflows/ai-memory-maintenance.yml",".github/workflows/ai-orchestrate-clarify-respond.yml",".github/workflows/ai-orchestrate-poll.yml",".github/workflows/ai-orchestrate.yml",".github/workflows/ai-plan.yml",".github/workflows/ai-review.yml",".github/workflows/ai-security-audit.yml",".github/workflows/ai-sync-labels.yml",".github/workflows/ai-update-workflows.yml",".github/workflows/ai-validate.yml",".github/workflows/ai-workflow-failure-heal.yml",".github/workflows/review_rb_judge_dispatch.yml"]'), github.event.workflow_run.path)
     uses: shubhodeep1/coding-workflows/.github/workflows/check_failure_triage.yml@stable
     with:
       pr_number: ${{ github.event.workflow_run.pull_requests[0].number }}

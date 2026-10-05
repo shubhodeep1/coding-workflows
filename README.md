@@ -1217,8 +1217,8 @@ the way to a fix PR without human action.
   GitHub Actions created ("to prevent recursive workflows"), so before this
   job the triage never ran for Actions CI. This repo's wrapper listens to the
   `CI` workflow; the consumer wrapper uses `workflows: ["*"]` to listen to
-  every workflow and skips the shipped pipeline workflow names (not custom
-  workflows merely named `AI …`), so each
+  every workflow and skips the shipped pipeline wrapper paths (not custom
+  workflows sharing a pipeline name, regardless of casing), so each
   finished workflow also leaves a skipped wrapper run in the Actions tab. Each failed run is evaluated,
   but an existing open triage issue for the same PR and workflow suppresses a
   duplicate; the diagnosis reads every failing check on the PR head. The
