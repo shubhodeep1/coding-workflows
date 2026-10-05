@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_engine_utility_roles.py:~line 198-228 in LAST RUN DIFF | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: The monkeypatch may not modify the heal script\u2019s inputs if `_run_heal_block` invokes it with `bash <script>` rather than `bash -c`, leaving the invalid-support integrity checks unexercised.\n  WHY: In that case the tests could pass without testing the intended failure paths; reviewers note the invocation pattern cannot be verified from the available checkout, so the concern remains conditional.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_claude_engine_utility_roles.py: test_heal_claude_rejects_invalid_support (~line 200-228 in LAST RUN DIFF) | severity=high | confidence=[3]\n  PROBLEM: The monkeypatch only modifies the call when `command[:2] == [\"bash\", \"-c\"]`; if `_run_heal_block` invokes the script via `subprocess.run([\"bash\", script_path])`, the environment remains unmodified and the integrity-guard failure paths are not exercised.\n  WHY: The test could report misleading coverage and pass without challenging the integrity guard with invalid inputs.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Looking at the test file structure to verify the cross-pollination finding.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_claude_engine_utility_roles.py: test_heal_claude_rejects_invalid_support (parameterized, ~line 198-228 in LAST RUN DIFF) | severity=high | confidence=[3]\n  PROBLEM: The monkeypatch only fires for `command[:2] == [\"bash\", \"-c\"]`; if `_run_heal_block` invokes the script via `subprocess.run([\"bash\", str(script)], ...)`, the intended environment modifications and dirty-file setup do not happen.\n  WHY: The tests may fail to exercise the intended integrity-guard paths; the reviewer notes that the call pattern depends on the unseen `_run_heal_block` implementation.\n  Suggested minimal fix: Add `assert run_with_invalid_support.called` or a counter to verify the monkeypatch branch was hit.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "45ce66283ba80f6bcca0447d9af4d042ba50c88d2bb5da508aeed0dd2a47769a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37303966058",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37303966058",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005115521_03016f3b7d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37303966058"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T11:55:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
