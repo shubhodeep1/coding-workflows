@@ -1131,18 +1131,25 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -f scripts/clarify_data_provision_guard.py ]; then
-            echo "::notice::clarify_data_provision_guard.py not found; skipping data-provision guard."
-            exit 0
+            echo "::error::clarify_data_provision_guard.py not found; refusing to post unchecked answers."
+            exit 1
           fi
           if [ ! -f "${RUNTIME_DIR}/clarification_comment.txt" ] || [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
-            echo "::notice::Missing clarification or answer files; skipping data-provision guard."
-            exit 0
+            echo "::error::Missing clarification or answer files; refusing to post unchecked answers."
+            exit 1
           fi
 
           GUARDED_OUTPUT="${RUNTIME_DIR}/codex_output_guarded.txt"
+          EVIDENCE_ARGS=()
+          for evidence_file in "${RUNTIME_DIR}/issue_body.txt" "${RUNTIME_DIR}/github_facts.txt"; do
+            if [ -f "${evidence_file}" ]; then
+              EVIDENCE_ARGS+=(--evidence-file "${evidence_file}")
+            fi
+          done
           if python3 scripts/clarify_data_provision_guard.py \
             --clarification-file "${RUNTIME_DIR}/clarification_comment.txt" \
-            --answers-file "${CODEX_OUTPUT_FILE}" > "${GUARDED_OUTPUT}"; then
+            --answers-file "${CODEX_OUTPUT_FILE}" \
+            "${EVIDENCE_ARGS[@]}" > "${GUARDED_OUTPUT}"; then
             if ! diff -q "${CODEX_OUTPUT_FILE}" "${GUARDED_OUTPUT}" >/dev/null 2>&1; then
               echo "::warning::Data-provision guard overrode one or more answers to prevent circular clarification loop."
               echo "::group::Guard diff"
@@ -1153,7 +1160,8 @@ jobs:
               echo "Data-provision guard: no overrides needed."
             fi
           else
-            echo "::warning::Data-provision guard script failed (fail-open); using original answers."
+            echo "::error::Data-provision guard script failed; refusing to post unchecked answers."
+            exit 1
           fi
 
       - name: Parse and post answer

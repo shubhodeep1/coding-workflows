@@ -13,9 +13,10 @@ Input: one or more `--text-file` paths (the issue body and the clarification
 questions). References are extracted from them:
   - issues and PRs: `#123`, `owner/repo#123`, and
     `https://github.com/owner/repo/(issues|pull|pulls)/123`;
-  - branches: backticked names that contain `/` and are not a path in the
-    checkout (`orchestrator/project-857`, `ai/issue-4329`), plus the value
-    of an `Integration branch:` line;
+  - branches: backticked names that contain `/` and, for the current repo,
+    are not a path in the checkout (`orchestrator/project-857`, `ai/issue-4329`), plus the value
+    of an `Integration branch:` line. Bare names belong to `--repo`;
+    `feature/x` in (or exists in) `owner/repo` belongs to that repo;
   - workflow runs: `.../owner/repo/actions/runs/<id>` URLs.
 Only the current repository (`--repo`) is read. Issue, PR and run references
 to other repositories are listed as "not read (cross-repository)" (at most
@@ -64,6 +65,7 @@ RUN_REF_RE = re.compile(rf"https://github\.com/({NAME}/{NAME})/actions/runs/([1-
 BACKTICK_RE = re.compile(r"`([^`\s]{3,200})`")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)+$")
 INTEGRATION_RE = re.compile(r"Integration branch:\**\s*`?([A-Za-z0-9][A-Za-z0-9._/-]*[A-Za-z0-9])`?", re.IGNORECASE)
+BRANCH_REPO_RE = re.compile(rf"^`?\s+(?:in|exists in)\s+`?({NAME}/{NAME})(?<!\.)`?(?=$|[\s,.;:)])", re.IGNORECASE)
 
 Runner = Callable[[list[str]], tuple[int, str]]
 
@@ -85,10 +87,10 @@ def _title(value: object) -> str:
 	return text[:MAX_TITLE] + ("…" if len(text) > MAX_TITLE else "")
 
 
-def _is_branch(token: str, checkout: Path) -> bool:
+def _is_branch(token: str, checkout: Path, check_checkout_paths: bool = True) -> bool:
 	if not BRANCH_RE.match(token) or ".." in token or token.endswith((".lock", "/")):
 		return False
-	if (checkout / token).exists() or (checkout / token.split("/", 1)[0]).exists():
+	if check_checkout_paths and ((checkout / token).exists() or (checkout / token.split("/", 1)[0]).exists()):
 		return False
 	last = token.rsplit("/", 1)[-1]
 	return not re.search(r"\.[A-Za-z0-9]{1,5}$", last)
@@ -97,7 +99,7 @@ def _is_branch(token: str, checkout: Path) -> bool:
 def extract_refs(text: str, repo: str, allowed: set[str], issue_number: int, checkout: Path) -> dict:
 	"""Issue/PR, branch and run references in `text` that this script may read."""
 	issues: list[tuple[str, int]] = []
-	branches: list[str] = []
+	branches: list[tuple[str, str]] = []
 	runs: list[tuple[str, int]] = []
 	cross_repo: list[tuple[str, str, int]] = []
 
@@ -129,19 +131,23 @@ def extract_refs(text: str, repo: str, allowed: set[str], issue_number: int, che
 			runs.append(key)
 	# A backticked `owner/repo` looks like a one-slash branch; the allowed
 	# repositories are the only slugs that can matter here, so skip those.
-	integration = [match.group(1) for match in INTEGRATION_RE.finditer(text)]
-	for token in integration + [match.group(1) for match in BACKTICK_RE.finditer(text)]:
-		if token in branches or token in ("main", "stable", "master") or token.lower() in allowed:
+	branch_mentions = [(match.group(1), match.end(1), True) for match in INTEGRATION_RE.finditer(text)]
+	branch_mentions += [(match.group(1), match.end(), False) for match in BACKTICK_RE.finditer(text)]
+	for token, end, is_integration in branch_mentions:
+		qualified = BRANCH_REPO_RE.match(text[end:])
+		branch_repo = qualified.group(1).lower() if qualified else repo.lower()
+		branch_ref = (branch_repo, token)
+		if branch_repo not in allowed or branch_ref in branches or token in ("main", "stable", "master") or token.lower() in allowed:
 			continue
-		if (token in integration and ".." not in token) or _is_branch(token, checkout):
-			branches.append(token)
+		if (is_integration and ".." not in token) or _is_branch(token, checkout, branch_repo == repo.lower()):
+			branches.append(branch_ref)
 	return {"issues": issues[:MAX_ISSUES], "branches": branches[:MAX_BRANCHES], "runs": runs[:MAX_RUNS], "cross_repo": cross_repo}
 
 
-def build_query(repo: str, issues: list[tuple[str, int]], branches: list[str]) -> tuple[str, dict]:
+def build_query(repo: str, issues: list[tuple[str, int]], branches: list[tuple[str, str]]) -> tuple[str, dict]:
 	"""One aliased GraphQL query, and the alias map used to read it back."""
 	issues = [(slug, number) for slug, number in issues if slug == repo.lower()]
-	slugs = sorted({slug for slug, _ in issues} | ({repo.lower()} if branches else set()))
+	slugs = sorted({slug for slug, _ in issues} | {slug for slug, _ in branches})
 	aliases: dict = {}
 	parts = []
 	for index, slug in enumerate(slugs):
@@ -155,11 +161,12 @@ def build_query(repo: str, issues: list[tuple[str, int]], branches: list[str]) -
 				"... on Issue { title state stateReason closedAt } "
 				"... on PullRequest { title state merged mergedAt baseRefName headRefName } }"
 			)
-		if slug == repo.lower():
-			for position, branch in enumerate(branches):
-				alias = f"b{position}"
-				aliases[(f"r{index}", alias)] = ("branch", slug, branch)
-				fields.append(f'{alias}: ref(qualifiedName: "refs/heads/{branch}") {{ target {{ oid }} }}')
+		for position, (branch_slug, branch) in enumerate(branches):
+			if branch_slug != slug:
+				continue
+			alias = f"b{position}"
+			aliases[(f"r{index}", alias)] = ("branch", slug, branch)
+			fields.append(f'{alias}: ref(qualifiedName: "refs/heads/{branch}") {{ target {{ oid }} }}')
 		if fields:
 			parts.append(f'r{index}: repository(owner: "{owner}", name: "{name}") {{ {" ".join(fields)} }}')
 	return ("query { " + " ".join(parts) + " }") if parts else "", aliases
@@ -199,9 +206,12 @@ def collect(refs: dict, repo: str, runner: Runner) -> tuple[list[str], dict]:
 			lines.append("- Issue, PR and branch references could not be read (GitHub API error).")
 		else:
 			for (repo_alias, alias), (kind, slug, value) in aliases.items():
-				node = (data.get(repo_alias) or {}).get(alias) if isinstance(data.get(repo_alias), dict) else None
+				repo_data = data.get(repo_alias)
+				node = repo_data.get(alias) if isinstance(repo_data, dict) else None
 				if kind == "issue":
 					lines.append(_issue_line(slug, value, node))
+				elif not isinstance(repo_data, dict):
+					lines.append(f"- Branch `{value}` in {slug}: not readable")
 				elif isinstance(node, dict) and isinstance(node.get("target"), dict):
 					lines.append(f"- Branch `{value}` in {slug}: exists at {str(node['target'].get('oid') or '')[:12]}")
 				else:
