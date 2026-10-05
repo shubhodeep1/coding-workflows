@@ -497,13 +497,13 @@ REVIEW_SITES = {
 	),
 	"review_rb_judge.sh": (
 		'review_rb_claude_run read "${RB_JUDGE_PROMPT}" "${RB_JUDGE_OUTPUT}" "${JUDGE_STDERR_FILE}" "${level}" || rb_judge_claude_rc=$?',
-		'elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then',
+		'if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then',
 		'      -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?',
 	),
 }
 
 
-def test_each_review_role_tries_claude_then_the_unchanged_opencode_command():
+def test_each_review_role_tries_claude_then_opencode():
 	for script, (claude_call, gate, opencode_call) in REVIEW_SITES.items():
 		text = (REPO_ROOT / "scripts" / script).read_text(encoding="utf-8")
 		assert text.count(claude_call) == 1, script
@@ -519,9 +519,10 @@ case "$1" in
   prepare-ephemeral)
     [ "${MODE}" != prepare_failed ] || exit 1
     if [ "${MODE}" = prepare_partial_cleanup_failed ]; then echo "${FAKE_ROOT}"; exit 1; fi
-    if [ "${RESOLVER_TEST:-false}" = true ]; then
-      count=0
-      [ ! -f "${CALLS}" ] || count=$(grep -c '^prepare-ephemeral' "${CALLS}" || true)
+    count=0
+    [ ! -f "${CALLS}" ] || count=$(grep -c '^prepare-ephemeral' "${CALLS}" || true)
+    [ "${MODE}" != prepare_second_failed ] || [ "${count}" -eq 0 ] || exit 1
+    if [ "${RESOLVER_TEST:-false}" = true ] || [ "${MODE}" = claude_unavailable_then_success ]; then
       echo "${FAKE_ROOT}-${count}"
     else
       echo "${FAKE_ROOT}"
@@ -530,13 +531,12 @@ case "$1" in
     ;;
   run)
     [ "$#" -eq 9 ] || exit 2
-    if [ "${RESOLVER_TEST:-false}" = true ]; then
-      printf 'run|%s|%s|%s|%s\n' "$7" "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
-    else
-      printf 'run|%s|%s|%s\n' "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
-    fi
+    printf 'run|%s|%s|%s|%s\n' "$7" "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
     case "${MODE}" in
       success) printf 'verdict\n' > "$3" ;;
+      claude_unavailable_then_success|prepare_second_failed)
+        [ "$7" != claude ] || exit 75
+        printf 'verdict\n' > "$3" ;;
       transfer_failed) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
       unsafe_directory) printf '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n' > "${RUNTIME_DIR}/review_sandbox_transfer_reason_${3##*/}"; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
       marker_on_success) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed" ;;
@@ -652,9 +652,7 @@ def test_resolver_selected_engine_and_failed_transfer(tmp_path):
 
 def _rb_helper() -> str:
 	text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
-	match = re.search(r"^review_rb_claude_run\(\)\n\{\n.*?^\}\n", text, re.M | re.S)
-	assert match
-	return match.group(0)
+	return text[text.index("review_rb_claude_run()\n{"):text.index("# Fallback: if gh_helpers.sh")]
 
 
 def _run_rb_helper(tmp: Path, *, engine: str, mode: str, access: str = "read", stage: bool = True):
@@ -676,13 +674,13 @@ def _run_rb_helper(tmp: Path, *, engine: str, mode: str, access: str = "read", s
 def test_rb_verdict_pass_runs_claude_read_only(tmp_path):
 	proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="success")
 	assert "rc=0" in proc.stdout, proc.stderr
-	assert calls.splitlines() == ["prepare-ephemeral", f"run|RB_JUDGE|read|{tmp_path / 'fake-root'}", "cleanup"]
+	assert calls.splitlines() == ["prepare-ephemeral", f"run|claude|RB_JUDGE|read|{tmp_path / 'fake-root'}", "cleanup"]
 	assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "verdict\n"
 
 
 def test_rb_fix_pass_keeps_the_write_profile(tmp_path):
 	_proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="success", access="write")
-	assert calls.splitlines()[1] == f"run|RB_JUDGE|write|{tmp_path / 'fake-root'}"
+	assert calls.splitlines()[1] == f"run|claude|RB_JUDGE|write|{tmp_path / 'fake-root'}"
 
 
 def test_rb_helper_returns_75_off_claude_unavailable_or_unstaged(tmp_path):
@@ -724,16 +722,121 @@ def test_rb_helper_reports_unsafe_directory_without_repeating_path(tmp_path):
 	assert calls.splitlines()[-1] == "cleanup"
 
 
+def _run_rb_isolated_fallback(tmp: Path, *, engine: str, mode: str, access: str = "read", stage: bool = True):
+	scripts = tmp / "scripts"
+	scripts.mkdir()
+	if stage:
+		(scripts / "review_untrusted_sandbox.sh").write_text(FAKE_SANDBOX, encoding="utf-8")
+	(tmp / "prompt.txt").write_text("judge\n", encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "opencode").write_text('#!/bin/sh\ntouch "${HOST_WRITER_MARKER}"\n', encoding="utf-8")
+	(bin_dir / "opencode").chmod(0o755)
+	calls = tmp / "calls"
+	script = (_rb_helper() + '''
+review_rb_prepare_opencode_config() {
+  [ "$MODE" != config_failed ] || return 1
+  printf '%s' "$1" > "$3"
+}
+rb_claude_rc=0
+review_rb_claude_run "$ACCESS" prompt.txt out.txt err.txt high || rb_claude_rc=$?
+rc="$rb_claude_rc"
+if [ "$rb_claude_rc" -eq 75 ]; then
+  if review_rb_opencode_sandbox_prepare config.json "$RB_TEST_PHASE" err.txt off; then
+    cmd=(env "REVIEW_SANDBOX_ROOT=${RB_OC_SANDBOX_ROOT}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run prompt.txt out.txt "${MODEL_EDITOR}" high config.json codex RB_JUDGE "$ACCESS")
+    rc=0
+    "${cmd[@]}" || rc=$?
+    review_rb_opencode_sandbox_finish "$rc" out.txt err.txt || rc=$?
+  else
+    rc=$?
+  fi
+fi
+printf 'claude=%s rc=%s reason=%s flag=%s\\n' "$rb_claude_rc" "$rc" "${RB_OC_ISOLATION_REASON:-}" "${RB_SANDBOX_TRANSFER_FAILED:-false}"
+''')
+	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(scripts), RB_OPENCODE_WORKSPACE=str(tmp), MODEL_EDITOR="openai/gpt-6-sol",
+		AI_ENGINE_RESOLVED_RB_JUDGE=engine, MODE=mode, ACCESS=access, CALLS=str(calls), FAKE_ROOT=str(tmp / "fake-root"),
+		RUNTIME_DIR=str(tmp), RB_TEST_PHASE="review_rb_judge" if access == "read" else "review_rb_fix",
+		PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", HOST_WRITER_MARKER=str(tmp / "host-writer"))
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(inherited, None)
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
+	return proc, (calls.read_text(encoding="utf-8") if calls.exists() else ""), tmp / "host-writer"
+
+
+def test_rb_codex_off_uses_isolated_opencode_for_both_access_modes(tmp_path):
+	for access in ("read", "write"):
+		work = tmp_path / access
+		work.mkdir()
+		proc, calls, host_writer = _run_rb_isolated_fallback(work, engine="codex", mode="success", access=access)
+		assert "claude=75 rc=0" in proc.stdout, proc.stderr
+		assert calls.splitlines() == ["prepare-ephemeral", f"run|codex|RB_JUDGE|{access}|{work / 'fake-root'}", "cleanup"]
+		assert (work / "config.json").read_text(encoding="utf-8") == ("reviewer" if access == "read" else "writer")
+		assert not host_writer.exists()
+
+
+def test_rb_claude_unavailable_tries_new_isolated_root(tmp_path):
+	proc, calls, host_writer = _run_rb_isolated_fallback(tmp_path, engine="claude", mode="claude_unavailable_then_success")
+	assert "claude=75 rc=0" in proc.stdout, proc.stderr
+	assert calls.splitlines() == ["prepare-ephemeral", f"run|claude|RB_JUDGE|read|{tmp_path / 'fake-root-0'}", "cleanup",
+		"prepare-ephemeral", f"run|codex|RB_JUDGE|read|{tmp_path / 'fake-root-1'}", "cleanup"]
+	assert not host_writer.exists()
+
+
+def test_rb_isolation_failure_defers_without_host_writer(tmp_path):
+	for index, (engine, mode, stage, reason) in enumerate((
+		("codex", "prepare_failed", True, "sandbox_prepare_failed"),
+		("claude", "prepare_second_failed", True, "sandbox_prepare_failed"),
+		("codex", "success", False, "support_missing"),
+		("codex", "config_failed", True, "opencode_config_failed"),
+		("codex", "outdated", True, "sandbox_helper_outdated"),
+	)):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, calls, host_writer = _run_rb_isolated_fallback(work, engine=engine, mode=mode, stage=stage)
+		assert f"rc=77 reason={reason}" in proc.stdout, proc.stderr
+		assert not host_writer.exists()
+		if mode == "outdated":
+			assert calls.count("run|codex") == 1
+		else:
+			assert not any(line.startswith("run|codex") for line in calls.splitlines())
+
+
+def test_rb_opencode_transfer_failure_blocks_a_fix(tmp_path):
+	proc, calls, host_writer = _run_rb_isolated_fallback(tmp_path, engine="codex", mode="transfer_failed", access="write")
+	assert "rc=1 reason= flag=true" in proc.stdout, proc.stderr
+	assert "run|codex|RB_JUDGE|write" in calls
+	assert calls.splitlines()[-1] == "cleanup"
+	assert not host_writer.exists()
+
+
 def test_rb_fix_refuses_failed_claude_transfer_before_commit_or_merge():
 	text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
 	block = text.split('  fix)\n', 1)[1].split('  merge_with_followup)', 1)[0]
-	gate = block.index('if [ "${rb_fix_claude_rc}" -ne 75 ] && { [ "${rb_fix_rc}" -ne 0 ] || [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; }; then')
+	gate = block.index('if [ "${rb_fix_rc}" -ne 0 ] || [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; then')
 	for needle in ('git status --porcelain', 'git commit -m "[judge-fix]', 'Treating as merge.'):
 		assert gate < block.index(needle), needle
 	assert 'judge_skip_reason=fix_transfer_failed' in block
 	assert 'judge_skip_reason=fix_failed' in block
+	assert 'judge_skip_reason=isolation_unavailable' in block
+	assert 'failed isolated fix' in block
 	helper = _rb_helper()
 	assert helper.index('RB_SANDBOX_TRANSFER_FAILED=true') < helper.index('rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"', helper.index('RB_SANDBOX_TRANSFER_FAILED=true'))
+
+
+def test_rb_judge_never_runs_opencode_on_host_and_defers_before_retry():
+	text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	assert "opencode_run_cmd" not in text
+	assert 'local rb_oc_role=writer' in text
+	assert '[ "${rb_oc_phase}" != review_rb_judge ] || rb_oc_role=reviewer' in text
+	assert 'RB_JUDGE_SANDBOX_OPENCODE_CONFIG="${RB_JUDGE_OPENCODE_CONFIG}"' in text
+	assert 'review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off' not in text
+	verdict = text.split('for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do', 1)[1].split('if [ "${JUDGE_SUCCESS}" != "true" ]; then', 1)[0]
+	assert verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true') < verdict.index('break', verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true')) < verdict.index('sleep 10')
+	assert 'judge_skip_reason=isolation_unavailable' in verdict
+	assert 'rb_fix_claude_rc}" -ne 75 ] &&' not in text
+	step = AGENT_STEPS["Post review-blocked comment on PR (autofix exhaustion)"]["run"]
+	assert 'isolation_unavailable)' in step
+	assert 'AI review/autofix — judge deferred: isolation unavailable' in step
 
 
 def test_sandbox_reports_progress_while_claude_streams():

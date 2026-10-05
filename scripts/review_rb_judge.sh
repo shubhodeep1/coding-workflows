@@ -99,8 +99,8 @@ review_rb_strip_opencode_output_file() {
 # codex). `read` is the verdict pass, narrowed to the read-only tool profile
 # like the OpenCode `reviewer` role; `write` is the fix pass. The answer goes
 # to <output_file>; stderr is appended to <stderr_file>. Returns 75 when the
-# role is not on Claude or Claude is unavailable, so the caller runs its
-# unchanged OpenCode command; otherwise the sandbox's status.
+# role is not on Claude or Claude is unavailable, so the caller retries
+# OpenCode in a new sandbox; otherwise the sandbox's status.
 review_rb_claude_run()
 {
   local access="$1" prompt_file="$2" output_file="$3" stderr_file="$4" effort="$5"
@@ -118,25 +118,80 @@ review_rb_claude_run()
     "${prompt_file}" "${output_file}" "${MODEL_EDITOR}" "${effort}" /dev/null claude RB_JUDGE "${access}" \
     2>>"${stderr_file}" || rb_sandbox_rc=$?
   REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" bash "${rb_sandbox_sh}" cleanup 2>>"${stderr_file}" || rb_sandbox_rc=1
-  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
-    RB_SANDBOX_TRANSFER_FAILED=true
-    local rb_transfer_reason="" rb_transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${output_file##*/}"
-    if [ -f "${rb_transfer_reason_file}" ] && [ ! -L "${rb_transfer_reason_file}" ] &&
-       [ "$(wc -c < "${rb_transfer_reason_file}")" -le 240 ] &&
-       [[ "$(< "${rb_transfer_reason_file}")" =~ ^::error::Review\ isolation\ snapshot\ or\ transfer\ rejected\ \(ValueError\)\ reason=(admitted_inventory_missing|symlink_path|unsafe_file|file_changed|entry_limit|unsafe_directory(\ dir=[A-Za-z0-9._/-]{1,64})?|unsafe_result_path|workspace_size_limit|host_baseline_changed|host_path_conflict|transfer_rollback_failed)$ ]]; then
-      rb_transfer_reason=" reason=${BASH_REMATCH[1]%% *}"
-    fi
-    echo "::error::Review-blocked judge sandbox transfer failed; refusing to commit the fix.${rb_transfer_reason}" >&2
-    if [ "${rb_sandbox_rc}" -eq 0 ] || [ "${rb_sandbox_rc}" -eq 2 ]; then
-      rb_sandbox_rc=1
-    fi
-    rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+  _review_rb_consume_transfer_marker "${output_file}"
+  if [ "${RB_SANDBOX_TRANSFER_FAILED}" = true ] && { [ "${rb_sandbox_rc}" -eq 0 ] || [ "${rb_sandbox_rc}" -eq 2 ]; }; then
+    rb_sandbox_rc=1
   fi
   if [ "${rb_sandbox_rc}" -eq 2 ]; then
     echo 'AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_helper_outdated' >&2
     return 75
   fi
   return "${rb_sandbox_rc}"
+}
+
+_review_rb_consume_transfer_marker()
+{
+  local rb_transfer_output_file="$1" rb_transfer_reason=""
+  local rb_transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${rb_transfer_output_file##*/}"
+  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+    RB_SANDBOX_TRANSFER_FAILED=true
+    if [ -f "${rb_transfer_reason_file}" ] && [ ! -L "${rb_transfer_reason_file}" ] &&
+       [ "$(wc -c < "${rb_transfer_reason_file}")" -le 240 ] &&
+       [[ "$(< "${rb_transfer_reason_file}")" =~ ^::error::Review\ isolation\ snapshot\ or\ transfer\ rejected\ \(ValueError\)\ reason=(admitted_inventory_missing|symlink_path|unsafe_file|file_changed|entry_limit|unsafe_directory(\ dir=[A-Za-z0-9._/-]{1,64})?|unsafe_result_path|workspace_size_limit|host_baseline_changed|host_path_conflict|transfer_rollback_failed)$ ]]; then
+      rb_transfer_reason=" reason=${BASH_REMATCH[1]%% *}"
+    fi
+    echo "::error::Review-blocked judge sandbox transfer failed; refusing to commit the fix.${rb_transfer_reason}" >&2
+    rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+  fi
+}
+
+# The prepare/finish pair brackets the existing stall-guard and heartbeat
+# wrappers. Never let an isolation error select a credentialed host writer.
+review_rb_opencode_sandbox_prepare()
+{
+  local rb_oc_config_path="$1" rb_oc_phase="$2" rb_oc_stderr_file="$3" rb_oc_serena_mode="$4"
+  local rb_oc_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+  # Verdicts inspect an immutable snapshot; only the fix phase gets writer tools.
+  local rb_oc_role=writer
+  [ "${rb_oc_phase}" != review_rb_judge ] || rb_oc_role=reviewer
+  RB_OC_ISOLATION_REASON=""
+  RB_OC_SANDBOX_ROOT=""
+  if [ ! -f "${rb_oc_sandbox_sh}" ]; then
+    RB_OC_ISOLATION_REASON=support_missing
+    echo 'AI_ENGINE_FALLBACK role=RB_JUDGE reason=support_missing' >&2
+  elif ! RB_OC_SANDBOX_ROOT="$(cd "${RB_OPENCODE_WORKSPACE}" && bash "${rb_oc_sandbox_sh}" prepare-ephemeral 2>>"${rb_oc_stderr_file}")" || [ -z "${RB_OC_SANDBOX_ROOT}" ]; then
+    RB_OC_ISOLATION_REASON=sandbox_prepare_failed
+    echo '::warning::Review-blocked judge sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback.' >&2
+  else
+    RB_SANDBOX_TRANSFER_FAILED=false
+    rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+    if ! review_rb_prepare_opencode_config "${rb_oc_role}" "${rb_oc_phase}" "${rb_oc_config_path}" "${rb_oc_serena_mode}"; then
+      RB_OC_ISOLATION_REASON=opencode_config_failed
+      REVIEW_SANDBOX_ROOT="${RB_OC_SANDBOX_ROOT}" bash "${rb_oc_sandbox_sh}" cleanup 2>>"${rb_oc_stderr_file}" || echo '::error::Review-blocked judge sandbox cleanup failed.' >&2
+      RB_OC_SANDBOX_ROOT=""
+    fi
+  fi
+  if [ -n "${RB_OC_ISOLATION_REASON}" ]; then
+    echo "RB_JUDGE_ISOLATION outcome=deferred reason=${RB_OC_ISOLATION_REASON}" >&2
+    return 77
+  fi
+}
+
+review_rb_opencode_sandbox_finish()
+{
+  local rb_oc_rc="$1" rb_oc_output_file="$2" rb_oc_stderr_file="$3"
+  local rb_oc_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+  REVIEW_SANDBOX_ROOT="${RB_OC_SANDBOX_ROOT}" bash "${rb_oc_sandbox_sh}" cleanup 2>>"${rb_oc_stderr_file}" || rb_oc_rc=1
+  _review_rb_consume_transfer_marker "${rb_oc_output_file}"
+  if [ "${RB_SANDBOX_TRANSFER_FAILED}" = true ] && { [ "${rb_oc_rc}" -eq 0 ] || [ "${rb_oc_rc}" -eq 2 ]; }; then
+    rb_oc_rc=1
+  fi
+  if [ "${rb_oc_rc}" -eq 2 ]; then
+    RB_OC_ISOLATION_REASON=sandbox_helper_outdated
+    echo 'RB_JUDGE_ISOLATION outcome=deferred reason=sandbox_helper_outdated' >&2
+    return 77
+  fi
+  return "${rb_oc_rc}"
 }
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —
@@ -1385,10 +1440,8 @@ JUDGE_EFFECTIVE_REASONING_EFFORT="${JUDGE_ATTEMPT_LEVELS[0]}"
 JUDGE_ATTEMPT_COUNT="${#JUDGE_ATTEMPT_LEVELS[@]}"
 RB_OPENCODE_WORKSPACE="$(pwd)"
 RB_JUDGE_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_judge_opencode.json"
+RB_JUDGE_SANDBOX_OPENCODE_CONFIG="${RB_JUDGE_OPENCODE_CONFIG}"
 RB_FIX_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_fix_opencode.json"
-if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then
-  exit 1
-fi
 
 # -----------------------------------------------------------
 # Recover judge JSON from a non-empty buffer
@@ -1451,6 +1504,7 @@ PY
 # top of the failing job instead of buried inside ~75k stderr lines.
 RB_JUDGE_PROMPT_SIZE_LOGGED=false
 JUDGE_SUCCESS=false
+RB_JUDGE_ISOLATION_DEFERRED=false
 JUDGE_STDERR_FILE="${RUNTIME_DIR}/rb_judge_stderr.txt"
 for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   attempt="$((attempt_idx + 1))"
@@ -1458,18 +1512,6 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   rc=0
   echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} (reasoning=${level})..."
   emit_review_rb_substate "review_rb_judge" "judge" "PreparingWorkspace" "${attempt}"
-  judge_codex_cmd=(
-    bash -c
-    # shellcheck disable=SC2016
-    'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-    opencode-rb-judge
-    "${OPENCODE_HELPERS_PATH}"
-    reviewer
-    "${MODEL_EDITOR}"
-    "${level}"
-    "${RB_JUDGE_OPENCODE_CONFIG}"
-    "${RB_OPENCODE_WORKSPACE}"
-  )
   sanitize_codex_prompt_file "${RB_JUDGE_PROMPT}"
   emit_review_rb_substate "review_rb_judge" "judge" "BuildingPrompt" "${attempt}"
   if [ "${RB_JUDGE_PROMPT_SIZE_LOGGED}" != "true" ]; then
@@ -1493,21 +1535,36 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   review_rb_claude_run read "${RB_JUDGE_PROMPT}" "${RB_JUDGE_OUTPUT}" "${JUDGE_STDERR_FILE}" "${level}" || rb_judge_claude_rc=$?
   if [ "${rb_judge_claude_rc}" -ne 75 ]; then
     rc="${rb_judge_claude_rc}"
-  elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-    "${CODEX_STALL_GUARD_HELPER}" \
-      --phase review_rb_judge \
-      --stdout-file "${RB_JUDGE_OUTPUT}" \
-      --stderr-file "${JUDGE_STDERR_FILE}" \
-      --status-file "${judge_stall_status_file}" \
-      -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?
-  elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    "${CODEX_HEARTBEAT_HELPER}" \
-      --phase review_rb_judge \
-      --stdout-file "${RB_JUDGE_OUTPUT}" \
-      --stderr-file "${JUDGE_STDERR_FILE}" \
-      -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?
   else
-    "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}" || rc=$?
+    if ! review_rb_opencode_sandbox_prepare "${RB_JUDGE_SANDBOX_OPENCODE_CONFIG}" review_rb_judge "${JUDGE_STDERR_FILE}" off; then
+      RB_JUDGE_ISOLATION_DEFERRED=true
+      rm -f "${judge_stall_status_file}"
+      break
+    fi
+    judge_codex_cmd=(env "REVIEW_SANDBOX_ROOT=${RB_OC_SANDBOX_ROOT}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run
+      "${RB_JUDGE_PROMPT}" "${RB_JUDGE_OUTPUT}" "${MODEL_EDITOR}" "${level}" "${RB_JUDGE_SANDBOX_OPENCODE_CONFIG}" codex RB_JUDGE read)
+    if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+      "${CODEX_STALL_GUARD_HELPER}" \
+        --phase review_rb_judge \
+        --stdout-file "${RB_JUDGE_OUTPUT}" \
+        --stderr-file "${JUDGE_STDERR_FILE}" \
+        --status-file "${judge_stall_status_file}" \
+        -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?
+    elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+      "${CODEX_HEARTBEAT_HELPER}" \
+        --phase review_rb_judge \
+        --stdout-file "${RB_JUDGE_OUTPUT}" \
+        --stderr-file "${JUDGE_STDERR_FILE}" \
+        -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?
+    else
+      "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}" || rc=$?
+    fi
+    review_rb_opencode_sandbox_finish "${rc}" "${RB_JUDGE_OUTPUT}" "${JUDGE_STDERR_FILE}" || rc=$?
+    if [ "${rc}" -eq 77 ]; then
+      RB_JUDGE_ISOLATION_DEFERRED=true
+      rm -f "${judge_stall_status_file}"
+      break
+    fi
   fi
   if judge_stall_state="$(read_codex_stall_guard_state_with_warning "${judge_stall_status_file}" "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT}" )"; then
     :
@@ -1563,6 +1620,12 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   fi
 done
 
+if [ "${RB_JUDGE_ISOLATION_DEFERRED}" = true ]; then
+  echo "::warning::Review-blocked judge deferred: isolation unavailable (reason=${RB_OC_ISOLATION_REASON}); no host fallback."
+  echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=isolation_unavailable" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
 if [ "${JUDGE_SUCCESS}" != "true" ]; then
   opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR}" "${rc:-1}" attempts_exhausted || true
   echo "::warning::Review-blocked judge LLM execution failed after ${JUDGE_ATTEMPT_COUNT} attempts — needs human intervention."
@@ -1941,23 +2004,7 @@ __EDIT_DISCIPLINE__
       if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
         rb_fix_serena_mode="on"
       fi
-      rb_fix_opencode_ready=true
-      if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then
-        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
-        exit 1
-      fi
-      rb_fix_opencode_cmd=(
-        bash -c
-        # shellcheck disable=SC2016
-        'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-        opencode-rb-fix
-        "${OPENCODE_HELPERS_PATH}"
-        writer
-        "${MODEL_EDITOR}"
-        "${JUDGE_EFFECTIVE_REASONING_EFFORT}"
-        "${RB_FIX_OPENCODE_CONFIG}"
-        "${RB_OPENCODE_WORKSPACE}"
-      )
+      rb_fix_isolation_deferred=false
       emit_review_rb_substate "review_rb_fix" "judge_fix" "LaunchingAgentProcess" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "InitializingSession" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "StreamingTurn" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
@@ -1966,21 +2013,30 @@ __EDIT_DISCIPLINE__
       review_rb_claude_run write "${RB_FIX_PROMPT}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" "${JUDGE_EFFECTIVE_REASONING_EFFORT}" || rb_fix_claude_rc=$?
       if [ "${rb_fix_claude_rc}" -ne 75 ]; then
         rb_fix_rc="${rb_fix_claude_rc}"
-      elif [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-        "${CODEX_STALL_GUARD_HELPER}" \
-          --phase review_rb_fix \
-          --stdout-file "${RB_FIX_OUTPUT}" \
-          --stderr-file "${RB_FIX_STDERR}" \
-          --status-file "${rb_fix_stall_status_file}" \
-          -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
-      elif [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-        "${CODEX_HEARTBEAT_HELPER}" \
-          --phase review_rb_fix \
-          --stdout-file "${RB_FIX_OUTPUT}" \
-          --stderr-file "${RB_FIX_STDERR}" \
-          -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
-      elif [ "${rb_fix_opencode_ready}" = "true" ]; then
-        "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>"${RB_FIX_STDERR}" || rb_fix_rc=$?
+      elif ! review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"; then
+        rb_fix_rc=77
+        rb_fix_isolation_deferred=true
+      else
+        rb_fix_opencode_cmd=(env "REVIEW_SANDBOX_ROOT=${RB_OC_SANDBOX_ROOT}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run
+          "${RB_FIX_PROMPT}" "${RB_FIX_OUTPUT}" "${MODEL_EDITOR}" "${JUDGE_EFFECTIVE_REASONING_EFFORT}" "${RB_FIX_OPENCODE_CONFIG}" codex RB_JUDGE write)
+        if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+          "${CODEX_STALL_GUARD_HELPER}" \
+            --phase review_rb_fix \
+            --stdout-file "${RB_FIX_OUTPUT}" \
+            --stderr-file "${RB_FIX_STDERR}" \
+            --status-file "${rb_fix_stall_status_file}" \
+            -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
+        elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+          "${CODEX_HEARTBEAT_HELPER}" \
+            --phase review_rb_fix \
+            --stdout-file "${RB_FIX_OUTPUT}" \
+            --stderr-file "${RB_FIX_STDERR}" \
+            -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
+        else
+          "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>"${RB_FIX_STDERR}" || rb_fix_rc=$?
+        fi
+        review_rb_opencode_sandbox_finish "${rb_fix_rc}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" || rb_fix_rc=$?
+        if [ "${rb_fix_rc}" -eq 77 ]; then rb_fix_isolation_deferred=true; fi
       fi
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
@@ -1992,7 +2048,9 @@ __EDIT_DISCIPLINE__
         echo "Fix OpenCode completed."
       else
         echo "::warning::Fix OpenCode failed for PR #${PR_NUMBER}."
-        opencode_emit_failure_alert review_rb_fix writer "${MODEL_EDITOR}" "${rb_fix_rc}" invocation_failed || true
+        if [ "${rb_fix_isolation_deferred}" != true ]; then
+          opencode_emit_failure_alert review_rb_fix writer "${MODEL_EDITOR}" "${rb_fix_rc}" invocation_failed || true
+        fi
       fi
       case "${rb_fix_stall_state}" in
         observed)
@@ -2014,10 +2072,12 @@ __EDIT_DISCIPLINE__
       rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
 
       # Check for changes and commit
-      if [ "${rb_fix_claude_rc}" -ne 75 ] && { [ "${rb_fix_rc}" -ne 0 ] || [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; }; then
-        echo "::error::Refusing [judge-fix] commit/push after failed Claude fix (rc=${rb_fix_rc} transfer_failed=${RB_SANDBOX_TRANSFER_FAILED:-false})."
+      if [ "${rb_fix_rc}" -ne 0 ] || [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; then
+        echo "::error::Refusing [judge-fix] commit/push after failed isolated fix (rc=${rb_fix_rc} transfer_failed=${RB_SANDBOX_TRANSFER_FAILED:-false})."
         echo "judge_action=skip" >> "$GITHUB_OUTPUT"
-        if [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; then
+        if [ "${rb_fix_isolation_deferred}" = true ]; then
+          echo "judge_skip_reason=isolation_unavailable" >> "$GITHUB_OUTPUT"
+        elif [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; then
           echo "judge_skip_reason=fix_transfer_failed" >> "$GITHUB_OUTPUT"
         else
           echo "judge_skip_reason=fix_failed" >> "$GITHUB_OUTPUT"
