@@ -9505,6 +9505,7 @@ def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
 			"baseRefName": "main",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
+			"headSha": "@sandbox_head",
 			"mergeable": True,
 			"mergeable_state": "clean",
 			"body": "ordinary PR body",
@@ -9543,6 +9544,7 @@ def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
 			"baseRefName": "main",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
+			"headSha": "@sandbox_head",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		}],
@@ -9772,20 +9774,24 @@ def test_review_blocked_fix_scope_accepts_pr_file():
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED" in agents_text
 
 
-@pytest.mark.parametrize("pr_overrides, reason", [
+# The file's own runner calls tests without arguments, so cases loop here.
+_RB_FIX_TARGET_UNTRUSTED_PR_CASES = [
 	({"headRepoFullName": "attacker/repo", "headRefName": "main", "headRefFromApi": "main", "body": "Refs #10"}, "cross_repository"),
 	({"headRepoFullName": None}, "head_repo_unavailable"),
 	({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
 	({"headSha": "not-a-sha"}, "head_sha_missing"),
-])
-def test_review_blocked_fix_target_rejects_untrusted_pr(pr_overrides, reason):
-	result = _review_blocked_fix_scope_case(
-		touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_overrides=pr_overrides,
-	)
-	assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
-	assert result.get("git_push_calls", []) == []
-	assert result.get("review_blocked_fix_commit_calls", []) == []
-	assert "Judge decision for #10" not in result["stdout"]
+]
+
+
+def test_review_blocked_fix_target_rejects_untrusted_pr():
+	for pr_overrides, reason in _RB_FIX_TARGET_UNTRUSTED_PR_CASES:
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_overrides=pr_overrides,
+		)
+		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert "Judge decision for #10" not in result["stdout"]
 
 
 def test_review_blocked_fix_target_rejects_failed_fetch_without_local_fallback():
@@ -9824,61 +9830,70 @@ def test_review_blocked_fix_target_rejects_ref_change_before_checkout():
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
 
-@pytest.mark.parametrize("changed_pr, reason", [
+# The file's own runner calls tests without arguments, so cases loop here.
+_RB_FIX_TARGET_HEAD_MOVE_CASES = [
 	({"headSha": "__integration_head__"}, "head_moved"),
 	({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
 	({"headRefFromApi": "feature/other"}, "head_ref_changed"),
-])
-def test_review_blocked_fix_target_rejects_head_move_during_judge(changed_pr, reason):
-	open_pr = {
-		"number": 901, "state": "open", "merged": False,
-		"baseRefName": "main", "headRefName": "ai/issue-10",
-		"headRefFromApi": "ai/issue-10", "headSha": "__default_head__",
-		"mergeable": True, "mergeable_state": "clean", "body": "Body",
-	}
-	result = _review_blocked_fix_scope_case(
-		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
-		# Reconciliation and branch prep consume six pulls/901 reads; the
-		# subsequent re-check must see the changed SHA.
-		pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
-	)
-	assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
-	assert result.get("git_push_calls", []) == []
-	assert result.get("review_blocked_fix_commit_calls", []) == []
-	assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+]
 
 
-@pytest.mark.parametrize("merged_overrides, reason", [
-	({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
+def test_review_blocked_fix_target_rejects_head_move_during_judge():
+	for changed_pr, reason in _RB_FIX_TARGET_HEAD_MOVE_CASES:
+		open_pr = {
+			"number": 901, "state": "open", "merged": False,
+			"baseRefName": "main", "headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10", "headSha": "__default_head__",
+			"mergeable": True, "mergeable_state": "clean", "body": "Body",
+		}
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+			# Reconciliation and branch prep consume six pulls/901 reads; the
+			# subsequent re-check must see the changed SHA.
+			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
+		)
+		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+
+
+# The file's own runner calls tests without arguments, so cases loop here.
+_RB_MERGED_FIX_TARGET_FOLLOWUP_CASES = [
+	# #6388's head-identity check rejects the fork before #6325's comparison.
+	({"headRepoFullName": "attacker/repo"}, "cross_repository"),
 	({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
-])
-def test_review_blocked_merged_fix_target_rejects_unrelated_followup(merged_overrides, reason):
-	state = _base_state(status="in_progress")
-	state["integration_branch"] = "orchestrator/project-192"
-	state["waves"][0]["issues"][0]["status"] = "review-blocked"
-	open_pr = {
-		"number": 901, "state": "open", "merged": False,
-		"headRefName": "ai/issue-10", "headRefFromApi": "ai/issue-10",
-		"baseRefName": "main", "body": "Closes #10",
-		"mergeable": True, "mergeable_state": "clean",
-	}
-	merged_pr = {
-		**open_pr, "state": "closed", "merged": True,
-		"merged_at": "2026-04-15T00:00:00Z", **merged_overrides,
-	}
-	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
-		pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
-		prs=[{**merged_pr, "files": ["sandbox_fix.txt"]}],
-		existing_branches=["main", "orchestrator/project-192"],
-		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
-		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
-	)
-	assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
-	assert result.get("git_push_calls", []) == []
-	assert result.get("review_blocked_fix_commit_calls", []) == []
-	assert len(result["prs"]) == 1
+]
+
+
+def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
+	for merged_overrides, reason in _RB_MERGED_FIX_TARGET_FOLLOWUP_CASES:
+		state = _base_state(status="in_progress")
+		state["integration_branch"] = "orchestrator/project-192"
+		state["waves"][0]["issues"][0]["status"] = "review-blocked"
+		open_pr = {
+			"number": 901, "state": "open", "merged": False,
+			"headRefName": "ai/issue-10", "headRefFromApi": "ai/issue-10",
+			"baseRefName": "main", "body": "Closes #10",
+			"mergeable": True, "mergeable_state": "clean",
+		}
+		merged_pr = {
+			**open_pr, "state": "closed", "merged": True,
+			"merged_at": "2026-04-15T00:00:00Z", **merged_overrides,
+		}
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+			pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
+			prs=[{**merged_pr, "files": ["sandbox_fix.txt"]}],
+			existing_branches=["main", "orchestrator/project-192"],
+			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+		)
+		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert len(result["prs"]) == 1
 
 
 def test_review_blocked_rejects_unverified_open_pr_head():
@@ -9909,7 +9924,9 @@ def test_review_blocked_rejects_changed_pr_head_ref_before_judge():
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
 		refetched_head_ref="ai/issue-elsewhere",
 	)
-	assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=head_ref_mismatch" in result["stdout"]
+	# The #6325 fix-target check runs first and rejects the non-implementation
+	# head before #6388's ref comparison; either way the judge never runs.
+	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=not_implementation_pr" in result["stdout"]
 	assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
 	assert result.get("git_push_calls", []) == []
 	assert "Judge decision for #10" not in result["stdout"]
