@@ -79,6 +79,18 @@ def test_restore_validates_an_origin_without_embedded_auth(tmp_path: Path) -> No
 	assert "newsecret" not in (repo / ".git" / "config").read_text()
 
 
+def test_restore_rejects_a_repo_name_matching_regex_punctuation(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/my.repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/my.repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "remote", "set-url", "origin", "https://github.com/owner/myXrepo.git")
+	assert subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True).returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
 def test_restore_rejects_editor_changed_push_url(tmp_path: Path) -> None:
 	repo = tmp_path / "repo"
 	repo.mkdir()
