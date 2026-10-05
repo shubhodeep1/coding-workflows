@@ -274,6 +274,15 @@ def test_judge_extension_marker_grants_one_more_audit_cycle(tmp_path: Path) -> N
 	assert "(cycle 6 of 6)" in posted[-1][-1]
 
 
+def test_duplicate_extension_markers_grant_only_one_cycle(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
+	comments.extend([_comment(_extension(OLD), comment_id=9), _comment(_extension(OLD), comment_id=10)])
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_ANCESTORS": OLD})
+	assert output == "hold=true\n" and "outcome=dispatched cycle=6" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "(cycle 6 of 6)" in posted[-1][-1]
+
+
 def test_unpushed_extension_does_not_hold_exhausted_pass(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)

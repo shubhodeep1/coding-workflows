@@ -2116,6 +2116,11 @@ ${RB_FIX_DESC}"
           fi
         else
           echo "Judge staged no effective changes. Treating as merge."
+          if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
+            echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+            echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
@@ -2127,6 +2132,11 @@ ${RB_FIX_DESC}"
         fi
       else
         echo "Judge produced no file changes. Treating as merge."
+        if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
+          echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+          echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
         while IFS= read -r issue_number; do
           [ -n "${issue_number}" ] || continue

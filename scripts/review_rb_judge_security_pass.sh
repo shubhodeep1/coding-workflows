@@ -26,10 +26,11 @@
 # issues, filtered locally by their `Integration branch:` line. A failed or
 # malformed page stops the judge before it decides. rb_security_merge_gate
 # costs what the gate costs (see review_single_issue_security_pass.sh).
-# rb_security_post_extension
-# writes one comment before the judge fix is pushed. Every read failure is
-# fail-safe: detection falls back to normal judge mode, and the merge gate
-# holds on any error.
+# rb_security_post_extension writes one logical comment before the judge fix
+# is pushed; gh_retry may repeat the POST after a transient failure, and the
+# gate deduplicates markers by fix SHA. Every read failure is fail-safe:
+# detection falls back to normal judge mode, and the merge gate holds on any
+# error.
 #
 # Log: RB_JUDGE_SECURITY_PASS mode= pr= outcome= reason=
 
@@ -83,7 +84,7 @@ rb_security_findings_render()
 	local head_ref="$1" out_file="$2" issues_json
 	# The judge's existing PR/linked-issue reads do not include the open
 	# ai:security issue set; reuse the audit's paginated listing shape.
-	if ! issues_json="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100" 2>/dev/null)" \
+	if ! issues_json="$(gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100" 2>/dev/null)" \
 		|| ! printf '%s' "${issues_json}" | jq -e 'type == "array" and length > 0 and all(.[]; type == "array")' >/dev/null 2>&1; then
 		echo "(Could not list the open security-audit findings for this branch; check the PR's \`ai:security\` follow-up issues.)" > "${out_file}"
 		rb_security_log "mode=findings pr=${PR_NUMBER:-} outcome=lookup_failed"
@@ -174,7 +175,9 @@ rb_security_post_extension()
 {
 	local head_sha="$1"
 	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
-	if gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="## Security pass: one more audit cycle
+	# Extension SHAs are deduplicated when the gate counts them, so gh_retry
+	# cannot grant extra audit cycles if a successful response is lost.
+	if gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="## Security pass: one more audit cycle
 
 The review-blocked judge prepared a fix for the open security findings after the audit ran out of cycles. If the push succeeds, the next clean review audits \`${head_sha}\` once more before the PR can merge.
 
