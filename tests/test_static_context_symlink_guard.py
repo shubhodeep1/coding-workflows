@@ -257,7 +257,7 @@ def test_orchestrator_static_context_guards_symlinks() -> None:
 				required_path.write_text("trusted input\n", encoding="utf-8")
 
 			output = root / "pre_assembled_static.txt"
-			output.unlink()
+			output.unlink(missing_ok=True)
 			output.symlink_to(secret)
 			result = subprocess.run(
 				["bash", "-c", step_run], cwd=root, env=workflow_env,

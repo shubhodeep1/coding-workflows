@@ -483,7 +483,7 @@ render_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${PRIOR_ROUND_DECISIO
 		cat ./pre_assembled_static.txt
 		echo
 	fi
-	if [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
 		emit_consolidator_untrusted_file 'PR README.MD (trimmed)' "${RUNTIME_DIR}/static_readme_trimmed.txt"
 		echo
 	fi

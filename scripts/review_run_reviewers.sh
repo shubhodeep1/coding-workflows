@@ -2584,7 +2584,7 @@ if [ "${reviewer_static_prefix_bytes}" -le 0 ]; then
   reviewer_static_prefix_bytes=200000
 fi
 reviewer_readme_context_bytes=0
-if [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
   reviewer_readme_context_bytes=$(( $(wc -c < "${RUNTIME_DIR}/static_readme_trimmed.txt") + 16 * $(wc -l < "${RUNTIME_DIR}/static_readme_trimmed.txt") + 200 ))
 fi
 reviewer_embed_budget_bytes=$(( REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES - reviewer_static_prefix_bytes - reviewer_readme_context_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES ))
@@ -3154,7 +3154,7 @@ assemble_reviewer_prompt() {
   {
     cat ./pre_assembled_static.txt
     echo
-    if [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+    if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
       echo "=== BEGIN UNTRUSTED PR README.MD (trimmed) ==="
       while IFS= read -r review_readme_line || [ -n "${review_readme_line}" ]; do
         printf 'UNTRUSTED_DATA: %s\n' "${review_readme_line}"

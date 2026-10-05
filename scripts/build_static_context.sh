@@ -125,7 +125,7 @@ emit_readme_trimmed() {
 	local readme_context_rc=0
 
 	readme_context_tmp="$(mktemp "${TMPDIR:-/tmp}/static-readme.XXXXXX")"
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${PWD}" > "${readme_context_tmp}" <<'PY' || readme_context_rc=$?
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${PWD}" > "${readme_context_tmp}" <<'PY' || readme_context_rc=$?
 import os
 from pathlib import Path
 import stat
