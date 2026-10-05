@@ -180,8 +180,14 @@ def test_broker_rejects_client_authorization(chain) -> None:
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.timeout = 5
 	body = json.dumps({"model": MODEL}).encode()
-	# The broker rejects on headers without reading the body; sending it races the close.
-	connection.request("POST", "/v1/messages", None, {"Content-Type": "application/json", "Content-Length": str(len(body)), "Authorization": "Bearer mine"})
+	# The broker rejects these headers before reading the body. Sending it
+	# races the broker's close and can raise BrokenPipeError on the client.
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", str(len(body)))
+	connection.endheaders()
+	connection.sock.settimeout(5)
 	assert connection.getresponse().status == 400
 	connection.close()
 	assert _Upstream.seen == []
