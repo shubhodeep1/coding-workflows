@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_engine.sh:513-514 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The INT and TERM trap commands use `|| true`, swallowing the support-integrity failure returned by `_ai_engine_support_finish`.\n  WHY: If support verification or unlock fails during signal handling, the process exits 130 or 143 instead of the tamper-detection exit 86.\n- scripts/claude_engine.py:645 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The data-checkout skip condition excludes nested support roots from the lock when a consumer checkout contains its support root.\n  WHY: Files in the nested support tree are not write-protected, so post-run integrity checks will not detect a read-profile model overwriting them.\n- tests/test_ai_engine.py:414-430 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The signal test uses `kill -{signal_name} \"$5907\"`, which does not target the shell running the test.\n  WHY: The INT/TERM trap is not reliably triggered, so the test cannot verify the expected signal return codes or the trap\u2019s support-failure behavior.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/ai_engine.sh: 513-514 | severity=critical | confidence=5\n  PROBLEM: The INT and TERM trap commands use `|| true` instead of propagating the support-integrity failure returned by `_ai_engine_support_finish`.\n  WHY: When support verification or unlock fails during signal handling, the trap swallows exit code 86 and exits 130 or 143 instead.\n- scripts/claude_engine.py: 645 | severity=high | confidence=5\n  PROBLEM: The data-checkout skip condition excludes the nested support tree when a consumer checkout contains its support root.\n  WHY: The nested support tree is not write-protected by the lock, so a read-profile model can overwrite files there without detection by the post-run integrity check.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- File: tests/test_ai_engine.py\n  Line or code reference: test_read_isolation_signal_preserves_support_failure lines 446-448 (LAST RUN DIFF +426)\n  severity=high | confidence=5\n  PROBLEM: The mock `_ai_engine_claude_run_isolated` executes `kill -{signal_name} \"$5907\"` instead of targeting the current shell (`$$`).\n  WHY: The signal trap is not triggered, so the `tamper=False` cases return 1 rather than the expected 130 or 143.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: tests/test_ai_engine.py\n  Line: 414-430 (test_read_isolation_signal_preserves_support_failure, new test added in last run diff)\n  severity=high | confidence=4\n  PROBLEM: The mock `_ai_engine_claude_run_isolated` runs `kill -{signal_name} \"$5907\"`, which does not send a signal to the test shell.\n  WHY: With `set -u` active, expansion aborts before `kill` runs, so the `tamper=False` cases return 1 instead of 130 or 143 and the intended trap behavior is not validated.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: tests/test_ai_engine.py\n  Line or code reference: test_read_isolation_signal_preserves_support_failure, `kill -{signal_name} \"$5907\"`\n  severity=high | confidence=5\n  PROBLEM: `$5907` expands the fifth positional argument followed by `907`, targeting PID 907 rather than the shell running the test.\n  WHY: The signal does not reliably reach the shell with the installed trap, so the test does not reliably exercise that trap or its expected return-code assertion.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: tests/test_ai_engine.py\n  Line or code reference: `test_read_isolation_signal_preserves_support_failure` at lines +419-430, specifically `kill -{signal_name} \"$5907\"`\n  severity=high | confidence=4\n  PROBLEM: The test uses `$5907` as the signal target, which bash parses as positional parameter `$5` followed by `907`.\n  WHY: With `set -u` active, the expansion causes an unbound-variable error instead of sending a signal, leaving the INT/TERM trap path untested.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: tests/test_ai_engine.py\n  Line or code reference: `test_read_isolation_signal_preserves_support_failure` \u2014 `kill -{signal_name} \"$5907\"` in the LAST RUN DIFF\n  severity=high | confidence=4\n  PROBLEM: `$5907` is parsed as `${5}907`, targeting PID 907 rather than the current bash shell.\n  WHY: The INT/TERM handlers are not triggered, so the `tamper=False` cases do not return 130 or 143 and the trap fix remains untested.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "144a23ee0c88b4aae3f7798eae1964748dc845d78d330f87c506fbde1592bff9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6257,
+    "run_id": "37273500635",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37273500635",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005075417_869da89f42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6257,
+    "run_id": "37273500635"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:54:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
