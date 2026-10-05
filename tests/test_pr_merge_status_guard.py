@@ -1037,6 +1037,8 @@ def test_appended_git_directory_push_asks_without_origin_lookup(merged_branch_re
 	"git push --rep https://github.com/other/repo HEAD:feature/x",
 	"git push https://github.com/other/repo HEAD:feature/x",
 	"git push --repo=upstream",
+	"git push --repo upstream",
+	"git push --rep upstream",
 	"git push --repo=upstream HEAD:feature/x",
 	"git push --repo=origin HEAD:feature/x",
 	"git push --repo origin HEAD:feature/x",
