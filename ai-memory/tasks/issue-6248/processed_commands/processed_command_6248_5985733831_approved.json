@@ -5,13 +5,29 @@
   "entry_id": "processed_command_6248_5985733831_approved",
   "issue_number": 6248,
   "metadata": {
+    "branch": "ai/issue-6248",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "agents.md",
+      "changelog.d/6248-static-context-symlink-guard.md",
+      "scripts/build_static_context.sh",
+      "scripts/targeted_file_context.py",
+      "tests/test_static_context_symlink_guard.py",
+      "tests/test_targeted_file_context.py"
+    ],
+    "issue_number": 6248,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6248",
+    "pr_number": 6253,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6253",
+    "run_attempt": "1",
+    "run_id": "37245083781",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37245083781"
   },
   "run_attempt": 1,
   "run_id": "37245083781",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-04T23:51:02Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T00:09:29Z",
   "workflow": "implement"
 }
