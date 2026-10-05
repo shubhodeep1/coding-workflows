@@ -14,9 +14,8 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories warn and fall back to
-the session checkout check; unresolved push refspecs also ask for confirmation.
-Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unknown directories or refspecs warn and
+fall back to the session checkout check. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 
 Detection rule — all three conditions must hold before the command is blocked:
@@ -261,23 +260,14 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
-	previous_token_end = -1
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
-			previous_token_end = -1
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			# A bare digit immediately adjacent to the redirect is an fd, not
-			# a push refspec. A separated or quoted digit is a real argument.
-			if (segment and segment[-1].isascii() and segment[-1].isdigit()
-				and previous_token_end >= len(segment[-1])
-				and command[previous_token_end - len(segment[-1]):previous_token_end] == segment[-1]
-				and command[previous_token_end - len(segment[-1]) - 1:previous_token_end - len(segment[-1])] not in ("\\", "'", '"')
-				and command[previous_token_end:previous_token_end + 1] in "<>"):
+			if segment and segment[-1].isdigit():
 				segment.pop()
 			redirect_target = True
-			previous_token_end = -1
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
@@ -286,7 +276,6 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			operator = token
 		else:
 			segment.append(token)
-			previous_token_end = lexer.instream.tell() - 1
 	if segment:
 		result.append((operator, segment))
 	return result
@@ -506,8 +495,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			continue
 		if branch is None:
 			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; checking the current branch instead",
-				bulk="unresolved git push destination"))
+				"could not resolve git push refspec; checking the current branch instead"))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
 	if bulk:
@@ -1185,9 +1173,8 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 
 	Used when the guard cannot prove the branch is safe: the API is
 	unreachable and git history is inconclusive, or ancestry cannot be
-	verified for a remote-only push, or a push refspec cannot be resolved.
-	The human verifies the actual destination and source; a denial sends the
-	reason back to Claude.
+	verified for a remote-only push. The human confirms the PR is still open;
+	a denial sends the reason back to Claude.
 	"""
 	# The prompt is read by a human: `reason` carries the full transport
 	# error for the log, `prompt_reason` a one-paragraph version for the prompt.
@@ -1200,11 +1187,10 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 					"hookEventName": "PreToolUse",
 					"permissionDecision": "ask",
 					"permissionDecisionReason": (
-						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only after "
-						f"verifying the actual push destination and source tip do not stack "
-						f"on a branch whose PR has already merged without an open PR. "
-						f"Otherwise deny, rebuild the branch from the default branch, "
-						f"and open a new PR."
+						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
+						f"pull request for this branch is still open. If it has merged, "
+						f"deny — the branch must be rebuilt from the default branch and "
+						f"a new PR opened."
 					),
 				},
 			}
@@ -1326,7 +1312,6 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					)
 				if code != 0:
 					_warn("could not resolve git push source; checking the session checkout instead")
-					bulk_reasons.append("unresolved git push source")
 					target = _GuardTarget(checkout, {}, "", "HEAD", True)
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
@@ -1386,7 +1371,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		return 2, "\n\n".join(blocks)
 	if bulk_reasons:
 		_request_confirmation(
-			"Git push may write branches or source tips the guard could not verify: "
+			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
 	return 0, ""
