@@ -1929,7 +1929,8 @@ the relay waits at most one second to drain a declared body with a short decimal
 of at most `MAX_BODY` before returning 400. A client that withholds the body
 still receives the rejection; the 400 response has its own one-second socket
 timeout even if the drain deadline expires. Malformed or oversized lengths are
-rejected without draining.
+rejected without draining. All rejection responses, including GET and CONNECT,
+use the same one-second socket timeout for the response write.
 
 **Which engine a role uses**, first match wins: the work item's labels
 (`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),

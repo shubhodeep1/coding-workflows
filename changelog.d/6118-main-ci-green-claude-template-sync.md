@@ -8,6 +8,6 @@ Two merged PRs updated a template under `workflow-templates/.claude/` without th
 | Failed `CI` push runs on `main`, 2026-10-03 09:51 to 2026-10-04 17:56 UTC | 35 of 35 |
 | Live copies updated in this change | 4 (1 hook, 3 commands) |
 | Command files allowlisted as maintained separately | 6 |
-| Anthropic relay focused suite | 24 tests passing |
+| Anthropic relay focused suite | 31 tests passing |
 
 What this means for operators: CI on new PRs no longer fails from these template/live parity mismatches or the relay's invalid-authorization regression. If a sync PR from `ai/sync-claude-live-copies` appears, it copies template content and executable mode into `.claude/`; it goes through the normal review. Symlinked template or live paths fail rather than copying checkout credentials or writing outside `.claude/`. To keep a file intentionally different, add it to `.github/ai/claude_template_divergence.json` with a reason.

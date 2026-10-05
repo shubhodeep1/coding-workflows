@@ -101,6 +101,10 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		pass
 
 	def _reject(self, status):
+		try:
+			self.connection.settimeout(1)
+		except OSError:
+			pass
 		self.send_error(status, "Request rejected")
 		self.close_connection = True
 

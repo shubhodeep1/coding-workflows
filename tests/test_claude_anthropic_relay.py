@@ -172,6 +172,16 @@ def test_get_is_rejected(chain) -> None:
 	assert status == 405
 
 
+@pytest.mark.parametrize("status", (400, 405, 502))
+@pytest.mark.parametrize("timeout_error", (None, OSError("closed connection")))
+def test_reject_binds_response_write_timeout(status, timeout_error) -> None:
+	request = Mock()
+	request.connection.settimeout.side_effect = timeout_error
+	request.send_error.side_effect = lambda *_args: request.connection.settimeout.assert_called_once_with(1)
+	relay.Relay._reject(request, status)
+	assert request.close_connection is True
+
+
 def test_broker_rejects_a_model_outside_the_allow_list(chain) -> None:
 	status, _, _ = _post(chain["bridge_port"], body={"model": "claude-other-9", "messages": []})
 	assert status == 400
