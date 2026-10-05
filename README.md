@@ -1218,7 +1218,7 @@ forwards one fixed endpoint for one model.
 | Image | built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after) |
 | Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files (including `.ssh`, `.npmrc`, `.netrc`) skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap; synthetic Git contains only allowed HEAD blobs |
 | Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
-| Implement dependencies | installed once per job in a credential-free networked container; never copied back |
+| Implement dependencies | installed once per job in a credential-free container with `--network none`, using an allowlisted HTTPS registry proxy; never copied back; when the proxy is unavailable, dependency installation is skipped without restoring network access |
 | Claude engine (`claude_run`) | same container via `--engine claude`, pinned Claude Code CLI added to the image; the token stays in the host relay (`claude_anthropic_relay.py`); unavailable isolation returns `75` so the role runs codex (README "Claude engine") |
 
 Credential-store filenames such as `client_secret.json`, `credentials.conf`,
@@ -1257,6 +1257,9 @@ repository with `--repo` or a positional remote asks for confirmation rather
 than treating the checkout's origin PR history as proof that the push is safe.
 When both are supplied, Git uses the positional repository; the guard checks
 that destination, not the `--repo` fallback.
+An explicit push URL asks even when its slug matches `origin`: Git may rewrite
+the URL with `url.*.insteadOf` or `pushInsteadOf`. The guard does not query
+origin PR history for that push, including deletion-only or tag-only pushes.
 Pushes with per-command Git configuration (`git -c` or `--config-env`) also ask:
 an override can redirect `origin`, so the guard does not use its stored PR history.
 The same confirmation applies to inline `GIT_CONFIG_*` or `GIT_CONFIG`
@@ -1820,6 +1823,7 @@ through `clarify → plan → implement → review`.
 | `EVENTS_JSONL_ENABLED` | `false` | Opt-in append-only JSONL mirror for stable workflow-event prefixes. When `true`, supported emitters append `.events/run-<GITHUB_RUN_ID\|local>.jsonl` under `GITHUB_WORKSPACE` after writing the original text line/comment marker; write failures emit `EVENTS_EMIT_FAIL` and fail open, so existing stderr/comment behavior remains authoritative. |
 | `REVIEW_MAX_RESUME_ROUNDS` | `3` | Maximum same-head partial-resume rounds before `review_autofix.yml` terminalizes the cached partial state as `round_budget_exhausted`; same-head no-progress rounds terminalize earlier as `no_progress`. |
 | `CODEX_VERSION` | `v0.114.0` | Pinned Codex CLI version retained by production paths that still use Codex outside the fully migrated review/autofix model pipeline. |
+| `DEPENDENCY_PROXY_ALLOWED_HOSTS` | `pypi.org,files.pythonhosted.org,registry.npmjs.org,registry.yarnpkg.com` | Complete comma- or whitespace-separated allowlist of public DNS names for the isolated implement/review dependency installs. Replace the list to add a public mirror; unlisted hosts, non-global DNS addresses and plain HTTP are refused. Direct-only egress is required on the runner; corporate upstream proxies are not chained. |
 | `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used by the dispatchable `opencode-live-smoke.yml` rollout gate and the complete production review/autofix model pipeline. |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-head project security pass before validation or finalization. Set to `false` for the immediate operator kill switch. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before terminal `ai:security-pass-failed`. |

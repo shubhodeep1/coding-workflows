@@ -564,8 +564,15 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   synthetic `.git` whose `HEAD` contains only allowed blobs from the host's
   `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
-  dependencies once per job in a credential-free container that does have
-  network (`npm ci --ignore-scripts`, `pip install` into `/opt/codex-venv`).
+  dependencies once per job in a credential-free container with `--network none`
+  (`npm ci --ignore-scripts`, `pip install` into `/opt/codex-venv`). A host-side
+  `scripts/dependency_registry_proxy.py` accepts only HTTPS CONNECT tunnels to
+  allowlisted public registry hosts, vets all resolved IPs and connects by IP.
+  The review dependency container uses the same proxy; the default allowlist is
+  PyPI and npm/Yarn registries, replaceable via `DEPENDENCY_PROXY_ALLOWED_HOSTS`.
+  A missing proxy skips dependency installation without restoring direct
+  container network access; review preparation continues, but validations
+  needing those dependencies may be unverified.
   Their output stays in the sandbox ("prep roots") and is never copied back.
   The agent itself has no network: it marks validators it cannot run
   UNVERIFIED instead of installing them.
@@ -649,6 +656,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   destination requests human confirmation instead of silently checking the
   checkout's origin. A positional repository overrides `--repo` when both
   are supplied; without a positional repository, `--repo` is the fallback.
+  Explicit URL destinations request confirmation even when their slug matches
+  origin, since Git's `url.*.insteadOf` or `pushInsteadOf` can rewrite the URL.
+  Deletion-only and tag-only pushes to such URLs follow the same rule.
   Remote URLs are never printed in the prompt (they may
   contain credentials). Pushes with `git -c`, `--config-env`, or inline
   `GIT_CONFIG_*` or `GIT_CONFIG` assignments, or an `env` wrapper, ask too:
@@ -1356,6 +1366,7 @@ prefixes. Renames are breaking unless an alongside-old shim is documented
 and shipped:
 
 - `CODEX_ISOLATION`
+- `DEPENDENCY_PROXY`
 - `LABEL_REPAIR`
 - `LABEL_REPAIR_DIFF`
 - `LABEL_SYNC_CREATED`
@@ -1563,6 +1574,7 @@ caller continues without injection and the helper emits only
 missing the requested phase key.
 
 LOG_PREFIX.name=CODEX_ISOLATION
+LOG_PREFIX.name=DEPENDENCY_PROXY
 LOG_PREFIX.name=LABEL_REPAIR
 LOG_PREFIX.name=LABEL_REPAIR_DIFF
 LOG_PREFIX.name=LABEL_SYNC_CREATED
