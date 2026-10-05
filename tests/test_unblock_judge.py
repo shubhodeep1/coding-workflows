@@ -1371,7 +1371,7 @@ def test_forged_project_state_cannot_bind_item(tmp_path: Path, kind: str) -> Non
 @pytest.mark.parametrize("kind", ["pr", "project"])
 def test_judge_prompt_excludes_forged_project_state(tmp_path: Path, kind: str) -> None:
 	item = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}]) if kind == "project" else dict(ISSUE, pull_request={"url": "u"})
-	trusted = json.loads(_project_comments_for_item(12, status="trusted"))
+	trusted = json.loads(_project_comments_for_item(12, status="failed"))
 	forged = json.loads(_project_comments_for_item(99, status="forged"))
 	forged[0]["user"]["login"] = "mallory"
 	comments = trusted + forged
@@ -1382,7 +1382,7 @@ def test_judge_prompt_excludes_forged_project_state(tmp_path: Path, kind: str) -
 		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"}, **judge_args)
 	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout, result.stderr
 	prompt_state = json.loads((tmp_path / "rt" / "judge_context.json").read_text(encoding="utf-8"))["project_state"]
-	assert prompt_state["status"] == "trusted"
+	assert prompt_state["status"] == "failed"
 
 
 @pytest.mark.parametrize(("head_repo", "head_ref", "member", "detail"), [
