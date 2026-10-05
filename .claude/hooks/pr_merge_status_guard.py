@@ -260,7 +260,6 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
-	previous_token_end = -1
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
