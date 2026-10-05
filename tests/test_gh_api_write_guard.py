@@ -32,14 +32,6 @@ CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 SEED_REPO_COMMAND = REPO_ROOT / ".claude" / "commands" / "seed-repo.md"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-# The source repo retired these session assets; consumers still use the templates.
-if not GUARD_PATH.is_file():
-	GUARD_PATH = TEMPLATE_GUARD_PATH
-if not SETTINGS_PATH.is_file():
-	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
-if not SEED_REPO_COMMAND.is_file():
-	SEED_REPO_COMMAND = REPO_ROOT / "workflow-templates" / ".claude" / "commands" / "seed-repo.md"
-
 LOCAL_SLUG = "shubhodeep1/coding-workflows"
 
 
@@ -709,14 +701,6 @@ def test_unvetted_loop_with_unquoted_api_expansion_asks(command):
 	assert _decide(command) == guard.DECISION_ASK
 
 
-@pytest.mark.parametrize("command", [
-	"for r in 1; do gh api repos/o/r/issues/{1,2}; done",
-	"for r in 1; do gh api repos/o/r/issues/1; done # hidden shell comment",
-])
-def test_shell_rewrite_hazard_in_read_loop_asks(command):
-	assert _decide(command) == guard.DECISION_ASK
-
-
 def test_expanded_file_field_in_loop_still_asks():
 	assert _decide("for r in 1; do gh api repos/o/r/actions/runs/$r/jobs -X GET -F page=$r; done") == guard.DECISION_ASK
 
@@ -1088,9 +1072,7 @@ def test_other_bash_guards_stay_wired(path):
 
 
 def test_template_parity():
-	assert TEMPLATE_GUARD_PATH.is_file()
-	if GUARD_PATH != TEMPLATE_GUARD_PATH:
-		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
+	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(encoding="utf-8")
 
 

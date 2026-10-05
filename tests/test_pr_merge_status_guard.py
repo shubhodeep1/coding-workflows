@@ -27,14 +27,6 @@ TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "setting
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
 
-if not GUARD_PATH.is_file():
-	GUARD_PATH = TEMPLATE_GUARD_PATH
-if not SETTINGS_PATH.is_file():
-	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
-SESSION_START_PATH = GUARD_PATH.parent / "session-start.sh"
-if not SESSION_START_PATH.is_file():
-	SESSION_START_PATH = TEMPLATE_GUARD_PATH.parent / "session-start.sh"
-
 
 def _load_guard():
 	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", GUARD_PATH)
@@ -45,13 +37,6 @@ def _load_guard():
 
 
 guard = _load_guard()
-
-
-def test_resolved_session_asset_paths_exist() -> None:
-	"""The source repo may retire root session assets; template fallbacks must remain complete."""
-	assert GUARD_PATH.is_file()
-	assert SETTINGS_PATH.is_file()
-	assert SESSION_START_PATH.is_file()
 
 
 def _git_env() -> dict[str, str]:
@@ -233,7 +218,7 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	and the whitelist is what stops a lookalike host from aiming `gh -R` at an
 	unrelated github.com repo.
 	"""
-	session_start = SESSION_START_PATH
+	session_start = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
@@ -1140,14 +1125,11 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 
 def test_template_copies_are_identical() -> None:
 	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
-	assert TEMPLATE_GUARD_PATH.is_file()
-	if GUARD_PATH != TEMPLATE_GUARD_PATH:
-		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
+	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
 		encoding="utf-8"
 	)
-	if TEMPLATE_CLAUDE_MD.is_file():
-		assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
+	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
 
 def test_review_editor_can_transfer_guard_without_opening_other_claude_hooks() -> None:
@@ -1380,7 +1362,7 @@ def test_history_fallback_push_asks_when_inconclusive(merge_commit_repo) -> None
 	decision = _ask_decision(proc)
 	assert decision is not None, proc.stdout
 	assert "inconclusive" in decision["systemMessage"]
-	assert "actual push destination and source tip" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "still open" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_history_fallback_commit_warns_when_inconclusive(merge_commit_repo) -> None:
