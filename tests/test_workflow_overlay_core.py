@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -424,6 +425,47 @@ def test_trusted_overlay_fetch_failure_disables_without_leaking_token() -> None:
 		assert "sentinel-secret" not in proc.stderr + proc.stdout
 
 
+def test_trusted_git_is_noninteractive_and_timeout_is_recoverable() -> None:
+	sys.path.insert(0, str(REPO_ROOT))
+	try:
+		from scripts import load_workflow_overlay as overlay_loader
+	finally:
+		sys.path.pop(0)
+	with patch.object(overlay_loader.subprocess, "run", side_effect=subprocess.TimeoutExpired(["git", "fetch"], 60)) as git_call:
+		try:
+			overlay_loader._trusted_git(["fetch"], auth_env=overlay_loader._trusted_git_env())
+		except overlay_loader.WorkflowOverlayLoadError as exc:
+			assert str(exc) == "git_timeout"
+		else:
+			raise AssertionError("Timed-out trusted git call must fail")
+		assert git_call.call_args.kwargs["stdin"] == subprocess.DEVNULL
+		assert git_call.call_args.kwargs["timeout"] == 60
+		assert git_call.call_args.kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+	with tempfile.TemporaryDirectory(prefix="trusted_overlay_timeout_") as td:
+		root = Path(td)
+		checkout = root / "checkout"
+		checkout.mkdir()
+		trusted_root = root / "trusted"
+		github_env = root / "trusted.env"
+		with patch.object(overlay_loader, "_trusted_git", side_effect=overlay_loader.WorkflowOverlayLoadError("git_timeout")):
+			overlay_loader.load_trusted_overlay(
+				overlay_loader.argparse.Namespace(trusted_source_repo="owner/repo", trusted_source_branch="", trusted_root=str(trusted_root), github_env=str(github_env)),
+				checkout,
+			)
+		assert _parse_github_env(github_env)["WORKFLOW_OVERLAY_ENABLED"] == "false"
+
+
+def test_empty_github_server_url_uses_https_default() -> None:
+	sys.path.insert(0, str(REPO_ROOT))
+	try:
+		from scripts import load_workflow_overlay as overlay_loader
+	finally:
+		sys.path.pop(0)
+	with patch.dict(os.environ, {"GITHUB_SERVER_URL": ""}):
+		assert overlay_loader._trusted_remote_url("owner/repo") == "https://github.com/owner/repo"
+
+
 def test_trusted_overlay_missing_fragment_is_rejected_before_export() -> None:
 	with tempfile.TemporaryDirectory(prefix="trusted_overlay_missing_fragment_") as td:
 		root = Path(td)
@@ -546,6 +588,7 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 	assert '--schema-path "${SUPPORT_AI_MEMORY_DIR}/schemas/workflow_overlay.v1.json"' in stage_helper_text
 	assert '--trusted-source-repo "${CURRENT_REPOSITORY}"' in stage_helper_text
 	assert '--trusted-root "${SUPPORT_ROOT_DIR}/workflow-overlay"' in stage_helper_text
+	assert 'stage_workflow_support.sh requires CURRENT_REPOSITORY or GITHUB_REPOSITORY for trusted overlay staging.' in stage_helper_text
 	assert 'WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"' in (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8")
 	for snippet in (
 		"python3 scripts/load_workflow_overlay.py",
@@ -572,6 +615,8 @@ if __name__ == "__main__":
 	test_trusted_overlay_absent_disables_checkout_overlay()
 	test_trusted_overlay_resolves_remote_head_without_event_and_ignores_checkout_git_env()
 	test_trusted_overlay_fetch_failure_disables_without_leaking_token()
+	test_trusted_git_is_noninteractive_and_timeout_is_recoverable()
+	test_empty_github_server_url_uses_https_default()
 	test_trusted_overlay_missing_fragment_is_rejected_before_export()
 	test_trusted_overlay_blob_read_failure_disables_overlay()
 	test_trusted_overlay_rejects_unsafe_fragment_paths()

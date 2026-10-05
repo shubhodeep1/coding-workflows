@@ -20,6 +20,10 @@ if [ -z "${RUNNER_TEMP:-}" ] || [ -z "${GITHUB_RUN_ID:-}" ] || [ -z "${GITHUB_RU
   echo "::error::stage_workflow_support.sh requires RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, and GITHUB_ENV."
   exit 1
 fi
+if [ -z "${CURRENT_REPOSITORY}" ]; then
+  echo "::error::stage_workflow_support.sh requires CURRENT_REPOSITORY or GITHUB_REPOSITORY for trusted overlay staging." >&2
+  exit 1
+fi
 
 wf_source="${WORKFLOW_SOURCE_REPO}"
 workspace_root="${GITHUB_WORKSPACE:-$PWD}"
