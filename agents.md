@@ -632,8 +632,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   are checked in the directory selected by `env -C` or `GIT_DIR`; ambiguous
   directories and unparseable `env -S` commands ask for confirmation instead
   of checking the session checkout. Append assignments to `GIT_DIR` or
-  `GIT_WORK_TREE` also ask before a push, and leading redirections do not
-  bypass commit/push detection. A numeric argument next to a redirection is
+  `GIT_WORK_TREE` also ask before a push, and leading redirections, including
+  those after environment assignments, do not bypass commit/push detection.
+  A numeric argument next to a redirection is
   checked as a possible branch and asks for confirmation when no block is found,
   since `2 >out` and `2>out` look identical after shell tokenization. An
   unresolved push source asks rather than checking the session checkout's HEAD.

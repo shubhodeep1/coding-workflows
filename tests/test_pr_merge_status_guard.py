@@ -91,6 +91,8 @@ def test_unguarded_commands_are_ignored(command: str) -> None:
 	">/tmp/guard-out git commit -m x",
 	"2>/dev/null git push origin HEAD:feature/x",
 	"2>&1 git push origin HEAD:feature/x",
+	"VAR=1 2>&1 git push origin HEAD:feature/x",
+	"FOO=bar 2>/dev/null git commit -m x",
 ])
 def test_leading_redirection_preserves_guarded_command(command: str) -> None:
 	assert guard.git_subcommands(command) & guard.GUARDED_SUBCOMMANDS
@@ -938,6 +940,8 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	">/tmp/guard-out git commit -m x",
 	">/tmp/guard-out git push origin HEAD:feature/x",
 	"2>&1 git push origin HEAD:feature/x",
+	"VAR=1 2>&1 git push origin HEAD:feature/x",
+	"FOO=bar 2>/dev/null git commit -m x",
 ])
 def test_leading_redirection_still_blocks_merged_branch(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
