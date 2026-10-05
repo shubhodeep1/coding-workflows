@@ -77,6 +77,15 @@ def _commit(root: Path, path: str, text: str) -> tuple[str, str]:
 	return before, _git(root, "rev-parse", "HEAD")
 
 
+def _sync_pr(number: int, *, repo: str = "octo/repo", base: str = "main") -> dict:
+	return {
+		"number": number,
+		"state": "open",
+		"head": {"ref": "ai/sync-claude-live-copies", "repo": {"full_name": repo}},
+		"base": {"ref": base},
+	}
+
+
 def test_plan_picks_template_only_changes(tmp_path: Path) -> None:
 	root = _scratch_repo(tmp_path)
 	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
@@ -216,7 +225,7 @@ def test_sync_commits_missing_live_copy(tmp_path: Path, monkeypatch) -> None:
 	_git(root, "remote", "add", "origin", str(remote))
 	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
 	monkeypatch.delenv("SYNC_BRANCH", raising=False)
-	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 7}])
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [_sync_pr(7)])
 	(root / "workflow-templates/.claude/commands").mkdir()
 	before, after = _commit(root, "workflow-templates/.claude/commands/new.md", "new command\n")
 	(root / "workflow-templates/.claude/commands/new.md").chmod(0o755)
@@ -280,8 +289,92 @@ def test_sync_pushes_a_branch_and_opens_one_pr(tmp_path: Path) -> None:
 	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/guard.py") == "v2"
 	lines = calls.read_text(encoding="utf-8").splitlines()
 	assert lines[0].startswith("api repos/octo/repo/pulls?state=open&head=octo:ai/sync-claude-live-copies")
+	assert "&base=main&per_page=100" in lines[0]
 	assert lines[1].startswith("api -X POST repos/octo/repo/pulls -f title=chore(.claude): sync live copies")
 	assert "-f head=ai/sync-claude-live-copies -f base=main" in lines[1]
+
+
+def test_sync_ignores_open_pr_into_other_base(tmp_path: Path, monkeypatch, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	remote = tmp_path / "remote.git"
+	_git(tmp_path, "init", "-q", "--bare", str(remote))
+	_git(root, "remote", "add", "origin", str(remote))
+	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+	monkeypatch.delenv("SYNC_BRANCH", raising=False)
+	calls = []
+
+	def gh_json(*args):
+		calls.append(args)
+		return {"number": 7} if "-X" in args else [_sync_pr(5, base="stable")]
+
+	monkeypatch.setattr(sync_mod, "_gh_json", gh_json)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert len(calls) == 2
+	assert "&base=main&per_page=100" in calls[0][0]
+	assert "base=main" in calls[1]
+	output = capsys.readouterr().err
+	assert "ignored_pr pr=5 reason=base_mismatch" in output
+	assert "opened pr=7" in output
+	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/guard.py") == "v2"
+
+
+def test_sync_ignores_fork_and_deleted_head_repo(tmp_path: Path, monkeypatch, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	remote = tmp_path / "remote.git"
+	_git(tmp_path, "init", "-q", "--bare", str(remote))
+	_git(root, "remote", "add", "origin", str(remote))
+	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+	monkeypatch.delenv("SYNC_BRANCH", raising=False)
+	calls = []
+	deleted_head = _sync_pr(6)
+	deleted_head["head"]["repo"] = None
+
+	def gh_json(*args):
+		calls.append(args)
+		return {"number": 7} if "-X" in args else [_sync_pr(5, repo="evil/repo"), deleted_head]
+
+	monkeypatch.setattr(sync_mod, "_gh_json", gh_json)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert len(calls) == 2
+	assert "base=main" in calls[1]
+	output = capsys.readouterr().err
+	assert "ignored_pr pr=5 reason=head_repo_mismatch" in output
+	assert "ignored_pr pr=6 reason=head_repo_mismatch" in output
+	assert "opened pr=7" in output
+
+
+def test_sync_updates_exact_match_after_decoy(tmp_path: Path, monkeypatch, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	remote = tmp_path / "remote.git"
+	_git(tmp_path, "init", "-q", "--bare", str(remote))
+	_git(root, "remote", "add", "origin", str(remote))
+	monkeypatch.setenv("GITHUB_REPOSITORY", "Octo/Repo")
+	monkeypatch.delenv("SYNC_BRANCH", raising=False)
+	calls = []
+
+	def gh_json(*args):
+		calls.append(args)
+		return [_sync_pr(5, base="stable"), _sync_pr(7)]
+
+	monkeypatch.setattr(sync_mod, "_gh_json", gh_json)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert len(calls) == 1
+	assert "&base=main&per_page=100" in calls[0][0]
+	output = capsys.readouterr().err
+	assert "ignored_pr pr=5 reason=base_mismatch" in output
+	assert "updated pr=7 branch=ai/sync-claude-live-copies base=main paths=1" in output
+
+
+def test_sync_pr_rejects_malformed_entries() -> None:
+	for pr in (None, [], {"number": 1}, {"head": {"repo": None}, "base": {"ref": "main"}},
+	           {"head": {"repo": {"full_name": "octo/repo"}, "ref": "ai/sync-claude-live-copies"}, "base": "main"}):
+		assert not sync_mod._is_sync_pr(pr, "octo/repo", "ai/sync-claude-live-copies", "main")
+	closed_pr = _sync_pr(1)
+	closed_pr["state"] = "closed"
+	assert not sync_mod._is_sync_pr(closed_pr, "octo/repo", "ai/sync-claude-live-copies", "main")
 
 
 def test_sync_refresh_keeps_earlier_unmerged_live_copies(tmp_path: Path, monkeypatch) -> None:
@@ -295,7 +388,7 @@ def test_sync_refresh_keeps_earlier_unmerged_live_copies(tmp_path: Path, monkeyp
 	_git(root, "remote", "add", "origin", str(remote))
 	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
 	monkeypatch.delenv("SYNC_BRANCH", raising=False)
-	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 7}])
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [_sync_pr(7)])
 	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
 	assert sync_mod.sync(root, before, after, dry_run=False) == 0
 	_git(root, "checkout", "main")

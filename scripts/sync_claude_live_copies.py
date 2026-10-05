@@ -31,7 +31,8 @@ still reports any drift on the next pull request.
 
 API budget (CLAUDE.md §15): `sync` issues at most two REST calls per push,
 and only when something needs syncing: one GET for an open PR from the branch
-and, when there is none, one POST to open it.
+into the base branch whose head repository is this repository, and, when
+there is none, one POST to open it.
 
 Log lines start with `CLAUDE_LIVE_SYNC`.
 """
@@ -47,6 +48,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -157,6 +159,23 @@ def _gh_json(*args: str) -> object:
 	return json.loads(result.stdout or "null")
 
 
+def _is_sync_pr(pr: object, repository: str, branch: str, base: str) -> bool:
+	if not isinstance(pr, dict):
+		return False
+	head = pr.get("head")
+	pr_base = pr.get("base")
+	if not isinstance(head, dict) or not isinstance(pr_base, dict) or not isinstance(head.get("repo"), dict):
+		return False
+	head_repo = head["repo"].get("full_name")
+	return (
+		isinstance(head_repo, str)
+		and head_repo.casefold() == repository.casefold()
+		and head.get("ref") == branch
+		and pr_base.get("ref") == base
+		and pr.get("state", "open") == "open"
+	)
+
+
 def is_security_live_path(relative: str) -> bool:
 	return relative.startswith(SECURITY_LIVE_PREFIXES) or relative in SECURITY_LIVE_FILES
 
@@ -246,18 +265,39 @@ def sync(root: Path, before: str, after: str, *, dry_run: bool, keep_committed_s
 		return 1
 	owner = repository.split("/", 1)[0]
 	try:
-		open_prs = _gh_json(f"repos/{repository}/pulls?state=open&head={owner}:{branch}&per_page=1")
+		open_prs = _gh_json(
+			f"repos/{repository}/pulls?state=open&head={quote(owner, safe='')}:{quote(branch, safe='/')}"
+			f"&base={quote(base, safe='')}&per_page=100"
+		)
 	except (subprocess.CalledProcessError, OSError, ValueError):
 		log("error reason=api_failed stage=lookup")
 		return 1
 	if not isinstance(open_prs, list):
 		log("error reason=api_failed stage=lookup_invalid_response")
 		return 1
-	if open_prs:
-		if not isinstance(open_prs[0], dict):
-			log("error reason=api_failed stage=lookup_invalid_response")
-			return 1
-		log(f"updated pr={open_prs[0].get('number')} branch={branch} paths={len(paths)}")
+	matches = [pr for pr in open_prs if _is_sync_pr(pr, repository, branch, base)]
+	for pr in open_prs:
+		if _is_sync_pr(pr, repository, branch, base):
+			continue
+		pr_number = pr.get("number") if isinstance(pr, dict) else None
+		pr_number = pr_number if isinstance(pr_number, int) and not isinstance(pr_number, bool) else "unknown"
+		if not isinstance(pr, dict) or not isinstance(pr.get("head"), dict) or not isinstance(pr.get("base"), dict):
+			reason = "invalid_entry"
+		elif (
+			not isinstance(pr["head"].get("repo"), dict)
+			or not isinstance(pr["head"]["repo"].get("full_name"), str)
+			or pr["head"]["repo"]["full_name"].casefold() != repository.casefold()
+		):
+			reason = "head_repo_mismatch"
+		elif pr["head"].get("ref") != branch:
+			reason = "head_ref_mismatch"
+		elif pr["base"].get("ref") != base:
+			reason = "base_mismatch"
+		else:
+			reason = "invalid_entry"
+		log(f"ignored_pr pr={pr_number} reason={reason}")
+	if matches:
+		log(f"updated pr={matches[0].get('number')} branch={branch} base={base} paths={len(paths)}")
 		return 0
 	body = (
 		"Syncs live `.claude/` copies with their `workflow-templates/.claude/` templates "
