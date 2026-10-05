@@ -811,6 +811,28 @@ def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch
 	assert "could not resolve git command directory" in proc.stdout
 
 
+@pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
+def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, monkeypatch, override: str) -> None:
+	repo, _ = merged_branch_repo
+	worktree = repo.parent / "open"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "main")
+	value = worktree / ".git" if override == "GIT_DIR" else worktree
+	command = f"{override}+={value} git push origin HEAD"
+	invocations = guard._guarded_git_invocations(command, str(repo))
+	assert len(invocations) == 1
+	assert invocations[0].environment == {}
+	assert invocations[0].warning == "could not resolve git command directory; checking the session checkout instead"
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd:
+		[dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert "Branch `feature/x`" in message
+
+
 def test_explicit_source_tip_and_multiple_destinations(merged_branch_repo) -> None:
 	repo, stub_bin = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
