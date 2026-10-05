@@ -606,7 +606,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   A failed publication logs a warning but counts as a completed judge
   invocation; the next poll tick rechecks mergeability rather than terminalizing
   the project. An already-up-to-date merge creates no empty commit.
-  The poller's review-blocked `fix` path checks every staged path before commit:
+  The poller's review-blocked `fix` path prepares a fix only for the issue's
+  implementation PR with a same-repo head, verifies the fetched branch tip
+  against the PR head SHA, and rechecks the head before pushing; failed
+  provenance checks skip the fix. It checks every staged path before commit:
   protected paths (`.github/workflows/`, `.github/actions/`, `.github/ai/`,
   `scripts/`, `prompts/`, `.claude/`) must occur in the PR's paginated changed-file
   list; other paths may also come from validated judge citations. An unavailable
@@ -1428,6 +1431,8 @@ and shipped:
 - `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
 - `REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED`
 - `REVIEW_BLOCKED_FIX_SCOPE_REJECTED`
+- `REVIEW_BLOCKED_FIX_TARGET_VERIFIED`
+- `REVIEW_BLOCKED_FIX_TARGET_REJECTED`
 - `REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED`
 - `REISSUE_ORCHESTRATOR_METADATA_CARRIED`
 - `REISSUE_ORCHESTRATOR_METADATA_ABSENT`
@@ -1637,6 +1642,8 @@ LOG_PREFIX.name=REISSUE_FILES_TOUCHED_UNION
 LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS
 LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED
 LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_REJECTED
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_VERIFIED
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_REJECTED
 LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_CARRIED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_ABSENT
