@@ -123,7 +123,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `ai:scope-blocked`, `ai:harness-broken`, `ai:resolver-escalated`,
     `ai:security-pass-failed`) in a consumer or in this repo, and on
     `workflow_run: completed` failures of the five release / promotion
-    workflows. The reporter links the failed runs and the wrapper release pin
+    workflows and of `CI` on pushes to the default branch. The reporter links the failed runs and the wrapper release pin
     and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
     the intake fetches the failed job logs, diagnoses against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with

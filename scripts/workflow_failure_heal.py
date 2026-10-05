@@ -62,6 +62,11 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 	"Forward-merge stable to main",
 )
 
+# CI in coding-workflows. The intake takes its failed runs only for pushes to
+# the default branch: a red main blocks every PR, and pull-request CI failures
+# go to check-failure triage instead.
+MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
+
 SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 

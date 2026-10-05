@@ -1204,9 +1204,19 @@ implement → review`, which is the "safest possible" route. With
 `AUTO_IMPLEMENT_ON_CLEAR_PLAN=true` (the default) the opened issue can flow all
 the way to a fix PR without human action.
 
-- **Trigger:** `check_run: completed` with a `failure` or `timed_out`
-  conclusion, on a check associated with an open PR. The workflow file lives
-  on the default branch (required for `check_run` events).
+- **Trigger:** a failed (`failure` or `timed_out`) pull-request run of a
+  GitHub Actions workflow, through `workflow_run: completed` (job
+  `triage-workflow-run`). GitHub sends no `check_run` event for a check that
+  GitHub Actions created ("to prevent recursive workflows"), so before this
+  job the triage never ran for Actions CI. This repo's wrapper listens to the
+  `CI` workflow; the consumer wrapper listens to every workflow (`"*"`) and
+  skips the pipeline's own `AI …` workflows, so each finished workflow also
+  leaves a skipped wrapper run in the Actions tab. There is one triage per
+  failed run: the check name is the workflow name, which keeps one open
+  triage issue per PR and workflow, and the diagnosis reads every failing
+  check on the PR head. The original `check_run: completed` job stays for
+  checks reported by apps other than GitHub Actions. Both events need the
+  workflow file on the default branch.
 - **On by default:** runs unless the repo variable `CHECK_FAILURE_TRIAGE_ENABLED`
   is set to `false`. While disabled the wrapper job is skipped immediately (no
   checkout / no model call).
@@ -1334,7 +1344,12 @@ through `clarify → plan → implement → review`.
   or `timed_out` on `Test & Mark Stable Release`, `Mark Stable Release`,
   `Promote main to stable`, `Auto release stable`, and
   `Forward-merge stable to main`, handled directly by
-  `workflow-failure-heal-intake.yml` in coding-workflows. A promote or
+  `workflow-failure-heal-intake.yml` in coding-workflows.
+- **Trigger (CI on main):** the same `workflow_run` path for a failed `CI` run
+  on a push to the default branch (`MAIN_CI_WORKFLOW_NAMES` in
+  `scripts/workflow_failure_heal.py`). A red `main` fails every PR's CI, so the
+  heal issue targets `main`, the failed run's branch. Pull-request CI failures
+  are skipped here; check-failure triage takes them. A promote or
   auto-release run that failed only because the smoke gate failed is skipped
   (`skip reason=downstream_gate_failure`) because the gate run reports itself.
 - **Report (consumer side):** the reporter reads the escalated issue / PR, its
