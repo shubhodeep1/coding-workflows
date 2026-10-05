@@ -1089,6 +1089,40 @@ def test_unknown_push_target_does_not_prompt_before_merged_branch_block(merged_b
 	assert capsys.readouterr().out == ""
 
 
+@pytest.mark.parametrize("command", [
+	"git push origin 2 > /dev/null",
+	"git push origin 2  >/dev/null",
+	'git push origin "2">/dev/null',
+	"git push origin feature/open 2 >&1",
+])
+def test_numeric_refspec_before_redirect_is_guarded(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "2")
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "2" else [OPEN_PR]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert "2" in lookups
+
+
+@pytest.mark.parametrize(("command", "expected"), [
+	("git push origin 2>/dev/null", ["git", "push", "origin"]),
+	("git push origin 2 > /dev/null", ["git", "push", "origin", "2"]),
+	("x 12<in", ["x"]),
+	("x '2'>f", ["x", "2"]),
+])
+def test_numeric_word_before_redirect_tokenization(command: str, expected: list[str]) -> None:
+	assert guard._shell_segments_with_operators(command) == [("", expected)]
+
+
 def test_unresolved_push_source_requests_confirmation(monkeypatch, merged_branch_repo, capsys) -> None:
 	repo, _ = merged_branch_repo
 	_git(repo, "checkout", "main")

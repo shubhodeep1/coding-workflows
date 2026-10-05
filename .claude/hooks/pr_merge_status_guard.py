@@ -82,6 +82,7 @@ The API-write confirmation safeguard remains active.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -260,7 +261,7 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	This is not a Bash interpreter. Unsupported control flow is marked unknown
 	by the caller, never executed to infer an authorization decision.
 	"""
-	lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer = shlex.shlex(io.StringIO(command), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
@@ -268,37 +269,38 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
-	last_token_attached_redirect = False
-	for token in lexer:
+	last_word_span: tuple[int, int] | None = None
+	while True:
+		start = lexer.instream.tell()
+		token = lexer.get_token()
+		end = lexer.instream.tell()
+		if token == lexer.eof:
+			break
 		if redirect_target:
 			redirect_target = False
-			last_token_attached_redirect = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
+			# Bash treats only adjacent, unquoted digits as an IO_NUMBER.
+			# Keep all other words as arguments so their push refspec is checked.
 			if (
-				segment and token[0] in "<>" and last_token_attached_redirect
+				segment and last_word_span is not None
+				and last_word_span[1] > last_word_span[0]
+				and command[last_word_span[1] - 1] in "<>"
+				and re.fullmatch(r"[0-9]+", command[last_word_span[0]:last_word_span[1] - 1].lstrip(" \t\r"))
 			):
 				segment.pop()
 			redirect_target = True
-			last_token_attached_redirect = False
+			last_word_span = None
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
 				result.append((operator, segment))
 				segment = []
 			operator = token
-			last_token_attached_redirect = False
+			last_word_span = None
 		else:
 			segment.append(token)
-			# shlex has read the next punctuation character by the time it
-			# returns a word; anchor to that position, not another redirect.
-			last_token_attached_redirect = (
-				bool(re.fullmatch(r"[0-9]+", token))
-				and (
-					_is_unquoted_fd_prefix(command[:lexer.instream.tell()], token, ">")
-					or _is_unquoted_fd_prefix(command[:lexer.instream.tell()], token, "<")
-				)
-			)
+			last_word_span = (start, end)
 	if segment:
 		result.append((operator, segment))
 	return result
