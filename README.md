@@ -516,6 +516,14 @@ jobs:
 > with no fixes needed, it labels linked issues `ai:ready-to-merge` and
 > enables auto-merge if configured.
 
+> A security-exhaustion judge needs the complete paginated list of open
+> `ai:security` findings. If the lookup fails or a page is malformed, the
+> judge step fails before deciding; the next review run can retry. For a
+> security-mode `[judge-fix]`, the extension comment must be published
+> before the commit is pushed. If publication fails, the step fails and
+> leaves the fix unpushed so the next judge cannot merge it without its
+> additional audit cycle.
+
 > **Warning — do NOT add a top-level `concurrency` block to this wrapper.**
 > The reusable workflow already manages concurrency at the job level. Adding a
 > workflow-level `concurrency` group with the same key (e.g.

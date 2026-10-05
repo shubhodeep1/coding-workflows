@@ -1050,7 +1050,10 @@ RB_SECURITY_MODE="false"
 RB_SECURITY_FINDINGS_FILE="${RUNTIME_DIR}/rb_judge_security_findings.txt"
 rb_security_mode_detect
 if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
-  rb_security_findings_render "${TARGET_BRANCH:-$(jq -r '.head.ref // ""' "${PR_PAYLOAD_FILE:-/dev/null}" 2>/dev/null || true)}" "${RB_SECURITY_FINDINGS_FILE}"
+  if ! rb_security_findings_render "${TARGET_BRANCH:-$(jq -r '.head.ref // ""' "${PR_PAYLOAD_FILE:-/dev/null}" 2>/dev/null || true)}" "${RB_SECURITY_FINDINGS_FILE}"; then
+    echo "::error::Security-pass findings are incomplete; refusing a judge decision without them."
+    exit 1
+  fi
   echo "Security pass exhausted for PR #${PR_NUMBER}; the judge decides with the open findings."
 fi
 
@@ -2089,12 +2092,18 @@ Review-blocked judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
 ${RB_FIX_DESC}"
+          if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
+            # A failed marker write must leave this fix unpushed: the next
+            # security-exhaustion judge would otherwise bypass its audit.
+            if ! rb_security_post_extension "$(git rev-parse HEAD 2>/dev/null || true)"; then
+              # The workflow must not degrade this error to success: its
+              # deferred push would publish this local commit without a marker.
+              exit 42
+            fi
+          fi
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}"
           if git push origin "HEAD:${TARGET_BRANCH}"; then
             echo "Pushed [judge-fix] commit to ${TARGET_BRANCH}."
-            if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
-              rb_security_post_extension "$(git rev-parse HEAD 2>/dev/null || true)"
-            fi
             echo "judge_handled=true" >> "$GITHUB_OUTPUT"
             echo "judge_action=fix" >> "$GITHUB_OUTPUT"
           else

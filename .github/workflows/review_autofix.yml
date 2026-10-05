@@ -5827,6 +5827,10 @@ jobs:
             _judge_exit=0
             bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" || _judge_exit=$?
           fi
+          if [ "${_judge_exit}" -eq 42 ]; then
+            echo "::error::Security-pass extension marker was not published; refusing the deferred push of the judge fix."
+            exit 1
+          fi
           if [ "${_judge_exit}" -ne 0 ]; then
             echo "::warning::review_rb_judge.sh exited ${_judge_exit} — degrading to ai:review-blocked recovery path"
             echo "rb_judge_status=failed" >> "$GITHUB_OUTPUT"
