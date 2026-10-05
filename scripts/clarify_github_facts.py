@@ -12,7 +12,7 @@ workflow's token, and writes a short plain-text block that
 Input: one or more `--text-file` paths (the issue body and the clarification
 questions). References are extracted from them:
   - issues and PRs: `#123`, `owner/repo#123`, and
-    `https://github.com/owner/repo/(issues|pull)/123`;
+    `https://github.com/owner/repo/(issues|pull|pulls)/123`;
   - branches: backticked names that contain `/` and are not a path in the
     checkout (`orchestrator/project-857`, `ai/issue-4329`), plus the value
     of an `Integration branch:` line;
@@ -52,7 +52,7 @@ MAX_TITLE = 120
 
 NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})"
 SLUG_RE = re.compile(rf"^{NAME}/{NAME}$")
-URL_REF_RE = re.compile(rf"https://github\.com/({NAME}/{NAME})/(?:issues|pull)/([1-9][0-9]{{0,6}})\b")
+URL_REF_RE = re.compile(rf"https://github\.com/({NAME}/{NAME})/(?:issues|pulls?)/([1-9][0-9]{{0,6}})\b")
 SLUG_REF_RE = re.compile(rf"(?<![\w./-])({NAME}/{NAME})#([1-9][0-9]{{0,6}})\b")
 LOCAL_REF_RE = re.compile(r"(?<![\w/#&])#([1-9][0-9]{0,6})\b")
 RUN_REF_RE = re.compile(rf"https://github\.com/({NAME}/{NAME})/actions/runs/([1-9][0-9]{{0,14}})\b")

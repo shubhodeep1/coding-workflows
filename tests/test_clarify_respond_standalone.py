@@ -316,6 +316,14 @@ def test_from_answers_reads_picks_rationale_and_setup() -> None:
 	assert auto.from_answers(QUESTIONS, WORKER_ANSWER.replace("Q1: Write-profile", "**Q1**: Write-profile"))["decisions"][0]["why"] == first["why"]
 
 
+@pytest.mark.parametrize("setup_heading", ["**SETUP REQUIRED:**", "### SETUP REQUIRED:"])
+def test_from_answers_reads_emphasized_section_headings(setup_heading: str) -> None:
+	answer = WORKER_ANSWER.replace("RATIONALE:", "**RATIONALE:**").replace("SETUP REQUIRED:", setup_heading)
+	result = auto.from_answers(QUESTIONS, answer)
+	assert result["decisions"][0]["why"] == "Write-profile roles read the same files, so the engine fix covers them too."
+	assert result["setup"] == ["FIXER_APP_TOKEN (secret): a GitHub App token used only by the fixer; until set: verdict-triggered auto-merge is skipped."]
+
+
 def test_from_answers_handles_strategies_guard_overrides_and_missing_decisions() -> None:
 	answer = (
 		"DECISIONS:\nQ1: DERIVE_FROM_REPO\n\nRATIONALE:\nQ1: B\n\n"
@@ -383,3 +391,12 @@ def test_clarify_prompt_never_blocks_on_credentials(prompt: Path) -> None:
 	assert "a private credential, a not-yet-existing commit SHA" not in text
 	blocked = text[text.index("- If a required input is the content of an auth-walled"):]
 	assert "emit exactly `BLOCKED: <short reason>`" in blocked.split("\n- ", 1)[0]
+
+
+def test_runtime_clarify_prompt_keeps_placeholder_rule() -> None:
+	text = (ROOT / ".github" / "workflows" / "clarify.yml").read_text(encoding="utf-8")
+	inline = text.split("<<'PROMPT'", 1)[1].split("\n          PROMPT", 1)[0]
+	assert "Credentials and setup never block" in inline
+	assert "Missing critical information (credentials," not in inline
+	assert "private credential, a not-yet-existing commit SHA" not in inline
+	assert "Only when the task depends on the content of an auth-walled or" in inline

@@ -904,6 +904,7 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 	"git push --repo=origin",
 	"git push --repo origin HEAD:feature/x",
 	"git push --repo=origin HEAD:feature/x",
+	"git push --rep=origin HEAD:feature/x",
 	"git push --repo=upstream origin",
 	"git push origin --repo=upstream",
 	"git push origin HEAD:feature/x --repo=upstream",
@@ -921,6 +922,28 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	def listing(slug, branch, cwd):
 		lookups.append(branch)
 		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert lookups == ["feature/x"]
+
+
+@pytest.mark.parametrize("command", [
+	"git push --repo=origin feature/x:feature/x",
+	"git push --repo origin feature/x:feature/x",
+	"git push --rep=origin feature/x:feature/x",
+])
+def test_push_with_repo_option_checks_destination_from_main(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
 	monkeypatch.setattr(guard, "query_pull_requests", listing)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": command}})

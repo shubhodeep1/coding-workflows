@@ -82,7 +82,7 @@ ANSWER_RE = re.compile(
 	r"^\s*\*?\*?(Q[1-9][0-9]*)\*?\*?\s*:\s*\*?\*?([A-Z](?:\+[A-Z])*|DERIVE_FROM_REPO|SYNTHESIZE|REFRAME|ESCALATE)\*?\*?\s*$"
 )
 RATIONALE_RE = re.compile(r"^\s*\*?\*?(Q[1-9][0-9]*)\*?\*?\s*:\s*(.+?)\s*$")
-SECTION_RE = re.compile(r"^\s*([A-Z][A-Z -]*[A-Z])\s*(?:\([^)]*\))?\s*:\s*$")
+SECTION_RE = re.compile(r"^\s*(?:#{1,6}\s*)?(?:\*\*)?([A-Z][A-Z -]*[A-Z])(?:\*\*)?\s*(?:\([^)]*\))?\s*:\s*(?:\*\*)?\s*$")
 BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
 MAX_SETUP = 50
 ISSUE_REF_RE = re.compile(r"#(\d)")

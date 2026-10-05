@@ -47,6 +47,11 @@ def test_consumer_repositories_are_read_when_listed() -> None:
 	assert refs["runs"] == [("other/repo", 9)]
 
 
+def test_extracts_singular_and_plural_pr_urls() -> None:
+	refs = _refs("https://github.com/owner/repo/pull/42 https://github.com/owner/repo/pulls/43")
+	assert refs["issues"] == [(REPO, 42), (REPO, 43)]
+
+
 def test_reference_counts_are_capped() -> None:
 	text = " ".join(f"#{n}" for n in range(1, 60)) + " " + " ".join(f"https://github.com/owner/repo/actions/runs/{n}" for n in range(1, 20))
 	refs = _refs(text)

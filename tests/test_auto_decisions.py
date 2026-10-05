@@ -168,6 +168,17 @@ def test_clarify_wiring() -> None:
 	assert "auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh" in text
 
 
+def test_clarify_inline_prompt_never_blocks_on_credentials() -> None:
+	text = CLARIFY.read_text(encoding="utf-8")
+	start = text.index("          cat > \"${PROMPT_TEMPLATE_FILE}\" <<'PROMPT'\n")
+	end = text.index("\n          PROMPT\n", start)
+	inline_prompt = text[start:end]
+	assert "Credentials and setup never block" in inline_prompt
+	assert "Choose undecided branch names from repository conventions" in inline_prompt
+	assert "a private credential, a not-yet-existing commit SHA" not in inline_prompt
+	assert "task depends on the content of an auth-walled or" in inline_prompt
+
+
 def test_implement_appends_the_section_before_the_lint() -> None:
 	text = IMPLEMENT.read_text(encoding="utf-8")
 	assert "security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in text
