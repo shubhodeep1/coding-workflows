@@ -1,12 +1,12 @@
 <!-- changelog: fixed -->
-- **Review autofix no longer fails every PR on the `/audit-plans` template parity test.** The root `.claude/commands/audit-plans.md` and `.claude/hooks/pr_merge_status_guard.py` match their `workflow-templates/` copies again, and the review editor's sandbox now admits `.claude/commands/audit-plans.md`.
+- **The review editor can now repair `.claude/commands/` template parity failures instead of failing the run.** Its sandbox admits each `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md` twin exists in the checkout.
 
-`main` CI had been red since 2026-10-04: `tests/test_audit_plans_command.py::test_template_parity` and five `tests/test_pr_merge_status_guard.py` tests failed because #6176 and #6133 updated only the template copies. Every PR inherited that failure, so `Internal: AI Review & Autofix` handed it to the editor. The sandbox had no `.claude/commands/` directory, so the editor created one, and the result transfer refused it with `reason=unsafe_directory`. That failed the whole editor step and threw away the editor's other, valid fixes (runs 37251542418 on #6204 and 37255381476 on #6208).
+Before this, the sandbox held no `.claude/commands/` files. When a PR's CI failed `tests/test_audit_plans_command.py::test_template_parity`, `Internal: AI Review & Autofix` handed the failure to the editor, the editor created the missing directory, and the result transfer refused it with `reason=unsafe_directory`. That failed the editor step and discarded the editor's other, valid edits (runs 37251542418 on #6204 and 37255381476 on #6208). The template twin is checked in the host checkout, never in the editor's workspace, so an editor cannot admit a new command by creating its twin.
 
 | The numbers that matter | Value |
 | --- | --- |
-| Root files re-synced from `workflow-templates/` | 2 |
-| Failing `main` CI tests fixed | 6 |
-| New sandbox-admitted path | `.claude/commands/audit-plans.md` |
+| Command files admitted in this repo | 13 of 13 under `.claude/commands/` |
+| Command files admitted in a repo without `workflow-templates/` | 0 |
+| Failing runs this addresses | 37251542418, 37255381476 |
 
-What this means for operators: review autofix runs stop failing on this parity test, and the editor can repair future drift in `audit-plans.md` itself. Other `.claude/commands/` files stay outside the sandbox, and a new directory the sandbox does not admit still fails the transfer.
+What this means for operators: review autofix no longer fails on a `.claude/commands/` parity test; it edits the live copy in the PR like any other source file. Other `.claude/` paths stay outside the sandbox. An editor write to an excluded file in an admitted directory is still dropped, and a new directory outside the admitted ones still fails the transfer.

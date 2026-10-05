@@ -69,14 +69,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `.cts`, and `.mts` alongside other source extensions for snapshot and
    validated transfer. For Claude engine fixes it also admits only
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
-   `.claude/hooks/pr_merge_status_guard.py`,
-   `.claude/commands/audit-plans.md` (CI requires it to match its
-   `workflow-templates/` copy), and
-   `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
-   `.claude/` files remain excluded from snapshot and transfer. An editor
-   write to an excluded file in an admitted directory is dropped; a new
-   directory outside the admitted ones fails the transfer
-   (`reason=unsafe_directory`) and the editor step with it. Its
+   `.claude/hooks/pr_merge_status_guard.py`, and
+   `scripts/claude_settings.json.tmpl`. It also admits each
+   `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md`
+   twin already exists in the host checkout (checked on the host, never in
+   the editor's workspace), so the editor can repair a template parity
+   failure; other `.github/ai/` and `.claude/` files remain excluded from
+   snapshot and transfer. An editor write to an excluded file in an
+   admitted directory is dropped; a new directory outside the admitted ones
+   fails the transfer (`reason=unsafe_directory`) and the editor step with it. Its
    isolation helpers must already exist in the verified workflow support
    commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.

@@ -8195,10 +8195,15 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(host / ".claude/commands").mkdir(parents=True)
 		(host / ".claude/commands/audit-plans.md").write_text("before\n")
 		(host / ".claude/commands/other.md").write_text("operator command\n")
+		(host / ".claude/commands/apply-url.md").write_text("before\n")
+		# Only a live command with a template twin in the host is admitted.
+		(host / "workflow-templates/.claude/commands").mkdir(parents=True)
+		(host / "workflow-templates/.claude/commands/audit-plans.md").write_text("template\n")
+		(host / "workflow-templates/.claude/commands/apply-url.md").write_text("template\n")
 		(host / "scripts").mkdir()
 		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
-		subprocess.run(["git", "add", ".github", ".claude", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github", ".claude", "workflow-templates", "scripts"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
@@ -8210,6 +8215,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (source / ".claude/hooks/gh_api_write_guard.py").exists()
 		assert not (source / ".claude/hooks/other.py").exists()
 		assert (source / ".claude/commands/audit-plans.md").exists()
+		assert (source / ".claude/commands/apply-url.md").exists()
 		assert not (source / ".claude/commands/other.md").exists()
 		assert (source / "scripts/claude_settings.json.tmpl").exists()
 		assert run("refresh").returncode == 0
@@ -8217,18 +8223,27 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(source / ".github/ai/claude_engine.json").write_text("after\n")
 		(source / ".claude/hooks/gh_api_write_guard.py").write_text("after\n")
 		(source / ".claude/commands/audit-plans.md").write_text("after\n")
+		(source / ".claude/commands/apply-url.md").write_text("after\n")
 		(source / "scripts/claude_settings.json.tmpl").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
 		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
 		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
 		assert (host / ".claude/commands/audit-plans.md").read_text() == "after\n"
+		assert (host / ".claude/commands/apply-url.md").read_text() == "after\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
-		# Other command files stay out of the sandbox: an editor write is dropped.
+		# A command without a host template twin stays out: the write is dropped.
 		(source / ".claude/commands/other.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".claude/commands/other.md").read_text() == "operator command\n"
 		(source / ".claude/commands/other.md").unlink()
+		# Creating the twin in the same transfer does not admit a new command.
+		(source / "workflow-templates/.claude/commands/new.md").write_text("template\n")
+		(source / ".claude/commands/new.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / "workflow-templates/.claude/commands/new.md").read_text() == "template\n"
+		assert not (host / ".claude/commands/new.md").exists()
+		(source / ".claude/commands/new.md").unlink()
 		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/ai/WORKFLOW.md").read_text() == "operator config\n"

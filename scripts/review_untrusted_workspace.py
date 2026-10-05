@@ -31,16 +31,22 @@ def git_env(manifest):
 		"GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
 
 
-def allowed(name):
+def allowed(name, host=None):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return False
 	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
-	# audit-plans.md must match its workflow-templates/ copy in CI; the editor
-	# needs it to repair that parity failure.
-	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", ".claude/commands/audit-plans.md", "scripts/claude_settings.json.tmpl"):
+	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):
 		return True
+	# A live command whose workflow-templates/ copy exists in the host checkout
+	# must match it in CI, so the editor needs it to repair a parity failure.
+	# The twin is read from the host, never from the editor's workspace.
+	if host is not None and len(parts) == 3 and parts[:2] == (".claude", "commands") and parts[2].endswith(".md") and not parts[2].startswith("."):
+		try:
+			return checked_path(host, "workflow-templates/" + name).is_file()
+		except ValueError:
+			return False
 	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
 		return False
 	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile"
@@ -75,7 +81,7 @@ def fingerprint(path):
 	return [hashlib.sha256(data).hexdigest(), mode]
 
 
-def enumerate_workspace(root):
+def enumerate_workspace(root, host=None):
 	count = 0
 	total = 0
 	entries = 0
@@ -96,7 +102,7 @@ def enumerate_workspace(root):
 			if entries > 10000:
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
-			if not allowed(name):
+			if not allowed(name, host):
 				# Build products and cached dependencies are not editor output.
 				if name in ROOT_FILES or rel == Path("."):
 					raise ValueError("unsafe workspace result path")
@@ -124,7 +130,7 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 	baseline = {}
 	total = 0
 	for name in sorted(paths):
-		if not allowed(name):
+		if not allowed(name, host):
 			continue
 		if (host / name).is_symlink():
 			continue  # Existing tracked symlinks are not in the editor snapshot.
@@ -152,7 +158,7 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 
 def transfer(host, workspace, manifest):
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace))
+	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace, host))
 	changes = []
 	# Even an untouched result must not conceal a host-side update made since
 	# the snapshot (including a write by another workflow process).
@@ -165,7 +171,7 @@ def transfer(host, workspace, manifest):
 		new = results.get(name)
 		if new is not None and old == [hashlib.sha256(new[0]).hexdigest(), new[1]]:
 			continue
-		if not allowed(name):
+		if not allowed(name, host):
 			raise ValueError("unsafe result path")
 		host_file = checked_path(host, name)
 		if old is None and (host_file.exists() or host_file.is_symlink()):
@@ -194,7 +200,7 @@ def transfer(host, workspace, manifest):
 def refresh(host, workspace, manifest):
 	"""Discard PR build-backend source writes before giving the writer access."""
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace))
+	results = dict((name, (data, mode)) for name, data, mode in enumerate_workspace(workspace, host))
 	for name, old in baseline.items():
 		host_file = checked_path(host, name)
 		if not host_file.exists() or fingerprint(host_file) != old:
