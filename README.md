@@ -1968,7 +1968,8 @@ Read-profile calls reject non-empty `AI_ENGINE_ISOLATED_READ_PATHS` instead of
 bind-mounting additional host paths; the caller falls back with
 `reason=isolation_read_path_invalid`. Only the filtered checkout snapshot and
 trusted support inputs are mounted. Its Git history is a synthetic commit of
-the filtered files; historical revisions and the source Git object store are
+the filtered files (including exclusion of extensionless `id_rsa`, `id_ed25519`,
+`id_ecdsa` and `id_dsa` keys); historical revisions and the source Git object store are
 not available to read-profile tools. Session reuse mounts only the selected
 session ID's transcript directory, not other sessions.
 

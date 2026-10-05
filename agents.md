@@ -249,7 +249,8 @@ profile. Container tool calls cannot reach GitHub; prompts carry the context.
 additional paths cannot be filtered safely; they fall back instead of mounting
 arbitrary host directories.
 Git commands inside the read snapshot see only a synthetic commit of the
-filtered files, not the source repository's history or object store. Session
+filtered files (excluding standard extensionless SSH private-key names even
+outside `.ssh`), not the source repository's history or object store. Session
 reuse mounts only the selected session ID's transcript directory.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.

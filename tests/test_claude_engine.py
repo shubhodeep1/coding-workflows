@@ -519,6 +519,9 @@ def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, mon
 	(source / ".env").write_text("private", encoding="utf-8")
 	(source / "id.key").write_text("private", encoding="utf-8")
 	(source / "skip.pem").write_text("private", encoding="utf-8")
+	(source / "keys").mkdir()
+	for key_name in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"):
+		(source / "keys" / key_name).write_text("private", encoding="utf-8")
 	(source / ".claude").mkdir()
 	(source / ".claude" / ".credentials.json").write_text("private", encoding="utf-8")
 	(source / ".ssh").mkdir()
@@ -543,6 +546,7 @@ def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, mon
 	assert status == []
 	for path in ("CLAUDE.md", ".env", "id.key", "skip.pem", "link.txt", "big.bin", "ignored.txt", ".codex-workflow-src", ".claude", ".ssh"):
 		assert not (dest / path).exists(), path
+	assert not (dest / "keys").exists()
 	assert "hidden" not in (dest / ".git" / "config").read_text(encoding="utf-8")
 	assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
 	assert subprocess.check_output(["git", "-C", str(dest), "show", "HEAD:ok.txt"], text=True) == "tracked"
