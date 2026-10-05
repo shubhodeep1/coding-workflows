@@ -103,3 +103,13 @@ def test_resolver_path_check_precedes_sandbox_and_does_not_pass_host_git_index()
 	assert branch.index('check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"') < branch.index('prepare-ephemeral')
 	assert branch.index('prepare-ephemeral') < branch.index('/dev/null claude CONFLICT_RESOLVER write') < branch.index('cleanup')
 	assert 'GIT_INDEX_FILE=' not in branch
+
+
+def test_progress_monitor_stops_without_waiting_for_its_sleep(tmp_path):
+	text = SANDBOX.read_text(encoding="utf-8")
+	monitor_body = text.split('\t\t(\n\t\t\tlast_size=0\n', 1)[1].split('\n\t\t) &', 1)[0]
+	process = subprocess.run(
+		["bash", "-c", 'root="$1"; REVIEW_SANDBOX_PROGRESS_SECS=60; ( last_size=0\n' + monitor_body + '\n) & progress_pid=$!; sleep 0.1; kill "$progress_pid"; wait "$progress_pid" || true', "_", str(tmp_path)],
+		capture_output=True, text=True, timeout=3, check=False,
+	)
+	assert process.returncode == 0, process.stderr

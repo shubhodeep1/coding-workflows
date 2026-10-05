@@ -95,7 +95,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    Host `claude_run` refuses all four review
    roles; unavailable sandbox support falls back to OpenCode, never host Claude.
    The judge verdict uses read access; its fix and the resolver use write access
-   with validated transfer back to the workspace. The
+   with validated transfer back to the workspace. The poller's review-blocked
+   judge uses the same sandbox from the verified workflow support checkout,
+   with read access for a verdict and validated transfer for a combined fix;
+   missing isolation falls back to Codex, while failed transfer discards the
+   verdict. The
    `claude-fixer-auto-merge` job id is kept but never runs.
    `[claude-intervention]` and `[claude-merge-resolve]` commits on older PR
    heads still end the counted run, like `[judge-fix]` and

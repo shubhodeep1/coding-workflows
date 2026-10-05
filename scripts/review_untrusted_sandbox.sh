@@ -229,8 +229,11 @@ if [ "${engine}" = claude ]; then
 		: > "${root}/transcript.jsonl"
 		(
 			last_size=0
-			# sleep holds no copy of stderr, so killing this subshell frees it.
-			while sleep "${REVIEW_SANDBOX_PROGRESS_SECS:-60}" </dev/null >/dev/null 2>&1; do
+			trap 'kill "${progress_sleep_pid:-}" 2>/dev/null || true' TERM
+			while :; do
+				sleep "${REVIEW_SANDBOX_PROGRESS_SECS:-60}" </dev/null >/dev/null 2>&1 &
+				progress_sleep_pid=$!
+				wait "${progress_sleep_pid}" || break
 				size="$(stat -c %s "${root}/transcript.jsonl" 2>/dev/null || echo 0)"
 				if [ "${size}" != "${last_size}" ]; then
 					echo "CLAUDE_ENGINE progress role=${claude_role} transcript_bytes=${size}" >&2

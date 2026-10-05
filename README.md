@@ -1884,7 +1884,8 @@ role's Claude session across attempts the way it resumes a codex thread) and
 since Phase 5b; the orchestrator judges `WAVE_JUDGE`, `STALL_JUDGE`,
 `INTEGRATION_JUDGE`, `SECURITY_JUDGE` and the poller's `RB_JUDGE`
 (`scripts/orchestrate_poll_process.sh` `poller_claude_judge`, labels from the
-tracking issue), `ORCHESTRATE` (the decomposer in `orchestrate.yml`), and the
+tracking issue; isolated review sandbox for `RB_JUDGE`), `ORCHESTRATE` (the
+decomposer in `orchestrate.yml`), and the
 review write roles `REVIEW_EDITOR` (the same untrusted sandbox, with the CLI in
 the image), `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER` and `RB_JUDGE`
 (`review_autofix.yml`), since Phase 5c. Every other role still defaults to
@@ -1903,6 +1904,10 @@ the editor's CLI streams to its transcript, the sandbox logs
 the transcript has grown (checked every `REVIEW_SANDBOX_PROGRESS_SECS`,
 default 60), so the editor's idle watchdog (`EDITOR_IDLE_TIMEOUT`) sees a
 working run and still stops a stuck one.
+The poller's review-blocked judge also uses the isolated sandbox: read-only
+for final verdicts and write with validated transfer when its combined
+decide-and-fix branch is checked out. Missing sandbox support falls back to
+its existing Codex path; a failed transfer discards the sandbox verdict.
 
 **How a cut-over role runs.** The job's "Resolve AI engine" step picks the
 engine for the role. Only when it is `claude` do "Install Claude Code CLI" and

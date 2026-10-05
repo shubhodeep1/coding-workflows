@@ -32,6 +32,9 @@ ai_engine_for_role() {
   echo "AI_ENGINE_SELECTED role=$1 engine=${FAKE_ENGINE}" >&2
   printf '%s\n' "${FAKE_ENGINE}"
 }
+ai_engine_fallback() {
+  printf 'AI_ENGINE_FALLBACK role=%s reason=%s\n' "$1" "$2" >&2
+}
 claude_run() {
   printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "$4" "${AI_ENGINE_LABELS-unset}" "${AI_ENGINE_MODEL_HINT-}" "${AI_ENGINE_EFFORT_HINT-}" >> "${CALLS}.claude"
   case "${FAKE_CLAUDE_MODE}" in
@@ -58,6 +61,9 @@ def _run_helper(
 	with_engine: bool = True,
 	extra: str = "",
 	tracking_labels: str | None = '["bug","ai:engine-claude"]',
+	role: str = "WAVE_JUDGE",
+	combined_mode: str = "false",
+	log_file: str = "judge_log.txt",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
@@ -72,12 +78,13 @@ def _run_helper(
 		f"_POLLER_AI_ENGINE_SH={scripts / 'ai_engine.sh'}\n"
 		+ _helper_source()
 		+ labels_line
-		+ "MODEL_EDITOR=openai/gpt-6-sol\nMODEL_REASONING_EFFORT_JUDGE=xhigh\n"
+		+ f"MODEL_EDITOR=openai/gpt-6-sol\nMODEL_REASONING_EFFORT_JUDGE=xhigh\nRB_COMBINED_MODE={combined_mode}\n"
 		+ "rc=0\n"
-		+ 'poller_claude_judge WAVE_JUDGE prompt.txt out.txt judge_log.txt ' + extra + ' || rc=$?\n'
+		+ f'poller_claude_judge {role} prompt.txt out.txt {log_file} ' + extra + ' || rc=$?\n'
 		+ 'echo "rc=${rc}"\n'
 	)
-	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE=engine, FAKE_CLAUDE_MODE=claude_mode)
+	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE=engine, FAKE_CLAUDE_MODE=claude_mode,
+		GITHUB_WORKSPACE=str(tmp_path), RUNTIME_DIR=str(tmp_path), FAKE_SANDBOX_ROOT=str(tmp_path / "sandbox-root"))
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
 	return proc, calls
 
@@ -101,6 +108,12 @@ def test_judge_on_codex_returns_75_without_running_claude(tmp_path: Path) -> Non
 	proc, calls = _run_helper(tmp_path, engine="codex")
 	assert "rc=75" in proc.stdout, proc.stderr
 	assert _read(Path(f"{calls}.claude")) == ""
+
+
+def test_dev_null_suppresses_judge_selection_stderr(tmp_path: Path) -> None:
+	proc, _calls = _run_helper(tmp_path, engine="codex", log_file="/dev/null")
+	assert "rc=75" in proc.stdout
+	assert proc.stderr == ""
 
 
 def test_claude_unavailable_returns_75_so_codex_runs(tmp_path: Path) -> None:
@@ -128,6 +141,58 @@ def test_no_tracking_labels_means_an_explicit_empty_list(tmp_path: Path) -> None
 def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
 	_proc, calls = _run_helper(tmp_path, engine="claude", extra="claude-sonnet-5-5")
 	assert _read(Path(f"{calls}.claude")).split("|")[5] == "claude-sonnet-5-5"
+
+
+FAKE_RB_SANDBOX = r"""#!/usr/bin/env bash
+case "$1" in
+  prepare-ephemeral)
+    [ "$FAKE_CLAUDE_MODE" != prepare_failed ] || exit 1
+    printf '%s\n' "$FAKE_SANDBOX_ROOT" ;;
+  run)
+    printf '%s|%s|%s|%s\n' "$8" "$9" "$AI_ENGINE_LABELS" "$AI_ENGINE_EFFORT_HINT" >> "${CALLS}.sandbox"
+    case "$FAKE_CLAUDE_MODE" in
+      success) printf 'claude verdict\n' > "$3" ;;
+      unavailable) exit 75 ;;
+      transfer_failed) printf 'unusable verdict\n' > "$3"; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      *) printf 'unusable verdict\n' > "$3"; exit 1 ;;
+    esac ;;
+  cleanup) printf 'cleanup\n' >> "${CALLS}.sandbox" ;;
+esac
+"""
+
+
+def test_poller_rb_judge_runs_only_in_isolated_sandbox(tmp_path: Path) -> None:
+	support = tmp_path / ".codex-workflow-src" / "scripts"
+	support.mkdir(parents=True)
+	(support / "review_untrusted_sandbox.sh").write_text(FAKE_RB_SANDBOX, encoding="utf-8")
+	for combined, expected in (("false", "read"), ("true", "write")):
+		proc, calls = _run_helper(tmp_path, engine="claude", role="RB_JUDGE", combined_mode=combined)
+		assert "rc=0" in proc.stdout, proc.stderr
+		assert _read(tmp_path / "out.txt") == "claude verdict\n"
+		assert _read(Path(f"{calls}.claude")) == ""
+		assert _read(Path(f"{calls}.sandbox")).splitlines()[-2:] == [
+			f'RB_JUDGE|{expected}|["bug","ai:engine-claude"]|xhigh', "cleanup",
+		]
+
+
+def test_poller_rb_judge_falls_back_only_when_sandbox_unavailable(tmp_path: Path) -> None:
+	support = tmp_path / ".codex-workflow-src" / "scripts"
+	support.mkdir(parents=True)
+	(support / "review_untrusted_sandbox.sh").write_text(FAKE_RB_SANDBOX, encoding="utf-8")
+	for mode, expected in (("prepare_failed", 75), ("unavailable", 75), ("crash", 1), ("transfer_failed", 76)):
+		proc, calls = _run_helper(tmp_path, engine="claude", claude_mode=mode, role="RB_JUDGE", combined_mode="true")
+		assert f"rc={expected}" in proc.stdout, proc.stderr
+		if mode == "prepare_failed":
+			assert "AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_prepare_failed" in proc.stderr
+		else:
+			assert _read(tmp_path / "out.txt") == ""
+			assert _read(Path(f"{calls}.sandbox")).splitlines()[-1] == "cleanup"
+	assert not (tmp_path / "review_sandbox_transfer_failed").exists()
+	(support / "review_untrusted_sandbox.sh").unlink()
+	proc, calls = _run_helper(tmp_path, engine="claude", role="RB_JUDGE")
+	assert "rc=75" in proc.stdout, proc.stderr
+	assert "AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_unavailable" in proc.stderr
+	assert _read(Path(f"{calls}.claude")) == ""
 
 
 # Each judge call site: the role, then the unchanged codex command that runs
@@ -170,6 +235,7 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 		assert text.index(codex_call, start) > text.index(gate, start), role
 		assert text.count(codex_call) == 1, role
 	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.M)) == len(SITES)
+	assert '[ "${RB_JUDGE_ENGINE_RC}" -ne 76 ] || break' in text
 
 
 def _poll_steps() -> list[dict]:

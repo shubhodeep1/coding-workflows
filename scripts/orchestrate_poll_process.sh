@@ -77,7 +77,9 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 # the file the codex call writes; stderr is appended to <log_file> and the
 # job log. Returns 75 when the role is on codex, ai_engine.sh is not staged
 # or Claude is unavailable, so the caller runs its unchanged codex command;
-# otherwise claude_run's status (0 success, 124 timeout, other = crash).
+# otherwise the runner's status (0 success, 76 rejected transfer, 124 timeout,
+# other = crash).
+# RB_JUDGE runs in the credential-free review sandbox, never via host claude_run.
 poller_claude_judge()
 {
   local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
@@ -85,9 +87,44 @@ poller_claude_judge()
   [ -f "${_POLLER_AI_ENGINE_SH}" ] || return 75
   # shellcheck source=ai_engine.sh
   source "${_POLLER_AI_ENGINE_SH}" || return 75
-  judge_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
-    ai_engine_for_role "${role}" 2> >(tee -a "${log_file}" >&2) || echo codex)"
+  if [ "${log_file}" = /dev/null ]; then
+    judge_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+      ai_engine_for_role "${role}" 2>/dev/null || echo codex)"
+  else
+    judge_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+      ai_engine_for_role "${role}" 2> >(tee -a "${log_file}" >&2) || echo codex)"
+  fi
   [ "${judge_engine}" = "claude" ] || return 75
+  if [ "${role}" = RB_JUDGE ]; then
+    # PR diffs and comments are untrusted. This role may not run with host
+    # credentials; use the verified support checkout's isolated review runner.
+    local rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts"
+    local rb_sandbox_root="" rb_access=read
+    [ -f "${rb_support_dir}/review_untrusted_sandbox.sh" ] || rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main/scripts"
+    if [ ! -f "${rb_support_dir}/review_untrusted_sandbox.sh" ]; then
+      ai_engine_fallback RB_JUDGE sandbox_unavailable
+      return 75
+    fi
+    [ "${RB_COMBINED_MODE:-false}" != true ] || rb_access=write
+    if ! rb_sandbox_root="$(SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral 2>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
+      ai_engine_fallback RB_JUDGE sandbox_prepare_failed
+      return 75
+    fi
+    : > "${output_file}"
+    SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
+      AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+      bash "${rb_support_dir}/review_untrusted_sandbox.sh" run "${prompt_file}" "${output_file}" \
+        "${model_hint}" "${MODEL_REASONING_EFFORT_JUDGE:-high}" /dev/null claude RB_JUDGE "${rb_access}" 2>"${log_file}" || judge_rc=$?
+    SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
+      bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>"${log_file}" || judge_rc=1
+    if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+      echo '::error::Review-blocked judge sandbox transfer failed; refusing its verdict.' >&2
+      rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+      judge_rc=76
+    fi
+    [ "${judge_rc}" -eq 0 ] || : > "${output_file}"
+    return "${judge_rc}"
+  fi
   AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
     claude_run "${role}" "${prompt_file}" "${output_file}" "${PWD}" 2> >(tee -a "${log_file}" >&2) || judge_rc=$?
   return "${judge_rc}"
@@ -21140,6 +21177,10 @@ ${FOLLOWUP_BLOCK_REASON}"
           if [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then
             cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
           fi
+          # A rejected write transfer may have touched the combined-mode
+          # checkout before failing. Do not snapshot that state into another
+          # sandbox attempt; the failure path below resets the checkout.
+          [ "${RB_JUDGE_ENGINE_RC}" -ne 76 ] || break
           if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break

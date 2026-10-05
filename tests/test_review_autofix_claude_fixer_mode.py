@@ -587,5 +587,5 @@ def test_rb_helper_returns_75_off_claude_unavailable_or_unstaged(tmp_path):
 def test_sandbox_reports_progress_while_claude_streams():
 	text = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 	assert 'echo "CLAUDE_ENGINE progress role=${claude_role} transcript_bytes=${size}" >&2' in text
-	assert 'while sleep "${REVIEW_SANDBOX_PROGRESS_SECS:-60}" </dev/null >/dev/null 2>&1; do' in text
+	assert 'wait "${progress_sleep_pid}" || break' in text
 	assert text.count('kill "${progress_pid}"') == 2
