@@ -108,6 +108,8 @@ def paired_paths(root: Path) -> list[str]:
 
 def mismatched(root: Path) -> list[str]:
 	divergent = load_divergent(root)
+	if (root / LIVE_PREFIX).is_symlink():
+		raise ValueError(f"unsafe live symlink: {LIVE_PREFIX}")
 	drift: list[str] = []
 	for relative in paired_paths(root):
 		if relative in divergent:

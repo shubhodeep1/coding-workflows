@@ -288,6 +288,20 @@ def test_sync_refuses_live_symlink_destination(tmp_path: Path) -> None:
 	assert "v2" not in (root / ".git/config").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("dry_run", (True, False))
+def test_sync_refuses_symlinked_live_root(tmp_path: Path, dry_run: bool) -> None:
+	root = _scratch_repo(tmp_path)
+	(root / "workflow-templates/.claude/commands").mkdir()
+	before, after = _commit(root, "workflow-templates/.claude/commands/new.md", "new command\n")
+	(root / ".claude").rename(tmp_path / "saved-live")
+	(root / ".claude").symlink_to(".git", target_is_directory=True)
+	with pytest.raises(ValueError, match="unsafe live symlink"):
+		sync_mod.mismatched(root)
+	with pytest.raises(ValueError, match="unsafe live symlink"):
+		sync_mod.sync(root, before, after, dry_run=dry_run)
+	assert not (root / ".git/commands/new.md").exists()
+
+
 def test_sync_creates_missing_live_copy(tmp_path: Path) -> None:
 	root = _scratch_repo(tmp_path)
 	template = root / "workflow-templates/.claude/commands/new.md"
