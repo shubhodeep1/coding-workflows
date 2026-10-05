@@ -79,7 +79,13 @@ sys.exit(0)
 FAKE_PASS = r'''#!/usr/bin/env bash
 echo "$1" >> "${FAKE_PASS_LOG}"
 case "$1" in
-	status) echo "SINGLE_ISSUE_SECURITY_PASS_STATE=${FAKE_PASS_STATE:-clean}" ;;
+	status)
+		echo "SINGLE_ISSUE_SECURITY_PASS_STATE=${FAKE_PASS_STATE:-clean}"
+		if [ -n "${FAKE_PASS_AUDITED_HEAD:-}" ]; then
+			echo "SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=${FAKE_PASS_AUDITED_HEAD}"
+		fi
+		exit "${FAKE_PASS_STATUS_RC:-0}"
+		;;
 	gate)
 		printf '%b' "${FAKE_PASS_GATE_OUTPUT:-}" >> "${GITHUB_OUTPUT}"
 		exit "${FAKE_PASS_GATE_RC:-0}"
@@ -439,9 +445,33 @@ def test_judge_merge_goes_through_the_security_gate(tmp_path: Path, gate_output:
 	assert not (tmp_path / "judge_output").exists() or (tmp_path / "judge_output").read_text(encoding="utf-8") == ""
 
 
-def test_security_mode_merges_skip_the_gate(tmp_path: Path) -> None:
-	result, _, pass_calls = _run(tmp_path, 'RB_SECURITY_MODE=true; if rb_security_merge_gate; then echo ALLOW; fi')
-	assert "ALLOW" in result.stdout and pass_calls == []
+@pytest.mark.parametrize(
+	"state, audited_head, judged_head, status_rc, allowed",
+	[
+		("exhausted", HEAD, HEAD, "0", True),
+		("exhausted", "d" * 40, HEAD, "0", False),
+		("exhausted", "", HEAD, "0", False),
+		("exhausted", "invalid", HEAD, "0", False),
+		("exhausted_unaudited", HEAD, HEAD, "0", False),
+		("exhausted", HEAD, "d" * 40, "0", False),
+		("exhausted", HEAD, HEAD, "1", False),
+	],
+)
+def test_security_mode_merges_reverify_audited_head(tmp_path: Path, state: str, audited_head: str, judged_head: str, status_rc: str, allowed: bool) -> None:
+	result, _, pass_calls = _run(tmp_path, 'RB_SECURITY_MODE=true; if rb_security_merge_gate; then echo ALLOW; else echo HOLD; fi', {
+		"FAKE_PASS_STATE": state, "FAKE_PASS_AUDITED_HEAD": audited_head, "RB_JUDGED_HEAD_SHA": judged_head,
+		"FAKE_PASS_STATUS_RC": status_rc,
+	})
+	assert result.returncode == 0, result.stderr
+	assert ("ALLOW" if allowed else "HOLD") in result.stdout.splitlines()
+	assert f"reason=security_mode_{'audited_head' if allowed else 'unverified'}" in result.stdout
+	assert pass_calls == ["status"]
+
+
+def test_missing_pass_script_holds_security_mode_merge(tmp_path: Path) -> None:
+	result, _, pass_calls = _run(tmp_path, 'RB_SECURITY_MODE=true; if rb_security_merge_gate; then echo ALLOW; else echo HOLD; fi', with_pass=False)
+	assert result.returncode == 0 and "HOLD" in result.stdout.splitlines()
+	assert "reason=security_mode_unverified" in result.stdout and pass_calls == []
 
 
 def test_missing_pass_script_lets_the_merge_run(tmp_path: Path) -> None:

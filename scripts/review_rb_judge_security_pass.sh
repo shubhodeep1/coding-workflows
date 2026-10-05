@@ -18,7 +18,7 @@
 #      goes through the same security gate as a clean review: a clean audit
 #      of the head merges, a pending audit or open findings hold the merge,
 #      and a PR without an audit gets one dispatched. Security-mode merges
-#      skip the gate, since the pass is already spent.
+#      require a completed audit of the head the judge is merging.
 #
 # API budget (CLAUDE.md §15): rb_security_mode_detect reuses the gate's own
 # reads (one /user read plus at most 3 GETs for the follow-up skip check;
@@ -290,10 +290,23 @@ Open high/critical/unrated security findings (${RB_SECURITY_BLOCKING_ISSUES:-unk
 # Returns 0 when a judge merge may proceed, 1 when the security gate holds it.
 rb_security_merge_gate()
 {
-	local script gate_out gate_rc hold exhausted
+	local script gate_out gate_rc hold exhausted state audited_head
 	if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
-		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=allow reason=security_mode"
-		return 0
+		script="$(rb_security_pass_script)"
+		if [ ! -f "${script}" ]; then
+			rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=security_mode_unverified state=script_missing"
+			return 1
+		fi
+		gate_out="$(GITHUB_OUTPUT="" bash "${script}" status 2>/dev/null)" || gate_out=""
+		state="$(printf '%s\n' "${gate_out}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_STATE=//p' | tail -n 1)"
+		audited_head="$(printf '%s\n' "${gate_out}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=//p' | tail -n 1)"
+		if [ "${state}" = "exhausted" ] && [[ "${audited_head}" =~ ^[0-9a-f]{40}$ ]] \
+			&& [ "${audited_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
+			rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=allow reason=security_mode_audited_head"
+			return 0
+		fi
+		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=security_mode_unverified state=${state:-unknown}"
+		return 1
 	fi
 	script="$(rb_security_pass_script)"
 	if [ ! -f "${script}" ]; then
