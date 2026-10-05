@@ -83,8 +83,8 @@ ai_engine_for_role()
 		printf 'codex\n'
 		return 0
 	fi
-	engine="$(printf '%s' "${resolved}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["engine"])')" || engine="codex"
-	printf '%s' "${resolved}" | python3 -c '
+	engine="$(printf '%s' "${resolved}" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["engine"])')" || engine="codex"
+	printf '%s' "${resolved}" | python3 -I -c '
 import json, sys
 r = json.load(sys.stdin)
 print("AI_ENGINE_SELECTED role={role} engine={engine} model={model} effort={effort} source={source}".format(**r))
@@ -154,7 +154,7 @@ ai_engine_accounts()
 
 _ai_engine_json_field()
 {
-	python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
+	python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
 }
 
 _ai_engine_instructions_file()
