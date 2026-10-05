@@ -749,6 +749,7 @@ def _run_poller(
 	branch_rebuild_threshold_hours: str = "24",
 	branch_rebuild_cooldown_hours: str = "48",
 	codex_touch_file: str | None = None,
+	mock_rb_judge_prompt_cap: int | None = None,
 	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
 	mock_git_checkout_fail: bool = False,
@@ -864,6 +865,36 @@ def _run_poller(
 		runtime_dir = tmp / "runtime"
 		store_file = tmp / "gh_store.json"
 		_make_poller_sandbox(sandbox)
+		if mock_rb_judge_prompt_cap is not None:
+			# Exercise the same skip branch without passing a >1 MiB issue
+			# body through the fixture's executable gh/jq wrappers (ARG_MAX).
+			poller_copy = sandbox / "scripts/orchestrate_poll_process.sh"
+			guard = 'if [ "${RB_JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then'
+			poller_text = poller_copy.read_text(encoding="utf-8")
+			assert poller_text.count(guard) == 1
+			poller_copy.write_text(poller_text.replace(guard, f'if [ "${{RB_JUDGE_PROMPT_CHARS}}" -gt {mock_rb_judge_prompt_cap} ]; then'), encoding="utf-8")
+		# The poller's RB_JUDGE no longer invokes the host codex mock. Give
+		# review-blocked scenarios a credential-free sandbox stand-in that
+		# preserves the old verdict/combined-fix fixture semantics.
+		rb_support = sandbox / ".codex-workflow-src" / "scripts"
+		rb_support.mkdir(parents=True, exist_ok=True)
+		_write_exec(rb_support / "review_untrusted_sandbox.sh", '''#!/usr/bin/env bash
+# if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
+case "$1" in
+  prepare-ephemeral) printf '%s\\n' "$RUNTIME_DIR" ;;
+  cleanup) exit 0 ;;
+  run)
+    rc=0; claude_access="${9:-write}"
+    # Arg 9 (read) applies to both engines; read-only roles never transfer edits back.
+    if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then :; fi
+    printf '%s\\n' "$MOCK_CODEX_JSON" > "$3"
+    if [ "${9:-write}" = write ] && [ -n "${MOCK_CODEX_TOUCH_FILE:-}" ]; then
+      printf 'mock change\\n' >> "$MOCK_CODEX_TOUCH_FILE"
+    fi ;;
+  *) exit 2 ;;
+esac
+''')
+		_write_exec(rb_support / "write_opencode_config.sh", '#!/usr/bin/env bash\nexit 0\n')
 		sandbox_sha_aliases = {
 			"__integration_head__": subprocess.run(
 				["git", "-C", str(sandbox), "rev-parse", "refs/heads/orchestrator/project-192"],
@@ -3370,6 +3401,7 @@ sys.exit(proc.returncode)
 				"GH_TOKEN": "test-token",
 				"OPENROUTER_API_KEY": "test-openrouter",
 				"GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_WORKSPACE": str(sandbox),
 				"MODEL_EDITOR": "openai/gpt-5.4",
 				"MODEL_REASONING_EFFORT_JUDGE": "xhigh",
 				"TG_BOT_SECRET": "",
@@ -9464,7 +9496,8 @@ def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
-		issue_bodies={10: "oversized-review-blocked-body-" + ("x" * 1_048_576)},
+		issue_bodies={10: "oversized-review-blocked-body-" + ("x" * 1000)},
+		mock_rb_judge_prompt_cap=1000,
 		issue_linked_prs={10: 77},
 		prs=[{
 			"number": 77,

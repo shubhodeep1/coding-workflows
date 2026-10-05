@@ -131,6 +131,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, merge_with_followup (merge as-is and open a follow-up issue tracking a deferred gap — only when merge is confirmed and follow-up details are provided), or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). PRs without linked issues use the PR title/body as requirement context. |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `high` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `none`). |
 | `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge `fix` retries for review-blocked PRs before forcing a final decision (`merge`, `merge_with_followup`, or `close_and_reissue` — no further `fix` attempts at IS_FINAL). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. Bump to `3` to give the judge one more `fix` attempt before falling back to a terminal action. |
+| `RB_JUDGE_ISOLATION_MAX_FAILURES` | No | `3` | orchestrate_poll | Consecutive isolation failures on one review-blocked PR head before the poller labels its issue `ai:needs-human` and stops retrying that head. A new head or removal of the label permits another attempt. Invalid or nonpositive values use `3`. No host-agent fallback is permitted. |
 | `WORKSPACE_HOOK_TIMEOUT_SECONDS` | No | `600` | implement, validate | Timeout in seconds for optional workspace lifecycle hooks executed by `scripts/run_workspace_hook.sh`. Invalid or non-positive values fall back to `600`. `after_create` / `before_run` failures are fatal; `after_run` / `before_remove` failures are logged and ignored. |
 | `WORKSPACE_REUSE_ENABLED` | No | `false` | implement, review_autofix, validate | Enables cache-backed per-issue workspaces under `${RUNNER_TEMP}/workspaces/<WORKSPACE_KEY>`. When `false`, the workflows keep the legacy per-run workspace layout; when `true`, exact workspace-cache restores can set `CREATED_NOW=false` so one-time setup and `after_create` hooks are skipped on reuse. |
 | `CODEX_THREAD_REUSE_ENABLED` | No | `false` | implement, review_autofix, validate | Enables same-run Codex session reuse through `scripts/codex_thread_reuse.sh` plus the `mode-*-continuation.txt` prompts. Unsupported resume capability or helper failures fail open to the fresh full-prompt path. |
@@ -1906,8 +1907,15 @@ default 60), so the editor's idle watchdog (`EDITOR_IDLE_TIMEOUT`) sees a
 working run and still stops a stuck one.
 The poller's review-blocked judge also uses the isolated sandbox: read-only
 for final verdicts and write with validated transfer when its combined
-decide-and-fix branch is checked out. Missing sandbox support falls back to
-its existing Codex path; a failed transfer discards the sandbox verdict and
+decide-and-fix branch is checked out. Unavailable Claude retries OpenCode in
+a fresh isolated sandbox; missing isolation defers instead of running a host
+agent and escalates after `RB_JUDGE_ISOLATION_MAX_FAILURES` failures on one head.
+An OpenCode installation failure does not stop other poller work; the isolated
+judge defers if its configuration or sandbox cannot be prepared.
+A lost escalation-comment response is reconciled against the issue's trusted
+comment history on the next tick; an uncleared `ai:needs-human` latch still
+blocks the judge after a new head is pushed.
+A failed transfer discards the sandbox verdict and
 removes only untracked files created since the judge started, preserving
 pre-existing files. If cleanup or verification of that removal fails, the
 poller stops rather than letting a later issue stage partial transfer output.

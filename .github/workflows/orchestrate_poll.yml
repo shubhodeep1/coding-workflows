@@ -269,6 +269,13 @@ jobs:
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
+      - name: Install OpenCode CLI for isolated review-blocked judge
+        if: steps.find_tracking.outputs.has_work == 'true'
+        continue-on-error: true
+        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
+        with:
+          opencode_version: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
+
       - name: Install OS-level core tools
         if: steps.find_tracking.outputs.has_work == 'true'
         shell: bash
@@ -789,6 +796,7 @@ jobs:
           ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
+          RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
           # Freshness window (minutes) the in-flight / zombie guards use for
           # review-family runs (AI Review / Internal Review / Review Autofix),

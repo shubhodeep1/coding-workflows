@@ -46,6 +46,9 @@ def test_read_role_cannot_write_snapshot_or_transfer():
 	assert '--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder' in claude
 	assert '--mount "type=bind,src=$(ai_engine_pool_dir)' not in claude
 	assert '--mount "type=bind,src=${root}/socket,dst=/socket,readonly"' in claude
+	opencode = text[text.index('[[ "${model}" =~'):]
+	assert 'claude_access="${9:-write}"' in text
+	assert 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' in opencode
 
 
 def test_prepare_ephemeral_skips_dependency_container(tmp_path):

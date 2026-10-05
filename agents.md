@@ -108,10 +108,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
    transfer checks destination parents and stages all changes before writing,
    rolling host changes back on failure. After a failed Claude fix or transfer
    the judge neither commits/pushes nor treats it as merged
-   (`judge_skip_reason=fix_transfer_failed|fix_failed`). Missing isolation
-   falls back to Codex, while failed transfer discards the
+   (`judge_skip_reason=fix_transfer_failed|fix_failed`). For the poller's judge,
+   missing isolation defers and escalates after three failures on the same
+   head (configurable with `RB_JUDGE_ISOLATION_MAX_FAILURES`); unavailable
+   Claude retries OpenCode in a fresh sandbox, never host Codex. Failed transfer discards the
    verdict and removes only newly untracked files. Cleanup/inventory failures
-   stop the tick so another issue cannot stage a partial transfer. The
+   stop the tick so another issue cannot stage a partial transfer. Lost comment
+   responses are reconciled from trusted history; uncleared human latches
+   block the judge even on a new head. The
    `claude-fixer-auto-merge` job id is kept but never runs.
    `[claude-intervention]` and `[claude-merge-resolve]` commits on older PR
    heads still end the counted run, like `[judge-fix]` and
@@ -1395,6 +1399,7 @@ and shipped:
 - `AUTOFIX_FAILURE_HEADLINE`
 - `MODEL_CATALOG_BACKFILL`
 - `CLAUDE_FIXER_AUTO_MERGE`
+- `RB_JUDGE_ISOLATION`
 - `SECURITY_AUDIT_TARGET`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -1597,6 +1602,7 @@ LOG_PREFIX.name=opencode_agent_failure
 LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
+LOG_PREFIX.name=RB_JUDGE_ISOLATION
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 
 ---
