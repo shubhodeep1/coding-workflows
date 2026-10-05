@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:38-39 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The exclusion uses a literal exact path match, so renaming the test would silently include it in the isolated editor snapshot even though it requires operator-only files.\n  WHY: The isolated editor would attempt to read `.claude/commands/audit-plans.md` and raise `FileNotFoundError`; full-repository CI still catches this drift.\n- .github/workflows/review_autofix.yml:3656-3739 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test does not assert that intermediate setup steps gate on `AUTOFIX_STALE_BASE_SKIP`, leaving a maintenance gap if future steps are added between the stale-base checks.\n  WHY: These steps currently perform only git operations that do not read workspace file content, and the second stale-base check catches branch advancement during fetch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py:38-39 | severity=low | confidence=3\n  PROBLEM: The exclusion uses a literal exact path match. If the test file is ever renamed, the exclusion silently breaks and the snapshot will include a test that requires operator-only files.\n  WHY: The isolated editor would attempt to read `.claude/commands/audit-plans.md` (which is intentionally excluded) and the test would raise `FileNotFoundError` during fixture setup. However, full-repository CI still catches this drift.\n- .github/workflows/review_autofix.yml:3656-3739 | severity=low | confidence=3\n  PROBLEM: The intermediate setup steps (`git_ref_health_check.sh repair`, `git fetch` retry loop, `git reset --hard` / `git checkout -f -B`) do not gate on `AUTOFIX_STALE_BASE_SKIP`; the test leaves a maintenance gap if future setup steps are added between the stale-base checks.\n  WHY: The intermediate steps are pure git operations that do not read workspace file content; the second check at lines 3741-3748 correctly catches any branch advancement during fetch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_untrusted_workspace.py:38-39\n  PROBLEM: The exclusion uses a literal exact path match. If the test file is renamed, the exclusion silently breaks and the isolated editor snapshot would include a test that requires operator-only files.\n  Suggested minimal fix: Consider centralizing excluded test files in an explicit set at the top of the function, e.g. `_EXCLUDED_TESTS = {\"tests/test_audit_plans_command.py\"}`, then checking `if name in _EXCLUDED_TESTS: return False`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "256817d8216593db01ed11f2864c4d46cbaf2f28b5ebd1034416b1861ce48d04",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6135,
+    "run_id": "37245095653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37245095653",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005001130_f843e4aee8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6135,
+    "run_id": "37245095653"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T00:11:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
