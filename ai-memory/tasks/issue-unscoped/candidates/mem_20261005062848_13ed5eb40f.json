@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:8181 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The test name says it covers only `.github/` directories, but it also covers `.claude/commands` admission and `.claude/skills` rejection.\n  WHY: The misleading name makes the `.claude/` coverage harder for future contributors to locate and extend.\n- scripts/review_untrusted_workspace.py:46-50 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `.claude/commands` branch checks the `.md` suffix case-sensitively, unlike the general case-insensitive suffix check.\n  WHY: Uppercase extensions such as `.MD` would be rejected by this branch even though the rest of `allowed()` admits them.\n- scripts/review_untrusted_workspace.py:95-100 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The directory-admission check calls `allowed(name + \"/placeholder.py\")` without passing `host`, so host-dependent admission cannot affect that check.\n  WHY: This is a latent design risk if a future change relies on the host to admit a new top-level directory; the current scope already enumerates the directories explicitly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_review_pipeline_contract.py:8181 | severity=NIT | confidence=4\n  PROBLEM: The test name now describes a narrower scope than the test exercises. After the change the test also covers `.claude/commands/` admission (with and without a host template twin) and `.claude/skills/` rejection. The \"only_allowed_github_directories\" name reads as if the test still only concerns `.github/`.\n  WHY: This is a maintainability defect, not a runtime failure. A future contributor searching for `.claude/commands` test coverage will not find it under this name and may add a redundant test or break the contract.\n- scripts/review_untrusted_workspace.py:46-50 | severity=NIT | confidence=3\n  PROBLEM: `parts[2].endswith(\".md\")` is case-sensitive, while the general suffix check at the bottom of `allowed()` uses `.suffix.lower() in SUFFIXES` (case-insensitive).\n  WHY: An editor asked to repair an uppercase-extension command file would have its write dropped silently. The behavior is also inconsistent with the rest of the file-extension handling in the same function.\n- scripts/review_untrusted_workspace.py:95-100 | severity=NIT | confidence=2\n  PROBLEM: The directory-admission check calls `allowed(name + \"/placeholder.py\")` without passing `host`. The new twin-based admission logic therefore cannot influence directory admission. This is correct for the current scope (the twin check is per-file and the directories are already enumerated explicitly), but if a future change relies on the host to admit a new top-level directory, the host argument would need to be threaded through here too.\n  WHY: This is a latent design risk, not a current bug. A future contributor adding a host-dependent directory admission rule would have to remember to thread `host` through this branch.\n- scripts/review_untrusted_workspace.py, Location: lines 46-50, the `try/except ValueError` around `checked_path(host, \"workflow-templates/\" + name).is_file()`\n  PROBLEM: `checked_path` may also raise `OSError` on filesystem failures (e.g. a transient `EACCES` while probing the host). The current handler only catches `ValueError`, so an `OSError` would propagate up and fail the snapshot/transfer with an opaque error.\n  WHY: Suggested minimal fix: Widen the `except` to `(ValueError, OSError)` and return `False` on either \u2014 a missing twin is the safe default. HARDENING_RISK_SCORE: 2\n- scripts/review_untrusted_workspace.py, Location: line 47, the new twin branch\n  PROBLEM: When the twin check rejects a `.claude/commands/<name>.md` write, the editor sees the same `unsafe result path` error regardless of whether the twin was missing or `checked_path` raised. Operators debugging a parity-repair failure cannot tell the two apart from the transfer log.\n  WHY: Suggested minimal fix: Add a one-line log when `host is not None` and the twin check returns `False` (e.g. emit a `##[debug]::twin-missing name=<path>` line through the existing `print(..., file=sys.stderr)` channel used elsewhere in this script). Keep the return value identical so the contract is unchanged. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_review_pipeline_contract.py\n  Line or code reference: line 8181 (function definition `test_review_isolation_traverses_only_allowed_github_directories`)\n  PROBLEM: The test name says \"only_allowed_github_directories\" but the test now also covers `.claude/commands` admission (with twin check) and `.claude/skills` rejection. The name no longer describes the full scope.\n  WHY: No runtime failure; the test itself passes. But a future contributor reading the test name would not expect `.claude/` admission logic to be covered here, making the test harder to locate and extend.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "94394f6eb785cbb8a0a3a498eee78661ff0c4e6e77479fd82363163610eb18a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6299,
+    "run_id": "37270720824",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37270720824",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005062848_13ed5eb40f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6299,
+    "run_id": "37270720824"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T06:28:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
