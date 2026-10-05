@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh: _resolver_sandbox_attempt function; caller at `resolver_claude_rc=75` dispatch block | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: A sandbox timeout returns 124, which can bypass the intended sandbox retry and fail-closed guards and allow the resolver to fall through to the host Codex resolver path.\n  WHY: The timeout exit code is not explicitly handled at the sandbox caller; the reviewers differ on whether later retry logic handles it, and the highest reported severity is critical.\n- scripts/review_conflict_resolve.sh:_resolver_sandbox_attempt function, around line 605-630 in the diff | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The `review_sandbox_transfer_failed` flag is not cleared between sandbox attempts, so a stale flag from the Claude attempt can falsely fail the OpenCode retry.\n  WHY: The retry checks the shared runtime flag after cleanup, allowing a prior attempt's transfer failure to be mistaken for the current attempt's result.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:_resolver_sandbox_attempt function, timeout exit code 124 not explicitly handled; caller at `resolver_claude_rc=75` dispatch block | severity=critical | confidence=4\n  PROBLEM: A timeout returns 124, bypassing the OpenCode retry guard and fail-closed guard and allowing the resolver to fall through to the host Codex resolver path.\n  WHY: A slow sandbox execution can cause attacker-controlled conflict content to reach the host resolver with runner credentials.\n- scripts/review_conflict_resolve.sh:_resolver_sandbox_attempt function, transfer-failed check after cleanup; the caller between `_resolver_sandbox_attempt claude` and `_resolver_sandbox_attempt codex` does not remove `review_sandbox_transfer_failed` from RUNTIME_DIR | severity=high | confidence=2\n  PROBLEM: The transfer-failure flag is not cleared between Claude and OpenCode attempts, so a stale flag can falsely fail a successful retry.\n  WHY: The stale flag causes `_resolver_fail_closed` to block a legitimate OpenCode retry.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_resolve.sh:618-621 | confidence=4\n  PROBLEM: The `review_sandbox_transfer_failed` flag is checked after sandbox cleanup but is not explicitly removed, allowing stale state to persist across retry attempts.\n  WHY: A previous attempt might leave the flag behind, causing a subsequent attempt to report a transfer failure even if its transfer succeeded.\n- scripts/review_conflict_resolve.sh:613-614, 2445 | confidence=3\n  PROBLEM: The sandbox timeout exit code 124 is not explicitly handled and is propagated as a generic exit code.\n  WHY: A sandbox timeout could be escalated or treated as a permanent failure instead of being handled with specific retry logic.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_conflict_resolve.sh:_resolver_sandbox_attempt function, around line 605-630 in the diff | severity=high | confidence=5\n  PROBLEM: The `review_sandbox_transfer_failed` flag is not cleared between sandbox attempts, allowing stale state to propagate from Claude to the OpenCode retry.\n  WHY: A failed Claude transfer can leave the shared flag set, causing the retry to return 77 despite its own successful transfer.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c77b34a34f1586f238690a5eab0f2f39814f19d540ac5add39219d2600ab1cbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6387,
+    "run_id": "37352414062",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37352414062",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005184309_0f3fffe8f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6387,
+    "run_id": "37352414062"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T18:43:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
