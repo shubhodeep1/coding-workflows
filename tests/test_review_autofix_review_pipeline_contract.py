@@ -8134,6 +8134,64 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		assert (host / "scripts/new.py").read_text() == "new\n"
 
 
+def test_review_isolation_unsafe_directory_names_bounded_dir() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		for directory, expected in (
+			(".claude/commands", ".claude/commands"),
+			(".github/ai/::set-output name=x::y", "redacted"),
+			(".github/ai/" + "a" * 100, "redacted"),
+			(".github/ai/secrets_backup", "redacted"),
+		):
+			bad_dir = source / directory
+			bad_dir.mkdir(parents=True)
+			(bad_dir / "audit-plans.md").write_text("untrusted\n")
+			rejection = run("transfer")
+			assert rejection.returncode == 1
+			assert rejection.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir={expected}\n"
+			assert (host / "scripts/app.py").read_text() == "before\n"
+			assert not (host / directory).exists()
+			(bad_dir / "audit-plans.md").unlink()
+			bad_dir.rmdir()
+		(source / "scripts/link").symlink_to(host, target_is_directory=True)
+		rejection = run("transfer")
+		assert rejection.returncode == 1
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=scripts/link\n"
+		assert not (host / "scripts/link").exists()
+		assert run("refresh").stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unknown\n"
+
+
+def test_review_editor_prompt_explains_sandbox_limits() -> None:
+	apply_fixes = _apply_fixes_text()
+	block = apply_fixes.split("SANDBOX WORKSPACE LIMITS", 1)[1].split("=== BEGIN UNTRUSTED", 1)[0]
+	assert ".claude/commands/" in block
+	assert "sandbox-excluded path" in block
+	assert "`" not in block and "$" not in block and "\\" not in block
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec is not None and spec.loader is not None
+	workspace_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(workspace_module)
+	assert not workspace_module.allowed(".claude/commands/audit-plans.md")
+	assert not workspace_module.allowed(".github/ai/other.json")
+	assert workspace_module.allowed(".github/workflows/x.yml")
+	assert workspace_module.allowed(".claude/hooks/gh_api_write_guard.py")
+
+
 def test_review_isolation_transfer_failure_evidence() -> None:
 	apply_fixes = _apply_fixes_text()
 	start = '  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then'
@@ -8154,6 +8212,15 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 		valid_reason = "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
 		for diagnostic, expected in (
 			(valid_reason, "host_baseline_changed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n", "unsafe_directory dir=.claude/commands"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=redacted\n", "unsafe_directory dir=redacted"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=../x\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=a b\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=a//b\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=scripts/\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.env-private\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=secrets_backup\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed dir=x\n", "unknown"),
 			(None, "unknown"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=forged\n", "unknown"),
 			(valid_reason + "secret second line\n", "unknown"),

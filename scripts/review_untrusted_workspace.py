@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import subprocess
 import sys
@@ -21,6 +22,21 @@ MAX_FILES = 5000
 EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox", ".nox", "dist", "build", "coverage", ".next", ".turbo", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials"}
 ROOT_FILES = {"README.md", "agents.md", "AGENTS.md", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "pyproject.toml", "requirements.txt", "setup.cfg", "pytest.ini", "tox.ini", "go.mod", "Cargo.toml"}
 SUFFIXES = {".py", ".sh", ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", ".mts", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql", ".lock", ".cfg", ".ini"}
+
+
+class UnsafeWorkspaceDirectory(ValueError):
+	def __init__(self, rejected_dir):
+		super().__init__("unsafe workspace directory")
+		self.rejected_dir = rejected_dir
+
+
+def _log_safe_dir(name):
+	if not re.fullmatch(r"[A-Za-z0-9._-][A-Za-z0-9._/-]{0,63}", name):
+		return "redacted"
+	parts = name.split("/")
+	if any(not part or part in (".", "..") or "secret" in part.lower() or "credential" in part.lower() or part.lower().startswith(".env") for part in parts):
+		return "redacted"
+	return name
 
 
 def git_env(manifest):
@@ -91,7 +107,7 @@ def enumerate_workspace(root):
 				dirs.remove(child)
 				continue
 			if (name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not allowed(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
-				raise ValueError("unsafe workspace directory")
+				raise UnsafeWorkspaceDirectory(name)
 		for child in files:
 			entries += 1
 			if entries > 10000:
@@ -227,7 +243,8 @@ def main():
 		else:
 			transfer(host, workspace, manifest)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
-		# Only fixed, path-free transfer reasons may cross into workflow logs.
+		# Only fixed reasons cross into logs, except one bounded, redacted relative
+		# directory name. The first rejected directory in walk order is reported.
 		reason_code = {
 			"symlink in workspace path": "symlink_path",
 			"unsafe file type or size": "unsafe_file",
@@ -240,7 +257,9 @@ def main():
 			"new result conflicts with host path": "host_path_conflict",
 			"unsafe result path": "unsafe_result_path",
 		}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "unknown"
-		print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)
+		directory_detail = f" dir={_log_safe_dir(exc.rejected_dir)}" if sys.argv[1] == "transfer" and isinstance(exc, UnsafeWorkspaceDirectory) else ""
+		error_type = "ValueError" if isinstance(exc, UnsafeWorkspaceDirectory) else type(exc).__name__
+		print(f"::error::Review isolation snapshot or transfer rejected ({error_type}) reason={reason_code}{directory_detail}", file=sys.stderr)
 		raise SystemExit(1) from None
 
 

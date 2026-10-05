@@ -71,7 +71,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
    and `scripts/claude_settings.json.tmpl`; the merged-PR safety hook and
    other `.github/ai/` and `.claude/` files remain excluded from snapshot
-   and transfer. Its
+   and transfer. The editor prompt names excluded paths so sandbox-only missing
+   files are not repaired by creating forbidden directories; transfer still
+   rejects them and reports `reason=unsafe_directory dir=<bounded>` when safe.
+   Its
    isolation helpers must already exist in the verified workflow support
    commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
