@@ -263,7 +263,7 @@ def _commit_authorization(
 			user = pr.get("user")
 			if not isinstance(user, dict) or not isinstance(user.get("login"), str):
 				raise ValueError("invalid PR author")  # noqa: TRY004 - malformed API data holds the path
-			if user.get("type") == "Bot" or user["login"].lower().endswith("[bot]"):
+			if user.get("type") != "User" or user["login"].lower().endswith("[bot]"):
 				return False, "bot_author", str(number)
 			association = pr.get("author_association")
 			if not isinstance(association, str) or association not in TRUSTED_AUTHOR_ASSOCIATIONS:

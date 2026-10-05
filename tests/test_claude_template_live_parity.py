@@ -577,6 +577,8 @@ def test_pipeline_provenance_is_held(head, subject, pr_subject, reason, monkeypa
 		({"head": {"ref": "claude/fix-x", "repo": "unknown"}}, "foreign_head_repo"),
 		({"head": {"ref": "claude/fix-x", "repo": {"full_name": "evil/repo"}}}, "foreign_head_repo"),
 		({"user": {"login": "octo", "type": "Bot"}}, "bot_author"),
+		({"user": {"login": "octo"}}, "bot_author"),
+		({"user": {"login": "octo", "type": "Organization"}}, "bot_author"),
 		({"user": {"login": "renovate[bot]", "type": "User"}}, "bot_author"),
 		({"author_association": "CONTRIBUTOR"}, "untrusted_author"),
 		({"author_association": "NONE"}, "untrusted_author"),
