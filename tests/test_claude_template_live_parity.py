@@ -77,13 +77,24 @@ def _commit(root: Path, path: str, text: str) -> tuple[str, str]:
 	return before, _git(root, "rev-parse", "HEAD")
 
 
-def _sync_pr(number: int, *, repo: str = "octo/repo", base: str = "main") -> dict:
+def _sync_pr(number: int, *, repo: str = "octo/repo", base: str = "main", branch: str = "ai/sync-claude-live-copies") -> dict:
 	return {
 		"number": number,
 		"state": "open",
-		"head": {"ref": "ai/sync-claude-live-copies", "repo": {"full_name": repo}},
+		"head": {"ref": branch, "repo": {"full_name": repo}},
 		"base": {"ref": base},
 	}
+
+
+def _authorized_api(*args):
+	endpoint = args[0]
+	if "/commits/" in endpoint and "/pulls?" in endpoint:
+		return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": "feature/approved"}}]
+	if "/pulls/12/commits?" in endpoint:
+		return [{"commit": {"message": "feat: human change"}}]
+	if "-X" in args:
+		return {"number": 7}
+	return [] if "-held" in endpoint else [_sync_pr(7)]
 
 
 def test_plan_picks_template_only_changes(tmp_path: Path) -> None:
@@ -117,6 +128,15 @@ def test_pr_dry_run_prepares_parity_without_changing_the_pr_commit(tmp_path: Pat
 	assert sync_mod.mismatched(root) == []
 	assert _git(root, "rev-parse", "HEAD") == after
 	assert _git(root, "show", "HEAD:.claude/hooks/guard.py") == "v1"
+
+
+def test_pr_dry_run_never_looks_up_provenance(tmp_path: Path, monkeypatch) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	def unexpected_api(*args):
+		raise AssertionError("dry-run must not call the API")
+	monkeypatch.setattr(sync_mod, "_gh_json", unexpected_api)
+	assert sync_mod.sync(root, before, after, dry_run=True) == 0
 
 
 def test_pr_dry_run_keeps_committed_security_hook(tmp_path: Path, capsys) -> None:
@@ -225,7 +245,7 @@ def test_sync_commits_missing_live_copy(tmp_path: Path, monkeypatch) -> None:
 	_git(root, "remote", "add", "origin", str(remote))
 	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
 	monkeypatch.delenv("SYNC_BRANCH", raising=False)
-	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [_sync_pr(7)])
+	monkeypatch.setattr(sync_mod, "_gh_json", _authorized_api)
 	(root / "workflow-templates/.claude/commands").mkdir()
 	before, after = _commit(root, "workflow-templates/.claude/commands/new.md", "new command\n")
 	(root / "workflow-templates/.claude/commands/new.md").chmod(0o755)
@@ -279,7 +299,7 @@ def test_sync_pushes_a_branch_and_opens_one_pr(tmp_path: Path) -> None:
 	bin_dir.mkdir()
 	calls = tmp_path / "gh_calls"
 	gh = bin_dir / "gh"
-	gh.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "' + str(calls) + '"\ncase "$*" in *"-X POST"*) echo \'{"number": 7}\' ;; *) echo "[]" ;; esac\n', encoding="utf-8")
+	gh.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "' + str(calls) + '"\ncase "$*" in *"/commits/"*"/pulls?"*) echo \'[{"number":12,"merged_at":"2026-10-01T00:00:00Z","head":{"ref":"feature/approved"}}]\' ;; *"/pulls/12/commits?"*) echo \'[{"commit":{"message":"human change"}}]\' ;; *"-X POST"*) echo \'{"number":7}\' ;; *) echo "[]" ;; esac\n', encoding="utf-8")
 	gh.chmod(0o755)
 	env = {key: value for key, value in os.environ.items() if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT"}}
 	env.update(PATH=f"{bin_dir}:{env['PATH']}", GITHUB_REPOSITORY="octo/repo", PYTHONDONTWRITEBYTECODE="1")
@@ -288,10 +308,10 @@ def test_sync_pushes_a_branch_and_opens_one_pr(tmp_path: Path) -> None:
 	assert "CLAUDE_LIVE_SYNC opened pr=7 branch=ai/sync-claude-live-copies paths=1" in result.stderr
 	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/guard.py") == "v2"
 	lines = calls.read_text(encoding="utf-8").splitlines()
-	assert lines[0].startswith("api repos/octo/repo/pulls?state=open&head=octo:ai/sync-claude-live-copies")
-	assert "&base=main&per_page=100" in lines[0]
-	assert lines[1].startswith("api -X POST repos/octo/repo/pulls -f title=chore(.claude): sync live copies")
-	assert "-f head=ai/sync-claude-live-copies -f base=main" in lines[1]
+	assert any(line.startswith("api repos/octo/repo/commits/") for line in lines)
+	assert any(line.startswith("api repos/octo/repo/pulls?state=open&head=octo:ai/sync-claude-live-copies") and "&base=main&per_page=100" in line for line in lines)
+	post = next(line for line in lines if line.startswith("api -X POST repos/octo/repo/pulls -f title=chore(.claude): sync live copies"))
+	assert "-f head=ai/sync-claude-live-copies -f base=main" in post
 
 
 def test_sync_ignores_open_pr_into_other_base(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -304,6 +324,8 @@ def test_sync_ignores_open_pr_into_other_base(tmp_path: Path, monkeypatch, capsy
 	calls = []
 
 	def gh_json(*args):
+		if "/commits/" in args[0] or "/pulls/12/commits?" in args[0]:
+			return _authorized_api(*args)
 		calls.append(args)
 		return {"number": 7} if "-X" in args else [_sync_pr(5, base="stable")]
 
@@ -331,6 +353,8 @@ def test_sync_ignores_fork_and_deleted_head_repo(tmp_path: Path, monkeypatch, ca
 	deleted_head["head"]["repo"] = None
 
 	def gh_json(*args):
+		if "/commits/" in args[0] or "/pulls/12/commits?" in args[0]:
+			return _authorized_api(*args)
 		calls.append(args)
 		return {"number": 7} if "-X" in args else [_sync_pr(5, repo="evil/repo"), deleted_head]
 
@@ -355,6 +379,8 @@ def test_sync_updates_exact_match_after_decoy(tmp_path: Path, monkeypatch, capsy
 	calls = []
 
 	def gh_json(*args):
+		if "/commits/" in args[0] or "/pulls/12/commits?" in args[0]:
+			return _authorized_api(*args)
 		calls.append(args)
 		return [_sync_pr(5, base="stable"), _sync_pr(7)]
 
@@ -388,7 +414,7 @@ def test_sync_refresh_keeps_earlier_unmerged_live_copies(tmp_path: Path, monkeyp
 	_git(root, "remote", "add", "origin", str(remote))
 	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
 	monkeypatch.delenv("SYNC_BRANCH", raising=False)
-	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [_sync_pr(7)])
+	monkeypatch.setattr(sync_mod, "_gh_json", _authorized_api)
 	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
 	assert sync_mod.sync(root, before, after, dry_run=False) == 0
 	_git(root, "checkout", "main")
@@ -405,6 +431,22 @@ def test_sync_refresh_keeps_earlier_unmerged_live_copies(tmp_path: Path, monkeyp
 	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/second.py") == "v3"
 
 
+def test_carry_forward_reports_template_read_failure(tmp_path: Path, monkeypatch, capsys) -> None:
+	root, _remote = _sync_repo(tmp_path, monkeypatch)
+	after = _git(root, "rev-parse", "HEAD")
+	branch = "ai/sync-claude-live-copies"
+	_git(root, "checkout", "-q", "-b", branch)
+	(root / ".claude/hooks/guard.py").write_text("v2\n", encoding="utf-8")
+	_git(root, "add", ".claude/hooks/guard.py")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "sync")
+	_git(root, "push", "-q", "origin", f"HEAD:refs/heads/{branch}")
+	_git(root, "checkout", "-q", "main")
+	(root / "workflow-templates/.claude/hooks/guard.py").unlink()
+
+	assert sync_mod._carry_forward(root, after, branch, [], {"hooks/guard.py"}) is None
+	assert "reason=template_read_failed path=workflow-templates/.claude/hooks/guard.py" in capsys.readouterr().err
+
+
 def test_sync_refuses_base_branch_override(tmp_path: Path, monkeypatch, capsys) -> None:
 	root = _scratch_repo(tmp_path)
 	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
@@ -412,6 +454,14 @@ def test_sync_refuses_base_branch_override(tmp_path: Path, monkeypatch, capsys) 
 	assert sync_mod.sync(root, before, after, dry_run=False) == 1
 	assert "reason=unsafe_sync_branch" in capsys.readouterr().err
 	assert _git(root, "rev-parse", "main") == after
+
+
+def test_sync_refuses_held_branch_override(tmp_path: Path, monkeypatch, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	monkeypatch.setenv("SYNC_BRANCH", "ai/sync-claude-live-copies-held")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 1
+	assert "reason=unsafe_sync_branch" in capsys.readouterr().err
 
 
 def test_sync_reports_api_error_after_push(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -422,6 +472,8 @@ def test_sync_reports_api_error_after_push(tmp_path: Path, monkeypatch, capsys) 
 	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
 	monkeypatch.delenv("SYNC_BRANCH", raising=False)
 	def api_unavailable(*args):
+		if "/commits/" in args[0] or "/pulls/12/commits?" in args[0]:
+			return _authorized_api(*args)
 		raise subprocess.CalledProcessError(1, ["gh", "api"])
 	monkeypatch.setattr(sync_mod, "_gh_json", api_unavailable)
 	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
@@ -438,6 +490,7 @@ def test_sync_reports_git_stage_error(tmp_path: Path, monkeypatch, capsys) -> No
 	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
 	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
 	git_sync_call = sync_mod._git
+	monkeypatch.setattr(sync_mod, "_gh_json", _authorized_api)
 
 	def fail_checkout(*args, **kwargs):
 		if args[1] == "checkout":
@@ -447,6 +500,176 @@ def test_sync_reports_git_stage_error(tmp_path: Path, monkeypatch, capsys) -> No
 	monkeypatch.setattr(sync_mod, "_git", fail_checkout)
 	assert sync_mod.sync(root, before, after, dry_run=False) == 1
 	assert "CLAUDE_LIVE_SYNC error reason=git_stage_failed" in capsys.readouterr().err
+
+
+def _sync_repo(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+	root = _scratch_repo(tmp_path)
+	remote = tmp_path / "remote.git"
+	_git(tmp_path, "init", "-q", "--bare", str(remote))
+	_git(root, "remote", "add", "origin", str(remote))
+	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+	monkeypatch.delenv("SYNC_BRANCH", raising=False)
+	monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+	return root, remote
+
+
+def test_unassociated_change_goes_only_to_draft_and_reports_source(tmp_path: Path, monkeypatch, capsys) -> None:
+	root, remote = _sync_repo(tmp_path, monkeypatch)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	output = tmp_path / "output"
+	monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+	calls = []
+	def api(*args):
+		calls.append(args)
+		if "/commits/" in args[0]:
+			return []
+		if "-X" in args:
+			return {"number": 9}
+		return []
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert _git(remote, "show", "ai/sync-claude-live-copies-held:.claude/hooks/guard.py") == "v2"
+	assert _git(remote, "branch", "--list", "ai/sync-claude-live-copies") == ""
+	assert "reason=no_merged_pr commit=" in capsys.readouterr().err
+	assert any("-F" in call and "draft=true" in call for call in calls)
+	assert "held=true\nheld_pr=9\n" in output.read_text(encoding="utf-8")
+	assert "commit " + after[:12] in output.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+	("head", "subject", "pr_subject", "reason"),
+	[
+		("ai/issue-5", "normal", "normal", "pipeline_branch"),
+		("auto/forward-merge-stable-1", "normal", "normal", "pipeline_branch"),
+		("feature/x", "[claude-intervention] edit", "normal", "pipeline_commit_marker"),
+		("feature/x", "normal", "[ai-autofix] edit", "pr_commit_marker"),
+		("feature/x", "normal", "feat (#12)", "squashed_pr_commit"),
+	],
+)
+def test_pipeline_provenance_is_held(head, subject, pr_subject, reason, monkeypatch) -> None:
+	def api(*args):
+		if "/commits/" in args[0]:
+			return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": head}}]
+		return [{"commit": {"message": pr_subject}}]
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	ok, actual, _pr = sync_mod._commit_authorization("octo/repo", "a" * 40, subject, {}, {})
+	assert not ok and actual == reason
+
+
+def test_provenance_truncation_and_malformed_api_fail_closed(monkeypatch) -> None:
+	def too_many(*args):
+		if "/commits/" in args[0]:
+			return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": "feature/x"}}]
+		return [{"commit": {"message": "normal"}}] * 100
+	monkeypatch.setattr(sync_mod, "_gh_json", too_many)
+	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "pr_commits_truncated"
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: {"error": "unavailable"})
+	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 12, "merged_at": True, "head": {"ref": "feature/x"}}])
+	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
+	for invalid_timestamp in ("invalid", "2026-13-01T00:00:00Z", "2026-10-01T00:00:00", ""):
+		monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 12, "merged_at": invalid_timestamp, "head": {"ref": "feature/x"}}])
+		assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
+
+
+def test_pr_commit_pagination_inspects_later_pages(monkeypatch) -> None:
+	def api(*args):
+		if "/commits/" in args[0] and "/pulls?" in args[0]:
+			return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": "feature/x"}}]
+		if "&page=1" in args[0]:
+			return [{"commit": {"message": "human"}}] * 100
+		return [{"commit": {"message": "[judge-fix] hidden edit"}}]
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "pr_commit_marker"
+
+
+def test_provenance_outage_still_opens_draft(tmp_path: Path, monkeypatch) -> None:
+	root, remote = _sync_repo(tmp_path, monkeypatch)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	def api(*args):
+		if "/commits/" in args[0]:
+			raise subprocess.CalledProcessError(1, "gh")
+		return {"number": 9} if "-X" in args else []
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert _git(remote, "show", "ai/sync-claude-live-copies-held:.claude/hooks/guard.py") == "v2"
+
+
+def test_mixed_paths_are_isolated_by_branch(tmp_path: Path, monkeypatch) -> None:
+	root, remote = _sync_repo(tmp_path, monkeypatch)
+	for prefix in (".claude", "workflow-templates/.claude"):
+		(root / prefix / "hooks/second.py").write_text("v1\n", encoding="utf-8")
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "second pair")
+	before = _git(root, "rev-parse", "HEAD")
+	_commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	_commit(root, "workflow-templates/.claude/hooks/second.py", "v2\n")
+	after = _git(root, "rev-parse", "HEAD")
+	def api(*args):
+		if "/commits/" in args[0] and "/pulls?" in args[0]:
+			return [] if _git(root, "show", "--format=", args[0].split("/commits/")[1].split("/")[0], "--", "workflow-templates/.claude/hooks/second.py") else _authorized_api(*args)
+		if "-X" in args:
+			return {"number": 9}
+		return _authorized_api(*args) if "/pulls/12/commits?" in args[0] else []
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/guard.py") == "v2"
+	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/second.py") == "v1"
+	assert _git(remote, "show", "ai/sync-claude-live-copies-held:.claude/hooks/second.py") == "v2"
+	assert _git(remote, "show", "ai/sync-claude-live-copies-held:.claude/hooks/guard.py") == "v1"
+
+
+def test_held_ready_pr_converted_before_push_and_failure_does_not_push(tmp_path: Path, monkeypatch, capsys) -> None:
+	root, remote = _sync_repo(tmp_path, monkeypatch)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	converted = []
+	def api(*args):
+		if "/commits/" in args[0]:
+			return []
+		if args[0] == "graphql":
+			converted.append(_git(remote, "branch", "--list", "ai/sync-claude-live-copies-held"))
+			return {"data": {"convertPullRequestToDraft": {"pullRequest": {"isDraft": True}}}}
+		return [{**_sync_pr(9, branch="ai/sync-claude-live-copies-held"), "draft": False, "node_id": "PR_9"}]
+	monkeypatch.setattr(sync_mod, "_gh_json", api)
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert converted == [""]
+	assert "converted_to_draft pr=9" in capsys.readouterr().err
+	_git(root, "checkout", "main")
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v3\n")
+	old_head = _git(remote, "rev-parse", "ai/sync-claude-live-copies-held")
+	def conversion_fails(*args):
+		if args[0] == "graphql":
+			raise subprocess.CalledProcessError(1, "gh")
+		return api(*args)
+	monkeypatch.setattr(sync_mod, "_gh_json", conversion_fails)
+	assert sync_mod.sync(root, before, after, dry_run=False) == 1
+	assert _git(remote, "rev-parse", "ai/sync-claude-live-copies-held") == old_head
+
+
+def test_provenance_cap_and_sanitized_outputs(tmp_path: Path, monkeypatch) -> None:
+	root = _scratch_repo(tmp_path)
+	_commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	_, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v3\n")
+	monkeypatch.setenv("CLAUDE_LIVE_SYNC_MAX_PROVENANCE_COMMITS", "1")
+	authorized, held = sync_mod._classify_paths(root, ["hooks/guard.py"], after, "octo/repo")
+	assert authorized == [] and held["hooks/guard.py"][0] == "provenance_cap_exceeded"
+	output = tmp_path / "output"
+	monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+	sync_mod._write_outputs(9, {"hooks/guard.py\nheld=false": ("api_failed", "a" * 12, "none")})
+	assert output.read_text(encoding="utf-8").splitlines()[0:2] == ["held=true", "held_pr=9"]
+	assert len(output.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_history_failure_is_held(tmp_path: Path, monkeypatch) -> None:
+	root = _scratch_repo(tmp_path)
+	_, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	previous = sync_mod._git
+	def fail_history(*args, **kwargs):
+		if args[1] == "log":
+			raise OSError("git unavailable")
+		return previous(*args, **kwargs)
+	monkeypatch.setattr(sync_mod, "_git", fail_history)
+	assert sync_mod._classify_paths(root, ["hooks/guard.py"], after, "octo/repo")[1]["hooks/guard.py"][0] == "history_failed"
 
 
 def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
@@ -459,6 +682,12 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	assert step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
 	assert step["env"]["PUSH_BEFORE"] == "${{ github.event.before }}"
 	assert step["env"]["PUSH_AFTER"] == "${{ github.sha }}"
+	assert step["id"] == "sync"
+	alert = next(step for step in data["jobs"]["sync"]["steps"] if step.get("name") == "Alert on held .claude live-copy sync")
+	assert "steps.sync.outputs.held == 'true'" in alert["if"]
+	assert '"WARNING"' in alert["run"] and "tg_send_msg" in alert["run"]
+	assert "${{" not in alert["run"]
+	assert all(key in alert["env"] for key in ("TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "ALERT_MSG_LEVEL"))
 	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 	assert "tests/test_claude_template_live_parity.py" in ci
 	ci_jobs = yaml.safe_load(ci)["jobs"]
