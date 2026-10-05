@@ -101,11 +101,32 @@ if argv[0] == "run":
 		print("CLAUDE_READ_CONTAINER_READY", file=sys.stderr)
 		sys.exit(1)
 	print("CLAUDE_READ_CONTAINER_READY", file=sys.stderr)
+	if mode == "tamper-support":
+		path = os.environ["FAKE_SUPPORT_FILE"]
+		os.chmod(path, 0o755)
+		with open(path, "a", encoding="utf-8") as handle:
+			handle.write("# tampered\n")
 	if mode == "limit":
 		print(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}))
 		print(json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "API Error"}))
 		sys.exit(1)
 	print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done", "usage": {"input_tokens": 1}}))
+'''
+
+FAKE_PS = r'''#!/usr/bin/env python3
+import sys
+from pathlib import Path
+if sys.argv[1:3] == ["-eo", "args="]:
+	for process_path in Path("/proc").glob("[0-9]*"):
+		try:
+			print((process_path / "cmdline").read_bytes().replace(b"\x00", b" ").decode(errors="replace"))
+		except OSError:
+			pass
+	sys.exit(0)
+try:
+	print(Path(f"/proc/{sys.argv[-1]}/stat").read_text().split(") ", 1)[1].split()[0])
+except (OSError, IndexError):
+	sys.exit(1)
 '''
 
 
@@ -119,6 +140,9 @@ def sandbox(tmp_path: Path):
 	docker = fake_bin / "docker"
 	docker.write_text(FAKE_DOCKER.replace("__DOCKER_LOG__", repr(str(tmp_path / "docker.jsonl"))), encoding="utf-8")
 	docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+	ps = fake_bin / "ps"
+	ps.write_text(FAKE_PS, encoding="utf-8")
+	ps.chmod(ps.stat().st_mode | stat.S_IXUSR)
 	home = tmp_path / "home"
 	home.mkdir()
 	runner_temp = tmp_path / "rt"
@@ -381,10 +405,27 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert call["stdin"] == "do the thing\n"
 	assert (sandbox["tmp"] / "out.txt").read_text() == "done"
 	assert "CLAUDE_ISOLATION role=SECURITY_AUDIT profile=read mode=container" in result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=locked" in result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=verified" in result.stderr
+	assert stat.S_IMODE(sandbox["support"].stat().st_mode) == 0o755
+	settings_path = next(arg.split("src=", 1)[1].split(",dst=", 1)[0] for arg in argv if "dst=/settings.json" in arg)
+	policy = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+	assert policy["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/read-guard.py" guard-read-bash'
 	assert not any(str(sandbox["pool"]) in arg for arg in argv)
 	assert "TOK_OK" not in json.dumps(call) + result.stdout + result.stderr
 	for key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
 		assert key not in call["env"]
+
+
+def test_read_isolation_tamper_stops_before_checkout_classifier(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["tmp"] / "docker-mode").write_text("tamper-support")
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 86, result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=tampered" in result.stderr
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
+	assert not (sandbox["tmp"] / "out.txt").exists()
+	assert stat.S_IMODE((sandbox["support"] / "scripts" / "ai_engine.sh").stat().st_mode) == 0o644
 
 
 def test_read_isolation_image_cache_skips_build(sandbox: dict) -> None:
@@ -602,7 +643,7 @@ def test_read_isolation_reaps_container_on_parent_sigkill(sandbox: dict) -> None
 	(sandbox["tmp"] / "docker-mode").write_text("hang")
 	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
 	process = subprocess.Popen(
-		["bash", "-c", f'source {shlex.quote(str(AI_ENGINE))}; claude_run {args}'],
+		["bash", "-c", f'source {shlex.quote(str(sandbox["support"] / "scripts/ai_engine.sh"))}; claude_run {args}'],
 		cwd=sandbox["tmp"], env=sandbox["env"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 		start_new_session=True,
 	)
@@ -619,7 +660,7 @@ def test_read_isolation_reaps_container_on_parent_sigkill(sandbox: dict) -> None
 			time.sleep(0.2)
 		assert _docker_calls(sandbox, "rm"), "orphan reaper did not remove the container"
 		while time.monotonic() < deadline:
-			broker_processes = subprocess.run(["ps", "-eo", "args="], capture_output=True, text=True, check=True).stdout
+			broker_processes = subprocess.run([str(sandbox["bin"] / "ps"), "-eo", "args="], capture_output=True, text=True, check=True).stdout
 			if not any("claude_anthropic_relay.py broker" in line and str(sandbox["tmp"]) in line for line in broker_processes.splitlines()):
 				break
 			time.sleep(0.1)
@@ -632,6 +673,8 @@ def test_read_isolation_reaps_container_on_parent_sigkill(sandbox: dict) -> None
 		except ProcessLookupError:
 			pass
 		process.wait(timeout=5)
+		for manifest in (sandbox["tmp"] / "rt").glob("claude-run-*/support-lock.json"):
+			subprocess.run(["python3", str(manifest.parent / "claude_engine.py"), "support-unlock", "--manifest", str(manifest)], check=True)
 
 
 @pytest.mark.parametrize("role, read_only", [

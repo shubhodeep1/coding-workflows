@@ -89,6 +89,7 @@ def test_guard_hook_runs_on_every_bash_call() -> None:
 	read_hooks = _render(profile="read")["hooks"]["PreToolUse"]
 	assert read_hooks[1]["matcher"] == "Bash"
 	assert read_hooks[1]["hooks"][0]["command"] == f'python3 "{SCRIPT}" guard-read-bash'
+	assert _render(profile="read", read_guard_hook="/read-guard.py")["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/read-guard.py" guard-read-bash'
 	assert len(_render(profile="write")["hooks"]["PreToolUse"]) == 1
 
 
@@ -147,6 +148,7 @@ def test_settings_cli_writes_owner_only_file(tmp_path: Path) -> None:
 	anchor = str(tmp_path.resolve()).lstrip("/")
 	assert f"Edit(//{anchor}/.claude/**)" in settings["permissions"]["deny"]
 	assert settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].endswith('/.claude/hooks/gh_api_write_guard.py" --read-only')
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"].endswith('claude_engine.py" guard-read-bash')
 
 
 def test_settings_cli_fails_without_the_guard_hook(tmp_path: Path) -> None:

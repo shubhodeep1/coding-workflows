@@ -603,7 +603,7 @@ def render_settings(
 			raise EngineError("read profile requires the gh api guard hook")
 		settings["hooks"]["PreToolUse"].append({
 			"matcher": "Bash",
-			"hooks": [{"type": "command", "command": f'python3 "{read_guard_path}" {"read-guard" if read_guard_hook is not None else READ_GUARD_SUBCOMMAND}', "timeout": 30}],
+			"hooks": [{"type": "command", "command": f'python3 "{read_guard_path}" {READ_GUARD_SUBCOMMAND}', "timeout": 30}],
 		})
 	permissions = settings.setdefault("permissions", {})
 	deny = [rule for rule in permissions.get("deny", []) if isinstance(rule, str)]

@@ -416,7 +416,7 @@ def test_read_profile_settings_have_a_bash_guard_without_changing_write_settings
 	read = ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook="/trusted/claude_engine.py")
 	assert set(ce.READ_PROFILE_DENY) <= set(read["permissions"]["deny"])
 	assert read["hooks"]["PreToolUse"][1] == {
-		"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "/trusted/claude_engine.py" read-guard', "timeout": 30}],
+		"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "/trusted/claude_engine.py" guard-read-bash', "timeout": 30}],
 	}
 	for path in ("", "relative.py", '/bad"path', "/bad\npath"):
 		with pytest.raises(ce.EngineError):
