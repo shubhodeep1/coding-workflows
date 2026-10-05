@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6419,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6419\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6422\",\"pr_number\":6422,\"branch\":\"ai/issue-6419\",\"run_id\":\"37387729008\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37387729008\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/ai/write_guards.v1.json\",\".github/workflows/ci.yml\",\".github/workflows/sync-claude-live-copies.yml\",\"agents.md\",\"changelog.d/6419-sync-live-copies-trusted-support.md\",\"scripts/dev/test_write_guard.sh\",\"scripts/review_conflict_resolve.sh\",\"scripts/write_guard.sh\",\"tests/test_claude_template_live_parity.py\",\"tests/test_sync_claude_live_copies_workflow_contract.py\"]}",
+  "fingerprint": "a58f8c76c722c3c9694e83391183f266aa1b7c4bd5fffcc1077bb9919a75eb2e",
+  "lineage": {
+    "issue_number": 6419,
+    "parent_ids": [],
+    "pr_number": 6422,
+    "run_id": "37387729008",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37387729008",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6422"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005234034_8131dd9271",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6419,
+    "level": "run",
+    "pr_number": 6422,
+    "run_id": "37387729008"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6419: https://github.com/shubhodeep1/coding-workflows/pull/6422",
+  "timestamps": {
+    "created_at": "2026-10-05T23:40:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
