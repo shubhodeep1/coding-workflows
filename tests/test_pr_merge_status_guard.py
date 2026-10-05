@@ -776,10 +776,21 @@ def test_fd_prefix_only_removed_for_supported_redirects(command: str, arguments:
 	assert guard._shell_segments_with_operators(command) == [("", arguments)]
 
 
-def test_malformed_later_line_requests_confirmation_for_redirected_push(capsys) -> None:
-	command = 'git push origin 123&>/dev/null\n"unterminated'
+@pytest.mark.parametrize("command", [
+	'git push origin 123&>/dev/null\n"unterminated',
+	'g\'\'it push origin 123&>/dev/null\n"unterminated',
+	'g""it push origin 123&>/dev/null\n"unterminated',
+	'g\\i\\t pu\'\'sh origin 123&>/dev/null\n"unterminated',
+])
+def test_malformed_later_line_requests_confirmation_for_redirected_push(command: str, capsys) -> None:
 	assert guard.git_subcommands(command) == set()
 	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}) == (0, "")
+	decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "ask"
+
+
+def test_unparsable_non_git_command_requests_confirmation(capsys) -> None:
+	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": 'pwd\n"unterminated'}}) == (0, "")
 	decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
 	assert decision["permissionDecision"] == "ask"
 

@@ -1294,12 +1294,12 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	if _guard_disabled():
 		return 0, ""
 	if not guarded_git_subcommands:
-		# Bash may execute a complete line before a later unmatched quote.
-		if re.search(r"\bgit\b", command) and re.search(r"\b(?:commit|push)\b", command):
-			try:
-				_shell_segments_with_operators(command)
-			except ValueError:
-				_request_confirmation("Cannot parse a Bash command containing git commit/push; an earlier line may still execute.")
+		# Bash may execute earlier lines before a later unmatched quote. Raw-text
+		# searches miss quoted/escaped spellings of git and its subcommands.
+		try:
+			_shell_segments_with_operators(command)
+		except ValueError:
+			_request_confirmation("Cannot parse the Bash command; an earlier git commit/push may still execute.")
 		return 0, ""
 
 	checkout = _payload_cwd(payload)
