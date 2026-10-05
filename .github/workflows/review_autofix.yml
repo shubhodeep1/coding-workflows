@@ -5576,7 +5576,9 @@ jobs:
         # merge" until a security audit of the current head comes back clean
         # (scripts/review_single_issue_security_pass.sh gate; the audit posts
         # its result and re-runs this review). At MAX_SECURITY_PASS_CYCLES the
-        # PR is labelled ai:security-pass-failed for the unblock judge. Same
+        # PR is labelled ai:security-pass-failed and the step outputs
+        # exhausted=true, which runs the review-blocked judge below in
+        # security-exhaustion mode. Same
         # condition as the auto-merge step, so it runs exactly when a merge
         # would.
         id: single_issue_security_pass
@@ -5779,7 +5781,10 @@ jobs:
 
       - name: Review-blocked judge decision
         id: rb_judge
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        # Also runs when the single-issue security pass is out of audit
+        # cycles (exhausted=true): the judge then decides in
+        # security-exhaustion mode (scripts/review_rb_judge_security_pass.sh).
+        if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || steps.single_issue_security_pass.outputs.exhausted == 'true') && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -5791,6 +5796,15 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+          # Single-issue security pass settings, the same as the
+          # "Single-issue security pass" step: security-exhaustion mode and
+          # the security gate on judge merges.
+          SECURITY_PASS_EXHAUSTED: ${{ steps.single_issue_security_pass.outputs.exhausted }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
         run: |
           set -euo pipefail
           # Graceful-degradation wrapper.  The judge has two recognised
@@ -6579,7 +6593,7 @@ jobs:
           fi
 
       - name: Telegram review-blocked judge decision
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || steps.single_issue_security_pass.outputs.exhausted == 'true') && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

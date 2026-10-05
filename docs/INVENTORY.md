@@ -228,6 +228,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_merge_train.sh` — merge train for review_autofix.yml: `gate` queues an ai/issue-* PR behind older open ai/issue-* PRs on the same base that edit the same files (label ai:merge-queued); `release` (cancel_on_pr_close.yml, orchestrate_poll.yml) re-dispatches review once the blockers are gone.
 - `scripts/review_parse_consolidator.sh` — Shell helper for review parse consolidator.
 - `scripts/review_rb_judge.sh` — Runs the review-blocked judge for PR merge, fix, or close-and-reissue decisions.
+- `scripts/review_rb_judge_security_pass.sh` — Security-pass helpers sourced by `review_rb_judge.sh`: security-exhaustion mode (judge decides with the open `[security-audit]` findings once the single-issue security pass is out of cycles), the security gate on judge merges, and the extension marker that grants one more audit cycle after a security-mode judge fix.
 - `scripts/review_reject_verify.sh` — Shell helper for review reject verify.
 - `scripts/review_resolve_review_threads.sh` — resolve PR review threads that the editor stage already audited.
 - `scripts/review_resolve_review_threads_plan.py` — Build the thread-resolution plan for review_resolve_review_threads.sh.

@@ -207,7 +207,7 @@ def test_pending_timeout_uses_operator_override(tmp_path: Path) -> None:
 def test_cycles_exhausted_labels_the_pr_for_the_unblock_judge(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\n" and "reason=cycles_exhausted" in result.stdout
+	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
 	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed"] in calls
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
@@ -215,7 +215,7 @@ def test_cycles_exhausted_labels_the_pr_for_the_unblock_judge(tmp_path: Path) ->
 def test_last_cycle_findings_escalate_on_the_same_head(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD, 5))]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\n" and "reason=cycles_exhausted" in result.stdout
+	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
 	assert any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
 
 
@@ -229,8 +229,55 @@ def test_failed_exhaustion_label_fails_closed_for_workflow_recovery(tmp_path: Pa
 def test_two_digit_cycle_limit_is_counted_numerically(tmp_path: Path) -> None:
 	comments = [_comment(_marker("failed", OLD, 9), comment_id=1), _comment(_marker("failed", OLD, 10), comment_id=2)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"MAX_SECURITY_PASS_CYCLES": "10"})
-	assert output == "hold=true\n" and "reason=cycles_exhausted cycle=10" in result.stdout
+	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted cycle=10" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def _extension(head: str) -> str:
+	return f"<!-- ai:single-issue-security-pass-extension:v1 head={head} -->"
+
+
+def test_judge_extension_marker_grants_one_more_audit_cycle(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
+	comments.append(_comment("Judge pushed a fix.\n\n" + _extension(OLD), comment_id=9))
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\n" and "outcome=dispatched cycle=6" in result.stdout
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "(cycle 6 of 6)" in posted[-1][-1]
+
+
+def test_extension_marker_from_another_author_is_ignored(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
+	comments.append(_comment(_extension(OLD), login="other[bot]", comment_id=9))
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nexhausted=true\n"
+
+
+@pytest.mark.parametrize(
+	"comments, env, state",
+	[
+		([], {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false"}, "skip"),
+		([_comment(_marker("clean", HEAD, 1))], {}, "clean"),
+		([_comment(_marker("pending", HEAD, 1))], {}, "pending"),
+		([_comment(_marker("findings", HEAD, 1))], {}, "findings"),
+		([], {}, "needs_audit"),
+		([_comment(_marker("findings", HEAD, 5))], {}, "exhausted"),
+	],
+)
+def test_status_mode_reports_state_without_side_effects(tmp_path: Path, comments: list, env: dict, state: str) -> None:
+	result, calls, output = _run(tmp_path, "status", comments=comments, env=env)
+	assert result.returncode == 0
+	assert f"SINGLE_ISSUE_SECURITY_PASS_STATE={state}" in result.stdout.splitlines()
+	assert output == ""
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert not any(call[:2] in (["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
+
+
+def test_status_only_cannot_be_forced_on_the_gate_from_the_environment(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 1))], env={"SINGLE_PASS_STATUS_ONLY": "true"})
+	assert output == "hold=true\n"
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=" not in result.stdout
 
 
 def test_a_failed_dispatch_falls_back_to_merging(tmp_path: Path) -> None:
@@ -238,14 +285,15 @@ def test_a_failed_dispatch_falls_back_to_merging(tmp_path: Path) -> None:
 	assert output == "hold=false\n" and "reason=dispatch_failed" in result.stdout
 
 
-def _report(tmp_path: Path, outcome: str, findings: str, cycle: int = 3):
+def _report(tmp_path: Path, outcome: str, findings: str, cycle: int = 3, extra_comments: list | None = None):
 	env = {
 		"SECURITY_PASS_PR_NUMBER": "42",
 		"SECURITY_PASS_HEAD_SHA": HEAD,
 		"SECURITY_PASS_AUDIT_OUTCOME": outcome,
 		"SECURITY_PASS_FINDINGS": findings,
 	}
-	return _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, cycle))], env=env)
+	comments = [_comment(_marker("pending", HEAD, cycle))] + list(extra_comments or [])
+	return _run(tmp_path, "report", comments=comments, env=env)
 
 
 @pytest.mark.parametrize(
@@ -314,6 +362,12 @@ def test_last_cycle_findings_redispatch_for_exhaustion(tmp_path: Path) -> None:
 	result, calls, _ = _report(tmp_path, "success", "2", cycle=5)
 	assert "outcome=findings cycle=5" in result.stdout
 	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] in calls
+
+
+def test_report_counts_judge_extensions_before_escalating(tmp_path: Path) -> None:
+	result, calls, _ = _report(tmp_path, "success", "2", cycle=5, extra_comments=[_comment(_extension(OLD), comment_id=99)])
+	assert "outcome=findings cycle=5" in result.stdout
+	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] not in calls
 
 
 def test_summaryless_audit_never_reports_clean(tmp_path: Path) -> None:

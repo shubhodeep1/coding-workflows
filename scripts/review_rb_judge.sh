@@ -38,6 +38,22 @@ for _ledger_candidate in \
   fi
 done
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+# Security-exhaustion mode and the judge-merge security gate
+# (scripts/review_rb_judge_security_pass.sh). An older staged bundle without
+# the helper keeps the pre-helper behaviour: normal judge mode, merges
+# without the single-issue security pass.
+# shellcheck source=/dev/null
+if [ -f "${SUPPORT_SCRIPTS_DIR}/review_rb_judge_security_pass.sh" ]; then
+  source "${SUPPORT_SCRIPTS_DIR}/review_rb_judge_security_pass.sh" || true
+fi
+if ! type rb_security_merge_gate >/dev/null 2>&1; then
+  echo "::warning::review_rb_judge_security_pass.sh is not staged; the judge runs without security-pass handling."
+  rb_security_mode_detect() { RB_SECURITY_MODE="false"; }
+  rb_security_findings_render() { : > "$2"; }
+  rb_security_prompt_section() { :; }
+  rb_security_merge_gate() { return 0; }
+  rb_security_post_extension() { :; }
+fi
 OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
 # shellcheck source=/dev/null
@@ -1028,6 +1044,16 @@ else
   echo "Judge retry ${RETRY_COUNT}/${MAX_REVIEW_BLOCKED_RETRIES}."
 fi
 
+# Security-exhaustion mode: the single-issue security pass used every audit
+# cycle, so the judge decides with the open findings in its prompt.
+RB_SECURITY_MODE="false"
+RB_SECURITY_FINDINGS_FILE="${RUNTIME_DIR}/rb_judge_security_findings.txt"
+rb_security_mode_detect
+if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
+  rb_security_findings_render "${TARGET_BRANCH:-$(jq -r '.head.ref // ""' "${PR_PAYLOAD_FILE:-/dev/null}" 2>/dev/null || true)}" "${RB_SECURITY_FINDINGS_FILE}"
+  echo "Security pass exhausted for PR #${PR_NUMBER}; the judge decides with the open findings."
+fi
+
 # -----------------------------------------------------------
 # Collect PR context for judge
 # -----------------------------------------------------------
@@ -1303,6 +1329,10 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
     echo "are preserved instead of discarded."
     echo "close_and_reissue only if the approach is fundamentally wrong and"
     echo "the PR's work should be discarded."
+  fi
+  if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
+    echo
+    rb_security_prompt_section "${RB_SECURITY_FINDINGS_FILE}" "${IS_FINAL}"
   fi
 } > "${RB_JUDGE_PROMPT}"
 _cleanup_prompt_budget
@@ -1689,6 +1719,9 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
     echo "**Posted review state:** ${RB_OUTBOUND_REVIEW_STATE} (break-glass override)"
   fi
   echo "**Retry:** $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
+  if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
+    echo "**Mode:** single-issue security pass exhausted; open findings stay open as issues"
+  fi
   echo "**Justification:** ${RB_JUSTIFICATION}"
   echo
   echo "**Remaining issues:** ${RB_REMAINING}"
@@ -1703,6 +1736,27 @@ post_review_blocked_assessment \
 # -----------------------------------------------------------
 # Execute judge action
 # -----------------------------------------------------------
+# Judge merges go through the single-issue security gate (outside
+# security-exhaustion mode): a clean audit of the head merges; otherwise the
+# gate dispatches or waits for the audit and the merge is held. The audit's
+# report re-runs the review, and the still-capped review brings the judge
+# back. `fix` on the final attempt is a merge too.
+RB_MERGE_ACTION="false"
+case "${RB_ACTION}" in
+  merge|merge_with_followup) RB_MERGE_ACTION="true" ;;
+  fix) [ "${IS_FINAL}" = "true" ] && RB_MERGE_ACTION="true" ;;
+esac
+if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
+  echo "Judge chose ${RB_ACTION} for PR #${PR_NUMBER}, but the single-issue security pass holds the merge."
+  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+    -f body="## Review-Blocked Judge — merge held for the security pass
+
+The judge chose **${RB_ACTION}**, but this PR's single-issue security audit has not passed for its current head, so the merge waits. The audit result re-runs the review, and the judge decides again then." >/dev/null 2>&1 || true
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
@@ -2038,6 +2092,9 @@ ${RB_FIX_DESC}"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}"
           if git push origin "HEAD:${TARGET_BRANCH}"; then
             echo "Pushed [judge-fix] commit to ${TARGET_BRANCH}."
+            if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
+              rb_security_post_extension "$(git rev-parse HEAD 2>/dev/null || true)"
+            fi
             echo "judge_handled=true" >> "$GITHUB_OUTPUT"
             echo "judge_action=fix" >> "$GITHUB_OUTPUT"
           else
