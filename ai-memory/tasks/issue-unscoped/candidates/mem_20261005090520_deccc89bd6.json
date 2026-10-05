@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_evidence.py:633-639, 883-915 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Review-only runs can fetch failed non-review job logs because `select_jobs()` prioritizes failed jobs over the codex-agent review job.\n  WHY: The review-only gate and selection path both use `select_jobs()`, so a successful or unfinished run with a failed non-review job can have that job's log fetched with GH_PAT; all reviewers rated this MAJOR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Read run IDs only from intake-generated structured fields, never quoted logs or diagnosis prose. Verify every run's repository and failure provenance before fetching it.\" (linked issue #6246 recommendation)\n  expected_change_site: scripts/workflow_failure_heal_evidence.py\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: Reviewer says the required changes are implemented: parse_leading_heal_markers / _runs_marker_urls, _HEAL_RUN_LINE_RE retired from trusted_run_refs, same-repo auto-verification removed in _verify_run, and each run checked for repository, head SHA, branch/PR, and conclusion; tests listed in the review confirm these changes.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal_evidence.py | Line or code reference: select_jobs at line 633-639, called from collect_run at line 908 without honoring review_only; gate at line 895 also uses select_jobs for review_only runs | severity=high | confidence=4\n  PROBLEM: A verified_review_only run with a failed non-review job can have that job selected instead of the review job.\n  WHY: `select_jobs` prioritizes failed jobs, so its result can cause a non-review job log to be fetched during the review_only path.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/workflow_failure_heal_evidence.py | Line or code reference: lines 883-885, 895-897, 908 | severity=high | confidence=5\n  PROBLEM: An unfinished or successful review_only run with a failed non-review job can select that job instead of the review job.\n  WHY: `select_jobs` returns failed jobs before falling back to review jobs, allowing the non-review job's log to be fetched with GH_PAT.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_evidence.py | Line or code reference: select_jobs() at lines 633-639; review_only gate at line 883 (cached) and line 895 (fresh); selected list at line 908; log fetch at lines 911-915. | severity=high | confidence=5\n  PROBLEM: The review_only gate accepts failed non-review jobs, and the selection path can fetch their logs instead of the codex-agent review job.\n  WHY: `select_jobs()` returns failed jobs first, so a failed non-review job can pass the gate and enter the evidence bundle.\n\n- scripts/workflow_failure_heal_evidence.py | Line or code reference: lines 911-915 (`raw = self.gh.raw(f\"repos/{ref['repo']}/actions/jobs/{job_id}/logs\", escapes=True)`) inside `Collector.collect_run` triggered via `select_jobs(...)` at line 908 when `review_only=True`. | severity=high | confidence=5\n  PROBLEM: A verified_review_only run can fetch and mount a failed non-review job's log as review evidence.\n  WHY: The review_only check uses `select_jobs(...)` as its gate, so its selected failed non-review job crosses the declared review-job-only collection boundary.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_evidence.py | Line or code reference: _verify_run() lines 871-872; select_jobs() lines 633-639; collect_run() lines 895, 908, 915 | severity=high | confidence=5\n  PROBLEM: Review-only runs can fetch logs for failed non-review jobs.\n  WHY: For an in-progress run, `select_jobs()` prioritizes failed jobs and `collect_run()` fetches the selected job's log, including through the cached-job check.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_evidence.py | Line or code reference: select_jobs() at lines 633-639; collect_run() at lines 895, 908, 915 | severity=high | confidence=5\n  PROBLEM: Review-only runs can fetch logs for failed non-review jobs instead of only the review job.\n  WHY: `select_jobs()` prioritizes failed jobs, and those selected logs are fetched with GH_PAT.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal_evidence.py | Line or code reference: select_jobs() lines 633-639; collect_run() lines 895, 908; _verify_run() line 872 | severity=high | confidence=5\n  PROBLEM: A successful or unfinished review-only run containing a failed non-review job can have that job's log fetched and written into the evidence bundle.\n  WHY: `review_only` gates whether an empty selection is skipped but does not constrain selection to the review job; the cached path has the same issue.\n\n- TASK_GAP\n  Requirement: \"Read run IDs only from intake-generated structured fields, never quoted logs or diagnosis prose. Verify every run's repository and failure provenance before fetching it.\" (linked issue #6246 recommendation)\n  Expected change site: scripts/workflow_failure_heal_evidence.py\n  Evidence of absence: The PR diff implements all required changes \u2014 only leading structured markers are read (parse_leading_heal_markers / _runs_marker_urls), the _HEAL_RUN_LINE_RE free-text matcher is retired from trusted_run_refs, same-repo auto-verification is removed in _verify_run, and every run is checked for repository, head SHA, branch/PR, and conclusion. Tests confirm the fix (test_untrusted_body_and_comment_text_cannot_supply_run_ids, test_same_repo_run_metadata_and_conclusion_are_required, test_same_repo_run_without_head_context_is_listed_without_fetch). The linked issue deliverables are fully met; the open correctness finding above is a refinement of the review-only path, not a task gap.\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5ad59ed0859febf5439ca0809ddaf1fd40880c7cfae576c2807e089cf913903d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6251,
+    "run_id": "37284925525",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37284925525",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005090520_deccc89bd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6251,
+    "run_id": "37284925525"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T09:05:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
