@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_anthropic_relay.py:102-112 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The reviewed diff does not match the committed code: the bounded-deadline drain and two claimed tests are absent from the working-tree checkout.\n  WHY: The review pass is evaluating phantom changes, misdirecting reviewer and editor effort toward code that does not exist in the repository.\n- scripts/claude_anthropic_relay.py:135 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `do_POST` converts the raw Content-Length string with `int(length)` before checking whether its length exceeds a reasonable bound.\n  WHY: The request is still rejected, but converting an arbitrarily long numeric header causes avoidable CPU work.\n- scripts/claude_anthropic_relay.py:107 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_reject` sets the connection timeout to 1 and does not restore its previous value.\n  WHY: The connection is closed after `_reject`, so this is harmless in practice, but restoring the timeout is the defensive pattern used in the reviewed diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_anthropic_relay.py:102-112 | severity=high | confidence=[5]\n  PROBLEM: The `last_run_diff.patch` provided as the primary review target shows a bounded-deadline drain in `_reject` that uses `time.monotonic()`, `read1`, `previous_timeout = self.connection.gettimeout()`, and a `finally: self.connection.settimeout(previous_timeout)` restore. None of that code exists in the actual working-tree checkout at head `772192731`. The on-disk `_reject` has a simpler drain: a hard `self.connection.settimeout(1)` followed by `self.rfile.read(int(length))` with no total deadline, no timeout save/restore, and no `read1`-based polling. The `last_run_diff.patch` also claims two additional test functions \u2014 `test_rejection_drain_has_a_total_deadline_and_restores_socket_timeout` and `test_bridge_rejects_an_oversized_length_with_valid_other_headers` \u2014 plus a `from unittest.mock import Mock` import, none of which are present in `tests/test_claude_anthropic_relay.py` on disk. The diff being reviewed does not match the committed code; every reviewer on this pass is receiving a `last_run_diff.patch` whose changes were never committed.\n  WHY: The diff/review-infrastructure mismatch means the entire review pass is evaluating phantom changes. The actual committed relay code on disk is a simpler subset of the changes the diff describes; the four-reviewer panel, consolidator, and editor all see a version of the code that does not exist in the repository. This misdirects reviewer and editor effort toward code the editor already decided (in entry[8]) was already satisfied and did not commit.\n- scripts/claude_anthropic_relay.py:135 | severity=low | confidence=[4]\n  PROBLEM: The `do_POST` validation block evaluates `int(length)` on the raw Content-Length string without first checking whether the string's length exceeds a reasonable bound. A header value of `\"9\" * 5000` triggers `int(\"9\" * 5000)` which constructs a ~16610-bit integer. CPython handles this in under a second, but it is unnecessary work when the value will always exceed `MAX_BODY` and the request will always be rejected. The PR diff adds `or len(length) > len(str(MAX_BODY)` before the `int()` call, and the `last_run_diff.patch` claims this guard was added, but it is not present on disk.\n  WHY: Not a correctness failure \u2014 the oversized value is still rejected by the `not 0 < int(length) <= MAX_BODY` check that follows. The `int()` call succeeds without crashing. This is a small avoidable CPU cost per oversized-header request, not a hang or crash.\n- scripts/claude_anthropic_relay.py:107 | severity=low | confidence=[3]\n  PROBLEM: The drain block sets `self.connection.settimeout(1)` and never restores the previous timeout value. If any code path accessed this connection after `_reject` returned, the connection would operate at the wrong timeout.\n  WHY: The connection is always closed after `_reject` (line 113: `self.close_connection = True`), so no subsequent code can use it. This is harmless in practice but the PR-diff version (with `previous_timeout` save/restore) is the correct defensive pattern.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5f7835944589d2626254225199dca3fa50c054cc1953f6152b6665374b3316b3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37269906680",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37269906680",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005070251_523aff114d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37269906680"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T07:02:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
