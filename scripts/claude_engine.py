@@ -22,6 +22,7 @@ stdout, diagnostics to stderr):
   * ``settings --checkout DIR --out FILE [--profile P] [--allow-workflow-edits]``
     — render ``scripts/claude_settings.json.tmpl`` (the P5 permission policy)
     for one run.
+  * ``read-guard`` — check a read-profile Bash PreToolUse payload from stdin.
   * ``trust --workdir DIR [--home H]`` — mark DIR trusted in ``~/.claude.json``
     (spike S10: until then the CLI ignores ``permissions.allow``).
   * ``support-file --name config|template|guard-hook`` — the path of a trusted
@@ -50,6 +51,7 @@ import json
 import math
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -167,6 +169,22 @@ READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Bash(gh pr view*)",
 	"Bash(gh pr diff*)",
 )
+# Defence in depth for #6217: these wildcard rules are not a substitute for
+# the read-guard hook, which checks abbreviated and clustered git options.
+READ_PROFILE_DENY: tuple[str, ...] = (
+	# #6217: git --output can overwrite support and Actions command files.
+	"Bash(git * --ou*)",
+	# #6217: diff drivers can execute attacker-controlled commands.
+	"Bash(git * --ext-diff*)",
+	# #6217: textconv drivers can execute attacker-controlled commands.
+	"Bash(git * --textconv*)",
+	# #6217: git grep -O runs the chosen pager.
+	"Bash(git grep*-O*)",
+	# #6217: git grep --open-files-in-pager also runs the chosen pager.
+	"Bash(git grep* --op*)",
+)
+READ_GUARD_SAFE_EXACT = frozenset(("--text",))
+_READ_GUARD_GIT_OPTIONS = ("--output", "--open-files-in-pager", "--ext-diff", "--textconv")
 PROFILE_TOOLS: dict[str, str] = {
 	"write": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
 	"read": "Read,Grep,Glob,Bash",
@@ -446,6 +464,7 @@ def render_settings(
 	guard_hook: str,
 	profile: str = "write",
 	allow_workflow_edits: bool = False,
+	read_guard_hook: str = "",
 ) -> dict[str, Any]:
 	"""Render the P5 permission policy for one run.
 
@@ -453,13 +472,16 @@ def render_settings(
 	``__CHECKOUT__`` and ``__GUARD_HOOK__`` placeholders are replaced inside
 	string values only. The two ``.github/workflows`` deny rules are dropped
 	when ``allow_workflow_edits``; the ``.claude/**`` rules never are. The
-	``read`` profile gets its allow list and a read-only gh api guard;
-	``write`` gets no allow list (it runs in ``bypassPermissions``, where
+	``read`` profile gets its allow list, a Bash guard, and a read-only gh api
+	guard; ``write`` gets no allow list (it runs in ``bypassPermissions``, where
 	deny rules still apply).
 	"""
 	if profile not in PROFILES:
 		raise EngineError(f"unknown profile: {profile!r}")
-	for name, value in (("checkout", checkout), ("guard hook", guard_hook)):
+	paths = [("checkout", checkout), ("guard hook", guard_hook)]
+	if profile == "read":
+		paths.append(("read guard hook", read_guard_hook))
+	for name, value in paths:
 		if not value.startswith("/") or any(char in value for char in "\n\r\"'$`\\"):
 			raise EngineError(f"{name} must be an absolute path without quotes, '$', backticks or backslashes")
 	checkout = checkout.rstrip("/") or "/"
@@ -495,6 +517,12 @@ def render_settings(
 	deny = [rule for rule in permissions.get("deny", []) if isinstance(rule, str)]
 	if allow_workflow_edits:
 		deny = [rule for rule in deny if WORKFLOW_DENY_MARKER not in rule]
+	if profile == "read":
+		deny.extend(READ_PROFILE_DENY)
+		settings["hooks"]["PreToolUse"].append({
+			"matcher": "Bash",
+			"hooks": [{"type": "command", "command": f'python3 "{read_guard_hook}" read-guard', "timeout": 30}],
+		})
 	permissions["deny"] = deny
 	permissions["allow"] = list(READ_PROFILE_ALLOW) if profile == "read" else []
 	env = settings.get("env")
@@ -503,6 +531,77 @@ def render_settings(
 			if "TOKEN" in key.upper() or "KEY" in key.upper() or "SECRET" in key.upper():
 				raise EngineError(f"settings env must not carry credentials: {key}")
 	return settings
+
+
+def read_profile_bash_decision(command: str) -> tuple[str | None, str]:
+	"""Fail closed on shell syntax and git options that can write or execute."""
+	if not isinstance(command, str) or not command.strip():
+		return "deny", "invalid Bash command"
+	quote = ""
+	escaped = False
+	for char in command:
+		if char in "\n\r":
+			return "deny", "multiline Bash command"
+		if escaped:
+			escaped = False
+			continue
+		if char == "\\" and quote != "'":
+			escaped = True
+			continue
+		if char == "'" and quote != '"':
+			quote = "" if quote == "'" else "'"
+		elif char == '"' and quote != "'":
+			quote = "" if quote == '"' else '"'
+		elif quote != "'" and char in "`$":
+			return "deny", "shell expansion"
+		elif not quote and char in ";&|<>()*?[]{}":
+			# A glob/brace can expand into a write-capable option after parsing.
+			return "deny", "shell control or expansion"
+	if quote or escaped:
+		return "deny", "unbalanced Bash quoting"
+	try:
+		argv = shlex.split(command, posix=True)
+	except ValueError:
+		return "deny", "invalid Bash quoting"
+	if len(argv) < 2:
+		return "deny", "unsupported Bash command"
+	if argv[0] == "git" and argv[1] in ("log", "show", "diff", "status", "ls-files", "grep"):
+		for arg in argv[2:]:
+			if arg in ("--", "--end-of-options"):
+				break
+			name = arg.split("=", 1)[0]
+			if name.startswith("--") and name not in READ_GUARD_SAFE_EXACT and any(
+				name.startswith(option) or (len(name) >= 3 and option.startswith(name))
+				for option in _READ_GUARD_GIT_OPTIONS
+			):
+				return "deny", "write-capable git option"
+			if argv[1] == "grep" and name.startswith("-") and not name.startswith("--") and "O" in name:
+				return "deny", "pager-capable git grep option"
+		return None, ""
+	if argv[0] == "gh" and (argv[1:3] in (["issue", "view"], ["pr", "view"], ["pr", "diff"]) or argv[1] == "api"):
+		return None, ""
+	return "deny", "unsupported Bash command"
+
+
+def cmd_read_guard(args: argparse.Namespace) -> int:
+	"""Respond to a Claude PreToolUse Bash hook; malformed input fails closed."""
+	decision, reason = "deny", "invalid hook payload"
+	try:
+		payload = json.loads(sys.stdin.read())
+		if isinstance(payload, dict) and isinstance(payload.get("tool_name"), str) and payload["tool_name"] != "Bash":
+			return 0
+		if isinstance(payload, dict) and payload.get("tool_name") == "Bash" and isinstance(payload.get("tool_input"), dict):
+			decision, reason = read_profile_bash_decision(payload["tool_input"].get("command"))
+	except Exception:  # noqa: BLE001 - fail closed even on unexpected hook errors
+		# Never echo the payload or exception: either may contain sensitive input.
+		decision, reason = "deny", "hook failure"
+	if decision:
+		_print_json({"hookSpecificOutput": {
+			"hookEventName": "PreToolUse",
+			"permissionDecision": "deny",
+			"permissionDecisionReason": f"claude_engine read-guard: {reason}",
+		}})
+	return 0
 
 
 # --- transcripts -----------------------------------------------------------
@@ -858,6 +957,7 @@ def cmd_settings(args: argparse.Namespace) -> int:
 		guard_hook,
 		profile=args.profile,
 		allow_workflow_edits=args.allow_workflow_edits,
+		read_guard_hook=str(Path(__file__).resolve()),
 	)
 	out = Path(args.out)
 	out.parent.mkdir(parents=True, exist_ok=True)
@@ -984,6 +1084,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--template", default="")
 	p.add_argument("--guard-hook", default="")
 	p.set_defaults(func=cmd_settings)
+
+	p = sub.add_parser("read-guard")
+	p.set_defaults(func=cmd_read_guard)
 
 	p = sub.add_parser("trust")
 	p.add_argument("--workdir", required=True)

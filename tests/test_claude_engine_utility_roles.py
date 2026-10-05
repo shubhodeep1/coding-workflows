@@ -98,12 +98,15 @@ def test_read_only_utility_roles_narrow_the_tool_profile() -> None:
 
 
 def test_credential_stripping_covers_the_claude_call() -> None:
-	for script in ("workflow_failure_heal_intake.sh", "check_failure_triage.sh"):
+	for script in ("workflow_failure_heal_intake.sh", "check_failure_triage.sh", "security_audit.sh"):
 		text = _read(SCRIPTS / script)
 		claude_at = text.index("bash -c 'source \"$1\" && claude_run_selected")
 		env_line = text.rindex("env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET", 0, claude_at)
 		assert claude_at - env_line < 400, script
 		assert "-u OPENROUTER_API_KEY" in text[env_line:claude_at], script
+		if script == "security_audit.sh":
+			assert "-u GH_PAT" in text[env_line:claude_at]
+			assert "-u GITHUB_ENV -u GITHUB_PATH" in text[env_line:claude_at]
 
 
 def test_untrusted_checkouts_use_the_staged_engine_root_only() -> None:

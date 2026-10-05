@@ -728,6 +728,28 @@ def test_security_audit_workflow_keeps_executable_support_outside_data_checkout(
 	assert steps("Run security audit")["env"]["SECURITY_AUDIT_SUPPORT_DIR"] == "${{ github.workspace }}"
 
 
+def test_audit_support_integrity_is_checked_before_running_reporter() -> None:
+	import yaml
+
+	all_steps = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))["jobs"]["security-audit"]["steps"]
+	names = [step["name"] for step in all_steps]
+	assert names.index("Record audit support integrity") + 1 == names.index("Run security audit")
+	record = _audit_workflow_step("Record audit support integrity")
+	assert record["id"] == "support_integrity"
+	assert 'find "${GITHUB_WORKSPACE}" \\\n' in record["run"]
+	assert '-path "${GITHUB_WORKSPACE}/.git" -prune -o \\\n' in record["run"]
+	assert '-path "${GITHUB_WORKSPACE}/audit-data" -prune -o \\\n' in record["run"]
+	assert '-exec chmod a-w {} +' in record["run"]
+	assert 'echo "support_scripts_sha256=${support_scripts_sha256}" >> "$GITHUB_OUTPUT"' in record["run"]
+	report = _audit_workflow_step("Report single-issue security pass")
+	assert report["env"]["SUPPORT_SCRIPTS_SHA256"] == "${{ steps.support_integrity.outputs.support_scripts_sha256 }}"
+	manifest_command = 'cd "${GITHUB_WORKSPACE}" && find scripts -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum'
+	assert manifest_command in record["run"] and manifest_command in report["run"]
+	assert 'if [[ ! "${SUPPORT_SCRIPTS_SHA256}" =~ ^[0-9a-f]{64}$ ]]' in report["run"]
+	assert 'SECURITY_AUDIT_SUPPORT_INTEGRITY outcome=mismatch' in report["run"]
+	assert report["run"].index('exit 1\n') < report["run"].index('bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" report')
+
+
 def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
 	template_path = REPO_ROOT / "workflow-templates" / "ai-security-audit.yml"
 	content = template_path.read_text(encoding="utf-8")
