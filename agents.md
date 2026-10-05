@@ -71,9 +71,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
    `.claude/hooks/pr_merge_status_guard.py`, and
    `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
-   `.claude/` files remain excluded from snapshot and transfer. Its
-   isolation helpers must already exist in the verified workflow support
-   commit; a PR's own copies are review data,
+   `.claude/` files remain excluded from snapshot and transfer. The command
+   contract test `tests/test_audit_plans_command.py` is also omitted because
+   its root `.claude/commands/audit-plans.md` input is excluded; host CI still
+   runs it. Its isolation helpers must already exist in the verified workflow
+   support commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
    PR-backed `claude/*` heads take the normal review path like every other
    PR: the GPT editor, conflict resolver, review-blocked judge and auto-merge
