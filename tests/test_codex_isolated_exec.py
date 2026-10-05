@@ -283,6 +283,33 @@ def test_persistent_root_is_reused_and_cleaned_up(sandbox):
 	assert not Path(root).exists()
 
 
+def test_dependency_prepare_has_only_allowlisted_proxy_egress(sandbox):
+	(sandbox["repo"] / "requirements.txt").write_text("example==1\n")
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]), "--deps")
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	runs = docker_runs(sandbox["docker_log"])
+	assert len(runs) == 1
+	argv = runs[0]["argv"]
+	assert argv[argv.index("--network") + 1] == "none"
+	assert any(mount.endswith("dst=/socket") for mount in mounts_of(runs[0]))
+	assert any(mount.endswith("dst=/support/dependency_registry_proxy.py,readonly") for mount in mounts_of(runs[0]))
+	assert "HTTPS_PROXY=http://127.0.0.1:3128" in argv
+	assert "proxy=on" in prep.stderr
+	assert not (root / "socket" / "registry.sock").exists()
+	assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+def test_missing_proxy_skips_dependency_container(sandbox):
+	(sandbox["scripts"] / "dependency_registry_proxy.py").unlink()
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]), "--deps")
+	assert prep.returncode == 0, prep.stderr
+	assert "deps_skipped reason=proxy_support_missing" in prep.stderr
+	assert "proxy=skipped" in prep.stderr
+	assert not docker_runs(sandbox["docker_log"])
+	assert run_helper(sandbox, "cleanup", "--root", prep.stdout.strip()).returncode == 0
+
+
 def test_foreign_root_is_rejected(sandbox, tmp_path):
 	write_fake_codex(sandbox)
 	foreign = sandbox["runner_temp"] / "not-ours"
