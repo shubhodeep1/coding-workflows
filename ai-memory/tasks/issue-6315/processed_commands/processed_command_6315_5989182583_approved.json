@@ -5,13 +5,29 @@
   "entry_id": "processed_command_6315_5989182583_approved",
   "issue_number": 6315,
   "metadata": {
+    "branch": "ai/issue-6315",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/orchestrate_poll.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/6315-unblock-scan-without-tracking-issues.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_orchestrate_poll_workflow_contract.py"
+    ],
+    "issue_number": 6315,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6315",
+    "pr_number": 6319,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6319",
+    "run_attempt": "1",
+    "run_id": "37271819451",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37271819451"
   },
   "run_attempt": 1,
   "run_id": "37271819451",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-05T06:23:01Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T06:38:17Z",
   "workflow": "implement"
 }
