@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_check_failure_triage_workflow_security.py:16 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The top-level import from `scripts.security_dependency` fails when CI invokes the test file directly because the repository root is not on `sys.path`.\n  WHY: Direct execution sets `sys.path[0]` to `tests/`, so the import raises `ModuleNotFoundError: No module named 'scripts'` and fails the tests-hooks-and-orchestrator job and aggregate lint gate, blocking the PR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_check_failure_triage_workflow_security.py:16 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The test's top-level import from `scripts.security_dependency` fails when CI runs the file directly.\n  WHY: Direct script execution sets `sys.path[0]` to `tests/`, causing `ModuleNotFoundError: No module named 'scripts'`; the tests-hooks-and-orchestrator CI job and lint roll-up check fail.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_check_failure_triage_workflow_security.py:16 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The module performs a top-level import from `scripts.security_dependency` before the repository root is present on `sys.path`.\n  WHY: Direct execution from `.github/workflows/ci.yml:610` sets `sys.path[0]` to `tests/`, causing `ModuleNotFoundError: No module named 'scripts'` during module load and failing the tests-hooks-and-orchestrator job and aggregate lint gate.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_check_failure_triage_workflow_security.py:16 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The top-level import from `scripts.security_dependency` raises `ModuleNotFoundError: No module named 'scripts'` when CI executes the test directly.\n  WHY: Direct `python3` execution sets `sys.path[0]` to `tests/`; `pyproject.toml`'s `pythonpath = [\".\"]` is pytest-only and does not apply.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_check_failure_triage_workflow_security.py:16 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The top-level import from `scripts.security_dependency` fails when CI invokes the test file directly.\n  WHY: Direct execution sets `sys.path[0]` to `tests/`, so `scripts` is not importable and the tests-hooks-and-orchestrator job fails; the aggregate lint job then fails because a required job did not succeed.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_check_failure_triage_workflow_security.py:16 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The top-level import from `scripts.security_dependency` fails when CI invokes the test file directly.\n  WHY: Direct invocation sets `sys.path[0]` to `tests/`, making `scripts` unimportable and causing `ModuleNotFoundError`; the reviewer also notes that removing the test entirely loses security coverage for routing-metadata neutralisation.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1a7dec84c1ba1e0f9591b3406815929714c3240abd81de2b21b74851980945c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37315263482",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37315263482",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005142519_2b27fa2b33",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37315263482"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T14:25:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
