@@ -8,15 +8,18 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 import yaml
-from scripts.security_dependency import SECURITY_DEPENDENCY_RE
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+from scripts.security_dependency import SECURITY_DEPENDENCY_RE  # noqa: E402 - CI runs this file directly
+
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "check_failure_triage.yml"
 TRIAGE_SCRIPT_PATH = REPO_ROOT / "scripts" / "check_failure_triage.sh"
 
