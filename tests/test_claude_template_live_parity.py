@@ -326,10 +326,15 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	assert step["env"]["PUSH_AFTER"] == "${{ github.sha }}"
 	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 	assert "tests/test_claude_template_live_parity.py" in ci
-	for job_name in ("tests-hooks-and-orchestrator", "tests-release-and-log-analysis"):
-		steps = yaml.safe_load(ci)["jobs"][job_name]["steps"]
-		assert steps[0]["with"]["fetch-depth"] == 0
-		prepare = next(step for step in steps if step["name"] == "Prepare template-only PR live copies for parity tests")
-		assert prepare["if"] == "github.event_name == 'pull_request' && github.base_ref == 'main'"
-		assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
-		assert 'sync --dry-run --before "${PR_BASE_SHA}" --after HEAD' in prepare["run"]
+	ci_jobs = yaml.safe_load(ci)["jobs"]
+	prepare_jobs = [
+		job_name for job_name, job in ci_jobs.items()
+		if any(step.get("name") == "Prepare template-only PR live copies for parity tests" for step in job.get("steps", []))
+	]
+	assert prepare_jobs == ["tests-hooks-and-orchestrator"]
+	steps = ci_jobs["tests-hooks-and-orchestrator"]["steps"]
+	assert steps[0]["with"]["fetch-depth"] == 0
+	prepare = next(step for step in steps if step["name"] == "Prepare template-only PR live copies for parity tests")
+	assert prepare["if"] == "github.event_name == 'pull_request' && github.base_ref == 'main'"
+	assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
+	assert 'sync --dry-run --before "${PR_BASE_SHA}" --after HEAD' in prepare["run"]
