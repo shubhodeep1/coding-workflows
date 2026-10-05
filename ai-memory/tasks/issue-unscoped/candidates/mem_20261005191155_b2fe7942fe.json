@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:59-71 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The still-active `triage_single_line_metadata` neutralizer permits C1 controls and other Unicode categories, escapes only `<!--`, and does not neutralize routing keys in metadata fields.\n  WHY: A C1 newline can create a line-start routing key that body validation treats as a forged marker, falsely rejecting a valid triage issue.\n- .ai/.workspace_source_manifest.txt:line 222 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The PR commits a generated, gitignored workspace manifest containing a stale changelog entry.\n  WHY: Workspace materialization regenerates this artifact from the on-disk tree, leaving the tracked copy inconsistent and prone to conflicts.\n- scripts/check_failure_triage.sh:74-92 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The check-name neutralization logic is duplicated across the script, workflow YAML, and diagnosis neutralizer without a complete synchronization mechanism.\n  WHY: A policy change applied to only some copies can leave another display or diagnosis surface using weaker sanitization; reviewers disagree on severity, with deepseek_deepseek-v4-pro rating it NIT and minimax_minimax-m3 rating it MAJOR.\n- .github/workflows/check_failure_triage.yml:458-471 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A check name that normalizes to an empty string is displayed as `(unnamed check)`, masking the original check name on operator-facing surfaces.\n  WHY: This makes hostile names composed of stripped characters indistinguishable from genuinely empty check names in the triage trail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAccept routing metadata only from structured, provenance-verified fields\u2014not arbitrary issue-body text.\u201d\n  expected_change_site: scripts/resolve_integration_ref.sh, in extract_integration_branch() and resolve_ref()\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: OpenAI reports no diff in `scripts/resolve_integration_ref.sh` and says `get_issue_body()` remains the source of routing metadata in `resolve_ref()` (lines 74\u201375 and 91\u201392); Qwen reports no diff hunk in `resolve_integration_ref.sh`; deepseek and qwen state the resolver change is explicitly out of scope.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/check_failure_triage.sh:59-71 | severity=high | confidence=[4]\n  PROBLEM: The still-active legacy neutralizer uses `unicodedata.category(char) in (\"Cc\", \"Zl\", \"Zp\")`, escapes only `<!--`, and does not neutralize routing keys in metadata fields.\n  WHY: A C1 newline can move `Integration branch: stable` to a line start where body validation falsely rejects a valid triage issue.\n- scripts/check_failure_triage.sh:76-91 | severity=low | confidence=[3]\n  PROBLEM: The script and workflow contain duplicated check-name neutralization logic that can drift.\n  WHY: Updating only one copy can make display surfaces apply different neutralization to the same check name.\n- scripts/resolve_integration_ref.sh | severity=NIT | confidence=[1]\n  Requirement: \"changing the shared routing resolver is out of scope\" (from the linked issue #6403 body, \"changing the shared routing resolver is out of scope\")\n  Expected change site: scripts/resolve_integration_ref.sh\n  Evidence of absence: Not a gap \u2014 the issue explicitly defers this. The cross-pollination summary entry flagged_by openai_gpt-6-luna about the resolver still accepting arbitrary issue-body text as routing metadata is an out-of-scope deferred requirement, not a missing delivery.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/check_failure_triage.sh:74-92 | severity=high | confidence=[4]\n  PROBLEM: The sanitization logic is duplicated across the script function, workflow YAML, and diagnosis neutralizer; the synchronization comment omits the workflow YAML copy.\n  WHY: Updating only some copies can leave a routing-injection sink using stale neutralization.\n- .ai/.workspace_source_manifest.txt:line 222 | severity=high | confidence=[4]\n  PROBLEM: The diff commits a gitignored generated runtime artifact with an entry for a previously merged fragment rather than the PR's new fragment.\n  WHY: Workspace initialization regenerates the file from the worktree, so the tracked artifact becomes inconsistent and can cause conflicts.\n- .github/workflows/check_failure_triage.yml:458-471 | severity=low | confidence=[2]\n  PROBLEM: A check name that normalizes to empty is replaced with `(unnamed check)`, hiding the original name on operator-facing surfaces.\n  WHY: Hostile names made only of stripped characters become indistinguishable from genuinely empty check names in the triage trail.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/resolve_integration_ref.sh:lines 74\u201375 and 91\u201392 | severity=high | confidence=[4]\n  Requirement: \u201cAccept routing metadata only from structured, provenance-verified fields\u2014not arbitrary issue-body text.\u201d\n  Expected change site: `scripts/resolve_integration_ref.sh`, in `extract_integration_branch()` and `resolve_ref()`.\n  Evidence of absence: The PR changes the triage writer but has no diff in `scripts/resolve_integration_ref.sh`. The resolver still fetches issue bodies with `get_issue_body()` and extracts branch routing metadata from them in `resolve_ref()` (lines 74\u201375 and 91\u201392). Thus arbitrary issue-body text remains a source of routing metadata.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/resolve_integration_ref.sh | severity=NIT | confidence=[1]\n  Requirement: \"Accept routing metadata only from structured, provenance-verified fields\u2014not arbitrary issue-body text.\"\n  Expected change site: scripts/resolve_integration_ref.sh\n  Evidence of absence: No diff hunk in resolve_integration_ref.sh; however, this is explicitly out of scope per the AI Issue Summary comment (\"Keep the fix scoped to the triage writer; changing the shared routing resolver is out of scope\").\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "2b17ef010299b127987d5797b7069430f0b35c218443cce910012cd7989e6f4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6410,
+    "run_id": "37353756415",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37353756415",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005191155_b2fe7942fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6410,
+    "run_id": "37353756415"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T19:11:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
