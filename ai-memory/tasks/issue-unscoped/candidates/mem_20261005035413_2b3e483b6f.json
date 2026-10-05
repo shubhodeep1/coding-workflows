@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: `test_template_parity` fails because the root audit-plans command and its workflow template have different hand-off wording.\n  WHY: The failure blocks `tests-hooks-and-orchestrator` and the aggregate `lint` check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: All CI checks must pass before the PR can merge.\n  expected_change_site: .claude/commands/audit-plans.md\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: `.claude/commands/audit-plans.md` is missing from the PR diff; `tests/test_audit_plans_command.py:29-30` asserts byte-identical parity with `workflow-templates/.claude/commands/audit-plans.md`; the CI log shows `test_template_parity` fails, blocking `tests-hooks-and-orchestrator` and aggregate `lint`\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_audit_plans_command.py:30 | severity=critical | confidence=5\n  PROBLEM: The parity test fails because the workflow template was updated with orchestrator hand-off phrasing while the root command retains legacy in-session wording.\n  WHY: This causes the `tests-hooks-and-orchestrator` job and aggregate lint check to fail on the PR head commit, blocking mergeability.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `tests/test_audit_plans_command.py`; `workflow-templates/.claude/commands/audit-plans.md`: `tests/test_audit_plans_command.py:29-30`; template lines 103, 126-127 | severity=critical | confidence=5\n  PROBLEM: The parity test fails because the template has updated hand-off wording while the root copy retains older wording.\n  WHY: `test_template_parity` fails, causing `tests-hooks-and-orchestrator` and the aggregate `lint` check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nRequirement: All CI checks must pass before the PR can merge.\nExpected change site: .claude/commands/audit-plans.md\nEvidence of absence: The file is missing from the PR diff. The test `tests/test_audit_plans_command.py:29-30` (`test_template_parity`) asserts that `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md` are byte-identical. The CI log shows this test fails with an AssertionError, causing `tests-hooks-and-orchestrator` and the aggregate `lint` check to fail. The editor summaries explicitly call this out as BLOCKED because the review workspace excludes `.claude/commands/` from transfer, so the fix cannot be delivered in this workspace. The PR cannot merge until this file is synchronized with its template.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bf69d4fe30d1a7c3a01f2721db06dce144b482d79751359c7e7e46b374a8a9ac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37253767838",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37253767838",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005035413_2b3e483b6f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37253767838"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T03:54:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
