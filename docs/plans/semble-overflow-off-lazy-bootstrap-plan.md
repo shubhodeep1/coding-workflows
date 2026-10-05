@@ -8,6 +8,29 @@ Semble in workflows that never query it, and install it lazily on first use
 in the workflows that do. Add telemetry that measures what Semble actually
 contributes. Serena is out of scope and stays off.
 
+## Automation & Wiring
+
+- **Scripts:** Extend existing Semble bootstrap, query and telemetry helpers;
+  introduce no standalone script.
+- **Entry points and triggers:** The reusable `.github/workflows/implement.yml`
+  runs through `.github/workflows/internal-implement.yml` on an
+  `issue_comment: created` `/approved` command; the reusable
+  `.github/workflows/review_autofix.yml` runs through
+  `.github/workflows/internal-review.yml` on its existing `pull_request`,
+  `push` and `workflow_dispatch` triggers;
+  `.github/workflows/orchestrate_poll.yml` runs through
+  `.github/workflows/internal-orchestrate-poll.yml` on its `*/5 * * * *`
+  schedule and manual dispatch; `.github/workflows/validate.yml` runs through
+  `.github/workflows/internal-validate.yml` on `workflow_dispatch`. The
+  existing `.github/workflows/workflow-log-analysis.yml` collects telemetry on
+  its `0 9 * * 1` schedule and manual dispatch. No new trigger is needed;
+  Phase 2 removes unused bootstrap from the existing clarify, plan,
+  orchestrate and clarify-respond entry points.
+- **Supervisor:** None; all work occurs in the existing finite workflow jobs.
+- **Database gate:** Not applicable; no database operations or contracts change.
+- **Future-removal registry:** No new single-use or long-running script or
+  supervisor, so no `docs/scripts-pending-removal.md` entry is required.
+
 ## Context
 
 An audit of the unattended pipeline's context tools (interactive session,
@@ -224,15 +247,18 @@ The decisions taken in the clarification round are recorded under
     `SEMBLE_BOOTSTRAP_MODE`, `SEMBLE_BOOTSTRAP_STATE_FILE`,
     `SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS`, `SEMBLE_BOOTSTRAP` (event),
     `SEMBLE_STATIC_CONTEXT_FILE`, `semble_ensure_ready`, `semble_should_query`.
-  - New log fields: `static_dup_bytes`, `sources`, `run`. Re-check
-    `SEMBLE_INSTALL_MS` and any further name before adding it.
+  - New log fields: `static_dup_bytes`, `sources`, `run`.
+    `SEMBLE_INSTALL_MS` has no existing use in scripts, workflows or tests;
+    re-check any further name before adding it.
 - **§4 env vars.** Every new variable has a default:
   - `TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED=false`
   - `SEMBLE_BOOTSTRAP_MODE=lazy` in the four opted-in workflows, and
     **`eager` when unset** in the helper
   - `SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS=180`
   - `SEMBLE_BOOTSTRAP_STATE_FILE` defaults to
-    `${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/semble_bootstrap.state`
+    `${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/semble_bootstrap-${GITHUB_RUN_ID:-${BASHPID}}-${GITHUB_RUN_ATTEMPT:-1}.state`;
+    resolve and export it once when sourcing the helper so subshells share
+    one path, including when neither GitHub ID nor `RUNTIME_DIR` is set.
   - `SEMBLE_STATIC_CONTEXT_FILE` is unset by default, in which case the field
     is omitted.
 - **§9 style.** Tabs in shell and Python, 2-space YAML, opening braces on a
@@ -241,14 +267,19 @@ The decisions taken in the clarification round are recorded under
   scripts, so consumer repos pick it up on the next `@stable` tag. Wrappers in
   `workflow-templates/` are unchanged.
 - **§15 GitHub API.** No new `gh api` or MCP calls. `cost_audit.py` already
-  fetches the run JSON, which carries `id` and `run_attempt`.
+  fetches `databaseId` in its run listing; Phase 4 requests `attempt` from
+  that same listing if the pinned CLI supports it. `collect_workflow_logs.py` already
+  fetches `id` and `run_attempt` through its existing REST listing.
 - **§18 automation.** No new standalone scripts. All logic extends
   `scripts/semble_helpers.sh`, `scripts/install_semble.sh`,
   `scripts/build_semble_wrapper.sh`, `scripts/targeted_file_context.py`,
   `scripts/cost_audit.py` and `scripts/collect_workflow_logs.py`. Nothing
   needs an entry in `docs/scripts-pending-removal.md`.
-- **§20 changelog.** Each phase adds one `changelog.d/<issue>-<slug>.md`
-  fragment. Never edit `CHANGELOG.md` directly.
+- **§20 changelog.** Each implementation phase adds one
+  `changelog.d/<phase-issue-or-pr>-<slug>.md` fragment, using that phase's
+  assigned issue or PR number when its implementation PR is created. This
+  plan-only PR does not ship observable behavior and needs no fragment. Never
+  edit `CHANGELOG.md` directly.
 - **§27 workflow size.**
   - `.github/workflows/review_autofix.yml` is 445,389 bytes, about 34.6 KB
     under the 480,000-byte split threshold. Phases 1 and 3 may add only a
@@ -258,9 +289,10 @@ The decisions taken in the clarification round are recorded under
 
 ## Approach
 
-**Overflow off (Phase 1).** The four callers already build an argument array
-and append the `--semble-*` flags only under a guard. The guard is extended
-with `TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED == true`, so no Python
+**Overflow off (Phase 1).** Three script callers already build an argument
+array and append the `--semble-*` flags only under a guard; the implement
+workflow passes them directly and must first use an argument array. Guard all
+four on `TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED == true`, so no Python
 change is needed and the marker fallback becomes the default.
 
 **Dead bootstrap removed (Phase 2).** Delete the three Semble steps from four
@@ -275,8 +307,9 @@ absence.
 - `semble_query_block` calls `semble_ensure_ready` before its availability
   checks. Outer caller gates that test `SEMBLE_INDEX_AVAILABLE=true` before
   calling `semble_query_block` switch to `semble_should_query`.
-- The four workflows keep their eager steps but gate them on
-  `SEMBLE_BOOTSTRAP_MODE == 'eager'`, so a repo variable rolls the change back.
+- The four workflows keep their eager steps but gate them on a mode other
+  than `lazy`, matching the helper's eager fallback for invalid values;
+  Serena retains its independent `setup-uv` gate.
 - The helper's built-in default is `eager` when the variable is unset, so
   workflows and scripts that never set it behave exactly as today.
 
@@ -303,7 +336,7 @@ production-safe at merge, with its own changelog fragment and rollback.
 | 1 | Overflow lookup off by default; fix the stale README / `probably_unnecessary…` defaults | `implement.yml`, `review_autofix.yml`, `orchestrate_poll.yml` (env only), `review_apply_fixes.sh`, `review_run_reviewers.sh`, `review_conflict_resolve.sh`, `README.md`, `probably_unnecessary_but_read_if_stuck.md`, tests, fragment | Contract tests prove all four call sites gate `--semble-*` on the switch, default `false`; the marker fallback is exercised | Set repo var `TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED=true`, or revert the PR |
 | 2 | Remove the unused bootstrap from four workflows | `clarify.yml`, `plan.yml`, `orchestrate.yml`, `orchestrate_clarify_respond.yml`, `tests/test_semble_workflow_parity_contract.py`, `README.md` (rollout note), fragment | Parity test asserts the steps are absent and the fail-open runtime defaults are still present; workflow YAML parses | Revert the PR |
 | 3 | Lazy bootstrap for `implement`, `review_autofix`, `orchestrate_poll`, `validate` | `semble_helpers.sh`, `orchestrate_poll_process.sh`, `review_rb_judge.sh`, `review_conflict_resolve.sh`, `review_run_reviewers.sh`, four workflows, `README.md`, tests, fragment | `tests/test_semble_helpers.py` covers lazy ready, failed, subshell, concurrency and eager/unset modes; the contract tests pin the `eager` gating | Set repo var `SEMBLE_BOOTSTRAP_MODE=eager`, or revert the PR |
-| 4 | Telemetry fields, `SEMBLE_BOOTSTRAP` event, echo rejection | `semble_helpers.sh`, `targeted_file_context.py`, `install_semble.sh`, `build_semble_wrapper.sh`, `cost_audit.py`, `collect_workflow_logs.py`, `agents.md`, workflows (one env line each for `SEMBLE_STATIC_CONTEXT_FILE`), tests, fragment | Parser tests cover new fields, legacy lines, mismatched `run=` and the bootstrap aggregates | Revert the PR. All fields are additive and old parsers ignore unknown fields |
+| 4 | Telemetry fields, `SEMBLE_BOOTSTRAP` event, echo rejection | `semble_helpers.sh`, `targeted_file_context.py`, `install_semble.sh`, `build_semble_wrapper.sh`, `cost_audit.py`, `collect_workflow_logs.py`, `agents.md`, workflows (static-context env lines and eager event relay), tests, fragment | Parser and workflow contract tests cover new fields, redirected events, legacy lines, mismatched `run=` and bootstrap aggregates | Revert the PR. All fields are additive and old parsers ignore unknown fields |
 
 **Cross-phase independence notes.**
 - Phases 1 and 3 touch nearby lines in `review_conflict_resolve.sh` and
@@ -323,7 +356,10 @@ production-safe at merge, with its own changelog fragment and rollback.
 - Phase 4's `SEMBLE_BOOTSTRAP` event is emitted from `build_semble_wrapper.sh`,
   which both the eager steps and Phase 3's lazy helper call. It therefore
   works with or without Phase 3: `mode=` comes from
-  `${SEMBLE_BOOTSTRAP_MODE:-eager}`.
+  `${SEMBLE_BOOTSTRAP_MODE:-eager}`. Phase 3 measures and exports the lazy
+  install time for the builder even before Phase 4 introduces the event;
+  when Phase 4 merges first, no lazy helper exists yet. The eager review and
+  poller steps must relay the event from their captured index logs.
 - Phase 2 only touches workflows that Phases 1, 3 and 4 do not change for
   Semble bootstrap. Phase 4's `SEMBLE_STATIC_CONTEXT_FILE` env line is added
   only to the workflows that query Semble.
@@ -378,7 +414,7 @@ production-safe at merge, with its own changelog fragment and rollback.
 7. `probably_unnecessary_but_read_if_stuck.md:749`: correct the same stale
    `SEMBLE_ENABLED` default.
 8. Tests (see [Tests](#tests)).
-9. Add `changelog.d/<issue>-semble-overflow-off.md` with
+9. Add `changelog.d/<phase-issue-or-pr>-semble-overflow-off.md` with
    `<!-- changelog: changed -->`, following §20.D/E. Include the numbers from
    the Context section.
 
@@ -424,7 +460,7 @@ production-safe at merge, with its own changelog fragment and rollback.
    `orchestrate` and `orchestrate_clarify_respond` from the list of
    workflows carrying install and index steps, and say why: they had no
    query path.
-6. Add `changelog.d/<issue>-semble-drop-unused-bootstrap.md` with
+6. Add `changelog.d/<phase-issue-or-pr>-semble-drop-unused-bootstrap.md` with
    `<!-- changelog: changed -->`, citing roughly 30 s saved per clarify,
    plan, orchestrate and clarify-respond run.
 
@@ -441,39 +477,54 @@ production-safe at merge, with its own changelog fragment and rollback.
      already-bootstrapped job.
    - **Return 1** if the mode is not `lazy`, or `SEMBLE_ENABLED` is not
      `true`.
-   - **State file.** Path
-     `"${SEMBLE_BOOTSTRAP_STATE_FILE:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/semble_bootstrap.state}"`,
-     holding `key=value` lines: `state`, `semble_bin`, `index_path`.
+   - **State file.** Use the exported `SEMBLE_BOOTSTRAP_STATE_FILE`
+     default from Constraints, including run attempt (the implement job's
+     `RUNTIME_DIR` contains only the run ID). Write it atomically, holding
+     `key=value` lines: `state`, `semble_bin`, `index_path`.
      - If it says `state=ready`, export `SEMBLE_AVAILABLE=true`,
        `SEMBLE_INDEX_AVAILABLE=true`, `SEMBLE_BIN` and `SEMBLE_INDEX_PATH`,
-       prepend `dirname SEMBLE_BIN` to `PATH`, and return 0.
+       prepend `dirname SEMBLE_BIN` to `PATH`, and return 0 **only after**
+       verifying the recorded index is a nonempty file and the wrapper is
+       executable. A stale or invalid ready state must not authorize a query.
      - If it says `state=failed`, return 1. There is no retry within a job.
-   - **Bootstrap.** Otherwise take `flock -w "${SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS:-180}"`
-     on `<state file>.lock`, re-read the state file (another process may have
-     finished), then run under `timeout "${SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS:-180}"`:
-     - `bash "<helpers dir>/install_semble.sh"`
-     - `SEMBLE_INDEX_PATH="$(_semble_index_path)" bash "<helpers dir>/build_semble_wrapper.sh"`
+   - **Bootstrap.** Record a deadline before taking
+     `flock -w "${SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS:-180}"` on
+     `<state file>.lock`, re-read the state file (another process may have
+     finished), then run the remaining work under `timeout` with the
+     **remaining** budget, not another full 180 seconds:
+      - `bash "<helpers dir>/install_semble.sh"`; the installer deliberately
+        returns 0 even on failed installation, so also verify its pinned
+        Python module/version matches the installer's configured pin before
+        proceeding. Measure this call in the helper's shell and export
+        `SEMBLE_INSTALL_MS` for the builder; it does nothing until Phase 4
+        adds bootstrap telemetry and makes both merge orders safe.
+      - Only after that check succeeds, run
+        `SEMBLE_INDEX_PATH="$(_semble_index_path)" bash "<helpers dir>/build_semble_wrapper.sh"`.
+        The builder also exits 0 on failure; verify its postconditions.
 
      Resolve `<helpers dir>` the same way the file already resolves
      `emit_event.sh`: its own directory first, then `scripts/`.
-   - **Success** means the index file exists and the wrapper
+   - **Success** means the index file is nonempty and the wrapper
      `$(dirname <index>)/semble/bin/semble` is executable. The two scripts
      already append to `GITHUB_ENV` and `GITHUB_PATH`, so later steps inherit
      the result. Write `state=ready`, export as above, and return 0.
-   - **Any failure, timeout or `flock` timeout:** write `state=failed`, emit
-     `SEMBLE_FALLBACK target=<slug> reason=lazy-bootstrap-failed` via
-     `_semble_log_event`, and return 1. Never exit non-zero from the caller's
-     perspective beyond the function's return code.
+   - **Install/build/postcondition failure or timeout:** write `state=failed`
+     while holding the lock, emit `SEMBLE_FALLBACK
+     target=<slug> reason=lazy-bootstrap-failed` via `_semble_log_event`,
+     and return 1. On `flock` timeout, return 1 without overwriting another
+     process's state; emit the same fallback and allow a later query to retry.
+     Never exit non-zero from the caller's perspective beyond the function's
+     return code.
 2. `scripts/semble_helpers.sh`: add `semble_should_query`. It returns 0 when
    `SEMBLE_INDEX_AVAILABLE=true`, or when the mode is `lazy`,
    `SEMBLE_ENABLED=true` and the state file does not say `state=failed`.
    Otherwise it returns 1.
 3. `scripts/semble_helpers.sh` `semble_query_block` (line 122): immediately
    after argument validation and before the `SEMBLE_AVAILABLE` check, add
-   `semble_ensure_ready >/dev/null 2>&1 || true`. Stdout must stay clean,
-   because callers capture it as the prefetch text, and the installer logs
-   go to stderr. The existing fallback events then fire unchanged if Semble
-   is still unavailable.
+   `semble_ensure_ready >/dev/null || true`. Stdout must stay clean because
+   callers capture it as the prefetch text; **do not suppress stderr**,
+   which carries installer errors and Phase 4 bootstrap events. The existing
+   fallback events then fire unchanged if Semble is still unavailable.
 4. Replace the outer gates with `semble_should_query`, keeping each gate's
    other conditions:
    - `scripts/orchestrate_poll_process.sh:317-318` and
@@ -485,25 +536,38 @@ production-safe at merge, with its own changelog fragment and rollback.
    - `scripts/review_run_reviewers.sh:2983`
 
    Each must still fail open if `semble_should_query` is undefined (an old
-   helpers file staged on a pinned ref). Use
-   `declare -F semble_should_query >/dev/null && semble_should_query || [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]`.
+   helpers file staged on a pinned ref). Use an explicit branch: if the
+   function exists, use **only** its exit status; otherwise use the legacy
+   `SEMBLE_INDEX_AVAILABLE=true` check. Do not write `declare -F ... &&
+   semble_should_query || [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]`:
+   its right-hand fallback would override a deliberate false verdict.
    Do **not** change the targeted-file-context overflow guards (see
    cross-phase notes).
 5. Workflows. Add top-level
    `SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}` and
    change step conditions:
+   - Compare `env.SEMBLE_BOOTSTRAP_MODE != 'lazy'` in workflow step `if:`
+     conditions. GitHub string comparison is case-insensitive; this sends
+     uppercase `EAGER` and invalid values to eager, matching the helper's
+     normalized mode. Test lowercase/uppercase and invalid overrides.
    - `implement.yml:1518-1562`: setup-uv becomes
-     `env.SKIP_IMPLEMENT != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE == 'eager') || env.SERENA_ENABLED == 'true')`.
-     Install semble gets the same. Build semble index adds
-     `&& env.SEMBLE_BOOTSTRAP_MODE == 'eager'`.
-   - `review_autofix.yml:2955-3010`: the same pattern, with
-     `env.PR_CLOSED != 'true'`. Keep the edit minimal for §27.
-   - `orchestrate_poll.yml:601-660`: add `&& env.SEMBLE_BOOTSTRAP_MODE == 'eager'`
-     to setup-uv, Install semble and Build semble index.
+     `env.SKIP_IMPLEMENT != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy') || env.SERENA_ENABLED == 'true')`.
+     Install semble and Build semble index use only
+     `env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'`.
+     Serena alone must never start a Semble install.
+   - `review_autofix.yml:2955-3010`: the same split, replacing
+     `env.SKIP_IMPLEMENT` with `env.PR_CLOSED`. Keep the edit minimal for §27.
+   - `orchestrate_poll.yml:601-660`: add
+     `&& env.SEMBLE_BOOTSTRAP_MODE != 'lazy'` to setup-uv, Install semble
+     and Build semble index.
    - `validate.yml:810-930`:
-     - In `Determine Semble bootstrap state`, emit
-       `bootstrap_enabled=true` only when `VALIDATION_USE_SEMBLE` is truthy
-       **and** the mode is `eager`.
+     - In `Determine Semble bootstrap state`, keep `bootstrap_enabled=true`
+       when either Serena is enabled **or** `VALIDATION_USE_SEMBLE` is
+       truthy and the lower-cased mode is not `lazy`. `setup-uv` keeps this
+       gate; gate Install semble separately on `enabled == 'true'` and
+       mode not `lazy` (its existing in-step check stays), and Build semble
+       index on the same Semble-only condition. Serena still gets uv even
+       when Semble is lazy or disabled.
      - When `VALIDATION_USE_SEMBLE` is truthy and the mode is `lazy`, write
        `SEMBLE_ENABLED=true` to `GITHUB_ENV`, so `semble_ensure_ready` can
        bootstrap on demand. The existing runtime defaults
@@ -520,11 +584,11 @@ production-safe at merge, with its own changelog fragment and rollback.
      diagnose.
    - Document that re-enabling overflow needs `SEMBLE_BOOTSTRAP_MODE=eager`.
    - Add rows for `SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS` and
-     `SEMBLE_BOOTSTRAP_STATE_FILE`.
+     `SEMBLE_BOOTSTRAP_STATE_FILE` (run-and-attempt-scoped default).
 7. Tests (see [Tests](#tests)). Register any new test file in `ci.yml`,
    `test-and-mark-stable.yml` and `mark-stable.yml` wherever sibling Semble
    tests are invoked by explicit path (e.g. `ci.yml:449`, `ci.yml:865`).
-8. Add `changelog.d/<issue>-semble-lazy-bootstrap.md` with
+8. Add `changelog.d/<phase-issue-or-pr>-semble-lazy-bootstrap.md` with
    `<!-- changelog: changed -->`.
 
 ### Phase 4 — Telemetry and echo rejection
@@ -532,9 +596,12 @@ production-safe at merge, with its own changelog fragment and rollback.
 1. Run field. Compute `run=` as `"${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"`,
    and omit it when `GITHUB_RUN_ID` is unset.
    - `scripts/semble_helpers.sh` `_semble_log_event`: append `run=` to every
-     `SEMBLE_QUERY` and `SEMBLE_FALLBACK` line.
+     `SEMBLE_QUERY` and `SEMBLE_FALLBACK` line. For fallbacks, add
+     `sources=0`; add `static_dup_bytes=0` only if the configured static
+     context file is readable. No chunks were injected on a fallback.
    - `scripts/targeted_file_context.py` `_log_semble_event`: do the same.
      The field order after the prefix is free; parsers are key=value.
+     Apply the same zero-contribution fallback fields there.
 2. `scripts/semble_helpers.sh` `semble_query_block`, on success:
    - `sources=<n>`: the number of distinct paths matching
      `^\[[0-9]+\] (\S+):[0-9]+-[0-9]+` in the returned text.
@@ -546,8 +613,12 @@ production-safe at merge, with its own changelog fragment and rollback.
    - Apply the same two fields in `targeted_file_context.py`'s overflow
      emitter, in case overflow is ever re-enabled.
 3. `scripts/install_semble.sh`: measure its own elapsed milliseconds and
-   write `SEMBLE_INSTALL_MS=<ms>` to `GITHUB_ENV` and the current process
-   environment. Re-check uniqueness first.
+   write `SEMBLE_INSTALL_MS=<ms>` to `GITHUB_ENV` for the next eager workflow
+   step. Re-check uniqueness first. In the lazy helper, measure the elapsed
+   install call in the **parent** and export `SEMBLE_INSTALL_MS` before
+   invoking the builder as a child (done in Phase 3); a child installer
+   cannot export a value to its parent or sibling, and `GITHUB_ENV` is not
+   reloaded mid-step.
 4. `scripts/build_semble_wrapper.sh`: on both success and `mark_unavailable`,
    emit `SEMBLE_BOOTSTRAP` via `emit_event` and stderr, in the same
    single-line `key=value` shape as `_semble_log_event`, with these fields:
@@ -557,6 +628,15 @@ production-safe at merge, with its own changelog fragment and rollback.
    - `index_ms=<own elapsed>`
    - `run=`
    - `reason=<sanitised reason>`, on failure only
+   If the lazy install fails before the builder starts, emit one failed
+   `SEMBLE_BOOTSTRAP` from `semble_ensure_ready` with the measured install
+   time and `index_ms=0`. Never run the builder just to generate an event.
+   In the eager `review_autofix.yml` and `orchestrate_poll.yml` index steps,
+   the builder's stderr is redirected to `${RUNTIME_DIR}/semble_index.log`.
+   After the builder returns, print only its `SEMBLE_BOOTSTRAP` line from
+   that file on both success and failure; leave the existing failure-tail
+   diagnostic unchanged and do not print the full log. Otherwise eager
+   bootstraps in those workflows are invisible to log-based aggregates.
 5. Callers set `SEMBLE_STATIC_CONTEXT_FILE` where the same prompt embeds a
    static prefix that exists at query time:
    - `implement.yml` (both repair and diagnose): `./pre_assembled_static.txt`
@@ -578,8 +658,15 @@ production-safe at merge, with its own changelog fragment and rollback.
      `SEMBLE_*` or `SERENA_*` telemetry line whose `run=` is present and
      differs, counting it in `semble_echo_lines_dropped`. Lines without
      `run=` are accepted as today.
-   - Pass `run_key=f"{run['id']}-{run.get('run_attempt', 1)}"` from the run
-     loop. This is the existing run JSON; no new API call.
+   - Extend the existing `list_runs` `gh run list --json` field list with
+     `attempt`, and pass
+     `run_key=f"{r['databaseId']}-{r['attempt']}"` from the run loop.
+     Confirm the pinned `gh` supports `attempt` when implementing; if an
+     attempt is absent or invalid, omit `run_key` and report the uncertainty
+     rather than guessing attempt 1 and dropping legitimate rerun events.
+     This extends one existing request; it does not add a per-run API call.
+   - Forward the optional `run_key` through `build_run_cost_telemetry` to
+     `parse_log`, preserving the default for existing callers.
    - New aggregates in `build_run_cost_telemetry` and
      `aggregate_run_cost_telemetry`, all additive keys:
      - `semble_bootstraps`
@@ -592,8 +679,11 @@ production-safe at merge, with its own changelog fragment and rollback.
      - `semble_echo_lines_dropped`
    - Surface them in the markdown table.
 8. `scripts/collect_workflow_logs.py`: apply the same `run=` mismatch drop
-   where it validates retained telemetry lines, using the run ID it is
-   collecting. Recognise `SEMBLE_BOOTSTRAP` as structured telemetry.
+   where it validates retained telemetry lines, using the existing `run_id`
+   **and** `run_attempt` of the run it is collecting. Recognise
+   `SEMBLE_BOOTSTRAP` as structured telemetry; pass that same run key to
+   `build_run_cost_telemetry` from `_apply_cost_telemetry_from_full_logs`
+   so the second parsing path cannot re-count a dropped echo.
 9. Add `SEMBLE_BOOTSTRAP` to the listed telemetry prefixes in **both** prompt
    bodies, so the log-analysis model reads it:
    - the legacy body `prompts/mode-workflow-analysis.txt` (lines ~23 and
@@ -604,14 +694,14 @@ production-safe at merge, with its own changelog fragment and rollback.
    Both bodies are maintained side by side (README "Phase O shared-prelude
    rollout"). Keep the prompt parity tests (`tests/test_assemble_prompt.py`
    and related) green.
-10. Add `changelog.d/<issue>-semble-telemetry.md` with
+10. Add `changelog.d/<phase-issue-or-pr>-semble-telemetry.md` with
     `<!-- changelog: added -->`.
 
 ## Files & Modules
 
 - `.github/workflows/implement.yml` (P1, P3, P4)
 - `.github/workflows/review_autofix.yml` (P1, P3, P4; §27 headroom)
-- `.github/workflows/orchestrate_poll.yml` (P1, P3)
+- `.github/workflows/orchestrate_poll.yml` (P1, P3, P4)
 - `.github/workflows/validate.yml` (P3)
 - `.github/workflows/clarify.yml` (P2)
 - `.github/workflows/plan.yml` (P2)
@@ -641,10 +731,10 @@ production-safe at merge, with its own changelog fragment and rollback.
 - `tests/test_targeted_file_context.py` (P4)
 - `tests/test_cost_audit_semble_metrics.py` (P4)
 - `tests/test_collect_workflow_logs.py` (P4)
-- `changelog.d/<issue>-semble-overflow-off.md` [new] (P1)
-- `changelog.d/<issue>-semble-drop-unused-bootstrap.md` [new] (P2)
-- `changelog.d/<issue>-semble-lazy-bootstrap.md` [new] (P3)
-- `changelog.d/<issue>-semble-telemetry.md` [new] (P4)
+- `changelog.d/<phase-issue-or-pr>-semble-overflow-off.md` [new] (P1)
+- `changelog.d/<phase-issue-or-pr>-semble-drop-unused-bootstrap.md` [new] (P2)
+- `changelog.d/<phase-issue-or-pr>-semble-lazy-bootstrap.md` [new] (P3)
+- `changelog.d/<phase-issue-or-pr>-semble-telemetry.md` [new] (P4)
 
 ## Data Model / Index Changes
 
@@ -686,8 +776,14 @@ write a fake index and wrapper and count invocations:
 - two concurrent calls (`&` plus `wait`) produce exactly one install
 - failure writes `state=failed`, emits `reason=lazy-bootstrap-failed`, and
   does not retry
+- a fail-soft installer returning 0 without a pinned module skips the build;
+  a fail-soft builder returning 0 without a nonempty index or executable
+  wrapper never writes `state=ready`
+- a lock timeout never overwrites another installer's ready state
 - unset or `eager` mode never installs
 - an invalid mode warns and acts as eager
+- workflows with Serena enabled still set up uv in lazy mode but do not run
+  either Semble bootstrap step; uppercase and invalid modes match helper mode
 - the timeout path, with a stub that sleeps past
   `SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS=1`
 - `semble_should_query` truth table
@@ -702,17 +798,23 @@ Contract updates:
 
 **Phase 4 (unit).**
 - `tests/test_semble_helpers.py`: `run=`, `sources=` and `static_dup_bytes=`
-  formatting and omission rules.
+  formatting and omission rules, including measured zero on fallbacks and
+  lazy install failure events reaching stderr.
 - `tests/test_targeted_file_context.py`: the same fields on the overflow
   emitter.
 - `tests/test_cost_audit_semble_metrics.py`:
   - `SEMBLE_BOOTSTRAP` validation, including malformed lines being ignored
   - unused-bootstrap detection
   - the `run_key` mismatch drop
+  - the `databaseId`/`attempt` run-list field contract and reruns
   - lines without `run=` being accepted
   - aggregate keys
 - `tests/test_collect_workflow_logs.py`: the same drop rule and
-  `SEMBLE_BOOTSTRAP` retention.
+  `SEMBLE_BOOTSTRAP` retention through both log retention and the
+  `build_run_cost_telemetry` reparse path.
+- Contract tests for `review_autofix.yml` and `orchestrate_poll.yml`: the eager
+  builder's redirected log contributes one `SEMBLE_BOOTSTRAP` line to the job
+  log on both successful and failed builds, without replaying the whole log.
 - Prompt parity tests for the workflow-analysis template.
 
 **Every phase.**
@@ -744,7 +846,9 @@ read the new events. Expected signals:
 - **Exports made inside `$(...)` subshells are lost.** Mitigation: the state
   file plus re-export on read; covered by a Phase 3 test.
 - **Concurrent first queries race.** Mitigation: `flock` on
-  `<state file>.lock` with a re-check after acquiring it; covered by a test.
+  `<state file>.lock` with a re-check after acquiring it; the exported default
+  is scoped to the run and attempt, and a lock timeout cannot overwrite the
+  holder's state. Covered by tests.
 - **An eager bootstrap failure must not trigger a lazy retry in workflows
   left eager** (workflow-log-analysis, consumers' other paths). Mitigation:
   the helper defaults to `eager` when `SEMBLE_BOOTSTRAP_MODE` is unset, so
@@ -756,8 +860,8 @@ read the new events. Expected signals:
   variables, `TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED=true` and
   `SEMBLE_BOOTSTRAP_MODE=eager`.
 - **Old helpers staged on a pinned ref lack `semble_should_query`.**
-  Mitigation: the gates use the `declare -F … || [ SEMBLE_INDEX_AVAILABLE ]`
-  fallback form.
+  Mitigation: gates use the legacy index check only if the helper is absent;
+  a false helper result is never overridden.
 - **The `run=` filter cannot catch echoes of a run's own lines inside the
   same run.** ACCEPTED: documented limitation. Cross-run echoes, the
   failure mode observed in the audit, are caught.
