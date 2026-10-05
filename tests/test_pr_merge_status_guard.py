@@ -964,11 +964,10 @@ def test_repo_option_guards_every_bare_refspec(merged_branch_repo, monkeypatch) 
 	assert lookups == ["feature/x", "feature/other"]
 
 
-def test_repo_option_guards_branch_named_after_remote(merged_branch_repo, monkeypatch) -> None:
+def test_repo_option_positional_remote_wins_over_same_named_branch(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
-	_git(repo, "branch", "origin", "feature/x")
-	_git(repo, "checkout", "main")
+	_git(repo, "branch", "origin", "main")
 	lookups: list[str] = []
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
@@ -976,7 +975,7 @@ def test_repo_option_guards_branch_named_after_remote(merged_branch_repo, monkey
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": "git push --repo=upstream origin"}})
 	assert code == 2, message
-	assert lookups == ["origin"]
+	assert lookups == ["feature/x"]
 
 
 @pytest.mark.parametrize("command", [

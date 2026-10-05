@@ -267,9 +267,9 @@ branch `2`). An unresolved push destination or source prompts for confirmation
 without substituting the checked-out branch for the unknown target; independently
 resolved refspecs are still checked and blocked when they stack on merged history.
 A bare branch after `git push --repo=origin` is checked as a refspec, including
-when followed by other bare refspecs or when its name matches a configured
-remote; a remote name without a matching local branch retains positional-
-repository behavior.
+when followed by other bare refspecs. A configured remote supplied positionally
+overrides `--repo` and causes the checked-out branch to be checked, even when a
+local branch has the same name as that remote.
 
 The `gh api` permission guard in `.claude/hooks/gh_api_write_guard.py` and
 its `workflow-templates/` twin exempts an unquoted literal-ID loop counter

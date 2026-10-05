@@ -480,13 +480,12 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; checking the current branch instead")]
-	# --repo already supplies a remote; a separate positional remote is
-	# possible, but must not hide a branch with the same name.
+	# A positional configured remote overrides --repo, even when a local branch
+	# has the same name. Otherwise every positional after --repo is a refspec.
 	if remote_provided and positionals and positionals[0] != "HEAD" and ":" not in positionals[0]:
 		with _git_environment(invocation.environment):
 			remote_status, remote_listing, _ = _run(["git", "remote"], invocation.cwd, _GIT_TIMEOUT_SECONDS)
-			branch_status, _, _ = _run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{positionals[0]}"], invocation.cwd, _GIT_TIMEOUT_SECONDS)
-		is_repository = remote_status == 0 and positionals[0] in remote_listing.splitlines() and branch_status != 0
+		is_repository = remote_status == 0 and positionals[0] in remote_listing.splitlines()
 		refspecs = positionals[1:] if is_repository else positionals
 	elif remote_provided and positionals and (positionals[0] == "HEAD" or ":" in positionals[0]):
 		refspecs = positionals
