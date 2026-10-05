@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which callers should the fix cover?\nChoices:\nA) Only the SUMMARISER call in `scripts/summarize_reviewer_consensus.sh`, as the finding cites.\nB) Fix it in the engine (`claude_run` / the read-profile settings in `scripts/claude_engine.py`). That covers every read-profile Claude role: SUMMARISER, BEHAVIOURAL_SMOKE, the read-mode RB_JUDGE, CLARIFY, PLAN and the other read-only roles, since they share the same unrestricted `Read`/`Grep`/`Glob`. (RECOMMENDED)\nC) Option B, plus the write-profile roles (`bypassPermissions`), which can read the same files.\n**Note:** Option A leaves the same weakness in every other read-profile role, so the weekly audit would likely file it again for those callers.\nQ2: How should credential files be kept out of the model's reach?\nChoices:\nA) Permission deny rules only. Add `Read`/`Grep`/`Glob` (and Bash) deny entries to the rendered Claude settings for the token-pool directory, `**/.git/config`, `/proc/*/environ` and the runner's home and temp credential paths. Small change, but it relies on the CLI enforcing those rules.\nB) Filesystem isolation, as the finding recommends. Run the read-profile Claude call against a credential-free snapshot of the source (no `.git/config` with an auth header, no `extraheader`), and keep the token-pool directory outside anything the model can reach. Pass the OAuth token to the CLI only through the process environment, and also block `/proc` environment reads.\nC) Both: isolation (B) as the main control, plus deny rules (A) as an extra layer. (RECOMMENDED)",
+  "fingerprint": "380e945ba50a8db0d46b6b409301c1cdbbf92e01b339dc6b55a3785621fce7ef",
+  "lineage": {
+    "issue_number": 6262,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37251621451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37251621451",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005013552_1b054f24eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6262,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37251621451"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6262 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T01:35:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
