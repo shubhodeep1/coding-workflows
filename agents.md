@@ -105,9 +105,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    with validated transfer back to the workspace. The poller's review-blocked
    judge uses the same sandbox from the verified workflow support checkout,
    with read access for a verdict and validated transfer for a combined fix;
-   missing isolation falls back to Codex, while failed transfer discards the
-   verdict and removes only newly untracked files. Cleanup/inventory failures
-   stop the tick so another issue cannot stage a partial transfer. The
+   missing sandbox support falls back to Codex, but a failed sandbox preparation
+   refuses host fallback and retries on the next poll tick. A failed transfer
+   discards the verdict and removes only newly untracked files. Cleanup/inventory
+   failures stop the tick so another issue cannot stage a partial transfer. The
    `claude-fixer-auto-merge` job id is kept but never runs.
    `[claude-intervention]` and `[claude-merge-resolve]` commits on older PR
    heads still end the counted run, like `[judge-fix]` and

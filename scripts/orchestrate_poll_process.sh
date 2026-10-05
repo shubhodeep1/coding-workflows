@@ -77,7 +77,8 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 # the file the codex call writes; stderr is appended to <log_file> and the
 # job log. Returns 75 when the role is on codex, ai_engine.sh is not staged
 # or Claude is unavailable, so the caller runs its unchanged codex command;
-# otherwise the runner's status (0 success, 76 rejected transfer, 124 timeout,
+# otherwise the runner's status (0 success, 76 rejected transfer, 77 isolation
+# required but sandbox preparation failed (no host fallback), 124 timeout,
 # other = crash).
 # RB_JUDGE runs in the credential-free review sandbox, never via host claude_run.
 poller_claude_judge()
@@ -124,8 +125,15 @@ poller_claude_judge()
     if ! rb_sandbox_root="$(SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
       [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}"
       [ -z "${rb_untracked_hash_file}" ] || rm -f -- "${rb_untracked_hash_file}"
-      ai_engine_fallback RB_JUDGE sandbox_prepare_failed
-      return 75
+      : > "${output_file}"
+      # PR content can cause preparation to fail (#3576); never let it select
+      # the credentialed host Codex fallback.
+      if [ "${log_file}" = /dev/null ]; then
+        echo '::warning::RB_JUDGE sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick.' >&2
+      else
+        echo '::warning::RB_JUDGE sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick.' | tee -a "${log_file}" >&2
+      fi
+      return 77
     fi
     : > "${output_file}"
     SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
@@ -21226,9 +21234,11 @@ ${FOLLOWUP_BLOCK_REASON}"
             cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
           fi
           # A rejected write transfer may have touched the combined-mode
-          # checkout before failing. Do not snapshot that state into another
-          # sandbox attempt; the failure path below resets the checkout.
-          [ "${RB_JUDGE_ENGINE_RC}" -ne 76 ] || break
+          # checkout before failing; a failed preparation cannot succeed on
+          # another same-tick attempt. Retry on the next poll after cleanup.
+          if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ]; then
+            break
+          fi
           if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break

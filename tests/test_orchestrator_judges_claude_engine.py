@@ -187,11 +187,17 @@ def test_poller_rb_judge_falls_back_only_when_sandbox_unavailable(tmp_path: Path
 	support = tmp_path / ".codex-workflow-src" / "scripts"
 	support.mkdir(parents=True)
 	(support / "review_untrusted_sandbox.sh").write_text(FAKE_RB_SANDBOX, encoding="utf-8")
-	for mode, expected in (("prepare_failed", 75), ("unavailable", 75), ("crash", 1), ("transfer_failed", 76)):
+	for mode, expected in (("prepare_failed", 77), ("unavailable", 75), ("crash", 1), ("transfer_failed", 76)):
+		if mode == "prepare_failed":
+			(tmp_path / "out.txt").write_text("stale verdict\n", encoding="utf-8")
 		proc, calls = _run_helper(tmp_path, engine="claude", claude_mode=mode, role="RB_JUDGE", combined_mode="true")
 		assert f"rc={expected}" in proc.stdout, proc.stderr
 		if mode == "prepare_failed":
-			assert "AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_prepare_failed" in proc.stderr
+			assert "AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_prepare_failed" not in proc.stderr
+			assert "reason=sandbox_prepare_failed" in proc.stderr
+			assert "reason=sandbox_prepare_failed" in _read(tmp_path / "judge_log.txt")
+			assert _read(tmp_path / "out.txt") == ""
+			assert _read(Path(f"{calls}.claude")) == ""
 		else:
 			assert _read(tmp_path / "out.txt") == ""
 			assert _read(Path(f"{calls}.sandbox")).splitlines()[-1] == "cleanup"
@@ -297,7 +303,21 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 		assert text.index(codex_call, start) > text.index(gate, start), role
 		assert text.count(codex_call) == 1, role
 	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.M)) == len(SITES)
-	assert '[ "${RB_JUDGE_ENGINE_RC}" -ne 76 ] || break' in text
+	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ]; then' in text
+
+
+def test_poller_rb_judge_only_falls_back_on_75_and_stops_on_isolation_failure() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index('poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}"')
+	end = text.index('if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then', start)
+	attempt = text[start:end]
+	assert re.search(
+		r'if \[ "\$\{RB_JUDGE_ENGINE_RC\}" -eq 75 \]; then\s+'
+		r'cat "\$\{RB_JUDGE_PROMPT_FILE\}" \| codex .* --sandbox danger-full-access .*\n\s*fi',
+		attempt,
+	)
+	assert attempt.count('--sandbox danger-full-access') == 1
+	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ]; then\n            break\n          fi' in attempt
 
 
 def _poll_steps() -> list[dict]:
