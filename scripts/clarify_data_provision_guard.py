@@ -33,7 +33,7 @@ _DATA_PROVISION_PATTERNS = [
 		re.IGNORECASE,
 	),
 	re.compile(
-		r"(?:URL|PR\s+link|commit\s+SHA|branch\s+name|deployment\s+URL)\b"
+		r"\b(?:URL|PR\s+link|commit\s+SHA|branch\s+name|deployment\s+URL)\b"
 		r".{0,40}"
 		r"\b(?:for|of|from|to|containing|with)\b",
 		re.IGNORECASE,
@@ -50,11 +50,11 @@ _FALLBACK_PATTERNS = re.compile(
 _WEAKENS_CONTROL_PATTERNS = [
 	re.compile(
 		r"\b(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|turn\s+off|not\s+requir\w*|drop\w*|remov\w*|relax\w*|best\s+effort)\b"
-		r".{0,40}?\b(?:verif\w*|validat\w*|check\w*|signature\w*|auth\w*|security|review\w*|approv\w*|audit\w*|scan\w*|test\w*|gate\w*|guard\w*|control\w*)",
+		r".{0,40}?\b(?:verif\w*|validat\w*|check\w*|signature\w*|auth(?:oriz\w*|entic\w*|[nz])?\b|security|review\w*|approv\w*|audit\w*|scan\w*|test\w*|gate\w*|guard\w*|control\w*)",
 		re.IGNORECASE,
 	),
 	re.compile(
-		r"\bwithout\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|signature\w*|auth\w*|security|review\w*|approv\w*|audit\w*|scan\w*|test\w*|gate\w*|guard\w*|control\w*)\b",
+		r"\bwithout\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|signature\w*|auth(?:oriz\w*|entic\w*|[nz])?\b|security|review\w*|approv\w*|audit\w*|scan\w*|test\w*|gate\w*|guard\w*|control\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(
@@ -63,11 +63,16 @@ _WEAKENS_CONTROL_PATTERNS = [
 		re.IGNORECASE,
 	),
 	re.compile(
-		r"\b(?:do\s+not|don't|never|no|refuse\s+to|stop)\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|auth\w*|review\w*|approv\w*|audit\w*|scan\w*|test\w*|guard\w*)\b",
+		r"\b(?:(?:security|verification|validation|checks?|audits?|reviews?|controls?)\s+)?(?:tests?|scans?|checks?|gates?|guards?|reviews?|audits?)\s+"
+		r"(?:(?:is|are|was|were|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived)\b",
+		re.IGNORECASE,
+	),
+	re.compile(
+		r"\b(?:do\s+not|don't|never|no|refuse\s+to|stop)\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|auth(?:oriz\w*|entic\w*|[nz])?\b|review\w*|approv\w*|audit\w*|scan\w*|test\w*|guard\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(r"\b(?:unverified|unvalidated|unchecked|unauthenticated|unreviewed|untested)\b", re.IGNORECASE),
-	re.compile(r"\b(?:do\s+not|don't|never)\s+enforce\b.{0,40}\b(?:security|verif\w*|validat\w*|check\w*|auth\w*|gate\w*|guard\w*)\b", re.IGNORECASE),
+	re.compile(r"\b(?:do\s+not|don't|never)\s+enforce\b.{0,40}\b(?:security|verif\w*|validat\w*|check\w*|auth(?:oriz\w*|entic\w*|[nz])?\b|gate\w*|guard\w*)\b", re.IGNORECASE),
 ]
 _DATA_EVIDENCE_PATTERNS = {
 	"url": (re.compile(r"\b(?:URL|link|http|deployment)\b", re.IGNORECASE), re.compile(r"https?://\S+", re.IGNORECASE)),

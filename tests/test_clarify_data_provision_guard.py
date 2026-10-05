@@ -102,10 +102,14 @@ def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) 
 	"Don't verify the PR head", "Never check the PR head", "No verification needed",
 	"Refuse to validate the PR head", "The test is optional", "Skip this verification, but provide the deployment URL",
 	"Leave the PR head unverified", "Proceed with the unchecked PR", "Do not enforce the security check",
+	"Security test skipped", "Security tests skipped", "Verification scan omitted", "Audit check disabled",
+	"Test skipped", "Tests were omitted", "Unit test disabled", "Omit authn", "Proceed without authz",
 ])
 def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL for verification\n- B — {fallback}\n"
 	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions)
+	answer = ANSWER.replace("Q1: A", "Q1: B")
+	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions, answer=answer)
 
 
 def test_second_pass_does_not_select_weakening_option(tmp_path: Path) -> None:
@@ -113,7 +117,7 @@ def test_second_pass_does_not_select_weakening_option(tmp_path: Path) -> None:
 	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions)
 
 
-@pytest.mark.parametrize("text", ["Require a shared lock", "Supply the crash details", "Require committee review"])
+@pytest.mark.parametrize("text", ["Require a shared lock", "Supply the crash details", "Require committee review", "Run curl for the endpoint", "Provide the curl command for verification"])
 def test_data_keywords_do_not_match_inside_other_words(tmp_path: Path, text: str) -> None:
 	questions = f"Q1: Which path?\n- A — {text}\n- B — Use default scope\n"
 	assert _run_guard(tmp_path, questions=questions) == ANSWER
@@ -134,7 +138,8 @@ def test_no_fallback_preserves_original_decision(tmp_path: Path) -> None:
 @pytest.mark.parametrize("option", [
 	"Do not skip verification", "Never bypass security checks", "Do not disable the audit",
 	"Check whether the feature flag is disabled", "Validate optional fields against schema",
-	"Test optional parameters", "Verify the debug toggle is disabled",
+	"Test optional parameters", "Verify the debug toggle is disabled", "Omit author metadata",
+	"Proceed without author attribution", "Do not enforce author attribution",
 ])
 def test_control_preserving_and_diagnostic_options_remain_available(tmp_path: Path, option: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL\n- B — {option}\n"
