@@ -477,9 +477,12 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; checking the current branch instead")]
-	# A positional repository overrides --repo; with only --repo, every
-	# positional is a refspec.
-	refspecs = positionals[1:] if len(positionals) > 1 or not remote_provided else positionals
+	# A positional repository always consumes the first positional, even
+	# with --repo; --repo alone supplies no positional refspecs.
+	if remote_provided and not positionals:
+		refspecs = []
+	else:
+		refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:

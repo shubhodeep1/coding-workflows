@@ -901,8 +901,11 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 @pytest.mark.parametrize("command", [
 	"git push origin HEAD",
 	"COUNT+=1 git push origin HEAD:feature/x",
+	"git push --repo=origin",
 	"git push --repo origin HEAD:feature/x",
 	"git push --repo=origin HEAD:feature/x",
+	"git push --repo=upstream origin",
+	"git push origin --repo=upstream",
 	"git push origin HEAD:feature/x --repo=upstream",
 	"git push --repo=upstream origin HEAD:feature/x",
 	"git push origin HEAD~0:feature/x",
