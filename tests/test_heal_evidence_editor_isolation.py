@@ -76,6 +76,55 @@ def test_restore_rejects_editor_changed_push_url(tmp_path: Path) -> None:
 	assert "newsecret" not in (repo / ".git" / "config").read_text()
 
 
+def test_hide_fails_when_an_unrestored_marker_exists(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	assert subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True).returncode != 0
+	assert "oldsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_hide_skips_non_checkout_inside_parent_repository(tmp_path: Path) -> None:
+	parent = tmp_path / "parent"
+	parent.mkdir()
+	_git(parent, "init", "-q")
+	_git(parent, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	nested = parent / "not-a-checkout"
+	nested.mkdir()
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(nested), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	result = subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and "non-git" in result.stderr
+	assert "oldsecret" in _git(parent, "remote", "get-url", "origin")
+
+
+def test_restore_rejects_untrusted_extraheader_scope(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	_git(repo, "config", "--local", "http.https://github.com/attacker/repo.extraheader", "AUTHORIZATION: basic oldsecret")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_hide_fails_without_trusted_repository_identity(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GH_TOKEN="newsecret")
+	env.pop("GITHUB_REPOSITORY", None)
+	result = subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "oldsecret" not in (repo / ".git" / "config").read_text()
+
+
 def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	implement = (WORKFLOWS / "implement.yml").read_text()
 	plan = (WORKFLOWS / "plan.yml").read_text()

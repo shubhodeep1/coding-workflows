@@ -543,6 +543,10 @@ def test_scope_allowlist_issue_first_plan_fallback_and_broad_globs(tmp_path: Pat
 	args = type("Args", (), {"issue_body_file": str(issue), "plan_file": str(plan)})()
 	ev._cmd_scope_allowlist(args)
 	assert json.loads(capsys.readouterr().out) == {"source": "issue", "allowlist": ["scripts/issue.py"]}
+	plan.unlink()
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out) == {"source": "issue", "allowlist": ["scripts/issue.py"]}
+	plan.write_text("## Files likely to change\n- `scripts/plan.py`\n")
 	issue.write_text("no allowlist")
 	ev._cmd_scope_allowlist(args)
 	assert json.loads(capsys.readouterr().out) == {"source": "plan", "allowlist": ["scripts/plan.py"]}

@@ -1445,11 +1445,11 @@ def _cmd_scope_allowlist(args: argparse.Namespace) -> int:
 		from files_touched_scope_guard import extract_files_touched, normalize_allowlist
 		from targeted_file_context import extract_paths_from_plan
 		issue_text = Path(args.issue_body_file).read_text(encoding="utf-8")
-		plan_text = Path(args.plan_file).read_text(encoding="utf-8")
 		entries = extract_files_touched(issue_text)
 		if entries:
 			result["source"] = "issue"
 		else:
+			plan_text = Path(args.plan_file).read_text(encoding="utf-8")
 			entries = extract_paths_from_plan(plan_text)
 			if entries:
 				result["source"] = "plan"
