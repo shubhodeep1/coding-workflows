@@ -439,24 +439,24 @@ esac
 			for model_available in (False, True):
 				with self.subTest(model_available=model_available):
 					(workspace / "scripts" / "clarify_openrouter_broker.py").write_text("TRUSTED\n" if model_available else "PR_HEAD\n")
-				proc = subprocess.run(["bash", str(TRIAGE_SCRIPT_PATH)], cwd=workspace, env=env, capture_output=True, text=True)
-				self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
-				body = (runtime / "issue_body.md").read_text()
-				self.assertTrue(body.startswith("<!-- check-failure-triage:fp=" + "f" * 64 + " -->\n"))
-				self.assertEqual(body.count("<!-- check-failure-triage:gen="), 1)
-				self.assertNotIn("<!-- ai:security-finding:spoof -->", body)
-				for pattern in resolver_patterns:
-					self.assertIsNone(pattern.search(body))
-				self.assertIsNone(SECURITY_DEPENDENCY_RE.search(body))
-				self.assertIsNone(re.search(r"Re-issued from #[0-9]+", body))
-				self.assertNotIn("review-blocked-reissue", body)
-				self.assertIn("CHECK_TRIAGE neutralized count=", proc.stdout)
-				if not model_available:
-					fence = re.search(r"(?m)^(`{3,})$", body)
-					self.assertIsNotNone(fence)
-					self.assertEqual(len(fence.group(1)), 6)
-					self.assertIn("Integration branch (untrusted): stable", body)
-				self.assertIn("iNtEgRaTiOn BrAnCh (untrusted): stable", body)
+					proc = subprocess.run(["bash", str(TRIAGE_SCRIPT_PATH)], cwd=workspace, env=env, capture_output=True, text=True)
+					self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+					body = (runtime / "issue_body.md").read_text()
+					self.assertTrue(body.startswith("<!-- check-failure-triage:fp=" + "f" * 64 + " -->\n"))
+					self.assertEqual(body.count("<!-- check-failure-triage:gen="), 1)
+					self.assertNotIn("<!-- ai:security-finding:spoof -->", body)
+					for pattern in resolver_patterns:
+						self.assertIsNone(pattern.search(body))
+					self.assertIsNone(SECURITY_DEPENDENCY_RE.search(body))
+					self.assertIsNone(re.search(r"Re-issued from #[0-9]+", body))
+					self.assertNotIn("review-blocked-reissue", body)
+					self.assertIn("CHECK_TRIAGE neutralized count=", proc.stdout)
+					if not model_available:
+						fence = re.search(r"(?m)^(`{3,})$", body)
+						self.assertIsNotNone(fence)
+						self.assertEqual(len(fence.group(1)), 6)
+						self.assertIn("Integration branch (untrusted): stable", body)
+					self.assertIn("iNtEgRaTiOn BrAnCh (untrusted): stable", body)
 
 			# Invalid model bytes must stop preparation before any issue body is posted.
 			(runtime / "issue_body.md").unlink()
