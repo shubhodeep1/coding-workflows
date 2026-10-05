@@ -134,6 +134,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     credential-free regular-file read that never follows symlinks.
     Untrusted logs and model diagnosis text are neutralised before issue posting
     so they cannot spoof downstream routing metadata or triage markers.
+    Check metadata is flattened for display while raw names remain in dedup keys;
+    the complete redacted issue body is checked for routing keys and forged markers
+    before either the posting step or a direct caller may create the issue.
     Issue posting is separate and requires the `CHECK_TRIAGE_ISSUES_TOKEN`
     fine-grained PAT so `issues: opened` still fires without exposing `GH_PAT`.
     Fix PRs linked to triage issues run the single-issue security pass at their

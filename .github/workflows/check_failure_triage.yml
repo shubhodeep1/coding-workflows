@@ -455,12 +455,20 @@ jobs:
           triage_post_root="$(jq -er '.root' "${RUNTIME_DIR}/triage_metadata.json")"
           # The script's existing issue-create call serves direct callers; this
           # workflow must post from its own token-scoped step instead.
+          triage_post_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -c '
+          import sys
+          import re
+          import unicodedata
+          value = "".join(" " if unicodedata.category(char) in ("Cc", "Zl", "Zp") else char for char in sys.argv[1])
+          value = value.replace("`", "\u0027").replace("<!--", "&lt;!--")
+          value = re.sub(r"Re-issued from\s*#", "Re-issued from (untrusted) #", value, flags=re.IGNORECASE)
+          value = re.sub(r"review-blocked-reissue", "review-blocked (untrusted) reissue", value, flags=re.IGNORECASE)
+          print(" ".join(value.split())[:200])
+          ' "${CHECK_NAME}")"
           triage_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
-            --title "CI failure: ${CHECK_NAME} on PR #${PR_NUMBER}" \
+            --title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}" \
             --body-file "${body_file}" --label "ai:check-triage")"
           test -n "${triage_issue_url}"
-          triage_post_check_name="${CHECK_NAME//$'\r'/ }"
-          triage_post_check_name="${triage_post_check_name//$'\n'/ }"
           printf 'CHECK_TRIAGE created issue=%s fp=%s gen=%s root=%s pr=%s check=%s\n' \
             "${triage_issue_url}" "${triage_post_fp}" "${triage_post_gen}" "${triage_post_root}" "${PR_NUMBER}" "${triage_post_check_name}"
           source scripts/tg_helpers.sh 2>/dev/null || true

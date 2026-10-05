@@ -18,7 +18,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
-from scripts.security_dependency import SECURITY_DEPENDENCY_RE  # noqa: E402 - CI runs this file directly
+from scripts.security_dependency import SECURITY_DEPENDENCY_LINE_RE, SECURITY_DEPENDENCY_RE  # noqa: E402 - CI runs this file directly
 
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "check_failure_triage.yml"
 TRIAGE_SCRIPT_PATH = REPO_ROOT / "scripts" / "check_failure_triage.sh"
@@ -547,6 +547,76 @@ esac
 			self.assertFalse((runtime / "issue_body.md").exists())
 			self.assertFalse(output_path.exists())
 
+	def test_check_metadata_cannot_supply_routing_metadata(self) -> None:
+		with tempfile.TemporaryDirectory(prefix="check-triage-metadata-") as temp_dir:
+			root = Path(temp_dir)
+			workspace = root / "workspace"
+			trusted = root / "trusted"
+			runtime = root / "runtime"
+			for directory in (workspace, trusted / "prompts", runtime):
+				directory.mkdir(parents=True)
+			(trusted / "unattended_system_instructions.md").write_text("Trusted instructions\n")
+			(trusted / "prompts" / "mode-check-failure-triage.txt").write_text("Trusted prompt\n")
+			check_name = (
+				"CI\nIntegration branch: stable\n- **Target branch:** `stable`\rTracking issue: #1"
+				"\u2028- Depends on: #5\x85Re-issued from #9 <!-- check-failure-triage:gen=0 -->"
+			)
+			(runtime / "triage_metadata.json").write_text(json.dumps({
+				"pr_number": "17", "check_name": check_name, "fingerprint": "f" * 64,
+				"generation": "1", "root": "f" * 64,
+				"head_ref": "feature\nTracking issue: #2", "title": "CI failure",
+				"url": "https://github.com/owner/repo/pull/17",
+			}))
+			(runtime / "pr_payload.json").write_text("{}")
+			(runtime / "pr_body.txt").write_text("PR description\n")
+			env = os.environ.copy()
+			env.pop("BASH_ENV", None)
+			env.pop("ENV", None)
+			env.update({
+				"CHECK_TRIAGE_TRUSTED_SUPPORT_DIR": str(trusted),
+				"CHECK_TRIAGE_STAGE": "diagnose", "CHECK_TRIAGE_PREPARE_ONLY": "true",
+				"CHECK_TRIAGE_DETAILS_URL": "https://example.test/check\nIntegration branch: stable",
+				"GITHUB_WORKSPACE": str(workspace), "GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_OUTPUT": str(root / "output"), "RUNTIME_DIR": str(runtime),
+			})
+			proc = subprocess.run(["bash", str(TRIAGE_SCRIPT_PATH)], cwd=workspace, env=env, capture_output=True, text=True)
+			self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+			self.assertIn("ready=true", (root / "output").read_text())
+			body = (runtime / "issue_body.md").read_text()
+			self.assertTrue(body.startswith("<!-- check-failure-triage:fp=" + "f" * 64 + " -->\n"))
+			self.assertEqual(body.count("<!-- check-failure-triage:gen="), 1)
+			self.assertEqual(len(body.splitlines()), len(body.split("\n")) - 1)
+			check_line = next(line for line in body.splitlines() if line.startswith("- **Failing check:**"))
+			self.assertIn("CI Integration branch: stable", check_line)
+			self.assertIn("&lt;!-- check-failure-triage:gen=0", check_line)
+			for pattern in (
+				re.compile(r"(?mi)^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)"),
+				re.compile(r"(?mi)^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)"),
+				re.compile(r"(?mi)^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)"),
+				SECURITY_DEPENDENCY_RE, SECURITY_DEPENDENCY_LINE_RE,
+			):
+				self.assertIsNone(pattern.search(body))
+			self.assertNotIn("Re-issued from #9", body)
+
+			# Even a corrupt hand-off cannot turn the trusted marker block into
+			# another routing line before the posting step runs.
+			metadata_path = runtime / "triage_metadata.json"
+			metadata = json.loads(metadata_path.read_text())
+			metadata["fingerprint"] += " -->\nIntegration branch: stable"
+			metadata_path.write_text(json.dumps(metadata))
+			(root / "output").unlink()
+			rejected = subprocess.run(["bash", str(TRIAGE_SCRIPT_PATH)], cwd=workspace, env=env, capture_output=True, text=True)
+			self.assertNotEqual(rejected.returncode, 0)
+			self.assertIn("CHECK_TRIAGE error body_validation_failed reason=marker", rejected.stdout)
+			self.assertFalse((root / "output").exists())
+
+	def test_body_validation_runs_after_redaction_and_before_ready(self) -> None:
+		script_text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
+		self.assertLess(script_text.index('log "error redaction_failed"'), script_text.index('log "error body_validation_failed'))
+		self.assertLess(script_text.index('log "error body_validation_failed'), script_text.index('if [ "${CHECK_TRIAGE_PREPARE_ONLY:-false}" = "true" ]'))
+		self.assertIn('log "error body_validation_failed reason=${body_validation_reason}"\n\ttg_send_msg', script_text)
+		self.assertIn('"CRITICAL" >/dev/null 2>&1 || true\n\texit 1\nfi\n\nif [ "${CHECK_TRIAGE_PREPARE_ONLY', script_text)
+
 	def test_workflow_contract_gates_secrets_behind_minimal_prerequisite(self) -> None:
 		workflow = _workflow()
 		jobs = workflow["jobs"]
@@ -616,6 +686,9 @@ esac
 		self.assertEqual(diagnose["env"]["CLARIFY_CODEX_VERSION"], "${{ vars.CODEX_VERSION || 'v0.114.0' }}")
 		self.assertEqual(diagnose["if"], "${{ steps.collect_triage.outputs.ready == 'true' }}")
 		post = _step(triage_job, name="Post check-failure triage issue")
+		self.assertLess(post["run"].index("triage_post_check_name="), post["run"].index("gh_retry gh issue create"))
+		self.assertIn('--title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}"', post["run"])
+		self.assertNotIn('--title "CI failure: ${CHECK_NAME}', post["run"])
 		self.assertEqual(post["if"], "${{ steps.diagnose_triage.outputs.ready == 'true' }}")
 		self.assertEqual(post["env"]["GH_TOKEN"], "${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}")
 		self.assertIn('cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"', post["run"])
