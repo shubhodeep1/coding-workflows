@@ -115,7 +115,10 @@ VERDICT_UNAVAILABLE = "unavailable"
 # `--opt=value`. Needed so `git -C /repo commit` resolves to `commit` rather
 # than to the path.
 GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
-	{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
+	{"-C", "-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
+)
+_INLINE_GIT_CONFIG_ENV_RE = re.compile(
+	r"^GIT_CONFIG(?:_(?:COUNT|PARAMETERS|GLOBAL|SYSTEM|NOSYSTEM|(?:KEY|VALUE)_[0-9]+))?$"
 )
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
@@ -165,6 +168,7 @@ _GIT_TIMEOUT_SECONDS = 5
 # Network-bound git calls (`ls-remote`, `fetch`) used by the history fallback.
 _GIT_REMOTE_TIMEOUT_SECONDS = 15
 _GIT_ENVIRONMENT: ContextVar[dict[str, str] | None] = ContextVar("guard_git_environment", default=None)
+_GIT_CONFIG_ARGS: ContextVar[tuple[str, ...]] = ContextVar("guard_git_config_args", default=())
 _pending_output: dict[str, list[str]] = {"system_messages": [], "ask_reasons": []}
 
 # Options with an argument must not turn that argument into a refspec. Unknown
@@ -184,6 +188,8 @@ class _GitInvocation(NamedTuple):
 	subcommand: str
 	arguments: list[str]
 	warning: str = ""
+	config: tuple[str, ...] = ()
+	config_block: str = ""
 
 
 class _GuardTarget(NamedTuple):
@@ -194,6 +200,7 @@ class _GuardTarget(NamedTuple):
 	reaches_remote: bool
 	warning: str = ""
 	bulk: str = ""
+	config: tuple[str, ...] = ()
 
 
 class LookupUnavailable(Exception):
@@ -208,6 +215,10 @@ def _run(argv: list[str], cwd: str | None, timeout: int) -> tuple[int, str, str]
 	fail-open path.
 	"""
 	try:
+		config = _GIT_CONFIG_ARGS.get()
+		if config and "git" in argv:
+			git_index = argv.index("git")
+			argv = argv[:git_index + 1] + [part for item in config for part in ("-c", item)] + argv[git_index + 1:]
 		overrides = _GIT_ENVIRONMENT.get()
 		proc = subprocess.run(
 			argv,
@@ -310,11 +321,13 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 
 
 @contextmanager
-def _git_environment(overrides: dict[str, str]):
+def _git_environment(overrides: dict[str, str], config: tuple[str, ...] = ()):
 	state = _GIT_ENVIRONMENT.set(overrides or None)
+	config_state = _GIT_CONFIG_ARGS.set(config)
 	try:
 		yield
 	finally:
+		_GIT_CONFIG_ARGS.reset(config_state)
 		_GIT_ENVIRONMENT.reset(state)
 
 
@@ -376,8 +389,11 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			working_directory = None
 		index = 0
 		environment: dict[str, str] = {}
+		config_block = ""
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
+			if _INLINE_GIT_CONFIG_ENV_RE.fullmatch(name.removesuffix("+")):
+				config_block = f"inline {name.removesuffix('+')} environment override"
 			if name.endswith("+"):
 				# Appending to an existing Git override depends on the shell state.
 				name = name[:-1]
@@ -391,21 +407,34 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		index += 1
 		git_cwd = working_directory
 		uncertain = git_cwd is None
+		config: list[str] = []
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
 			value = None
 			if option in GIT_GLOBAL_OPTS_WITH_VALUE:
 				if index + 1 >= len(tokens):
 					uncertain = True
+					if option in ("-c", "--config-env"):
+						config_block = "missing inline Git config value"
 					break
 				value = tokens[index + 1]
 				index += 1
 			elif option.startswith("-C") and option != "-C":
 				value = option[2:]
+			elif option.startswith("-c") and option != "-c":
+				option, value = "-c", option[2:]
+			elif option.startswith("--config-env="):
+				option, value = "--config-env", option.split("=", 1)[1]
 			elif option.startswith(("--git-dir=", "--work-tree=")):
 				value = option.split("=", 1)[1]
 			if value is not None:
-				if option.startswith("-C"):
+				if option == "-c":
+					config.append(value)
+					if "$" in value or "`" in value:
+						config_block = "expanded -c value"
+				elif option == "--config-env":
+					config_block = "--config-env value is not available to the hook"
+				elif option.startswith("-C"):
 					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
 					uncertain |= git_cwd is None
 				elif option.startswith("--git-dir"):
@@ -428,6 +457,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
 			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
+			tuple(config), config_block,
 		))
 	return invocations
 
@@ -448,10 +478,30 @@ def _branch_ref(ref: str) -> str | None:
 	return ref
 
 
+def _inline_push_config_block(config: tuple[str, ...]) -> str:
+	"""Reject inline keys that can redirect or remap a push outside our model."""
+	for entry in config:
+		key = entry.split("=", 1)[0]
+		parts = key.split(".")
+		if len(parts) < 2:
+			return "inline key without a section"
+		section, field = parts[0].lower(), parts[-1].lower()
+		if section == "remote" and len(parts) >= 3 and field in ("push", "mirror", "pushurl"):
+			return f"remote.*.{field}"
+		if section in ("url", "include", "includeif"):
+			return f"{section}.*"
+	return ""
+
+
 def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarget]:
 	"""Identify the destination branches and source tips of a git push."""
+	config_block = invocation.config_block or _inline_push_config_block(invocation.config)
+	if config_block:
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+			f"inline git config: {config_block}", config=invocation.config)]
 	if invocation.warning:
-		return [_GuardTarget(invocation.cwd, {}, "", "HEAD", True, invocation.warning)]
+		return [_GuardTarget(invocation.cwd, {}, "", "HEAD", True, invocation.warning,
+			config=invocation.config)]
 	positionals: list[str] = []
 	remote_provided = False
 	bulk = ""
@@ -496,23 +546,48 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		return []  # Deletes do not strand new commits on a branch.
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
-			"could not resolve git push options; destination branch is unknown")]
+			"could not resolve git push options; destination branch is unknown", config=invocation.config)]
 	if remote_provided and positionals:
-		with _git_environment(invocation.environment):
+		with _git_environment(invocation.environment, invocation.config):
 			code, _, _ = _run(
 				["git", "config", "--get", f"remote.{positionals[0]}.url"],
 				invocation.cwd, _GIT_TIMEOUT_SECONDS,
 			)
 		if code not in (0, 1):
 			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
-				"could not resolve git push positional repository; destination branch is unknown")]
+				"could not resolve git push positional repository; destination branch is unknown",
+				config=invocation.config)]
 		refspecs = positionals[1:] if code == 0 else positionals
 	else:
 		refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk)]
+		if invocation.config and not bulk:
+			with _git_environment(invocation.environment, invocation.config):
+				code, output, _ = _run(["git", "config", "--get", "push.default"],
+					invocation.cwd, _GIT_TIMEOUT_SECONDS)
+				mode = output.strip().lower() if code == 0 else "simple" if code == 1 else ""
+			if mode == "nothing":
+				return []
+			if mode == "matching":
+				bulk = "push.default=matching"
+			elif mode in ("upstream", "tracking"):
+				with _git_environment(invocation.environment, invocation.config):
+					current = current_branch(invocation.cwd)
+					code, output, _ = _run(["git", "config", "--get", f"branch.{current}.merge"],
+						invocation.cwd, _GIT_TIMEOUT_SECONDS) if current else (1, "", "")
+				branch = _branch_ref(output.strip()) if code == 0 and output.strip().startswith("refs/heads/") else None
+				if branch:
+					return [_GuardTarget(invocation.cwd, invocation.environment, branch, "HEAD", True,
+						config=invocation.config)]
+				mode = "unresolvable upstream branch"
+			if mode not in ("simple", "current", "matching"):
+				return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+					"inline git config: push.default is unsupported or cannot be resolved",
+					config=invocation.config)]
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+			bulk=bulk, config=invocation.config)]
 	targets: list[_GuardTarget] = []
 	for refspec in refspecs:
 		refspec = refspec.removeprefix("+")
@@ -527,17 +602,20 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			source = destination = refspec
 			if destination == "HEAD":
 				# Git pushes the checked-out branch, not a branch named HEAD.
-				with _git_environment(invocation.environment):
+				with _git_environment(invocation.environment, invocation.config):
 					destination = current_branch(invocation.cwd)
 		branch = _branch_ref(destination)
 		if branch == "":
 			continue
 		if branch is None:
-			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True))
+			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True,
+				config=invocation.config))
 			continue
-		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True,
+			config=invocation.config))
 	if bulk:
-		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk))
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+			bulk=bulk, config=invocation.config))
 	return targets
 
 
@@ -1344,6 +1422,12 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "commit" and invocation.config_block:
+			blocks.append(
+				f"BLOCKED: git commit uses inline Git configuration the merged-PR guard cannot resolve "
+				f"({invocation.config_block}). Re-run without the inline override, or set it in the repository config first."
+			)
+			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			_warn(invocation.warning)
 			unresolved_push_sources.append(
@@ -1351,9 +1435,17 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			)
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
-			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
+			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False,
+				invocation.warning, config=invocation.config)]
 		)
 		for target in targets:
+			if target.warning.startswith("inline git config:"):
+				blocks.append(
+					f"BLOCKED: git {invocation.subcommand} uses inline Git configuration the merged-PR guard "
+					f"cannot resolve ({target.warning.removeprefix('inline git config: ')}). "
+					"Re-run without the inline override, or set it in the repository config first."
+				)
+				continue
 			if target.branch is None:
 				unresolved_push_destinations.append(
 					"could not resolve git push destination; shell expansion may change the pushed branch."
@@ -1367,7 +1459,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.warning:
 				_warn(target.warning)
 			if target.tip != "HEAD":
-				with _git_environment(target.environment):
+				with _git_environment(target.environment, target.config):
 					code, resolved_source_sha, _ = _run(
 						["git", "rev-parse", "--verify", "--end-of-options", f"{target.tip}^{{commit}}"],
 						target.cwd, _GIT_TIMEOUT_SECONDS,
@@ -1380,7 +1472,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					continue
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
-			with _git_environment(target.environment):
+			with _git_environment(target.environment, target.config):
 				branch = target.branch or current_branch(target.cwd)
 				if not branch:
 					# Detached HEAD without a literal branch destination.
@@ -1390,7 +1482,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					continue
 				slug = repo_slug(target.cwd)
 				if not slug:
-					_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
+					if target.config:
+						blocks.append(
+							f"BLOCKED: git {invocation.subcommand} uses inline Git configuration the merged-PR guard "
+							"cannot resolve (repository identity unavailable). Re-run without the inline override, "
+							"or set it in the repository config first."
+						)
+					else:
+						_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
 					continue
 				tip = target.tip
 				key = (slug, branch)
