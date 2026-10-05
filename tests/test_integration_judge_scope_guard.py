@@ -46,12 +46,12 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 	git(root, "remote", "add", "origin", str(remote))
 	git(root, "push", "origin", "main")
 	git(root, "checkout", "-b", "integration")
-	conflicted.write_text("first\nours\nlast\n")
+	conflicted.write_text("first\n\nours\nlast\n" if request.param == "shared" else "first\nours\nlast\n")
 	git(root, "commit", "-am", "ours")
 	git(root, "push", "origin", "integration")
 	before = git(remote, "rev-parse", "refs/heads/integration").stdout.strip()
 	git(root, "checkout", "main")
-	conflicted.write_text("first\ntheirs\nlast\n")
+	conflicted.write_text("first\n\ntheirs\nlast\n" if request.param == "shared" else "first\ntheirs\nlast\n")
 	git(root, "commit", "-am", "theirs")
 	git(root, "push", "origin", "main")
 	wt = tmp_path / "judge"
@@ -133,6 +133,24 @@ def test_scope_verifier_uses_worktree_index_despite_ambient_git_overrides(judge_
 	result = run(f'GIT_DIR="{remote}" GIT_INDEX_FILE="{baseline / "index"}" _integration_judge_verify_scope "{wt}" "{baseline}" 42')
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert result.stdout.strip() == git(wt, "write-tree").stdout.strip()
+
+
+@pytest.mark.parametrize("judge_repo", ["shared"], indirect=True)
+@pytest.mark.parametrize("content,accepted", [
+	("first\n\nours\n\ntheirs\nlast\n", True),
+	("first\n\nours\n\n\ntheirs\nlast\n", False),
+])
+def test_protected_conflict_combines_shared_lines_from_both_sides(judge_repo, content, accepted):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text(content)
+	git(wt, "add", conflict_path)
+	result = run(f'_integration_judge_verify_scope "{wt}" "{baseline}" 42')
+	assert (result.returncode == 0) == accepted, result.stderr + result.stdout
+	if accepted:
+		assert result.stdout.strip() == git(wt, "write-tree").stdout.strip()
+	else:
+		assert "reason=protected_path_provenance" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
 
 
 @pytest.mark.parametrize("judge_repo", [False], indirect=True)

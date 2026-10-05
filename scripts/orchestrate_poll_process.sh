@@ -8778,6 +8778,7 @@ _integration_judge_capture_baseline() {
 _integration_judge_verify_scope() {
   local wt="$1" baseline_dir="$2" final_pr="$3"
   PYTHONDONTWRITEBYTECODE=1 python3 - "${wt}" "${baseline_dir}" "${final_pr}" <<'PY'
+import bisect
 import os
 import re
 import shutil
@@ -8867,13 +8868,36 @@ try:
         if not set(resolved_lines) <= allowed:
             raise ValueError("invented protected line")
         if resolved_lines not in side_lines:
-            # Project onto each side to preserve its order and bound repeated lines.
+            # Assign each occurrence to one side, preserving order on that side.
+            side_indexes = []
             for source_lines in side_lines:
-                source_values = set(source_lines)
-                ordered_source = iter(source_lines)
-                if not all(any(candidate == line for candidate in ordered_source)
-                           for line in resolved_lines if line in source_values):
+                line_positions = {}
+                for line_index, source_line in enumerate(source_lines):
+                    line_positions.setdefault(source_line, []).append(line_index)
+                side_indexes.append(line_positions)
+            while len(side_indexes) < 2:
+                side_indexes.append({})
+            frontier = {(0, 0)}
+            for resolved_line in resolved_lines:
+                next_frontier = set()
+                for first_pos, second_pos in frontier:
+                    for side_num, source_pos in enumerate((first_pos, second_pos)):
+                        positions = side_indexes[side_num].get(resolved_line, ())
+                        match_index = bisect.bisect_left(positions, source_pos)
+                        if match_index < len(positions):
+                            if side_num == 0:
+                                next_frontier.add((positions[match_index] + 1, second_pos))
+                            else:
+                                next_frontier.add((first_pos, positions[match_index] + 1))
+                if not next_frontier:
                     raise ValueError("reordered or duplicated protected line")
+                # A state with both cursors further along cannot enable a later match.
+                frontier = set()
+                best_second = float("inf")
+                for first_pos, second_pos in sorted(next_frontier):
+                    if second_pos < best_second:
+                        frontier.add((first_pos, second_pos))
+                        best_second = second_pos
     validated_tree = git("write-tree").strip()
     if not re.fullmatch(rb"[0-9a-f]{40,64}", validated_tree):
         raise ValueError("invalid staged tree")
