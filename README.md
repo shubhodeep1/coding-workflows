@@ -2672,6 +2672,11 @@ and resolver chains, a failed project) now goes to the unblock judge
   `orchestrator/project-<n>` base. Issue project fix-ups require the
   `ai:orchestrator-managed` label and membership in the project's state;
   missing or unverifiable state skips actuation until it can be confirmed.
+  For PRs with an untrusted author or head, issue-creating verdicts create
+  no issue: the judge explains the rejection, closes the PR, and warns via
+  Telegram. A fork PR targeting a project is never bound to project state;
+  its non-issue-creating, non-close verdicts are skipped. If the explanation write fails,
+  closure still proceeds and a failed close sends a failure WARNING.
   `operator_step` also writes the `ai:operator-step` issue and sends a
   Telegram WARNING. New operator steps are appended as keyed comments, never
   written back into the shared issue body. The newest trusted comment for a

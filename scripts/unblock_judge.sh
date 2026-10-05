@@ -145,7 +145,9 @@ unblock_run_ops()
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
 		issue="$(jq -r ".ops[${idx}].issue // empty" "${ops_file}")"
-		if [ "${ops_failed}" = "true" ] && [ "${op}" != "close" ] && [ "${op}" != "telegram" ]; then
+		if [ "${ops_failed}" = "true" ] && [ "${op}" != "close" ] && [ "${op}" != "telegram" ] \
+			&& ! { [ "${op}" = "add_labels" ] && [ "${close_succeeded}" = "true" ] && [ "${ITEM_KIND}" = "pr" ] \
+				&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; }; then
 			continue
 		fi
 		case "${op}" in
@@ -269,7 +271,8 @@ PY
 				fi
 				;;
 			close)
-				if [ "${ops_failed}" = "true" ]; then
+				if [ "${ops_failed}" = "true" ] && ! { [ "${ITEM_KIND}" = "pr" ] \
+					&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; }; then
 					unblock_log "item=${ITEM} op=close issue=${issue} outcome=skip reason=prerequisite_failed"
 					continue
 				fi
@@ -294,6 +297,8 @@ PY
 				if [ "${ops_failed}" = "true" ] && [ "${close_succeeded}" != "true" ]; then
 					if [ "${ITEM_KIND}" = "project" ] && [ "$(jq -r ".ops[${idx}].level" "${ops_file}")" = "CRITICAL" ]; then
 						unblock_tg "CRITICAL" "Unblock judge could not mark project #${ITEM} for closure; label write failed (${REPOSITORY})."
+					elif [ "${ITEM_KIND}" = "pr" ] && jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; then
+						unblock_tg "WARNING" "Unblock judge could not close untrusted PR #${ITEM}; a write failed (${REPOSITORY})."
 					fi
 					continue
 				fi
@@ -391,6 +396,7 @@ unblock_main()
 
 	# The project an item belongs to, and a PR's linked issue.
 	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref="" head_repo="" binding_issue=""
+	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo="" untrusted_project_pr="false"
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "project" ]; then
 		tracking="${ITEM}"
@@ -406,22 +412,40 @@ unblock_main()
 			unblock_log "item=${ITEM} outcome=skip reason=pr_unreadable"
 			return 0
 		fi
-		if [[ "$(jq -r '.base.ref' <<< "${pr_json}")" =~ ^orchestrator/project-([1-9][0-9]*)$ ]]; then
-			tracking="${BASH_REMATCH[1]}"
-			head_repo="$(jq -r '.head.repo.full_name // ""' <<< "${pr_json}")"
-			head_ref="$(jq -r '.head.ref // ""' <<< "${pr_json}")"
-			if [ -z "${head_repo}" ] || [ "${head_repo,,}" != "${REPOSITORY,,}" ]; then
-				unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=fork_head"
-				return 0
-			fi
-			if [[ ! "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
-				unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=head_ref"
-				return 0
-			fi
-			binding_issue="${BASH_REMATCH[1]}"
-		fi
 		head_sha="$(jq -r '.head.sha // ""' <<< "${pr_json}")"
 		head_ref="$(jq -r '.head.ref // ""' <<< "${pr_json}")"
+		pr_author="$(jq -r '.user.login // ""' <<< "${pr_json}")"
+		pr_assoc="$(jq -r '.author_association // ""' <<< "${pr_json}")"
+		pr_head_repo="$(jq -r '.head.repo.full_name // ""' <<< "${pr_json}")"
+		if jq -e --arg repo "${REPOSITORY}" --arg login "${UNBLOCK_LOGIN}" '
+			(.head.repo.full_name | type == "string")
+			and ((.head.repo.full_name | ascii_downcase) == ($repo | ascii_downcase))
+			and (.user.login | strings | test("^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$"))
+			and (.head.sha | strings | test("^[0-9a-f]{40}([0-9a-f]{24})?$"))
+			and ((.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))
+				or .user.login == $login or .user.login == "github-actions[bot]")
+		' <<< "${pr_json}" >/dev/null 2>&1; then
+			pr_trusted="true"
+		fi
+		unblock_log "item=${ITEM} kind=pr op=pr_provenance trusted=${pr_trusted} head_repo=$(printf '%s' "${pr_head_repo}" | tr '\r\n' '  ') assoc=$(printf '%s' "${pr_assoc}" | tr '\r\n' '  ')"
+		if [[ "$(jq -r '.base.ref' <<< "${pr_json}")" =~ ^orchestrator/project-([1-9][0-9]*)$ ]]; then
+			if [ "${pr_trusted}" != "true" ]; then
+				# Never bind an untrusted PR to project state; only its rejection may proceed.
+				untrusted_project_pr="true"
+			else
+				tracking="${BASH_REMATCH[1]}"
+				head_repo="$(jq -r '.head.repo.full_name // ""' <<< "${pr_json}")"
+				if [ -z "${head_repo}" ] || [ "${head_repo,,}" != "${REPOSITORY,,}" ]; then
+					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=fork_head"
+					return 0
+				fi
+				if [[ ! "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=head_ref"
+					return 0
+				fi
+				binding_issue="${BASH_REMATCH[1]}"
+			fi
+		fi
 		linked="$(printf '%s\n' "${body_text}" | grep -oiE '\b(refs|closes|close|closed|fixes|fix|fixed|resolves|resolve|resolved)[[:space:]]+#[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
 	fi
 
@@ -443,12 +467,14 @@ unblock_main()
 	jq -n --arg repo "${REPOSITORY}" --arg kind "${ITEM_KIND}" --argjson item "${ITEM}" --arg stop "${ITEM_STOP}" \
 		--slurpfile labels "${RUNTIME_DIR}/labels.json" --arg tracking "${tracking}" --arg linked "${linked}" \
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
-		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title}' \
+		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
+		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
 	local last_activity="" wait_id wait_fixup wait_state wait_at wait_updated fixup_json
-	wait="$(unblock_latest_wait)"
+	wait=""
+	[ "${untrusted_project_pr}" = "true" ] || wait="$(unblock_latest_wait)"
 	if [ -n "${wait}" ]; then
 		read -r wait_id wait_fixup wait_state wait_at wait_updated <<< "${wait}"
 		if [ "${wait_state}" = "done" ]; then
@@ -579,6 +605,10 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		return 0
 	fi
 	verdict_name="$(jq -r '.verdict' "${RUNTIME_DIR}/verdict.json")"
+	if [ "${untrusted_project_pr}" = "true" ] && [[ ! "${verdict_name}" =~ ^(reissue|descope|operator_step|accept_with_followup|close)$ ]]; then
+		unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=untrusted_pr_verdict"
+		return 0
+	fi
 	round="$(jq -r '.round' "${RUNTIME_DIR}/verdict.json")"
 	local -a marker_args=(marker --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${fp}" --verdict "${verdict_name}" --round "${round}")
 	[ "$(jq -r '.override // ""' "${RUNTIME_DIR}/verdict.json")" = "bulk_delete" ] && marker_args+=(--override bulk_delete)
