@@ -505,8 +505,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			continue
 		if branch is None:
 			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; checking the current branch instead",
-				bulk="unresolved git push destination"))
+				"could not resolve git push refspec: unresolved git push destination"))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
 	if bulk:
@@ -1314,6 +1313,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
 			if target.warning:
+				if target.warning.startswith("could not resolve git push refspec"):
+					_request_confirmation(f"{target.warning}; verify the actual push destination and source tip")
+					continue
 				_warn(target.warning)
 			if target.bulk == "unresolved git push destination":
 				# The checked-out branch is not the requested destination.

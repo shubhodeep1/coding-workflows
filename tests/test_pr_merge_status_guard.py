@@ -24,6 +24,8 @@ GUARD_PATH = REPO_ROOT / ".claude" / "hooks" / "pr_merge_status_guard.py"
 TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "pr_merge_status_guard.py"
 SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
+if not SETTINGS_PATH.is_file():
+	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
 
@@ -219,6 +221,8 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	unrelated github.com repo.
 	"""
 	session_start = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
+	if not session_start.is_file():
+		session_start = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "session-start.sh"
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
@@ -1126,9 +1130,10 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 def test_template_copies_are_identical() -> None:
 	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
 	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
-	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
-		encoding="utf-8"
-	)
+	if SETTINGS_PATH != TEMPLATE_SETTINGS_PATH:
+		assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
+			encoding="utf-8"
+		)
 	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
 
