@@ -26,10 +26,10 @@ evidence to a folder the agents read:
 API budget (CLAUDE.md §15), per ``collect`` call:
   * intake provenance: 1 cached ``GET /user`` and 1 batched GraphQL query
     for the heal issue and up to 20 occurrence comments;
-  * run identity: reuse the head-SHA timeline listing, falling back to 1 run
-    GET per selected run not in that listing;
-  * runs already in the out dir from an earlier stage (actions/cache) are
-    reused; each new run costs 1 jobs call + 1 job-log call per selected job
+  * run identity (including same-repo): reuse the head-SHA timeline listing,
+    falling back to 1 run GET per selected run not in that listing;
+  * runs already in the out dir are reused; each new run costs 1 jobs call +
+    1 job-log call per selected job
     (at most ``--max-jobs``) + 1 artifact list + at most 2 artifact
     downloads;
   * provenance: 1 source-PR call, at most 2 compare calls;
@@ -37,7 +37,7 @@ API budget (CLAUDE.md §15), per ``collect`` call:
     lineage issue's closing PRs, at most 5 compare calls for merges not yet
     known to have reached the default branch (a positive answer is cached);
   * timeline: 1 call; ``GET /rate_limit`` is free.
-A first stage spends about 20 calls, a later stage about 5. When fewer than
+Each stage spends about 20 calls. When fewer than
 ``--min-rate-remaining`` core calls are left, the optional parts (artifacts,
 timeline, lineage compares) are skipped and recorded under ``skipped``.
 
@@ -88,6 +88,7 @@ MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 MAX_ARTIFACT_MEMBERS = 40
 MAX_PROVENANCE_COMMENTS = 20
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_=-]{1,100}$")
+LEGACY_CACHE_KEY_RE = re.compile(r"heal-evidence-[0-9]+-[0-9]+-[0-9]+")
 
 # The review workflow's job is "codex-agent" (consumer wrapper) or
 # "review / codex-agent" (internal). A review/autofix failure usually ends
@@ -138,6 +139,7 @@ _SECRET_RES = (
 	re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 	re.compile(r"(?i)\b(authorization:\s*(?:bearer|token)\s+)[^\s\"']{8,}"),
 )
+# Retained for compatibility; free-text run lines are not an authority for fetching logs.
 _HEAL_RUN_LINE_RE = re.compile(r"\*\*(?:Failed run|Failed runs?)\:\*\*\s*(?P<url>\S+)")
 _OCCURRENCE_MARKER = "<!-- " + heal.MARKER_PREFIX + "occurrence -->"
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -413,6 +415,10 @@ class GitHub:
 		except (UnicodeError, ValueError):
 			return None
 
+	def delete(self, path: str) -> bool:
+		# A successful DELETE returns HTTP 204 and an empty byte string.
+		return self._run(["-X", "DELETE", path]) is not None
+
 	def raw(self, path: str, *, escapes: bool = False) -> bytes | None:
 		# Job logs carry ANSI colour codes, which newer gh releases refuse to
 		# print without --allow-escape-sequences; older ones lack the flag.
@@ -549,6 +555,7 @@ def _occurrence_context(text: str) -> dict[str, str]:
 		"source_number": number,
 		"head_sha": sha if heal.is_valid_sha(sha) else "",
 		"head_branch": _body_field(text, "Failed on branch"),
+		"workflow_name": _body_field(text, "Failed workflow"),
 	}
 
 
@@ -567,11 +574,21 @@ def heal_context(issue: dict[str, Any]) -> dict[str, Any]:
 		"source_number": source_number if source_number.isdigit() else "",
 		"head_sha": head_sha if heal.is_valid_sha(head_sha) else "",
 		"head_branch": _body_field(body, "Failed on branch"),
+		"workflow_name": _body_field(body, "Failed workflow"),
 		"base_branch": _body_field(body, "Pull request base branch"),
 		"target_branch": _body_field(body, "Target branch"),
 		"failure_reason": _body_field(body, "Failure reason"),
-		"runs_marker": markers.get("runs", ""),
+		"runs_marker": heal.parse_leading_heal_markers(body).get("runs", ""),
 	}
+
+
+def _runs_marker_urls(value: str) -> list[str]:
+	urls = []
+	for token in value.split(","):
+		repo, sep, run_id = token.partition(":")
+		if sep and heal.is_valid_repo_slug(repo) and run_id.isdigit():
+			urls.append(f"https://github.com/{repo}/actions/runs/{run_id}")
+	return urls
 
 
 def trusted_run_refs(
@@ -580,23 +597,17 @@ def trusted_run_refs(
 ) -> list[dict[str, str]]:
 	"""Run links from the issue body and its occurrence comments, newest last.
 
-	Only the heal issue's own author may add runs through an occurrence
-	comment (the intake posts both with the same account), and a run must
-	live in an allowed repository (the issue's repository or the source
-	repository named by the body marker).
+	Only leading structured runs markers in the issue and intake-authored
+	occurrence comments supply run IDs; free-text log excerpts never do.
+	Runs must live in an allowed repository.
 	"""
 	allowed = {repo for repo in allowed_repos if heal.is_valid_repo_slug(repo)}
 	author = ((issue.get("user") or {}) if isinstance(issue.get("user"), dict) else {}).get("login")
 	texts: list[tuple[str, str, dict[str, str]]] = []
-	body = issue.get("body") or ""
 	ctx = heal_context(issue)
 	if include_body:
-		body_ctx = {key: ctx.get(key, "") for key in ("source_repo", "source_number", "head_sha", "head_branch")}
-		for token in (ctx.get("runs_marker") or "").split(","):
-			repo, _, run_id = token.partition(":")
-			if heal.is_valid_repo_slug(repo) and run_id.isdigit():
-				texts.append((f"https://github.com/{repo}/actions/runs/{run_id}", "body", body_ctx))
-		texts.extend((match.group("url"), "body", body_ctx) for match in _HEAL_RUN_LINE_RE.finditer(body))
+		body_ctx = {key: ctx.get(key, "") for key in ("source_repo", "source_number", "head_sha", "head_branch", "workflow_name")}
+		texts.extend((url, "body", body_ctx) for url in _runs_marker_urls(ctx.get("runs_marker") or ""))
 	for comment in comments or []:
 		if not isinstance(comment, dict):
 			continue
@@ -607,9 +618,9 @@ def trusted_run_refs(
 		text = comment.get("body") or ""
 		if not isinstance(text, str):
 			continue
-		if not author or comment_author != author or _OCCURRENCE_MARKER not in text:
+		if not author or comment_author != author or not text.startswith((_OCCURRENCE_MARKER + "\n", _OCCURRENCE_MARKER + "\r\n")):
 			continue
-		texts.extend((match.group("url"), f"comment:{comment_id}", _occurrence_context(text)) for match in _HEAL_RUN_LINE_RE.finditer(text))
+		texts.extend((url, f"comment:{comment_id}", _occurrence_context(text)) for url in _runs_marker_urls(heal.parse_leading_heal_markers(text).get("runs", "")))
 	seen: dict[tuple[str, str], dict[str, str]] = {}
 	for text, origin, facts in texts:
 		for match in heal._RUN_URL_RE.finditer(text):
@@ -839,13 +850,16 @@ class Collector:
 		return result
 
 	def _verify_run(self, ref: dict[str, str], issue_repo: str) -> tuple[bool, str]:
-		# Same-repo runs also require server-backed identity (#6334).
+		"""Bind a run in either repository to the intake's reported failure."""
+		# #6328: issue text can carry unrelated same-repo run links. Bind every
+		# run to API metadata before reading its jobs, logs or artifacts with GH_PAT.
 		if ref["source_repo"] != ref["repo"]:
 			return False, "run_no_verified_context"
 		sha = ref["head_sha"] if heal.is_valid_sha(ref["head_sha"]) else ""
 		branch = ref["head_branch"] if heal.is_valid_branch(ref["head_branch"]) else ""
 		pr_number = int(ref["source_number"]) if ref["source_number"].isdigit() and len(ref["source_number"]) <= 12 and int(ref["source_number"]) > 0 else None
-		if not sha or (not branch and pr_number is None):
+		workflow_name = ref.get("workflow_name", "")
+		if not sha or not workflow_name or (not branch and pr_number is None):
 			return False, "run_no_verified_context"
 		run = self._timeline_index.get(ref["run_id"])
 		if run is None:
@@ -863,15 +877,34 @@ class Collector:
 		head_matches = sha and isinstance(run.get("head_sha"), str) and run["head_sha"].lower() == sha
 		branch_matches = branch and run.get("head_branch") == branch
 		if head_matches and (branch_matches or pr_linked or pr_named):
-			return True, "verified"
+			# A dispatch run-name can append the PR token to the workflow name.
+			if run.get("name") not in (workflow_name, f"{workflow_name} [pr:{pr_number}]" if pr_number is not None else workflow_name):
+				return False, "run_workflow_mismatch"
+			if run.get("conclusion") in FAILED_CONCLUSIONS:
+				return True, "verified"
+			if (run.get("status") == "completed" and run.get("conclusion") == "success") or (isinstance(run.get("status"), str) and run["status"] and run["status"] != "completed" and run.get("conclusion") is None):
+				return True, "verified_review_only"
+			return False, "run_not_failed"
 		return False, "run_head_mismatch"
 
 	# -- runs -----------------------------------------------------------------
 
-	def collect_run(self, ref: dict[str, str]) -> dict[str, Any]:
+	def collect_run(self, ref: dict[str, str], *, review_only: bool = False) -> dict[str, Any]:
 		run_dir = f"runs/{_safe_name(ref['repo'].replace('/', '__'))}__{ref['run_id']}"
 		cached = self._read_json(f"{run_dir}/meta.json")
 		if isinstance(cached, dict) and cached.get("complete"):
+			cached_jobs = cached.get("job_table")
+			cached_review_jobs = cached.get("jobs")
+			if review_only and (not isinstance(cached_jobs, list) or not all(isinstance(job, dict) for job in cached_jobs)
+				or not any(FOCUS_JOB_RE.search(job.get("name") or "") for job in cached_jobs)
+				or not isinstance(cached_review_jobs, list) or not cached_review_jobs or not all(
+					isinstance(job, dict) and FOCUS_JOB_RE.search(job.get("name") or "")
+					and isinstance(job.get("id"), int) and job.get("file") == f"{run_dir}/job-{job['id']}.txt"
+					for job in cached_review_jobs
+				) or any(old_log.name not in {f"job-{job['id']}.txt" for job in cached_review_jobs}
+					for old_log in (self.out / run_dir).glob("job-*.txt"))):
+				self._skip(f"run:{ref['repo']}:{ref['run_id']}", "unverified_run_not_failed")
+				return {"skipped": True}
 			cached["reused"] = True
 			return cached
 		meta: dict[str, Any] = {"repo": ref["repo"], "run_id": ref["run_id"], "url": ref["url"], "dir": run_dir, "jobs": [], "artifacts": [], "complete": False}
@@ -881,6 +914,11 @@ class Collector:
 			self._skip(f"run:{ref['run_id']}", "jobs_unavailable")
 			return meta
 		jobs = [job for job in jobs if isinstance(job, dict)]
+		selected = ([job for job in jobs if FOCUS_JOB_RE.search(job.get("name") or "")][:self.max_jobs]
+			if review_only else select_jobs(jobs, self.max_jobs))
+		if review_only and not selected:
+			self._skip(f"run:{ref['repo']}:{ref['run_id']}", "unverified_run_not_failed")
+			return {"skipped": True}
 		all_complete = all((job.get("status") or "") == "completed" for job in jobs) if jobs else False
 		meta["job_table"] = [
 			{"id": job.get("id"), "name": heal.single_line(job.get("name"), 120), "conclusion": job.get("conclusion"), "failing_step": _failing_step(job)}
@@ -891,7 +929,11 @@ class Collector:
 			meta["head_branch"] = heal.single_line(jobs[0].get("head_branch"), 200)
 			meta["workflow_name"] = heal.single_line(jobs[0].get("workflow_name"), 200)
 		fetched_all = True
-		selected = select_jobs(jobs, self.max_jobs)
+		if review_only:
+			selected_names = {f"job-{job['id']}.txt" for job in selected if isinstance(job.get("id"), int)}
+			for previous_log in (self.out / run_dir).glob("job-*.txt"):
+				if previous_log.name not in selected_names:
+					previous_log.unlink()
 		if not selected:
 			self._skip(f"run:{ref['run_id']}", "no_failed_or_focus_job")
 		for job in selected:
@@ -1165,7 +1207,9 @@ class Collector:
 			if not verified:
 				self._skip(f"run:{ref['repo']}:{ref['run_id']}", f"unverified_{reason}")
 				continue
-			runs.append(self.collect_run(ref))
+			run = self.collect_run(ref, review_only=reason == "verified_review_only")
+			if not run.get("skipped"):
+				runs.append(run)
 		# Cached legacy runs contain sliced logs but not structured diagnostics.
 		for run in runs:
 			for job in run.get("jobs") or []:
@@ -1377,6 +1421,34 @@ def render_index(
 # ---------------------------------------------------------------------------
 
 
+def purge_legacy_evidence_caches(gh: GitHub, repo: str) -> dict[str, Any]:
+	"""Delete at most one page of the old PR-readable evidence caches."""
+	result: dict[str, Any] = {"listed": 0, "matched": 0, "deleted": 0, "failed": 0, "status": "list_failed"}
+	if not heal.is_valid_repo_slug(repo):
+		result["status"] = "invalid_repo"
+		return result
+	listing = gh.json(f"repos/{repo}/actions/caches?key=heal-evidence-&per_page=100")
+	if not isinstance(listing, dict) or not isinstance(listing.get("actions_caches"), list):
+		log("warn purge_list_failed")
+		return result
+	entries = listing["actions_caches"]
+	result["listed"] = len(entries)
+	result["status"] = "ok" if entries else "none"
+	for entry in entries:
+		if not isinstance(entry, dict) or not isinstance(entry.get("key"), str) or not LEGACY_CACHE_KEY_RE.fullmatch(entry["key"]):
+			continue
+		cache_id = entry.get("id")
+		if type(cache_id) is not int or cache_id <= 0:
+			continue
+		result["matched"] += 1
+		if gh.delete(f"repos/{repo}/actions/caches/{cache_id}"):
+			result["deleted"] += 1
+		else:
+			result["failed"] += 1
+	log(f"purged_legacy_cache repo={repo} listed={result['listed']} deleted={result['deleted']} failed={result['failed']}")
+	return result
+
+
 def _cmd_slice_log(args: argparse.Namespace) -> int:
 	text = Path(args.log_file).read_text(encoding="utf-8", errors="replace")
 	steps: list[dict[str, Any]] = []
@@ -1490,6 +1562,11 @@ def _cmd_eligible(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_purge_legacy_cache(args: argparse.Namespace) -> int:
+	print(json.dumps(purge_legacy_evidence_caches(GitHub(), args.repo)))
+	return 0
+
+
 def _cmd_collect(args: argparse.Namespace) -> int:
 	gh = GitHub()
 	issue = _load_json_lenient(args.issue_json) if args.issue_json else None
@@ -1557,6 +1634,10 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("eligible", help="is this issue a trusted heal issue")
 	p.add_argument("--issue-json", required=True)
 	p.set_defaults(func=_cmd_eligible)
+
+	p = sub.add_parser("purge-legacy-cache", help="delete old PR-readable evidence caches")
+	p.add_argument("--repo", required=True)
+	p.set_defaults(func=_cmd_purge_legacy_cache)
 
 	p = sub.add_parser("collect", help="collect the evidence folder for one heal issue")
 	p.add_argument("--repo", required=True)

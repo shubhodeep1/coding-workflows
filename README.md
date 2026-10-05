@@ -1049,13 +1049,25 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`hooks/pr_watch_guard.py`, §25). The former post-push PR status check-in
 > reminder, the permission-prompt logger and their helper scripts were retired
 > (see the retired-files paragraph below). Nothing to configure in the
-> consumer. The merged-PR guard distinguishes `git push origin 2>/dev/null`
-> (stderr redirection, check the current branch) from `git push origin 2 > /dev/null`
-> (push branch `2`, redirect stdout). When a `git push` source or destination
-> cannot be resolved locally (for example `git push origin HEAD:$DEST`), the
-> guard asks for confirmation instead of checking the checkout branch or tip.
+> consumer. For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
+> the merged-PR guard ignores the unresolved value and checks the session checkout.
+> If that check does not block, it asks for confirmation because the pushed
+> repository may differ. Other unresolved push directories follow the same rule.
+> When a `git push` source cannot be resolved locally (for example,
+> a shell-expanded source), the merged-PR guard asks for confirmation rather
+> than using the session checkout as a substitute for the pushed commit.
+> A push with a destination that cannot be resolved locally (such as
+> `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
 > If `--repo` and a positional remote are both supplied, the guard checks the
-> refspecs after that remote, not the remote name as a branch.
+> refspecs after that remote, not the remote name as a branch. If the local
+> remote-config lookup cannot identify the positional repository (including an
+> unconfigured path or URL), the guard asks instead of treating it as a refspec.
+
+> The merged-PR guard checks numeric push refspecs before a separate output
+> redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
+> or option leaves the destination unknown, it requests confirmation rather
+> than checking an unrelated current branch. A push with no refspec keeps the
+> existing current-branch check.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
@@ -1390,10 +1402,15 @@ through `clarify → plan → implement → review`.
   OWNER/MEMBER/COLLABORATOR or `github-actions[bot]` author) each of the three
   stages runs `workflow_failure_heal_evidence.py collect` in a trusted step
   (`GH_PAT`) before its agent and writes an evidence folder: per failing run
-  (the `runs=` marker, `**Failed run:**` lines, and occurrence comments by the
-  issue's own author; at most 3, newest) the sliced log of the failing or
+  (only the leading `runs=` marker of the issue body and of intake-authored
+  occurrence comments; at most 3, newest) the sliced log of the failing or
   review job and the diagnostic files of the `codex-review-autofix-failure-logs-*`
   / `reviewer-logs-*` artifacts (editor attempts, `.err`, `status_*`);
+  every run must match the reported repository, head SHA, workflow name and
+  branch or PR,
+  and must have failed (a successful or unfinished run must have a review job);
+  missing or mismatched workflow names are listed under `Skipped` before any
+  run jobs or artifacts are fetched;
   provenance (source PR state, the failing head against the default and
   target branches); earlier heals of the same lineage with where each fix PR
   merged and **whether that reached `main`**; the other runs on the failing
@@ -1420,12 +1437,11 @@ through `clarify → plan → implement → review`.
   commits and pushes disable repository Git hooks, including during push retries.
   Budget: 400 KB in total and 60 KB per file (reviewer outputs, then other
   artifact files, then job logs of the oldest run are dropped first); about
-  20 REST calls for the first stage and about 5 for a later one, since
-  actions/cache (`heal-evidence-<issue>-…`) carries finished runs between
-  stages and only runs not yet fetched are read; missing cached files are
-  recorded under `skipped` without re-fetching completed runs. Files removed
-  by this stage's size budget are reported separately. When fewer than 500
-  core calls remain, artifacts, the run timeline and lineage compares are skipped
+  20 REST calls per stage, since each stage collects its own evidence. The
+  evidence is not cached between stages because Actions caches are readable
+  by pull-request runs. The gate makes a best-effort purge of old
+  `heal-evidence-*` caches (one list call plus one delete per matching entry).
+  When fewer than 500 core calls remain, artifacts, the run timeline and lineage compares are skipped
   (`GET /rate_limit` is free). Every part fails open: what could not be
   fetched is listed under `skipped` and the stage carries on. Log prefix
   `WORKFLOW_HEAL_EVIDENCE` (`collected issue=… runs=… reused=… api_calls=…
@@ -1754,7 +1770,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the `lite` (one-reviewer) tier. Any file type qualifies, but a diff touching a protected path (the same list as the deterministic skip gate: `agents.md` / `CLAUDE.md` / `unattended_system_instructions.md`, `.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`, and build, dependency, config and script files; both sides of a rename count) goes to `standard` instead. `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator. |
 | `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Reviewer slug for the `lite` tier. Empty (the default) draws one reviewer from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list (from `REVIEWER_MODELS` when that list is empty or names a slug not on the panel, with a warning for the latter), seeded by the PR number: the lowest `sha256("<PR number>:<model>")` wins, so a PR keeps the same reviewer on every round and rerun and PRs spread evenly across the pool (`models_source=random_lite`). A set value pins that reviewer (`models_source=configured_lite`); unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the `standard` (four-reviewer) tier, in any folder. Larger diffs run the full panel. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | Comma-separated reviewer subset for the `standard` tier, and the pool an unpinned `lite` tier draws from. The default is the four cheapest panel models by list price; `google/gemini-3.8-flash` and `z-ai/glm-5.2`, the two most expensive, run only on the `full` panel. A set value pins those reviewers (`models_source=configured_standard`). If the value reaches the script empty (an empty repo variable falls back to this default instead), four reviewers are drawn from `REVIEWER_MODELS` the same way as `REVIEW_TIER_LITE_REVIEWER_SLUG` (`models_source=random_standard`); unknown or unavailable slugs fail open to the full live reviewer roster. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | Comma-separated reviewer subset for the `standard` tier, and the pool an unpinned `lite` tier draws from. The default is four panel models; `google/gemini-3.1-flash-lite` and `z-ai/glm-5.2` run only on the `full` panel. A set value pins those reviewers (`models_source=configured_standard`). If the value reaches the script empty (an empty repo variable falls back to this default instead), four reviewers are drawn from `REVIEWER_MODELS` the same way as `REVIEW_TIER_LITE_REVIEWER_SLUG` (`models_source=random_standard`); unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEWER_MAX_STEPS` | `120` | Hard turn cap per review-panel reviewer attempt. The reviewer watchdog kills an attempt that starts more OpenCode turns, and the slot fails without a retry or failback. Real reviewer passes peaked at 101 turns. |
 | `REVIEWER_TOOL_REPEAT_LIMIT` | `10` | Consecutive identical tool calls (same tool and same input) that end a review-panel reviewer attempt as a retryable `tool_repeat` failure (cheaper reasoning, then the reviewer's failback model). Minimum `2`. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |

@@ -53,6 +53,16 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/workflow_failure_heal_evidence.py purge-legacy-cache` + evidence gates in `.github/workflows/{clarify,plan,implement}.yml`
+
+- **Introduced in:** PR pending for issue #6247 (2026-10-04)
+- **Type:** single-use
+- **Removal trigger:** 7 days after this change merges and reaches `@stable` for every consumer, with no `heal-evidence-*` caches left.
+- **Removal preflight checks:**
+  - `gh api "repos/<repo>/actions/caches?key=heal-evidence-&per_page=1" --jq .total_count` returns `0` for this repo and every repo in `.github/ai/consumer_repos.json`.
+  - `grep -rn "actions/cache" .github/workflows | grep heal-evidence` returns nothing (no evidence cache restores or saves).
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_failure_heal_report.sh` + `scripts/workflow_failure_heal_autofix_report.sh` + `scripts/workflow_failure_heal_intake.sh` + `scripts/workflow_failure_heal.py` + `.github/workflows/workflow_failure_heal.yml` + `.github/workflows/workflow-failure-heal-intake.yml`
 
 - **Introduced in:** #4165 (2026-09-20)
@@ -212,4 +222,3 @@ Copy this block when adding a new entry:
   - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
 - **Owner:** @shubhodeep1
-

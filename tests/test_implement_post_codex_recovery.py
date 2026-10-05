@@ -2216,48 +2216,52 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 		assert "scope_violation_blocked" not in output_text
 
 
-def test_heal_evidence_scope_lock_blocks_overrides_and_allows_named_file(tmp_path: Path) -> None:
-	for name, allowlist, expected in (
-		("missing", "", "heal-evidence-no-allowlist"),
-		("outside", "other.md", "out-of-scope"),
-		("inside", "README.md", ""),
-	):
-		parent = tmp_path / name
-		parent.mkdir()
-		repo_dir, github_output, env, _ = _staged_support_fixture(parent, _STAGED_HELPER_MAIN)
+def test_heal_evidence_scope_lock_blocks_overrides_and_allows_named_file() -> None:
+	# CI runs this file as a plain script (no pytest fixtures), so use a tempdir.
+	with tempfile.TemporaryDirectory(prefix="test_heal_scope_lock_") as td:
+		tmp_path = Path(td)
+		for name, allowlist, expected in (
+			("missing", "", "heal-evidence-no-allowlist"),
+			("outside", "other.md", "out-of-scope"),
+			("inside", "README.md", ""),
+		):
+			parent = tmp_path / name
+			parent.mkdir()
+			repo_dir, github_output, env, _ = _staged_support_fixture(parent, _STAGED_HELPER_MAIN)
+			support_dir = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
+			shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_dir / "files_touched_scope_guard.py")
+			env.update({
+				"HEAL_EVIDENCE_SCOPE_LOCK": "true",
+				"HEAL_EVIDENCE_SCOPE_ALLOWLIST": allowlist,
+				"ENFORCE_FILES_TOUCHED": "false",
+				"ALLOW_OUT_OF_SCOPE_FILES": "true",
+			})
+			proc = _run_commit_helper(repo_dir, env)
+			assert (proc.returncode == 0) == (expected == ""), proc.stdout + proc.stderr
+			if expected:
+				assert f"scope_violation_blocked={expected}" in github_output.read_text()
+			else:
+				assert "did_commit=true" in github_output.read_text()
+
+
+def test_heal_evidence_preflight_blocks_missing_allowlist() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_heal_preflight_") as td:
+		repo_dir, github_output, env, _ = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
 		support_dir = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
 		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_dir / "files_touched_scope_guard.py")
 		env.update({
 			"HEAL_EVIDENCE_SCOPE_LOCK": "true",
-			"HEAL_EVIDENCE_SCOPE_ALLOWLIST": allowlist,
+			"HEAL_EVIDENCE_SCOPE_ALLOWLIST": "",
 			"ENFORCE_FILES_TOUCHED": "false",
 			"ALLOW_OUT_OF_SCOPE_FILES": "true",
 		})
-		proc = _run_commit_helper(repo_dir, env)
-		assert (proc.returncode == 0) == (expected == ""), proc.stdout + proc.stderr
-		if expected:
-			assert f"scope_violation_blocked={expected}" in github_output.read_text()
-		else:
-			assert "did_commit=true" in github_output.read_text()
-
-
-def test_heal_evidence_preflight_blocks_missing_allowlist(tmp_path: Path) -> None:
-	repo_dir, github_output, env, _ = _staged_support_fixture(tmp_path, _STAGED_HELPER_MAIN)
-	support_dir = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
-	shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_dir / "files_touched_scope_guard.py")
-	env.update({
-		"HEAL_EVIDENCE_SCOPE_LOCK": "true",
-		"HEAL_EVIDENCE_SCOPE_ALLOWLIST": "",
-		"ENFORCE_FILES_TOUCHED": "false",
-		"ALLOW_OUT_OF_SCOPE_FILES": "true",
-	})
-	script = _render_github_expressions(
-		_extract_run_script("Preflight destructive-commit guard"),
-		{"github.repository": "shubhodeep1/coding-workflows"},
-	)
-	proc = _run_shell_script(script, cwd=repo_dir, env=env)
-	assert proc.returncode != 0, proc.stdout + proc.stderr
-	assert "scope_violation_blocked=heal-evidence-no-allowlist" in github_output.read_text()
+		script = _render_github_expressions(
+			_extract_run_script("Preflight destructive-commit guard"),
+			{"github.repository": "shubhodeep1/coding-workflows"},
+		)
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0, proc.stdout + proc.stderr
+		assert "scope_violation_blocked=heal-evidence-no-allowlist" in github_output.read_text()
 
 
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
