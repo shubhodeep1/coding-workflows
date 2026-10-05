@@ -37,7 +37,7 @@ def allowed(name):
 		return False
 	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
-	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", "scripts/claude_settings.json.tmpl"):
+	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):
 		return True
 	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
 		return False
