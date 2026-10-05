@@ -219,6 +219,7 @@ changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
 changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6337-rb-judge-no-host-fallback.md
 changelog.d/6357-rb-judge-sandbox-fail-closed.md
+changelog.d/6358-poller-judges-isolated-sandbox.md
 changelog.d/6359-rb-judge-atomic-transfer.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
