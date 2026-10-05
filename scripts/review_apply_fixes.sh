@@ -1746,6 +1746,14 @@ prompt_tmp="$(mktemp)"
 {
   cat ./pre_assembled_static.txt
   echo
+  if [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+    echo "=== BEGIN UNTRUSTED PR README.MD (trimmed) ==="
+    while IFS= read -r review_readme_line || [ -n "${review_readme_line}" ]; do
+      printf 'UNTRUSTED_DATA: %s\n' "${review_readme_line}"
+    done < "${RUNTIME_DIR}/static_readme_trimmed.txt"
+    echo "=== END UNTRUSTED PR README.MD (trimmed) ==="
+    echo
+  fi
   if [ -n "${TOOL_CALL_BUDGET_JUDGE:-}" ]; then
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo

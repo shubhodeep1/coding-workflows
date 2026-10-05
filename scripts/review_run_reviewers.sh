@@ -2552,8 +2552,8 @@ fi
 # codex-cli's `turn/start` imposes a hard 1,048,576-character stdin cap on
 # the WHOLE prompt.  The assembled reviewer prompt (see
 # assemble_reviewer_prompt) is `pre_assembled_static.txt` (unattended
-# system instructions + agents.md + trimmed README — ~190KB today and
-# growing) PLUS this reviewer template, the checklist, and memory/semble
+# system instructions + agents.md) plus a separately framed README,
+# this reviewer template, the checklist, and memory/semble
 # context, all wrapped OUTSIDE the _embed_input_file budget, PLUS the
 # budgeted body.  The historical flat 800KB embed budget was sized against
 # a stale "static prefix ~10k tokens (~40KB)" assumption; once the static
@@ -2583,9 +2583,13 @@ fi
 if [ "${reviewer_static_prefix_bytes}" -le 0 ]; then
   reviewer_static_prefix_bytes=200000
 fi
-reviewer_embed_budget_bytes=$(( REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES - reviewer_static_prefix_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES ))
+reviewer_readme_context_bytes=0
+if [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+  reviewer_readme_context_bytes=$(( $(wc -c < "${RUNTIME_DIR}/static_readme_trimmed.txt") + 16 * $(wc -l < "${RUNTIME_DIR}/static_readme_trimmed.txt") + 200 ))
+fi
+reviewer_embed_budget_bytes=$(( REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES - reviewer_static_prefix_bytes - reviewer_readme_context_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES ))
 if [ "${reviewer_embed_budget_bytes}" -lt 0 ]; then
-  echo "::warning::Reviewer prompt static prefix (${reviewer_static_prefix_bytes}) plus scaffold reserve (${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES}) leaves negative embed headroom (${reviewer_embed_budget_bytes}) under codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}; forcing embed budget to 0." >&2
+  echo "::warning::Reviewer prompt static prefix (${reviewer_static_prefix_bytes}) plus framed README (${reviewer_readme_context_bytes}) and scaffold reserve (${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES}) leaves negative embed headroom (${reviewer_embed_budget_bytes}) under codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}; forcing embed budget to 0." >&2
   reviewer_embed_budget_bytes=0
 elif [ "${reviewer_embed_budget_bytes}" -lt "${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES}" ]; then
   echo "::warning::Reviewer embed budget floor ${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES} exceeds cap-safe headroom ${reviewer_embed_budget_bytes}; continuing with reduced embed budget to stay under codex stdin cap." >&2
@@ -2593,7 +2597,7 @@ fi
 if [ "${reviewer_embed_budget_bytes}" -gt "${_PROMPT_BUDGET_TOTAL_BYTES}" ]; then
   reviewer_embed_budget_bytes="${_PROMPT_BUDGET_TOTAL_BYTES}"
 fi
-echo "Reviewer prompt embed budget: ${reviewer_embed_budget_bytes} bytes (codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}, measured static prefix ${reviewer_static_prefix_bytes}, scaffold reserve ${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES})."
+echo "Reviewer prompt embed budget: ${reviewer_embed_budget_bytes} bytes (codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}, measured static prefix ${reviewer_static_prefix_bytes}, framed README ${reviewer_readme_context_bytes}, scaffold reserve ${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES})."
 _init_prompt_budget "${reviewer_embed_budget_bytes}"
 {
   cat <<__REVIEWER_PROMPT__
@@ -3150,6 +3154,14 @@ assemble_reviewer_prompt() {
   {
     cat ./pre_assembled_static.txt
     echo
+    if [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+      echo "=== BEGIN UNTRUSTED PR README.MD (trimmed) ==="
+      while IFS= read -r review_readme_line || [ -n "${review_readme_line}" ]; do
+        printf 'UNTRUSTED_DATA: %s\n' "${review_readme_line}"
+      done < "${RUNTIME_DIR}/static_readme_trimmed.txt"
+      echo "=== END UNTRUSTED PR README.MD (trimmed) ==="
+      echo
+    fi
     if [ -n "${TOOL_CALL_BUDGET_JUDGE:-}" ]; then
       echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
       echo
