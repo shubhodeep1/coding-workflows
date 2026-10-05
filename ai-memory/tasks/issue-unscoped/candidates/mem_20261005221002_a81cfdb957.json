@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrator_judges_claude_engine.py:`test_decomposer_preflight_fails_open_when_engine_helper_cannot_be_sourced` | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The test\u2019s `return 42` helper may produce different failure behavior across Bash versions because `return` is used outside a function.\n  WHY: The production guard catches sourcing failures, but the test may not exercise the same failure mode consistently.\n- scripts/review_untrusted_workspace.py:lines 58-60 in allowed() | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `allowed()` explicitly permits transfer of `.claude/hooks/pr_merge_status_guard.py` through the workspace transfer boundary.\n  WHY: This grants the sandboxed review editor write capability over a host-executed safety hook, creating a potential trust-boundary violation.\n- scripts/review_rb_judge.sh:logic block around line 21103 in the patch | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The RB judge retry loop does not trigger isolation-failure logic when a sandbox transfer fails.\n  WHY: Transfer failure sets `RB_SANDBOX_TRANSFER_FAILED`, not `RB_JUDGE_ISOLATION_FAILED`, so the isolation failure budget is not consumed and the error may not be handled or escalated.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cIt returns 75 when the role is on codex or Claude is unavailable, and the caller then runs its unchanged codex command.\u201d\n  expected_change_site: scripts/orchestrate_poll_process.sh, poller_judge_isolated and the poller judge call sites\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Codex-selected judges run through _poller_rb_judge_sandbox_attempt with the codex engine, which writes an OpenCode configuration and invokes review_untrusted_sandbox.sh; when Claude returns 75, poller_judge_isolated retries that isolated OpenCode path and does not run the prior codex commands.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrator_judges_claude_engine.py | severity=low | confidence=2\n  PROBLEM: The test\u2019s `return 42` helper may produce different failure behavior across Bash versions because `return` is used outside a function.\n  WHY: The production guard catches sourcing failures, but the test may not exercise the same failure mode consistently.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_workspace.py:lines 58-60 in allowed() | severity=critical | confidence=5\n  PROBLEM: `allowed()` explicitly permits transfer of .claude/hooks/pr_merge_status_guard.py through the workspace transfer boundary.\n  WHY: This grants the review editor (running in the sandbox) write capability for a host-executed safety hook, creating a potential trust-boundary violation where the editor could bypass or weaken security guards.\n- scripts/review_rb_judge.sh:logic block around line 21103 in the patch | severity=high | confidence=4\n  PROBLEM: The RB judge retry loop fails to correctly trigger isolation-failure logic when a sandbox transfer fails.\n  WHY: The retry loop checks RB_JUDGE_ISOLATION_FAILED to trigger isolation recovery/escalation, but sandbox transfer failure only sets RB_SANDBOX_TRANSFER_FAILED. Consequently, the isolation failure budget is not consumed, and the error may not be properly handled or escalated, potentially allowing invalid verdicts to proceed or silent retry failures.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cIt returns 75 when the role is on codex or Claude is unavailable, and the caller then runs its unchanged codex command.\u201d\nExpected change site: scripts/orchestrate_poll_process.sh, poller_judge_isolated and the poller judge call sites.\nEvidence of absence: Codex-selected judges run through _poller_rb_judge_sandbox_attempt with the codex engine, which writes an OpenCode configuration and invokes review_untrusted_sandbox.sh. When Claude returns 75, poller_judge_isolated retries that isolated OpenCode path; it does not run the prior codex commands. Thus the specified return-75 behavior and unchanged codex fallback are absent.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c1de0fd318cc28cc9c89577bc384880e0cf960e805f2f05edd2d187454403a44",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37377891568",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37377891568",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005221002_a81cfdb957",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37377891568"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T22:10:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
