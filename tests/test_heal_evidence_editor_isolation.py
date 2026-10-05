@@ -37,7 +37,8 @@ def test_git_credentials_hidden_and_restored_without_marker_secrets(tmp_path: Pa
 	assert restore.returncode == 0
 	assert "newsecret" in _git(repo, "remote", "get-url", "origin")
 	assert "newsecret" in _git(support, "remote", "get-url", "origin")
-	assert "AUTHORIZATION: basic" in _git(repo, "config", "--local", "--get", "http.https://github.com/.extraheader")
+	assert "AUTHORIZATION: basic" in _git(repo, "config", "--local", "--get", "http.https://github.com/owner/repo.git.extraheader")
+	assert subprocess.run(["git", "-C", str(repo), "config", "--local", "--get", "http.https://github.com/.extraheader"], capture_output=True).returncode != 0
 	assert not marker.read_text()
 	subprocess.run(["bash", str(HELPER), "hide", str(repo)], env=env, check=True, capture_output=True)
 	env.pop("GH_TOKEN")
@@ -73,6 +74,19 @@ def test_restore_rejects_editor_changed_push_url(tmp_path: Path) -> None:
 	_git(repo, "config", "--local", "remote.origin.pushurl", "https://github.com/attacker/repo.git")
 	proc = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
 	assert proc.returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_restore_rejects_editor_changed_push_url_rewrite(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "config", "--local", "url.https://github.com/attacker/repo.git.pushInsteadOf", "https://github.com/owner/repo.git")
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True)
+	assert result.returncode != 0
 	assert "newsecret" not in (repo / ".git" / "config").read_text()
 
 
@@ -122,7 +136,25 @@ def test_hide_fails_without_trusted_repository_identity(tmp_path: Path) -> None:
 	env.pop("GITHUB_REPOSITORY", None)
 	result = subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True)
 	assert result.returncode != 0
-	assert "oldsecret" not in (repo / ".git" / "config").read_text()
+	assert "oldsecret" in (repo / ".git" / "config").read_text()
+
+
+def test_restore_validates_every_checkout_before_injecting_any_token(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	support = repo / ".codex-workflow-src"
+	support.mkdir()
+	_git(support, "init", "-q")
+	_git(support, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/shubhodeep1/coding-workflows.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(support, "remote", "set-url", "origin", "https://github.com/attacker/repo.git")
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+	assert "newsecret" not in (support / ".git" / "config").read_text()
 
 
 def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
@@ -140,6 +172,10 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert "--format structured" in implement
 	assert "--format structured" in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert "--format structured" not in (WORKFLOWS / "clarify.yml").read_text()
+	repair = implement.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in repair
+	assert repair.count('editor_git_credentials.sh" restore') == 2
+	assert repair.index('editor_git_credentials.sh" restore') < repair.index('echo "::warning::Post-Codex repair attempt')
 
 
 def test_editor_credential_scrub_retains_model_and_thread_settings(tmp_path: Path) -> None:

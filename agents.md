@@ -212,8 +212,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the prompt points to its index
     (`=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`). Plan and implement receive
     only the bounded `diagnostics.json` structured prompt section; raw job and
-    artifact files are not linked in those prompts. Their editor launches
-    scrub GitHub/Telegram credentials and temporarily hide checkout git auth.
+    artifact files are not linked in those prompts, and free-form step names
+    and error signatures are represented only by SHA-256 fingerprints. Their
+    editor launches scrub GitHub/Telegram credentials and temporarily hide checkout git auth.
     Hiding/restoring git auth fails the editor step on error; restoration
     verifies the workflow repository identity, not merely the GitHub host.
     Heal-evidence implement runs pin the issue/plan scope allowlist before the

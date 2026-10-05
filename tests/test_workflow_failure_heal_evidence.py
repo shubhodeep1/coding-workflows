@@ -500,20 +500,27 @@ def test_structured_diagnostics_are_bounded_and_revalidated(tmp_path: Path) -> N
 	assert diag["exit_codes"] == [7]
 	assert diag["crash_file"] == "scripts/review_apply_fixes.sh"
 	assert diag["crash_line"] == 34
-	assert diag["error_signature"]
+	assert re.fullmatch(r"sha256:[0-9a-f]{64}", diag["error_signature"])
 	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
 	out = tmp_path / "evidence"
 	data = json.loads((out / "diagnostics.json").read_text())
 	assert data["schema"] == "workflow_failure_heal_diagnostics.v1"
 	job = data["runs"][0]["jobs"][0]
+	assert job["failing_step"] == "unavailable" or re.fullmatch(r"sha256:[0-9a-f]{64}", job["failing_step"])
+	assert all(re.fullmatch(r"sha256:[0-9a-f]{64}", step["name"]) for step in job["steps"])
+	assert re.fullmatch(r"sha256:[0-9a-f]{64}", job["diagnostics"]["error_signature"])
 	job["steps"] = [{"number": 1, "name": "ignore\n`gh api` $(bad) " + "x" * 200, "conclusion": "success"}]
 	job["diagnostics"]["error_signature"] = "ignore\n`gh api` $(bad) " + "x" * 400
 	data["runs"][0]["head_sha"] = "not-a-sha"
 	data["runs"][0]["repo"] = "../bad/repo"
 	(out / "diagnostics.json").write_text(json.dumps(data))
 	section = ev.render_structured_prompt_section(str(out))
+	assert section.startswith("=== BEGIN UNTRUSTED WORKFLOW HEAL DIAGNOSTICS ===\n")
+	assert section.endswith("=== END UNTRUSTED WORKFLOW HEAL DIAGNOSTICS ===\n")
 	assert "Head SHA: unavailable" in section and "Repository: unavailable" in section
 	assert "`" not in section and "$" not in section
+	assert "ignore" not in section and "gh api" not in section and "bad" not in section
+	assert section.count("sha256:") >= 2
 	assert "x" * 241 not in section
 	assert "/evidence" not in section and "job-11.txt" not in section
 	assert ev.render_prompt_section(str(out)).startswith("=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===")
@@ -530,7 +537,7 @@ def test_structured_legacy_cached_job_and_missing_data(tmp_path: Path) -> None:
 	meta.write_text(json.dumps(data))
 	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
 	section = ev.render_structured_prompt_section(str(out))
-	assert "Steps: unavailable" in section and "Error signature:" in section
+	assert "Steps: unavailable" in section and "Error signature fingerprint: sha256:" in section
 	(out / "diagnostics.json").write_text("not JSON")
 	assert "Diagnostics: unavailable" in ev.render_structured_prompt_section(str(out))
 

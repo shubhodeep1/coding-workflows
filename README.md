@@ -1402,12 +1402,14 @@ through `clarify → plan → implement → review`.
   with the index; clarify's sandbox gets a read-only copy at `/evidence`
   (`CLARIFY_EVIDENCE_DIR`, accepted only under `RUNNER_TEMP`, regular files
   only). Plan and implement receive only a bounded, revalidated structured
-  diagnostics section (from `diagnostics.json`), without raw log paths. Their
-  editor processes drop GitHub/Telegram credentials and temporarily hide git
+  diagnostics section (from `diagnostics.json`), without raw log paths.
+  Free-form step names and error signatures are represented only by SHA-256
+  fingerprints. Their editor processes drop GitHub/Telegram credentials and temporarily hide git
   checkout credentials; network access for the model remains available. The
   credential helper rejects failed hides/restores and restores auth only when
   the origin still names the workflow's original repository (or its trusted
-  support checkout) and its push URL agrees, not an editor-changed GitHub destination.
+  support checkout) and its push URL agrees, not an editor-changed GitHub destination;
+  generic GitHub extraheaders are restored scoped to the verified origin only.
   Implement runs with heal evidence also pin the issue/plan file allowlist
   before the editor and block out-of-scope commits even when the normal guard
   or per-run override is disabled. This is not a process isolation boundary:
