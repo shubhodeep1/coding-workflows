@@ -35,7 +35,8 @@
 #
 # Never fails its caller: every problem is logged and the exit code is 0.
 # API budget (CLAUDE.md §15), per run: one `user` read, the item, its
-# comments (paginated), the tracking issue's comments for a project's item,
+# comments (paginated; one fresh read before recording a `project-failed`
+# verdict), the tracking issue's comments for a project's item,
 # at most one linked-issue read, one fix-up read while waiting, the PR diff,
 # at most three run-metadata reads to bind a run cited in a pipeline-authored
 # comment to this item, then that run's log, one verdict comment (two for a
@@ -43,6 +44,8 @@
 # the planned operations (at most about six writes). A failed project marker
 # is reconciled if the item stays blocked; actuation used the item ledger.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
+# Project-failed fallback skips: project_state_unverified, project_not_failed,
+# project_state_recheck_unavailable, project_resumed.
 set -uo pipefail
 
 UNBLOCK_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,6 +87,20 @@ unblock_fetch_comments()
 		return 1
 	fi
 	jq -e 'type == "array"' "${out}" >/dev/null 2>&1 || { echo '[]' > "${out}"; return 1; }
+}
+
+# Only the pipeline login's V2 state can authorize the unlabeled project-failed
+# fallback. No V1 or untrusted-comment fallback is safe for this decision.
+unblock_trusted_project_status()
+{
+	local comments_file="$1" out_state_file="$2"
+	jq -e --arg login "${UNBLOCK_LOGIN}" '
+		if type == "array" then [.[] | select(.user.login == $login)] else empty end
+	' "${comments_file}" > "${RUNTIME_DIR}/project_state_comments.json" 2>/dev/null || return 1
+	unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract \
+		--comments-json "${RUNTIME_DIR}/project_state_comments.json" > "${out_state_file}" 2>/dev/null || return 1
+	jq -er 'if type == "object" and (.status | type == "string") then .status else empty end' \
+		"${out_state_file}" 2>/dev/null
 }
 
 unblock_tg()
@@ -344,6 +361,7 @@ PY
 unblock_main()
 {
 	local now stop_json fp verdict_name round marker_line comment_body terminal ops_file wait
+	local project_failed_substituted="false" project_status=""
 	if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
 		unblock_log "item=${ITEM:-} outcome=skip reason=disabled"
 		return 0
@@ -406,6 +424,15 @@ unblock_main()
 
 	if ! stop_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" stop --labels-json "$(cat "${RUNTIME_DIR}/labels.json")")"; then
 		if [ "${ITEM_KIND}" = "project" ]; then
+			if ! project_status="$(unblock_trusted_project_status "${RUNTIME_DIR}/item_comments.json" "${RUNTIME_DIR}/project_state_trusted.json")"; then
+				unblock_log "item=${ITEM} kind=project outcome=skip reason=project_state_unverified"
+				return 0
+			fi
+			if [ "${project_status}" != "failed" ]; then
+				unblock_log "item=${ITEM} kind=project outcome=skip reason=project_not_failed status=$(printf '%s' "${project_status}" | tr -cd 'a-z_-' | cut -c1-40)"
+				return 0
+			fi
+			project_failed_substituted="true"
 			stop_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" stop --project-failed)"
 		else
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} outcome=skip reason=not_blocked"
@@ -558,6 +585,21 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 	if [ -z "${marker_line}" ]; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=marker_failed"
 		return 0
+	fi
+	if [ "${project_failed_substituted}" = "true" ]; then
+		# The model can take minutes; never record or act on a stale verdict.
+		if ! unblock_fetch_comments "${ITEM}" "${RUNTIME_DIR}/item_comments_recheck.json"; then
+			unblock_log "item=${ITEM} kind=project outcome=skip reason=project_state_recheck_unavailable"
+			return 0
+		fi
+		if ! project_status="$(unblock_trusted_project_status "${RUNTIME_DIR}/item_comments_recheck.json" "${RUNTIME_DIR}/project_state_trusted.json")"; then
+			unblock_log "item=${ITEM} kind=project outcome=skip reason=project_state_unverified stage=recheck"
+			return 0
+		fi
+		if [ "${project_status}" != "failed" ]; then
+			unblock_log "item=${ITEM} kind=project outcome=skip reason=project_resumed status=$(printf '%s' "${project_status}" | tr -cd 'a-z_-' | cut -c1-40)"
+			return 0
+		fi
 	fi
 	comment_body="$(jq -r --arg marker "${marker_line}" '
 		"## Unblock judge: `" + .verdict + "` (round " + (.round | tostring) + ")\n\nReason: " + .reason + "\n\n"

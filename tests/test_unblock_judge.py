@@ -546,6 +546,14 @@ if endpoint.endswith("/comments?per_page=100"):
 		sys.exit(1)
 	if endpoint == "repos/o/r/issues/40/comments?per_page=100":
 		done(os.environ.get("FAKE_GH_PROJECT_COMMENTS", "[]"))
+	if endpoint == "repos/o/r/issues/7/comments?per_page=100":
+		state["item_comments_reads"] = state.get("item_comments_reads", 0) + 1
+		if state["item_comments_reads"] > 1:
+			if os.environ.get("FAKE_GH_FAIL_RECHECK"):
+				json.dump(state, open(state_path, "w"))
+				sys.exit(1)
+			if os.environ.get("FAKE_GH_ITEM_COMMENTS_RECHECK"):
+				done(os.environ["FAKE_GH_ITEM_COMMENTS_RECHECK"])
 	done(json.dumps(state["item_comments"]))
 if endpoint.startswith("repos/o/r/pulls/"):
 	number = endpoint.rsplit("/", 1)[1]
@@ -637,7 +645,10 @@ def test_unrelated_or_fork_run_is_refused(tmp_path: Path, run: dict) -> None:
 @pytest.mark.parametrize("kind", ["issue", "project"])
 def test_same_title_issue_event_does_not_bind_run(tmp_path: Path, kind: str) -> None:
 	item = ISSUE if kind == "issue" else dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
-	result, state = _judge(tmp_path, item, comments=[_comment("/actions/runs/111")],
+	comments = [_comment("/actions/runs/111")]
+	if kind == "project":
+		comments.append(_project_state_comment("failed"))
+	result, state = _judge(tmp_path, item, comments=comments,
 		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
 		FAKE_GH_RUNS=json.dumps({"111": _run_metadata(111, event="issue_comment", display_title="Add cache")}))
 	assert result.returncode == 0 and "op=run_log outcome=omitted reason=run_unbound candidates=1" in result.stdout
@@ -687,7 +698,7 @@ def test_missing_run_metadata_leaves_log_out_but_judge_continues(tmp_path: Path)
 
 def test_project_named_run_is_bound(tmp_path: Path) -> None:
 	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
-	result, state = _judge(tmp_path, project, comments=[_comment("/actions/runs/111")],
+	result, state = _judge(tmp_path, project, comments=[_comment("/actions/runs/111"), _project_state_comment("failed")],
 		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
 		FAKE_GH_RUNS=json.dumps({"111": _run_metadata(111, display_title="Validation [tracking:7]")}))
 	assert "op=run_log outcome=attached run=111" in result.stdout, result.stderr
@@ -702,6 +713,82 @@ def _project_comments_for_item(issue: int, validation_only: bool = False) -> str
 	manifest = hashlib.sha256(payload).hexdigest()
 	body = f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={manifest} -->\n{base64.b64encode(payload).decode('ascii')}\nORCHESTRATOR_STATE_V2 -->"
 	return json.dumps([_comment(body)])
+
+
+def _project_state_comment(status: str, login: str = BOT) -> dict:
+	payload = json.dumps({"status": status}).encode("utf-8")
+	manifest = hashlib.sha256(payload).hexdigest()
+	body = f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={manifest} -->\n{base64.b64encode(payload).decode('ascii')}\nORCHESTRATOR_STATE_V2 -->"
+	return _comment(body, login=login)
+
+
+def test_unlabeled_project_skips_after_resuming(tmp_path: Path) -> None:
+	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, project, comments=[_project_state_comment("in_progress")],
+		verdict={"verdict": "close", "reason": "stale"})
+	assert "reason=project_not_failed status=in_progress" in result.stdout
+	assert state["item_comments_reads"] == 1
+	assert not state["comments"] and not state["labels_added"] and not state["patched"]
+	assert not _run_calls(state, "metadata") and not _run_calls(state, "view")
+	assert not (tmp_path / "rt" / "prompt.txt").exists()
+
+
+def test_unlabeled_project_requires_trusted_v2_state(tmp_path: Path) -> None:
+	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
+	for comments, reason in (
+		([], "project_state_unverified"),
+		([_project_state_comment("failed", login="mallory")], "project_state_unverified"),
+		([_project_state_comment("in_progress"), _project_state_comment("failed", login="mallory")], "project_not_failed"),
+	):
+		result, state = _judge(tmp_path, project, comments=comments, verdict={"verdict": "close", "reason": "stale"})
+		assert f"reason={reason}" in result.stdout, result.stderr
+		assert state["item_comments_reads"] == 1 and state["comments"] == [] and state["labels_added"] == []
+
+
+def test_unlabeled_project_resumes_during_judgment(tmp_path: Path) -> None:
+	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, project, comments=[_project_state_comment("failed")],
+		FAKE_GH_ITEM_COMMENTS_RECHECK=json.dumps([_project_state_comment("failed"), _project_state_comment("in_progress")]),
+		verdict={"verdict": "close", "reason": "stale"})
+	assert "reason=project_resumed status=in_progress" in result.stdout, result.stderr
+	assert state["item_comments_reads"] == 2 and not state["comments"] and not state["labels_added"]
+	assert not state["patched"]
+
+
+def test_unlabeled_project_recheck_requires_trusted_state(tmp_path: Path) -> None:
+	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, project, comments=[_project_state_comment("failed")],
+		FAKE_GH_ITEM_COMMENTS_RECHECK=json.dumps([_project_state_comment("failed", login="mallory")]),
+		verdict={"verdict": "close", "reason": "stale"})
+	assert "reason=project_state_unverified stage=recheck" in result.stdout, result.stderr
+	assert state["item_comments_reads"] == 2 and not state["comments"] and not state["labels_added"]
+
+
+def test_unlabeled_failed_project_still_closes(tmp_path: Path) -> None:
+	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, project, comments=[_project_state_comment("failed")],
+		verdict={"verdict": "close", "reason": "still failed"})
+	assert "verdict=close round=1 outcome=acted" in result.stdout, result.stderr
+	assert state["item_comments_reads"] == 2
+	assert state["comments"][0]["body"].splitlines()[-1].startswith("<!-- ai:unblock:v1")
+	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
+
+
+def test_labeled_project_is_not_subject_to_failed_state_check(tmp_path: Path) -> None:
+	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}, {"name": "ai:validation-failed"}])
+	result, state = _judge(tmp_path, project, comments=[_project_state_comment("in_progress")],
+		verdict={"verdict": "close", "reason": "stop remains"})
+	assert "verdict=close round=1 outcome=acted" in result.stdout, result.stderr
+	assert state["item_comments_reads"] == 1
+	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
+
+
+def test_unlabeled_project_recheck_failure_skips_actuation(tmp_path: Path) -> None:
+	project = dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, project, comments=[_project_state_comment("failed")],
+		FAKE_GH_FAIL_RECHECK="1", verdict={"verdict": "close", "reason": "stale"})
+	assert "reason=project_state_recheck_unavailable" in result.stdout, result.stderr
+	assert state["item_comments_reads"] == 2 and not state["comments"] and not state["labels_added"]
 
 
 def test_project_membership_fixture_uses_valid_state(tmp_path: Path) -> None:
