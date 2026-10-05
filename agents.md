@@ -504,8 +504,9 @@ a new value, add it to the appropriate overrides file with a
   Other pre-review `python3 -c`, `-m` and stdin calls set `PYTHONSAFEPATH=1`
   per call, including consolidator, reviewer and host-side editor helpers;
   reviewer Python imports require absolute trusted support directories rather
-  than falling back to the PR checkout. Script-file imports and the checkout's
-  Git auth are unchanged.
+  than falling back to the PR checkout. The host-side partial-finalize timeout
+  extractor also uses safe-path when reading the workflow YAML. Script-file
+  imports and the checkout's Git auth are unchanged.
 - `orchestrate.yml` and `orchestrate_clarify_respond.yml` also assemble static
   context on the host. They reject symlinked required instructions and pipeline
   files before writing prompt output, and omit symlinked local agents files,

@@ -221,3 +221,32 @@ def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 	for match in re.finditer(r"\bpython3\s+(?:-c|-m|-)\s", pre_review):
 		line = pre_review[pre_review.rfind("\n", 0, match.start()) + 1:match.start()]
 		assert "PYTHONSAFEPATH=1" in line, line
+	assert "PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml;" in workflow
+
+
+def test_partial_finalize_timeout_probe_never_imports_checkout_yaml(tmp_path: Path) -> None:
+	checkout = tmp_path / "pr"
+	checkout.mkdir()
+	marker = tmp_path / "poisoned"
+	_poison_module(checkout / "yaml.py", marker)
+	trusted_modules = tmp_path / "trusted"
+	trusted_modules.mkdir()
+	(trusted_modules / "yaml.py").write_text(
+		'def safe_load(_text):\n'
+		'\treturn {"jobs": {"codex-agent": {"timeout-minutes": 240, "steps": '
+		'[{"name": "Run Codex resolver, validate, stage, commit", "timeout-minutes": 170}]}}}\n',
+		encoding="utf-8",
+	)
+	workflow_path = ROOT / ".github/workflows/review_autofix.yml"
+	timeout_line = next(line for line in workflow_path.read_text(encoding="utf-8").splitlines()
+		if "python3 -c 'from pathlib import Path; import sys, yaml;" in line)
+	timeout_command = timeout_line.split("< <(", 1)[1].rsplit("); then", 1)[0]
+	child_env = os.environ.copy()
+	for inherited_name in ("PYTHONSAFEPATH", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		child_env.pop(inherited_name, None)
+	child_env.update({"PYTHONPATH": str(trusted_modules), "workflow_timeout_source_path": str(workflow_path), "PYTHONDONTWRITEBYTECODE": "1"})
+	result = subprocess.run(["bash", "-c", timeout_command], cwd=checkout, env=child_env,
+		capture_output=True, text=True, timeout=15, check=False)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "240 170"
+	assert not marker.exists()
