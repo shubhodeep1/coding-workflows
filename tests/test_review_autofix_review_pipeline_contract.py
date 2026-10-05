@@ -3401,7 +3401,7 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 
 	def run_case(pages: list[list[dict] | dict[str, object]], *, timeout: int = 300,
 		lookup: frozenset[str] | None = frozenset({"CI"}),
-		self_id: str = "") -> tuple[str, str, list[int], int]:
+		self_id: str = "", first_poll_delay: int = 0) -> tuple[str, str, list[int], int]:
 		clock = [base_time]
 		sleeps: list[int] = []
 		reads = [0]
@@ -3410,6 +3410,8 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 		def read(**_kwargs: object) -> subprocess.CompletedProcess[str]:
 			index = min(reads[0], len(pages) - 1)
 			reads[0] += 1
+			if reads[0] == 1:
+				clock[0] += first_poll_delay
 			runs = pages[index]
 			page = runs if isinstance(runs, dict) else {"total_count": len(runs), "check_runs": runs}
 			return subprocess.CompletedProcess(["gh"], 0, json.dumps([page]), "")
@@ -3420,6 +3422,7 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 
 		def protected(*_args: object) -> frozenset[str] | None:
 			lookups[0] += 1
+			assert _args[3] == min(60, max(0, base_time + timeout - clock[0]))
 			return lookup
 
 		with tempfile.TemporaryDirectory() as td:
@@ -3457,6 +3460,8 @@ def test_check_runs_wait_budgets_and_late_unknown() -> None:
 
 	context, log, sleeps, lookups = run_case([[required]], lookup=None)
 	assert "reason=no_required_set" in log and "budget_secs=300" in log and sum(sleeps) == 300 and lookups == 1
+	context, log, sleeps, lookups = run_case([[required]], lookup=None, first_poll_delay=290)
+	assert "collection_status: timeout" in context and sum(sleeps) == 10 and lookups == 1
 	context, log, sleeps, lookups = run_case([[required]], timeout=30)
 	assert "budget_secs=30" in log and sum(sleeps) == 30 and lookups == 0
 	context, log, sleeps, lookups = run_case([[required]], timeout=60)
@@ -3512,6 +3517,14 @@ def test_check_runs_protection_lookup_and_zero_wait() -> None:
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
+	with mock.patch.object(module.subprocess, "Popen") as launch, mock.patch.object(module.os, "killpg") as kill_group:
+		child = launch.return_value.__enter__.return_value
+		child.pid = 333
+		child.communicate.side_effect = [subprocess.TimeoutExpired("bash", 0.01), ("", "")]
+		assert module._lookup_protected_required_names("owner/repo", "main", CHECK_RUNS_HELPER.parent, 0.01) is None
+		assert child.communicate.call_args_list[0].kwargs["timeout"] == 0.01
+		kill_group.assert_called_once_with(333, module.signal.SIGKILL)
+	assert module._lookup_protected_required_names("owner/repo", "main", CHECK_RUNS_HELPER.parent, 0) is None
 	with tempfile.TemporaryDirectory() as td:
 		bin_dir = Path(td) / "bin"
 		bin_dir.mkdir()

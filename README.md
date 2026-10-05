@@ -77,6 +77,8 @@ configured wait budget, then reports `collection_status: api_error` rather than
 `ready` if they never recover. A wait budget of 60 seconds or less skips the
 branch-protection lookup because it cannot shorten that budget.
 Complete paginated listings of 1,000 or more check-runs remain valid.
+The optional protection lookup is bounded to 60 seconds or the remaining
+configured wait, whichever is shorter; a timeout uses the legacy wait budget.
 
 | Variable | Required | Default | Used By | Description |
 |---|---|---|---|---|

@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -206,25 +207,41 @@ def _load_base_ref(payload_path: Path) -> str:
 	return base_ref
 
 
-def _lookup_protected_required_names(repository: str, base_ref: str, script_dir: Path) -> frozenset[str] | None:
-	if not base_ref or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+def _lookup_protected_required_names(
+	repository: str, base_ref: str, script_dir: Path, timeout_secs: float = KNOWN_REQUIRED_WAIT_CAP_SECS,
+) -> frozenset[str] | None:
+	if timeout_secs <= 0 or not base_ref or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
 		return None
 	# The PR payload contains no branch-protection data, and the existing
 	# check-runs listing has no required flag. One candidate-only protection
 	# read (plus gh_retry retries) is necessary; never infer from defaults.
 	env = os.environ.copy()
 	env.update({"PR_CHECKS_REPOSITORY": repository, "BASE_REF": base_ref})
-	proc = subprocess.run(
-		["bash", "-c", 'source "$1" && source "$2" && _pr_required_check_names_from_protection "$BASE_REF"',
-		"bash", str(script_dir / "gh_helpers.sh"), str(script_dir / "pr_checks_lib.sh")],
-		check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
-	)
-	if proc.returncode != 0 or not proc.stdout.strip():
+	try:
+		with subprocess.Popen(
+			["bash", "-c", 'source "$1" && source "$2" && _pr_required_check_names_from_protection "$BASE_REF"',
+			"bash", str(script_dir / "gh_helpers.sh"), str(script_dir / "pr_checks_lib.sh")],
+			stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+			env=env, start_new_session=True,
+		) as proc:
+			try:
+				stdout, _ = proc.communicate(timeout=timeout_secs)
+			except subprocess.TimeoutExpired:
+				# Kill gh_retry's children too; otherwise they keep the captured pipes open.
+				try:
+					os.killpg(proc.pid, signal.SIGKILL)
+				except ProcessLookupError:
+					pass
+				proc.communicate()
+				return None
+			if proc.returncode != 0 or not stdout.strip():
+				return None
+	except OSError:
 		return None
-	names = proc.stdout.splitlines()
+	names = stdout.splitlines()
 	# A line separator inside a protection context must not manufacture a
 	# different required name when the shell's newline format is decoded.
-	if any(not name for name in names) or proc.stdout != "\n".join(names) + "\n":
+	if any(not name for name in names) or stdout != "\n".join(names) + "\n":
 		return None
 	return frozenset(names)
 
@@ -661,6 +678,7 @@ def main() -> int:
 				lookup_attempted = True
 				required_names = _lookup_protected_required_names(
 					repository, base_ref, Path(__file__).resolve().parent,
+					min(KNOWN_REQUIRED_WAIT_CAP_SECS, max(0, start + wait_timeout - time.time())),
 				)
 				eligible, wait_reason, wait_pending = _short_wait_eligibility(
 					raw_text, head_sha, self_run_id, required_names, time.time(),
