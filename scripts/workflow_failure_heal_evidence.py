@@ -555,6 +555,7 @@ def _occurrence_context(text: str) -> dict[str, str]:
 		"source_number": number,
 		"head_sha": sha if heal.is_valid_sha(sha) else "",
 		"head_branch": _body_field(text, "Failed on branch"),
+		"workflow_name": _body_field(text, "Failed workflow"),
 	}
 
 
@@ -573,6 +574,7 @@ def heal_context(issue: dict[str, Any]) -> dict[str, Any]:
 		"source_number": source_number if source_number.isdigit() else "",
 		"head_sha": head_sha if heal.is_valid_sha(head_sha) else "",
 		"head_branch": _body_field(body, "Failed on branch"),
+		"workflow_name": _body_field(body, "Failed workflow"),
 		"base_branch": _body_field(body, "Pull request base branch"),
 		"target_branch": _body_field(body, "Target branch"),
 		"failure_reason": _body_field(body, "Failure reason"),
@@ -604,7 +606,7 @@ def trusted_run_refs(
 	texts: list[tuple[str, str, dict[str, str]]] = []
 	ctx = heal_context(issue)
 	if include_body:
-		body_ctx = {key: ctx.get(key, "") for key in ("source_repo", "source_number", "head_sha", "head_branch")}
+		body_ctx = {key: ctx.get(key, "") for key in ("source_repo", "source_number", "head_sha", "head_branch", "workflow_name")}
 		texts.extend((url, "body", body_ctx) for url in _runs_marker_urls(ctx.get("runs_marker") or ""))
 	for comment in comments or []:
 		if not isinstance(comment, dict):
@@ -856,7 +858,8 @@ class Collector:
 		sha = ref["head_sha"] if heal.is_valid_sha(ref["head_sha"]) else ""
 		branch = ref["head_branch"] if heal.is_valid_branch(ref["head_branch"]) else ""
 		pr_number = int(ref["source_number"]) if ref["source_number"].isdigit() and len(ref["source_number"]) <= 12 and int(ref["source_number"]) > 0 else None
-		if not sha or (not branch and pr_number is None):
+		workflow_name = ref.get("workflow_name", "")
+		if not sha or not workflow_name or (not branch and pr_number is None):
 			return False, "run_no_verified_context"
 		run = self._timeline_index.get(ref["run_id"])
 		if run is None:
@@ -874,6 +877,9 @@ class Collector:
 		head_matches = sha and isinstance(run.get("head_sha"), str) and run["head_sha"].lower() == sha
 		branch_matches = branch and run.get("head_branch") == branch
 		if head_matches and (branch_matches or pr_linked or pr_named):
+			# A dispatch run-name can append the PR token to the workflow name.
+			if run.get("name") not in (workflow_name, f"{workflow_name} [pr:{pr_number}]" if pr_number is not None else workflow_name):
+				return False, "run_workflow_mismatch"
 			if run.get("conclusion") in FAILED_CONCLUSIONS:
 				return True, "verified"
 			if (run.get("status") == "completed" and run.get("conclusion") == "success") or (isinstance(run.get("status"), str) and run["status"] and run["status"] != "completed" and run.get("conclusion") is None):

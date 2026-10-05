@@ -1394,8 +1394,11 @@ through `clarify → plan → implement → review`.
   occurrence comments; at most 3, newest) the sliced log of the failing or
   review job and the diagnostic files of the `codex-review-autofix-failure-logs-*`
   / `reviewer-logs-*` artifacts (editor attempts, `.err`, `status_*`);
-  every run must match the reported repository, head SHA and branch or PR,
+  every run must match the reported repository, head SHA, workflow name and
+  branch or PR,
   and must have failed (a successful or unfinished run must have a review job);
+  missing or mismatched workflow names are listed under `Skipped` before any
+  run jobs or artifacts are fetched;
   provenance (source PR state, the failing head against the default and
   target branches); earlier heals of the same lineage with where each fix PR
   merged and **whether that reached `main`**; the other runs on the failing

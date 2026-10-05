@@ -154,6 +154,7 @@ def _issue(**overrides):
 		"- **Target branch:** `main`\n"
 		f"- **Head SHA:** `{HEAD_SHA}`\n"
 		"- **Failed on branch:** `ai/issue-5144`\n"
+		"- **Failed workflow:** `Internal: AI Review & Autofix` (conclusion: `success`)\n"
 		"- **Failure reason:** `editor_changes_lost`\n"
 		f"- **Heal intake run:** https://github.com/{REPO}/actions/runs/999\n"
 	)
@@ -204,7 +205,7 @@ def test_intake_occurrence_marker_round_trips_into_trusted_refs() -> None:
 	comment = _occurrence(222)
 	comment["body"] = ev.heal.compose_occurrence_comment({
 		"run_refs": [{"repo": REPO, "run_id": "222", "url": f"https://github.com/{REPO}/actions/runs/222"}],
-		"source_repo": REPO, "issue_number": 6133, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144",
+		"source_repo": REPO, "issue_number": 6133, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "workflow_name": "Internal: AI Review & Autofix",
 	}, intake_run_url="u")
 	assert comment["body"].splitlines()[1] == f"<!-- workflow-failure-heal:runs={REPO}:222 -->"
 	refs = ev.trusted_run_refs(_issue(), [comment], allowed_repos=[REPO], limit=3, verified_comment_ids={222})
@@ -275,7 +276,7 @@ def test_other_repository_run_is_recorded_without_fetch(tmp_path: Path, monkeypa
 	comment["body"] = comment["body"].replace(REPO, third_repo)
 	fake = FakeGh()
 	fake.routes[f"repos/acme/registered/actions/runs?head_sha={HEAD_SHA}&per_page=30"] = {"workflow_runs": [
-		{"id": 111, "repository": {"full_name": "acme/registered"}, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "status": "completed", "conclusion": "success"},
+		{"id": 111, "name": "Internal: AI Review & Autofix", "repository": {"full_name": "acme/registered"}, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "status": "completed", "conclusion": "success"},
 	]}
 	fake.routes["repos/acme/registered/actions/runs/111/jobs?per_page=100"] = fake.routes[f"repos/{REPO}/actions/runs/111/jobs?per_page=100"]
 	fake.routes["repos/acme/registered/actions/jobs/11/logs"] = _review_log()
@@ -297,7 +298,7 @@ def test_registered_consumer_source_remains_readable(tmp_path: Path, monkeypatch
 	fake.routes["repos/acme/registered/actions/jobs/11/logs"] = _review_log()
 	fake.routes["repos/acme/registered/actions/runs/111/artifacts?per_page=100"] = {"artifacts": []}
 	fake.routes[f"repos/acme/registered/actions/runs?head_sha={HEAD_SHA}&per_page=30"] = {"workflow_runs": [
-		{"id": 111, "repository": {"full_name": "acme/registered"}, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "status": "completed", "conclusion": "success"},
+		{"id": 111, "name": "Internal: AI Review & Autofix", "repository": {"full_name": "acme/registered"}, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "status": "completed", "conclusion": "success"},
 	]}
 	_collector(tmp_path, fake).collect(issue, [], issue_repo=REPO)
 	assert "repos/acme/registered/actions/jobs/11/logs" in fake.paths
@@ -308,6 +309,7 @@ def test_heal_context_reads_the_intake_fields() -> None:
 	assert ctx["source_repo"] == REPO and ctx["source_number"] == "6133"
 	assert ctx["head_sha"] == HEAD_SHA and ctx["target_branch"] == "main"
 	assert ctx["failure_reason"] == "editor_changes_lost"
+	assert ctx["workflow_name"] == "Internal: AI Review & Autofix"
 
 
 def test_select_jobs_falls_back_to_the_review_job_when_nothing_failed() -> None:
@@ -441,10 +443,10 @@ class FakeGh:
 			"user": {"login": "healer"},
 			"rate_limit": {"resources": {"core": {"limit": 5000, "remaining": remaining, "reset": 1}, "graphql": {"limit": 5000, "remaining": 4999, "reset": 1}}},
 			"provenance": {"data": {"issue": {"issue": {"author": {"login": "healer"}, "lastEditedAt": None, "editor": None, "userContentEdits": {"totalCount": 0, "nodes": []}}}, "comments": []}},
-			f"repos/{REPO}/actions/runs/111": {"id": 111, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "repository": {"full_name": REPO}, "pull_requests": [{"number": 6133}], "status": "completed", "conclusion": "success"},
+			f"repos/{REPO}/actions/runs/111": {"id": 111, "name": "Internal: AI Review & Autofix", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "repository": {"full_name": REPO}, "pull_requests": [{"number": 6133}], "status": "completed", "conclusion": "success"},
 			f"repos/{REPO}/actions/runs/111/jobs?per_page=100": {"jobs": jobs},
 			f"repos/{REPO}/actions/runs/222/jobs?per_page=100": {"jobs": jobs},
-			f"repos/{REPO}/actions/runs/222": {"id": 222, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "repository": {"full_name": REPO}, "pull_requests": [{"number": 6133}], "status": "completed", "conclusion": "success"},
+			f"repos/{REPO}/actions/runs/222": {"id": 222, "name": "Internal: AI Review & Autofix", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "repository": {"full_name": REPO}, "pull_requests": [{"number": 6133}], "status": "completed", "conclusion": "success"},
 			f"repos/{REPO}/actions/jobs/11/logs": _review_log(),
 			f"repos/{REPO}/actions/runs/111/artifacts?per_page=100": {"artifacts": [
 				{"id": 501, "name": "codex-review-autofix-failure-logs-111-1", "expired": False, "size_in_bytes": 100},
@@ -500,7 +502,7 @@ def _collector(tmp_path: Path, fake: FakeGh, **kwargs):
 
 
 def _occurrence(run_id: int) -> dict:
-	return {"id": run_id, "node_id": f"IC_{run_id}", "user": {"login": "healer"}, "body": f"<!-- workflow-failure-heal:occurrence -->\n<!-- workflow-failure-heal:runs={REPO}:{run_id} -->\n- **Source pull request:** https://github.com/{REPO}/pull/6133 ({REPO}#6133)\n- **Failed on branch:** `ai/issue-5144`\n- **Head SHA:** `{HEAD_SHA}`\n- **Failed run:** https://github.com/{REPO}/actions/runs/{run_id}\n"}
+	return {"id": run_id, "node_id": f"IC_{run_id}", "user": {"login": "healer"}, "body": f"<!-- workflow-failure-heal:occurrence -->\n<!-- workflow-failure-heal:runs={REPO}:{run_id} -->\n- **Source pull request:** https://github.com/{REPO}/pull/6133 ({REPO}#6133)\n- **Failed on branch:** `ai/issue-5144`\n- **Head SHA:** `{HEAD_SHA}`\n- **Failed workflow:** `Internal: AI Review & Autofix` (conclusion: `success`)\n- **Failed run:** https://github.com/{REPO}/actions/runs/{run_id}\n"}
 
 
 def test_collect_builds_the_bundle_and_index(tmp_path: Path) -> None:
@@ -744,7 +746,7 @@ def test_unrelated_consumer_run_skipped_but_valid_one_collected(tmp_path: Path, 
 	issue = _issue(body=_issue()["body"].replace(REPO, "acme/registered"))
 	fake = FakeGh()
 	fake.routes[f"repos/acme/registered/actions/runs?head_sha={HEAD_SHA}&per_page=30"] = {"workflow_runs": [
-		{"id": 111, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "repository": {"full_name": "acme/registered"}, "status": "completed", "conclusion": "success"},
+		{"id": 111, "name": "Internal: AI Review & Autofix", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "repository": {"full_name": "acme/registered"}, "status": "completed", "conclusion": "success"},
 	]}
 	fake.routes["repos/acme/registered/actions/runs/222"] = {"id": 222, "head_sha": MERGE_SHA, "head_branch": "other", "pull_requests": [], "repository": {"full_name": "acme/registered"}}
 	fake.routes["repos/acme/registered/actions/runs/111/jobs?per_page=100"] = fake.routes[f"repos/{REPO}/actions/runs/111/jobs?per_page=100"]
@@ -762,7 +764,7 @@ def test_unrelated_consumer_run_skipped_but_valid_one_collected(tmp_path: Path, 
 def test_default_branch_review_run_is_accepted_with_pr_token(tmp_path: Path, monkeypatch) -> None:
 	monkeypatch.setenv("WORKFLOW_HEAL_CONSUMER_REGISTRY", str(tmp_path / "consumers.json"))
 	(tmp_path / "consumers.json").write_text(json.dumps(["acme/registered"]))
-	issue = _issue(body=_issue()["body"].replace(REPO, "acme/registered"))
+	issue = _issue(body=_issue()["body"].replace(REPO, "acme/registered").replace("Internal: AI Review & Autofix", "AI Review"))
 	fake = FakeGh()
 	fake.routes["repos/acme/registered/actions/runs/111"] = {
 		"id": 111, "head_sha": HEAD_SHA, "head_branch": "main", "name": "AI Review [pr:6133]", "repository": {"full_name": "acme/registered"}, "status": "completed", "conclusion": "success",
@@ -806,9 +808,9 @@ def test_pr_linked_run_requires_reported_head(tmp_path: Path) -> None:
 	fake = FakeGh()
 	fake.routes["repos/acme/registered/actions/runs/111"] = {
 		"id": 111, "head_sha": MERGE_SHA, "head_branch": "ai/issue-5144",
-		"pull_requests": [{"number": 6133}], "repository": {"full_name": "acme/registered"}, "status": "completed", "conclusion": "failure",
+		"name": "Internal: AI Review & Autofix", "pull_requests": [{"number": 6133}], "repository": {"full_name": "acme/registered"}, "status": "completed", "conclusion": "failure",
 	}
-	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"}
+	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "workflow_name": "Internal: AI Review & Autofix"}
 	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_head_mismatch")
 	fake.routes["repos/acme/registered/actions/runs/111"]["head_sha"] = HEAD_SHA
 	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (True, "verified")
@@ -836,15 +838,57 @@ def test_same_repo_unrelated_run_is_rejected_before_jobs(tmp_path: Path) -> None
 
 def test_same_repo_matching_head_and_branch_uses_timeline_or_get(tmp_path: Path) -> None:
 	fake = FakeGh()
-	ref = {"repo": REPO, "run_id": "111", "source_repo": REPO, "source_number": "", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"}
+	ref = {"repo": REPO, "run_id": "111", "source_repo": REPO, "source_number": "", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "workflow_name": "Internal: AI Review & Autofix"}
 	collector = _collector(tmp_path, fake)
 	fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"]["workflow_runs"].pop()
+	fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"]["workflow_runs"][0]["name"] = "Internal: AI Review & Autofix"
 	collector.timeline({"source_repo": REPO, "head_sha": HEAD_SHA})
 	assert collector._verify_run(ref, REPO) == (True, "verified_review_only")
 	assert f"repos/{REPO}/actions/runs/111" not in fake.paths
 	ref["run_id"] = "222"
 	assert collector._verify_run(ref, REPO) == (True, "verified_review_only")
 	assert f"repos/{REPO}/actions/runs/222" in fake.paths
+
+
+@pytest.mark.parametrize("timeline_hit", [True, False])
+@pytest.mark.parametrize("run_workflow", ["Unrelated CI [pr:6133]", None])
+def test_wrong_workflow_skips_same_head_run_and_pruned_cache(tmp_path: Path, timeline_hit: bool, run_workflow: str | None) -> None:
+	fake = FakeGh()
+	wrong_run = fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"]["workflow_runs"][0]
+	wrong_run["name"] = run_workflow
+	if not timeline_hit:
+		fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"] = {"workflow_runs": []}
+		fake.routes[f"repos/{REPO}/actions/runs/111"] = wrong_run
+	stale = tmp_path / "evidence/runs/acme__coding-workflows__111"
+	stale.mkdir(parents=True)
+	(stale / "meta.json").write_text('{"complete": true}')
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:111", "reason": "unverified_run_workflow_mismatch"} in manifest["skipped"]
+	assert "unverified_run_workflow_mismatch" in (tmp_path / "evidence/INDEX.md").read_text()
+	assert not stale.exists()
+	assert not any("/actions/jobs/" in path or "/actions/runs/111/jobs" in path or "/actions/runs/111/artifacts" in path for path in fake.paths)
+	assert (f"repos/{REPO}/actions/runs/111" in fake.paths) is not timeline_hit
+
+
+def test_reported_workflow_is_required_before_run_lookup(tmp_path: Path) -> None:
+	issue = _issue(body=_issue()["body"].replace("- **Failed workflow:** `Internal: AI Review & Autofix` (conclusion: `success`)\n", ""))
+	fake = FakeGh()
+	manifest = _collector(tmp_path, fake).collect(issue, [], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:111", "reason": "unverified_run_no_verified_context"} in manifest["skipped"]
+	assert f"repos/{REPO}/actions/runs/111" not in fake.paths
+	assert f"repos/{REPO}/actions/runs/111/jobs?per_page=100" not in fake.paths
+
+
+def test_occurrence_run_uses_its_own_reported_workflow(tmp_path: Path) -> None:
+	fake = FakeGh()
+	comment = _occurrence(222)
+	comment["body"] = comment["body"].replace("Internal: AI Review & Autofix", "Other Workflow")
+	fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"]["workflow_runs"][1]["name"] = "Other Workflow"
+	refs = ev.trusted_run_refs(_issue(), [comment], allowed_repos=[REPO], limit=3, verified_comment_ids={222})
+	assert [ref["workflow_name"] for ref in refs] == ["Internal: AI Review & Autofix", "Other Workflow"]
+	manifest = _collector(tmp_path, fake).collect(_issue(), [comment], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:222", "reason": "unverified_run_workflow_mismatch"} not in manifest["skipped"]
+	assert f"repos/{REPO}/actions/runs/222/jobs?per_page=100" in fake.paths
 
 
 def test_same_repo_run_rejected_when_source_is_another_repo(tmp_path: Path, monkeypatch) -> None:
@@ -875,7 +919,7 @@ def test_escalation_issue_without_head_skips_same_repo_runs(tmp_path: Path) -> N
 
 def test_same_repo_run_metadata_and_conclusion_are_required(tmp_path: Path) -> None:
 	fake = FakeGh()
-	ref = {"repo": REPO, "run_id": "111", "source_repo": REPO, "source_number": "6133", "head_sha": "", "head_branch": "ai/issue-5144"}
+	ref = {"repo": REPO, "run_id": "111", "source_repo": REPO, "source_number": "6133", "head_sha": "", "head_branch": "ai/issue-5144", "workflow_name": "Internal: AI Review & Autofix"}
 	collector = _collector(tmp_path, fake)
 	assert collector._verify_run(ref, REPO) == (False, "run_no_verified_context")
 	assert fake.paths == []
@@ -901,10 +945,10 @@ def test_same_repo_run_metadata_and_conclusion_are_required(tmp_path: Path) -> N
 
 
 def test_release_run_with_matching_head_and_branch_is_collected(tmp_path: Path) -> None:
-	issue = _issue(body=_issue()["body"].replace(f"source={REPO}#6133", f"source={REPO}#run").replace("ai/issue-5144", "stable"))
+	issue = _issue(body=_issue()["body"].replace(f"source={REPO}#6133", f"source={REPO}#run").replace("ai/issue-5144", "stable").replace("Internal: AI Review & Autofix", "Promote main to stable"))
 	fake = FakeGh()
 	fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"] = {"workflow_runs": [
-		{"id": 111, "head_sha": HEAD_SHA, "head_branch": "stable", "repository": {"full_name": REPO}, "status": "completed", "conclusion": "failure"},
+		{"id": 111, "name": "Promote main to stable", "head_sha": HEAD_SHA, "head_branch": "stable", "repository": {"full_name": REPO}, "status": "completed", "conclusion": "failure"},
 	]}
 	_collector(tmp_path, fake).collect(issue, [], issue_repo=REPO)
 	assert f"repos/{REPO}/actions/runs/111/jobs?per_page=100" in fake.paths
@@ -1010,7 +1054,7 @@ def test_review_only_run_rejects_orphaned_cached_non_review_log(tmp_path: Path) 
 
 
 def test_same_repo_release_run_with_branch_and_failed_conclusion(tmp_path: Path) -> None:
-	issue = _issue(body=_issue()["body"].replace(f"{REPO}#6133", f"{REPO}#run"))
+	issue = _issue(body=_issue()["body"].replace(f"{REPO}#6133", f"{REPO}#run").replace("Internal: AI Review & Autofix", "Promote main to stable"))
 	fake = FakeGh()
 	run = fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"]["workflow_runs"][0]
 	run.update({"name": "Promote main to stable", "conclusion": "failure", "pull_requests": []})
@@ -1038,7 +1082,7 @@ def test_cross_repo_run_without_repository_metadata_is_rejected(tmp_path: Path) 
 	fake.routes["repos/acme/registered/actions/runs/111"] = {
 		"id": 111, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144",
 	}
-	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"}
+	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "workflow_name": "Internal: AI Review & Autofix"}
 	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_repo_mismatch")
 
 
@@ -1047,7 +1091,7 @@ def test_run_metadata_rejects_different_repository(tmp_path: Path) -> None:
 	fake.routes["repos/acme/registered/actions/runs/111"] = {
 		"id": 111, "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "repository": {"full_name": "other/repo"},
 	}
-	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144"}
+	ref = {"repo": "acme/registered", "run_id": "111", "source_repo": "acme/registered", "source_number": "6133", "head_sha": HEAD_SHA, "head_branch": "ai/issue-5144", "workflow_name": "Internal: AI Review & Autofix"}
 	assert _collector(tmp_path, fake)._verify_run(ref, REPO) == (False, "run_repo_mismatch")
 
 

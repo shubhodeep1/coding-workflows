@@ -216,7 +216,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     registry data skips them. Run references also require intake-account-only
     authorship and edit history for the heal issue and occurrence comments;
     every run, same-repo included, requires matching API metadata (repo,
-    reported head SHA, and PR, named PR or head branch) and a failed
+    reported head SHA, workflow name, and PR, named PR or head branch) and a failed
     conclusion (a successful or unfinished run only counts as its review
     job). Unverifiable runs are skipped before log/artifact reads, including
     when previously collected; rejected intake-origin
