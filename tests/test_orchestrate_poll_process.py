@@ -9772,20 +9772,20 @@ def test_review_blocked_fix_scope_accepts_pr_file():
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED" in agents_text
 
 
-@pytest.mark.parametrize("pr_overrides, reason", [
-	({"headRepoFullName": "attacker/repo", "headRefName": "main", "headRefFromApi": "main", "body": "Refs #10"}, "cross_repository"),
-	({"headRepoFullName": None}, "head_repo_unavailable"),
-	({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
-	({"headSha": "not-a-sha"}, "head_sha_missing"),
-])
-def test_review_blocked_fix_target_rejects_untrusted_pr(pr_overrides, reason):
-	result = _review_blocked_fix_scope_case(
-		touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_overrides=pr_overrides,
-	)
-	assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
-	assert result.get("git_push_calls", []) == []
-	assert result.get("review_blocked_fix_commit_calls", []) == []
-	assert "Judge decision for #10" not in result["stdout"]
+def test_review_blocked_fix_target_rejects_untrusted_pr():
+	for pr_overrides, reason in (
+		({"headRepoFullName": "attacker/repo", "headRefName": "main", "headRefFromApi": "main", "body": "Refs #10"}, "cross_repository"),
+		({"headRepoFullName": None}, "head_repo_unavailable"),
+		({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
+		({"headSha": "not-a-sha"}, "head_sha_missing"),
+	):
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_overrides=pr_overrides,
+		)
+		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert "Judge decision for #10" not in result["stdout"]
 
 
 def test_review_blocked_fix_target_rejects_failed_fetch_without_local_fallback():
@@ -9824,61 +9824,61 @@ def test_review_blocked_fix_target_rejects_ref_change_before_checkout():
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 
 
-@pytest.mark.parametrize("changed_pr, reason", [
-	({"headSha": "__integration_head__"}, "head_moved"),
-	({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
-	({"headRefFromApi": "feature/other"}, "head_ref_changed"),
-])
-def test_review_blocked_fix_target_rejects_head_move_during_judge(changed_pr, reason):
-	open_pr = {
-		"number": 901, "state": "open", "merged": False,
-		"baseRefName": "main", "headRefName": "ai/issue-10",
-		"headRefFromApi": "ai/issue-10", "headSha": "__default_head__",
-		"mergeable": True, "mergeable_state": "clean", "body": "Body",
-	}
-	result = _review_blocked_fix_scope_case(
-		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
-		# Reconciliation and branch prep consume six pulls/901 reads; the
-		# subsequent re-check must see the changed SHA.
-		pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
-	)
-	assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
-	assert result.get("git_push_calls", []) == []
-	assert result.get("review_blocked_fix_commit_calls", []) == []
-	assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+def test_review_blocked_fix_target_rejects_head_move_during_judge():
+	for changed_pr, reason in (
+		({"headSha": "__integration_head__"}, "head_moved"),
+		({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
+		({"headRefFromApi": "feature/other"}, "head_ref_changed"),
+	):
+		open_pr = {
+			"number": 901, "state": "open", "merged": False,
+			"baseRefName": "main", "headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10", "headSha": "__default_head__",
+			"mergeable": True, "mergeable_state": "clean", "body": "Body",
+		}
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+			# Reconciliation and branch prep consume six pulls/901 reads; the
+			# subsequent re-check must see the changed SHA.
+			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
+		)
+		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
 
 
-@pytest.mark.parametrize("merged_overrides, reason", [
-	({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
-	({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
-])
-def test_review_blocked_merged_fix_target_rejects_unrelated_followup(merged_overrides, reason):
-	state = _base_state(status="in_progress")
-	state["integration_branch"] = "orchestrator/project-192"
-	state["waves"][0]["issues"][0]["status"] = "review-blocked"
-	open_pr = {
-		"number": 901, "state": "open", "merged": False,
-		"headRefName": "ai/issue-10", "headRefFromApi": "ai/issue-10",
-		"baseRefName": "main", "body": "Closes #10",
-		"mergeable": True, "mergeable_state": "clean",
-	}
-	merged_pr = {
-		**open_pr, "state": "closed", "merged": True,
-		"merged_at": "2026-04-15T00:00:00Z", **merged_overrides,
-	}
-	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
-		pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
-		prs=[{**merged_pr, "files": ["sandbox_fix.txt"]}],
-		existing_branches=["main", "orchestrator/project-192"],
-		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
-		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
-	)
-	assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
-	assert result.get("git_push_calls", []) == []
-	assert result.get("review_blocked_fix_commit_calls", []) == []
-	assert len(result["prs"]) == 1
+def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
+	for merged_overrides, reason in (
+		({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
+		({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
+	):
+		state = _base_state(status="in_progress")
+		state["integration_branch"] = "orchestrator/project-192"
+		state["waves"][0]["issues"][0]["status"] = "review-blocked"
+		open_pr = {
+			"number": 901, "state": "open", "merged": False,
+			"headRefName": "ai/issue-10", "headRefFromApi": "ai/issue-10",
+			"baseRefName": "main", "body": "Closes #10",
+			"mergeable": True, "mergeable_state": "clean",
+		}
+		merged_pr = {
+			**open_pr, "state": "closed", "merged": True,
+			"merged_at": "2026-04-15T00:00:00Z", **merged_overrides,
+		}
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+			pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
+			prs=[{**merged_pr, "files": ["sandbox_fix.txt"]}],
+			existing_branches=["main", "orchestrator/project-192"],
+			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+		)
+		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert len(result["prs"]) == 1
 
 
 def test_review_blocked_rejects_unverified_open_pr_head():
@@ -22652,6 +22652,21 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 		) == 0
 	assert '"event":"heartbeat"' not in pass_output.getvalue()
 	assert '"event":"slowest"' not in pass_output.getvalue()
+
+
+def test_custom_runner_tests_need_no_pytest_arguments():
+	import inspect
+
+	# CI discovers these functions by name and invokes each with func().
+	required_arguments = []
+	for name, func in globals().items():
+		if not name.startswith("test_") or not callable(func):
+			continue
+		try:
+			inspect.signature(func).bind()
+		except TypeError:
+			required_arguments.append(name)
+	assert not required_arguments, required_arguments
 
 
 def _extract_bash_function(script: str, signature: str) -> str:
