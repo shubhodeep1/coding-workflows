@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Review preflight Python probes no longer import modules from a PR checkout.** The review job verifies safe-path support before running host-side PR-tree helpers; Semble and Serena bootstrap from neutral directories, and shared pre-review Python calls use safe-path mode. Semble remains fail-soft when its neutral directory is unavailable. Checkout credentials are unchanged.

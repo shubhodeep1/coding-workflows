@@ -2586,6 +2586,17 @@ jobs:
             fi
           done
 
+      - name: Require safe-path Python before PR-tree helpers
+        run: |
+          set -euo pipefail
+          safe_python_dir="$(mktemp -d)" || { echo "::error::Unable to create neutral Python directory."; exit 1; }
+          trap 'rm -rf -- "${safe_python_dir}"' EXIT
+          cd -- "${safe_python_dir}"
+          if ! PYTHONSAFEPATH=1 python3 -c 'import sys; raise SystemExit(0 if sys.flags.safe_path else 1)'; then
+            echo "::error::Review runner Python does not honor PYTHONSAFEPATH; refusing PR-tree helper execution."
+            exit 1
+          fi
+
       - name: Show disk usage (post checkout)
         run: df -h /
 
@@ -3288,7 +3299,7 @@ jobs:
           RESUME_ROUND_LIMIT="${resume_round_limit}" \
           CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}" \
           CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}" \
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
+          PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
           from __future__ import annotations
 
           import json
