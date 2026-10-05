@@ -261,6 +261,19 @@ def run_guard(clarification_file: Path, answers_file: Path, evidence_files: tupl
 				data_requiring_letters.add(letter)
 
 		if data_requiring_letters:
+			if len(selected_letters) > 1:
+				# Replacing the whole combination could silently discard a required check.
+				overrides[qid] = "ESCALATE"
+				override_reasons.append(
+					f"{qid}: escalated {'+'.join(selected_letters)} "
+					"(combined selection needs unavailable external data; cannot safely replace individual options)"
+				)
+				escalations.append(
+					f"{qid}: Missing data required by option(s) {', '.join(sorted(data_requiring_letters))}: "
+					f"{'; '.join(q_options[letter] for letter in sorted(data_requiring_letters))}. "
+					"Cannot replace a combined decision without dropping its other selected requirements."
+				)
+				continue
 			fallback, rejected_weakening = _find_fallback(q_options, data_requiring_letters)
 			if fallback:
 				overrides[qid] = fallback

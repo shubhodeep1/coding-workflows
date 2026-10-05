@@ -145,6 +145,19 @@ def test_no_fallback_preserves_original_decision(tmp_path: Path) -> None:
 	assert _run_guard(tmp_path, questions=questions, evidence_files=(evidence,)) == ANSWER
 
 
+def test_combined_selection_does_not_drop_independent_check(tmp_path: Path) -> None:
+	questions = ("Q1: Which path?\n- A — Provide the PR URL\n"
+		"- B — Proceed without the URL using available information\n"
+		"- C — Require signature verification\n")
+	answer = ANSWER.replace("Q1: A", "Q1: A+C")
+	result = _run_guard(tmp_path, questions=questions, answer=answer)
+	assert auto_decisions.from_answers(questions, result)["answers"] == "Q1: ESCALATE\n"
+	assert "Cannot replace a combined decision without dropping its other selected requirements" in result
+	evidence = tmp_path / "issue_body.txt"
+	evidence.write_text("PR: https://github.com/o/r/pull/12", encoding="utf-8")
+	assert _run_guard(tmp_path, questions=questions, answer=answer, evidence_files=(evidence,)) == answer
+
+
 def test_alternative_evidence_accepts_supplied_sha_or_pr_url(tmp_path: Path) -> None:
 	questions = "Q1: Which path?\n- A — Provide the PR URL or commit SHA for verification\n- B — Skip verification\n"
 	evidence = tmp_path / "issue_body.txt"
