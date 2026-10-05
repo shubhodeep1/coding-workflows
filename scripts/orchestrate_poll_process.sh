@@ -80,11 +80,16 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 # otherwise the runner's status (0 success, 76 rejected transfer, 77 isolation
 # required but sandbox preparation failed (no host fallback), 124 timeout,
 # other = crash).
-# RB_JUDGE runs in the credential-free review sandbox, never via host claude_run.
+# RB_JUDGE never returns 75: it runs in the credential-free review sandbox
+# (Claude or OpenCode), or defers with 77 when isolation is unavailable.
 poller_claude_judge()
 {
   local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
   local judge_engine="codex" judge_rc=0
+  if [ "${role}" = RB_JUDGE ]; then
+    poller_rb_judge_isolated "${prompt_file}" "${output_file}" "${log_file}"
+    return $?
+  fi
   [ -f "${_POLLER_AI_ENGINE_SH}" ] || return 75
   # shellcheck source=ai_engine.sh
   source "${_POLLER_AI_ENGINE_SH}" || return 75
@@ -96,17 +101,21 @@ poller_claude_judge()
       ai_engine_for_role "${role}" 2> >(tee -a "${log_file}" >&2) || echo codex)"
   fi
   [ "${judge_engine}" = "claude" ] || return 75
-  if [ "${role}" = RB_JUDGE ]; then
+  AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+    claude_run "${role}" "${prompt_file}" "${output_file}" "${PWD}" 2> >(tee -a "${log_file}" >&2) || judge_rc=$?
+  return "${judge_rc}"
+}
+
+# Each attempt owns a fresh snapshot; never reuse a root after Claude returns
+# 75, because even a failed model may have written into its private copy.
+_poller_rb_judge_sandbox_attempt()
+{
+    local rb_engine="$1" prompt_file="$2" output_file="$3" log_file="$4" rb_support_dir="$5"
+    local rb_config=/dev/null rb_effort="${MODEL_REASONING_EFFORT_JUDGE:-high}" judge_rc=0
     # PR diffs and comments are untrusted. This role may not run with host
     # credentials; use the verified support checkout's isolated review runner.
-    local rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts"
     local rb_sandbox_root="" rb_access=read
     local rb_untracked_before_file="" rb_untracked_after_file="" rb_untracked_hash_file="" rb_untracked_path="" rb_cleanup_rc=0
-    [ -f "${rb_support_dir}/review_untrusted_sandbox.sh" ] || rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main/scripts"
-    if [ ! -f "${rb_support_dir}/review_untrusted_sandbox.sh" ]; then
-      ai_engine_fallback RB_JUDGE sandbox_unavailable
-      return 75
-    fi
     [ "${RB_COMBINED_MODE:-false}" != true ] || rb_access=write
     if [ "${rb_access}" = write ]; then
       rb_untracked_before_file="$(mktemp "${RUNTIME_DIR:?}/rb-claude-untracked-before-XXXXXXXX")" || { echo '::error::Cannot inventory review-blocked workspace before Claude transfer.' >&2; exit 1; }
@@ -133,13 +142,29 @@ poller_claude_judge()
       else
         echo '::warning::RB_JUDGE sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick.' | tee -a "${log_file}" >&2
       fi
+      printf '%s\n' sandbox_prepare_failed > "${RUNTIME_DIR}/rb_judge_isolation_reason"
       return 77
     fi
+    if [ "${rb_engine}" = codex ]; then
+      rb_config="${RUNTIME_DIR}/rb_judge_opencode.json"
+      if ! bash "${rb_support_dir}/write_opencode_config.sh" --role writer --model "${MODEL_EDITOR}" \
+        --project-path "$PWD" --config-path "${rb_config}" --serena off 2>>"${log_file}"; then
+        # Cleanup is mandatory before any later issue or attempt may run.
+        if ! SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
+          bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>>"${log_file}"; then
+          echo '::error::Review-blocked sandbox cleanup failed; stopping the poller.' >&2
+          exit 1
+        fi
+        [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}" "${rb_untracked_hash_file}"
+        printf '%s\n' opencode_config_failed > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+        return 77
+      fi
+    fi
+    [ "${rb_effort}" != minimal ] || rb_effort=low
     : > "${output_file}"
     SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
-      AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" run "${prompt_file}" "${output_file}" \
-        "${model_hint}" "${MODEL_REASONING_EFFORT_JUDGE:-high}" /dev/null claude RB_JUDGE "${rb_access}" 2>>"${log_file}" || judge_rc=$?
+        "${MODEL_EDITOR}" "${rb_effort}" "${rb_config}" "${rb_engine}" RB_JUDGE "${rb_access}" 2>>"${log_file}" || judge_rc=$?
     SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>>"${log_file}" || rb_cleanup_rc=$?
     if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ] || [ "${rb_cleanup_rc}" -ne 0 ]; then
@@ -179,11 +204,52 @@ poller_claude_judge()
       [ -z "${rb_untracked_after_file}" ] || rm -f -- "${rb_untracked_after_file}"
     fi
     [ "${judge_rc}" -eq 0 ] || : > "${output_file}"
+    if [ "${judge_rc}" -eq 2 ]; then
+      printf '%s\n' sandbox_helper_outdated > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+      return 77
+    fi
     return "${judge_rc}"
+}
+
+poller_rb_judge_isolated()
+{
+  local prompt_file="$1" output_file="$2" log_file="$3" rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts"
+  local rb_engine=codex rb_rc=0
+  : > "${RUNTIME_DIR:?}/rb_judge_isolation_reason"
+  : > "${output_file}"
+  if [ -f "${_POLLER_AI_ENGINE_SH}" ]; then
+    # shellcheck source=ai_engine.sh
+    if source "${_POLLER_AI_ENGINE_SH}"; then
+      rb_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+        ai_engine_for_role RB_JUDGE 2> >(tee -a "${log_file}" >&2) || echo codex)"
+    fi
   fi
-  AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
-    claude_run "${role}" "${prompt_file}" "${output_file}" "${PWD}" 2> >(tee -a "${log_file}" >&2) || judge_rc=$?
-  return "${judge_rc}"
+  [ "${rb_engine}" = claude ] || rb_engine=codex
+  [ -f "${rb_support_dir}/review_untrusted_sandbox.sh" ] || rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main/scripts"
+  if [ ! -f "${rb_support_dir}/review_untrusted_sandbox.sh" ]; then
+    printf '%s\n' support_missing > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+    echo 'RB_JUDGE_ISOLATION outcome=deferred reason=support_missing' >&2
+    return 77
+  fi
+  # An older verified support commit ignores arg 9 for OpenCode and would
+  # transfer verdict-only edits. Wait for the support update instead.
+  if ! grep -Fq '# Arg 9 (read) applies to both engines; read-only roles never transfer edits back.' "${rb_support_dir}/review_untrusted_sandbox.sh" ||
+     [ "$(grep -Fc 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' "${rb_support_dir}/review_untrusted_sandbox.sh")" -lt 2 ]; then
+    printf '%s\n' sandbox_helper_outdated > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+    return 77
+  fi
+  _poller_rb_judge_sandbox_attempt "${rb_engine}" "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" || rb_rc=$?
+  if [ "${rb_rc}" -eq 75 ] && [ "${rb_engine}" = claude ]; then
+    # Claude unavailable inside isolation: retry OpenCode in a NEW root.
+    rb_rc=0
+    _poller_rb_judge_sandbox_attempt codex "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" || rb_rc=$?
+  fi
+  if [ "${rb_rc}" -eq 75 ]; then
+    printf '%s\n' sandbox_helper_outdated > "${RUNTIME_DIR}/rb_judge_isolation_reason"
+    rb_rc=77
+  fi
+  [ "${rb_rc}" -eq 0 ] || : > "${output_file}"
+  return "${rb_rc}"
 }
 # shellcheck source=scripts/semble_helpers.sh
 SEMBLE_HELPERS_AVAILABLE="false"
@@ -20716,6 +20782,11 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
+    RB_JUDGE_ISOLATION_MAX_FAILURES="${RB_JUDGE_ISOLATION_MAX_FAILURES:-3}"
+    if ! [[ "${RB_JUDGE_ISOLATION_MAX_FAILURES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_ISOLATION_MAX_FAILURES}" -lt 1 ]; then
+      echo '::warning::Invalid RB_JUDGE_ISOLATION_MAX_FAILURES; using 3.' >&2
+      RB_JUDGE_ISOLATION_MAX_FAILURES=3
+    fi
     REVIEW_BLOCKED_STATE_CHANGED=false
 
     while read -r rb_issue; do
@@ -20880,6 +20951,87 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
             echo "::warning::[review-blocked] Pre-judge dispatch failed for PR #${RB_PR}; falling through to judge."
           fi
         fi
+      fi
+
+      RB_ISOLATION_HEAD="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.sha // "unknown"' 2>/dev/null || echo unknown)"
+      [[ "${RB_ISOLATION_HEAD}" =~ ^[0-9a-f]{40}$ ]] || RB_ISOLATION_HEAD=unknown
+      RB_ISOLATION_ENTRY="$(jq -c --arg key "${rb_issue}" '.review_blocked_isolation_state[$key] // {}' "${STATE_FILE}")"
+      RB_ISOLATION_OLD_HEAD="$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.head_sha // empty')"
+      RB_ISOLATION_ESCALATED="$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.escalated // false')"
+      if [ "${RB_ISOLATION_ESCALATED}" = true ]; then
+        # LABELS_JSON is a cycle snapshot, not evidence that a human has
+        # cleared a latch since the snapshot. The PR JSON has no issue labels;
+        # this rare escalated path needs a live issue read before retrying.
+        RB_ISOLATION_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '{labels: [.labels[]?.name]}' 2>/dev/null || true)"
+        if ! printf '%s' "${RB_ISOLATION_ISSUE_JSON}" | jq -e '.labels | type == "array"' >/dev/null 2>&1; then
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=skip reason=labels_unavailable"
+          continue
+        fi
+        RB_ISOLATION_HAS_LABEL="$(printf '%s' "${RB_ISOLATION_ISSUE_JSON}" | jq -r '.labels | index("ai:needs-human") != null')"
+        if [ "${RB_ISOLATION_OLD_HEAD}" = "${RB_ISOLATION_HEAD}" ] && [ "${RB_ISOLATION_HAS_LABEL}" = true ]; then
+          if [ "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.comment_id // empty')" = '' ]; then
+            RB_ISOLATION_ACTOR="$(gh_retry _safe_gh_jq user --jq '.id' 2>/dev/null || true)"
+            RB_ISOLATION_COMMENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments?per_page=100" 2>/dev/null || true)"
+            if [[ "${RB_ISOLATION_ACTOR}" =~ ^[0-9]+$ ]] && printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -e 'type == "array" and all(.[]; type == "array")' >/dev/null 2>&1; then
+              RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -r --argjson actor "${RB_ISOLATION_ACTOR}" --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_HEAD} " '[.[][] | select(.user.id == $actor and (.body | type == "string") and (.body | contains($marker)))] | last | .id // empty')"
+              if ! [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+                RB_ISOLATION_COMMENT="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments" -f body="$(printf '## Review-blocked judge isolation unavailable\n\nReason: %s. Failures: %s. Head: %s. The judge will not run on this head again; push a new commit or remove `ai:needs-human` to retry.\n\n<!-- ai:rb-judge-isolation-escalated head=%s reason=%s -->' "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.reason')" "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.count')" "${RB_ISOLATION_HEAD:0:7}" "${RB_ISOLATION_HEAD}" "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.reason')")" 2>/dev/null || true)"
+                RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENT}" | jq -r '.id // empty' 2>/dev/null || true)"
+              fi
+              if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+                jq --arg key "${rb_issue}" --argjson id "${RB_ISOLATION_COMMENT_ID}" '.review_blocked_isolation_state[$key].comment_id = $id' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+                REVIEW_BLOCKED_STATE_CHANGED=true
+              fi
+            fi
+          fi
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=skip reason=escalated"
+          continue
+        fi
+        if [ "${RB_ISOLATION_OLD_HEAD}" != "${RB_ISOLATION_HEAD}" ] && [ "${RB_ISOLATION_HAS_LABEL}" = true ] && \
+           [ "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.owned_label // false')" = true ]; then
+          # Only clear a latch whose most recent isolation marker is our
+          # recorded comment. Do not clear an unrelated human gate.
+          RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.comment_id // empty')"
+          RB_ISOLATION_ACTOR="$(gh_retry _safe_gh_jq user --jq '.id' 2>/dev/null || true)"
+          RB_ISOLATION_COMMENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments?per_page=100" 2>/dev/null || true)"
+          if ! [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]] && [[ "${RB_ISOLATION_ACTOR}" =~ ^[0-9]+$ ]] && \
+             printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -e 'type == "array" and all(.[]; type == "array")' >/dev/null 2>&1; then
+            # The POST may have succeeded while its response was lost. Recover
+            # its ID from the already-fetched trusted comment history.
+            RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -r --argjson actor "${RB_ISOLATION_ACTOR}" \
+              --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_OLD_HEAD} " \
+              '[.[][] | select((.body | type == "string") and .user.id == $actor and (.body | startswith("## Review-blocked judge isolation unavailable") and contains($marker)))] | last | .id // empty')"
+          fi
+          # The PR/issue snapshots contain no label-event history. Only
+          # clear our own latch if the last label event is ours and predates
+          # our marker; a subsequent human latch must survive a head push.
+          if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+            RB_ISOLATION_EVENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/events?per_page=100" 2>/dev/null || true)"
+            if [[ "${RB_ISOLATION_ACTOR}" =~ ^[0-9]+$ ]] && printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -e \
+              --argjson id "${RB_ISOLATION_COMMENT_ID}" --argjson actor "${RB_ISOLATION_ACTOR}" \
+              --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_OLD_HEAD} " \
+              '[.[][] | select((.body | type == "string") and (.body | startswith("## Review-blocked judge isolation unavailable")) and (.body | contains("<!-- ai:rb-judge-isolation-escalated head=")))] | last | .id == $id and .user.id == $actor and (.body | contains($marker))' >/dev/null 2>&1 && \
+              printf '%s' "${RB_ISOLATION_EVENTS}" | jq -e --argjson actor "${RB_ISOLATION_ACTOR}" \
+                --argjson id "${RB_ISOLATION_COMMENT_ID}" --argjson comments "${RB_ISOLATION_COMMENTS}" \
+                '($comments | [.[][] | select(.id == $id)] | last | .created_at) as $marker_at | $marker_at != null and ([.[][] | select(.event == "labeled" and .label.name == "ai:needs-human")] | last | .actor.id == $actor and .created_at <= $marker_at)' >/dev/null 2>&1; then
+              gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" --remove-label 'ai:needs-human' >/dev/null || {
+                echo '::warning::Could not clear review-blocked isolation latch; deferring.' >&2
+                continue
+              }
+              RB_ISOLATION_HAS_LABEL=false
+            fi
+          fi
+        fi
+        if [ "${RB_ISOLATION_OLD_HEAD}" != "${RB_ISOLATION_HEAD}" ] && [ "${RB_ISOLATION_HAS_LABEL}" = true ]; then
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=skip reason=latch_not_cleared"
+          continue
+        fi
+      fi
+      if [ -n "${RB_ISOLATION_OLD_HEAD}" ] && { [ "${RB_ISOLATION_OLD_HEAD}" != "${RB_ISOLATION_HEAD}" ] || [ "${RB_ISOLATION_ESCALATED}" = true ]; }; then
+        jq --arg key "${rb_issue}" '.review_blocked_isolation_state |= del(.[$key])' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        REVIEW_BLOCKED_STATE_CHANGED=true
+        echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=reset reason=$([ "${RB_ISOLATION_OLD_HEAD}" = "${RB_ISOLATION_HEAD}" ] && echo label_cleared || echo head_changed)"
+        RB_ISOLATION_ESCALATED=false
       fi
 
       # Collect full PR context for the judge. Apply the same byte cap as the
@@ -21217,6 +21369,7 @@ ${FOLLOWUP_BLOCK_REASON}"
 
       # Run the judge
       RB_JUDGE_SUCCESS=false
+      RB_JUDGE_ISOLATION_FAILED=false
       sanitize_codex_prompt_file "${RB_JUDGE_PROMPT_FILE}"
       RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
       [[ "${RB_JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || RB_JUDGE_PROMPT_BYTES=0
@@ -21229,9 +21382,10 @@ ${FOLLOWUP_BLOCK_REASON}"
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
           RB_JUDGE_ENGINE_RC=0
-          poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" /dev/null || RB_JUDGE_ENGINE_RC=$?
-          if [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then
-            cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+          poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || RB_JUDGE_ENGINE_RC=$?
+          if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then
+            RB_JUDGE_ISOLATION_FAILED=true
+            break
           fi
           # A rejected write transfer may have touched the combined-mode
           # checkout before failing; a failed preparation cannot succeed on
@@ -21250,8 +21404,51 @@ ${FOLLOWUP_BLOCK_REASON}"
       fi
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
+        RB_ISOLATION_REASON="$(cat "${RUNTIME_DIR}/rb_judge_isolation_reason" 2>/dev/null || true)"
+        case "${RB_ISOLATION_REASON}" in
+          support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated) ;;
+          *) RB_ISOLATION_REASON=unknown ;;
+        esac
+        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then
+          RB_ISOLATION_PREV_COUNT="$(jq -r --arg key "${rb_issue}" --arg head "${RB_ISOLATION_HEAD}" 'if .review_blocked_isolation_state[$key].head_sha == $head then .review_blocked_isolation_state[$key].count // 0 else 0 end' "${STATE_FILE}")"
+          [[ "${RB_ISOLATION_PREV_COUNT}" =~ ^[0-9]+$ ]] || RB_ISOLATION_PREV_COUNT=0
+          RB_ISOLATION_COUNT=$((RB_ISOLATION_PREV_COUNT + 1))
+          jq --arg key "${rb_issue}" --arg head "${RB_ISOLATION_HEAD}" --arg reason "${RB_ISOLATION_REASON}" --argjson count "${RB_ISOLATION_COUNT}" \
+            '.review_blocked_isolation_state //= {} | .review_blocked_isolation_state[$key] = {head_sha: $head, count: $count, escalated: false, reason: $reason}' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          REVIEW_BLOCKED_STATE_CHANGED=true
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=deferred reason=${RB_ISOLATION_REASON} count=${RB_ISOLATION_COUNT} max=${RB_JUDGE_ISOLATION_MAX_FAILURES}"
+          if [ "${RB_ISOLATION_COUNT}" -ge "${RB_JUDGE_ISOLATION_MAX_FAILURES}" ]; then
+            # Do not claim ownership of a pre-existing human latch: a later
+            # head change must not remove a label placed for another reason.
+            RB_ISOLATION_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '[.labels[]?.name]' 2>/dev/null || true)"
+            RB_ISOLATION_OWNED_LABEL=false
+            if printf '%s' "${RB_ISOLATION_LABELS}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+              if ! printf '%s' "${RB_ISOLATION_LABELS}" | jq -e 'index("ai:needs-human") != null' >/dev/null; then
+                ensure_label_exists 'ai:needs-human'
+                if gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null; then
+                  RB_ISOLATION_OWNED_LABEL=true
+                else
+                  RB_ISOLATION_LABELS=''
+                fi
+              fi
+            fi
+            if [ -n "${RB_ISOLATION_LABELS}" ]; then
+              RB_ISOLATION_COMMENT="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments" -f body="$(printf '## Review-blocked judge isolation unavailable\n\nReason: %s. Failures: %s. Head: %s. The judge will not run on this head again; push a new commit or remove `ai:needs-human` to retry.\n\n<!-- ai:rb-judge-isolation-escalated head=%s reason=%s -->' "${RB_ISOLATION_REASON}" "${RB_ISOLATION_COUNT}" "${RB_ISOLATION_HEAD:0:7}" "${RB_ISOLATION_HEAD}" "${RB_ISOLATION_REASON}")" 2>/dev/null || true)"
+              RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENT}" | jq -r '.id // empty' 2>/dev/null || true)"
+              if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]] || [ "${RB_ISOLATION_OWNED_LABEL}" = true ] || printf '%s' "${RB_ISOLATION_LABELS}" | jq -e 'index("ai:needs-human") != null' >/dev/null 2>&1; then
+                jq --arg key "${rb_issue}" --arg id "${RB_ISOLATION_COMMENT_ID}" --argjson owned "${RB_ISOLATION_OWNED_LABEL}" '.review_blocked_isolation_state[$key] |= (.escalated = true | .comment_id = (if ($id | test("^[0-9]+$")) then ($id | tonumber) else null end) | .owned_label = $owned)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+                RB_ISOLATION_ESCALATED=true
+                echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=escalated reason=${RB_ISOLATION_REASON} count=${RB_ISOLATION_COUNT} max=${RB_JUDGE_ISOLATION_MAX_FAILURES}"
+                tg_notify "Review-blocked judge isolation unavailable for issue #${rb_issue} (PR #${RB_PR}); escalated after ${RB_ISOLATION_COUNT} failures. Reason: ${RB_ISOLATION_REASON}." "CRITICAL"
+              fi
+            fi
+          fi
+        fi
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
-        tg_notify "Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+        if [ "${RB_ISOLATION_ESCALATED}" != true ]; then
+          tg_notify "Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle. Reason: ${RB_ISOLATION_REASON}."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+        fi
         # Reset worktree + switch back to default branch if we entered
         # combined mode — otherwise the next rb_issue iteration could
         # fail to check out its target branch.
@@ -21259,6 +21456,10 @@ ${FOLLOWUP_BLOCK_REASON}"
         continue
       fi
 
+      if jq -e --arg key "${rb_issue}" '.review_blocked_isolation_state // {} | has($key)' "${STATE_FILE}" >/dev/null; then
+        jq --arg key "${rb_issue}" '.review_blocked_isolation_state |= del(.[$key])' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        REVIEW_BLOCKED_STATE_CHANGED=true
+      fi
       # Parse judge output
       RB_JUDGE_JSON="$(python3 -c "
 import json, re, sys
