@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the allowlist of paths the review-blocked fix may commit come from?\nChoices:\nA) Only the files the blocked PR already changed, read from GitHub's paginated `pulls/<n>/files` list. The model has no say in it, but a fix that needs a new test or `changelog.d/` file would be refused.\nB) The PR's changed files from GitHub, plus files the judge cites in `fix_description` / `remaining_issues[].file`. Judge-cited files are kept only if they pass the existing path checks (no globs, no `.git`, no traversal) and are not protected paths (see Q2). (RECOMMENDED)\nC) Only the files the judge cites. **Note:** this is not provenance-verified, because the judge is the component the exploit targets.\nQ2: How should protected paths (`.github/workflows/`, `.github/actions/`, `.github/ai/`, `scripts/`, `prompts/`, `.claude/`) be handled when `ALLOW_WORKFLOW_EDITS=true`?\nChoices:\nA) A protected path may be committed only if the blocked PR itself already changed that exact path. Otherwise it is rejected, whatever `ALLOW_WORKFLOW_EDITS` says. (RECOMMENDED)\nB) Always reject protected paths in this fix path. **Note:** this blocks most legitimate review-blocked fixes in coding-workflows, where PRs routinely change `scripts/`.\nC) Keep today's behaviour for protected paths (allowed when `ALLOW_WORKFLOW_EDITS=true`) and enforce only the Q1 allowlist.\nQ3: What should happen when staged changes fall outside the allowlist?\nChoices:\nA) Reject the whole fix: no commit, no push, clean up the workspace. Log a new stable prefix (for example `REVIEW_BLOCKED_FIX_SCOPE_REJECTED`) listing the offending paths, send a Telegram WARNING, and count the attempt against `MAX_REVIEW_BLOCKED_RETRIES` so the existing retry/terminal ladder still moves forward. (RECOMMENDED)\nB) Drop the out-of-scope paths and commit the rest.\nC) Reject the fix and set `ai:needs-human` straight away.\nQ4: Should the same guard also cover the standalone judge's fix commit path in `scripts/review_rb_judge.sh`?\nChoices:\nA) No. Fix only the poller path the finding cites (`scripts/orchestrate_poll_process.sh`) and add contract tests in `tests/test_orchestrate_poll_process.py`. (RECOMMENDED)\nB) Yes. Put the check in a shared helper and use it from both the poller and `review_rb_judge.sh`.",
+  "fingerprint": "7c4170a45674fc6d63f1a455ca20e77511e8609723b252f7e2c291202d2556cc",
+  "lineage": {
+    "issue_number": 6324,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37276652794",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37276652794",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005072258_c3e7609de2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6324,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37276652794"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6324 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T07:22:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
