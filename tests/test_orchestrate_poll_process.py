@@ -9679,6 +9679,7 @@ def _review_blocked_fix_scope_case(
 	*, touch: str, files: list[str | dict], description: str = "patched",
 	remaining: list[dict] | None = None, pr_files_fail: bool = False,
 	pr_changed_file_count: int | None = None,
+	env_overrides: dict[str, str] | None = None,
 ) -> dict:
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
@@ -9706,6 +9707,7 @@ def _review_blocked_fix_scope_case(
 		mock_git_push_success=True,
 		capture_telegram_calls=True,
 		pr_files_fail=pr_files_fail,
+		env_overrides=env_overrides,
 	)
 
 
@@ -9727,6 +9729,18 @@ def test_review_blocked_fix_scope_rejects_unrelated_file():
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_empty_staged_set():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/excluded.sh", files=["scripts/excluded.sh"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=no_staged_changes" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
 def test_review_blocked_fix_scope_accepts_non_protected_judge_citation():
@@ -9790,7 +9804,7 @@ def test_review_blocked_fix_scope_rejects_incomplete_pr_listing():
 	result = _review_blocked_fix_scope_case(
 		touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_changed_file_count=2,
 	)
-	assert "reason=pr_files_unavailable" in result["stdout"]
+	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
@@ -9806,7 +9820,7 @@ def test_review_blocked_fix_scope_ignores_invalid_citations():
 
 def test_review_blocked_fix_scope_fails_closed_on_pr_listing_failure():
 	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_files_fail=True)
-	assert "reason=pr_files_unavailable" in result["stdout"]
+	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 

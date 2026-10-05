@@ -1232,6 +1232,8 @@ Before publishing a review-blocked `fix`, the poller checks staged paths against
 the complete PR file list and valid judge citations. Protected paths require an
 exact match in the PR file list; an incomplete list or out-of-scope path rejects
 the whole fix, warns operators, and consumes a review-blocked retry without a push.
+An empty staged set is rejected too. Listing failures report the staged paths in
+the rejection log and alert to make the attempted fix diagnosable.
 If the integration judge cannot publish a resolution, the poller warns and
 rechecks mergeability on the next tick instead of failing the project immediately.
 The merged-PR push guard checks `origin` as before. A push selecting a different

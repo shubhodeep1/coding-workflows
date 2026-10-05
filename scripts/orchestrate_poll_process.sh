@@ -21364,7 +21364,7 @@ ${FOLLOWUP_BLOCK_REASON}"
       rb_fix_scope_check() {
         local workdir="$1" pr="$2" judge_json="$3"
         local staged_file pr_response pr_listing pr_changed_file_count path candidate description candidate_count
-        local -a staged_paths=() pr_paths=() cited_paths=()
+        local -a staged_paths=() pr_paths=() cited_paths=() raw_candidates=()
         local -A pr_set=() cited_set=()
         RB_FIX_SCOPE_REASON=accepted
         RB_FIX_SCOPE_REJECTED_PATHS=()
@@ -21372,16 +21372,17 @@ ${FOLLOWUP_BLOCK_REASON}"
         RB_FIX_SCOPE_CITED_COUNT=0
         RB_FIX_SCOPE_STAGED_COUNT=0
 
-        staged_file="$(mktemp "${RUNTIME_DIR}/rb_fix_scope_${pr}.XXXXXX")" || { RB_FIX_SCOPE_REASON=pr_files_unavailable; return 1; }
+        staged_file="$(mktemp "${RUNTIME_DIR}/rb_fix_scope_${pr}.XXXXXX")" || { RB_FIX_SCOPE_REASON=staging_unavailable; return 1; }
         if ! git -C "${workdir}" diff --cached --name-only --no-renames -z > "${staged_file}"; then
           rm -f -- "${staged_file}"
-          RB_FIX_SCOPE_REASON=pr_files_unavailable
+          RB_FIX_SCOPE_REASON=staging_unavailable
           return 1
         fi
         mapfile -d '' -t staged_paths < "${staged_file}"
         rm -f -- "${staged_file}"
         RB_FIX_SCOPE_STAGED_COUNT=${#staged_paths[@]}
-        [ "${RB_FIX_SCOPE_STAGED_COUNT}" -gt 0 ] || return 0
+        [ "${RB_FIX_SCOPE_STAGED_COUNT}" -gt 0 ] || { RB_FIX_SCOPE_REASON=no_staged_changes; return 1; }
+        RB_FIX_SCOPE_REJECTED_PATHS=("${staged_paths[@]}")
 
         # §14: _fetch_pr_json/PR_META have no file list; the superseded-check
         # listing covers other PRs and is not cached on this fix path.
@@ -21402,6 +21403,7 @@ ${FOLLOWUP_BLOCK_REASON}"
           RB_FIX_SCOPE_REASON=pr_files_unavailable
           return 1
         fi
+        RB_FIX_SCOPE_REJECTED_PATHS=()
         mapfile -d '' -t pr_paths < <(printf '%s' "${pr_listing}" | jq -j '.files[] | ., "\u0000"')
         for path in "${pr_paths[@]}"; do pr_set["${path}"]=1; done
 
