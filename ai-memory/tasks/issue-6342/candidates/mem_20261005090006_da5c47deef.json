@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the facts helper handle references to repositories other than the current one?\nChoices:\nA. Stop reading other repositories. Only the current repository (`--repo`) is queried. `--consumer-repos-file` is still accepted so existing callers keep working, but it has no effect. A reference to another repository gets one line saying it was \"not read (cross-repository)\". No extra API calls. (RECOMMENDED)\nB. Keep reading listed consumer repositories, but only show facts for public ones. Add `isPrivate` to the existing single GraphQL query and `repository.private` from the run response, and leave out private non-current repositories. No extra API calls, but this still uses the shared PAT for those reads.\nC. Check each referenced repository against the issue author's identity first: call `repos/{slug}/collaborators/{login}/permission` once per repository and leave the repository out on any failure. **Note:** this adds one REST call per repository and still exposes facts to readers of the current repo who lack access to the referenced repo. Combined with Q2:A it would also need the PAT, which defeats Q2:A.\nQ2: Which credential should the \"Fetch GitHub facts for the questions\" step use?\nChoices:\nA. Keep `secrets.GH_PAT` for this step, now limited to the current repository by Q1. PR-merge and run facts keep working in every consumer without changing any wrapper's `permissions:`. (RECOMMENDED)\nB. Switch to the repository-scoped `github.token`, so reads of other repositories are impossible by design. Add `pull-requests: read` and `actions: read` to `internal-orchestrate-clarify-respond.yml` and `workflow-templates/ai-orchestrate-clarify-respond.yml`. Until consumers pick up the synced wrapper, PR and run facts fail open (they show as \"could not be read\"). **Note:** incompatible with Q1:B and Q1:C, which need cross-repository reads.",
+  "fingerprint": "2d1e8fbf6263e89b911c49efe2889658045c2577402453db1cbafad8ecf62407",
+  "lineage": {
+    "issue_number": 6342,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37285767957",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37285767957",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005090006_da5c47deef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6342,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37285767957"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6342 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T09:00:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
