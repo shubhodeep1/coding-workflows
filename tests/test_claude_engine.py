@@ -436,6 +436,11 @@ def test_read_profile_settings_have_a_bash_guard_without_changing_write_settings
 	assert len(write["hooks"]["PreToolUse"]) == 1
 	read = ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook="/trusted/claude_engine.py")
 	assert set(ce.READ_PROFILE_DENY) <= set(read["permissions"]["deny"])
+	assert {
+		"Read(//proc/**)", "Grep(**/claude-pool/**)", "Read(**/.git/config)", "Glob(**/.git/config)",
+		"Grep(**/.git-credentials)", "Grep(**/.netrc)", "Glob(~/.config/gh/**)",
+		"Grep(~/.claude/.credentials.json)", "Bash(git * --no-index*)",
+	} <= set(read["permissions"]["deny"])
 	assert read["hooks"]["PreToolUse"][1] == {
 		"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "/trusted/claude_engine.py" guard-read-bash', "timeout": 30}],
 	}
@@ -461,6 +466,7 @@ def test_read_guard_allows_safe_reads(command: str) -> None:
 	"git log $(id)", 'git log "$(id)"', "git log `id`", "git -c core.pager=sh log",
 	"git push", "cat x", "git log 'unterminated", "git log\nid", "git log $GITHUB_ENV",
 	"git log *", "git log --format={x,y}",
+	"git diff --no-index /tmp/token /dev/null", "git diff --no-i /tmp/token /dev/null",
 ])
 def test_read_guard_denies_write_primitives_and_shell_control(command: str) -> None:
 	decision, reason = ce.read_profile_bash_decision(command)
@@ -476,6 +482,112 @@ def test_read_guard_cli_fails_closed_on_invalid_input() -> None:
 		assert response["permissionDecision"] == "deny"
 		assert response["permissionDecisionReason"].startswith("claude_engine read-guard:")
 	assert _run("read-guard", stdin=json.dumps({"tool_name": "Read", "tool_input": {}})).stdout == ""
+
+
+def test_read_guard_hook_override_in_cli(tmp_path: Path) -> None:
+	settings_file = tmp_path / "settings.json"
+	params = ("settings", "--checkout", str(tmp_path), "--out", str(settings_file),
+		"--profile", "read", "--guard-hook", "/guard.py")
+	assert _run(*params, "--read-guard-hook", "/claude_engine.py").returncode == 0
+	settings = json.loads(settings_file.read_text(encoding="utf-8"))
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/claude_engine.py" guard-read-bash'
+	assert _run(*params).returncode == 0
+	settings = json.loads(settings_file.read_text(encoding="utf-8"))
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"].endswith('/scripts/claude_engine.py" guard-read-bash')
+	assert _run(*params, "--read-guard-hook", "relative.py").returncode == 2
+
+
+def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	source, dest = tmp_path / "source", tmp_path / "snapshot"
+	source.mkdir()
+	dest.mkdir()
+	def git(*args: str) -> str:
+		return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
+	git("init", "-q")
+	git("config", "user.name", "test")
+	git("config", "user.email", "test@example.invalid")
+	git("config", "http.https://github.com/.extraheader", "AUTHORIZATION: hidden")
+	(source / "ok.txt").write_text("tracked", encoding="utf-8")
+	(source / "run.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(source / "run.sh").chmod(0o755)
+	(source / "removed.txt").write_text("deleted", encoding="utf-8")
+	(source / "CLAUDE.md").write_text("invisible", encoding="utf-8")
+	git("add", "ok.txt", "run.sh", "removed.txt", "CLAUDE.md")
+	git("commit", "-qm", "base")
+	(source / "removed.txt").unlink()
+	(source / "untracked.txt").write_text("untracked", encoding="utf-8")
+	(source / ".env").write_text("private", encoding="utf-8")
+	(source / "id.key").write_text("private", encoding="utf-8")
+	(source / "skip.pem").write_text("private", encoding="utf-8")
+	(source / "keys").mkdir()
+	for key_name in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss"):
+		(source / "keys" / key_name).write_text("private", encoding="utf-8")
+	(source / ".claude").mkdir()
+	(source / ".claude" / ".credentials.json").write_text("private", encoding="utf-8")
+	(source / ".ssh").mkdir()
+	(source / ".ssh" / "config").write_text("private", encoding="utf-8")
+	(source / "link.txt").symlink_to(source / "ok.txt")
+	(source / "big.bin").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+	(source / ".codex-workflow-src" / ".git").mkdir(parents=True)
+	(source / ".codex-workflow-src" / ".git" / "config").write_text("private", encoding="utf-8")
+	(source / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+	(source / "ignored.txt").write_text("ignored", encoding="utf-8")
+	monkeypatch.setenv("GIT_DIR", str(tmp_path / "bad-git-dir"))
+	monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "bad-work-tree"))
+	summary = ce.build_read_snapshot(source, dest, omit_claude_md=True)
+	assert summary["git"] == "present" and summary["git_objects"] == ""
+	assert (dest / "ok.txt").read_text(encoding="utf-8") == "tracked"
+	assert (dest / "untracked.txt").read_text(encoding="utf-8") == "untracked"
+	assert (dest / "run.sh").stat().st_mode & stat.S_IXUSR
+	assert not (dest / "removed.txt").exists()
+	monkeypatch.delenv("GIT_DIR")
+	monkeypatch.delenv("GIT_WORK_TREE")
+	status = subprocess.check_output(["git", "-C", str(dest), "status", "--short"], text=True).splitlines()
+	assert status == []
+	for path in ("CLAUDE.md", ".env", "id.key", "skip.pem", "link.txt", "big.bin", "ignored.txt", ".codex-workflow-src", ".claude", ".ssh"):
+		assert not (dest / path).exists(), path
+	assert not (dest / "keys").exists()
+	assert "hidden" not in (dest / ".git" / "config").read_text(encoding="utf-8")
+	assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
+	assert subprocess.check_output(["git", "-C", str(dest), "show", "HEAD:ok.txt"], text=True) == "tracked"
+	assert subprocess.check_output(["git", "-C", str(dest), "log", "--format=%s"], text=True).strip() == "Isolated read snapshot"
+	assert git("rev-parse", "HEAD") != subprocess.check_output(["git", "-C", str(dest), "rev-parse", "HEAD"], text=True).strip()
+
+
+def test_read_snapshot_caps_and_alternates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	source, dest = tmp_path / "source", tmp_path / "snapshot"
+	source.mkdir()
+	dest.mkdir()
+	(source / "one.txt").write_text("hello", encoding="utf-8")
+	monkeypatch.setenv("CLAUDE_READ_SNAPSHOT_MAX_BYTES", "4")
+	result = _run("read-snapshot", "--source", str(source), "--dest", str(dest))
+	assert result.returncode == 2 and "read snapshot limit exceeded" in result.stderr
+	monkeypatch.delenv("CLAUDE_READ_SNAPSHOT_MAX_BYTES")
+	assert not list(dest.iterdir())
+	subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+		"commit", "--allow-empty", "-qm", "base"], check=True)
+	(source / ".git" / "objects" / "info" / "alternates").write_text("/other/objects\n", encoding="utf-8")
+	assert ce.build_read_snapshot(source, dest)["git"] == "present"
+	assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
+
+
+def test_read_snapshot_does_not_expose_prior_committed_credentials(tmp_path: Path) -> None:
+	source, dest = tmp_path / "source", tmp_path / "snapshot"
+	source.mkdir()
+	dest.mkdir()
+	subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+	(source / ".env").write_text("HISTORICAL_TOKEN=private\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(source), "add", ".env"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "secret"], check=True)
+	secret = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD:.env"], text=True).strip()
+	(source / ".env").unlink()
+	subprocess.run(["git", "-C", str(source), "add", "-u"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "delete secret"], check=True)
+	assert ce.build_read_snapshot(source, dest)["git_objects"] == ""
+	assert not (dest / ".env").exists()
+	for spec in ("HEAD~1:.env", secret):
+		assert subprocess.run(["git", "-C", str(dest), "show", spec], capture_output=True).returncode != 0
 
 
 # --- transcripts ---------------------------------------------------------------

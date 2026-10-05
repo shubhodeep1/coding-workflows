@@ -1959,8 +1959,20 @@ attempts of that role in the same job.
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
 | `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. |
+| `CLAUDE_READ_SNAPSHOT_MAX_FILES` | Read-profile `claude_run` snapshot file limit (default `20000`); exceeding it falls back to codex/OpenCode instead of reading the host filesystem. |
+| `CLAUDE_READ_SNAPSHOT_MAX_BYTES` | Read-profile `claude_run` snapshot total byte limit (default `268435456`, 256 MiB); exceeding it falls back to codex/OpenCode. Docker is required for read-profile Claude calls; tools have no GitHub network access in the isolated container. |
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
+
+Read-profile calls reject non-empty `AI_ENGINE_ISOLATED_READ_PATHS` instead of
+bind-mounting additional host paths; the caller falls back with
+`reason=isolation_read_path_invalid`. Only the filtered checkout snapshot and
+trusted support inputs are mounted. Its Git history is a synthetic commit of
+the filtered files (including exclusion of standard extensionless SSH keys,
+such as `id_ed25519`, `id_ed25519_sk`, and `id_ecdsa_sk`); historical revisions
+and the source Git object store are not available to read-profile tools.
+Session reuse mounts only the selected session ID's transcript directory,
+not other sessions.
 
 **Which engine a role uses**, first match wins: `CLAUDE_FIXER_ENABLED=false`
 for the four review write roles, the work item's labels (`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),

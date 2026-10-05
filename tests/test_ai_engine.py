@@ -76,8 +76,18 @@ import json, os, sys
 from pathlib import Path
 log = Path(__DOCKER_LOG__)
 argv = sys.argv[1:]
+record = {"argv": argv, "env": dict(os.environ), "stdin": sys.stdin.read() if argv[0] == "run" else ""}
+if argv[0] == "run":
+	for arg in argv:
+		if arg.startswith("type=bind,src=") and "/source-snapshot,dst=" in arg:
+			snapshot = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
+			record["snapshot_files"] = sorted(str(p.relative_to(snapshot)) for p in snapshot.rglob("*") if p.is_file())
+			record["snapshot_config"] = (snapshot / ".git" / "config").read_text() if (snapshot / ".git" / "config").exists() else ""
+		if arg.startswith("type=bind,src=") and ",dst=/home/agent/.claude/projects" in arg:
+			session_mount = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
+			record["session_files"] = sorted(str(p.relative_to(session_mount)) for p in session_mount.rglob("*") if p.is_file())
 with log.open("a", encoding="utf-8") as handle:
-	handle.write(json.dumps({"argv": argv, "env": dict(os.environ), "stdin": sys.stdin.read() if argv[0] == "run" else ""}) + "\n")
+	handle.write(json.dumps(record) + "\n")
 if argv[:2] == ["image", "inspect"]:
 	sys.exit(0 if log.with_name("docker-cache-hit").exists() else 1)
 if argv[0] == "build":
@@ -388,6 +398,12 @@ def test_write_role_command_line(sandbox: dict) -> None:
 
 def test_read_role_command_line(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
+	(sandbox["work"] / ".env").write_text("PRIVATE=do-not-mount\n")
+	(sandbox["work"] / "file.txt").write_text("safe\n")
+	subprocess.run(["git", "-C", str(sandbox["work"]), "init", "-q"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "add", "file.txt"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "config", "http.extraheader", "AUTHORIZATION: hidden"], check=True)
 	result = _claude_run(sandbox, "SECURITY_AUDIT", AI_ENGINE_MODEL_HINT="claude-sonnet-5-5")
 	assert _rc(result) == 0, result.stderr
 	assert _calls(sandbox) == []
@@ -407,6 +423,14 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert "CLAUDE_ISOLATION role=SECURITY_AUDIT profile=read mode=container" in result.stderr
 	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=locked" in result.stderr
 	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=verified" in result.stderr
+	snapshot_mount = next(arg for arg in argv if arg.startswith("type=bind,src=") and f",dst={sandbox['work']},readonly" in arg)
+	snapshot = Path(snapshot_mount.split("src=", 1)[1].split(",dst=", 1)[0])
+	assert snapshot != sandbox["work"] and "file.txt" in call["snapshot_files"]
+	assert ".env" not in call["snapshot_files"]
+	assert "hidden" not in call["snapshot_config"]
+	assert not any("dst=/git-objects" in arg or f"src={sandbox['work'] / '.git' / 'objects'}" in arg for arg in argv)
+	assert not snapshot.exists()
+	assert all(f"src={sandbox['work']}," not in arg for arg in argv)
 	assert stat.S_IMODE(sandbox["support"].stat().st_mode) == 0o755
 	settings_path = next(arg.split("src=", 1)[1].split(",dst=", 1)[0] for arg in argv if "dst=/settings.json" in arg)
 	policy = json.loads(Path(settings_path).read_text(encoding="utf-8"))
@@ -470,6 +494,16 @@ def test_read_isolation_build_failure_falls_back(sandbox: dict) -> None:
 	assert _calls(sandbox) == []
 
 
+def test_read_snapshot_limit_falls_back_without_mounting_checkout(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["work"] / "file.txt").write_text("too big")
+	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
+	result = _bash(sandbox, f'_ai_engine_isolation_image() {{ printf "%s\\n" fake-image; }}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"', CLAUDE_READ_SNAPSHOT_MAX_BYTES="1")
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_snapshot_failed" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
 @pytest.mark.parametrize("mode", ["startup-fail", "startup-kill"])
 def test_read_isolation_container_start_failure_falls_back(sandbox: dict, mode: str) -> None:
 	_accounts(sandbox, A="TOK_OK", B="TOK_OK")
@@ -523,6 +557,35 @@ def test_read_isolation_rejects_session_mount_containing_pool(sandbox: dict) -> 
 	result = _bash(sandbox, script, CLAUDE_ENGINE_POOL_DIR=str(sandbox["pool"]))
 	assert _rc(result) == 75, result.stderr
 	assert "reason=isolation_pool_overlap" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_mounts_only_selected_session(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	session = "0123abcd-0000-4000-8000-00000000abcd"
+	sessions = sandbox["tmp"] / "rt" / "claude-read-sessions"
+	(sessions / "other-session" / "project").mkdir(parents=True)
+	(sessions / "other-session" / "project" / "private.jsonl").write_text("foreign transcript")
+	(sessions / session / "project").mkdir(parents=True)
+	(sessions / session / "project" / f"{session}.jsonl").write_text("own transcript")
+	result = _claude_run(sandbox, "SECURITY_AUDIT", session=session)
+	assert _rc(result) == 0, result.stderr
+	call = _docker_calls(sandbox)[0]
+	assert f"type=bind,src={sessions / session},dst=/home/agent/.claude/projects" in call["argv"]
+	assert call["session_files"] == [f"project/{session}.jsonl"]
+	assert call["argv"][-1] == session and call["argv"][-2] == "--resume"
+	assert "foreign transcript" not in json.dumps(call)
+
+
+def test_read_isolation_rejects_symlinked_session(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	session = "0123abcd-0000-4000-8000-00000000abcd"
+	sessions = sandbox["tmp"] / "rt" / "claude-read-sessions"
+	(sessions / "other-session").mkdir(parents=True)
+	(sessions / session).symlink_to(sessions / "other-session", target_is_directory=True)
+	result = _claude_run(sandbox, "SECURITY_AUDIT", session=session)
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_session_dir_unavailable" in result.stderr
 	assert not _docker_calls(sandbox)
 
 
@@ -596,23 +659,22 @@ def test_read_isolation_masks_checkout_credential_and_claude_md(sandbox: dict) -
 	assert "SECRET" in (sandbox["work"] / ".git" / "config").read_text()
 	assert "PASS_TWO" in (sandbox["work"] / ".git" / "config").read_text()
 	assert (sandbox["work"] / "CLAUDE.md").read_text() == "checkout CLAUDE.md\n"
-	assert any("empty-claude-md,dst=" in arg for arg in argv)
-	masks = [arg for arg in argv if "/git-mask/" in arg and "dst=" in arg]
-	assert len(masks) == 3
-	for mask in masks:
-		masked_config = Path(mask.split("src=", 1)[1].split(",dst=", 1)[0]).read_text().lower()
-		assert "extraheader" not in masked_config
-		assert "nested_secret" not in masked_config
-		assert "pass_one" not in masked_config and "pass_two" not in masked_config
+	snapshot_mount = next(arg for arg in argv if arg.startswith("type=bind,src=") and f",dst={sandbox['work']},readonly" in arg)
+	assert "/source-snapshot,dst=" in snapshot_mount
+	assert "CLAUDE.md" not in _docker_calls(sandbox)[0]["snapshot_files"]
+	assert not any(".codex-workflow-src" in path for path in _docker_calls(sandbox)[0]["snapshot_files"])
+	assert "SECRET" not in _docker_calls(sandbox)[0]["snapshot_config"]
+	assert not any("/git-mask/" in arg for arg in argv)
 
 
 def test_read_isolation_fails_closed_if_git_config_cannot_be_masked(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	subprocess.run(["git", "init", "-q", str(sandbox["work"])], check=True)
 	(sandbox["work"] / ".git" / "config").write_text("[http \"https://github.com/\"]\n\textraheader=SECRET\n[broken\n")
-	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
+	result = _bash(sandbox, f'_ai_engine_isolation_image() {{ printf "%s\\n" fake-image; }}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"')
 	assert _rc(result) == 75
-	assert "reason=isolation_mask_failed" in result.stderr
+	assert "reason=isolation_snapshot_failed" in result.stderr
 	assert not _docker_calls(sandbox)
 
 
