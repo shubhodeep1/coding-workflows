@@ -1058,10 +1058,21 @@ not delete wrappers that are already present in `.github/workflows/`.
 > than using the session checkout as a substitute for the pushed commit.
 > A push with a destination that cannot be resolved locally (such as
 > `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
-> If `--repo` and a positional remote are both supplied, the guard checks the
-> refspecs after that remote, not the remote name as a branch. If the local
-> remote-config lookup errors rather than reporting no such remote, the guard
-> asks instead of guessing which branch the push targets.
+> Without inline config, if `--repo` and a positional remote are both supplied,
+> the guard checks the refspecs after that remote, not the remote name as a
+> branch. If the local remote-config lookup errors rather than reporting no
+> such remote, the guard asks instead of guessing which branch the push targets.
+> With inline `git -c` options, `--repo` instead identifies the push remote and
+> every positional argument is a refspec. The guard reads the selected remote's
+> push URL and effective `push.default`/upstream mapping using those options,
+> then checks that repository's PRs. Git keeps the saved URL for an existing
+> remote despite an inline `remote.<name>.url` override; a newly defined inline
+> remote uses that URL. Inline `--config-env` and `GIT_CONFIG_*`
+> assignments (including `env GIT_CONFIG_*=... git push`) that cannot be
+> resolved safely are blocked, as are unmappable inline bulk/refspec pushes.
+> Inline remote-URL overrides on `git commit` are blocked so the commit check
+> still uses the checkout's repository identity. Ordinary pushes without
+> inline config retain the previous origin-based check and confirmation path.
 
 > The merged-PR guard checks numeric push refspecs before a separate output
 > redirect (`git push origin 123 > /dev/null`). When an explicit push refspec

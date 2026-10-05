@@ -201,6 +201,7 @@ class _GuardTarget(NamedTuple):
 	warning: str = ""
 	bulk: str = ""
 	config: tuple[str, ...] = ()
+	remote: str = ""
 
 
 class LookupUnavailable(Exception):
@@ -216,8 +217,11 @@ def _run(argv: list[str], cwd: str | None, timeout: int) -> tuple[int, str, str]
 	"""
 	try:
 		config = _GIT_CONFIG_ARGS.get()
-		if config and "git" in argv:
-			git_index = argv.index("git")
+		git_index = (
+			0 if argv and argv[0] == "git" else
+			2 if argv[:3] == ["env", "GIT_TERMINAL_PROMPT=0", "git"] else -1
+		)
+		if config and git_index >= 0:
 			argv = argv[:git_index + 1] + [part for item in config for part in ("-c", item)] + argv[git_index + 1:]
 		overrides = _GIT_ENVIRONMENT.get()
 		proc = subprocess.run(
@@ -402,6 +406,15 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 			index += 1
+		if index < len(tokens) and tokens[index] == "env":
+			index += 1
+			while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+				name, value = tokens[index].split("=", 1)
+				if _INLINE_GIT_CONFIG_ENV_RE.fullmatch(name):
+					config_block = f"inline {name} environment override"
+				elif name in ("GIT_DIR", "GIT_WORK_TREE"):
+					environment[name] = value
+				index += 1
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
 			continue
 		index += 1
@@ -486,8 +499,14 @@ def _inline_push_config_block(config: tuple[str, ...]) -> str:
 		if len(parts) < 2:
 			return "inline key without a section"
 		section, field = parts[0].lower(), parts[-1].lower()
-		if section == "remote" and len(parts) >= 3 and field in ("push", "mirror", "pushurl"):
+		if section == "remote" and (
+			field == "pushdefault" or len(parts) >= 3 and field in ("push", "mirror", "pushurl")
+		):
 			return f"remote.*.{field}"
+		if section == "branch" and field in ("pushremote", "remote"):
+			return f"branch.*.{field}"
+		if section == "core" and field in ("worktree", "bare"):
+			return f"core.{field}"
 		if section in ("url", "include", "includeif"):
 			return f"{section}.*"
 	return ""
@@ -504,6 +523,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			config=invocation.config)]
 	positionals: list[str] = []
 	remote_provided = False
+	selected_remote = ""
 	bulk = ""
 	delete = False
 	tags = False
@@ -531,11 +551,14 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			index += 1
 			if index >= len(arguments):
 				uncertain = True
+			elif word in ("--repo", "--rep"):
+				selected_remote = arguments[index]
 		elif re.fullmatch(r"-[ufnqv]*d[ufnqv]*", word):
 			delete = True
 		elif word.startswith(("--push-option=", "--push-o=", "--pu=", "--repo=", "--rep=", "--receive-pack=", "--rece=", "--exec=", "--e=", "--force-with-lease=")) or (word.startswith("-o") and word != "-o"):
 			if word.startswith(("--repo=", "--rep=")):
 				remote_provided = True
+				selected_remote = word.split("=", 1)[1]
 		elif word.startswith("-"):
 			if word not in _PUSH_BOOLEAN_OPTIONS and not re.fullmatch(r"-[ufnqv]+", word):
 				uncertain = True
@@ -547,7 +570,17 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; destination branch is unknown", config=invocation.config)]
-	if remote_provided and positionals:
+	if remote_provided and invocation.config:
+		refspecs = positionals
+	elif remote_provided and positionals:
+		with _git_environment(invocation.environment):
+			code, _, _ = _run(["git", "config", "--get", f"remote.{positionals[0]}.url"],
+				invocation.cwd, _GIT_TIMEOUT_SECONDS)
+		if code not in (0, 1):
+			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+				"could not resolve git push positional repository; destination branch is unknown")]
+		refspecs = positionals[1:] if code == 0 else positionals
+	elif positionals:
 		with _git_environment(invocation.environment, invocation.config):
 			code, _, _ = _run(
 				["git", "config", "--get", f"remote.{positionals[0]}.url"],
@@ -555,11 +588,30 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			)
 		if code not in (0, 1):
 			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+				"inline git config: push positional repository cannot be resolved" if invocation.config else
 				"could not resolve git push positional repository; destination branch is unknown",
 				config=invocation.config)]
-		refspecs = positionals[1:] if code == 0 else positionals
-	else:
+		if code == 1 and invocation.config and not extract_repo_slug(positionals[0]):
+			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+				"inline git config: push positional repository is unknown", config=invocation.config)]
 		refspecs = positionals[1:]
+		selected_remote = positionals[0] if invocation.config else ""
+	else:
+		refspecs = []
+	if not invocation.config:
+		selected_remote = ""  # Preserve the legacy origin check for commands without inline config.
+	if invocation.config and not selected_remote:
+		with _git_environment(invocation.environment, invocation.config):
+			current = current_branch(invocation.cwd)
+			for key in (f"branch.{current}.pushRemote", "remote.pushDefault", f"branch.{current}.remote"):
+				code, output, _ = _run(["git", "config", "--get", key], invocation.cwd, _GIT_TIMEOUT_SECONDS)
+				if code == 0 and output.strip():
+					selected_remote = output.strip()
+					break
+				if code not in (0, 1):
+					return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+						"inline git config: push remote cannot be resolved", config=invocation.config)]
+		selected_remote = selected_remote or "origin"
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:
@@ -571,7 +623,8 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			if mode == "nothing":
 				return []
 			if mode == "matching":
-				bulk = "push.default=matching"
+				return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+					"inline git config: push.default=matching cannot be mapped to one branch", config=invocation.config)]
 			elif mode in ("upstream", "tracking"):
 				with _git_environment(invocation.environment, invocation.config):
 					current = current_branch(invocation.cwd)
@@ -580,14 +633,14 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 				branch = _branch_ref(output.strip()) if code == 0 and output.strip().startswith("refs/heads/") else None
 				if branch:
 					return [_GuardTarget(invocation.cwd, invocation.environment, branch, "HEAD", True,
-						config=invocation.config)]
+						config=invocation.config, remote=selected_remote)]
 				mode = "unresolvable upstream branch"
 			if mode not in ("simple", "current", "matching"):
 				return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
 					"inline git config: push.default is unsupported or cannot be resolved",
 					config=invocation.config)]
 		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
-			bulk=bulk, config=invocation.config)]
+			bulk=bulk, config=invocation.config, remote=selected_remote)]
 	targets: list[_GuardTarget] = []
 	for refspec in refspecs:
 		refspec = refspec.removeprefix("+")
@@ -609,13 +662,13 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			continue
 		if branch is None:
 			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True,
-				config=invocation.config))
+				config=invocation.config, remote=selected_remote))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True,
-			config=invocation.config))
+			config=invocation.config, remote=selected_remote))
 	if bulk:
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
-			bulk=bulk, config=invocation.config))
+			bulk=bulk, config=invocation.config, remote=selected_remote))
 	return targets
 
 
@@ -761,6 +814,10 @@ def git_subcommands(command: str) -> set[str]:
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1
+		if index < len(tokens) and tokens[index] == "env":
+			index += 1
+			while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+				index += 1
 		if index >= len(tokens):
 			continue
 
@@ -1422,10 +1479,15 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
-		if invocation.subcommand == "commit" and invocation.config_block:
+		commit_config_block = invocation.config_block or (
+			_inline_push_config_block(invocation.config)
+			or next(("remote URL override" for entry in invocation.config
+				if re.fullmatch(r"remote\..+\.url", entry.split("=", 1)[0], re.IGNORECASE)), "")
+		) if invocation.subcommand == "commit" else ""
+		if commit_config_block:
 			blocks.append(
 				f"BLOCKED: git commit uses inline Git configuration the merged-PR guard cannot resolve "
-				f"({invocation.config_block}). Re-run without the inline override, or set it in the repository config first."
+				f"({commit_config_block}). Re-run without the inline override, or set it in the repository config first."
 			)
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
@@ -1458,6 +1520,29 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				continue
 			if target.warning:
 				_warn(target.warning)
+			push_slug = ""
+			if target.reaches_remote and (target.config or target.remote not in ("", "origin")):
+				# Git push keeps the saved URL for an existing remote even when -c
+				# remote.<name>.url supplies a different value. A newly defined remote
+				# has no saved URL, so resolve that one from the inline config instead.
+				with _git_environment(target.environment):
+					code, url, _ = _run(["git", "remote", "get-url", "--push", target.remote or "origin"],
+						target.cwd, _GIT_TIMEOUT_SECONDS)
+				if code != 0 and target.config:
+					with _git_environment(target.environment, target.config):
+						code, url, _ = _run(["git", "config", "--get", f"remote.{target.remote or 'origin'}.url"],
+							target.cwd, _GIT_TIMEOUT_SECONDS)
+						if code == 1:
+							url = target.remote
+							code = 0
+				push_slug = extract_repo_slug(url) if code == 0 and len(url.splitlines()) == 1 else ""
+				if not push_slug:
+					if target.config:
+						blocks.append("BLOCKED: git push uses inline Git configuration the merged-PR guard "
+							"cannot resolve (push repository identity unavailable).")
+					else:
+						unresolved_push_destinations.append("could not resolve git push repository identity.")
+					continue
 			if target.tip != "HEAD":
 				with _git_environment(target.environment, target.config):
 					code, resolved_source_sha, _ = _run(
@@ -1478,9 +1563,16 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					# Detached HEAD without a literal branch destination.
 					continue
 				base = default_branch(target.cwd)
+				if not push_slug and base and branch == base:
+					continue
+			with _git_environment(target.environment):
+				checkout_slug = repo_slug(target.cwd) if push_slug else ""
+			with _git_environment(target.environment, target.config):
+				slug = push_slug or checkout_slug or repo_slug(target.cwd)
+				if push_slug and push_slug != checkout_slug:
+					base = ""
 				if base and branch == base:
 					continue
-				slug = repo_slug(target.cwd)
 				if not slug:
 					if target.config:
 						blocks.append(
@@ -1505,6 +1597,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						pr_snapshots[key] = (pull_requests, cached is None, "")
 				pull_requests, fresh, failure = pr_snapshots[key]
 				if failure:
+					if push_slug and push_slug != checkout_slug:
+						_request_confirmation(f"could not reach GitHub to check PR status for `{branch}` in the push repository ({failure}).")
+						continue
 					outcome, message = _unreachable_outcome(
 						failure, tip, branch, base, target.cwd, target.reaches_remote
 					)
@@ -1520,6 +1615,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					except LookupUnavailable as exc:
 						failure = f"could not re-verify: {exc}"
 						pr_snapshots[key] = (None, True, failure)
+						if push_slug and push_slug != checkout_slug:
+							_request_confirmation(f"could not re-verify PR status for `{branch}` in the push repository ({failure}).")
+							continue
 						outcome, message = _unreachable_outcome(
 							failure, tip, branch, base, target.cwd, target.reaches_remote
 						)
@@ -1533,6 +1631,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
+	if any(invocation.subcommand == "push" and invocation.config for invocation in _guarded_git_invocations(command, checkout)) and (
+		bulk_reasons or unknown_destination_reasons or unresolved_push_sources or unresolved_push_destinations
+	):
+		return 2, "BLOCKED: git push uses inline Git configuration whose effective destination or source cannot be resolved."
 	unresolved_push_sources.extend(unresolved_push_destinations)
 	if bulk_reasons:
 		unknown_destination_reasons.append(
