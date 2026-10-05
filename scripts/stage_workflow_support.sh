@@ -159,10 +159,11 @@ for sf in memory_record.v1.json lessons_learned_record.v1.json processed_command
   fi
 done
 
-# WORKFLOW.md overlay is opt-in by file presence; absent file must
-# stay a no-op while valid prompt overrides flow through render_prompt.py.
+# Read the overlay from the pinned default branch, never the PR head.
 PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py" \
   --repo-root "${workspace_root}" \
+  --trusted-source-repo "${CURRENT_REPOSITORY}" \
+  --trusted-root "${SUPPORT_ROOT_DIR}/workflow-overlay" \
   --schema-path "${SUPPORT_AI_MEMORY_DIR}/schemas/workflow_overlay.v1.json" \
   --github-env "${GITHUB_ENV}"
 
@@ -819,11 +820,20 @@ emit_consumer_gitignore()
 run_overlay_loader()
 {
 	: "${GITHUB_ENV:?GITHUB_ENV must be set}"
-	# WORKFLOW.md overlay is opt-in by file presence; absent file must
-	# stay a no-op while valid prompt overrides flow through render_prompt.py.
+	if [ -z "${RUNNER_TEMP:-}" ] || [ -z "${GITHUB_RUN_ID:-}" ] || [ -z "${GITHUB_RUN_ATTEMPT:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		echo "::error::Trusted overlay staging requires RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, and GITHUB_REPOSITORY." >&2
+		return 1
+	fi
+	local overlay_schema_path="ai-memory/schemas/workflow_overlay.v1.json"
+	if [ -f "${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json" ]; then
+		overlay_schema_path="${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json"
+	fi
+	# The default-branch copy must outlive SUPPORT_STAGE_ROOT's EXIT cleanup.
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
 		--repo-root "${REPO_ROOT}" \
-		--schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
+		--trusted-source-repo "${GITHUB_REPOSITORY}" \
+		--trusted-root "${RUNNER_TEMP}/workflow-overlay-trusted-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+		--schema-path "${overlay_schema_path}" \
 		--github-env "${GITHUB_ENV}"
 }
 

@@ -813,6 +813,11 @@ committing the corresponding file:
   append/replace entries only. This repository ships a no-op overlay
   (`schema_version` only, no `prompt_overrides`), so `WORKFLOW_OVERLAY_ENABLED`
   is `true` but no rendered prompt is altered until override entries are added.
+  Review/autofix and validate stage it and its fragments from one fetched,
+  pinned default-branch commit, not from the PR/integration checkout; a fetch
+  failure disables the overlay instead of falling back to the checkout.
+  `replace_path` is ignored with a warning for `mode-judge`, `mode-judge-*`
+  and `mode-orchestrate-poll-judge`; `append_path` remains supported.
 - `.github/ai/concurrency_caps.yml` — parsed by
   `scripts/orchestrate_lib.py::load_concurrency_caps`. Missing or empty files
   disable the cap layer and restore legacy uncapped dispatch.
