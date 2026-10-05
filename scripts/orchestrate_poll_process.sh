@@ -15751,9 +15751,17 @@ unblock_trusted_login() {
 # fix-up issue in the current wave (the same way judge fix-ups are filed),
 # posts the wait marker on item <n>, and resumes a `failed` project so the
 # wave runs. Reads COMMENTS, STATE_FILE, TRACKING_NUM, TRACKING_LABELS,
-# PROJECT_STATUS; issues at most one create and two comments per request.
+# PROJECT_STATUS. Project/issue items need no extra API call; other items
+# require at most one pulls/<n> GET per pending request per tick to verify a
+# same-repository ai/issue-<n> head whose issue is in the project state.
+# Membership for both issue and PR items uses already-fetched, author-filtered
+# tracking comments, never the potentially forged working STATE_FILE.
+# Definitive rejections are recorded so they are not read again. No batched
+# cache in this path holds a PR's head repo or ref; _fetch_pr_json is the
+# smallest existing call that supplies both (§14).
 handle_unblock_judge_project_hooks() {
   local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
+  local binding_pr_json binding_head_issue binding_reason binding_trusted_state_json="" binding_trusted_state_status="unset"
   if has_label "${TRACKING_LABELS}" "ai:unblock-closed"; then
     if [ "${PROJECT_STATUS}" != "abandoned" ]; then
       jq '.status = "abandoned"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -15791,6 +15799,58 @@ handle_unblock_judge_project_hooks() {
     [[ "${req_item}" =~ ^[0-9]+$ ]] && [ -n "${req_id}" ] || continue
     if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
       continue
+    fi
+    if jq -e --arg id "${req_id}" '(.unblock_fixup_rejected_ids // []) | index($id) != null' "${STATE_FILE}" >/dev/null 2>&1; then
+      continue
+    fi
+    if [ "${req_item}" != "${TRACKING_NUM}" ]; then
+      if [ "${binding_trusted_state_status}" = "unset" ]; then
+        if binding_trusted_state_json="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '[.[] | select((.user.login // "") == $login)]' | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_state_v2.py extract --comments-json /dev/stdin 2>/dev/null)" \
+          && jq -e 'type == "object"' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+          binding_trusted_state_status="ok"
+        else
+          binding_trusted_state_status="unavailable"
+        fi
+      fi
+      if [ "${binding_trusted_state_status}" != "ok" ]; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=trusted_state"
+        continue
+      fi
+    fi
+    if [ "${req_item}" != "${TRACKING_NUM}" ] \
+      && ! jq -e --argjson issue "${req_item}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+      binding_pr_json="$(_fetch_pr_json "${req_item}")"
+      if ! jq -e '.number | type == "number"' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=pr_read"
+        continue
+      fi
+      binding_reason=""
+      if ! jq -e --argjson issue "${req_item}" --arg base "orchestrator/project-${TRACKING_NUM}" \
+        --argjson trusted_state "${binding_trusted_state_json}" \
+        '.number == $issue and .base.ref == $base and .base.ref == ($trusted_state.integration_branch // "")' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        binding_reason="base"
+      elif ! jq -e --arg base "orchestrator/project-${TRACKING_NUM}" '.integration_branch == $base' "${STATE_FILE}" >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=state_drift"
+        continue
+      elif ! jq -e --arg repo "${GITHUB_REPOSITORY}" '(.head.repo.full_name // "" | ascii_downcase) == ($repo | ascii_downcase)' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        binding_reason="head_repo"
+      else
+        binding_head_issue="$(jq -r '.head.ref // ""' <<< "${binding_pr_json}" 2>/dev/null || true)"
+        if [[ "${binding_head_issue}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+          binding_head_issue="${BASH_REMATCH[1]}"
+          if ! jq -e --argjson issue "${binding_head_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+            binding_reason="not_member"
+          fi
+        else
+          binding_reason="head_ref"
+        fi
+      fi
+      if [ -n "${binding_reason}" ]; then
+        jq --arg id "${req_id}" '.unblock_fixup_rejected_ids = (((.unblock_fixup_rejected_ids // []) + [$id] | reduce .[] as $entry ([]; if index($entry) == null then . + [$entry] else . end)) | .[-50:])' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" && post_state_comment || true
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unverified reason=${binding_reason}"
+        continue
+      fi
     fi
     [ -n "${req_title}" ] || req_title="Unblock fix-up for #${req_item}"
     wave_idx="$(jq -r '((.current_wave // 1) | tonumber) - 1 | if . < 0 then 0 else . end' "${STATE_FILE}" 2>/dev/null || echo 0)"

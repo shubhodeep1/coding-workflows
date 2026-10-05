@@ -341,6 +341,13 @@ print(json.dumps(evidence))
 PY
 }
 
+# A project may only claim an issue that its authenticated V2 state lists.
+unblock_state_lists_issue()
+{
+	local bound_issue="$1" binding_json="$2"
+	jq -e --argjson issue "${bound_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${binding_json}" >/dev/null 2>&1
+}
+
 unblock_main()
 {
 	local now stop_json fp verdict_name round marker_line comment_body terminal ops_file wait
@@ -381,7 +388,7 @@ unblock_main()
 	fi
 
 	# The project an item belongs to, and a PR's linked issue.
-	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref=""
+	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref="" pr_bound_issue=""
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "project" ]; then
 		tracking="${ITEM}"
@@ -389,8 +396,8 @@ unblock_main()
 		tracking="$(printf '%s\n' "${body_text}" | sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*\(\*\*\)\{0,1\}Tracking issue:\(\*\*\)\{0,1\}[[:space:]]*#\([0-9][0-9]*\)[[:space:]]*$/\3/p' | head -n1)"
 	fi
 	if [ "${ITEM_KIND}" = "pr" ]; then
-		# PR body references are untrusted; only its GitHub-reported base can
-		# bind a fix-up and its verdict ledger to an orchestrator project.
+		# PR body and base are untrusted. Project binding requires a same-repo
+		# ai/issue-<n> head whose issue is listed in the project's V2 state.
 		pr_json="$(gh api "repos/${REPOSITORY}/pulls/${ITEM}" 2>/dev/null || true)"
 		if ! jq -e --argjson item "${ITEM}" '.number == $item and (.base.ref | type == "string")' <<< "${pr_json}" >/dev/null 2>&1; then
 			unblock_log "item=${ITEM} outcome=skip reason=pr_unreadable"
@@ -398,6 +405,16 @@ unblock_main()
 		fi
 		if [[ "$(jq -r '.base.ref' <<< "${pr_json}")" =~ ^orchestrator/project-([1-9][0-9]*)$ ]]; then
 			tracking="${BASH_REMATCH[1]}"
+			if ! jq -e --arg repo "${REPOSITORY}" '(.head.repo.full_name // "" | ascii_downcase) == ($repo | ascii_downcase)' <<< "${pr_json}" >/dev/null 2>&1; then
+				unblock_log "item=${ITEM} kind=pr outcome=skip reason=project_binding_unverified detail=head_repo"
+				return 0
+			fi
+			if [[ "$(jq -r '.head.ref // ""' <<< "${pr_json}")" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+				pr_bound_issue="${BASH_REMATCH[1]}"
+			else
+				unblock_log "item=${ITEM} kind=pr outcome=skip reason=project_binding_unverified detail=head_ref"
+				return 0
+			fi
 		fi
 		head_sha="$(jq -r '.head.sha // ""' <<< "${pr_json}")"
 		head_ref="$(jq -r '.head.ref // ""' <<< "${pr_json}")"
@@ -494,9 +511,12 @@ unblock_main()
 				unblock_log "item=${ITEM} outcome=skip reason=project_comments_unavailable"
 				return 0
 			fi
-			if [ "${ITEM_KIND}" = "issue" ]; then
-				if ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
-					|| ! jq -e --argjson issue "${ITEM}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${RUNTIME_DIR}/project_binding.json" >/dev/null 2>&1; then
+			if [ "${ITEM_KIND}" = "issue" ] || [ "${ITEM_KIND}" = "pr" ]; then
+				local binding_issue="${ITEM}"
+				[ "${ITEM_KIND}" != "pr" ] || binding_issue="${pr_bound_issue}"
+				if ! jq --arg login "${UNBLOCK_LOGIN}" '[.[] | select((.user.login // "") == $login)]' "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/trusted_project_comments.json" \
+					|| ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/trusted_project_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
+					|| ! unblock_state_lists_issue "${binding_issue}" "${RUNTIME_DIR}/project_binding.json"; then
 					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified"
 					return 0
 				fi

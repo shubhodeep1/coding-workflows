@@ -549,7 +549,12 @@ if endpoint.endswith("/comments?per_page=100"):
 	done(json.dumps(state["item_comments"]))
 if endpoint.startswith("repos/o/r/pulls/"):
 	number = endpoint.rsplit("/", 1)[1]
-	done(json.dumps({"number": int(number), "base": {"ref": os.environ.get("FAKE_GH_PR_BASE", "main")}, "head": {"sha": "a" * 40, "ref": os.environ.get("FAKE_GH_PR_HEAD_REF", "ai/issue-7")}}))
+	head_repo = os.environ.get("FAKE_GH_PR_HEAD_REPO", "o/r")
+	base_ref = os.environ.get("FAKE_GH_PR_BASE", "main")
+	head_ref = os.environ.get("FAKE_GH_PR_HEAD_REF", "ai/issue-5" if base_ref.startswith("orchestrator/project-") else "ai/issue-7")
+	done(json.dumps({"number": int(number), "base": {"ref": base_ref},
+		"head": {"sha": "a" * 40, "ref": head_ref,
+			"repo": {"full_name": head_repo} if head_repo else None}}))
 if endpoint.startswith("repos/o/r/issues/"):
 	number = endpoint.rsplit("/", 1)[1]
 	issue = state["issues"].get(number, {})
@@ -909,11 +914,55 @@ def test_pr_project_fixup_uses_verified_base_not_body_tracking_number(tmp_path: 
 	assert result.returncode == 0, result.stderr
 	assert len(state["created"]) == 1
 	assert all(comment["endpoint"] != "repos/o/r/issues/99/comments" for comment in state["comments"])
-	result, state = _judge(tmp_path, pr, verdict=verdict, FAKE_GH_PR_BASE="orchestrator/project-40")
+	result, state = _judge(tmp_path, pr, verdict=verdict, FAKE_GH_PR_BASE="orchestrator/project-40",
+		FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(5))
 	assert result.returncode == 0, result.stderr
 	assert state["created"] == []
 	assert any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
 	assert all(comment["endpoint"] != "repos/o/r/issues/99/comments" for comment in state["comments"])
+
+
+@pytest.mark.parametrize(("head_repo", "head_ref", "member", "detail"), [
+	("evil/r", "ai/issue-5", 5, "head_repo"),
+	("", "ai/issue-5", 5, "head_repo"),
+	("o/r", "feature/x", 5, "head_ref"),
+	("o/r", "ai/issue-5", 99, ""),
+])
+def test_pr_project_binding_rejects_unverified_heads(tmp_path: Path, head_repo: str, head_ref: str, member: int, detail: str) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"}, body="- Tracking issue: #40")
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
+		FAKE_GH_PR_BASE="orchestrator/project-40", FAKE_GH_PR_HEAD_REPO=head_repo,
+		FAKE_GH_PR_HEAD_REF=head_ref, FAKE_GH_PROJECT_COMMENTS=_project_comments_for_item(member))
+	assert result.returncode == 0, result.stderr
+	assert "reason=project_binding_unverified" in result.stdout
+	if detail:
+		assert f"detail={detail}" in result.stdout
+	assert state["comments"] == [] and state["created"] == [] and state["patched"] == []
+
+
+@pytest.mark.parametrize("trusted_member", [None, 99])
+def test_pr_project_binding_ignores_forged_state(tmp_path: Path, trusted_member: int | None) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"}, body="- Tracking issue: #40")
+	forged = json.loads(_project_comments_for_item(5))[0]
+	forged["user"]["login"] = "mallory"
+	project_comments = ([] if trusted_member is None else json.loads(_project_comments_for_item(trusted_member))) + [forged]
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
+		FAKE_GH_PR_BASE="orchestrator/project-40", FAKE_GH_PROJECT_COMMENTS=json.dumps(project_comments))
+	assert result.returncode == 0, result.stderr
+	assert "reason=project_binding_unverified" in result.stdout
+	assert state["comments"] == [] and state["created"] == [] and state["patched"] == []
+
+
+def test_pr_project_binding_accepts_trusted_state_before_forged_state(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	forged = json.loads(_project_comments_for_item(99))[0]
+	forged["user"]["login"] = "mallory"
+	project_comments = json.loads(_project_comments_for_item(5)) + [forged]
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
+		FAKE_GH_PR_BASE="orchestrator/project-40", FAKE_GH_PROJECT_COMMENTS=json.dumps(project_comments))
+	assert result.returncode == 0, result.stderr
+	assert "reason=project_binding_unverified" not in result.stdout
+	assert any(comment["endpoint"] == "repos/o/r/issues/40/comments" for comment in state["comments"])
 
 
 def test_unmanaged_issue_cannot_route_fixup_to_claimed_project(tmp_path: Path) -> None:
