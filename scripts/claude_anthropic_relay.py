@@ -29,6 +29,7 @@ import socketserver
 import ssl
 import stat
 import sys
+import time
 
 MAX_BODY = 32 * 1024 * 1024
 UPSTREAM_HOST = "api.anthropic.com"
@@ -127,9 +128,15 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			# Consume a bounded, declared body before closing so a rejected
 			# client still sending it can receive the 400 instead of EPIPE.
 			if len(length) <= 8 and length.isascii() and length.isdecimal() and 0 < int(length) <= MAX_BODY:
-				self.connection.settimeout(1)
+				drain_deadline = time.monotonic() + 1
+				drain_remaining = int(length)
 				try:
-					self.rfile.read(int(length))
+					while drain_remaining and (drain_wait := drain_deadline - time.monotonic()) > 0:
+						self.connection.settimeout(drain_wait)
+						drain_chunk = self.rfile.read1(min(drain_remaining, 65536))
+						if not drain_chunk:
+							break
+						drain_remaining -= len(drain_chunk)
 				except OSError:
 					pass
 			return self._reject(400)

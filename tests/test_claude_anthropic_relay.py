@@ -17,6 +17,8 @@ import os
 import socket
 import threading
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -194,6 +196,42 @@ def test_broker_rejects_without_waiting_forever_for_body(chain) -> None:
 		with client.makefile("rb") as response:
 			assert response.readline().startswith(b"HTTP/1.0 400")
 	assert _Upstream.seen == []
+
+
+def test_broker_consumes_rejected_body_before_responding(chain) -> None:
+	with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+		client.settimeout(3)
+		client.connect(chain["socket"])
+		client.sendall(b"POST /v1/messages HTTP/1.0\r\nHost: localhost\r\nAuthorization: Bearer mine\r\nContent-Length: 4\r\n\r\nab")
+		client.settimeout(0.2)
+		with pytest.raises(socket.timeout):
+			client.recv(1)
+		client.settimeout(3)
+		client.sendall(b"cd")
+		with client.makefile("rb") as response:
+			assert response.readline().startswith(b"HTTP/1.0 400")
+	assert _Upstream.seen == []
+
+
+def test_rejected_body_drain_has_total_deadline_and_bounded_reads(monkeypatch) -> None:
+	clock = [0.0]
+	requested = []
+	def read_chunk(limit):
+		requested.append(limit)
+		clock[0] += 0.4
+		return b"x"
+
+	connection = Mock()
+	request = SimpleNamespace(
+		server=SimpleNamespace(mode="broker"), path="/v1/messages",
+		headers={"Authorization": "Bearer mine", "Content-Length": str(relay.MAX_BODY)},
+		connection=connection, rfile=SimpleNamespace(read1=read_chunk), _reject=lambda status: status,
+	)
+	with monkeypatch.context() as patch:
+		patch.setattr(relay.time, "monotonic", lambda: clock[0])
+		assert relay.Relay.do_POST(request) == 400
+	assert requested == [65536] * 3
+	assert connection.settimeout.call_count == 3
 
 
 def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
