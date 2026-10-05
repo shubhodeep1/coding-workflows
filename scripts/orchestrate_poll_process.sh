@@ -121,7 +121,7 @@ poller_claude_judge()
         exit 1
       fi
     fi
-    if ! rb_sandbox_root="$(SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral 2>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
+    if ! rb_sandbox_root="$(SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
       [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}"
       [ -z "${rb_untracked_hash_file}" ] || rm -f -- "${rb_untracked_hash_file}"
       ai_engine_fallback RB_JUDGE sandbox_prepare_failed
@@ -148,7 +148,7 @@ poller_claude_judge()
             echo '::error::Cannot remove file added by rejected review-blocked transfer.' >&2
             exit 1
           fi
-        done < <(comm -z -13 <(LC_ALL=C sort -z "${rb_untracked_before_file}") <(LC_ALL=C sort -z "${rb_untracked_after_file}"))
+        done < <(LC_ALL=C comm -z -13 <(LC_ALL=C sort -z "${rb_untracked_before_file}") <(LC_ALL=C sort -z "${rb_untracked_after_file}"))
         if ! git ls-files --others --exclude-standard -z > "${rb_untracked_after_file}" || ! cmp -s "${rb_untracked_before_file}" "${rb_untracked_after_file}"; then
           echo '::error::Review-blocked workspace still has untracked changes after rejected transfer.' >&2
           exit 1

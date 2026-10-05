@@ -204,6 +204,7 @@ def test_poller_rb_judge_falls_back_only_when_sandbox_unavailable(tmp_path: Path
 
 
 def test_rejected_poller_transfer_removes_only_new_untracked_files(tmp_path: Path) -> None:
+	assert 'LC_ALL=C comm -z -13 <(LC_ALL=C sort -z "${rb_untracked_before_file}") <(LC_ALL=C sort -z "${rb_untracked_after_file}")' in _helper_source()
 	support = tmp_path / ".codex-workflow-src" / "scripts"
 	support.mkdir(parents=True)
 	(support / "review_untrusted_sandbox.sh").write_text(FAKE_RB_SANDBOX, encoding="utf-8")
@@ -240,6 +241,20 @@ def test_rejected_poller_transfer_stops_if_existing_untracked_file_was_modified(
 	else:
 		assert preexisting.stat().st_mode & 0o111
 	assert _read(Path(f"{calls}.sandbox")).splitlines()[-1] == "cleanup"
+
+
+def test_poller_rb_prepare_preserves_engine_selection_log(tmp_path: Path) -> None:
+	support = tmp_path / ".codex-workflow-src" / "scripts"
+	support.mkdir(parents=True)
+	(support / "review_untrusted_sandbox.sh").write_text(
+		FAKE_RB_SANDBOX.replace('  prepare-ephemeral)\n', '  prepare-ephemeral)\n    printf "sandbox preparation started\\n" >&2\n'),
+		encoding="utf-8",
+	)
+	proc, _calls = _run_helper(tmp_path, engine="claude", role="RB_JUDGE", log_file="judge_log.txt")
+	assert "rc=0" in proc.stdout, proc.stderr
+	log = _read(tmp_path / "judge_log.txt")
+	assert "AI_ENGINE_SELECTED role=RB_JUDGE engine=claude" in log
+	assert "sandbox preparation started" in log
 
 
 # Each judge call site: the role, then the unchanged codex command that runs
