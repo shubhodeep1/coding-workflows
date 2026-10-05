@@ -437,8 +437,11 @@ def _trusted_git_env() -> dict[str, str]:
 	# Workflow steps can pin git to the PR checkout; isolate all trusted-source operations.
 	for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
 		auth_env.pop(name, None)
+	for name in tuple(auth_env):
+		if name.startswith("GIT_CONFIG_"):
+			auth_env.pop(name)
 	auth_env["GIT_TERMINAL_PROMPT"] = "0"
-	token = auth_env.get("GH_TOKEN") or auth_env.get("GITHUB_TOKEN", "")
+	token = auth_env.get("GH_TOKEN", "").strip() or auth_env.get("GITHUB_TOKEN", "").strip()
 	if token:
 		encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
 		auth_env.update({
@@ -452,7 +455,7 @@ def _trusted_git_env() -> dict[str, str]:
 def _trusted_remote_url(repo: str) -> str:
 	if TRUSTED_REPO_PATTERN.fullmatch(repo) is None or any(part in (".", "..") for part in repo.split("/")):
 		raise WorkflowOverlayLoadError("Invalid trusted source repository")
-	server_url = (os.environ.get("GITHUB_SERVER_URL") or "https://github.com").rstrip("/")
+	server_url = (os.environ.get("GITHUB_SERVER_URL") or "https://github.com").strip().rstrip("/") or "https://github.com"
 	return f"{server_url}/{repo}"
 
 

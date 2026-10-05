@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shlex
@@ -466,6 +467,34 @@ def test_empty_github_server_url_uses_https_default() -> None:
 		assert overlay_loader._trusted_remote_url("owner/repo") == "https://github.com/owner/repo"
 
 
+def test_trusted_git_uses_trimmed_fallback_token() -> None:
+	sys.path.insert(0, str(REPO_ROOT))
+	try:
+		from scripts import load_workflow_overlay as overlay_loader
+	finally:
+		sys.path.pop(0)
+	with patch.dict(os.environ, {"GH_TOKEN": " \n", "GITHUB_TOKEN": " fallback-token \n"}):
+		git_env = overlay_loader._trusted_git_env()
+	assert git_env["GIT_CONFIG_VALUE_0"] == "Authorization: Basic " + base64.b64encode(b"x-access-token:fallback-token").decode("ascii")
+
+
+def test_trusted_git_ignores_inherited_config_and_whitespace_server_url() -> None:
+	sys.path.insert(0, str(REPO_ROOT))
+	try:
+		from scripts import load_workflow_overlay as overlay_loader
+	finally:
+		sys.path.pop(0)
+	with patch.dict(os.environ, {
+		"GH_TOKEN": "", "GITHUB_TOKEN": "", "GIT_CONFIG_PARAMETERS": "'url.file:///attacker.insteadOf=https://github.com'",
+		"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraHeader", "GIT_CONFIG_VALUE_0": "untrusted",
+		"GITHUB_SERVER_URL": "   ",
+	}):
+		assert not any(name.startswith("GIT_CONFIG_") for name in overlay_loader._trusted_git_env())
+		assert overlay_loader._trusted_remote_url("owner/repo") == "https://github.com/owner/repo"
+	with patch.dict(os.environ, {"GITHUB_SERVER_URL": " https://github.com/ "}):
+		assert overlay_loader._trusted_remote_url("owner/repo") == "https://github.com/owner/repo"
+
+
 def test_trusted_overlay_missing_fragment_is_rejected_before_export() -> None:
 	with tempfile.TemporaryDirectory(prefix="trusted_overlay_missing_fragment_") as td:
 		root = Path(td)
@@ -558,6 +587,8 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 	for workflow_path in WORKFLOW_FILES:
 		workflow_text = workflow_path.read_text(encoding="utf-8")
 		if workflow_path.name == "review_autofix.yml":
+			stage_step = workflow_text.split("      - name: Stage workflow support files\n", 1)[1].split("      - name:", 1)[0]
+			assert 'CURRENT_REPOSITORY="${{ github.repository }}"' in stage_step
 			assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in workflow_text
 			assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in workflow_text
 			assert 'bash "${helper}"' in workflow_text
@@ -617,6 +648,8 @@ if __name__ == "__main__":
 	test_trusted_overlay_fetch_failure_disables_without_leaking_token()
 	test_trusted_git_is_noninteractive_and_timeout_is_recoverable()
 	test_empty_github_server_url_uses_https_default()
+	test_trusted_git_uses_trimmed_fallback_token()
+	test_trusted_git_ignores_inherited_config_and_whitespace_server_url()
 	test_trusted_overlay_missing_fragment_is_rejected_before_export()
 	test_trusted_overlay_blob_read_failure_disables_overlay()
 	test_trusted_overlay_rejects_unsafe_fragment_paths()
