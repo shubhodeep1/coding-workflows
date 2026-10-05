@@ -268,7 +268,12 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
 			if segment and segment[-1].isdigit():
-				segment.pop()
+				if len(segment) == 1:
+					segment.pop()  # Leading file descriptor, e.g. 2>&1 git push.
+				else:
+					# shlex loses the space: `push origin 2 >out` and `2>out`
+					# are indistinguishable. Check branch 2 AND ask about the redirect.
+					segment.append("<ambiguous-io-number>")
 			redirect_target = True
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
@@ -1400,7 +1405,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
 			if target.warning:
-				_warn(target.warning)
+				unverified_destinations.add("could not resolve git push options or refspec")
+				continue
 			if target.remote and target.remote != "origin":
 				with _git_environment(target.environment):
 					checkout_slug = repo_slug(target.cwd)
@@ -1419,8 +1425,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						target.cwd, _GIT_TIMEOUT_SECONDS,
 					)
 				if code != 0:
-					_warn("could not resolve git push source; checking the session checkout instead")
-					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+					unverified_destinations.add("could not resolve git push source")
+					continue
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
