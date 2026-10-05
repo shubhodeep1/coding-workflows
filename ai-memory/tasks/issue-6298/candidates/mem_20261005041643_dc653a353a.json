@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which `claude_run` roles should get credential isolation, meaning an isolated filesystem plus a relay so the model never sees the pool token file?\nChoices:\nA) Only read-profile roles (MATERIALITY, SUMMARISER, LOG_SUMMARY, RETRO, the read-only heal/security/triage roles), as the finding scopes it. Write-profile roles get their own follow-up issue. (RECOMMENDED)\nB) Every `claude_run` role, read and write profiles, in this change.\nC) Only MATERIALITY, the role that posts bot PR advisories as described in the exploit.\nQ2: When isolation can't start (Docker missing, the relay fails to come up, or the sandbox image fails to build), what should a read-profile role do?\nChoices:\nA) Fail closed using the existing engine fallback: exit 75, `AI_ENGINE_FALLBACK role=<R> reason=isolation_unavailable`, and continue on the codex/OpenCode path or the role's existing non-Claude default. Claude never runs unisolated. (RECOMMENDED)\nB) Fail the calling step outright, with no fallback.\nC) Run Claude unisolated as today and emit a `::warning::`.\n**Note:** C leaves the reported exposure open whenever isolation is unavailable, so it conflicts with fixing this finding.",
+  "fingerprint": "0a556f1285145acda19313f3c0f78f84d125dcc1852cc45b9e40b7e27d9d3c58",
+  "lineage": {
+    "issue_number": 6298,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37262156555",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37262156555",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005041643_dc653a353a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6298,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37262156555"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6298 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T04:16:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
