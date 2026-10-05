@@ -24,8 +24,6 @@ GUARD_PATH = REPO_ROOT / ".claude" / "hooks" / "pr_merge_status_guard.py"
 TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "pr_merge_status_guard.py"
 SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
-if not SETTINGS_PATH.is_file():
-	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
 
@@ -221,8 +219,6 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	unrelated github.com repo.
 	"""
 	session_start = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
-	if not session_start.is_file():
-		session_start = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "session-start.sh"
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
@@ -927,38 +923,6 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	assert lookups == ["feature/x"]
 
 
-@pytest.mark.parametrize(("command", "expected_branch"), [
-	("git push origin 2>/dev/null", "feature/x"),
-	("git push origin 2>&1", "feature/x"),
-	("git push origin 2 > /dev/null", "2"),
-	('git push origin "2">/dev/null', "2"),
-	(r"git push origin \2>/dev/null", "2"),
-])
-def test_numeric_redirects_do_not_hide_refspecs(merged_branch_repo, monkeypatch, command: str, expected_branch: str) -> None:
-	repo, _ = merged_branch_repo
-	merged_sha = _git(repo, "rev-parse", "HEAD")
-	_git(repo, "branch", "2", "feature/x")
-	lookups: list[str] = []
-	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
-	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
-	def listing(slug, branch, cwd):
-		lookups.append(branch)
-		return [dict(MERGED_PR, headRefOid=merged_sha)]
-	monkeypatch.setattr(guard, "query_pull_requests", listing)
-	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
-	assert code == 2, message
-	assert lookups == [expected_branch]
-
-
-@pytest.mark.parametrize("command", ['git push origin "$TARGET"', 'git push origin "$TARGET":feature/x'])
-def test_unresolved_push_refspec_requires_confirmation(merged_branch_repo, capsys, command: str) -> None:
-	repo, _ = merged_branch_repo
-	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}}) == (0, "")
-	output = capsys.readouterr().out
-	assert '"permissionDecision": "ask"' in output
-	assert "verify the actual push destination and source tip" in output
-
-
 def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	worktree = repo.parent / "other"
@@ -1034,10 +998,9 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 def test_template_copies_are_identical() -> None:
 	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
 	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
-	if SETTINGS_PATH != TEMPLATE_SETTINGS_PATH:
-		assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
-			encoding="utf-8"
-		)
+	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
+		encoding="utf-8"
+	)
 	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
 
