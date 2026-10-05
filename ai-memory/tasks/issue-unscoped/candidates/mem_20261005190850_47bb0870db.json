@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/ai-check-failure-triage.yml:63\u201364 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `triage-workflow-run` condition checks `github.event.workflow.path`, which is absent from the `workflow_run` event payload, so the consumer job skips every run.\n  WHY: The regression test masks the payload mismatch by adding a top-level `workflow` object in `_run_event` at line 66.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/ai-check-failure-triage.yml: `triage-workflow-run` condition, lines 63\u201364 | severity=high | confidence=5\n  PROBLEM: The condition checks `github.event.workflow.path`, but workflow-run event data is nested under `github.event.workflow_run`; the filter should use a field present in that payload.\n  WHY: The sibling `workflow` object is absent from the workflow-run payload, so this null check is false and the consumer job skips every run, including failed CI runs that should be triaged. The regression test masks this by adding a top-level `workflow` object in `_run_event` at line 66.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "26a0a50d12d0f78b37f2baa9977f92361b446dfe8b4fa4c32262a0b1c2b05014",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37358713227",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37358713227",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005190850_47bb0870db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37358713227"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T19:08:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
