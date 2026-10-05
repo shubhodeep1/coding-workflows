@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The rejected path cannot be identified from the evidence. What should this fix cover?\nChoices:\nA) Make the failure traceable without changing which paths are allowed. Put the cleaned-up relative directory and the rule it broke (for example `dot_subdir`, `excluded_case_variant`, `secret_name`, `symlink`) into the raised error, the transfer-reason file and the `::error::` line. Add a regression test that reproduces each rule. (RECOMMENDED)\nB) Do A, and also fix the most likely cause found in the code (see Q2).\nC) Do nothing in code until someone pulls the rejected path from the `review_sandbox_transfer_reason_*` artifact of runs 37244244934 / 37250546865 / 37255381476 and posts it here. Then fix only that path.\nQ2: Should a directory whose name differs only in letter case from an excluded name (for example `Build/`, `Dist/`, `Coverage/`) be skipped quietly, like its lowercase form? Today it aborts the transfer. This only applies if Q1 = B.\nChoices:\nA) Yes. Make the prune check at line 85 ignore case so it matches `allowed()`. Directories under `.github/` other than `workflows`/`actions`, names containing \"secret\" or \"credential\", and directory symlinks keep failing closed. (RECOMMENDED)\nB) No. Keep every current way of raising and change only the diagnostics.\nC) Also skip quietly any directory that cannot hold allowed files (including `.github/ai`), the same way disallowed files are skipped today. **Note:** this loosens the transfer guard, which the issue's fix constraints rule out. Picking it along with Q1 = A will need another round of clarification.\nQ3: The editor cannot see the root `.claude/commands/` (it is a top-level dot-directory left out of the sandbox), so it cannot fix `.claude` \u2194 `workflow-templates/.claude` parity failures. How should that be handled?\nChoices:\nA) Leave `.claude/**` out of the sandbox (it is a protected path). Add a short note to the editor's sandbox guidance that root `.claude/` is not available and must not be recreated. (RECOMMENDED)\nB) Make no prompt or guidance change. Only the guard and diagnostics work from Q1 goes ahead.\nC) Let `.claude/commands/*.md` into the sandbox snapshot and transfer. **Note:** this widens what an untrusted editor can write to a protected path. It conflicts with the \"do not relax the transfer guard\" constraint and needs security sign-off.",
+  "fingerprint": "f9163c78efcd6603699fd8e665554e171c2ed05191d816398feb351085445021",
+  "lineage": {
+    "issue_number": 6413,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37354944333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37354944333",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005182845_67fe0ee81e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6413,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37354944333"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6413 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T18:28:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
