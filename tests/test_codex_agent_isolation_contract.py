@@ -123,6 +123,22 @@ def test_helper_container_has_no_credentials_network_or_host_checkout():
 	assert "CODEX_ISOLATION_DISABLED" not in text and "fallback" not in text.lower().replace("fall back", "")
 
 
+def test_dependency_containers_require_the_registry_proxy():
+	for helper_name in ("codex_isolated_exec.sh", "review_untrusted_sandbox.sh"):
+		text = (SCRIPTS / helper_name).read_text(encoding="utf-8")
+		assert "dependency_registry_proxy.py" in text
+		for line in logical_lines(text):
+			if "docker run --rm" in line:
+				assert "--network none" in line, helper_name
+	stage = (SCRIPTS / "stage_workflow_support.sh").read_text(encoding="utf-8")
+	assert "dependency_registry_proxy.py" in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split()
+	implement = (WORKFLOWS / "implement.yml").read_text(encoding="utf-8")
+	assert "dependency_registry_proxy.py" in implement.split("for f in ", 1)[1].split("; do", 1)[0].split()
+	for workflow, minimum in (("implement.yml", 2), ("review_autofix.yml", 2)):
+		text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+		assert text.count("DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}") >= minimum
+
+
 def step_block(workflow_text: str, name: str) -> str:
 	start = workflow_text.index(f"      - name: {name}\n")
 	end = workflow_text.find("\n      - name: ", start + 1)
