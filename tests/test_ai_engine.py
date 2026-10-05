@@ -82,6 +82,7 @@ def sandbox(tmp_path: Path):
 		key: value
 		for key, value in os.environ.items()
 		if not key.startswith(("AI_ENGINE", "CLAUDE_", "ANTHROPIC_", "SUPPORT_", "TG_", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH"))
+		and key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "ALLOW_WORKFLOW_EDITS")
 	}
 	env.update(
 		{
@@ -312,10 +313,19 @@ def test_read_role_command_line(sandbox: dict) -> None:
 ])
 def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools: str, mode: str) -> None:
 	_accounts(sandbox, A="TOK_OK")
-	result = _claude_run(sandbox, "RB_JUDGE", AI_ENGINE_READ_ONLY=value)
+	result = _claude_run(sandbox, "IMPLEMENT", AI_ENGINE_READ_ONLY=value)
 	assert _rc(result) == 0, result.stderr
 	argv = _calls(sandbox)[0]["argv"]
 	assert (argv[argv.index("--tools") + 1], argv[argv.index("--permission-mode") + 1]) == (tools, mode)
+
+
+@pytest.mark.parametrize("role", ["REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "RB_JUDGE", "CONFLICT_RESOLVER"])
+def test_review_roles_cannot_run_host_claude(sandbox: dict, role: str) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, role)
+	assert _rc(result) == 75, result.stderr
+	assert f"AI_ENGINE_FALLBACK role={role} reason=host_run_forbidden" in result.stderr
+	assert _calls(sandbox) == []
 
 
 def test_read_profile_has_no_shell_permission() -> None:
@@ -363,7 +373,10 @@ def test_profile_tool_lists_match_claude_engine() -> None:
 	assert f'read) tools="{module.PROFILE_TOOLS["read"]}"' in engine_src
 	assert f'*) tools="{module.PROFILE_TOOLS["write"]}"' in engine_src
 	sandbox_src = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
-	assert f'--tools {module.PROFILE_TOOLS["write"]} --permission-mode bypassPermissions' in sandbox_src
+	assert f"claude_tools='{module.PROFILE_TOOLS['write']}'" in sandbox_src
+	assert f"claude_tools='{module.PROFILE_TOOLS['read']}'" in sandbox_src
+	assert 'claude_permissions=bypassPermissions' in sandbox_src
+	assert 'claude_permissions=dontAsk' in sandbox_src
 	for src in (engine_src, sandbox_src):
 		assert "--tools default" not in src
 		assert 'tools="default"' not in src

@@ -461,10 +461,12 @@ def test_missing_engine_keeps_every_role_on_codex(tmp_path):
 	assert {values[f"AI_ENGINE_RESOLVED_{role}"] for role in FIXER_ROLES} == {"codex"}
 
 
-def test_sandbox_prepare_follows_the_editor_engine_with_an_opencode_fallback():
+def test_sandbox_prepare_follows_both_roles_with_an_opencode_fallback():
 	run = AGENT_STEPS["Install project dependencies (best-effort)"]["run"]
 	assert 'review_untrusted_sandbox.sh" prepare claude; then' in run
-	assert 'echo "AI_ENGINE_RESOLVED_REVIEW_EDITOR=codex" >> "$GITHUB_ENV"' in run
+	assert '[ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]' in run
+	assert 'for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR; do' in run
+	assert 'echo "${resolved}=codex" >> "$GITHUB_ENV"' in run
 	assert run.count('bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare\n') == 2
 
 
@@ -484,12 +486,12 @@ REVIEW_SITES = {
 		'      -- "${editor_opencode_cmd[@]}" < "${prompt_file}" 2>"${stderr_target}"',
 	),
 	"review_consolidate.sh": (
-		'bash -c \'source "$1" && claude_run REVIEW_CONSOLIDATOR "$2" "$3" "$4"\'',
+		'claude REVIEW_CONSOLIDATOR read \\',
 		'elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then',
 		'			-- "${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}"; then',
 	),
 	"review_conflict_resolve.sh": (
-		'bash -c \'source "$1" && claude_run CONFLICT_RESOLVER "$2" "$3" "$4"\'',
+		'/dev/null claude CONFLICT_RESOLVER write \\',
 		'elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then',
 		'        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \\',
 	),
@@ -512,16 +514,25 @@ def test_each_review_role_tries_claude_then_the_unchanged_opencode_command():
 	assert 'review_rb_claude_run write "${RB_FIX_PROMPT}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" "${JUDGE_EFFECTIVE_REASONING_EFFORT}" || rb_fix_claude_rc=$?' in rb
 
 
-FAKE_ENGINE = r"""
-claude_run() {
-  printf '%s|%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "$4" "${AI_ENGINE_READ_ONLY:-}" "${AI_ENGINE_EFFORT_HINT:-}" >> "${CALLS}"
-  case "${MODE}" in
-    success) printf 'verdict\n' > "$3"; return 0 ;;
-    unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
-    *) return 1 ;;
-  esac
-}
-"""
+FAKE_SANDBOX = r'''#!/usr/bin/env bash
+case "$1" in
+  prepare-ephemeral)
+    [ "${MODE}" != prepare_failed ] || exit 1
+    echo "${FAKE_ROOT}"
+    echo prepare-ephemeral >> "${CALLS}"
+    ;;
+  run)
+    printf 'run|%s|%s|%s\n' "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
+    case "${MODE}" in
+      success) printf 'verdict\n' > "$3" ;;
+      unavailable) exit 75 ;;
+      outdated) exit 2 ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  cleanup) echo cleanup >> "${CALLS}" ;;
+esac
+'''
 
 
 def _rb_helper() -> str:
@@ -535,12 +546,14 @@ def _run_rb_helper(tmp: Path, *, engine: str, mode: str, access: str = "read", s
 	scripts = tmp / "scripts"
 	scripts.mkdir()
 	if stage:
-		(scripts / "ai_engine.sh").write_text(FAKE_ENGINE, encoding="utf-8")
+		(scripts / "review_untrusted_sandbox.sh").write_text(FAKE_SANDBOX, encoding="utf-8")
 	(tmp / "prompt.txt").write_text("judge\n", encoding="utf-8")
 	calls = tmp / "calls"
 	script = _rb_helper() + f'rc=0; review_rb_claude_run {access} prompt.txt out.txt err.txt high || rc=$?; echo "rc=$rc"\n'
 	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(scripts), RB_OPENCODE_WORKSPACE=str(tmp), MODEL_EDITOR="openai/gpt-6-sol",
-		AI_ENGINE_RESOLVED_RB_JUDGE=engine, MODE=mode, CALLS=str(calls))
+		AI_ENGINE_RESOLVED_RB_JUDGE=engine, MODE=mode, CALLS=str(calls), FAKE_ROOT=str(tmp / "fake-root"), RUNTIME_DIR=str(tmp))
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(inherited, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
 	return proc, (calls.read_text(encoding="utf-8") if calls.exists() else "")
 
@@ -548,21 +561,23 @@ def _run_rb_helper(tmp: Path, *, engine: str, mode: str, access: str = "read", s
 def test_rb_verdict_pass_runs_claude_read_only(tmp_path):
 	proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="success")
 	assert "rc=0" in proc.stdout, proc.stderr
-	assert calls.splitlines() == [f"RB_JUDGE|prompt.txt|out.txt|{tmp_path}|true|high"]
+	assert calls.splitlines() == ["prepare-ephemeral", f"run|RB_JUDGE|read|{tmp_path / 'fake-root'}", "cleanup"]
 	assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "verdict\n"
 
 
 def test_rb_fix_pass_keeps_the_write_profile(tmp_path):
 	_proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="success", access="write")
-	assert calls.split("|")[4] == "false"
+	assert calls.splitlines()[1] == f"run|RB_JUDGE|write|{tmp_path / 'fake-root'}"
 
 
 def test_rb_helper_returns_75_off_claude_unavailable_or_unstaged(tmp_path):
-	for index, (engine, mode, stage) in enumerate((("codex", "success", True), ("claude", "unavailable", True), ("claude", "success", False))):
+	for index, (engine, mode, stage) in enumerate((("codex", "success", True), ("claude", "unavailable", True), ("claude", "success", False), ("claude", "outdated", True), ("claude", "prepare_failed", True))):
 		work = tmp_path / str(index)
 		work.mkdir()
-		proc, _calls = _run_rb_helper(work, engine=engine, mode=mode, stage=stage)
+		proc, recorded = _run_rb_helper(work, engine=engine, mode=mode, stage=stage)
 		assert "rc=75" in proc.stdout, (engine, mode, stage, proc.stderr)
+		if mode in ("unavailable", "outdated"):
+			assert recorded.splitlines()[-1] == "cleanup"
 	crash = tmp_path / "crash"
 	crash.mkdir()
 	proc, _calls = _run_rb_helper(crash, engine="claude", mode="crash")
@@ -571,6 +586,6 @@ def test_rb_helper_returns_75_off_claude_unavailable_or_unstaged(tmp_path):
 
 def test_sandbox_reports_progress_while_claude_streams():
 	text = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
-	assert 'echo "CLAUDE_ENGINE progress role=REVIEW_EDITOR transcript_bytes=${size}" >&2' in text
+	assert 'echo "CLAUDE_ENGINE progress role=${claude_role} transcript_bytes=${size}" >&2' in text
 	assert 'while sleep "${REVIEW_SANDBOX_PROGRESS_SECS:-60}" </dev/null >/dev/null 2>&1; do' in text
 	assert text.count('kill "${progress_pid}"') == 2

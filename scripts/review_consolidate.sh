@@ -608,19 +608,24 @@ fi
 	# the answer to tmp_out; exit 75 (Claude unavailable) runs the unchanged
 	# OpenCode command below.
 	consolidator_claude_rc=75
-	consolidator_engine_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
-	if [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ] && [ -f "${consolidator_engine_sh}" ]; then
+	consolidator_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+	if [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ] && [ -f "${consolidator_sandbox_sh}" ] && [ -n "${REVIEW_SANDBOX_ROOT:-}" ]; then
 		consolidator_claude_rc=0
-		# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
-		AI_ENGINE_MODEL_HINT="${REVIEW_CONSOLIDATOR_MODEL}" AI_ENGINE_EFFORT_HINT="${REVIEW_CONSOLIDATOR_REASONING}" \
-			timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
-			bash -c 'source "$1" && claude_run REVIEW_CONSOLIDATOR "$2" "$3" "$4"' _ \
-			"${consolidator_engine_sh}" "${CONSOLIDATOR_PROMPT_FILE}" "${tmp_out}" "${consolidator_workspace}" \
+		timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+			bash "${consolidator_sandbox_sh}" run "${CONSOLIDATOR_PROMPT_FILE}" "${tmp_out}" \
+			"${REVIEW_CONSOLIDATOR_MODEL}" "${REVIEW_CONSOLIDATOR_REASONING}" "${consolidator_opencode_config}" \
+			claude REVIEW_CONSOLIDATOR read \
 			2> "${tmp_err}" || consolidator_claude_rc=$?
+		if [ "${consolidator_claude_rc}" -eq 2 ]; then
+			echo 'AI_ENGINE_FALLBACK role=REVIEW_CONSOLIDATOR reason=sandbox_helper_outdated' >&2
+			consolidator_claude_rc=75
+		fi
 		cmd_rc="${consolidator_claude_rc}"
 		if [ "${consolidator_claude_rc}" -eq 75 ]; then
 			grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${tmp_err}" >&2 || true
 		fi
+	elif [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]; then
+		echo 'AI_ENGINE_FALLBACK role=REVIEW_CONSOLIDATOR reason=sandbox_unavailable' >&2
 	fi
 	if [ "${consolidator_claude_rc}" -ne 75 ]; then
 		:
