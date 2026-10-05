@@ -8223,6 +8223,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
 		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		assert (host / "tests/test_audit_plans_command.py").read_text() == "operator command contract\n"
 		(source / ".claude/commands").mkdir()
 		(source / ".claude/commands/audit-plans.md").write_text("untrusted\n")
 		result = run("transfer")

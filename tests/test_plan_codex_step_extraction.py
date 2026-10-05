@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from runpy import run_path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -44,7 +45,7 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	stage_step = _workflow_step(workflow_text, "Stage workflow support files")
 
 	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in workflow_text
-	assert "ai_engine.sh claude_engine.py claude_settings.json.tmpl; do" in stage_step
+	assert 'install -m 0644 "${src}" scripts/claude_settings.json.tmpl' in workflow_text
 	assert (REPO_ROOT / "scripts" / "claude_settings.json.tmpl").is_file()
 	assert "if: env.SKIP_PLAN != 'true'" in step
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
@@ -55,6 +56,22 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 		"          bash scripts/run_plan_codex.sh\n"
 	)
 	assert len(step.encode("utf-8")) < 2_000
+
+
+def test_workflow_reference_checker_accepts_claude_settings_template() -> None:
+	checker_ns = run_path(str(REPO_ROOT / "scripts" / "check_workflow_script_refs.py"))
+	extract_refs = checker_ns["extract_refs"]
+	for reference in (
+		"scripts/claude_settings.json.tmpl",
+		"${SUPPORT_SCRIPTS_DIR}/claude_settings.json.tmpl",
+		"for f in claude_settings.json.tmpl; do install scripts/${f}; done",
+	):
+		assert extract_refs(reference) == {"claude_settings.json.tmpl"}
+	result = subprocess.run(
+		["python3", "scripts/check_workflow_script_refs.py"],
+		cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0, result.stderr
 
 
 def test_extracted_prompt_matches_pre_extraction_bytes() -> None:

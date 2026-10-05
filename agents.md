@@ -71,9 +71,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
    `.claude/hooks/pr_merge_status_guard.py`, and
    `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
-   `.claude/` files remain excluded from snapshot and transfer. Its
-   isolation helpers must already exist in the verified workflow support
-   commit; a PR's own copies are review data,
+   `.claude/` files remain excluded from snapshot and transfer. The command
+   contract test `tests/test_audit_plans_command.py` is also omitted because
+   its root `.claude/commands/audit-plans.md` input is excluded; host CI still
+   runs it. Its isolation helpers must already exist in the verified workflow
+   support commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
    PR-backed `claude/*` heads take the normal review path like every other
    PR: the GPT editor, conflict resolver, review-blocked judge and auto-merge
@@ -471,6 +473,15 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- Host-side static-context reads of checkout-controlled `README.md` and
+  `agents.md` skip symbolic links rather than following them into prompt text.
+  Required `unattended_system_instructions.md` and `ai_pipeline.md` symlinks
+  instead fail prompt assembly before any content is written; review checkout
+  credential persistence is unchanged.
+- Static prompts omit the optional overflow-runbook pointer when
+  `probably_unnecessary_but_read_if_stuck.md` is a symlink; regular runbooks
+  still receive the pointer. A symlink emits a warning without directing the
+  model to read its target from the credential-bearing checkout.
 - The review gate's existing PR read validates the same-repository head and
   exports `review_checkout_sha` only for a 40-hex SHA. `Checkout repo` uses
   that SHA for every PR event, so reviewer and other `GITHUB_WORKSPACE` file
@@ -484,6 +495,31 @@ a new value, add it to the appropriate overrides file with a
   source/workspace/PR-metadata SHA mismatch, or a branch that advances during
   fetch, sets `AUTOFIX_STALE_BASE_SKIP` so no reviewer, editor or merge acts
   on stale files.
+- Before host-side pre-review helpers run against the PR tree, `review_autofix.yml`
+  requires a Python that honors `PYTHONSAFEPATH`. The Semble and Serena
+  bootstrap import probes run from private neutral directories; Serena's
+  trusted absolute-path handshake probe retains the project cwd for
+  `--project-from-cwd` while clearing `PYTHONPATH` and passing safe-path to its
+  server subprocess.
+  Serena requires an absolute `HOME` for Codex config writes; a relative or
+  missing `HOME` leaves the tool unavailable rather than writing under the PR tree.
+  Other pre-review `python3 -c`, `-m` and stdin calls set `PYTHONSAFEPATH=1`
+  per call, including consolidator, reviewer and host-side editor helpers;
+  reviewer Python imports require absolute trusted support directories rather
+  than falling back to the PR checkout. The host-side partial-finalize timeout
+  extractor also uses safe-path when reading the workflow YAML. Script-file
+  imports and the checkout's Git auth are unchanged.
+- `orchestrate.yml` and `orchestrate_clarify_respond.yml` also assemble static
+  context on the host. They reject symlinked required instructions and pipeline
+  files before writing prompt output, and omit symlinked local agents files,
+  `README.md`, and the optional overflow-runbook pointer with warnings. Regular
+  files retain their existing content and local agents-file precedence in the
+  clarify-respond workflow. Checkout credential handling is unchanged.
+- Review's optional break-glass scan and conflict-resolution prompt rendering
+  also use safe-path Python in the credential-bearing checkout. The conflict
+  preparation path can run before reviewers when pre-review conflict resolution
+  is enabled; resolver retries remain host-side but no longer import checkout
+  modules through Python's implicit current-directory entry.
 - `internal-review.yml` itself must not forward a `with:` input that
   `review_autofix.yml` on `main` does not define yet: GitHub validates the
   call against `main`'s file, so every review run on the PR adding the input
@@ -628,9 +664,9 @@ a new value, add it to the appropriate overrides file with a
 | clarify, clarify-respond | `openai/gpt-6-sol` | `high` (smoke: `low` — `clarify.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | Claude (Opus 5.5; codex fallback) · `CLARIFY`, `CLARIFY_RESPOND` |
 | plan | `openai/gpt-6-sol` | `high` (smoke: `low` — `plan.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | Claude (Opus 5.5; codex fallback) · `PLAN` |
 | orchestrate (decompose), judge | `openai/gpt-6-sol` | `high` | `low` | codex · `ORCHESTRATE`, `WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE` |
-| implement (main editor) | `openai/gpt-6-sol` | `high` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | `low` | codex · `IMPLEMENT` |
-| implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` | codex · `IMPLEMENT_REPAIR` |
-| implement-diagnose | `openai/gpt-6-sol` | `high` | `low` | codex · `IMPLEMENT_DIAGNOSE` |
+| implement (main editor) | `openai/gpt-6-sol` | `high` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT` |
+| implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_REPAIR` |
+| implement-diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_DIAGNOSE` |
 | review autofix editor | `openai/gpt-6-sol` | `high` (smoke: `medium`) | `low` | OpenCode · `REVIEW_EDITOR` |
 | review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode only (no engine switch) |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | OpenCode only (no engine switch) |
@@ -649,7 +685,7 @@ The **Engine · Claude role** column names today's engine and the role name
 `scripts/ai_engine.sh` resolves for that row (README "Claude engine").
 Every role's default in `.github/ai/claude_engine.json` is `codex`
 until its cutover (Phase 5a moved `CLARIFY`, `CLARIFY_RESPOND` and `PLAN`
-to `claude`; a missing config file still means codex for every role);
+to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`; a missing config file still means codex for every role);
 `AI_ENGINE_<ROLE>`, `AI_ENGINE` or the `ai:engine-claude`
 / `ai:codex` labels select it per run. On Claude a role uses its existing
 model variable only when that value starts with `claude-`, else Opus 5.5
@@ -1630,7 +1666,7 @@ Operator runbooks (env var reference, autofix retrigger/dedup internals,
 orchestrator integration-sync auto-heal, validation self-healing, workflow
 log analysis pipeline, semantic cache scope, wrapper pin policy) live in
 `./probably_unnecessary_but_read_if_stuck.md`. Read it only when needed —
-it is intentionally large.
+and only if it is a regular file, not a symlink — it is intentionally large.
 
 `CHANGELOG.md` is never edited directly. Write one fragment per PR at
 `changelog.d/<issue-or-pr>-<slug>.md`; `scripts/assemble_changelog.py` folds
