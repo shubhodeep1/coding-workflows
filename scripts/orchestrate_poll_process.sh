@@ -15679,6 +15679,14 @@ _pr_json_is_issue_implementation_pr() {
   return 1
 }
 
+# A branch name alone does not identify the repository that owns a PR head.
+# Reuse the already-fetched pulls/N payload before preparing a writable branch.
+_pr_json_head_repo_is_origin() {
+  local _head_repo_name
+  _head_repo_name="$(printf '%s' "$1" | jq -r 'if (.head.repo.full_name | type) == "string" then .head.repo.full_name else "" end' 2>/dev/null)" || return 1
+  [ -n "${_head_repo_name}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${_head_repo_name,,}" = "${GITHUB_REPOSITORY,,}" ]
+}
+
 # _resolve_issue_implementation_pr — resolve the ISSUE'S OWN implementation
 # PR for stall-recovery actions that push to the linked PR's branch.
 #
@@ -20994,6 +21002,18 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         fi
       fi
 
+      # A cross-reference does not prove the selected PR belongs to this repo.
+      # Reject fork heads before their diff can drive a judge merge or close.
+      _rb_selected_head_repo="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.repo.full_name // empty | strings' 2>/dev/null || true)"
+      if ! _pr_json_head_repo_is_origin "${_rb_pr_json}"; then
+        _rb_selected_identity_reason="cross_repository"
+        [ -n "${_rb_selected_head_repo}" ] || _rb_selected_identity_reason="head_repo_unavailable"
+        _rb_safe_selected_repo="$(printf '%s' "${_rb_selected_head_repo:-none}" | LC_ALL=C tr -c '[:alnum:]/_.-' '?' | cut -c1-100)"
+        echo "::warning::Review-blocked PR #${RB_PR} head identity rejected (${_rb_selected_identity_reason}); judge skipped."
+        echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_selected_identity_reason} head_repo=${_rb_safe_selected_repo}"
+        continue
+      fi
+
       # ------------------------------------------------------------------
       # Pre-judge auto-unstick / dirty-first dispatch
       # ------------------------------------------------------------------
@@ -21251,7 +21271,26 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         fi
         unset _rb_prev_pr_state _rb_prev_pr_merged _rb_pr_json_refetched
 
-        if [ "${RB_PR_MERGED}" = "true" ]; then
+        _rb_api_head_repo="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.repo.full_name // empty | strings' 2>/dev/null || true)"
+        _rb_api_head_ref="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.ref // empty | strings' 2>/dev/null || true)"
+        _rb_api_head_sha="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.sha // empty | strings' 2>/dev/null || true)"
+        if [ -z "${_rb_api_head_repo}" ]; then
+          _rb_identity_reason="head_repo_unavailable"
+        elif ! _pr_json_head_repo_is_origin "${_rb_pr_json}"; then
+          _rb_identity_reason="cross_repository"
+        elif [ -z "${HEAD_REF}" ] || [ "${_rb_api_head_ref}" != "${HEAD_REF}" ]; then
+          _rb_identity_reason="head_ref_mismatch"
+        else
+          _rb_identity_reason=""
+        fi
+        if [ -n "${_rb_identity_reason}" ]; then
+          # PR metadata is untrusted: only print a bounded, single-line repo name.
+          _rb_safe_head_repo="$(printf '%s' "${_rb_api_head_repo:-none}" | LC_ALL=C tr -c '[:alnum:]/_.-' '?' | cut -c1-100)"
+          echo "::warning::Review-blocked PR #${RB_PR} head identity rejected (${_rb_identity_reason}); combined-mode branch prep skipped."
+          echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_identity_reason} head_repo=${_rb_safe_head_repo}"
+          rm -f -- "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+          continue
+        elif [ "${RB_PR_MERGED}" = "true" ]; then
           RB_TARGET_MERGED="true"
           resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
           ORCH_FOLLOWUP_OWNED="${RESOLVED_ORCHESTRATOR_OWNED}"
@@ -21344,24 +21383,36 @@ ${FOLLOWUP_BLOCK_REASON}"
             unset _rb_co_src _rb_co_src_desc
           fi
         elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
-          if git fetch --no-tags origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \
-            && git worktree add --force -B "${HEAD_REF}" "${RB_COMBINED_WORKDIR}" "refs/remotes/origin/${HEAD_REF}" >/dev/null 2>&1; then
+          _rb_verified_head_sha=""
+          if ! git fetch --no-tags origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
+            _rb_identity_reason="fetch_failed"
+          else
+            _rb_verified_head_sha="$(git rev-parse --verify "refs/remotes/origin/${HEAD_REF}^{commit}" 2>/dev/null || true)"
+            if ! [[ "${_rb_api_head_sha}" =~ ^[0-9a-fA-F]{40}$ ]] || [ -z "${_rb_verified_head_sha}" ]; then
+              _rb_identity_reason="head_sha_unavailable"
+            elif [ "${_rb_api_head_sha,,}" != "${_rb_verified_head_sha,,}" ]; then
+              _rb_identity_reason="head_sha_mismatch"
+            fi
+          fi
+          if [ -n "${_rb_identity_reason}" ]; then
+            _rb_log_api_head_sha="none"
+            _rb_log_fetched_head_sha="none"
+            [[ "${_rb_api_head_sha}" =~ ^[0-9a-fA-F]{40}$ ]] && _rb_log_api_head_sha="${_rb_api_head_sha}"
+            [[ "${_rb_verified_head_sha}" =~ ^[0-9a-fA-F]{40}$ ]] && _rb_log_fetched_head_sha="${_rb_verified_head_sha}"
+            echo "::warning::Review-blocked PR #${RB_PR} head SHA could not be verified (${_rb_identity_reason}); combined-mode branch prep skipped."
+            echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_identity_reason} expected_sha=${_rb_log_api_head_sha} fetched_sha=${_rb_log_fetched_head_sha}"
+            rm -f -- "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+            continue
+          elif git worktree add --force -B "${HEAD_REF}" "${RB_COMBINED_WORKDIR}" "${_rb_verified_head_sha}" >/dev/null 2>&1; then
             RB_COMBINED_MODE="true"
-            RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."
-          elif git worktree add --force -B "${HEAD_REF}" "${RB_COMBINED_WORKDIR}" >/dev/null 2>&1; then
-            # Fallback: same rationale as the merged-PR fallback above —
-            # keep the combined-mode fix path alive when the initial fetch
-            # can't reach origin, at the cost of starting the branch from
-            # the local HEAD instead of origin/${HEAD_REF}.
-            echo "::warning::git fetch for ${HEAD_REF} failed; reusing local HEAD as PR branch base."
-            RB_COMBINED_MODE="true"
-            RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF}), derived from the local checkout (a fresh fetch of ${HEAD_REF} failed)."
+            RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF}) at verified head ${_rb_verified_head_sha}."
           else
             echo "::warning::Could not check out PR branch ${HEAD_REF} for issue #${rb_issue}; combined-mode fix not possible."
           fi
         else
           echo "::warning::Cannot determine PR head branch for #${RB_PR}; combined-mode fix not possible."
         fi
+        unset _rb_api_head_repo _rb_api_head_ref _rb_api_head_sha _rb_identity_reason _rb_safe_head_repo _rb_verified_head_sha _rb_log_api_head_sha _rb_log_fetched_head_sha
       fi
 
       # Drop the combined-mode worktree after a judge call whose decision
