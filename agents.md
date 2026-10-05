@@ -757,9 +757,15 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   touches `workflow-templates/.claude/**`. When the push changed a template
   but not its live copy, it copies the template over, pushes
   `ai/sync-claude-live-copies` and opens a PR (or refreshes the open one). It
-  fails open: no usable `before` commit means no sync, and the parity test
-  still reports the drift. At most two REST calls per push, only when
-  something needs syncing. Log prefix `CLAUDE_LIVE_SYNC`.
+  also carries forward still-drifted live copies from the existing sync branch
+  only when that branch's copy matches the current template; a live copy
+  changed on `main` since the earlier sync is left for the parity test.
+  Branch replacement is lease-checked; push or PR API failures fail the job
+  with a structured `CLAUDE_LIVE_SYNC error` line, leaving the branch for a
+  later sync attempt.
+  It fails open on an unusable `before` commit: no sync is attempted, and
+  the parity test still reports the drift. At most two REST calls per push,
+  only when something needs syncing. Log prefix `CLAUDE_LIVE_SYNC`.
 - A push that changed only the live copy is left to the parity test.
 
 ---

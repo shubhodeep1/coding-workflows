@@ -17,11 +17,11 @@ Subcommands:
           whose template changed in that push while the live copy did not,
           that differ now and are not allowlisted. These are the ones `sync`
           copies.
-  sync    plan, then copy each template over its live copy, commit on
-          SYNC_BRANCH (default `ai/sync-claude-live-copies`, recreated from the
-          pushed commit), push it, and open a pull request into BASE_BRANCH
-          unless one is already open from that branch. --dry-run stops after the
-          copy.
+  sync    plan, carry forward still-drifted copies from the previous sync
+          branch when they match their current templates, and commit the copies
+          on SYNC_BRANCH (default `ai/sync-claude-live-copies`, recreated from
+          the pushed commit). Lease-check the push and open a pull request into
+          BASE_BRANCH unless one is already open. --dry-run stops after the copy.
 
 `sync` runs from `.github/workflows/sync-claude-live-copies.yml` on pushes to
 main that touch `workflow-templates/.claude/**`. It fails open: an unreachable `before` commit (first push,
@@ -41,6 +41,7 @@ import argparse
 import filecmp
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -63,6 +64,8 @@ def load_divergent(root: Path) -> set[str]:
 	divergent = data.get("divergent") if isinstance(data, dict) else None
 	if not isinstance(divergent, dict):
 		raise ValueError(f"{ALLOWLIST_PATH}: 'divergent' must be an object of path -> reason")
+	if any(not isinstance(reason, str) or not reason.strip() for reason in divergent.values()):
+		raise ValueError(f"{ALLOWLIST_PATH}: each divergent path needs a non-empty reason")
 	return set(divergent)
 
 
@@ -131,49 +134,105 @@ def sync(root: Path, before: str, after: str, *, dry_run: bool) -> int:
 	if not paths:
 		log(f"nothing_to_sync before={before} after={after}")
 		return 0
+	repository = os.environ.get("GITHUB_REPOSITORY", "")
+	branch = os.environ.get("SYNC_BRANCH") or DEFAULT_SYNC_BRANCH
+	base = os.environ.get("BASE_BRANCH") or "main"
+	if not dry_run and (
+		branch == base
+		or (branch != DEFAULT_SYNC_BRANCH and not branch.startswith(DEFAULT_SYNC_BRANCH + "-"))
+		or _git(root, "check-ref-format", "--branch", branch, check=False).returncode != 0
+	):
+		log("error reason=unsafe_sync_branch")
+		return 1
+	previous_sha = ""
+	if not dry_run:
+		remote_result = _git(root, "ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{branch}", check=False)
+		if remote_result.returncode == 0:
+			previous_sha = remote_result.stdout.partition("\t")[0]
+			if (
+				not re.fullmatch(r"[0-9a-f]{40,64}", previous_sha)
+				or _git(root, "fetch", "--no-tags", "origin", f"refs/heads/{branch}", check=False).returncode != 0
+				or _git(root, "rev-parse", "FETCH_HEAD", check=False).stdout.strip() != previous_sha
+			):
+				log("error reason=sync_branch_fetch_failed")
+				return 1
+			prior_paths = _git(root, "diff", "--name-only", f"{after}...FETCH_HEAD", "--", LIVE_PREFIX, check=False)
+			main_paths = _git(root, "diff", "--name-only", f"FETCH_HEAD...{after}", "--", LIVE_PREFIX, check=False)
+			if prior_paths.returncode != 0 or main_paths.returncode != 0:
+				log("error reason=sync_branch_diff_failed")
+				return 1
+			drifted = set(mismatched(root))
+			main_changed = set(main_paths.stdout.splitlines())
+			for path in prior_paths.stdout.splitlines():
+				if not path.startswith(LIVE_PREFIX):
+					continue
+				prior_relative = path[len(LIVE_PREFIX):]
+				if prior_relative not in drifted or path in main_changed or prior_relative in paths:
+					continue
+				# Carry forward only a copy that the previous sync actually set to today's template.
+				prior_copy = _git(root, "show", f"FETCH_HEAD:{path}", check=False)
+				if prior_copy.returncode == 0 and prior_copy.stdout == (root / TEMPLATE_PREFIX / prior_relative).read_text(encoding="utf-8"):
+					paths.append(prior_relative)
+		elif remote_result.returncode != 2:
+			log("error reason=sync_branch_lookup_failed")
+			return 1
 	for relative in paths:
 		shutil.copyfile(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative)
 		log(f"copied path={LIVE_PREFIX}{relative}")
 	if dry_run:
 		return 0
-	repository = os.environ.get("GITHUB_REPOSITORY", "")
-	branch = os.environ.get("SYNC_BRANCH") or DEFAULT_SYNC_BRANCH
-	base = os.environ.get("BASE_BRANCH") or "main"
 	if not repository or "/" not in repository:
 		log("error reason=missing_repository")
 		return 1
 	short_after = after[:12]
 	message = (
 		f"chore(.claude): sync live copies with their templates after {short_after}\n\n"
-		"The pipeline's editors cannot edit .claude/**, so this push changed only\n"
-		"the template copy of:\n\n"
+		"The pipeline's editors cannot edit .claude/**. Copy the templates for:\n\n"
 		+ "".join(f"- .claude/{relative}\n" for relative in paths)
 		+ "\nCopied by scripts/sync_claude_live_copies.py (sync-claude-live-copies.yml).\n"
 	)
 	_git(root, "checkout", "-B", branch)
 	_git(root, "add", "--", *[LIVE_PREFIX + relative for relative in paths])
 	_git(root, "-c", "user.name=github-actions[bot]", "-c", "user.email=github-actions[bot]@users.noreply.github.com", "commit", "-q", "-m", message)
-	_git(root, "push", "--force", "origin", f"HEAD:refs/heads/{branch}")
+	try:
+		_git(root, "push", f"--force-with-lease=refs/heads/{branch}:{previous_sha}", "origin", f"HEAD:refs/heads/{branch}")
+	except subprocess.CalledProcessError:
+		log("error reason=push_failed")
+		return 1
 	owner = repository.split("/", 1)[0]
-	open_prs = _gh_json(f"repos/{repository}/pulls?state=open&head={owner}:{branch}&per_page=1")
-	if isinstance(open_prs, list) and open_prs:
+	try:
+		open_prs = _gh_json(f"repos/{repository}/pulls?state=open&head={owner}:{branch}&per_page=1")
+	except (subprocess.CalledProcessError, OSError, ValueError):
+		log("error reason=api_failed stage=lookup")
+		return 1
+	if not isinstance(open_prs, list):
+		log("error reason=api_failed stage=lookup_invalid_response")
+		return 1
+	if open_prs:
+		if not isinstance(open_prs[0], dict):
+			log("error reason=api_failed stage=lookup_invalid_response")
+			return 1
 		log(f"updated pr={open_prs[0].get('number')} branch={branch} paths={len(paths)}")
 		return 0
 	body = (
-		"Syncs live `.claude/` copies with their `workflow-templates/.claude/` templates after "
-		f"`{short_after}` changed only the template:\n\n"
+		"Syncs live `.claude/` copies with their `workflow-templates/.claude/` templates "
+		f"after `{short_after}`:\n\n"
 		+ "".join(f"- `.claude/{relative}`\n" for relative in paths)
 		+ "\nThe pipeline's editors cannot edit `.claude/**`, so a template-only change leaves this repo's own copy "
 		"behind and fails the parity tests on every PR. Opened by `scripts/sync_claude_live_copies.py` from the "
 		"`sync-claude-live-copies.yml` workflow.\n"
 	)
-	created = _gh_json(
-		"-X", "POST", f"repos/{repository}/pulls",
-		"-f", f"title=chore(.claude): sync live copies with their templates ({short_after})",
-		"-f", f"head={branch}",
-		"-f", f"base={base}",
-		"-f", f"body={body}",
-	)
+	try:
+		created = _gh_json(
+			"-X", "POST", f"repos/{repository}/pulls",
+			"-f", f"title=chore(.claude): sync live copies with their templates ({short_after})",
+			"-f", f"head={branch}",
+			"-f", f"base={base}",
+			"-f", f"body={body}",
+		)
+	except (subprocess.CalledProcessError, OSError, ValueError):
+		log("error reason=api_failed stage=create")
+		return 1
 	number = created.get("number") if isinstance(created, dict) else None
 	log(f"opened pr={number} branch={branch} paths={len(paths)}")
 	return 0

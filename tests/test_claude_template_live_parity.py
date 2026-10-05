@@ -121,6 +121,59 @@ def test_sync_pushes_a_branch_and_opens_one_pr(tmp_path: Path) -> None:
 	assert "-f head=ai/sync-claude-live-copies -f base=main" in lines[1]
 
 
+def test_sync_refresh_keeps_earlier_unmerged_live_copies(tmp_path: Path, monkeypatch) -> None:
+	root = _scratch_repo(tmp_path)
+	for prefix in (".claude", "workflow-templates/.claude"):
+		(root / prefix / "hooks" / "second.py").write_text("v1\n", encoding="utf-8")
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "second pair")
+	remote = tmp_path / "remote.git"
+	_git(tmp_path, "init", "-q", "--bare", str(remote))
+	_git(root, "remote", "add", "origin", str(remote))
+	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+	monkeypatch.delenv("SYNC_BRANCH", raising=False)
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 7}])
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	_git(root, "checkout", "main")
+	before, after = _commit(root, "workflow-templates/.claude/hooks/second.py", "v2\n")
+	assert sync_mod.plan(root, before, after) == ["hooks/second.py"]
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	for name in ("guard.py", "second.py"):
+		assert _git(remote, "show", f"ai/sync-claude-live-copies:.claude/hooks/{name}") == "v2"
+	_git(root, "checkout", "main")
+	_commit(root, ".claude/hooks/guard.py", "custom\n")
+	before, after = _commit(root, "workflow-templates/.claude/hooks/second.py", "v3\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/guard.py") == "custom"
+	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/second.py") == "v3"
+
+
+def test_sync_refuses_base_branch_override(tmp_path: Path, monkeypatch, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	monkeypatch.setenv("SYNC_BRANCH", "main")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 1
+	assert "reason=unsafe_sync_branch" in capsys.readouterr().err
+	assert _git(root, "rev-parse", "main") == after
+
+
+def test_sync_reports_api_error_after_push(tmp_path: Path, monkeypatch, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	remote = tmp_path / "remote.git"
+	_git(tmp_path, "init", "-q", "--bare", str(remote))
+	_git(root, "remote", "add", "origin", str(remote))
+	monkeypatch.setenv("GITHUB_REPOSITORY", "octo/repo")
+	monkeypatch.delenv("SYNC_BRANCH", raising=False)
+	def api_unavailable(*args):
+		raise subprocess.CalledProcessError(1, ["gh", "api"])
+	monkeypatch.setattr(sync_mod, "_gh_json", api_unavailable)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=False) == 1
+	assert "CLAUDE_LIVE_SYNC error reason=api_failed stage=lookup" in capsys.readouterr().err
+	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/guard.py") == "v2"
+
+
 def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	data = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "sync-claude-live-copies.yml").read_text(encoding="utf-8"))
 	on = data.get("on", data.get(True))
