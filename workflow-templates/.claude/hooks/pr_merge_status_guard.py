@@ -14,10 +14,13 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories fall back to the
-session checkout with a warning; unresolved push sources or destinations
-request confirmation. Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unknown directories warn and fall back to
+the session checkout check; unresolvable explicit push targets require
+confirmation. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
+A `cd` or `exit` with a redirect that might fail (anything but a plain
+`/dev/null` target) makes the directory unknown. After checking the session
+checkout, a push in an unknown directory asks for confirmation.
 
 Detection rule — all three conditions must hold before the command is blocked:
 
@@ -74,6 +77,8 @@ Exit codes (Claude Code hook protocol):
   0 — allow the command. A warning may be emitted via `systemMessage`, or a
       `permissionDecision: ask` may route the call through the harness prompt.
   2 — block the command; stderr is fed back to Claude as the reason.
+The hook prints at most one JSON object on stdout per call, merging warnings
+and confirmation reasons into that object.
 
 Escape hatch: set CLAUDE_PR_MERGE_GUARD=off to disable only the merged-PR check.
 The API-write confirmation safeguard remains active.
@@ -82,6 +87,7 @@ The API-write confirmation safeguard remains active.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -118,6 +124,7 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
 _FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", ">|", "<>", ">&", "<&", "<<", "<<<"})
+_SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "(", "!"})
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -163,6 +170,7 @@ _GIT_TIMEOUT_SECONDS = 5
 # Network-bound git calls (`ls-remote`, `fetch`) used by the history fallback.
 _GIT_REMOTE_TIMEOUT_SECONDS = 15
 _GIT_ENVIRONMENT: ContextVar[dict[str, str] | None] = ContextVar("guard_git_environment", default=None)
+_pending_output: dict[str, list[str]] = {"system_messages": [], "ask_reasons": []}
 
 # Options with an argument must not turn that argument into a refspec. Unknown
 # options are treated as uncertain rather than authorizing a different branch.
@@ -248,47 +256,91 @@ def _shell_segments(command: str) -> list[list[str]]:
 	return segments
 
 
-def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
-	"""Return simple commands and the operator preceding each one.
+def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], bool]]:
+	"""Return simple commands, their preceding operator and redirect uncertainty.
 
 	This is not a Bash interpreter. Unsupported control flow is marked unknown
 	by the caller, never executed to infer an authorization decision.
 	"""
-	lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer = shlex.shlex(io.StringIO(command), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
-	result: list[tuple[str, list[str]]] = []
+	# shlex groups adjacent punctuation (e.g. `>;`), but Bash still sees
+	# a redirect without a target followed by a command separator.
+	tokens: list[tuple[str, int]] = []
+	for raw_token in lexer:
+		if raw_token and set(raw_token) <= set(_SHELL_PUNCTUATION_CHARS):
+			part_end = lexer.instream.tell() - len(raw_token)
+			for part in re.findall(r"&>>|&>|&&|\|\||>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
+				part_end += len(part)
+				tokens.append((part, part_end))
+		else:
+			tokens.append((raw_token, lexer.instream.tell()))
+	result: list[tuple[str, list[str], bool]] = []
 	segment: list[str] = []
 	operator = ""
-	redirect_target = False
-	for token in lexer:
-		if redirect_target:
-			redirect_target = False
+	redirect_target: str | None = None
+	redirect_may_fail = False
+	for token, token_end in tokens:
+		if redirect_target is not None and not (token and set(token) <= set(_SHELL_PUNCTUATION_CHARS)):
+			if redirect_target not in (">", ">>", ">|", "&>", "&>>", "<") or token != "/dev/null":
+				redirect_may_fail = True
+			redirect_target = None
 			continue
+		if redirect_target is not None:
+			redirect_may_fail = True
+			redirect_target = None
 		if token == ">|" or (token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token)):
 			# Bash &> and &>> take no fd prefix (#6249); keep adjacent digits as
 			# arguments for these and unknown redirects so push refspecs are checked.
 			if token in _FD_PREFIX_REDIRECT_OPERATORS and segment and segment[-1].isdigit():
 				# Only an unquoted digit immediately attached to a redirect is an fd.
-				redirect_start = lexer.instream.tell() - len(token)
+				redirect_start = token_end - len(token)
 				if command[redirect_start:redirect_start + len(token)] != token:
 					redirect_start -= 1  # shlex may read one character ahead.
 				fd_start = redirect_start - len(segment[-1])
 				if fd_start >= 0 and command[fd_start:redirect_start] == segment[-1] and (fd_start == 0 or command[fd_start - 1] not in "'\"\\"):
 					segment.pop()
-			redirect_target = True
+			redirect_target = token
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
-				result.append((operator, segment))
+				result.append((operator, segment, redirect_may_fail))
 				segment = []
+				redirect_may_fail = False
 			operator = token
 		else:
 			segment.append(token)
+	if redirect_target is not None:
+		redirect_may_fail = True
 	if segment:
-		result.append((operator, segment))
+		result.append((operator, segment, redirect_may_fail))
 	return result
+
+
+def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
+	"""Return simple commands and the operator preceding each one."""
+	return [(operator, tokens) for operator, tokens, _ in _shell_segments_with_redirects(command)]
+
+
+def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
+	"""Expose a command behind shell control words without trusting its cwd."""
+	control_prefix_seen = False
+	while tokens:
+		if tokens[0] in _SHELL_CONTROL_PREFIXES or tokens[0].endswith(")"):
+			tokens = tokens[1:]
+		elif tokens[0] == "case":
+			for position, word in enumerate(tokens[3:], start=3):
+				if word.endswith(")"):
+					tokens = tokens[position + 1:]
+					break
+			else:
+				break
+		else:
+			break
+		control_prefix_seen = True
+	return tokens, control_prefix_seen
 
 
 @contextmanager
@@ -328,15 +380,21 @@ def _literal_guard_path(
 
 def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation]:
 	try:
-		segments = _shell_segments_with_operators(command)
+		segments = _shell_segments_with_redirects(command)
 	except ValueError:
 		return []
 	working_directory: str | None = checkout
 	conditional_cd = False
 	invocations: list[_GitInvocation] = []
-	for operator, tokens in segments:
-		if operator == "||" and tokens[0] == "exit" and working_directory is not None:
+	for operator, tokens, redirect_may_fail in segments:
+		tokens, control_prefix = _command_after_control_prefix(tokens)
+		if control_prefix:
+			working_directory = None
+		if not tokens:
+			continue
+		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
+			# A failed builtin redirect means exit did not run (#6289).
 			continue
 		if operator not in ("", "&&") and conditional_cd:
 			working_directory = None
@@ -348,9 +406,10 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			operand = tokens[1:]
 			if operand[:1] == ["--"]:
 				operand = operand[1:]
+			# A failed builtin redirect means cd did not run (#6289).
 			working_directory = (
 				_literal_guard_path(operand[0], working_directory, shell_cd=True)
-				if len(operand) == 1 and working_directory is not None else None
+				if len(operand) == 1 and working_directory is not None and not redirect_may_fail else None
 			)
 			conditional_cd = operator == "&&" or conditional_cd
 			continue
@@ -365,7 +424,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
-			if name in ("GIT_DIR", "GIT_WORK_TREE"):
+			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 			index += 1
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
@@ -478,11 +537,17 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		return []  # Deletes do not strand new commits on a branch.
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
-			"could not resolve git push options; checking the current branch instead")]
-	# A positional repository always consumes the first positional, even
-	# with --repo; --repo alone supplies no positional refspecs.
-	if remote_provided and not positionals:
-		refspecs = []
+			"could not resolve git push options; destination branch is unknown")]
+	if remote_provided and positionals:
+		with _git_environment(invocation.environment):
+			code, _, _ = _run(
+				["git", "config", "--get", f"remote.{positionals[0]}.url"],
+				invocation.cwd, _GIT_TIMEOUT_SECONDS,
+			)
+		if code != 0:
+			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+				"could not resolve git push positional repository; destination branch is unknown")]
+		refspecs = positionals[1:]
 	else:
 		refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
@@ -642,8 +707,8 @@ def _api_write_requires_confirmation(command: str) -> bool:
 def git_subcommands(command: str) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
-	Only counts `git` when it is the first real token of a shell segment, after
-	any leading `VAR=value` assignments. That keeps `man git commit` and
+	Only counts `git` when it is the first real token of a shell segment after
+	control words and any leading `VAR=value` assignments. That keeps `man git commit` and
 	`echo "git commit"` from tripping the guard, at the cost of missing
 	wrapper-prefixed invocations like `sudo git commit` — an acceptable trade,
 	since a false block is more disruptive than a missed check on a rare form.
@@ -655,6 +720,7 @@ def git_subcommands(command: str) -> set[str]:
 		# Unbalanced quotes — the command is not something we can read.
 		return found
 	for tokens in segments:
+		tokens, _ = _command_after_control_prefix(tokens)
 		# Drop leading environment assignments (`GIT_DIR=... git commit`).
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
@@ -1179,7 +1245,9 @@ def _history_block_message(branch: str, base: str, detail: str, api_failure: str
 
 def _warn(reason: str) -> None:
 	"""Emit a non-blocking warning to the user and allow the command."""
-	print(json.dumps({"systemMessage": f"merged-PR guard skipped: {reason}"}))
+	message = f"merged-PR guard skipped: {reason}"
+	if message not in _pending_output["system_messages"]:
+		_pending_output["system_messages"].append(message)
 
 
 def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None:
@@ -1193,41 +1261,47 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 	# The prompt is read by a human: `reason` carries the full transport
 	# error for the log, `prompt_reason` a one-paragraph version for the prompt.
 	short_reason = prompt_reason or reason
-	print(
-		json.dumps(
-			{
-				"systemMessage": f"merged-PR guard needs confirmation: {reason}",
-				"hookSpecificOutput": {
-					"hookEventName": "PreToolUse",
-					"permissionDecision": "ask",
-					"permissionDecisionReason": (
-						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
-						f"pull request for this branch is still open. If it has merged, "
-						f"deny — the branch must be rebuilt from the default branch and "
-						f"a new PR opened."
-					),
-				},
-			}
-		)
+	message = f"merged-PR guard needs confirmation: {reason}"
+	if message not in _pending_output["system_messages"]:
+		_pending_output["system_messages"].append(message)
+	ask_reason = (
+		f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
+		f"pull request for this branch is still open. If it has merged, "
+		f"deny — the branch must be rebuilt from the default branch and "
+		f"a new PR opened."
 	)
+	if ask_reason not in _pending_output["ask_reasons"]:
+		_pending_output["ask_reasons"].append(ask_reason)
 
 
 def _request_api_write_confirmation() -> None:
 	"""Restore the harness prompt for a non-canonical allowlisted API write."""
-	print(
-		json.dumps(
-			{
-				"hookSpecificOutput": {
-					"hookEventName": "PreToolUse",
-					"permissionDecision": "ask",
-					"permissionDecisionReason": (
-						"Non-canonical API curl options can override the allowlisted "
-						"HTTP method or destination."
-					),
-				}
-			}
-		)
+	ask_reason = (
+		"Non-canonical API curl options can override the allowlisted "
+		"HTTP method or destination."
 	)
+	if ask_reason not in _pending_output["ask_reasons"]:
+		_pending_output["ask_reasons"].append(ask_reason)
+
+
+def _reset_pending_output() -> None:
+	_pending_output["system_messages"].clear()
+	_pending_output["ask_reasons"].clear()
+
+
+def _emit_pending_output(code: int) -> None:
+	response: dict = {}
+	if _pending_output["system_messages"]:
+		response["systemMessage"] = "\n".join(_pending_output["system_messages"])
+	if code == 0 and _pending_output["ask_reasons"]:
+		response["hookSpecificOutput"] = {
+			"hookEventName": "PreToolUse",
+			"permissionDecision": "ask",
+			"permissionDecisionReason": "\n\n".join(_pending_output["ask_reasons"]),
+		}
+	if response:
+		print(json.dumps(response))
+	_reset_pending_output()
 
 
 def _payload_cwd(payload: dict) -> str:
@@ -1314,9 +1388,13 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	uncertain_push_reasons: list[str] = []
+	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "push" and invocation.warning:
+			uncertain_push_reasons.append(invocation.warning)
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
@@ -1329,6 +1407,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				continue
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
+			if target.warning.startswith("could not resolve git push"):
+				unknown_destination_reasons.append(target.warning)
+				continue
 			if target.warning:
 				_warn(target.warning)
 			if target.tip != "HEAD":
@@ -1399,14 +1480,23 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
-	unresolved_push_sources.extend(unresolved_push_destinations)
+	confirmation_reasons: list[str] = []
+	if uncertain_push_reasons:
+		confirmation_reasons.append(
+			"could not resolve git push repository; the session checkout may not be the pushed repository. "
+			"could not determine the directory `git push` runs in (shell control flow or redirection); "
+			"checked the session checkout instead"
+		)
+	confirmation_reasons.extend(unresolved_push_sources)
+	confirmation_reasons.extend(unresolved_push_destinations)
+	confirmation_reasons.extend(unknown_destination_reasons)
 	if bulk_reasons:
-		unresolved_push_sources.append(
+		confirmation_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
-	if unresolved_push_sources:
-		_request_confirmation(" ".join(unresolved_push_sources))
+	if confirmation_reasons:
+		_request_confirmation("; ".join(confirmation_reasons))
 	return 0, ""
 
 
@@ -1497,14 +1587,26 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 	return 2, _block_message(offender, branch, base, tip_label=f"origin/{branch}")
 
 
-def evaluate(payload: dict) -> tuple[int, str]:
-	"""Core decision. Returns (exit_code, message_for_stderr)."""
+def _evaluate_tool(payload: dict) -> tuple[int, str]:
+	"""Dispatch the hook's decision for the requested tool."""
 	tool_name = payload.get("tool_name")
 	if tool_name == "Bash":
 		return _evaluate_bash(payload)
 	if tool_name in MCP_PUSH_TOOLS:
 		return _evaluate_mcp_push(payload)
 	return 0, ""
+
+
+def evaluate(payload: dict) -> tuple[int, str]:
+	"""Core decision. Returns (exit_code, message_for_stderr)."""
+	_reset_pending_output()
+	try:
+		code, message = _evaluate_tool(payload)
+	except Exception as exc:  # noqa: BLE001 - the guard must never break the session
+		_warn(f"internal error ({exc})")
+		code, message = 0, ""
+	_emit_pending_output(code)
+	return code, message
 
 
 def main() -> int:
@@ -1521,8 +1623,7 @@ def main() -> int:
 
 	try:
 		code, message = evaluate(payload)
-	except Exception as exc:  # noqa: BLE001 - the guard must never break the session
-		_warn(f"internal error ({exc})")
+	except Exception:  # noqa: BLE001 - stdout may already contain a hook response
 		return 0
 
 	if message:

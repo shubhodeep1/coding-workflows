@@ -64,7 +64,7 @@ first_linked_issue_number()
 		return 0
 	fi
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' 2>/dev/null || true
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' 2>/dev/null || true
 import json
 import os
 
@@ -101,12 +101,13 @@ emit_lessons_learned_records_from_consolidator_output()
 	if ! command -v python3 >/dev/null 2>&1; then
 		return 0
 	fi
+	[[ "${SUPPORT_SCRIPTS_DIR:-}" == /* ]] || return 0
 
 	issue_number="$(first_linked_issue_number || true)"
 	telemetry_json="$({
 		PYTHONDONTWRITEBYTECODE=1 \
-		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-		python3 - "${PWD}" "${CONSOLIDATOR_RAW_FILE}" "${issue_number}" <<'PY'
+		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:?trusted support scripts required}" \
+		PYTHONSAFEPATH=1 python3 - "${PWD}" "${CONSOLIDATOR_RAW_FILE}" "${issue_number}" <<'PY'
 import json
 import os
 import re
@@ -279,11 +280,12 @@ emit_context_budget_warn_for_prompt()
 	if ! command -v python3 >/dev/null 2>&1; then
 		return 0
 	fi
+	[[ "${SUPPORT_SCRIPTS_DIR:-}" == /* ]] || return 0
 
 	warn_line="$(
 		PYTHONDONTWRITEBYTECODE=1 \
-		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-		python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:?trusted support scripts required}" \
+		PYTHONSAFEPATH=1 python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -325,7 +327,7 @@ render_prior_round_decisions_file()
 	fi
 
 	tmp_path="$(mktemp)"
-	if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
+	if PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -479,6 +481,10 @@ render_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${PRIOR_ROUND_DECISIO
 {
 	if [ -s ./pre_assembled_static.txt ]; then
 		cat ./pre_assembled_static.txt
+		echo
+	fi
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+		emit_consolidator_untrusted_file 'PR README.MD (trimmed)' "${RUNTIME_DIR}/static_readme_trimmed.txt"
 		echo
 	fi
 	echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE:-50}"

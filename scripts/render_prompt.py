@@ -33,6 +33,7 @@ INCLUDE_DIRECTIVE_PATTERN = re.compile(r'^[ \t]*\{%[ \t]*include[ \t]+"([^"\n]+)
 VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 LITERAL_DOT_EXPRESSION_PATTERN = re.compile(r"^\s*\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*$")
 OVERLAY_MODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$")
+OVERLAY_REPLACE_DENIED_MODE_PATTERN = re.compile(r"^mode-(?:judge(?:-[A-Za-z0-9_-]+)?|orchestrate-poll-judge)$")
 CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
 PERSONA_SOURCE_FILE_NAME = "_prelude_role_persona.txt"
 LEGACY_STANDALONE_ONLY_VARS = frozenset({"WORKFLOW_EDIT_RESTRICTION", "SEMBLE_PREFETCH", "SERENA_TOOL_HINTS"})
@@ -1281,6 +1282,10 @@ def _resolve_overlay_fragment_path(repo_root: Path, raw_path: str) -> Path:
 	return fragment_path
 
 
+def _overlay_replace_denied(mode_name: str) -> bool:
+	return OVERLAY_REPLACE_DENIED_MODE_PATTERN.fullmatch(mode_name) is not None
+
+
 def apply_workflow_overlay(
 	prompt_path: Path,
 	prompt_text: str,
@@ -1301,6 +1306,9 @@ def apply_workflow_overlay(
 
 	match = matches[0]
 	if match.replace_path is not None:
+		if _overlay_replace_denied(mode_name):
+			print(f"::warning::WORKFLOW_OVERLAY_REPLACE_REJECTED mode={mode_name} path={json.dumps(match.replace_path)}", file=sys.stderr)
+			return (PromptFragment(path=prompt_path, text=prompt_text),)
 		replacement_path = _resolve_overlay_fragment_path(overlay.repo_root, match.replace_path)
 		return (PromptFragment(path=replacement_path, text=load_prompt(replacement_path)),)
 

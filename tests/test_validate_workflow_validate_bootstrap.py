@@ -121,10 +121,17 @@ def test_validate_workflow_bootstrap_lists_prompt_assembly_assets() -> None:
 
 def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> None:
 	helper = _helper_text()
+	fetch_step = _workflow_text().split("      - name: Fetch workflow support files\n", 1)[1].split("      - name:", 1)[0]
+	assert 'GH_TOKEN: ${{ secrets.GH_PAT }}' in fetch_step
+	assert '${GITHUB_REPOSITORY}' in fetch_step
+	assert 'WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate' in fetch_step
 	for snippet in (
-		"WORKFLOW.md overlay is opt-in by file presence",
+		"The default-branch copy must outlive SUPPORT_STAGE_ROOT",
 		"python3 scripts/load_workflow_overlay.py",
-		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
+		'--trusted-source-repo "${GITHUB_REPOSITORY}"',
+		'--trusted-root "${RUNNER_TEMP}/workflow-overlay-trusted-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+		'overlay_schema_path="${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json"',
+		'--schema-path "${overlay_schema_path}"',
 		'--github-env "${GITHUB_ENV}"',
 	):
 		assert snippet in helper
