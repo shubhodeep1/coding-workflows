@@ -17,6 +17,9 @@ are checked against the destination branch and the source commit, including
 when the source is a detached HEAD. Unknown directories or refspecs warn and
 fall back to the session checkout check. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
+A `cd` or `exit` with a redirect that might fail (anything but a plain
+`/dev/null` target) makes the directory unknown. After checking the session
+checkout, a push in an unknown directory asks for confirmation.
 
 Detection rule — all three conditions must hold before the command is blocked:
 
@@ -247,8 +250,8 @@ def _shell_segments(command: str) -> list[list[str]]:
 	return segments
 
 
-def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
-	"""Return simple commands and the operator preceding each one.
+def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], bool]]:
+	"""Return simple commands, their preceding operator and redirect uncertainty.
 
 	This is not a Bash interpreter. Unsupported control flow is marked unknown
 	by the caller, never executed to infer an authorization decision.
@@ -257,37 +260,62 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
-	result: list[tuple[str, list[str]]] = []
+	# shlex groups adjacent punctuation (e.g. `>;`), but Bash still sees
+	# a redirect without a target followed by a command separator.
+	tokens: list[tuple[str, int]] = []
+	for raw_token in lexer:
+		if raw_token and set(raw_token) <= set(_SHELL_PUNCTUATION_CHARS):
+			part_end = lexer.instream.tell() - len(raw_token)
+			for part in re.findall(r"&>>|&>|&&|\|\||>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
+				part_end += len(part)
+				tokens.append((part, part_end))
+		else:
+			tokens.append((raw_token, lexer.instream.tell()))
+	result: list[tuple[str, list[str], bool]] = []
 	segment: list[str] = []
 	operator = ""
-	redirect_target = False
-	for token in lexer:
-		if redirect_target:
-			redirect_target = False
+	redirect_target: str | None = None
+	redirect_may_fail = False
+	for token, token_end in tokens:
+		if redirect_target is not None and not (token and set(token) <= set(_SHELL_PUNCTUATION_CHARS)):
+			if redirect_target not in (">", ">>", ">|", "&>", "&>>", "<") or token != "/dev/null":
+				redirect_may_fail = True
+			redirect_target = None
 			continue
+		if redirect_target is not None:
+			redirect_may_fail = True
+			redirect_target = None
 		if token == ">|" or (token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token)):
 			# Bash &> and &>> take no fd prefix (#6249); keep adjacent digits as
 			# arguments for these and unknown redirects so push refspecs are checked.
 			if token in _FD_PREFIX_REDIRECT_OPERATORS and segment and segment[-1].isdigit():
 				# Only an unquoted digit immediately attached to a redirect is an fd.
-				redirect_start = lexer.instream.tell() - len(token)
+				redirect_start = token_end - len(token)
 				if command[redirect_start:redirect_start + len(token)] != token:
 					redirect_start -= 1  # shlex may read one character ahead.
 				fd_start = redirect_start - len(segment[-1])
 				if fd_start >= 0 and command[fd_start:redirect_start] == segment[-1] and (fd_start == 0 or command[fd_start - 1] not in "'\"\\"):
 					segment.pop()
-			redirect_target = True
+			redirect_target = token
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
-				result.append((operator, segment))
+				result.append((operator, segment, redirect_may_fail))
 				segment = []
+				redirect_may_fail = False
 			operator = token
 		else:
 			segment.append(token)
+	if redirect_target is not None:
+		redirect_may_fail = True
 	if segment:
-		result.append((operator, segment))
+		result.append((operator, segment, redirect_may_fail))
 	return result
+
+
+def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
+	"""Return simple commands and the operator preceding each one."""
+	return [(operator, tokens) for operator, tokens, _ in _shell_segments_with_redirects(command)]
 
 
 @contextmanager
@@ -327,15 +355,16 @@ def _literal_guard_path(
 
 def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation]:
 	try:
-		segments = _shell_segments_with_operators(command)
+		segments = _shell_segments_with_redirects(command)
 	except ValueError:
 		return []
 	working_directory: str | None = checkout
 	conditional_cd = False
 	invocations: list[_GitInvocation] = []
-	for operator, tokens in segments:
-		if operator == "||" and tokens[0] == "exit" and working_directory is not None:
+	for operator, tokens, redirect_may_fail in segments:
+		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
+			# A failed builtin redirect means exit did not run (#6289).
 			continue
 		if operator not in ("", "&&") and conditional_cd:
 			working_directory = None
@@ -347,9 +376,10 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			operand = tokens[1:]
 			if operand[:1] == ["--"]:
 				operand = operand[1:]
+			# A failed builtin redirect means cd did not run (#6289).
 			working_directory = (
 				_literal_guard_path(operand[0], working_directory, shell_cd=True)
-				if len(operand) == 1 and working_directory is not None else None
+				if len(operand) == 1 and working_directory is not None and not redirect_may_fail else None
 			)
 			conditional_cd = operator == "&&" or conditional_cd
 			continue
@@ -1309,7 +1339,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	uncertain_push_reasons: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "push" and invocation.warning:
+			uncertain_push_reasons.append(invocation.warning)
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
@@ -1384,11 +1417,19 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
+	confirmation_reasons: list[str] = []
+	if uncertain_push_reasons:
+		confirmation_reasons.append(
+			"could not determine the directory `git push` runs in (shell control flow or redirection); "
+			"checked the session checkout instead"
+		)
 	if bulk_reasons:
-		_request_confirmation(
+		confirmation_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
+	if confirmation_reasons:
+		_request_confirmation("; ".join(confirmation_reasons))
 	return 0, ""
 
 

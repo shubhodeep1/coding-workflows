@@ -779,6 +779,23 @@ def test_fd_prefix_only_removed_for_supported_redirects(command: str, arguments:
 	assert guard._shell_segments_with_operators(command) == [("", arguments)]
 
 
+@pytest.mark.parametrize("command,expected", [
+	("cd /tmp >/missing", True),
+	("cd /tmp 2>/dev/null", False),
+	("cd /tmp &>/dev/null", False),
+	("exit 2>&1", True),
+	("exit <<<x", True),
+	("cd /tmp >", True),
+	("cd /tmp >; git push origin", True),
+	("cd /tmp", False),
+])
+def test_redirect_uncertainty_on_shell_segments(command: str, expected: bool) -> None:
+	segments = guard._shell_segments_with_redirects(command)
+	assert segments[0][2] is expected
+	if len(segments) > 1:
+		assert segments[1][2] is False
+
+
 def test_clobber_redirect_checks_current_branch(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
@@ -1019,6 +1036,73 @@ def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch)
 		"tool_input": {"command": f"cd {worktree} || exit 1 && git push origin HEAD:feature/open"}})
 	assert code == 0, message
 	assert lookups == ["feature/open", "feature/open"]
+
+
+def test_failed_cd_and_exit_redirects_check_session_checkout(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	other_directory = repo.parent / "not-a-repo"
+	other_directory.mkdir()
+	missing = repo.parent / "missing" / "output"
+	proc = _run_hook(repo, stub_bin,
+		f"cd {other_directory} >{missing} || exit >{missing}; git push origin")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+	assert "could not resolve git command directory" in proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"cd {worktree} >{missing} || exit 1; git push origin HEAD:feature/open",
+	"cd {worktree} || exit 1 >{missing}; git push origin HEAD:feature/open",
+	"cd {worktree} 2>&1 || exit 1; git push origin HEAD:feature/open",
+])
+def test_redirected_cd_or_exit_cannot_authorize_worktree_push(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	missing = repo.parent / "missing" / "output"
+	proc = _run_hook(repo, stub_bin, command.format(worktree=worktree, missing=missing))
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+	assert "could not resolve git command directory" in proc.stdout
+
+
+def test_dev_null_redirect_keeps_cd_or_exit_worktree(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [OPEN_PR]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"cd {worktree} 2>/dev/null || exit 1; git push origin HEAD:feature/open"}})
+	assert code == 0, message
+	assert lookups == ["feature/open"]
+	assert "permissionDecision" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("subcommand,asks", [
+	("git push origin HEAD:feature/open", True),
+	("git commit -m x", False),
+])
+@pytest.mark.parametrize("directory_change", ["cd $WT &&", "cd {other_dir} >{missing};"])
+def test_unknown_directory_push_asks_but_commit_warns(
+	merged_branch_repo, subcommand: str, asks: bool, directory_change: str
+) -> None:
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "-b", "feature/open", "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	prefix = directory_change.format(other_dir=repo.parent, missing=repo.parent / "missing" / "output")
+	proc = _run_hook(repo, stub_bin, f"{prefix} {subcommand}")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "could not resolve git command directory" in proc.stdout
+	assert (_ask_decision(proc) is not None) is asks
 
 
 # ──────────────────────────────────────────────────────────────────
