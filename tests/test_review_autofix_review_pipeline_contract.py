@@ -8188,6 +8188,7 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	spec.loader.exec_module(workspace_module)
 	assert not workspace_module.allowed(".claude/commands/audit-plans.md")
 	assert not workspace_module.allowed(".github/ai/other.json")
+	assert not workspace_module.allowed(".claude/hooks/pr_merge_status_guard.py")
 	assert workspace_module.allowed(".github/workflows/x.yml")
 	assert workspace_module.allowed(".claude/hooks/gh_api_write_guard.py")
 
