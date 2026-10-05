@@ -784,6 +784,8 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   Branch replacement is lease-checked; push or PR API failures fail the job
   with a structured `CLAUDE_LIVE_SYNC error` line, leaving the branch for a
   later sync attempt.
+  Its existing-PR lookup accepts only an open PR from this repository's sync
+  branch into the configured base branch, even when other PRs are returned.
   It fails open on an unusable `before` commit: no sync is attempted, and
   the parity test still reports the drift. The API budget is at most one
   association lookup per distinct template commit, 1-3 pages per distinct
