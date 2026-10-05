@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"restrict model reads to non-secret audit inputs\"\n  expected_change_site: `scripts/ai_engine.sh` in `_ai_engine_claude_run_isolated`, where read-profile filesystem mounts are assembled (lines 301-305).\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: The full checkout and configured extra read directories are mounted without a per-file or per-directory read allowlist; README.md:2031-2033 documents that there is no per-file read allowlist yet; secret-bearing files in mounted paths remain readable by the model.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- (No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- TASK_GAP\n  Requirement: Keep pool tokens outside the model process's filesystem and user identity; supply model authentication through a host-side relay and restrict model reads to non-secret audit inputs.\n  Expected change site: `scripts/ai_engine.sh` in `_ai_engine_claude_run_isolated` where read-profile container filesystem mounts are assembled (lines 301-305).\n  Evidence of absence: `scripts/ai_engine.sh` bind-mounts the entire repository working tree as a read-only volume into the container without an allowlist or input filter restricting reads to non-secret audit inputs. While Git configuration credentials and Claude pool tokens are kept out, any other sensitive file in the workspace (such as .env files, private keys, or local token caches) remains readable by the model process via Read and Bash. README.md explicitly documents that there is no per-file read allowlist yet and instructs operators not to place secrets in mounted paths.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- HARDENING_SUGGESTION: Global helper variables AI_ENGINE_ISOLATION_WORKDIR, AI_ENGINE_ISOLATION_MASKS, AI_ENGINE_ISOLATION_PATHS, AI_ENGINE_ISOLATION_FAILURE, and AI_ENGINE_ISOLATION_GUARD leak into the sourcing shell environment on read-profile runs. Suggested minimal fix: Declare local AI_ENGINE_ISOLATION_WORKDIR AI_ENGINE_ISOLATION_MASKS AI_ENGINE_ISOLATION_PATHS AI_ENGINE_ISOLATION_FAILURE AI_ENGINE_ISOLATION_GUARD at the start of `_ai_engine_claude_run_isolated` to prevent environment variable pollution in the caller shell while preserving dynamic scoping for child helpers. Estimated lines changed: 1. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- (No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cRestrict model reads to non-secret audit inputs.\u201d\n  Expected change site: `scripts/ai_engine.sh`, in `_ai_engine_claude_run_isolated` where read-profile filesystem mounts are assembled.\n  Evidence of absence: The PR still mounts the full checkout and configured extra read directories without a read allowlist. The README explicitly documents that there is \u201cno per-file read allowlist yet,\u201d leaving secret-bearing files in mounted paths readable by the model.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"restrict model reads to non-secret audit inputs\" (from linked issue #6236 recommendation)\n  Expected change site: `scripts/ai_engine.sh` in `_ai_engine_claude_run_isolated`, the mount assembly around lines 301-305 where `mounts=(--mount \"type=bind,src=${workdir},dst=${workdir},readonly\")` is constructed\n  Evidence of absence: The PR mounts the full checkout and configured extra read directories with no per-file or per-directory read allowlist. The README explicitly documents this limitation: \"The read-profile container still mounts the full checkout and any configured extra read directories; do not place credentials or other secrets in those paths. There is no per-file read allowlist yet.\" The review-blocked judge (entry[8]) classified this as SEVERITY: MAJOR and deferred it \"pending separate assessment after the credential leak is closed.\" The last run diff resolved the BLOCKER (nested Git config leak) that was the deferral precondition, but the MAJOR issue remains unaddressed. Prior editor comments (entries[5-7]) consistently labeled this \"TASK_GAP_DEFERRED\" - a deferral, not acceptance as residual. A read-profile model with Read and Bash tools can still open non-Git-config secrets (.env, secrets.yml, private keys) in the mounted checkout.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: \"restrict model reads to non-secret audit inputs\" (from issue #6236 recommendation: \"Keep pool tokens outside the model process's filesystem and user identity; supply model authentication through a host-side relay and restrict model reads to non-secret audit inputs.\")\n  Expected change site: `scripts/ai_engine.sh` in `_ai_engine_claude_run_isolated`, the `mounts=(--mount \"type=bind,src=${workdir},dst=${workdir},readonly\")` line and the AI_ENGINE_ISOLATION_PATHS mount loop.\n  Evidence of absence: The PR diff shows the full workdir mounted read-only with no per-file or per-directory read allowlist. The README explicitly documents this gap: \"The read-profile container still mounts the full checkout and any configured extra read directories; do not place credentials or other secrets in those paths. There is no per-file read allowlist yet.\" The Dockerfile change in scripts/clarify_sandbox/Dockerfile adds git to the container image, giving the model Bash-tool access to git commands that can read .git/objects and commit history \u2014 secrets in commit messages or diffs remain reachable even after the Git-config masking the last run added. The review-blocked judge (entry[8]) classified this as SEVERITY: MAJOR and deferred it \"pending separate assessment after the credential leak is closed.\" The last run diff closed that BLOCKER (nested Git config leak), satisfying the deferral precondition. Prior editor comments (entries 5-7) consistently labeled this TASK_GAP_DEFERRED \u2014 a deferral, not an acceptance as residual.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2032ee00c662976ff295f8d466e784eba37ee7500b87206e4d259dc07ee0f13d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6245,
+    "run_id": "37260457841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37260457841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005042251_13c72954af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6245,
+    "run_id": "37260457841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T04:22:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
