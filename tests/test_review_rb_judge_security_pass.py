@@ -45,6 +45,16 @@ if args == ["api", "--paginate", "--slurp", "repos/o/r/issues?labels=ai:security
 		issues = json.load(open(os.environ["FAKE_GH_ISSUES"]))
 		print(json.dumps(issues if os.environ.get("FAKE_GH_PAGES") else [issues]))
 	sys.exit(0)
+if args == ["api", "user", "--jq", '.login // ""']:
+	if os.environ.get("FAKE_GH_FAIL") == "user": sys.exit(1)
+	print("pipeline-account")
+	sys.exit(0)
+if args == ["api", "--paginate", "--slurp", "repos/o/r/issues/42/comments?per_page=100"]:
+	if os.environ.get("FAKE_GH_FAIL") == "comments": sys.exit(1)
+	print(json.dumps([json.load(open(os.environ["FAKE_GH_COMMENTS"]))]))
+	sys.exit(0)
+if args[:2] == ["api", "repos/o/r/issues/42/labels"] and os.environ.get("FAKE_GH_FAIL") == "labels":
+	sys.exit(1)
 if args[:2] == ["api", "repos/o/r/issues/42/comments"] and os.environ.get("FAKE_GH_FAIL") == "comment":
 	sys.exit(1)
 sys.exit(0)
@@ -84,6 +94,7 @@ def _run(tmp_path: Path, script: str, env: dict | None = None, with_pass: bool =
 	if with_pass:
 		(support / "review_single_issue_security_pass.sh").write_text(FAKE_PASS, encoding="utf-8")
 	(tmp_path / "issues.json").write_text(json.dumps(ISSUES if issues is None else issues), encoding="utf-8")
+	(tmp_path / "comments.json").write_text(json.dumps([]), encoding="utf-8")
 	gh_log = tmp_path / "gh.log"
 	pass_log = tmp_path / "pass.log"
 	gh_log.write_text("", encoding="utf-8")
@@ -93,6 +104,7 @@ def _run(tmp_path: Path, script: str, env: dict | None = None, with_pass: bool =
 		"HOME": str(tmp_path),
 		"FAKE_GH_LOG": str(gh_log),
 		"FAKE_GH_ISSUES": str(tmp_path / "issues.json"),
+		"FAKE_GH_COMMENTS": str(tmp_path / "comments.json"),
 		"FAKE_PASS_LOG": str(pass_log),
 		"SUPPORT_SCRIPTS_DIR": str(support),
 		"REPOSITORY": "o/r",
@@ -172,6 +184,98 @@ def test_malformed_findings_pages_fail_closed(tmp_path: Path) -> None:
 	assert "Could not list" in out.read_text(encoding="utf-8")
 
 
+def test_findings_block_all_severities_except_medium_and_low(tmp_path: Path) -> None:
+	out = tmp_path / "findings.txt"
+	issues = [
+		{"number": n, "title": str(n), "body": f"- Integration branch: `branch`\n- Severity: `{severity}`\n"}
+		for n, severity in enumerate(("critical", " HIGH ", "medium", "LOW", "", "weird"), start=10)
+	]
+	issues.append({"number": 99, "body": "- Integration branch: `other`\n- Severity: `high`"})
+	result, _, _ = _run(tmp_path, f'rb_security_findings_render branch "{out}"; echo "COUNT=$RB_SECURITY_BLOCKING_COUNT ISSUES=$RB_SECURITY_BLOCKING_ISSUES"', issues=issues)
+	assert result.returncode == 0, result.stderr
+	assert "COUNT=4 ISSUES=#10 #11 #14 #15" in result.stdout
+	text = out.read_text(encoding="utf-8")
+	assert text.count("[BLOCKS MERGE]") == 4
+	assert "[BLOCKS MERGE] #12" not in text and "#99" not in text
+
+
+@pytest.mark.parametrize(
+	"action, final, count, extra_env, expected",
+	[
+		("merge", "false", "2", {}, "convert_fix"),
+		("merge_with_followup", "false", "2", {}, "convert_fix"),
+		("merge", "true", "2", {}, "hold"),
+		("merge_with_followup", "true", "2", {}, "hold"),
+		("fix", "true", "2", {}, "hold"),
+		("fix", "false", "2", {}, "allow"),
+		("close_and_reissue", "true", "2", {}, "allow"),
+		("merge", "true", "0", {}, "allow"),
+		("merge", "true", "invalid", {}, "hold"),
+		("merge", "true", "2", {"PR_ALREADY_MERGED": "true"}, "allow"),
+		("merge", "true", "2", {"RB_SECURITY_MODE": "false"}, "allow"),
+	],
+)
+def test_severity_decision(tmp_path: Path, action: str, final: str, count: str, extra_env: dict, expected: str) -> None:
+	env = {"RB_SECURITY_MODE": "true", "RB_SECURITY_BLOCKING_COUNT": count, **extra_env}
+	result, _, _ = _run(tmp_path, f'rb_security_severity_block {action} {final}', env)
+	assert result.returncode == 0
+	assert result.stdout.strip() == expected
+	assert f"outcome={expected}" in result.stderr
+
+
+def test_terminal_hold_labels_comments_and_outputs(tmp_path: Path) -> None:
+	script = f'''ensure_label_exists() {{ :; }}
+_resilient_phase_swap() {{ echo "SWAP=$1:$2"; }}
+RB_SECURITY_BLOCKING_ISSUES="#6246"
+RB_SECURITY_BLOCKING_COUNT=1
+rb_security_block_hold {HEAD} "6246" final_round'''
+	result, calls, _ = _run(tmp_path, script)
+	assert result.returncode == 0, result.stderr
+	assert "SWAP=6246:ai:review-blocked" in result.stdout
+	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed", "-f", "labels[]=ai:review-blocked"] in calls
+	assert any(f"<!-- ai:single-issue-security-pass-blocked:v1 head={HEAD} -->" in call[-1] for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"])
+	assert (tmp_path / "judge_output").read_text() == "judge_handled=true\njudge_action=security_blocked\njudge_skip_reason=final_round\n"
+
+
+def test_terminal_hold_does_not_repost_trusted_marker(tmp_path: Path) -> None:
+	comment_file = tmp_path / "trusted_comments.json"
+	comment_file.write_text(json.dumps([{
+		"user": {"login": "pipeline-account"},
+		"body": f"Already held\n<!-- ai:single-issue-security-pass-blocked:v1 head={HEAD} -->",
+	}]), encoding="utf-8")
+	script = f'ensure_label_exists() {{ :; }}; _resilient_phase_swap() {{ :; }}; rb_security_block_hold {HEAD} "6246" fix_no_changes'
+	result, calls, _ = _run(tmp_path, script, {"FAKE_GH_COMMENTS": str(comment_file)})
+	assert result.returncode == 0, result.stderr
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	assert "judge_skip_reason=fix_no_changes" in (tmp_path / "judge_output").read_text()
+
+
+@pytest.mark.parametrize("sha, fail", [(HEAD, "labels"), ("invalid", "")])
+def test_terminal_hold_rejects_failed_label_or_bad_head(tmp_path: Path, sha: str, fail: str) -> None:
+	script = f'ensure_label_exists() {{ :; }}; _resilient_phase_swap() {{ :; }}; rb_security_block_hold {sha} "6246" final_round'
+	result, calls, _ = _run(tmp_path, script, {"FAKE_GH_FAIL": fail})
+	assert result.returncode != 0
+	assert not (tmp_path / "judge_output").exists()
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+
+
+@pytest.mark.parametrize("author, head, fail, expected", [
+	("pipeline-account", HEAD, "", True),
+	("untrusted", HEAD, "", False),
+	("pipeline-account", "f" * 40, "", False),
+	("pipeline-account", HEAD, "comments", False),
+	("pipeline-account", HEAD, "user", False),
+])
+def test_block_marker_trusts_only_matching_head_and_author(tmp_path: Path, author: str, head: str, fail: str, expected: bool) -> None:
+	comments = [{"user": {"login": author}, "body": f"Held\n\n<!-- ai:single-issue-security-pass-blocked:v1 head={head} -->"}]
+	comment_file = tmp_path / "trusted_comments.json"
+	comment_file.write_text(json.dumps(comments), encoding="utf-8")
+	result, _, _ = _run(tmp_path, f'if rb_security_block_already_reported {HEAD}; then echo YES; else echo NO; fi',
+		{"FAKE_GH_COMMENTS": str(comment_file), "FAKE_GH_FAIL": fail})
+	assert result.returncode == 0
+	assert ("YES" in result.stdout) is expected
+
+
 @pytest.mark.parametrize("is_final, offers_fix", [("false", True), ("true", False)])
 def test_prompt_section_offers_fix_only_with_retries_left(tmp_path: Path, is_final: str, offers_fix: bool) -> None:
 	findings = tmp_path / "f.txt"
@@ -182,6 +286,16 @@ def test_prompt_section_offers_fix_only_with_retries_left(tmp_path: Path, is_fin
 	assert ("- fix:" in result.stdout) is offers_fix
 	assert "=== BEGIN UNTRUSTED SECURITY-AUDIT FINDINGS ===" in result.stdout
 	assert "=== END UNTRUSTED SECURITY-AUDIT FINDINGS ===" in result.stdout
+
+
+@pytest.mark.parametrize("final", ["true", "false"])
+def test_prompt_blocks_merge_with_high_severity(tmp_path: Path, final: str) -> None:
+	findings = tmp_path / "f.txt"
+	findings.write_text("- [BLOCKS MERGE] #6246 finding\n", encoding="utf-8")
+	result, _, _ = _run(tmp_path, f'rb_security_prompt_section "{findings}" {final} 1')
+	assert "NOT AVAILABLE" in result.stdout
+	assert "ship the PR now" not in result.stdout
+	assert ("held for a clean audit" in result.stdout) is (final == "true")
 
 
 @pytest.mark.parametrize(
@@ -256,6 +370,12 @@ def test_judge_script_wiring() -> None:
 	assert 'The final-attempt fix is treated as a merge because judge fix retries are exhausted; no fix commit was created.' in text
 	assert 'echo "::warning::Failed to push judge fix — falling back to manual intervention."\n            exit 1' in text
 	assert "review_rb_judge_security_pass.sh" in STAGE.read_text(encoding="utf-8")
+	assert 'if ! type rb_security_severity_block' in text
+	assert 'rb_security_prompt_section "${RB_SECURITY_FINDINGS_FILE}" "${IS_FINAL}" "${RB_SECURITY_BLOCKING_COUNT:-0}"' in text
+	assert text.index('RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD') < text.index('rb_security_block_already_reported "${RB_JUDGED_HEAD_SHA}"') < text.index('} > "${RB_JUDGE_PROMPT}"')
+	assert text.index('merged_pr_unsafe_action') < text.index('RB_SECURITY_SEVERITY_DECISION="$(rb_security_severity_block') < text.index('post_review_blocked_assessment \\') < gate_at
+	assert text.count('rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes') == 2
+	assert text.index('rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" final_round') < gate_at
 
 
 def test_review_workflow_runs_the_judge_on_security_exhaustion() -> None:
@@ -274,3 +394,6 @@ def test_review_workflow_runs_the_judge_on_security_exhaustion() -> None:
 	assert 'if [ "${_judge_exit}" -eq 42 ]; then' in judge["run"]
 	assert judge["run"].index('if [ "${_judge_exit}" -eq 42 ]; then') < judge["run"].index('echo "rb_judge_status=failed"')
 	assert "success()" in steps["Push all pending commits"]["if"]
+	telegram = steps["Telegram review-blocked judge decision"]["run"]
+	assert "security_blocked)" in telegram and "security_blocked_pending)" in telegram
+	assert telegram.index("security_blocked_pending)") < telegram.index('exit 0 ;;', telegram.index("security_blocked_pending)"))
