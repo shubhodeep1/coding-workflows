@@ -2326,23 +2326,35 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
     # Claude engine (replace-claude-sessions plan Phase 5c): the workflow
     # exports AI_ENGINE_RESOLVED_CONFLICT_RESOLVER (CLAUDE_FIXER_ENABLED=false
-    # keeps it on codex). On Claude, claude_run works in the same workspace,
-    # with the same private Git index and per-attempt timeout; exit 75
-    # (Claude unavailable) runs the unchanged OpenCode command below.
+    # keeps it on codex). Claude runs in a fresh isolated snapshot per attempt;
+    # the host's private Git index remains exclusive to the OpenCode path.
     resolver_claude_rc=75
-    resolver_engine_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
-    if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ] && [ -f "${resolver_engine_sh}" ]; then
-      resolver_claude_rc=0
-      resolver_claude_env=(AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${_current_reasoning_effort}")
-      if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-        resolver_claude_env+=("GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}")
+    resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+    resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
+    if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
+      if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
+        echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_prepare_failed' >&2
+      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"; then
+        echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_path_unsupported' >&2
+      else
+        resolver_sandbox_root=""
+        if ! resolver_sandbox_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral)" || [ -z "${resolver_sandbox_root}" ]; then
+          echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_prepare_failed' >&2
+        else
+          resolver_claude_rc=0
+          REVIEW_SANDBOX_ROOT="${resolver_sandbox_root}" \
+            timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+            bash "${resolver_sandbox_sh}" run "${_effective_prompt_file}" "${tmp_output}" \
+            "${MODEL_EDITOR}" "${_current_reasoning_effort}" /dev/null claude CONFLICT_RESOLVER write \
+            || resolver_claude_rc=$?
+          REVIEW_SANDBOX_ROOT="${resolver_sandbox_root}" bash "${resolver_sandbox_sh}" cleanup || resolver_claude_rc=1
+          rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+          if [ "${resolver_claude_rc}" -eq 2 ]; then
+            echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_helper_outdated' >&2
+            resolver_claude_rc=75
+          fi
+        fi
       fi
-      # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
-      env "${resolver_claude_env[@]}" \
-        timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        bash -c 'source "$1" && claude_run CONFLICT_RESOLVER "$2" "$3" "$4"' _ \
-        "${resolver_engine_sh}" "${_effective_prompt_file}" "${tmp_output}" "${RESOLVER_OPENCODE_WORKSPACE}" \
-        || resolver_claude_rc=$?
       [ "${resolver_claude_rc}" -eq 75 ] || _codex_exit="${resolver_claude_rc}"
     fi
     if [ "${resolver_claude_rc}" -ne 75 ]; then

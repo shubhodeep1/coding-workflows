@@ -94,25 +94,34 @@ review_rb_strip_opencode_output_file() {
 
 # review_rb_claude_run <read|write> <prompt_file> <output_file> <stderr_file> <effort>
 # Claude engine (replace-claude-sessions plan Phase 5c): runs one RB_JUDGE
-# call through claude_run in RB_OPENCODE_WORKSPACE when the workflow resolved
+# call through the isolated review sandbox in RB_OPENCODE_WORKSPACE when the workflow resolved
 # AI_ENGINE_RESOLVED_RB_JUDGE=claude (CLAUDE_FIXER_ENABLED=false keeps it on
 # codex). `read` is the verdict pass, narrowed to the read-only tool profile
 # like the OpenCode `reviewer` role; `write` is the fix pass. The answer goes
 # to <output_file>; stderr is appended to <stderr_file>. Returns 75 when the
 # role is not on Claude or Claude is unavailable, so the caller runs its
-# unchanged OpenCode command; otherwise claude_run's status.
+# unchanged OpenCode command; otherwise the sandbox's status.
 review_rb_claude_run()
 {
   local access="$1" prompt_file="$2" output_file="$3" stderr_file="$4" effort="$5"
-  local engine_sh="${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" read_only="false"
-  if [ "${AI_ENGINE_RESOLVED_RB_JUDGE:-codex}" != "claude" ] || [ ! -f "${engine_sh}" ]; then
+  local rb_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh" rb_sandbox_root="" rb_sandbox_rc=0
+  if [ "${AI_ENGINE_RESOLVED_RB_JUDGE:-codex}" != "claude" ]; then
     return 75
   fi
-  [ "${access}" = "read" ] && read_only="true"
-  # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
-  AI_ENGINE_READ_ONLY="${read_only}" AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${effort}" \
-    bash -c 'source "$1" && claude_run RB_JUDGE "$2" "$3" "$4"' _ \
-    "${engine_sh}" "${prompt_file}" "${output_file}" "${RB_OPENCODE_WORKSPACE}" 2>>"${stderr_file}"
+  if [ ! -f "${rb_sandbox_sh}" ] || ! rb_sandbox_root="$(cd "${RB_OPENCODE_WORKSPACE}" && bash "${rb_sandbox_sh}" prepare-ephemeral 2>>"${stderr_file}")" || [ -z "${rb_sandbox_root}" ]; then
+    echo 'AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_prepare_failed' >&2
+    return 75
+  fi
+  REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" bash "${rb_sandbox_sh}" run \
+    "${prompt_file}" "${output_file}" "${MODEL_EDITOR}" "${effort}" /dev/null claude RB_JUDGE "${access}" \
+    2>>"${stderr_file}" || rb_sandbox_rc=$?
+  REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" bash "${rb_sandbox_sh}" cleanup 2>>"${stderr_file}" || rb_sandbox_rc=1
+  rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+  if [ "${rb_sandbox_rc}" -eq 2 ]; then
+    echo 'AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_helper_outdated' >&2
+    return 75
+  fi
+  return "${rb_sandbox_rc}"
 }
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —

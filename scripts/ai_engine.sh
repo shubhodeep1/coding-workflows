@@ -62,6 +62,7 @@ _AI_ENGINE_LOADED="true"
 
 _AI_ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _AI_ENGINE_EXIT_FALLBACK=75
+readonly -a _AI_ENGINE_SANDBOX_ONLY_ROLES=(REVIEW_EDITOR REVIEW_CONSOLIDATOR RB_JUDGE CONFLICT_RESOLVER)
 
 _ai_engine_py()
 {
@@ -184,6 +185,13 @@ claude_run()
 		echo "::error::claude_run: usage: claude_run <role> <prompt_file> <out_file> <workdir> [session_id]" >&2
 		return 2
 	fi
+	local sandbox_only_role
+	for sandbox_only_role in "${_AI_ENGINE_SANDBOX_ONLY_ROLES[@]}"; do
+		if [ "${role}" = "${sandbox_only_role}" ]; then
+			ai_engine_fallback "${role}" host_run_forbidden
+			return "${_AI_ENGINE_EXIT_FALLBACK}"
+		fi
+	done
 	# The run changes into <workdir>; every path must survive that.
 	workdir="$(cd "${workdir}" && pwd)" || return 2
 	case "${prompt_file}" in /*) ;; *) prompt_file="${PWD}/${prompt_file}" ;; esac
@@ -205,8 +213,8 @@ claude_run()
 	model="$(_ai_engine_json_field "${resolved}" model)"
 	effort="$(_ai_engine_json_field "${resolved}" effort)"
 	profile="$(_ai_engine_json_field "${resolved}" profile)"
-	# AI_ENGINE_READ_ONLY=true narrows a write role to the read profile for
-	# one call (the review-blocked judge's verdict pass); it never widens one.
+	# Defense in depth: AI_ENGINE_READ_ONLY=true narrows even if resolve
+	# changes; an inherited value only removes tools, never grants them.
 	if [ "${AI_ENGINE_READ_ONLY:-false}" = "true" ]; then
 		profile="read"
 	fi
@@ -243,7 +251,7 @@ claude_run()
 	_ai_engine_py trust --workdir "${workdir}" || echo "::warning::claude_run: could not mark ${workdir} trusted" >&2
 	local tools mode
 	case "${profile}" in
-		read) tools="Read,Grep,Glob,Bash"; mode="dontAsk" ;;
+		read) tools="Read,Grep,Glob"; mode="dontAsk" ;;
 		# An explicit list, not "default": the default set loads ~35 tools whose
 		# descriptions push a no-op start-up past the 25,000-token context gate.
 		# Keep in sync with PROFILE_TOOLS["write"] in claude_engine.py.

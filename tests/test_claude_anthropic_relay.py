@@ -14,6 +14,7 @@ import http.server
 import importlib.util
 import json
 import os
+import socket
 import threading
 from pathlib import Path
 
@@ -212,10 +213,10 @@ def test_broker_rejection_does_not_wait_for_an_unfinished_body(chain, monkeypatc
 
 
 def test_broker_rejection_ignores_peer_reset_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-	def reset_on_write(_handler, _status):
+	def reset_on_write(_handler, _status, _message):
 		raise ConnectionResetError("peer disconnected")
 
-	monkeypatch.setattr(relay.Relay, "_reject", reset_on_write)
+	monkeypatch.setattr(relay.Relay, "send_error", reset_on_write)
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
 	with pytest.raises(http.client.RemoteDisconnected):
@@ -226,10 +227,10 @@ def test_broker_rejection_ignores_peer_reset_during_response(chain, monkeypatch:
 
 
 def test_broker_rejection_ignores_peer_abort_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-	def abort_on_write(_handler, _status):
+	def abort_on_write(_handler, _status, _message):
 		raise ConnectionAbortedError("peer disconnected")
 
-	monkeypatch.setattr(relay.Relay, "_reject", abort_on_write)
+	monkeypatch.setattr(relay.Relay, "send_error", abort_on_write)
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
 	with pytest.raises(http.client.RemoteDisconnected):
@@ -258,11 +259,41 @@ def test_broker_rejection_reports_unexpected_write_error(chain, monkeypatch: pyt
 	assert _Upstream.seen == []
 
 
-def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("payload, extra_length", [
+	(b"not-json", 0),
+	(b'{"model":"claude-other-9"}', 0),
+	(b'{"model":"claude-opus-5-5"}', 10),
+])
+def test_broker_late_rejections_ignore_peer_disconnect(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, payload: bytes, extra_length: int) -> None:
+	def abort_on_write(_handler, _status, _message):
+		raise ConnectionAbortedError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "send_error", abort_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", str(len(payload) + extra_length))
+	connection.endheaders()
+	connection.send(payload)
+	connection.sock.shutdown(socket.SHUT_WR)
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
+	assert _Upstream.seen == []
+
+
+@pytest.mark.parametrize("peer_error_type", [None, TimeoutError, ConnectionRefusedError])
+def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, peer_error_type: type[OSError] | None) -> None:
 	def refused(host, timeout=None, context=None):
 		return http.client.HTTPConnection("127.0.0.1", 9, timeout=2)
 
 	monkeypatch.setattr(http.client, "HTTPSConnection", refused)
+	if peer_error_type is not None:
+		def fail_on_write(_handler, _status, _message):
+			raise peer_error_type("peer stopped reading")
+
+		monkeypatch.setattr(relay.Relay, "send_error", fail_on_write)
 	sock = str(tmp_path / "s.sock")
 	broker = relay.UnixHTTPServer(sock, relay.Relay)
 	broker.mode = "broker"
@@ -272,10 +303,16 @@ def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.Monk
 	try:
 		connection = relay.UnixHTTPConnection(sock)
 		connection.request("POST", "/v1/messages", json.dumps({"model": MODEL}).encode(), {"Content-Type": "application/json"})
-		response = connection.getresponse()
-		body = response.read()
-		assert response.status == 502
-		assert REAL_TOKEN.encode() not in body
+		if peer_error_type is not None:
+			with pytest.raises(http.client.RemoteDisconnected):
+				connection.getresponse()
+			assert "Traceback" not in capsys.readouterr().err
+		else:
+			response = connection.getresponse()
+			body = response.read()
+			assert response.status == 502
+			assert REAL_TOKEN.encode() not in body
+		connection.close()
 	finally:
 		broker.shutdown()
 		broker.server_close()

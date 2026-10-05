@@ -230,8 +230,30 @@ def refresh(host, workspace, manifest):
 			os.chmod(target, mode)
 
 
+def check_paths(host, paths_file):
+	with paths_file.open(encoding="utf-8", newline="") as handle:
+		path_lines = handle.read().split("\n")
+	for name in path_lines:
+		if not name:
+			continue
+		try:
+			if not allowed(name):
+				raise ValueError("unsupported path")
+			checked_path(host, name)
+		except (ValueError, OSError):
+			print("unsupported path", file=sys.stderr)
+			raise SystemExit(1) from None
+
+
 def main():
 	# snapshot alone takes an optional fifth argument: the host Git dir.
+	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) == 4:
+		try:
+			check_paths(Path(sys.argv[2]), Path(sys.argv[3]))
+		except (OSError, UnicodeError):
+			print("unsupported path", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
 	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
 		raise SystemExit(2)
 	host, workspace, manifest = map(Path, sys.argv[2:5])
