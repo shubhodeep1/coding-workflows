@@ -16,7 +16,7 @@ evidence to a folder the agents read:
     comes from it, so existing lineages keep their fingerprints.
   * ``collect``: for one ``ai:workflow-heal`` issue, reads the run links from
     the trusted issue body and occurrence comments and writes, per run, the
-    sliced log of the failing (or focus) job and allowlisted diagnostic lines
+    sliced log of the failing (or focus) job and allowlisted diagnostic fields
     from artifact files; plus provenance (source PR state, the failing head against the
     default and target branches), the heal lineage with where each fix PR
     merged and whether that reached the default branch, the other runs on
@@ -103,7 +103,7 @@ ARTIFACT_MEMBER_RES = {
 	"codex-review-autofix-failure-logs": re.compile(r"(?:^|/)(?:editor_attempt_[^/]*|[^/]*\.err|[^/]*summar[^/]*|status_[^/]*)$"),
 	"reviewer-logs": re.compile(r"(?:^|/)(?:status_[^/]*\.txt|[^/]*\.err)$"),
 }
-ARTIFACT_EXTRACT_FORMAT = "allowlist-lines.v1"
+ARTIFACT_EXTRACT_FORMAT = "allowlist-fields.v2"
 MAX_ARTIFACT_KEPT_LINES = 200
 MAX_ARTIFACT_LINE_CHARS = 400
 _ARTIFACT_ERROR_WORD_RE = re.compile(
@@ -729,7 +729,7 @@ def _artifact_kind(name: str) -> str:
 
 
 def _artifact_diagnostic_extract(member_name: str, text: str) -> str:
-	"""Keep bounded diagnostic lines only, never raw artifact prose or assignments."""
+	"""Extract fixed diagnostic labels and exit codes, never free-form stderr."""
 	lines = text.splitlines()
 	kept: list[str] = []
 	denied = 0
@@ -738,14 +738,26 @@ def _artifact_diagnostic_extract(member_name: str, text: str) -> str:
 		if any(pattern.search(line) for pattern in _ARTIFACT_ENV_ASSIGNMENT_RES):
 			denied += 1
 			continue
-		if (_ERROR_LINE_RE.match(line) or _DIAGNOSTIC_LINE_RE.search(line) or _EXIT_CODE_RE.search(line)
-			or _ARTIFACT_ERROR_WORD_RE.search(line)
-			or (status_member and _ARTIFACT_STATUS_TOKEN_RE.fullmatch(line.strip()))):
-			kept.append(f"L{number}: {line[:MAX_ARTIFACT_LINE_CHARS]}")
+		exit_code = _EXIT_CODE_RE.search(line)
+		category = _ARTIFACT_ERROR_WORD_RE.search(line)
+		status = line.strip()
+		if exit_code:
+			field = f"exit code {exit_code.group(1)}"
+		elif category:
+			field = category.group(0).lower()
+		elif status_member and _ARTIFACT_STATUS_TOKEN_RE.fullmatch(status) and status in KNOWN_CONCLUSIONS | {"ok"}:
+			field = status
+		elif _ERROR_LINE_RE.match(line):
+			field = "error"
+		elif _DIAGNOSTIC_LINE_RE.search(line):
+			field = "diagnostic event"
+		else:
+			continue
+		kept.append(f"L{number}: {field}")
 	kept = kept[-MAX_ARTIFACT_KEPT_LINES:]
 	header = (f"# Extract ({ARTIFACT_EXTRACT_FORMAT}): kept {len(kept)} of {len(lines)} line(s); "
 		f"environment assignments and free-form text dropped ({denied} line(s) denied)")
-	return header + "\n" + ("\n".join(kept) if kept else "(no allowlisted diagnostic lines)")
+	return header + "\n" + ("\n".join(kept) if kept else "(no allowlisted diagnostic fields)")
 
 
 def extract_artifact_texts(blob: bytes, *, max_file_bytes: int, member_re: re.Pattern[str] | None = None) -> list[tuple[str, str]]:
