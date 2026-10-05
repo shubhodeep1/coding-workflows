@@ -850,6 +850,22 @@ jobs:
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
+      - name: Run unblock scan without active projects
+        if: steps.find_tracking.outputs.has_work != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
+          UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
+          UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
+          UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
+          UNBLOCK_SCAN_SWEEP_ONLY: "true"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: bash scripts/orchestrate_poll_process.sh
+
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
 

@@ -5030,6 +5030,26 @@ def test_staged_support_latch_sweep_only_mode_releases_without_tracking_work() -
 	assert "Standalone issue stall recovery" not in combined_log
 
 
+def test_unblock_scan_sweep_only_mode_runs_without_tracking_work() -> None:
+	for enabled, expected in (("false", "outcome=skip reason=disabled"), ("true", "candidates=0 dispatched=0 outcome=idle")):
+		result = _run_poller(
+			state=_base_state(status="in_progress"),
+			enable_validation="false",
+			max_validate_cycles="3",
+			env_overrides={
+				"UNBLOCK_SCAN_SWEEP_ONLY": "true",
+				"UNBLOCK_JUDGE_ENABLED": enabled,
+				"OPENROUTER_API_KEY": "",
+			},
+		)
+		combined_log = result["stdout"] + result["stderr"]
+		assert f"UNBLOCK_SCAN {expected}" in combined_log
+		assert "Processing tracking issue" not in combined_log
+		assert "Standalone issue stall recovery" not in combined_log
+		assert "Staged-support needs-human latch release" not in combined_log
+		assert result["api_calls"].count("search/issues") == (enabled == "true")
+
+
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
 	engine_sha = "c" * 40
 

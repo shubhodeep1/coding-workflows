@@ -2623,12 +2623,14 @@ the scope and destructive latches, `ai:*-failed`, the escalated triage, heal
 and resolver chains, a failed project) now goes to the unblock judge
 (Phase 7 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`).
 
-- **Scan.** Once per poll tick, after the per-project loop,
+- **Scan.** On ticks with active projects, after the per-project loop,
   `run_unblock_scan` in `scripts/orchestrate_poll_process.sh` makes one REST
   search for open issues and pull requests with a block label
   (`scripts/unblock_ledger.py labels`), one batched GraphQL query for their
   label events and last comments, and one list of recent
-  `unblock_judge_dispatch.yml` runs. `scripts/unblock_scan.py` picks items
+  `unblock_judge_dispatch.yml` runs. On ticks with no open tracking issue,
+  `Run unblock scan without active projects` runs the scan on its own with
+  `UNBLOCK_SCAN_SWEEP_ONLY=true`. `scripts/unblock_scan.py` picks items
   blocked for at least `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES`, with no trusted
   `ai:unblock` marker younger than `UNBLOCK_JUDGE_RETRY_HOURS` and no judge
   running, oldest first, at most one per tick. The scan waits for an active
