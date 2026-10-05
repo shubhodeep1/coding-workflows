@@ -766,6 +766,38 @@ def test_read_isolation_mounts_only_sanitized_extra_directories(sandbox: dict) -
 	assert str(sandbox["pool"]) not in " ".join(argv)
 
 
+def test_read_isolation_hides_claude_md_in_extra_directories(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	extra = sandbox["tmp"] / "heal_source"
+	extra.mkdir()
+	(extra / "CLAUDE.md").write_text("private marker\n", encoding="utf-8")
+	(extra / "source.txt").write_text("safe\n", encoding="utf-8")
+	support = sandbox["tmp"] / "support"
+	(support / ".github" / "ai").mkdir(parents=True)
+	(support / ".github" / "ai" / "claude_engine.json").write_text('{"hide_claude_md": true}', encoding="utf-8")
+	result = _claude_run(sandbox, "WORKFLOW_HEAL", AI_ENGINE_READ_EXTRA_DIRS=str(extra), SUPPORT_ROOT_DIR=str(support))
+	assert _rc(result) == 0, result.stderr
+	assert "CLAUDE.md" not in _docker_calls(sandbox)[0]["extra_snapshot_files"]
+	assert (extra / "CLAUDE.md").read_text(encoding="utf-8") == "private marker\n"
+
+
+@pytest.mark.parametrize("limit_name, limit_value", [
+	("CLAUDE_READ_SNAPSHOT_MAX_FILES", "2"),
+	("CLAUDE_READ_SNAPSHOT_MAX_BYTES", "24"),
+])
+def test_read_isolation_shares_snapshot_budget_with_extra_directories(sandbox: dict, limit_name: str, limit_value: str) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	first = sandbox["tmp"] / "first-source"
+	second = sandbox["tmp"] / "second-source"
+	for source in (first, second):
+		source.mkdir()
+		(source / "source.txt").write_text("safe\n", encoding="utf-8")
+	result = _claude_run(sandbox, "WORKFLOW_HEAL", AI_ENGINE_READ_EXTRA_DIRS=f"{first}:{second}", **{limit_name: limit_value})
+	assert _rc(result) == 75, result.stderr
+	assert "outcome=rejected reason=isolation_snapshot_failed files=2 git=none extra_dirs=1" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
 def test_read_isolation_reports_prepared_extras_on_snapshot_failure(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	first = sandbox["tmp"] / "first-source"

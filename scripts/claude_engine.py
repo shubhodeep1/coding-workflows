@@ -1308,11 +1308,22 @@ def _snapshot_copy_git_file(path: Path, target: Path) -> None:
 	os.chmod(target, 0o644)
 
 
-def _snapshot_metadata(workdir: Path, dest: Path) -> tuple[str, str]:
+def _snapshot_metadata(workdir: Path, dest: Path, omit_root_claude_md: bool = False) -> tuple[str, str]:
 	common = Path(os.fsdecode(_snapshot_git(workdir, "rev-parse", "--path-format=absolute", "--git-common-dir")).strip())
 	gitdir = Path(os.fsdecode(_snapshot_git(workdir, "rev-parse", "--path-format=absolute", "--git-dir")).strip())
 	if (common / "objects/info/alternates").exists():
 		return "omitted", "alternates"
+	# A filtered working tree is not safe if git show can recover the same
+	# path from an earlier commit. Retain history only when its paths pass
+	# the working-tree filter; never mount a partly filtered object store.
+	history_paths = _snapshot_git(workdir, "log", "--all", "--format=", "--name-only", "-z", "--no-renames")
+	for history_path in history_paths.split(b"\0"):
+		history_relative = Path(os.fsdecode(history_path.lstrip(b"\n")))
+		parts = history_relative.parts
+		if omit_root_claude_md and history_relative == Path("CLAUDE.md"):
+			return "omitted", "filtered_history"
+		if any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or part.lower().endswith(_SNAPSHOT_BAD_SUFFIXES) for part in parts):
+			return "omitted", "filtered_history"
 	meta = dest / ".git"
 	meta.mkdir()
 	# Copy only object/refs trees and HEAD; never git's credentials, hooks,
@@ -1387,7 +1398,7 @@ def read_snapshot(workdir: Path, dest: Path, omit_root_claude_md: bool = False) 
 			if omit_root_claude_md and path == Path("CLAUDE.md"):
 				continue
 			_snapshot_copy(workdir, dest, path, limits)
-		git, reason = _snapshot_metadata(workdir, dest) if git_workdir else ("none", "")
+		git, reason = _snapshot_metadata(workdir, dest, omit_root_claude_md) if git_workdir else ("none", "")
 		return {"files": limits[0], "bytes": limits[1], "git": git, "reason": reason}
 	except (OSError, ValueError, subprocess.CalledProcessError):
 		# Partial snapshots must never be mounted.
@@ -1419,8 +1430,8 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 			raise EngineError("invalid read snapshot limit")
 		return value
 
-	max_files = limit("CLAUDE_READ_SNAPSHOT_MAX_FILES", 20000)
-	max_bytes = limit("CLAUDE_READ_SNAPSHOT_MAX_BYTES", 268435456)
+	max_files = limit("CLAUDE_READ_SNAPSHOT_MAX_FILES", 50000)
+	max_bytes = limit("CLAUDE_READ_SNAPSHOT_MAX_BYTES", 1073741824)
 	git_env = {key: value for key, value in os.environ.items() if key not in (
 		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",

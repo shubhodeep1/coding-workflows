@@ -212,7 +212,7 @@ _ai_engine_read_path_sensitive()
 
 _ai_engine_snapshot_summary()
 {
-	python3 -c 'import json,sys; d=json.loads(sys.argv[1]); (type(d["files"]) is int and d["files"] >= 0 and d["git"] in ("copied", "omitted", "none") and d["reason"] in ("", "alternates")) or sys.exit(1); print(d["files"], d["git"], d["reason"] or "none")' "$1"
+	python3 -c 'import json,sys; d=json.loads(sys.argv[1]); (type(d["files"]) is int and d["files"] >= 0 and d["git"] in ("copied", "omitted", "none") and d["reason"] in ("", "alternates", "filtered_history")) or sys.exit(1); print(d["files"], d["git"], d["reason"] or "none")' "$1"
 }
 
 _ai_engine_support_finish()
@@ -390,27 +390,6 @@ _ai_engine_claude_run_isolated()
 	fi
 	read -r snapshot_files snapshot_git snapshot_reason <<< "${snapshot_summary}"
 	mounts=(--mount "type=bind,src=${snapshot_dir},dst=${workdir},readonly")
-	extra_snapshot_dir="${run_dir}/extra-snapshots"
-	for extra_source in "${extra_roots[@]}"; do
-		extra_dest="${extra_snapshot_dir}/${#mounts[@]}"
-		if ! mkdir -p -- "${extra_snapshot_dir}" ||
-		   ! extra_summary="$(_ai_engine_py read-snapshot --workdir "${extra_source}" --dest "${extra_dest}")" ||
-		   ! extra_details="$(_ai_engine_snapshot_summary "${extra_summary}")"; then
-			echo "CLAUDE_READ_ISOLATION role=${role} outcome=rejected reason=isolation_snapshot_failed files=${snapshot_files} git=${snapshot_git} extra_dirs=$((${#mounts[@]} / 2 - 1))" >&2
-			ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
-		fi
-		extra_files="${extra_details%% *}"
-		snapshot_files=$((snapshot_files + extra_files))
-		mounts+=(--mount "type=bind,src=${extra_dest},dst=${extra_source},readonly")
-	done
-	git_objects="$(printf '%s' "${snapshot_result}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("git_objects", ""))')" || {
-		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
-	}
-	if [ -n "${git_objects}" ]; then
-		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
-	fi
-	# Each auxiliary checkout gets the same credential filter and a synthetic Git
-	# commit. Share the main snapshot's file/byte budget across all three roots.
 	snapshot_files_limit="${CLAUDE_READ_SNAPSHOT_MAX_FILES:-50000}"
 	snapshot_bytes_limit="${CLAUDE_READ_SNAPSHOT_MAX_BYTES:-1073741824}"
 	if [[ ! "${snapshot_files_limit}" =~ ^[0-9]+$ || ! "${snapshot_bytes_limit}" =~ ^[0-9]+$ ]]; then
@@ -420,6 +399,31 @@ _ai_engine_claude_run_isolated()
 	snapshot_bytes_limit=$((10#${snapshot_bytes_limit}))
 	snapshot_files_used="$(_ai_engine_json_field "${snapshot_result}" files)" || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
 	snapshot_bytes_used="$(_ai_engine_json_field "${snapshot_result}" bytes)" || { ai_engine_fallback "${role}" isolation_snapshot_failed; return 75; }
+	extra_snapshot_dir="${run_dir}/extra-snapshots"
+	for extra_source in "${extra_roots[@]}"; do
+		extra_dest="${extra_snapshot_dir}/${#mounts[@]}"
+		if [ "${snapshot_files_limit}" -le "${snapshot_files_used}" ] || [ "${snapshot_bytes_limit}" -le "${snapshot_bytes_used}" ] ||
+		   ! mkdir -p -- "${extra_snapshot_dir}" ||
+		   ! extra_summary="$(CLAUDE_READ_SNAPSHOT_MAX_FILES="$((snapshot_files_limit - snapshot_files_used))" \
+			CLAUDE_READ_SNAPSHOT_MAX_BYTES="$((snapshot_bytes_limit - snapshot_bytes_used))" \
+			_ai_engine_py read-snapshot --workdir "${extra_source}" --dest "${extra_dest}" "${snapshot_args[@]}")" ||
+		   ! extra_details="$(_ai_engine_snapshot_summary "${extra_summary}")"; then
+			echo "CLAUDE_READ_ISOLATION role=${role} outcome=rejected reason=isolation_snapshot_failed files=${snapshot_files} git=${snapshot_git} extra_dirs=$((${#mounts[@]} / 2 - 1))" >&2
+			ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
+		fi
+		extra_files="${extra_details%% *}"
+		snapshot_files=$((snapshot_files + extra_files))
+		snapshot_files_used=$((snapshot_files_used + extra_files))
+		snapshot_bytes_used=$((snapshot_bytes_used + $(_ai_engine_json_field "${extra_summary}" bytes)))
+		mounts+=(--mount "type=bind,src=${extra_dest},dst=${extra_source},readonly")
+	done
+	git_objects="$(printf '%s' "${snapshot_result}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("git_objects", ""))')" || {
+		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
+	}
+	if [ -n "${git_objects}" ]; then
+		ai_engine_fallback "${role}" isolation_snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
+	fi
+	# Legacy auxiliary checkouts use the same remaining budget.
 	for i in "${!AI_ENGINE_ISOLATION_PATHS[@]}"; do
 		extra_snapshot="${run_dir}/source-snapshot-${i}"
 		if [ "${snapshot_files_limit}" -le "${snapshot_files_used}" ] || [ "${snapshot_bytes_limit}" -le "${snapshot_bytes_used}" ] ||

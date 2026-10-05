@@ -700,9 +700,10 @@ Session reuse rejects a pool path overlapping the mounted session directory with
 Read-profile calls through `scripts/ai_engine.sh::claude_run` (including
 `AI_ENGINE_READ_ONLY=true`) run in a network-less, read-only Docker container.
 The host-side Anthropic relay retains OAuth credentials; the container sees
-only tracked-file snapshots, sanitized git metadata, the prompt and trusted
-support, with an optional `AI_ENGINE_READ_EXTRA_DIRS` snapshot for the heal
-worktrees. Missing isolation returns exit 75, never host Claude.
+only tracked-file snapshots, sanitized git metadata when history contains no
+filtered paths (otherwise no git metadata), the prompt and trusted support,
+with an optional `AI_ENGINE_READ_EXTRA_DIRS` snapshot for the heal worktrees.
+Missing isolation returns exit 75, never host Claude.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production

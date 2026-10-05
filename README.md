@@ -2063,10 +2063,12 @@ container starts.
 **Read-profile isolation.** Every `claude_run` with a `read` profile (also a
 write role narrowed by `AI_ENGINE_READ_ONLY=true`) runs in a network-less,
 read-only Docker container instead of running Claude on the host. A sanitized
-snapshot includes regular tracked files and git objects/refs with a new config
-that excludes credential headers; untracked files, symlinks and runner secrets
-are not mounted. Repositories using git object alternates retain working-tree
-files but omit git history (`git=omitted` in the isolation log). Non-git
+snapshot includes regular tracked files and, when all reachable history paths
+pass the snapshot filter, git objects/refs with a new config that excludes
+credential headers; untracked files, symlinks and runner secrets are not
+mounted. Repositories using git object alternates or with filtered paths in
+reachable history retain working-tree files but omit git history (`git=omitted`,
+`reason=alternates|filtered_history` in the isolation log). Non-git
 workdirs copy only regular files, excluding secret
 filenames and key suffixes. The host-side Anthropic relay keeps the OAuth token
 outside the container. A Docker, relay, image or snapshot preflight failure
@@ -2077,8 +2079,8 @@ returns `75` for the caller's existing fallback, never unisolated Claude.
 |---|---|---|
 | `AI_ENGINE_READ_EXTRA_DIRS` | empty | Colon-separated absolute directories to snapshot alongside the workdir (the workflow-heal worktrees). |
 | `AI_ENGINE_ISOLATED_READ_PATHS` | empty | WORKFLOW_HEAL-only paths under `RUNTIME_DIR` for filtered auxiliary snapshots; other paths fall back. |
-| `CLAUDE_READ_SNAPSHOT_MAX_FILES` | `50000` | Maximum snapshot working-tree file count. |
-| `CLAUDE_READ_SNAPSHOT_MAX_BYTES` | `1073741824` | Maximum snapshot working-tree bytes. |
+| `CLAUDE_READ_SNAPSHOT_MAX_FILES` | `50000` | Maximum combined snapshot working-tree file count. |
+| `CLAUDE_READ_SNAPSHOT_MAX_BYTES` | `1073741824` | Maximum combined snapshot working-tree bytes. |
 | `CLAUDE_READ_ISOLATION_MAX_SECS` | `14400` | Maximum per-account container call time; relay startup has a separate 5-second check. Invalid values use the default. |
 
 **Context gate.** `--bare` is not used because it never reads OAuth
@@ -2089,7 +2091,7 @@ For write profiles, `claude_run` then moves `CLAUDE.md` out of the checkout for 
 it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
 file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
 and reports that path instead of overwriting the new content.
-Read profiles omit `CLAUDE.md` from the sanitized container snapshot without
+Read profiles omit `CLAUDE.md` from every sanitized container snapshot without
 moving the host checkout's file.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
