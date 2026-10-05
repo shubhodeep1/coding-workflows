@@ -626,7 +626,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   does not trust its stored URL or PR history for that push. Wrapped commits
   are checked in the directory selected by `env -C` or `GIT_DIR`; ambiguous
   directories and unparseable `env -S` commands ask for confirmation instead
-  of checking the session checkout.
+  of checking the session checkout. Append assignments to `GIT_DIR` or
+  `GIT_WORK_TREE` also ask before a push, and leading redirections do not
+  bypass commit/push detection.
 - **No MCP tools inside.** Serena (and any other MCP server) is not configured
   in the container, so isolated prompts carry no Serena hints. Semble results
   are rendered into prompts on the host and are unaffected.

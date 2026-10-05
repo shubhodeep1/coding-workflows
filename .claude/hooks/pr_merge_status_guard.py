@@ -713,11 +713,11 @@ def git_subcommands(command: str) -> set[str]:
 	"""
 	found: set[str] = set()
 	try:
-		segments = _shell_segments(command)
+		segments = _shell_segments_with_operators(command)
 	except ValueError:
 		# Unbalanced quotes — the command is not something we can read.
 		return found
-	for tokens in segments:
+	for _separator, tokens in segments:
 		# Drop leading environment assignments (`GIT_DIR=... git commit`),
 		# including append assignments such as `COUNT+=1 git push`.
 		index = 0
@@ -1380,11 +1380,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	bulk_reasons: list[str] = []
 	unverified_destinations: set[str] = set()
 	for invocation in _guarded_git_invocations(command, checkout):
-		if invocation.subcommand == "push" and invocation.config_override:
+		if invocation.subcommand == "push" and invocation.warning:
 			unverified_destinations.add(
 				"unparsed env-wrapped Git command" if invocation.warning == "unparsed env wrapper"
-				else "per-command Git configuration may redirect the push"
+				else "could not resolve the git push directory"
 			)
+			continue
+		if invocation.subcommand == "push" and invocation.config_override:
+			unverified_destinations.add("per-command Git configuration may redirect the push")
 			continue  # Origin's PR history cannot authorize a push with overridden configuration.
 		if invocation.subcommand == "commit" and invocation.warning:
 			unverified_destinations.add("could not resolve the git commit directory")
