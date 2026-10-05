@@ -136,7 +136,7 @@ PY
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" count idx op issue number created body label close_failed="false" ops_failed="false"
+	local ops_file="$1" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false"
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -267,9 +267,11 @@ PY
 				fi
 				if [ "$(jq -r ".ops[${idx}].pr" "${ops_file}")" = "true" ]; then
 					gh api -X PATCH "repos/${REPOSITORY}/pulls/${issue}" -f state=closed >/dev/null 2>&1 \
+						&& close_succeeded="true" \
 						|| { close_failed="true"; ops_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
 				else
 					gh api -X PATCH "repos/${REPOSITORY}/issues/${issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
+						&& close_succeeded="true" \
 						|| { close_failed="true"; ops_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
 				fi
 				;;
@@ -281,7 +283,7 @@ PY
 					|| { ops_failed="true"; unblock_log "item=${ITEM} op=dispatch_review pr=${number} outcome=failed"; }
 				;;
 			telegram)
-				[ "${ops_failed}" = "true" ] && continue
+				[ "${ops_failed}" = "true" ] && [ "${close_succeeded}" != "true" ] && continue
 				unblock_tg "$(jq -r ".ops[${idx}].level" "${ops_file}")" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
 				;;
 			*)

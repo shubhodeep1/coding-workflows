@@ -2670,7 +2670,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
   poller then sets the state to `abandoned` and closes the tracking issue.
   For an issue or PR, a failed close leaves the terminal label unset so a
-  later scan can retry.
+  later scan can retry. If the close succeeds but adding the label fails,
+  the judge logs the failure and still sends the CRITICAL alert; the closed
+  item cannot be rediscovered by the open-item scan.
 
 A person can still act on any blocked item at any time; the judge only
 picks up what is still blocked. `UNBLOCK_JUDGE_ENABLED=false` turns all of

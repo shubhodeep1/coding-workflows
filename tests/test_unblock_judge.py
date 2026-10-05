@@ -509,6 +509,9 @@ if method == "POST" and endpoint.endswith("/comments"):
 	state["comments"].append({"endpoint": endpoint, "body": f.get("body", "")})
 	done("{}")
 if method == "POST" and endpoint.endswith("/labels"):
+	if os.environ.get("FAKE_GH_FAIL_LABEL"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	state["labels_added"].append([endpoint, f.get("labels[]")])
 	done("{}")
 if method == "DELETE":
@@ -865,6 +868,30 @@ def test_failed_close_does_not_add_terminal_label(tmp_path: Path) -> None:
 	assert "op=close issue=7 outcome=failed" in result.stdout
 	assert "reason=actuation_failed" in result.stdout
 	assert state["labels_added"] == []
+
+
+def test_closed_item_still_alerts_when_terminal_label_fails(tmp_path: Path) -> None:
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	(support / "prompts").mkdir()
+	for name in ("unblock_ledger.py", "unblock_actions.py"):
+		(support / "scripts" / name).symlink_to(ROOT / "scripts" / name)
+	(support / "prompts" / "mode-judge-unblock.txt").symlink_to(ROOT / "prompts" / "mode-judge-unblock.txt")
+	(support / "scripts" / "tg_helpers.sh").write_text(
+		'tg_send_msg() { printf "%s\\n" "$2" >> "$FAKE_TG_ALERTS"; }\n', encoding="utf-8",
+	)
+	alerts = tmp_path / "alerts.txt"
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "close", "reason": "nothing left"},
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts))
+	assert "op=add_labels issue=7 label=ai:unblock-closed outcome=failed" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
+	assert any(fields.get("state") == "closed" for _, fields in state["patched"])
+	assert state["labels_added"] == []
+	assert alerts.read_text(encoding="utf-8").splitlines() == ["CRITICAL"]
+	result, _ = _judge(tmp_path, ISSUE, verdict={"verdict": "close", "reason": "nothing left"},
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_CLOSE="1", FAKE_TG_ALERTS=str(alerts))
+	assert "reason=actuation_failed" in result.stdout
+	assert alerts.read_text(encoding="utf-8").splitlines() == ["CRITICAL"]
 
 
 def test_judge_closes_without_the_model_when_the_caps_are_spent(tmp_path: Path) -> None:
