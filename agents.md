@@ -790,13 +790,15 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   Its existing-PR lookup accepts only an open PR from this repository's sync
   branch into the configured base branch, even when other PRs are returned.
   It fails open on an unusable `before` commit: no sync is attempted, and
-  the parity test still reports the drift. The API budget is at most one
-  association lookup per distinct template commit, 1-3 pages per distinct
-  merged PR, and two sync-PR lookups plus at most one create/convert per
-  nonempty group. `GH_PAT` remains broad to trigger CI/review; branch names
-  and commit subjects are not proof of human authorship, and marking a held PR
-  ready between conversion and push is a residual race. Log prefix
-  `CLAUDE_LIVE_SYNC`.
+  the parity test still reports the drift. Provenance and open-PR reads use
+  GraphQL: one aliased association lookup covers up to 30 distinct template
+  commits, followed by 1-3 pages per distinct merged PR and one sync-PR lookup
+  per nonempty group.
+  Only PR creation uses REST, at most once for each of the authorized and held
+  groups (two REST calls total). `GH_PAT` remains broad to trigger CI/review;
+  branch names and commit subjects are not proof of human authorship, and
+  marking a held PR ready between conversion and push is a residual race. Log
+  prefix `CLAUDE_LIVE_SYNC`.
 - A push that changed only the live copy is left to the parity test.
 
 For PRs targeting `main`, the `tests-hooks-and-orchestrator` CI job runs

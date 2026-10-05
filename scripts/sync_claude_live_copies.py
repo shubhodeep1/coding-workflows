@@ -37,9 +37,11 @@ broad write credential; branch provenance is a conservative signal, not proof
 of a human author (a trusted collaborator can still submit AI-written content).
 A ready held PR can race with draft conversion before the next push.
 
-API budget (CLAUDE.md §15): per run, at most one association lookup per
-distinct template commit (30 by default), 1-3 pages per distinct merged PR,
-and two PR lookups plus at most one create/convert per nonempty group.
+API budget (CLAUDE.md §15): provenance and open-PR reads use GraphQL; per run,
+one aliased association lookup covers up to 30 distinct template commits,
+followed by 1-3 pages per distinct merged PR and one open-PR lookup per
+nonempty group. Only PR creation uses REST, at most once for each of the
+authorized and held groups (two REST calls total).
 
 Log lines start with `CLAUDE_LIVE_SYNC`.
 """
@@ -57,7 +59,6 @@ import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -174,6 +175,108 @@ def _gh_json(*args: str) -> object:
 	return json.loads(result.stdout or "null")
 
 
+def _commit_pull_requests_graphql(repository: str, shas: list[str]) -> dict[str, object]:
+	"""Map commit SHA to REST-shaped associated PRs with one aliased GraphQL call.
+
+	Input is at most 30 validated commit SHAs; output has one list per SHA. The
+	helper issues exactly one API call and raises on partial or malformed data so
+	the caller can hold every affected path rather than authorizing from a cache
+	miss.
+	"""
+	if not shas:
+		return {}
+	owner, name = repository.split("/", 1)
+	query_variables = ",".join(["$owner:String!", "$name:String!", *(f"$sha{index}:GitObjectID!" for index in range(len(shas)))])
+	query_fields = "".join(
+		"commit%d:object(oid:$sha%d){... on Commit{associatedPullRequests(first:100){nodes{number mergedAt headRefName baseRefName headRepository{nameWithOwner} author{login __typename} authorAssociation} pageInfo{hasNextPage}}}}"
+		% (index, index)
+		for index in range(len(shas))
+	)
+	query = f"query({query_variables}){{repository(owner:$owner,name:$name){{{query_fields}}}}}"
+	arguments = ["graphql", "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}"]
+	for index, sha in enumerate(shas):
+		arguments.extend(("-f", f"sha{index}={sha}"))
+	result = _gh_json(*arguments)
+	try:
+		if not isinstance(result, dict) or result.get("errors"):
+			raise ValueError("invalid commit associations")
+		repository_data = result["data"]["repository"]
+		response_cache: dict[str, object] = {}
+		for index, sha in enumerate(shas):
+			connection = repository_data[f"commit{index}"]["associatedPullRequests"]
+			if connection["pageInfo"]["hasNextPage"] is not False or not isinstance(connection["nodes"], list):
+				raise ValueError("invalid commit associations")
+			response_cache[sha] = [
+				{
+					"number": pull_request["number"], "merged_at": pull_request["mergedAt"],
+					"head": {"ref": pull_request["headRefName"], "repo": {"full_name": pull_request["headRepository"]["nameWithOwner"]} if pull_request["headRepository"] else None},
+					"base": {"ref": pull_request["baseRefName"]},
+					"user": {"login": pull_request["author"]["login"], "type": pull_request["author"]["__typename"]} if pull_request["author"] else None,
+					"author_association": pull_request["authorAssociation"],
+				}
+				for pull_request in connection["nodes"]
+			]
+		return response_cache
+	except (KeyError, TypeError, ValueError):
+		raise ValueError("invalid commit associations") from None
+
+
+def _pull_request_commits_graphql(repository: str, number: int, cursor: str | None) -> tuple[list[object], str | None, bool, int]:
+	"""Return one 100-commit GraphQL page plus cursor metadata; malformed data fails closed."""
+	owner, name = repository.split("/", 1)
+	query = """query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){commits(first:100,after:$cursor){nodes{commit{message}} totalCount pageInfo{hasNextPage endCursor}}}}}"""
+	arguments = ["graphql", "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}", "-F", f"number={number}"]
+	if cursor is not None:
+		arguments.extend(("-f", f"cursor={cursor}"))
+	result = _gh_json(*arguments)
+	try:
+		if not isinstance(result, dict) or result.get("errors"):
+			raise ValueError("invalid PR commits")
+		connection = result["data"]["repository"]["pullRequest"]["commits"]
+		entries = connection["nodes"]
+		next_cursor = connection["pageInfo"]["endCursor"]
+		has_next_page = connection["pageInfo"]["hasNextPage"]
+		total_count = connection["totalCount"]
+		if (
+			not isinstance(entries, list)
+			or not isinstance(has_next_page, bool)
+			or not isinstance(total_count, int)
+			or isinstance(total_count, bool)
+			or (has_next_page and not isinstance(next_cursor, str))
+		):
+			raise ValueError("invalid PR commits")
+		return entries, next_cursor, has_next_page, total_count
+	except (KeyError, TypeError, ValueError):
+		raise ValueError("invalid PR commits") from None
+
+
+def _open_sync_prs_graphql(repository: str, branch: str, base: str) -> object:
+	"""Return REST-shaped open sync PRs using one GraphQL read; malformed data fails closed."""
+	owner, name = repository.split("/", 1)
+	query = """query($owner:String!,$name:String!,$branch:String!,$base:String!){repository(owner:$owner,name:$name){pullRequests(first:100,states:OPEN,headRefName:$branch,baseRefName:$base){nodes{number state isDraft id headRefName baseRefName headRepository{nameWithOwner}} pageInfo{hasNextPage}}}}"""
+	result = _gh_json(
+		"graphql", "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}",
+		"-f", f"branch={branch}", "-f", f"base={base}",
+	)
+	try:
+		if not isinstance(result, dict) or result.get("errors"):
+			raise ValueError("invalid open PRs")
+		connection = result["data"]["repository"]["pullRequests"]
+		if connection["pageInfo"]["hasNextPage"] is not False or not isinstance(connection["nodes"], list):
+			raise ValueError("invalid open PRs")
+		return [
+			{
+				"number": pull_request["number"], "state": pull_request["state"].lower(),
+				"draft": pull_request["isDraft"], "node_id": pull_request["id"],
+				"head": {"ref": pull_request["headRefName"], "repo": {"full_name": pull_request["headRepository"]["nameWithOwner"]} if pull_request["headRepository"] else None},
+				"base": {"ref": pull_request["baseRefName"]},
+			}
+			for pull_request in connection["nodes"]
+		]
+	except (AttributeError, KeyError, TypeError, ValueError):
+		raise ValueError("invalid open PRs") from None
+
+
 def _is_sync_pr(pr: object, repository: str, branch: str, base: str) -> bool:
 	if not isinstance(pr, dict):
 		return False
@@ -228,7 +331,7 @@ def _commit_authorization(
 	try:
 		# The sync-branch PR lookup cannot establish the source commit's provenance.
 		if sha not in pr_cache:
-			pr_cache[sha] = _gh_json(f"repos/{repository}/commits/{sha}/pulls?per_page=100")
+			raise ValueError("commit associations unavailable")
 		associations = pr_cache[sha]
 		if not isinstance(associations, list) or len(associations) >= 100 or any(not isinstance(pr, dict) for pr in associations):
 			raise ValueError("invalid commit associations")
@@ -272,19 +375,22 @@ def _commit_authorization(
 			number = pr["number"]
 			if number not in commit_cache:
 				entries: list[object] = []
-				for page in range(1, 4):
-					batch = _gh_json(f"repos/{repository}/pulls/{number}/commits?per_page=100&page={page}")
-					if not isinstance(batch, list) or any(not isinstance(item, dict) for item in batch):
-						raise ValueError("invalid PR commits")
+				cursor = None
+				for _page in range(3):
+					batch, cursor, has_next_page, total_count = _pull_request_commits_graphql(repository, number, cursor)
+					if total_count >= 250 or any(not isinstance(item, dict) for item in batch):
+						return False, "pr_commits_truncated", str(number)
 					entries.extend(batch)
-					if len(batch) < 100:
+					if not has_next_page:
 						break
+				else:
+					return False, "pr_commits_truncated", str(number)
+				if len(entries) != total_count:
+					raise ValueError("incomplete PR commits")
 				commit_cache[number] = entries
 			entries = commit_cache[number]
 			if not isinstance(entries, list) or not entries:
 				raise ValueError("empty PR commits")
-			if len(entries) >= 250:
-				return False, "pr_commits_truncated", str(number)
 			for entry in entries:
 				commit = entry.get("commit") if isinstance(entry, dict) else None
 				message = commit.get("message") if isinstance(commit, dict) else None
@@ -303,7 +409,6 @@ def _commit_authorization(
 def _classify_paths(root: Path, paths: list[str], after: str, repository: str, base_branch: str | None = None) -> tuple[list[str], dict[str, tuple[str, str, str]]]:
 	authorized: list[str] = []
 	held: dict[str, tuple[str, str, str]] = {}
-	pr_cache: dict[str, object] = {}
 	commit_cache: dict[int, object] = {}
 	try:
 		cap = int(os.environ.get("CLAUDE_LIVE_SYNC_MAX_PROVENANCE_COMMITS", str(DEFAULT_MAX_PROVENANCE_COMMITS)))
@@ -312,8 +417,19 @@ def _classify_paths(root: Path, paths: list[str], after: str, repository: str, b
 	if cap <= 0:
 		cap = DEFAULT_MAX_PROVENANCE_COMMITS
 	seen: set[str] = set()
+	path_commits: dict[str, list[tuple[str, str]] | None] = {}
 	for relative in paths:
 		commits = _template_commits(root, relative, after)
+		path_commits[relative] = commits
+		if commits and len(seen | {sha for sha, _subject in commits}) <= cap:
+			seen.update(sha for sha, _subject in commits)
+	try:
+		pr_cache = _commit_pull_requests_graphql(repository, sorted(seen))
+	except (subprocess.CalledProcessError, OSError, ValueError):
+		pr_cache = {}
+	seen.clear()
+	for relative in paths:
+		commits = path_commits[relative]
 		reason, sha12, pr_number = "", "none", "none"
 		if commits is None:
 			reason = "history_failed"
@@ -401,10 +517,7 @@ def _open_or_refresh_pr(repository: str, owner: str, branch: str, base: str, tit
 	if not draft and not push():
 		return None
 	try:
-		open_prs = _gh_json(
-			f"repos/{repository}/pulls?state=open&head={quote(owner, safe='')}:{quote(branch, safe='/')}"
-			f"&base={quote(base, safe='')}&per_page=100"
-		)
+		open_prs = _open_sync_prs_graphql(repository, branch, base)
 	except (subprocess.CalledProcessError, OSError, ValueError):
 		log("error reason=api_failed stage=lookup")
 		return None
