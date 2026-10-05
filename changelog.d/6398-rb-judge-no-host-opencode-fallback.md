@@ -1,2 +1,2 @@
 <!-- changelog: security -->
-- **Review-blocked judge OpenCode fallback now stays isolated.** Verdict and fix passes run in fresh credential-free sandboxes when Claude is disabled or unavailable; sandbox failures defer the judge instead of executing PR-controlled prompts on the host.
+- **Review-blocked judge OpenCode fallback now stays isolated.** Verdict and fix passes run in fresh credential-free sandboxes when Claude is disabled or unavailable; verdicts use a read-only source snapshot and reviewer tools, while fixes retain isolated writer tools with validated transfer. Sandbox failures defer the judge instead of executing PR-controlled prompts on the host.

@@ -151,6 +151,9 @@ review_rb_opencode_sandbox_prepare()
 {
   local rb_oc_config_path="$1" rb_oc_phase="$2" rb_oc_stderr_file="$3" rb_oc_serena_mode="$4"
   local rb_oc_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+  # Verdicts inspect an immutable snapshot; only the fix phase gets writer tools.
+  local rb_oc_role=writer
+  [ "${rb_oc_phase}" != review_rb_judge ] || rb_oc_role=reviewer
   RB_OC_ISOLATION_REASON=""
   RB_OC_SANDBOX_ROOT=""
   if [ ! -f "${rb_oc_sandbox_sh}" ]; then
@@ -162,7 +165,7 @@ review_rb_opencode_sandbox_prepare()
   else
     RB_SANDBOX_TRANSFER_FAILED=false
     rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
-    if ! review_rb_prepare_opencode_config writer "${rb_oc_phase}" "${rb_oc_config_path}" "${rb_oc_serena_mode}"; then
+    if ! review_rb_prepare_opencode_config "${rb_oc_role}" "${rb_oc_phase}" "${rb_oc_config_path}" "${rb_oc_serena_mode}"; then
       RB_OC_ISOLATION_REASON=opencode_config_failed
       REVIEW_SANDBOX_ROOT="${RB_OC_SANDBOX_ROOT}" bash "${rb_oc_sandbox_sh}" cleanup 2>>"${rb_oc_stderr_file}" || echo '::error::Review-blocked judge sandbox cleanup failed.' >&2
       RB_OC_SANDBOX_ROOT=""
@@ -1437,11 +1440,8 @@ JUDGE_EFFECTIVE_REASONING_EFFORT="${JUDGE_ATTEMPT_LEVELS[0]}"
 JUDGE_ATTEMPT_COUNT="${#JUDGE_ATTEMPT_LEVELS[@]}"
 RB_OPENCODE_WORKSPACE="$(pwd)"
 RB_JUDGE_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_judge_opencode.json"
-RB_JUDGE_SANDBOX_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_judge_sandbox_opencode.json"
+RB_JUDGE_SANDBOX_OPENCODE_CONFIG="${RB_JUDGE_OPENCODE_CONFIG}"
 RB_FIX_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_fix_opencode.json"
-if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then
-  exit 1
-fi
 
 # -----------------------------------------------------------
 # Recover judge JSON from a non-empty buffer

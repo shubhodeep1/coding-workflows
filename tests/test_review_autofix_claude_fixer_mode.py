@@ -736,13 +736,13 @@ def _run_rb_isolated_fallback(tmp: Path, *, engine: str, mode: str, access: str 
 	script = (_rb_helper() + '''
 review_rb_prepare_opencode_config() {
   [ "$MODE" != config_failed ] || return 1
-  printf 'config' > "$3"
+  printf '%s' "$1" > "$3"
 }
 rb_claude_rc=0
 review_rb_claude_run "$ACCESS" prompt.txt out.txt err.txt high || rb_claude_rc=$?
 rc="$rb_claude_rc"
 if [ "$rb_claude_rc" -eq 75 ]; then
-  if review_rb_opencode_sandbox_prepare config.json review_rb_judge err.txt off; then
+  if review_rb_opencode_sandbox_prepare config.json "$RB_TEST_PHASE" err.txt off; then
     cmd=(env "REVIEW_SANDBOX_ROOT=${RB_OC_SANDBOX_ROOT}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run prompt.txt out.txt "${MODEL_EDITOR}" high config.json codex RB_JUDGE "$ACCESS")
     rc=0
     "${cmd[@]}" || rc=$?
@@ -755,7 +755,8 @@ printf 'claude=%s rc=%s reason=%s flag=%s\\n' "$rb_claude_rc" "$rc" "${RB_OC_ISO
 ''')
 	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(scripts), RB_OPENCODE_WORKSPACE=str(tmp), MODEL_EDITOR="openai/gpt-6-sol",
 		AI_ENGINE_RESOLVED_RB_JUDGE=engine, MODE=mode, ACCESS=access, CALLS=str(calls), FAKE_ROOT=str(tmp / "fake-root"),
-		RUNTIME_DIR=str(tmp), PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", HOST_WRITER_MARKER=str(tmp / "host-writer"))
+		RUNTIME_DIR=str(tmp), RB_TEST_PHASE="review_rb_judge" if access == "read" else "review_rb_fix",
+		PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", HOST_WRITER_MARKER=str(tmp / "host-writer"))
 	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
 		env.pop(inherited, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
@@ -769,6 +770,7 @@ def test_rb_codex_off_uses_isolated_opencode_for_both_access_modes(tmp_path):
 		proc, calls, host_writer = _run_rb_isolated_fallback(work, engine="codex", mode="success", access=access)
 		assert "claude=75 rc=0" in proc.stdout, proc.stderr
 		assert calls.splitlines() == ["prepare-ephemeral", f"run|codex|RB_JUDGE|{access}|{work / 'fake-root'}", "cleanup"]
+		assert (work / "config.json").read_text(encoding="utf-8") == ("reviewer" if access == "read" else "writer")
 		assert not host_writer.exists()
 
 
@@ -824,6 +826,10 @@ def test_rb_fix_refuses_failed_claude_transfer_before_commit_or_merge():
 def test_rb_judge_never_runs_opencode_on_host_and_defers_before_retry():
 	text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
 	assert "opencode_run_cmd" not in text
+	assert 'local rb_oc_role=writer' in text
+	assert '[ "${rb_oc_phase}" != review_rb_judge ] || rb_oc_role=reviewer' in text
+	assert 'RB_JUDGE_SANDBOX_OPENCODE_CONFIG="${RB_JUDGE_OPENCODE_CONFIG}"' in text
+	assert 'review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off' not in text
 	verdict = text.split('for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do', 1)[1].split('if [ "${JUDGE_SUCCESS}" != "true" ]; then', 1)[0]
 	assert verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true') < verdict.index('break', verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true')) < verdict.index('sleep 10')
 	assert 'judge_skip_reason=isolation_unavailable' in verdict
