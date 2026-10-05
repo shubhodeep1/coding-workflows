@@ -83,7 +83,7 @@ emit_context_budget_warn_for_prompt() {
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    PYTHONSAFEPATH=1 python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -165,7 +165,7 @@ reviewer_tool_repeat_detected() {
   [ -s "${structured_file}" ] || return 1
   grep -E '"type"[[:space:]]*:[[:space:]]*"tool_use"' "${structured_file}" 2>/dev/null \
     | tail -n "$((repeat_limit * 2))" \
-    | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+    | PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
 import json
 import sys
 
@@ -463,7 +463,7 @@ normalize_openrouter_usage() {
   local phase_label="$2"
   local call_label="$3"
   local model_name="$4"
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
 import json
 import os
 import sys
@@ -783,7 +783,7 @@ reviewer_materialize_opencode_json_text() {
   local structured_output_file="$1"
   local reviewer_text_file="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${structured_output_file}" "${reviewer_text_file}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${structured_output_file}" "${reviewer_text_file}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -860,7 +860,7 @@ filter_reviewer_paths_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -894,7 +894,7 @@ filter_reviewer_stat_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -993,7 +993,7 @@ emit_reviewer_filter_skip_logs() {
   local pr_skipped_file="$1"
   local last_run_skipped_file="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1152,7 +1152,7 @@ reviewer_count_diff_loc() {
 reviewer_count_paths_file() {
   local paths_file="$1"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
     "$paths_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1175,7 +1175,7 @@ reviewer_any_path_matches_regex() {
   local paths_file="$1"
   local pattern="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$paths_file" "$pattern" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$paths_file" "$pattern" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -1422,7 +1422,7 @@ reviewer_collect_review_tier_path_metadata() {
   local paths_file="$1"
   local diff_file="${2:-}"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
     "$paths_file" "$diff_file" <<'PY'
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -1931,7 +1931,7 @@ build_reviewer_iteration_scope_artifacts() {
   local output_paths_file="$3"
   local output_summary_file="$4"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
     "$changed_files_file" "$ledger_status_file" "$output_paths_file" "$output_summary_file" <<'PY'
 from pathlib import Path
 import sys
@@ -3261,7 +3261,7 @@ reviewer_slot_backoff_cap_secs() {
 
 reviewer_slot_backoff_budget_ratio() {
   local raw="${REVIEWER_SLOT_BACKOFF_BUDGET_RATIO:-0.05}"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${raw}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${raw}" <<'PY'
 import re
 import sys
 
@@ -3295,7 +3295,7 @@ reviewer_slot_backoff_budget_secs() {
   local total_secs="${1:-0}"
   local ratio=""
   ratio="$(reviewer_slot_backoff_budget_ratio)"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${total_secs}" "${ratio}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${total_secs}" "${ratio}" <<'PY'
 import math
 import sys
 
@@ -3363,7 +3363,7 @@ reviewer_random_int_upto() {
 
 reviewer_cache_status_for_model() {
   local model_name="$1"
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "${model_name}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "${model_name}" <<'PY'
 import sys
 
 try:
@@ -3439,7 +3439,7 @@ reviewer_catalog_declares_model() {
   if [ ! -s "${REVIEWER_MODEL_CATALOG_FILE}" ]; then
     return 0
   fi
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_MODEL_CATALOG_FILE}" "${model}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_MODEL_CATALOG_FILE}" "${model}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -3479,7 +3479,7 @@ reviewer_failback_target_for_model() {
       printf '%s\n' "${candidate}"
       return 0
     fi
-  done < <(PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_FAILBACK_CHAINS_FILE}" "${model}" <<'PY'
+  done < <(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_FAILBACK_CHAINS_FILE}" "${model}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -3515,7 +3515,7 @@ reviewer_health_state_action() {
   shift || true
   [ -n "${REVIEWER_HEALTH_STATE_FILE:-}" ] || return 0
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${action}" "${REVIEWER_HEALTH_STATE_FILE}" "$@" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${action}" "${REVIEWER_HEALTH_STATE_FILE}" "$@" <<'PY'
 import json
 import os
 import sys

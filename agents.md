@@ -501,7 +501,8 @@ a new value, add it to the appropriate overrides file with a
   Serena requires an absolute `HOME` for Codex config writes; a relative or
   missing `HOME` leaves the tool unavailable rather than writing under the PR tree.
   Other pre-review `python3 -c`, `-m` and stdin calls set `PYTHONSAFEPATH=1`
-  per call, without changing script-file imports or the checkout's Git auth.
+  per call, including reviewer and host-side editor helpers, without changing
+  script-file imports or the checkout's Git auth.
 - `orchestrate.yml` and `orchestrate_clarify_respond.yml` also assemble static
   context on the host. They reject symlinked required instructions and pipeline
   files before writing prompt output, and omit symlinked local agents files,

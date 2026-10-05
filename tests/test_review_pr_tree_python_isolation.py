@@ -113,12 +113,34 @@ def test_diff_filter_never_imports_pr_fnmatch(tmp_path: Path) -> None:
 	assert not marker.exists()
 
 
+def test_reviewer_usage_probe_never_imports_pr_json(tmp_path: Path) -> None:
+	pr_tree = tmp_path / "pr"
+	pr_tree.mkdir()
+	marker = tmp_path / "poisoned"
+	_poison_module(pr_tree / "json.py", marker)
+	reviewer_script = (SCRIPTS / "review_run_reviewers.sh").read_text(encoding="utf-8")
+	reviewer_function = "normalize_openrouter_usage() {" + reviewer_script.split("normalize_openrouter_usage() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+	child_env = os.environ.copy()
+	for inherited_name in ("PYTHONPATH", "PYTHONSAFEPATH", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		child_env.pop(inherited_name, None)
+	child_env.update({"SUPPORT_SCRIPTS_DIR": str(SCRIPTS), "PYTHONDONTWRITEBYTECODE": "1"})
+	result = subprocess.run(
+		["bash", "-c", reviewer_function + 'normalize_openrouter_usage "$1" review probe model',
+			"reviewer probe", str(tmp_path / "usage.log")],
+		cwd=pr_tree, env=child_env, capture_output=True, text=True, timeout=15, check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "INFO: openrouter usage phase=review call=probe model=model" in result.stdout
+	assert not marker.exists()
+
+
 def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 	shared = (
 		"review_collect_pr_metadata.sh", "memory_helpers.sh", "opencode_helpers.sh",
 		"workspace_init.sh", "gh_helpers.sh", "transcript_archive.sh",
 		"write_opencode_config.sh", "review_filter_uninteresting_files.sh",
-		"review_agents_md_materiality.sh",
+		"review_agents_md_materiality.sh", "review_run_reviewers.sh",
+		"review_apply_fixes.sh",
 	)
 	# Only interpreter option/inline invocations need the cwd removed from sys.path.
 	for filename in shared:

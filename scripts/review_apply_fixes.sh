@@ -269,7 +269,7 @@ emit_context_budget_warn_for_prompt() {
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    PYTHONSAFEPATH=1 python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -329,7 +329,7 @@ emit_lessons_learned_for_out_of_plan_fix() {
   telemetry_json="$(printf '%s\n' "${current_diff_paths}" | {
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
+    PYTHONSAFEPATH=1 python3 - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
 import json
 import os
 import sys
@@ -551,7 +551,7 @@ prepare_judge_interim_priors()
 		return 0
 	fi
 
-	merged_count="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${prior_json}" "${JUDGE_INTERIM_PRIORS_FILE}" <<'PY'
+	merged_count="$(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${prior_json}" "${JUDGE_INTERIM_PRIORS_FILE}" <<'PY'
 import json
 import re
 import sys
