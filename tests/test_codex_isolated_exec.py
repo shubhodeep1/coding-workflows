@@ -358,19 +358,37 @@ def test_prepare_deps_failure_remains_unverified_warning(sandbox):
 	assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
 
 
-def test_dependency_prepare_has_only_allowlisted_proxy_egress(sandbox):
+@pytest.mark.parametrize("mode", ["both", "pyproject"])
+def test_dependency_fallback_reports_missing_dev_dependencies(tmp_path, mode):
+	meta = tmp_path / ".codex-deps"
+	meta.mkdir()
+	(meta / "python").write_text(mode + "\n")
+	shell_source = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text()
+	case_start = shell_source.index('case "$(cat .codex-deps/python)" in')
+	case_end = shell_source.index('if [ -f .codex-deps/want-pytest ]', case_start)
+	command = ('pip() { case "$*" in *dev.txt*) return 1 ;; *) return 0 ;; esac; }\n'
+		'install_failed=false\n' + shell_source[case_start:case_end] + '\nprintf "%s\\n" "$install_failed"\n')
+	proc = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True, check=True)
+	assert proc.stdout.strip() == "true"
+
+
+@pytest.mark.parametrize("installable", [False, True])
+def test_dependency_prepare_has_only_allowlisted_proxy_egress(sandbox, installable):
 	(sandbox["repo"] / "requirements.txt").write_text("example==1\n")
+	if installable:
+		(sandbox["repo"] / "setup.py").write_text("from setuptools import setup\nsetup(name='sample')\n")
 	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]), "--deps")
 	assert prep.returncode == 0, prep.stderr
 	root = Path(prep.stdout.strip())
 	runs = docker_runs(sandbox["docker_log"])
-	assert len(runs) == 2
+	assert len(runs) == (2 if installable else 1)
 	argv = runs[0]["argv"]
 	assert argv[argv.index("--network") + 1] == "none"
 	assert any(f"src={root}/deps-stage,dst=/codex-deps" in mount for mount in mounts_of(runs[0]))
 	assert not any(f"src={root}/work" in mount for mount in mounts_of(runs[0]))
-	assert any(f"src={root}/work" in mount for mount in mounts_of(runs[1]))
-	assert runs[1]["argv"][runs[1]["argv"].index("--network") + 1] == "none"
+	if installable:
+		assert any(f"src={root}/work" in mount for mount in mounts_of(runs[1]))
+		assert runs[1]["argv"][runs[1]["argv"].index("--network") + 1] == "none"
 	assert any(mount.endswith("dst=/socket") for mount in mounts_of(runs[0]))
 	assert any(mount.endswith("dst=/support/dependency_registry_proxy.py,readonly") for mount in mounts_of(runs[0]))
 	assert "HTTPS_PROXY=http://127.0.0.1:3128" in argv

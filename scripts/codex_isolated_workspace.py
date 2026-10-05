@@ -729,7 +729,7 @@ def stage_deps(work, stage):
 			remaining -= len(filtered)
 			(meta / filename).write_text("\n".join(filtered) + "\n", encoding="utf-8")
 		python_mode = "both" if python_mode == "requirements" else "pyproject"
-	if python_mode != "none":
+	if python_mode in ("pyproject", "both") or (python_mode == "requirements" and deps_manifest(work, "setup.py") is not None):
 		(meta / "source-install").touch()
 	(meta / "python").write_text(python_mode + "\n", encoding="ascii")
 	if (any(deps_manifest(work, name) is not None for name in ("pytest.ini", "conftest.py", "tests/conftest.py"))

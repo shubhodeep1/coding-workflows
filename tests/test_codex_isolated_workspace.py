@@ -451,16 +451,20 @@ addopts = "-q"
 	assert (stage2 / ".codex-deps" / "source-install").exists()
 
 
-def test_stage_deps_requirements_only_installs_source_offline(tmp_path):
+@pytest.mark.parametrize("installable", [False, True])
+def test_stage_deps_requirements_only_marks_installable_source(tmp_path, installable):
 	work = tmp_path / "work"
 	work.mkdir()
 	(work / "requirements.txt").write_text("requests==2\n-e .\n")
+	if installable:
+		(work / "setup.py").write_text("from setuptools import setup\nsetup(name='sample')\n")
 	stage = tmp_path / "stage"
 	run("stage-deps", work, stage)
 	meta = stage / ".codex-deps"
 	assert (meta / "python").read_text().strip() == "requirements"
 	assert (meta / "requirements.txt").read_text().splitlines() == ["requests==2"]
-	assert (meta / "source-install").exists()
+	assert (meta / "source-install").exists() == installable
+	assert not (stage / "setup.py").exists()
 
 
 def test_stage_deps_bad_pyproject_degrades_without_install(tmp_path):

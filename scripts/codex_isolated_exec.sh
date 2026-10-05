@@ -353,9 +353,9 @@ if [ "${action}" = prepare ]; then
 					case "$(cat .codex-deps/python)" in
 						requirements) pip install -r .codex-deps/requirements.txt 2>&1 || install_failed=true ;;
 						both) pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
-							|| pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || install_failed=true ;;
+							|| { install_failed=true; pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || :; } ;;
 						pyproject) pip install -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
-							|| pip install -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || install_failed=true ;;
+							|| { install_failed=true; pip install -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || :; } ;;
 					esac
 					if [ -f .codex-deps/want-pytest ] && ! python3 -c "import pytest" >/dev/null 2>&1; then
 						pip install pytest 2>&1 || true

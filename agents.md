@@ -576,7 +576,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   container network access; review preparation continues, but validations
   needing those dependencies may be unverified.
   An editable source install runs separately with `--network none` for
-  Python dependency projects, including requirements-only and Node/Python hybrids;
+  parsed `pyproject.toml` projects or requirements with a regular `setup.py`,
+  including Node/Python hybrids. Requirements-only projects without an
+  installable source skip that step; a failed dev dependency install warns
+  even when retrying base dependencies succeeds.
   `prep-finalize` restores source files and keeps dependency output in the
   sandbox ("prep roots"), never copying it back.
   The agent itself has no network: it marks validators it cannot run
