@@ -524,6 +524,14 @@ def test_structured_diagnostics_are_bounded_and_revalidated(tmp_path: Path) -> N
 	assert "x" * 241 not in section
 	assert "/evidence" not in section and "job-11.txt" not in section
 	assert ev.render_prompt_section(str(out)).startswith("=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===")
+	job["failing_step"] = "unavailable"
+	job["steps"] = [{"number": 1, "name": "unavailable", "conclusion": "failure"}]
+	job["diagnostics"]["error_signature"] = "unavailable"
+	(out / "diagnostics.json").write_text(json.dumps(data))
+	section = ev.render_structured_prompt_section(str(out))
+	assert "Failing step fingerprint: unavailable" in section
+	assert "Step 1: unavailable; failure" in section
+	assert "Error signature fingerprint: unavailable" in section
 
 
 def test_structured_legacy_cached_job_and_missing_data(tmp_path: Path) -> None:

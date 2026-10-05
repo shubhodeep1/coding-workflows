@@ -667,7 +667,7 @@ def _diagnostic_fingerprint(value: Any) -> str:
 	"""Return a bounded identifier without exposing free-form log text."""
 	if isinstance(value, str) and _DIAGNOSTIC_FINGERPRINT_RE.fullmatch(value):
 		return value
-	if not isinstance(value, str):
+	if not isinstance(value, str) or value == "unavailable":
 		return "unavailable"
 	normalized = heal.single_line(redact_secrets(value), 4096).strip()
 	if not normalized:
