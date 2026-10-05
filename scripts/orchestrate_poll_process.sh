@@ -20983,17 +20983,25 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
           # Only clear a latch whose most recent isolation marker is our
           # recorded comment. Do not clear an unrelated human gate.
           RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.comment_id // empty')"
+          RB_ISOLATION_ACTOR="$(gh_retry _safe_gh_jq user --jq '.id' 2>/dev/null || true)"
+          RB_ISOLATION_COMMENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments?per_page=100" 2>/dev/null || true)"
+          if ! [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]] && [[ "${RB_ISOLATION_ACTOR}" =~ ^[0-9]+$ ]] && \
+             printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -e 'type == "array" and all(.[]; type == "array")' >/dev/null 2>&1; then
+            # The POST may have succeeded while its response was lost. Recover
+            # its ID from the already-fetched trusted comment history.
+            RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -r --argjson actor "${RB_ISOLATION_ACTOR}" \
+              --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_OLD_HEAD} " \
+              '[.[][] | select((.body | type == "string") and .user.id == $actor and (.body | startswith("## Review-blocked judge isolation unavailable") and contains($marker)))] | last | .id // empty')"
+          fi
+          # The PR/issue snapshots contain no label-event history. Only
+          # clear our own latch if the last label event is ours and predates
+          # our marker; a subsequent human latch must survive a head push.
           if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
-            RB_ISOLATION_ACTOR="$(gh_retry _safe_gh_jq user --jq '.id' 2>/dev/null || true)"
-            RB_ISOLATION_COMMENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments?per_page=100" 2>/dev/null || true)"
-            # The PR/issue snapshots contain no label-event history. Only
-            # clear our own latch if the last label event is ours and predates
-            # our marker; a subsequent human latch must survive a head push.
             RB_ISOLATION_EVENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/events?per_page=100" 2>/dev/null || true)"
             if [[ "${RB_ISOLATION_ACTOR}" =~ ^[0-9]+$ ]] && printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -e \
               --argjson id "${RB_ISOLATION_COMMENT_ID}" --argjson actor "${RB_ISOLATION_ACTOR}" \
               --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_OLD_HEAD} " \
-              '[.[][] | select(.body | startswith("## Review-blocked judge isolation unavailable")) | select(.body | contains("<!-- ai:rb-judge-isolation-escalated head="))] | last | .id == $id and .user.id == $actor and (.body | contains($marker))' >/dev/null 2>&1 && \
+              '[.[][] | select((.body | type == "string") and (.body | startswith("## Review-blocked judge isolation unavailable")) and (.body | contains("<!-- ai:rb-judge-isolation-escalated head=")))] | last | .id == $id and .user.id == $actor and (.body | contains($marker))' >/dev/null 2>&1 && \
               printf '%s' "${RB_ISOLATION_EVENTS}" | jq -e --argjson actor "${RB_ISOLATION_ACTOR}" \
                 --argjson id "${RB_ISOLATION_COMMENT_ID}" --argjson comments "${RB_ISOLATION_COMMENTS}" \
                 '($comments | [.[][] | select(.id == $id)] | last | .created_at) as $marker_at | $marker_at != null and ([.[][] | select(.event == "labeled" and .label.name == "ai:needs-human")] | last | .actor.id == $actor and .created_at <= $marker_at)' >/dev/null 2>&1; then
@@ -21014,6 +21022,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         jq --arg key "${rb_issue}" '.review_blocked_isolation_state |= del(.[$key])' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         REVIEW_BLOCKED_STATE_CHANGED=true
         echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=reset reason=$([ "${RB_ISOLATION_OLD_HEAD}" = "${RB_ISOLATION_HEAD}" ] && echo label_cleared || echo head_changed)"
+        RB_ISOLATION_ESCALATED=false
       fi
 
       # Collect full PR context for the judge. Apply the same byte cap as the
@@ -21418,6 +21427,7 @@ ${FOLLOWUP_BLOCK_REASON}"
               RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENT}" | jq -r '.id // empty' 2>/dev/null || true)"
               if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]] || [ "${RB_ISOLATION_OWNED_LABEL}" = true ] || printf '%s' "${RB_ISOLATION_LABELS}" | jq -e 'index("ai:needs-human") != null' >/dev/null 2>&1; then
                 jq --arg key "${rb_issue}" --arg id "${RB_ISOLATION_COMMENT_ID}" --argjson owned "${RB_ISOLATION_OWNED_LABEL}" '.review_blocked_isolation_state[$key] |= (.escalated = true | .comment_id = (if ($id | test("^[0-9]+$")) then ($id | tonumber) else null end) | .owned_label = $owned)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+                RB_ISOLATION_ESCALATED=true
                 echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=escalated reason=${RB_ISOLATION_REASON} count=${RB_ISOLATION_COUNT} max=${RB_JUDGE_ISOLATION_MAX_FAILURES}"
                 tg_notify "Review-blocked judge isolation unavailable for issue #${rb_issue} (PR #${RB_PR}); escalated after ${RB_ISOLATION_COUNT} failures. Reason: ${RB_ISOLATION_REASON}." "CRITICAL"
               fi
@@ -21425,7 +21435,9 @@ ${FOLLOWUP_BLOCK_REASON}"
           fi
         fi
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
-        tg_notify "Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle. Reason: ${RB_ISOLATION_REASON}."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+        if [ "${RB_ISOLATION_ESCALATED}" != true ]; then
+          tg_notify "Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle. Reason: ${RB_ISOLATION_REASON}."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+        fi
         # Reset worktree + switch back to default branch if we entered
         # combined mode — otherwise the next rb_issue iteration could
         # fail to check out its target branch.

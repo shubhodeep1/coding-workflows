@@ -392,6 +392,74 @@ def test_lost_escalation_comment_response_does_not_retry_judge(tmp_path: Path, c
 	assert _read(tmp_path / "remote_calls") == ("" if comment_seen else "post\n")
 
 
+@pytest.mark.parametrize("comment_id, comment_actor, later_latch, should_resume", [
+	(None, 42, False, True),
+	(123, 42, False, True),
+	(None, 99, False, False),
+	(None, 42, True, False),
+	(None, None, False, False),
+])
+def test_new_head_recovers_only_its_own_isolation_latch(
+	tmp_path: Path, comment_id: int | None, comment_actor: int | None, later_latch: bool, should_resume: bool,
+) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	block = text.split('      RB_ISOLATION_HEAD="', 1)[1].split('      # Collect full PR context', 1)[0]
+	state = tmp_path / "state.json"
+	old_head, new_head = "a" * 40, "b" * 40
+	state.write_text(json.dumps({"review_blocked_isolation_state": {"10": {
+		"head_sha": old_head, "count": 3, "escalated": True,
+		"comment_id": comment_id, "owned_label": True,
+	}}}), encoding="utf-8")
+	comments = [[{"id": 12, "body": None}, *([{
+		"id": 123, "user": {"id": comment_actor}, "created_at": "2026-10-05T10:01:00Z",
+		"body": f"## Review-blocked judge isolation unavailable\n<!-- ai:rb-judge-isolation-escalated head={old_head} reason=sandbox_prepare_failed -->",
+	}] if comment_actor is not None else [])]]
+	events = [[{"event": "labeled", "label": {"name": "ai:needs-human"},
+		"actor": {"id": 42}, "created_at": "2026-10-05T10:00:00Z"}]]
+	if later_latch:
+		events[0].append({"event": "labeled", "label": {"name": "ai:needs-human"},
+			"actor": {"id": 99}, "created_at": "2026-10-05T10:02:00Z"})
+	script = (
+		"set -euo pipefail\n"
+		f'STATE_FILE={state}\nGITHUB_REPOSITORY=owner/repo\nrb_issue=10\nRB_PR=77\n'
+		f'_rb_pr_json=\'{json.dumps({"head": {"sha": new_head}})}\'\n'
+		'gh_retry() {\n'
+		'  if [ "$1" = _safe_gh_jq ]; then\n'
+		'    if [ "$2" = user ]; then printf "42\\n"; else printf \'%s\\n\' \'{"labels":["ai:needs-human"]}\'; fi\n'
+		'  elif [ "${3:-}" = --paginate ]; then\n'
+		f'    case "$5" in */events?*) printf \'%s\\n\' \'{json.dumps(events)}\' ;; *) printf \'%s\\n\' \'{json.dumps(comments)}\' ;; esac\n'
+		'  elif [ "$1 $2" = "gh issue" ]; then printf "removed\\n" >> remote_calls; fi\n'
+		'}\n'
+		'for rb_issue in 10; do\n'
+		'RB_ISOLATION_HEAD="' + block + 'printf "judge-ran:%s\\n" "${RB_ISOLATION_ESCALATED}"\ndone\n'
+	)
+	env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "WORKSPACE_PATH")}
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert ("judge-ran:false" in result.stdout) is should_resume
+	assert ("removed" in _read(tmp_path / "remote_calls")) is should_resume
+	assert ("10" not in json.loads(state.read_text(encoding="utf-8")).get("review_blocked_isolation_state", {})) is should_resume
+
+
+@pytest.mark.parametrize("escalated, expected_warning", [(True, False), (False, True)])
+def test_isolation_escalation_does_not_promise_next_tick_retry(tmp_path: Path, escalated: bool, expected_warning: bool) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	notice = '        echo "::warning::Review-blocked judge failed for issue #${rb_issue}"' + text.split(
+		'        echo "::warning::Review-blocked judge failed for issue #${rb_issue}"', 1,
+	)[1].split('        # Reset worktree', 1)[0]
+	script = (
+		"set -euo pipefail\n"
+		f'RB_ISOLATION_ESCALATED={str(escalated).lower()}\n'
+		'RB_ISOLATION_REASON=sandbox_prepare_failed\nrb_issue=10\nRB_PR=77\n'
+		'tg_notify() { printf "%s\\n" "$1" >> notifications; }\n'
+		'_gh_url() { printf "https://example.invalid/%s" "$1"; }\n'
+		+ notice
+	)
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert ("Will retry next poll cycle" in _read(tmp_path / "notifications")) is expected_warning
+
+
 # Each judge call site: the role, then the unchanged codex command that runs
 # only on exit 75.
 SITES = {
