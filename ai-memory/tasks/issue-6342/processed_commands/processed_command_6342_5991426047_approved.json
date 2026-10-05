@@ -5,13 +5,29 @@
   "entry_id": "processed_command_6342_5991426047_approved",
   "issue_number": 6342,
   "metadata": {
+    "branch": "ai/issue-6342",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/orchestrate_clarify_respond.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/6262-clarify-respond-standalone.md",
+      "scripts/clarify_github_facts.py",
+      "tests/test_clarify_github_facts.py",
+      "tests/test_clarify_respond_standalone.py"
+    ],
+    "issue_number": 6342,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6342",
+    "pr_number": 6351,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6351",
+    "run_attempt": "1",
+    "run_id": "37287938721",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37287938721"
   },
   "run_attempt": 1,
   "run_id": "37287938721",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-05T09:11:02Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T09:25:57Z",
   "workflow": "implement"
 }
