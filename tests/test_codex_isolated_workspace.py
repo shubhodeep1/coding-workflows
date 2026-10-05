@@ -154,6 +154,7 @@ def test_export_oversized_chunks_only_scoped_safe_tracked_files(repo, tmp_path):
 	proc = run("export-oversized", repo, scope, dest, len(data), len(data), hide="CLAUDE.md")
 	assert "scoped=1" in proc.stderr and "unscoped=2" in proc.stderr
 	manifest = json.loads((dest / "manifest.json").read_text())
+	assert manifest["scope_mode"] == "explicit"
 	assert [item["path"] for item in manifest["unscoped_oversized"]] == ["big.bin", "unscoped.txt"]
 	assert manifest["unscoped_oversized_count"] == 2
 	assert len(manifest["scoped"]) == 1
@@ -163,6 +164,99 @@ def test_export_oversized_chunks_only_scoped_safe_tracked_files(repo, tmp_path):
 	assert all(chunk["bytes"] <= 1024 * 1024 for chunk in item["chunks"])
 	assert all(left["end_line"] + 1 == right["start_line"] for left, right in zip(item["chunks"], item["chunks"][1:]))
 	assert tree(dest) == sorted([chunk["file"] for chunk in item["chunks"]] + ["manifest.json"])
+
+
+def test_export_oversized_all_chunks_every_eligible_tracked_file(repo, tmp_path):
+	data = b"source\n" * 300000
+	(repo / "large.txt").write_bytes(data)
+	(repo / "unscoped.txt").write_bytes(data)
+	(repo / "secret.json").write_bytes(data)
+	(repo / "CLAUDE.md").write_bytes(data)
+	(repo / "large-link.txt").symlink_to("large.txt")
+	git(repo, "add", "large.txt", "unscoped.txt", "secret.json", "CLAUDE.md", "large-link.txt")
+	scope = tmp_path / "scope.txt"
+	scope.write_text("")
+	dest = tmp_path / "export"
+	run("export-oversized", repo, scope, dest, 16777216, 67108864, "all", hide="CLAUDE.md")
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert manifest["scope_mode"] == "all"
+	assert [item["path"] for item in manifest["scoped"]] == ["big.bin", "large.txt", "unscoped.txt"]
+	assert manifest["unscoped_oversized"] == []
+	assert manifest["unscoped_oversized_count"] == 0
+	for item in manifest["scoped"]:
+		assert b"".join((dest / chunk["file"]).read_bytes() for chunk in item["chunks"]) == (data if item["path"] != "big.bin" else b"x" * (2 * 1024 * 1024 + 1))
+
+
+@pytest.mark.parametrize("file_cap,total_cap,expected", [
+	("2097152", "67108864", {"big.bin": "over_file_cap", "large.txt": "over_file_cap"}),
+	("16777216", "4194304", {"large.txt": "over_total_cap"}),
+])
+def test_export_oversized_all_reports_unlisted_cap_breach(repo, tmp_path, file_cap, total_cap, expected):
+	# Q24: a full audit lists unscoped files past the caps as not inspected.
+	(repo / "large.txt").write_bytes(b"a" * (2 * 1024 * 1024 + 1))
+	git(repo, "add", "large.txt")
+	scope = tmp_path / "scope.txt"
+	scope.write_text("")
+	dest = tmp_path / "export"
+	run("export-oversized", repo, scope, dest, file_cap, total_cap, "all")
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert {item["path"]: item["reason"] for item in manifest["unscoped_oversized"]} == expected
+	assert manifest["unscoped_oversized_count"] == len(expected)
+	assert {item["path"] for item in manifest["scoped"]} == {"big.bin", "large.txt"} - set(expected)
+
+
+def test_export_oversized_all_lists_binary_files_without_chunking(repo, tmp_path):
+	(repo / "photo.jpg").write_bytes(b"\xff\xd8\x00" + b"a" * (2 * 1024 * 1024))
+	git(repo, "add", "photo.jpg")
+	scope = tmp_path / "scope.txt"
+	scope.write_text("")
+	dest = tmp_path / "export"
+	run("export-oversized", repo, scope, dest, 16777216, 67108864, "all")
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert [item["path"] for item in manifest["scoped"]] == ["big.bin"]
+	assert manifest["unscoped_oversized"] == [{"path": "photo.jpg", "size": 2 * 1024 * 1024 + 3, "reason": "binary"}]
+	assert not any(path.startswith("f002") for path in tree(dest))
+
+
+def test_export_oversized_all_gives_explicit_scope_the_cap_budget(repo, tmp_path):
+	# An explicit file that sorts after an extra still fits; the extra yields.
+	(repo / "z-listed.txt").write_bytes(b"z" * (2 * 1024 * 1024 + 1))
+	git(repo, "add", "z-listed.txt")
+	scope = tmp_path / "scope.txt"
+	scope.write_text("z-listed.txt\n")
+	dest = tmp_path / "export"
+	run("export-oversized", repo, scope, dest, 16777216, 2 * 1024 * 1024 + 1, "all")
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert [item["path"] for item in manifest["scoped"]] == ["z-listed.txt"]
+	assert manifest["unscoped_oversized"] == [{"path": "big.bin", "size": 2 * 1024 * 1024 + 1, "reason": "over_total_cap"}]
+
+
+@pytest.mark.parametrize("file_cap,total_cap", [("2097152", "67108864"), ("16777216", "2097152")])
+def test_export_oversized_all_still_rejects_explicit_cap_breach(repo, tmp_path, file_cap, total_cap):
+	scope = tmp_path / "scope.txt"
+	scope.write_text("big.bin\n")
+	dest = tmp_path / "export"
+	proc = run("export-oversized", repo, scope, dest, file_cap, total_cap, "all", check=False)
+	assert proc.returncode == 1 and "exceeds cap" in proc.stderr
+	assert not dest.exists()
+
+
+def test_export_oversized_all_still_refuses_explicit_filtered_file(repo, tmp_path):
+	scope = tmp_path / "scope.txt"
+	scope.write_text(".env\n")
+	dest = tmp_path / "export"
+	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, "all", check=False)
+	assert proc.returncode == 1 and "scoped file excluded by read-only filter" in proc.stderr
+	assert not dest.exists()
+
+
+def test_export_oversized_rejects_invalid_scope_mode(repo, tmp_path):
+	scope = tmp_path / "scope.txt"
+	scope.write_text("")
+	dest = tmp_path / "export"
+	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, "other", check=False)
+	assert proc.returncode == 1 and "invalid oversized scope mode" in proc.stderr
+	assert not dest.exists()
 
 
 @pytest.mark.parametrize("filtered_name,hide", [("secret.json", None), ("CLAUDE.md", "CLAUDE.md")])
