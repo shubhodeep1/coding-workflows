@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:1313-1316 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When `invocation.warning` is set for a push invocation, the new branch adds a generic confirmation reason but does not emit the underlying warning text.\n  WHY: The user may lose the diagnostic explaining why the warning fired; qwen_qwen3_7-plus and z-ai_glm-5_2 report that the warning is present in the PR head, so reviewers disagree about whether this is a defect there.\n- tests/test_pr_merge_status_guard.py:814-822, 833-845 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new tests check substrings in raw `proc.stdout` instead of structured JSON and do not assert that the underlying `invocation.warning` reaches `systemMessage`.\n  WHY: The missing diagnostic could go undetected by the tests; qwen_qwen3_7-plus and z-ai_glm-5_2 describe the tests as covering the confirmation behavior and report no new issues.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fix: the appended value is no longer applied (if \u2192 elif), in both guard copies, which stay byte-identical.\" (PR DESCRIPTION)\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py` around line 367, `_guarded_git_invocations`, and `workflow-templates/.claude/hooks/pr_merge_status_guard.py`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The LAST RUN DIFF contains no hunk touching that line; `.claude/hooks/pr_merge_status_guard.py:367` still has the `if` (not `elif`), and the new tests cover the confirmation layer rather than the `if \u2192 elif` fix.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:1313-1316 (in the LAST RUN DIFF); .claude/hooks/pr_merge_status_guard.py:1313-1316 in the LAST RUN | severity=high | confidence=5\n  PROBLEM: The LAST RUN's new push-from-unresolved-repository branch reads `invocation.warning` (using it as a truthy check) but never emits it. The original PR diff included `_warn(invocation.warning)` immediately before the `unresolved_push_sources.append(...)` call; the LAST RUN stripped that line.\n  WHY: When a developer runs `GIT_DIR+=<merged-worktree>/.git git push origin HEAD` from a session checkout on `main`, the guard now asks for confirmation (correctly) but the only `systemMessage` the user sees is \"merged-PR guard needs confirmation: could not resolve git push repository; the session checkout may not be the pushed repository.\" The operator loses the cause-and-effect that the underlying `invocation.warning` carries.\n- tests/test_pr_merge_status_guard.py:814-822 (LAST RUN's new test); 833-845 (LAST RUN's other new test) | severity=high | confidence=5\n  PROBLEM: The LAST RUN's new tests check for substrings inside raw `proc.stdout` instead of structured JSON. They never assert that the underlying `invocation.warning` text reaches the systemMessage.\n  WHY: The regression above is not caught by the test suite. A developer reading the LAST RUN's tests gets no signal that an explanatory warning is missing from the user-visible output.\n- .claude/hooks/pr_merge_status_guard.py:1313-1316 (LAST RUN's new check) | severity=high | confidence=4\n  PROBLEM: When a push invocation has `invocation.warning` set, the new code only adds a generic message to `unresolved_push_sources` and relies on `_request_confirmation` later. It does not also surface the underlying reason (the `invocation.warning` text) anywhere.\n  WHY: If the downstream code path (e.g., a future change to `_request_confirmation`'s call site) drops or rephrases `unresolved_push_sources`, the operator will never see what triggered the confirmation.\n- TASK_GAP\n  Requirement: \"Fix: the appended value is no longer applied (if \u2192 elif), in both guard copies, which stay byte-identical.\" (PR DESCRIPTION) and the bug description: \"It then still stores <path> in the git environment it checks. Bash appends to the existing variable, so the guard checks a different repository than the one git uses.\"\n  Expected change site: `.claude/hooks/pr_merge_status_guard.py` around line 367 (the second `if name in (\"GIT_DIR\", \"GIT_WORK_TREE\"):` inside the `+=` handling loop in `_guarded_git_invocations`) and the byte-identical mirror at `workflow-templates/.claude/hooks/pr_merge_status_guard.py`.\n  Evidence of absence: The LAST RUN DIFF (the most recent AI autofix run being reviewed) contains no hunk touching that line; the file on disk at `.claude/hooks/pr_merge_status_guard.py:367` still has the `if` (not `elif`), so the appended `GIT_DIR+=<path>` / `GIT_WORK_TREE+=<path>` value is still being stored in the `environment` dict that the guard then uses to resolve the push repository. The ORIGINAL PR DIFF in the prompt body DOES include the `if \u2192 elif` change in both copies plus the regression test `test_appended_git_override_falls_back_without_using_rhs`, but the LAST RUN's autoscoped editor chose to ship only the confirmation-routing layer on top of code that still has the underlying bug. The two existing test entries the LAST RUN added (`test_unresolvable_worktree_push_asks_when_checkout_is_main` and `test_appended_git_override_asks_when_checkout_is_not_merged`) only cover the confirmation layer, not the `if \u2192 elif` fix that closes the security defect the PR description names.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "35560fa939cd1c0396d87f5f1dc048c18d9a6d646d64a41dc624e59b23d794fc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6286,
+    "run_id": "37284356466",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37284356466",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005093818_c2e634da73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6286,
+    "run_id": "37284356466"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T09:38:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
