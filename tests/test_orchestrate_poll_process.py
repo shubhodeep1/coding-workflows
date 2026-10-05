@@ -2259,6 +2259,7 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		pr.setdefault('changed_files', len(next((item.get('files', []) for item in store.get('prs', []) if item.get('number') == pr_num), [])))
 		if any('application/vnd.github.diff' in arg for arg in args) and 'diff' in pr:
 			print(pr.get('diff', ''), end='')
 			sys.exit(0)
@@ -9677,6 +9678,7 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 def _review_blocked_fix_scope_case(
 	*, touch: str, files: list[str | dict], description: str = "patched",
 	remaining: list[dict] | None = None, pr_files_fail: bool = False,
+	pr_changed_file_count: int | None = None,
 ) -> dict:
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
@@ -9692,6 +9694,7 @@ def _review_blocked_fix_scope_case(
 			"headRefFromApi": "ai/issue-10", "mergeable": True,
 			"mergeable_state": "clean", "title": "Test PR",
 			"body": "Body", "files": files,
+			"changed_files": len(files) if pr_changed_file_count is None else pr_changed_file_count,
 		}],
 		codex_json={
 			"action": "fix", "justification": "apply fixes",
@@ -9743,6 +9746,14 @@ def test_review_blocked_fix_scope_accepts_fix_description_citation():
 	assert result.get("git_push_calls", [])
 
 
+def test_review_blocked_fix_scope_accepts_extensionless_citation():
+	result = _review_blocked_fix_scope_case(
+		touch="Makefile", files=["other.txt"], description="Updated `Makefile`",
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+
+
 def test_review_blocked_fix_scope_rejects_protected_judge_citation():
 	result = _review_blocked_fix_scope_case(
 		touch="scripts/evil.sh", files=["other.txt"],
@@ -9773,6 +9784,15 @@ def test_review_blocked_fix_scope_rejects_capped_pr_listing():
 	)
 	assert "reason=pr_files_unavailable" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_rejects_incomplete_pr_listing():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_changed_file_count=2,
+	)
+	assert "reason=pr_files_unavailable" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
 def test_review_blocked_fix_scope_ignores_invalid_citations():

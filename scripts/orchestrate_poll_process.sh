@@ -21363,7 +21363,7 @@ ${FOLLOWUP_BLOCK_REASON}"
 
       rb_fix_scope_check() {
         local workdir="$1" pr="$2" judge_json="$3"
-        local staged_file pr_response pr_listing path candidate description candidate_count
+        local staged_file pr_response pr_listing pr_changed_file_count path candidate description candidate_count
         local -a staged_paths=() pr_paths=() cited_paths=()
         local -A pr_set=() cited_set=()
         RB_FIX_SCOPE_REASON=accepted
@@ -21396,7 +21396,9 @@ ${FOLLOWUP_BLOCK_REASON}"
           return 1
         fi
         RB_FIX_SCOPE_PR_COUNT="$(printf '%s' "${pr_listing}" | jq -r '.count')"
-        if [ "${RB_FIX_SCOPE_PR_COUNT}" -eq 0 ] || [ "${RB_FIX_SCOPE_PR_COUNT}" -ge 3000 ]; then
+        pr_changed_file_count="$(printf '%s' "${_rb_recheck_json}" | jq -er '.changed_files | select(type == "number" and . >= 0 and . == floor) | tostring' 2>/dev/null)"
+        if [ "${RB_FIX_SCOPE_PR_COUNT}" -eq 0 ] || [ "${RB_FIX_SCOPE_PR_COUNT}" -ge 3000 ] \
+          || [ -z "${pr_changed_file_count}" ] || [ "${RB_FIX_SCOPE_PR_COUNT}" -ne "${pr_changed_file_count}" ]; then
           RB_FIX_SCOPE_REASON=pr_files_unavailable
           return 1
         fi
@@ -21421,13 +21423,9 @@ ${FOLLOWUP_BLOCK_REASON}"
           candidate="${description%%\`*}"
           description="${description#*\`}"
           candidate_count=$((candidate_count + 1))
-          case "${candidate}" in
-            */*|*.*)
-              if _rb_fix_scope_valid_path "${candidate}" && ! _rb_fix_scope_is_protected "${candidate}"; then
-                cited_paths+=("${candidate}")
-              fi
-              ;;
-          esac
+          if _rb_fix_scope_valid_path "${candidate}" && ! _rb_fix_scope_is_protected "${candidate}"; then
+            cited_paths+=("${candidate}")
+          fi
         done
         for path in "${cited_paths[@]}"; do cited_set["${path}"]=1; done
         RB_FIX_SCOPE_CITED_COUNT=${#cited_set[@]}
