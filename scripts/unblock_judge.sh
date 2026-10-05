@@ -382,6 +382,7 @@ unblock_main()
 
 	# The project an item belongs to, and a PR's linked issue.
 	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref=""
+	local pr_trusted="false" pr_author="" pr_assoc="" pr_head_repo=""
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "project" ]; then
 		tracking="${ITEM}"
@@ -401,6 +402,18 @@ unblock_main()
 		fi
 		head_sha="$(jq -r '.head.sha // ""' <<< "${pr_json}")"
 		head_ref="$(jq -r '.head.ref // ""' <<< "${pr_json}")"
+		pr_author="$(jq -r '.user.login // ""' <<< "${pr_json}")"
+		pr_assoc="$(jq -r '.author_association // ""' <<< "${pr_json}")"
+		pr_head_repo="$(jq -r '.head.repo.full_name // ""' <<< "${pr_json}")"
+		if jq -e --arg repo "${REPOSITORY}" --arg login "${UNBLOCK_LOGIN}" '
+			(.head.repo.full_name | type == "string")
+			and ((.head.repo.full_name | ascii_downcase) == ($repo | ascii_downcase))
+			and ((.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))
+				or .user.login == $login or .user.login == "github-actions[bot]")
+		' <<< "${pr_json}" >/dev/null 2>&1; then
+			pr_trusted="true"
+		fi
+		unblock_log "item=${ITEM} kind=pr op=pr_provenance trusted=${pr_trusted} head_repo=$(printf '%s' "${pr_head_repo}" | tr '\r\n' '  ') assoc=$(printf '%s' "${pr_assoc}" | tr '\r\n' '  ')"
 		linked="$(printf '%s\n' "${body_text}" | grep -oiE '\b(refs|closes|close|closed|fixes|fix|fixed|resolves|resolve|resolved)[[:space:]]+#[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
 	fi
 
@@ -422,7 +435,8 @@ unblock_main()
 	jq -n --arg repo "${REPOSITORY}" --arg kind "${ITEM_KIND}" --argjson item "${ITEM}" --arg stop "${ITEM_STOP}" \
 		--slurpfile labels "${RUNTIME_DIR}/labels.json" --arg tracking "${tracking}" --arg linked "${linked}" \
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
-		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title}' \
+		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
+		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.

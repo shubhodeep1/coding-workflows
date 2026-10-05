@@ -342,6 +342,8 @@ ASPEC.loader.exec_module(actions)
 
 def _ctx(kind: str = "issue", stop: str = "blocked", **extra) -> dict:
 	raw = {"repo": "acme/app", "kind": kind, "item": 7, "stop": stop, "labels": [f"ai:{stop}"], "tracking": None, "has_plan": False, "linked_issue": None, "title": "T"}
+	if kind == "pr":
+		raw.update(pr_trusted=True, pr_author="alice", pr_head_repo="acme/app", pr_head_sha="a" * 40)
 	raw.update(extra)
 	return actions._context(raw)
 
@@ -388,12 +390,64 @@ def test_pr_reissue_creates_replacement_before_closing_source() -> None:
 	standalone = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx("pr", linked_issue=31))
 	assert [op["op"] for op in standalone] == ["create_issue", "close"]
 	assert "correct spec" in standalone[0]["body"]
+	assert standalone[0]["body"].endswith("<!-- ai:unblock-provenance:v1 source_pr=7 author=alice head_repo=acme/app head_sha=" + "a" * 40 + " -->")
 	assert all(op.get("issue") != 31 for op in standalone)
 	unlinked = actions.plan(_verdict("reissue", instructions="new start"), _ctx("pr"))
 	assert [op["op"] for op in unlinked] == ["create_issue", "close"]
 	managed = actions.plan(_verdict("reissue", instructions="new start"), _ctx("pr", tracking=40))
 	assert [op["op"] for op in managed] == ["create_issue", "close"]
 	assert all(op.get("issue") != 40 for op in managed)
+
+
+@pytest.mark.parametrize("name", ["reissue", "descope", "operator_step", "accept_with_followup"])
+@pytest.mark.parametrize("untrusted", [
+	{"pr_trusted": False}, {"pr_head_repo": "evil/app"}, {"pr_author": ""},
+	{"pr_head_sha": "x -->"}, {"pr_head_repo": "x -->"}, {"pr_author": "x -->"},
+])
+def test_untrusted_pr_issue_creating_verdicts_fail_closed(name: str, untrusted: dict) -> None:
+	ctx = _ctx("pr", tracking=40, **untrusted)
+	verdict = _verdict(name, instructions="model spec", placeholder="SAFE_FLAG", operator_instructions="model instructions")
+	ops = actions.plan(verdict, ctx)
+	assert not ctx["pr_trusted"]
+	assert [op["op"] for op in ops] == ["comment", "close", "add_labels", "telegram"]
+	assert ops[1] == {"op": "close", "issue": 7, "reason": "not_planned", "pr": True}
+	assert ops[2]["labels"] == ["ai:unblock-closed"]
+	assert ops[3]["level"] == "WARNING"
+	assert all(op.get("issue", 7) == 7 for op in ops)
+	assert all("model spec" not in str(op) and "model instructions" not in str(op) and "because" not in str(op) for op in ops)
+	assert all(not line.startswith("/") for line in ops[0]["body"].splitlines())
+
+
+def test_pr_provenance_is_required_for_issue_creating_verdicts() -> None:
+	ctx = _ctx("pr", pr_head_sha=None)
+	assert not ctx["pr_trusted"]
+	assert [op["op"] for op in actions.plan(_verdict("reissue", instructions="x"), ctx)] == ["comment", "close", "add_labels", "telegram"]
+	assert not actions._context({"kind": "pr", "item": 7, "labels": [], "repo": "acme/app"})["pr_trusted"]
+	for kind in ("issue", "project"):
+		assert not _ctx(kind, pr_trusted=True, pr_author="alice", pr_head_repo="acme/app", pr_head_sha="a" * 40)["pr_trusted"]
+
+
+@pytest.mark.parametrize("name", ["accept_with_followup", "descope", "operator_step"])
+@pytest.mark.parametrize("tracking", [None, 40])
+def test_trusted_pr_derived_issue_bodies_record_provenance(name: str, tracking: int | None) -> None:
+	ctx = _ctx("pr", tracking=tracking)
+	verdict = _verdict(name, instructions="new scope", placeholder="SAFE_FLAG", operator_instructions="operator work")
+	ops = actions.plan(verdict, ctx)
+	if tracking and name in ("descope", "operator_step"):
+		assert ops[0]["op"] == "comment" and ops[0]["issue"] == tracking
+		assert ops[0]["body"].startswith("<!-- ai:unblock-fixup-request:v1 item=7 id=unblock-7-r1 -->")
+	else:
+		assert ops[0]["op"] == "create_issue"
+	assert ops[0]["body"].endswith("<!-- ai:unblock-provenance:v1 source_pr=7 author=alice head_repo=acme/app head_sha=" + "a" * 40 + " -->")
+
+
+def test_issue_issue_creating_verdicts_have_no_pr_provenance() -> None:
+	for name in ("descope", "reissue"):
+		ops = actions.plan(_verdict(name, instructions="new scope"), _ctx())
+		assert "ai:unblock-provenance" not in str(ops)
+		assert ops[0]["op"] == "create_issue"
+	assert [op["op"] for op in actions.plan(_verdict("retry_budget", instructions="retry"), _ctx("pr", pr_trusted=False))] == ["comment", "dispatch_review", "remove_label"]
+	assert [op["op"] for op in actions.plan(_verdict("close"), _ctx("pr", pr_trusted=False))] == ["close", "add_labels", "telegram"]
 
 
 def test_scope_override_extends_files_touched_and_reapproves() -> None:
@@ -549,7 +603,7 @@ if endpoint.endswith("/comments?per_page=100"):
 	done(json.dumps(state["item_comments"]))
 if endpoint.startswith("repos/o/r/pulls/"):
 	number = endpoint.rsplit("/", 1)[1]
-	done(json.dumps({"number": int(number), "base": {"ref": os.environ.get("FAKE_GH_PR_BASE", "main")}, "head": {"sha": "a" * 40, "ref": os.environ.get("FAKE_GH_PR_HEAD_REF", "ai/issue-7")}}))
+	done(json.dumps({"number": int(number), "base": {"ref": os.environ.get("FAKE_GH_PR_BASE", "main")}, "head": {"sha": "a" * 40, "ref": os.environ.get("FAKE_GH_PR_HEAD_REF", "ai/issue-7"), "repo": {"full_name": os.environ.get("FAKE_GH_PR_HEAD_REPO", "o/r")}}, "user": {"login": os.environ.get("FAKE_GH_PR_AUTHOR", "alice")}, "author_association": os.environ.get("FAKE_GH_PR_ASSOC", "MEMBER")}))
 if endpoint.startswith("repos/o/r/issues/"):
 	number = endpoint.rsplit("/", 1)[1]
 	issue = state["issues"].get(number, {})
@@ -886,6 +940,37 @@ def test_reissue_does_not_close_pr_when_issue_creation_fails(tmp_path: Path) -> 
 	assert "op=create_issue outcome=failed" in result.stdout
 	assert "reason=prerequisite_failed" in result.stdout
 	assert not any(endpoint == "repos/o/r/pulls/7" for endpoint, _ in state["patched"])
+
+
+@pytest.mark.parametrize("untrusted", [{"FAKE_GH_PR_HEAD_REPO": "evil/r"}, {"FAKE_GH_PR_ASSOC": "CONTRIBUTOR"}])
+def test_untrusted_pr_reissue_closes_without_creating_an_issue(tmp_path: Path, untrusted: dict) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "reissue", "reason": "model reason", "instructions": "model instructions"}, **untrusted)
+	assert result.returncode == 0, result.stderr
+	assert "op=pr_provenance trusted=false" in result.stdout
+	assert state["created"] == []
+	assert any(endpoint == "repos/o/r/pulls/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
+	assert [label for _, label in state["labels_added"]] == ["ai:unblock-closed"]
+	assert not any("model instructions" in comment["body"] or "model reason" in comment["body"] for comment in state["comments"] if "Unblock judge could not act" in comment["body"])
+
+
+def test_trusted_pr_reissue_records_provenance_on_created_issue(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"})
+	assert result.returncode == 0, result.stderr
+	assert "op=pr_provenance trusted=true" in result.stdout
+	assert len(state["created"]) == 1
+	assert state["created"][0]["body"].endswith("<!-- ai:unblock-provenance:v1 source_pr=7 author=alice head_repo=o/r head_sha=" + "a" * 40 + " -->")
+
+
+def test_untrusted_project_pr_does_not_request_a_fixup(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "model spec"},
+		FAKE_GH_PR_BASE="orchestrator/project-40", FAKE_GH_PR_HEAD_REPO="evil/r")
+	assert result.returncode == 0, result.stderr
+	assert state["created"] == []
+	assert not any("ai:unblock-fixup-request:v1" in comment["body"] for comment in state["comments"])
+	assert any(endpoint == "repos/o/r/pulls/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
 
 
 def test_failed_fixup_wait_marker_is_not_reported_as_acted(tmp_path: Path) -> None:
