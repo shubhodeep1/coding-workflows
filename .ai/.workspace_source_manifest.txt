@@ -214,9 +214,16 @@ changelog.d/6230-security-audit-oversized-scoped-files.md
 changelog.d/6231-integration-judge-scope-guard.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
 changelog.d/6293-numeric-push-refspec-redirect.md
+changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
+changelog.d/6322-pr-merge-guard-single-json-output.md
+changelog.d/6324-review-blocked-fix-scope-guard.md
+changelog.d/6347-security-audit-full-scan-oversized-chunks.md
+changelog.d/6348-dependency-registry-proxy.md
+changelog.d/6360-integration-judge-protected-provenance.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
+changelog.d/reviewer-panel-gemini-3-1-flash-lite.md
 changelog.d/summariser-inline-inputs-only.md
 codex.md
 docs/INVENTORY.md
@@ -471,6 +478,7 @@ scripts/compare_issue_timeline_parity.sh
 scripts/comprehensive_test_and_release_gh_api.sh
 scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
+scripts/dependency_registry_proxy.py
 scripts/detect_editor_changes_lost.sh
 scripts/dev/replay_review_pipeline.sh
 scripts/dev/test_codex_helpers.sh
@@ -773,6 +781,7 @@ tests/test_consolidate_soft_error_reports.py
 tests/test_consumer_artifact_cleanup_preserves_tracked.py
 tests/test_cost_audit_semble_metrics.py
 tests/test_cost_audit_serena_metrics.py
+tests/test_dependency_registry_proxy.py
 tests/test_detect_editor_changes_lost.py
 tests/test_drift_audit_job.py
 tests/test_e2e_editor_smoke_canary.py

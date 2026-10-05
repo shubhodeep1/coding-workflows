@@ -875,6 +875,10 @@ def _run_poller(
 		else:
 			_make_poller_sandbox(sandbox)
 		sandbox_sha_aliases = {
+			"@sandbox_head": subprocess.run(
+				["git", "-C", str(sandbox), "rev-parse", "HEAD"],
+				check=True, capture_output=True, text=True, env=_git_test_env(),
+			).stdout.strip(),
 			"__integration_head__": subprocess.run(
 				["git", "-C", str(sandbox), "rev-parse", "refs/heads/orchestrator/project-192"],
 				check=True,
@@ -949,6 +953,13 @@ def _run_poller(
 			}
 			for pr in prs
 		]
+		pr_api_sequence = {
+			pr_number: [
+				{**pr, **({"headSha": _resolve_sandbox_sha_alias(str(pr["headSha"]))} if "headSha" in pr else {})}
+				for pr in sequence
+			]
+			for pr_number, sequence in pr_api_sequence.items()
+		}
 		resolved_pull_ref_shas = {
 			str(pr_number): _resolve_sandbox_sha_alias(raw_sha)
 			for pr_number, raw_sha in pull_ref_shas.items()
@@ -2335,6 +2346,8 @@ if args[0] == 'api':
 				'head': {
 					'sha': pr.get('headSha', f'mocksha{pr_num}'),
 					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
+					'repo': ({'full_name': pr.get('headRepoFullName', os.environ.get('GITHUB_REPOSITORY', 'owner/repo'))}
+					         if pr.get('headRepoFullName', True) is not None else None),
 				},
 			}))
 		sys.exit(0)
@@ -2810,6 +2823,9 @@ if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '
 # switching the poller's own checkout; the checkout-failure knob covers it.
 if args[:2] == ['worktree', 'add'] and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
 	sys.exit(1)
+if args[:2] == ['worktree', 'add']:
+	store.setdefault('git_worktree_add_calls', []).append(args[2:])
+	store_path.write_text(json.dumps(store), encoding='utf-8')
 
 if args and args[0] == 'fetch' and len([a for a in args[1:] if a not in ('--no-tags', 'origin')]) > 1:
 	# Several refspecs in one call (the integration judge fetches both
@@ -9688,6 +9704,9 @@ def _review_blocked_fix_scope_case(
 	pr_changed_file_count: int | None = None,
 	env_overrides: dict[str, str] | None = None,
 	sandbox_origin_url: str | None = None,
+	head_repo: str | None = "owner/repo", head_sha: str = "@sandbox_head",
+	head_ref_from_api: str = "ai/issue-10",
+	missing_git_branch_fetches: list[str] | None = None,
 ) -> dict:
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
@@ -9700,9 +9719,10 @@ def _review_blocked_fix_scope_case(
 		prs=[{
 			"number": 901, "state": "open", "merged": False,
 			"baseRefName": "main", "headRefName": "ai/issue-10",
-			"headRefFromApi": "ai/issue-10", "mergeable": True,
+			"headRefFromApi": head_ref_from_api, "mergeable": True,
 			"mergeable_state": "clean", "title": "Test PR",
 			"body": "Body", "files": files,
+			"headSha": head_sha, "headRepoFullName": head_repo,
 			"changed_files": len(files) if pr_changed_file_count is None else pr_changed_file_count,
 		}],
 		codex_json={
@@ -9717,6 +9737,7 @@ def _review_blocked_fix_scope_case(
 		pr_files_fail=pr_files_fail,
 		env_overrides=env_overrides,
 		sandbox_origin_url=sandbox_origin_url,
+		missing_git_branch_fetches=missing_git_branch_fetches,
 	)
 
 
@@ -9728,6 +9749,59 @@ def test_review_blocked_fix_scope_accepts_pr_file():
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" in agents_text
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in agents_text
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED" in agents_text
+
+
+def test_review_blocked_rejects_unverified_open_pr_head():
+	for head_repo, head_sha, head_ref, missing_fetches, reason in (
+		("attacker/repo", "@sandbox_head", "ai/issue-10", None, "cross_repository"),
+		(None, "@sandbox_head", "ai/issue-10", None, "head_repo_unavailable"),
+		("owner/repo", "mocksha901", "ai/issue-10", None, "head_sha_unavailable"),
+		("owner/repo", "0" * 40, "ai/issue-10", None, "head_sha_mismatch"),
+		("owner/repo", "@sandbox_head", "ai/issue-10", ["ai/issue-10"], "fetch_failed"),
+	):
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+			head_repo=head_repo, head_sha=head_sha, head_ref_from_api=head_ref,
+			missing_git_branch_fetches=missing_fetches,
+		)
+		assert f"REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert not any("ai/issue-10" in call for call in result.get("git_worktree_add_calls", []))
+		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+		assert "reusing local HEAD as PR branch base" not in result["stdout"]
+
+
+def test_review_blocked_open_pr_head_identity_contract():
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert '"${RB_COMBINED_WORKDIR}" "${_rb_verified_head_sha}"' in text
+	assert "reusing local HEAD as PR branch base" not in text
+
+
+def test_review_blocked_rejects_fork_head_on_merged_followup():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	open_pr = {
+		"number": 901, "state": "open", "merged": False,
+		"baseRefName": "main", "headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10", "headRepoFullName": "attacker/repo",
+	}
+	merged_pr = {
+		**open_pr, "state": "closed", "merged": True,
+		"merged_at": "2026-04-15T00:00:00Z", "files": ["sandbox_fix.txt"],
+	}
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+		pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
+		prs=[merged_pr],
+		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+	)
+	assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert not any("fix/10-followup-" in str(call) for call in result.get("git_worktree_add_calls", []))
 
 
 def test_review_blocked_fix_scope_rejects_unrelated_file():
