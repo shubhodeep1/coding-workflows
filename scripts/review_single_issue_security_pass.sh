@@ -23,10 +23,11 @@
 #               used: dispatch the security audit for the PR head branch with
 #               `pr_number`, post a `status=pending` marker, hold=true.
 #             - cycles used up: label the PR `ai:security-pass-failed` once,
-#               hold=true and exhausted=true. The review-blocked judge
-#               (scripts/review_rb_judge.sh, security-exhaustion mode) then
-#               decides: merge (the open findings stay as issues and are
-#               fixed against the default branch), fix, or close.
+#               hold=true and exhausted=true only if this head has completed
+#               with findings. Otherwise retry a bounded number of audits of
+#               this head, then hold without entering security-exhaustion mode.
+#               The review-blocked judge (scripts/review_rb_judge.sh) can
+#               decide to merge only an exhausted, audited head.
 #             Cycles available = MAX_SECURITY_PASS_CYCLES plus one per
 #             trusted extension marker: the judge posts one each time it
 #             pushes a [judge-fix] after the pass ran out, so that fix is
@@ -37,8 +38,9 @@
 #   status  Read-only: runs the gate's checks with no label, comment,
 #           dispatch or GITHUB_OUTPUT write, and prints
 #           SINGLE_ISSUE_SECURITY_PASS_STATE=<skip|unverifiable|clean|pending|
-#           findings|exhausted|needs_audit>. review_rb_judge.sh uses it to
-#           enter security-exhaustion mode.
+#           findings|exhausted|exhausted_unaudited|needs_audit>. An exhausted
+#           head also emits SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=<sha>.
+#           review_rb_judge.sh uses it to enter security-exhaustion mode.
 #   report  Run by security-audit.yml after an audit dispatched with
 #           `pr_number`. Posts the `status=clean|findings|failed` marker for
 #           the audited commit. On clean, failed or final-cycle findings it
@@ -200,11 +202,13 @@ single_pass_gate()
 {
 	local pr_json="${PR_PAYLOAD_FILE:-}" comments="${PR_ISSUE_COMMENTS_FILE:-}" default_branch="${DEFAULT_BRANCH:-}"
 	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}" stale_hours="${SECURITY_PASS_PENDING_STALE_HOURS:-6}"
+	local exhausted_head_limit="${SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS:-2}" exhausted_retry="false" head_attempts=0
 	local pattern="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
 	local cycles_used next_cycle age_hours workflow body extensions effective_max
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
+	[[ "${exhausted_head_limit}" =~ ^[1-9][0-9]*$ ]] || exhausted_head_limit=2
 	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-true}" = "false" ]; then
 		single_pass_log "mode=gate pr=${PR_NUMBER:-} outcome=skip reason=disabled"
 		single_pass_state skip
@@ -300,28 +304,52 @@ single_pass_gate()
 		return 0
 	fi
 	if [ "${cycles_used}" -ge "${effective_max}" ]; then
-		if [ "${SINGLE_PASS_STATUS_ONLY}" = "true" ]; then
-			single_pass_log "mode=status pr=${PR_NUMBER} head=${head_sha} outcome=exhausted cycle=${cycles_used} max=${effective_max}"
-			single_pass_state exhausted
+		if [ "${latest_status}" != "findings" ] || [ "${latest_head}" != "${head_sha}" ]; then
+			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" '$3 == "pending" && $4 == h { n++ } END { print n + 0 }')"
+			if [ "${head_attempts}" -lt "${exhausted_head_limit}" ]; then
+				exhausted_retry="true"
+			fi
+		fi
+		if [ "${exhausted_retry}" != "true" ]; then
+			if [ "${SINGLE_PASS_STATUS_ONLY}" = "true" ]; then
+				if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ]; then
+					single_pass_log "mode=status pr=${PR_NUMBER} head=${head_sha} outcome=exhausted cycle=${cycles_used} max=${effective_max}"
+					single_pass_state exhausted
+					echo "SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=${head_sha}"
+				else
+					single_pass_state exhausted_unaudited
+				fi
+				return 0
+			fi
+			if ! printf ',%s,' "${labels}" | grep -q ',ai:security-pass-failed,'; then
+				if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:security-pass-failed' >/dev/null 2>&1; then
+					echo "::error::Could not label PR #${PR_NUMBER} ai:security-pass-failed; failing closed so workflow recovery can retry."
+					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=failed reason=label_write_failed cycle=${cycles_used}"
+					single_pass_output true
+					return 1
+				fi
+				if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ]; then
+					body="## Single-issue security pass exhausted
+
+The security audit of this PR has used ${cycles_used} of ${effective_max} cycles, so auto-merge stays off. The PR is labelled \`ai:security-pass-failed\`, and the review-blocked judge decides next: merge (open findings stay as issues and are fixed against the default branch), fix, or close."
+				else
+					body="## Single-issue security pass: unaudited head
+
+No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push starts a fresh per-head audit budget; /re-run rechecks this head."
+				fi
+				gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
+					|| echo "::warning::Could not post the security-pass exhaustion comment on PR #${PR_NUMBER}."
+			fi
+			if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ]; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=cycles_exhausted cycle=${cycles_used}"
+				single_pass_output true
+				single_pass_exhausted_output
+			else
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=exhausted_without_completed_audit cycle=${cycles_used} head_attempts=${head_attempts}"
+				single_pass_output true
+			fi
 			return 0
 		fi
-		if ! printf ',%s,' "${labels}" | grep -q ',ai:security-pass-failed,'; then
-			if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:security-pass-failed' >/dev/null 2>&1; then
-				echo "::error::Could not label PR #${PR_NUMBER} ai:security-pass-failed; failing closed so workflow recovery can retry."
-				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=failed reason=label_write_failed cycle=${cycles_used}"
-				single_pass_output true
-				return 1
-			fi
-			gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-				-f body="## Single-issue security pass exhausted
-
-The security audit of this PR has used ${cycles_used} of ${effective_max} cycles, so auto-merge stays off. The PR is labelled \`ai:security-pass-failed\`, and the review-blocked judge decides next: merge (open findings stay as issues and are fixed against the default branch), fix, or close." >/dev/null 2>&1 \
-				|| echo "::warning::Could not post the security-pass exhaustion comment on PR #${PR_NUMBER}."
-		fi
-		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=cycles_exhausted cycle=${cycles_used}"
-		single_pass_output true
-		single_pass_exhausted_output
-		return 0
 	fi
 	next_cycle=$((cycles_used + 1))
 	if [ "${SINGLE_PASS_STATUS_ONLY}" = "true" ]; then
@@ -330,19 +358,32 @@ The security audit of this PR has used ${cycles_used} of ${effective_max} cycles
 	fi
 	workflow="$(single_pass_audit_workflow)"
 	if ! gh workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}" >/dev/null 2>&1; then
+		if [ "${exhausted_retry}" = "true" ]; then
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed_exhausted cycle=${next_cycle}"
+			single_pass_output true
+			return 0
+		fi
 		echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; merging without the single-issue security pass (the pre-port behaviour)."
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=skip reason=dispatch_failed workflow=${workflow}"
 		single_pass_output false
 		return 0
 	fi
-	body="## Single-issue security pass
+	if [ "${exhausted_retry}" = "true" ]; then
+		body="## Single-issue security pass: retry audit
+
+Auto-merge waits for a retry audit of the exhausted pass on \`${head_sha}\` (head attempt $((head_attempts + 1)) of ${exhausted_head_limit}).
+
+$(single_pass_marker pending "${head_sha}" "${next_cycle}")"
+	else
+		body="## Single-issue security pass
 
 Auto-merge waits for the security audit of \`${head_sha}\` (cycle ${next_cycle} of ${effective_max}). Findings become follow-up issues against this branch; a clean audit re-runs the review, which then merges.
 
 $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
+	fi
 	gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
 		|| echo "::warning::Could not post the pending security-pass marker on PR #${PR_NUMBER}."
-	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}"
+	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')"
 	single_pass_output true
 }
 
