@@ -26,6 +26,12 @@ SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
+if not GUARD_PATH.exists():
+	GUARD_PATH = TEMPLATE_GUARD_PATH
+if not SETTINGS_PATH.exists():
+	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
+if not TEMPLATE_CLAUDE_MD.exists():
+	TEMPLATE_CLAUDE_MD = CLAUDE_MD
 
 
 def _load_guard():
@@ -219,6 +225,8 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	unrelated github.com repo.
 	"""
 	session_start = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
+	if not session_start.exists():
+		session_start = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "session-start.sh"
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
