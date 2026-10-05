@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:274 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: When multiple escalated judge roles for the same tracking issue reach the live-label fetch, each makes a sequential issue read instead of reusing the result.\n  WHY: This causes up to four redundant API calls per issue per poll tick, adding avoidable API usage and latency; reviewers characterize the impact as bounded and the security fix as correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh, _judge_isolation_should_run function, line 274 | confidence not stated\n  PROBLEM: The live-label fetch may trigger up to 3 identical API requests per tracking issue per poll tick when multiple judge roles are escalated and the cycle-local snapshot lacks ai:needs-human.\n  WHY: The fetch only fires in the rare error-recovery case where the snapshot is empty from a prior failed fetch; a shared cache would require a global variable across function calls, and the current poll tick runs every 5 minutes.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: line 274 (the fresh `_safe_gh_jq` fetch inside `_judge_isolation_should_run`) | severity=NIT | confidence=2\n  PROBLEM: Each escalated judge role can independently read the same issue when the cycle snapshot lacks `ai:needs-human`, duplicating the call when multiple roles are escalated on the same tracking issue.\n  WHY: The redundant calls waste work and increase tail latency during an extended escalation window, though rate-limit cost stays well under GitHub's 5,000/hr budget; this is a performance observation, not a correctness bug.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh | severity=NIT | confidence=4\n  PROBLEM: Each escalated role independently fetches the same issue\u2019s labels when its cycle snapshot lacks `ai:needs-human`.\n  WHY: When a poll tick reaches multiple escalated roles for the same tracking issue, it makes a sequential issue GET for each role instead of reusing the already-fetched label result, consuming API budget and adding retry latency when the endpoint is degraded.\n  Evidence: Line 274; `_judge_isolation_should_run` is called for SECURITY_JUDGE at line 6758, INTEGRATION_JUDGE at line 8820, STALL_JUDGE at line 15035, and WAVE_JUDGE at line 23517.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh, _judge_isolation_should_run() at line 274 | severity=NIT | confidence=3\n  PROBLEM: The live-label fetch executes once per escalated judge role per poll tick, making independent API calls when multiple judge roles are escalated for the same issue.\n  WHY: This causes up to four sequential GitHub API calls per escalated issue per tick; escalated issues are rare, so the absolute impact is bounded, but the redundant work is avoidable.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "94147c9bf3c6a7713066216503d6e55dbd7667f473107805a14ebf596713a856",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6405,
+    "run_id": "37374967124",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37374967124",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005214220_062e0ce3f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6405,
+    "run_id": "37374967124"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T21:42:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
