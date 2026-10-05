@@ -494,7 +494,7 @@ fi
 # OpenCode snapshots; turn them off in this resolver-only config.
 _resolver_disable_opencode_snapshot()
 {
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${RESOLVER_OPENCODE_CONFIG}" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${1:-${RESOLVER_OPENCODE_CONFIG}}" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -567,6 +567,57 @@ _resolver_model_index_prepare()
   rm -f -- "${RESOLVER_MODEL_INDEX_FILE}" "${RESOLVER_MODEL_INDEX_FILE}.lock" || return 1
   cp -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}" || return 1
   cmp -s -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}"
+}
+
+_resolver_fail_closed()
+{
+  echo "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=$1 action=fail_closed" >&2
+  echo "::error::Conflict resolver isolation unavailable (reason=$1); refusing host fallback." >&2
+  emit_conflict_resolver_substate "Failed" "${attempt}"
+  rm -f -- "${tmp_output}" "${_stall_status_file}"
+  exit 1
+}
+
+# Each invocation prepares its own snapshot: a failed Claude run may have
+# modified its copy, so the OpenCode retry must never reuse that root.
+_resolver_sandbox_attempt()
+{
+  local sandbox_attempt_engine="$1" sandbox_attempt_root="" sandbox_attempt_config=/dev/null
+  local sandbox_attempt_rc=0
+  resolver_sandbox_failure_reason=""
+  if ! sandbox_attempt_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral)" || [ -z "${sandbox_attempt_root}" ]; then
+    resolver_sandbox_failure_reason=sandbox_prepare_failed
+    if [ -n "${sandbox_attempt_root}" ]; then
+      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || return 1
+    fi
+    return 77
+  fi
+  if [ "${sandbox_attempt_engine}" = codex ]; then
+    sandbox_attempt_config="${RUNTIME_DIR}/resolver_sandbox_opencode.json"
+    if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" --role writer --model "${MODEL_EDITOR}" \
+      --project-path "$(pwd)" --config-path "${sandbox_attempt_config}" --serena off ||
+      ! _resolver_disable_opencode_snapshot "${sandbox_attempt_config}"; then
+      resolver_sandbox_failure_reason=opencode_config_failed
+      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || return 1
+      return 77
+    fi
+  fi
+  if ! : > "${tmp_output}"; then
+    REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || return 1
+    return 1
+  fi
+  REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" \
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+    bash "${resolver_sandbox_sh}" run "${_effective_prompt_file}" "${tmp_output}" \
+    "${MODEL_EDITOR}" "${_current_reasoning_effort}" "${sandbox_attempt_config}" "${sandbox_attempt_engine}" CONFLICT_RESOLVER write \
+    || sandbox_attempt_rc=$?
+  REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || sandbox_attempt_rc=1
+  rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+  if [ "${sandbox_attempt_rc}" -eq 2 ]; then
+    resolver_sandbox_failure_reason=sandbox_helper_outdated
+    return 77
+  fi
+  return "${sandbox_attempt_rc}"
 }
 
 # Source-repo only: the final touched-set gate compares against the prepare
@@ -2333,29 +2384,24 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
     if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
       if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
-        echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_prepare_failed' >&2
+        _resolver_fail_closed sandbox_prepare_failed
       elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"; then
-        echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_path_unsupported' >&2
-      else
-        resolver_sandbox_root=""
-        if ! resolver_sandbox_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral)" || [ -z "${resolver_sandbox_root}" ]; then
-          echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_prepare_failed' >&2
-        else
-          resolver_claude_rc=0
-          REVIEW_SANDBOX_ROOT="${resolver_sandbox_root}" \
-            timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-            bash "${resolver_sandbox_sh}" run "${_effective_prompt_file}" "${tmp_output}" \
-            "${MODEL_EDITOR}" "${_current_reasoning_effort}" /dev/null claude CONFLICT_RESOLVER write \
-            || resolver_claude_rc=$?
-          REVIEW_SANDBOX_ROOT="${resolver_sandbox_root}" bash "${resolver_sandbox_sh}" cleanup || resolver_claude_rc=1
-          rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
-          if [ "${resolver_claude_rc}" -eq 2 ]; then
-            echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_helper_outdated' >&2
-            resolver_claude_rc=75
-          fi
-        fi
+        _resolver_fail_closed sandbox_path_unsupported
       fi
-      [ "${resolver_claude_rc}" -eq 75 ] || _codex_exit="${resolver_claude_rc}"
+      resolver_claude_rc=0
+      _resolver_sandbox_attempt claude || resolver_claude_rc=$?
+      if [ "${resolver_claude_rc}" -eq 75 ]; then
+        echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=claude_unavailable action=sandbox_opencode' >&2
+        resolver_claude_rc=0
+        _resolver_sandbox_attempt codex || resolver_claude_rc=$?
+      fi
+      if [ "${resolver_claude_rc}" -eq 75 ]; then
+        _resolver_fail_closed sandbox_opencode_unavailable
+      elif [ "${resolver_claude_rc}" -eq 77 ]; then
+        _resolver_fail_closed "${resolver_sandbox_failure_reason}"
+      fi
+      _codex_exit="${resolver_claude_rc}"
+      resolver_claude_rc=0
     fi
     if [ "${resolver_claude_rc}" -ne 75 ]; then
       :

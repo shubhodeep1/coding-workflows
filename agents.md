@@ -100,7 +100,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    without installing dependencies. The relay suppresses peer disconnects and
    timeouts on rejection, but other write errors reach the server error handler.
    Host `claude_run` refuses all four review
-   roles; unavailable sandbox support falls back to OpenCode, never host Claude.
+   roles. A Claude-selected resolver retries OpenCode only in a fresh isolated
+   sandbox when Claude is unavailable; unsupported paths or missing isolation
+   fail closed, never reaching host OpenCode. An explicitly selected codex
+   resolver still uses the existing host OpenCode path.
    The judge verdict uses read access; its fix and the resolver use write access
    with validated transfer back to the workspace. The poller's review-blocked
    judge uses the same sandbox from the verified workflow support checkout,
