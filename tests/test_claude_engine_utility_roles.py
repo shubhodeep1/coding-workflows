@@ -104,6 +104,8 @@ def test_credential_stripping_covers_the_claude_call() -> None:
 		env_line = text.rindex("env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET", 0, claude_at)
 		assert claude_at - env_line < 700, script
 		assert "-u OPENROUTER_API_KEY" in text[env_line:claude_at], script
+		if script == "check_failure_triage.sh":
+			assert "AI_ENGINE_READ_ONLY=true" in text[env_line:claude_at]
 		if script == "security_audit.sh":
 			assert "-u GH_PAT" in text[env_line:claude_at]
 			assert "-u GITHUB_ENV -u GITHUB_PATH" in text[env_line:claude_at]
@@ -117,6 +119,28 @@ def test_untrusted_checkouts_use_the_staged_engine_root_only() -> None:
 		assert "scripts/ai_engine.sh\" \"${" not in text.replace('"${SUPPORT_ROOT_DIR:-}/scripts/ai_engine.sh"', ""), script
 
 
+def test_triage_stops_when_read_profile_support_is_tampered(tmp_path: Path) -> None:
+	text = _read(SCRIPTS / "check_failure_triage.sh")
+	triage_block = text[text.index("triage_claude_rc=75\n"):text.index("# Fallback body if the model produced nothing usable.")]
+	support_scripts = tmp_path / "support" / "scripts"
+	support_scripts.mkdir(parents=True)
+	(support_scripts / "ai_engine.sh").write_text(FAKE_ENGINE, encoding="utf-8")
+	(tmp_path / "prompt.txt").write_text("diagnose\n", encoding="utf-8")
+	triage_script = (
+		"set -euo pipefail\nlog() { echo \"CHECK_TRIAGE $*\"; }\n"
+		f"RUNTIME_DIR={tmp_path}\nPROMPT_FILE={tmp_path / 'prompt.txt'}\nDIAG_FILE={tmp_path / 'diagnosis.md'}\n"
+		+ triage_block + "echo 'issue filing reached'\n"
+	)
+	proc = subprocess.run(["bash", "-c", triage_script], cwd=tmp_path,
+		env={**os.environ, "MODE": "support_failure", "CALLS": str(tmp_path / "calls"),
+			"SUPPORT_ROOT_DIR": str(tmp_path / "support"), "AI_ENGINE_RESOLVED_CHECK_TRIAGE": "claude"},
+		capture_output=True, text=True, check=False)
+	assert proc.returncode == 86, proc.stderr
+	assert "CHECK_TRIAGE error support_tampered" in proc.stdout
+	assert "issue filing reached" not in proc.stdout
+	assert (tmp_path / "calls").read_text(encoding="utf-8").split("|")[5] == "true"
+
+
 # ---- the Claude branch of a script site, run against a stand-in engine ----
 
 FAKE_ENGINE = r"""
@@ -128,6 +152,7 @@ claude_run_selected() {
   case "${MODE}" in
     success) printf '%s\n' "${CLAUDE_ANSWER:-claude answer}" > "$3"; return 0 ;;
     tamper) printf '%s\n' "${CLAUDE_ANSWER:-claude answer}" > "$3"; touch support-tampered; return 0 ;;
+    support_failure) return 86 ;;
     unavailable) return 75 ;;
     *) return 1 ;;
   esac
@@ -382,6 +407,10 @@ def test_triage_and_validate_stage_a_trusted_engine_root() -> None:
 		assert ".github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py" in runs, workflow
 	triage = "\n".join(step.get("run", "") for step in _job_steps("check_failure_triage.yml", None))
 	assert triage.index('echo "SUPPORT_ROOT_DIR=${engine_root}"') < triage.index("rm -rf .codex-workflow-src")
+	assert 'mkdir -p "${engine_root}/scripts/clarify_sandbox"' in triage
+	assert 'scripts/claude_anthropic_relay.py scripts/clarify_sandbox/Dockerfile' in triage
+	assert '.codex-workflow-src/${engine_file}' in triage
+	assert '"profile": "read"' in _read(WORKFLOWS.parent / "ai" / "claude_engine.json").split('"CHECK_TRIAGE":', 1)[1].split('"WORKFLOW_HEAL":', 1)[0]
 
 
 def test_log_analysis_sites_keep_their_codex_heartbeat_calls() -> None:

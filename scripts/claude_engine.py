@@ -105,8 +105,8 @@ ROLES: tuple[str, ...] = (
 )
 UTILITY_ROLES: tuple[str, ...] = ("LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE")
 # Roles whose codex call runs `--sandbox read-only` today keep a read-only
-# tool set on Claude; every other role edits its checkout.
-READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL")
+# tool set on Claude; CHECK_TRIAGE also handles untrusted PR content without editing.
+READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "CHECK_TRIAGE")
 
 LABEL_CODEX = "ai:codex"
 LABEL_ENGINE_CLAUDE = "ai:engine-claude"

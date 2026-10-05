@@ -258,6 +258,9 @@ uses a bounded source snapshot inside a network-isolated Docker container;
 the real OAuth token remains in the host relay. Missing Docker, relay support,
 or a failed snapshot falls back to codex/OpenCode, never an unisolated read
 profile. Container tool calls cannot reach GitHub; prompts carry the context.
+`CHECK_TRIAGE` uses this read profile for untrusted PR logs; its workflow stages
+the relay and sandbox Dockerfile from verified support, and exit 75 retains the
+existing Codex diagnosis path.
 `AI_ENGINE_ISOLATED_READ_PATHS` accepts only the two workflow-heal diagnosis
 worktrees under `RUNTIME_DIR` for `WORKFLOW_HEAL`; each is filtered through the
 same read-snapshot builder and shares its file/byte budget. All other extra

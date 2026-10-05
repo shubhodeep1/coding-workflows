@@ -366,8 +366,8 @@ jobs:
           # role config from the verified support checkout outside the PR
           # checkout, so claude_engine.py never reads the PR's copies.
           engine_root="${RUNNER_TEMP}/claude-engine-support"
-          mkdir -p "${engine_root}/scripts" "${engine_root}/.github/ai" "${engine_root}/.claude/hooks"
-          for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_settings.json.tmpl scripts/codex_stall_guard.sh .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py unattended_system_instructions.md; do
+          mkdir -p "${engine_root}/scripts/clarify_sandbox" "${engine_root}/.github/ai" "${engine_root}/.claude/hooks"
+          for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_settings.json.tmpl scripts/codex_stall_guard.sh scripts/claude_anthropic_relay.py scripts/clarify_sandbox/Dockerfile .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py unattended_system_instructions.md; do
             if [ -f ".codex-workflow-src/${engine_file}" ]; then
               install -m 0644 ".codex-workflow-src/${engine_file}" "${engine_root}/${engine_file}"
             fi

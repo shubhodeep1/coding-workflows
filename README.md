@@ -2066,8 +2066,8 @@ Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`, `RETRO`, `MATERIALITY`,
 the effort, with `none` / `minimal` mapped to `low`. Codex model variables are
 never rewritten.
 
-**Tool profiles.** Roles whose codex call is read-only today (`CLARIFY`,
-`CLARIFY_RESPOND`, `SECURITY_JUDGE`, `SECURITY_AUDIT`, `WORKFLOW_HEAL`) run with
+**Tool profiles.** Read-profile roles (`CLARIFY`, `CLARIFY_RESPOND`,
+`SECURITY_JUDGE`, `SECURITY_AUDIT`, `WORKFLOW_HEAL`, `CHECK_TRIAGE`) run with
 `Read`, `Grep`, `Glob` and a fixed list of read-only `git` / `gh` commands in
 `dontAsk` mode (no `git grep` shell allowance). Their model processes receive
 no GitHub, Telegram, OpenRouter or Actions OIDC/runtime credentials; `gh api`
@@ -2084,6 +2084,11 @@ runs `bypassPermissions`, where the P5 deny rules still apply, with the tools
 The CLI's `default` tool set is not used: it loads about 35 tools, and their
 descriptions alone push a no-op start-up past the 25,000-token context gate
 in `claude-engine-smoke.yml`.
+
+`CHECK_TRIAGE` diagnoses untrusted PR logs inside the read-profile container;
+`check_failure_triage.yml` stages the relay and Dockerfile from verified support
+for this path. If isolation cannot start, exit 75 uses the existing Codex
+diagnosis path, which is not changed by the Claude profile switch.
 
 **Accounts and fallback.** `claude_run` reads the account pool the token step
 writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
