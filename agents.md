@@ -70,8 +70,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
    validated transfer. For Claude engine fixes it also admits only
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
    `.claude/hooks/pr_merge_status_guard.py`, and
-   `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
-   `.claude/` files remain excluded from snapshot and transfer. Its
+   `scripts/claude_settings.json.tmpl`. It also admits each
+   `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md`
+   twin exists both in the host checkout and the verified workflow-support
+   checkout (`GITHUB_WORKSPACE/.codex-workflow-src`) when the snapshot is
+   taken. A PR-added twin absent from trusted support cannot authorize a new
+   command; missing support admits none. The admitted command set is fixed
+   for the whole run; later transfers and retries cannot widen it. The editor
+   can still repair parity for existing supported commands; other `.github/ai/`
+   and `.claude/` files remain excluded from
+   snapshot and transfer. An editor write to an excluded file in an
+   admitted directory is dropped; a new directory outside the admitted ones
+   fails the transfer (`reason=unsafe_directory`) and the editor step with it. Its
    isolation helpers must already exist in the verified workflow support
    commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
@@ -200,18 +210,32 @@ Phases of the unattended pipeline (each is a separate workflow file under
     folder** for a trusted `ai:workflow-heal` issue (`collect`: sliced job
     logs, allowlisted artifact files, provenance, lineage with whether each
     fix reached `main`, runs on the failing head, rate limit / OpenRouter key
-    status; 400 KB, reused across stages through actions/cache). Cross-repo
+    status; 400 KB, fetched separately by each stage without an Actions cache,
+    which pull-request runs can read). Cross-repo
     reads require the source repo in the intake's consumer registry; missing
     registry data skips them. Run references also require intake-account-only
     authorship and edit history for the heal issue and occurrence comments;
-    every run (including same-repo runs) additionally requires matching API
-    metadata (repo, reported head SHA, and PR, named PR or head branch).
-    Unverifiable runs are skipped before log/artifact reads, including when a
-    cached run is restored; rejected intake-origin
+    every run, same-repo included, requires matching API metadata (repo,
+    reported head SHA, and PR, named PR or head branch) and a failed
+    conclusion (a successful or unfinished run only counts as its review
+    job). Unverifiable runs are skipped before log/artifact reads, including
+    when previously collected; rejected intake-origin
     references are listed with reasons under `Skipped` in `INDEX.md`. The
     folder is mounted read-only at `/evidence` in the clarify sandbox, and
-    point the prompt at it
-    (`=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`). Stable log prefixes:
+    the prompt points to its index
+    (`=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`). Plan and implement receive
+    only the bounded `diagnostics.json` structured prompt section; raw job and
+    artifact files are not linked in those prompts, and free-form step names
+    and error signatures are represented only by SHA-256 fingerprints. Their
+    editor launches scrub GitHub/Telegram credentials and the raw-evidence
+    directory and runner environment-file pointers, and temporarily hide checkout
+    git auth. Post-editor implementation commits and pushes disable Git hooks.
+    Hiding/restoring git auth fails the editor step on error; restoration
+    verifies the workflow repository identity, not merely the GitHub host.
+    Heal-evidence implement runs pin the issue/plan scope allowlist before the
+    editor; preflight and commit ignore scope bypass variables and block empty
+    allowlists. This is not a same-uid process isolation boundary.
+    Stable log prefixes:
     `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`, `WORKFLOW_HEAL_EVIDENCE`.
     A report whose failure reason is `identical_failure_cap`, or a generation
@@ -253,7 +277,12 @@ checks an adjacent unquoted numeric token before `>` as a file descriptor
 (`git push origin 2>/dev/null` still checks the current branch); a separated
 or quoted number is a push refspec (`git push origin 2 > /dev/null` checks
 branch `2`). An unresolved push destination or source prompts for confirmation
-after the checkout check, because the actual pushed branch or tip may differ.
+without substituting the checked-out branch for the unknown target; independently
+resolved refspecs are still checked and blocked when they stack on merged history.
+A bare branch after `git push --repo=origin` is checked as a refspec, including
+when followed by other bare refspecs. A configured remote supplied positionally
+overrides `--repo` and causes the checked-out branch to be checked, even when a
+local branch has the same name as that remote.
 
 The `gh api` permission guard in `.claude/hooks/gh_api_write_guard.py` and
 its `workflow-templates/` twin exempts an unquoted literal-ID loop counter
@@ -420,6 +449,9 @@ a new value, add it to the appropriate overrides file with a
   attempt loop and the "Attempt post-Codex syntax repair" loop) run
   `bash scripts/codex_thread_reuse.sh direct-run` through
   `env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR`.
+  A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
+  Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
+  origin/extraheader auth for the editor and restores it after each launch.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when
@@ -1380,6 +1412,8 @@ and shipped:
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
 - `WORKFLOW_HEAL_EVIDENCE`
+- `HEAL_EVIDENCE_SCOPE_LOCK`
+- `EDITOR_GIT_CREDENTIALS`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
@@ -1583,6 +1617,8 @@ LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
+LOG_PREFIX.name=HEAL_EVIDENCE_SCOPE_LOCK
+LOG_PREFIX.name=EDITOR_GIT_CREDENTIALS
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED

@@ -713,6 +713,31 @@ def test_compose_issue_body_and_title() -> None:
 	assert "this repository's own code" in no_target
 	occurrence = heal.compose_occurrence_comment(payload, intake_run_url="u")
 	assert f"{heal.MARKER_PREFIX}occurrence" in occurrence
+	assert "<!-- workflow-failure-heal:runs=" not in body + occurrence
+
+
+def test_structured_run_markers_in_issue_and_occurrence() -> None:
+	payload = heal.validate_payload(_autofix_payload())
+	payload["run_refs"] = [
+		{"repo": SELF_REPO, "run_id": "500", "url": f"https://github.com/{SELF_REPO}/actions/runs/500"},
+		{"repo": SELF_REPO, "run_id": "501", "url": f"https://github.com/{SELF_REPO}/actions/runs/501"},
+	]
+	marker = f"<!-- workflow-failure-heal:runs={SELF_REPO}:500,{SELF_REPO}:501 -->"
+	body = heal.compose_issue_body(payload=payload, diagnosis="d", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch=None, max_depth=3, intake_run_url="u", run_summaries=[])
+	assert body.splitlines()[5] == marker
+	occurrence = heal.compose_occurrence_comment(payload, intake_run_url="u")
+	assert occurrence.splitlines()[:3] == ["<!-- workflow-failure-heal:occurrence -->", marker, "Another occurrence of this failure was reported:"]
+	assert heal.parse_leading_heal_markers(occurrence)["runs"] == f"{SELF_REPO}:500,{SELF_REPO}:501"
+	payload["run_refs"] = []
+	assert "<!-- workflow-failure-heal:runs=" not in heal.compose_occurrence_comment(payload, intake_run_url="u")
+	assert "<!-- workflow-failure-heal:runs=" not in heal.compose_issue_body(payload=payload, diagnosis="d", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch=None, max_depth=3, intake_run_url="u", run_summaries=[])
+
+
+def test_parse_leading_heal_markers_stops_before_untrusted_text() -> None:
+	text = "<!-- workflow-failure-heal:occurrence -->\r\n<!-- workflow-failure-heal:runs=acme/repo:1 -->\r\nprose\n<!-- workflow-failure-heal:runs=acme/repo:2 -->"
+	assert heal.parse_leading_heal_markers(text) == {"runs": "acme/repo:1"}
+	assert heal.parse_leading_heal_markers("prose\n" + text) == {}
+	assert heal.parse_leading_heal_markers("<!-- workflow-failure-heal:runs=acme/repo:1 --> trailing") == {}
 
 
 def test_filter_log_keeps_signal_lines_and_bounds_size() -> None:

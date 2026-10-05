@@ -149,6 +149,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/dev/test_watchdog_helpers.sh` — Shell regression tests for watchdog_helpers.sh.
 - `scripts/dev/test_write_guard.sh` — Shell regression tests for write_guard.sh.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
+- `scripts/editor_git_credentials.sh` — Hide checkout origin and extraheader credentials while plan/implement editors run; restore them from the trusted step token afterwards.
 - `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
