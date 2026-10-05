@@ -2344,6 +2344,9 @@ def _run_guard_handler_case(
 			"MOCK_CURL_CALLS_FILE": str(curl_calls_file),
 			"GITHUB_REPOSITORY": repository,
 			"GITHUB_RUN_ID": "777",
+			"GITHUB_RUN_ATTEMPT": "1",
+			"GITHUB_OUTPUT": str(runtime_dir / "step_output.txt"),
+			"RUNTIME_DIR": str(runtime_dir),
 			"GITHUB_SERVER_URL": "https://github.example.test",
 			"ISSUE_NUMBER": "948",
 			"GH_TOKEN": "test-token",
@@ -2427,6 +2430,38 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 			assert f"run: https://github.example.test/{repository}/actions/runs/777" in curl_text, f"case={case_name}"
 		finally:
 			shutil.rmtree(case_dir)
+
+
+def test_bulk_delete_handler_records_snapshot_only_for_bulk_rejection() -> None:
+	for reason in ("bulk-delete", "canonical-source", ""):
+		with tempfile.TemporaryDirectory(prefix="test_bulk_delete_snapshot_") as td:
+			case_dir = Path(td)
+			proc, state, _ = _run_guard_handler_case(case_dir, repository="owner/consumer",
+				destructive_reason=reason, scope_reason="files-touched" if not reason else "")
+			assert proc.returncode != 0
+			snapshot_path = case_dir / "runtime/destructive_rejection/destructive_rejection.json"
+			assert snapshot_path.exists() == (reason == "bulk-delete")
+			if reason == "bulk-delete":
+				assert json.loads(snapshot_path.read_text()) == {
+					"schema": "destructive_rejection.v1", "issue": 948, "run_id": 777,
+					"run_attempt": 1, "reason": "bulk-delete", "paths": ["agents.md"],
+				}
+				assert "rejection_snapshot=true" in (case_dir / "runtime/step_output.txt").read_text()
+				assert "<!-- ai:destructive-rejection:v1 item=948 run=777 attempt=1 -->" in state["issue_comments"][0]["body"]
+			else:
+				assert not (case_dir / "runtime/step_output.txt").exists()
+
+
+def test_destructive_snapshot_upload_wiring() -> None:
+	handler = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	upload = _step_block_text("Upload destructive-rejection snapshot")
+	assert "id: handle_guard_block" in handler
+	assert "always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'" in upload
+	assert "uses: actions/upload-artifact@v6" in upload
+	assert "name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}" in upload
+	assert "path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json" in upload
+	assert "retention-days: 30" in upload and "continue-on-error: true" in upload
+	assert "unblock_ledger.py" in _step_block_text("Stage workflow support files")
 
 
 def test_guard_handler_omits_marker_for_incomplete_path_list() -> None:

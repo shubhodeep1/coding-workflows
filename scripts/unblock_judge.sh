@@ -395,6 +395,43 @@ print(json.dumps(evidence))
 PY
 }
 
+# Item/comments/check-runs and the optional run-log read do not include Actions
+# artifact metadata. Only a destructive override needs these three reads.
+unblock_rejection_snapshot()
+{
+	local artifact_id rejection_run_id rejection_artifact_file="${RUNTIME_DIR}/rejection_artifact.json"
+	rm -f "${RUNTIME_DIR}/rejected_deletions.json"
+	rejection_run_id="$(jq -r 'if .status == "ok" and (.run | type) == "string" then .run else empty end' "${RUNTIME_DIR}/rejection.json")"
+	if ! [[ "${rejection_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+		unblock_log "item=${ITEM} op=rejection_snapshot outcome=failed reason=rejection_run_unbound"
+		return 1
+	fi
+	if ! gh api "repos/${REPOSITORY}/actions/runs/${rejection_run_id}/artifacts?per_page=100" > "${RUNTIME_DIR}/rejection_artifacts.json" 2>/dev/null; then
+		unblock_log "item=${ITEM} op=rejection_snapshot outcome=failed reason=artifact_list_unavailable"
+		return 1
+	fi
+	if ! jq -e --arg name "destructive-rejection-issue-${ITEM}" --argjson run "${rejection_run_id}" '
+		[.artifacts[]? | select(.name == $name and .expired == false and .workflow_run.id == $run)]
+		| sort_by(.created_at) | last // empty
+	' "${RUNTIME_DIR}/rejection_artifacts.json" > "${rejection_artifact_file}" 2>/dev/null; then
+		unblock_log "item=${ITEM} op=rejection_snapshot outcome=failed reason=artifact_missing"
+		return 1
+	fi
+	artifact_id="$(jq -r '.id' "${rejection_artifact_file}")"
+	rejection_run_id="$(jq -r '.workflow_run.id' "${rejection_artifact_file}")"
+	if ! [[ "${artifact_id}" =~ ^[1-9][0-9]*$ && "${rejection_run_id}" =~ ^[1-9][0-9]*$ ]] \
+		|| ! gh api "repos/${REPOSITORY}/actions/runs/${rejection_run_id}" > "${RUNTIME_DIR}/rejection_run.json" 2>/dev/null \
+		|| ! gh api "repos/${REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "${RUNTIME_DIR}/rejection.zip" 2>/dev/null \
+		|| ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" rejection-snapshot \
+			--run-file "${RUNTIME_DIR}/rejection_run.json" --artifact-file "${rejection_artifact_file}" \
+			--zip-file "${RUNTIME_DIR}/rejection.zip" --item "${ITEM}" --repo "${REPOSITORY}" \
+			> "${RUNTIME_DIR}/rejected_deletions.json"; then
+		rm -f "${RUNTIME_DIR}/rejected_deletions.json"
+		unblock_log "item=${ITEM} op=rejection_snapshot outcome=failed reason=unverified"
+		return 1
+	fi
+}
+
 # A project may only claim an issue that its authenticated V2 state lists.
 unblock_state_lists_issue()
 {
@@ -661,9 +698,14 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 	else
 		unblock_ask_model || return 0
 	fi
-	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" validate --verdict-file "${RUNTIME_DIR}/verdict_raw.json" \
-		--decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" \
-		--rejection-file "${RUNTIME_DIR}/rejection.json" > "${RUNTIME_DIR}/verdict.json"; then
+	local -a validate_args=(validate --verdict-file "${RUNTIME_DIR}/verdict_raw.json" --decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" --rejection-file "${RUNTIME_DIR}/rejection.json")
+	if [ "${ITEM_STOP}" = "destructive-blocked" ] && [ "${ITEM_KIND}" = "issue" ] \
+		&& jq -e '.verdict == "override_guard"' "${RUNTIME_DIR}/verdict_raw.json" >/dev/null 2>&1; then
+		if unblock_rejection_snapshot; then
+			validate_args+=(--rejected-deletions-file "${RUNTIME_DIR}/rejected_deletions.json")
+		fi
+	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" "${validate_args[@]}" > "${RUNTIME_DIR}/verdict.json"; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} outcome=skip reason=invalid_verdict detail=$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" | tr ' ' '_' | cut -c1-120)"
 		gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="The unblock judge could not reach a valid verdict this time and will try again later.
 
@@ -704,6 +746,7 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		+ (if (.answer // "") != "" then "Answer: " + .answer + "\n\n" else "" end)
 		+ (if (.paths // []) | length > 0 then "Paths: " + ((.paths // []) | map("`" + . + "`") | join(", ")) + "\n\n" else "" end)
 		+ (if (.override // "") == "bulk_delete" then "Approved deletions: " + (.paths | tojson) + "\n\n" else "" end)
+		+ (if (.override // "") == "bulk_delete" then "Rejected run: " + (.rejected_run | tostring) + "\n\n" else "" end)
 		+ (if (.rejection_run // "") != "" then "Bound to guard rejection from run " + .rejection_run + ".\n\n" else "" end)
 		+ (if (.placeholder // "") != "" then "Stays off behind `" + .placeholder + "` until the operator step is done.\n\n" else "" end)
 		+ $marker

@@ -231,6 +231,26 @@ case "${DCB_REASON}" in
     ;;
 esac
 
+# Only the rejected bulk-delete list is eligible for an unblock override.
+# Comments are informational; the Actions artifact is the provenance record.
+if [ "${DCB_REASON}" = "bulk-delete" ] && [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "${GITHUB_RUN_ID}" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]]; then
+  rejection_dir="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/destructive_rejection"
+  if mkdir -p "${rejection_dir}" && printf '%s\n' "${DCB_DELETIONS}" | jq -Rsc \
+    --argjson issue "${ISSUE_NUMBER}" --argjson run "${GITHUB_RUN_ID}" \
+    --argjson attempt "${GITHUB_RUN_ATTEMPT}" \
+    '{schema:"destructive_rejection.v1", issue:$issue, run_id:$run, run_attempt:$attempt, reason:"bulk-delete", paths:(split("\n") | map(select(length > 0)))}' \
+    > "${rejection_dir}/destructive_rejection.json" \
+    && jq -e '.paths | length > 0' "${rejection_dir}/destructive_rejection.json" >/dev/null \
+    && [ -n "${GITHUB_OUTPUT:-}" ] \
+    && printf 'rejection_snapshot=true\n' >> "${GITHUB_OUTPUT}"; then
+    rejection_pointer="<!-- ai:destructive-rejection:v1 item=${ISSUE_NUMBER} run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} -->"
+  else
+    echo "::warning::Could not record destructive rejection snapshot; override approval will remain blocked."
+  fi
+fi
+
 # 1. Ensure the latch label exists. Color/description are
 #    hardcoded to mirror scripts/label_helpers.sh and
 #    .github/ai/label_contract.v1.json without sourcing them —
@@ -306,6 +326,10 @@ fi
   echo '```'
   echo
   echo "${DCB_REDISPATCH_HINT}"
+  if [ -n "${rejection_pointer:-}" ]; then
+    echo
+    echo "${rejection_pointer}"
+  fi
   guard_rejection_marker destructive "${DCB_REASON}" "${DCB_DELETIONS}" "${DCB_COUNT}" || true
 } > "${GUARD_COMMENT_FILE}"
 gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \

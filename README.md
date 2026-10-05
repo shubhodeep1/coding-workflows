@@ -2623,12 +2623,14 @@ the scope and destructive latches, `ai:*-failed`, the escalated triage, heal
 and resolver chains, a failed project) now goes to the unblock judge
 (Phase 7 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`).
 
-- **Scan.** Once per poll tick, after the per-project loop,
+- **Scan.** On ticks with active projects, after the per-project loop,
   `run_unblock_scan` in `scripts/orchestrate_poll_process.sh` makes one REST
   search for open issues and pull requests with a block label
   (`scripts/unblock_ledger.py labels`), one batched GraphQL query for their
   label events and last comments, and one list of recent
-  `unblock_judge_dispatch.yml` runs. `scripts/unblock_scan.py` picks items
+  `unblock_judge_dispatch.yml` runs. On ticks with no open tracking issue,
+  `Run unblock scan without active projects` runs the scan on its own with
+  `UNBLOCK_SCAN_SWEEP_ONLY=true`. `scripts/unblock_scan.py` picks items
   blocked for at least `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES`, with no trusted
   `ai:unblock` marker younger than `UNBLOCK_JUDGE_RETRY_HOURS` and no judge
   running, oldest first, at most one per tick. The scan waits for an active
@@ -2671,6 +2673,11 @@ and resolver chains, a failed project) now goes to the unblock judge
   fall back to an older `failed` state for this decision. A failed read or late
   resume withholds the label, though a resume after verdict recording can leave
   an unacted-on verdict.
+  Scope overrides must match the trusted guard rejection exactly. Bulk-delete
+  overrides may approve a non-empty subset of its rejected paths only when the
+  failed implement run's matching Actions artifact verifies the same issue,
+  run and attempt; the next implement run rechecks the artifact before spending
+  the one-shot override. Missing or expired evidence keeps the guard in force.
 - **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
   then carried out with the existing commands: on a tracking issue
   `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on
@@ -2714,7 +2721,12 @@ and resolver chains, a failed project) now goes to the unblock judge
 - **Terminal.** When the caps are spent, or the item is still blocked 24
   hours after the last round, the judge closes it as not planned with a
   report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
-  poller then sets the state to `abandoned` and closes the tracking issue.
+  poller then sets the state to `abandoned` and closes the tracking issue
+  only when its newest pipeline-authored verdict marker for that project is
+  `close`, no newer pipeline-authored state write supersedes it, and it still
+  matches a `failed` project state and the stop label when present (or it is
+  already `abandoned` and the close needs retrying). A label without that
+  authorization cannot hide a still-failed project from the unblock scan.
   An `ai:security` finding instead remains open with its block label and
   `ai:unblock-closed`, receives an explanation and a CRITICAL alert; the scan
   skips it until a linked fix is verified merged or a person triages it.

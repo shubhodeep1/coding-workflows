@@ -195,7 +195,7 @@ def select(
 			continue
 		seen.add(number)
 		labels = _label_names(item)
-		if CLOSED_LABEL in labels:
+		if CLOSED_LABEL in labels and number not in failed:
 			skip("closed_by_judge")
 			continue
 		carried = labels & block_labels
