@@ -47,11 +47,15 @@ def test_review_static_context_skips_symlink_and_preserves_regular_readme() -> N
 		secret.write_text("x-access-token:SENTINEL\n", encoding="utf-8")
 		readme = root / "README.md"
 		readme.symlink_to(secret)
+		overflow = root / "probably_unnecessary_but_read_if_stuck.md"
+		overflow.symlink_to(secret)
 		env = _safe_env()
 		env.update(SUPPORT_INSTRUCTIONS_FILE=str(instructions), SUPPORT_AGENTS_FILE=str(agents))
 		for symlinked in (True, False):
 			if not symlinked:
 				readme.unlink()
+				overflow.unlink()
+				overflow.write_text("public runbook\n", encoding="utf-8")
 				readme.write_text(
 					"public overview\n### 2. Create wrapper workflows\nprivate runbook\n",
 					encoding="utf-8",
@@ -66,9 +70,13 @@ def test_review_static_context_skips_symlink_and_preserves_regular_readme() -> N
 			assert "trusted agents" in context
 			if symlinked:
 				assert "=== README.MD" not in context
+				assert "=== OVERFLOW REFERENCE ===" not in context
+				assert "read ./probably_unnecessary_but_read_if_stuck.md" not in context
 				assert "::warning::README.md is a symbolic link" in result.stdout + result.stderr
+				assert "::warning::probably_unnecessary_but_read_if_stuck.md is a symbolic link" in result.stdout + result.stderr
 			else:
 				assert "=== README.MD (trimmed) ===\npublic overview\n" in context
+				assert "=== OVERFLOW REFERENCE ===" in context
 				assert "private runbook" not in context
 
 
@@ -85,6 +93,8 @@ def test_phase_static_context_skips_symlinks_but_keeps_canonical_agents() -> Non
 		secret.write_text("x-access-token:SENTINEL\n", encoding="utf-8")
 		(root / "README.md").symlink_to(secret)
 		(root / "agents.md").symlink_to(secret)
+		overflow = root / "probably_unnecessary_but_read_if_stuck.md"
+		overflow.symlink_to(secret)
 		runtime = root / "runtime"
 		runtime.mkdir()
 		(runtime / "agents_canonical.md").write_text("canonical agents\n", encoding="utf-8")
@@ -100,8 +110,11 @@ def test_phase_static_context_skips_symlinks_but_keeps_canonical_agents() -> Non
 			context = output.read_text(encoding="utf-8")
 			assert "SENTINEL" not in context
 			assert "=== README.MD" not in context
+			assert "=== OVERFLOW REFERENCE ===" not in context
+			assert "read ./probably_unnecessary_but_read_if_stuck.md" not in context
 			assert "=== REPO-SPECIFIC AGENTS.MD" not in context
 			assert "::warning::agents.md is a symbolic link" in result.stderr
+			assert "::warning::probably_unnecessary_but_read_if_stuck.md is a symbolic link" in result.stderr
 			if phase == "implement":
 				assert "=== AGENTS.MD ===\ncanonical agents\n" in context
 			else:
@@ -110,6 +123,8 @@ def test_phase_static_context_skips_symlinks_but_keeps_canonical_agents() -> Non
 
 		(root / "README.md").unlink()
 		(root / "agents.md").unlink()
+		overflow.unlink()
+		overflow.write_text("public runbook\n", encoding="utf-8")
 		(root / "README.md").write_text(
 			"public overview\n### 2. Create wrapper workflows\nprivate runbook\n", encoding="utf-8",
 		)
@@ -127,6 +142,7 @@ def test_phase_static_context_skips_symlinks_but_keeps_canonical_agents() -> Non
 			else:
 				assert "public overview" in context
 			assert "private runbook" not in context
+			assert "=== OVERFLOW REFERENCE ===" in context
 			assert "local agents" in context
 			assert "::warning::" not in result.stderr
 

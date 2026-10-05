@@ -476,6 +476,10 @@ a new value, add it to the appropriate overrides file with a
   Required `unattended_system_instructions.md` and `ai_pipeline.md` symlinks
   instead fail prompt assembly before any content is written; review checkout
   credential persistence is unchanged.
+- Static prompts omit the optional overflow-runbook pointer when
+  `probably_unnecessary_but_read_if_stuck.md` is a symlink; regular runbooks
+  still receive the pointer. A symlink emits a warning without directing the
+  model to read its target from the credential-bearing checkout.
 - The review gate's existing PR read validates the same-repository head and
   exports `review_checkout_sha` only for a 40-hex SHA. `Checkout repo` uses
   that SHA for every PR event, so reviewer and other `GITHUB_WORKSPACE` file
@@ -1635,7 +1639,7 @@ Operator runbooks (env var reference, autofix retrigger/dedup internals,
 orchestrator integration-sync auto-heal, validation self-healing, workflow
 log analysis pipeline, semantic cache scope, wrapper pin policy) live in
 `./probably_unnecessary_but_read_if_stuck.md`. Read it only when needed —
-it is intentionally large.
+and only if it is a regular file, not a symlink — it is intentionally large.
 
 `CHANGELOG.md` is never edited directly. Write one fragment per PR at
 `changelog.d/<issue-or-pr>-<slug>.md`; `scripts/assemble_changelog.py` folds
