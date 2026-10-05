@@ -92,22 +92,64 @@ if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
   fi
 fi
 
-# Count consecutive [ai-autofix] commits from HEAD backwards.
-# [claude-autofix] rounds (left by the retired Claude-fixer
-# hand-off on older PR heads) count the same way; [claude-intervention]
-# and [claude-merge-resolve] commits break the run, as [judge-fix]
-# and [ai-merge-resolve] do.
+# Count the autofix rounds since the last [judge-fix] commit.
+#
+# Walk the PR's own first-parent history (HEAD back to where it leaves the
+# base branch). [ai-autofix] and [claude-autofix] commits count; a
+# [judge-fix] commit ends the walk, so each judge fix opens a fresh budget
+# of MAX_AUTOFIX_ITERATIONS rounds; every other commit ([ai-merge-resolve],
+# [claude-intervention], [claude-merge-resolve], merge commits, human or
+# Claude-session pushes, merged follow-up PRs) is skipped without resetting
+# the count. Before this, any such commit reset the count to zero, so on a
+# busy base branch the judge rarely ran: PRs #6178 and #6187 reached 18
+# autofix rounds since their last judge fix while the old count read 0.
+#
+# The walk needs the base branch to know where the PR's history ends. When
+# PR metadata names no usable base, or the base cannot be fetched or its
+# merge-base with HEAD is unreachable, fall back to the old count of
+# consecutive autofix commits from HEAD (AUTOFIX_COUNT_MODE=legacy_consecutive)
+# rather than walk into base-branch history.
 autofix_count=0
-while true; do
-  msg="$(git log -1 --format='%s' "HEAD~${autofix_count}" 2>/dev/null || true)"
-  if echo "${msg}" | grep -Eq '^\[(ai|claude)-autofix\]'; then
-    autofix_count=$((autofix_count + 1))
+autofix_count_mode="legacy_consecutive"
+autofix_count_base_ref=""
+if [ -f "${PR_META_FILE:-}" ]; then
+  autofix_count_base_ref="$(jq -r '.baseRefName // .base.ref // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
+fi
+if [ -n "${autofix_count_base_ref}" ] && git check-ref-format --branch "${autofix_count_base_ref}" >/dev/null 2>&1; then
+  if git fetch --no-tags --prune origin "+refs/heads/${autofix_count_base_ref}:refs/remotes/origin/${autofix_count_base_ref}" 2>/dev/null \
+    && git merge-base "origin/${autofix_count_base_ref}" HEAD >/dev/null 2>&1; then
+    if autofix_count_subjects="$(git log --first-parent --format='%s' HEAD "^origin/${autofix_count_base_ref}" 2>/dev/null)"; then
+      autofix_count_mode="since_judge_fix"
+      while IFS= read -r msg; do
+        if printf '%s\n' "${msg}" | grep -q '^\[judge-fix\]'; then
+          break
+        fi
+        if printf '%s\n' "${msg}" | grep -Eq '^\[(ai|claude)-autofix\]'; then
+          autofix_count=$((autofix_count + 1))
+        fi
+      done <<< "${autofix_count_subjects}"
+    fi
   else
-    break
+    echo "::warning::Could not fetch origin/${autofix_count_base_ref} or reach its merge-base with HEAD; counting consecutive autofix commits only (AUTOFIX_COUNT_MODE=legacy_consecutive)."
   fi
-done
+else
+  echo "::warning::PR metadata names no usable base branch ('${autofix_count_base_ref}'); counting consecutive autofix commits only (AUTOFIX_COUNT_MODE=legacy_consecutive)."
+fi
+if [ "${autofix_count_mode}" = "legacy_consecutive" ]; then
+  # Legacy count: consecutive [ai-autofix] / [claude-autofix] commits from
+  # HEAD backwards; any other commit breaks the run.
+  while true; do
+    msg="$(git log -1 --format='%s' "HEAD~${autofix_count}" 2>/dev/null || true)"
+    if echo "${msg}" | grep -Eq '^\[(ai|claude)-autofix\]'; then
+      autofix_count=$((autofix_count + 1))
+    else
+      break
+    fi
+  done
+fi
+echo "AUTOFIX_COUNT_MODE=${autofix_count_mode} base=${autofix_count_base_ref:-unknown} count=${autofix_count}"
 
-echo "Consecutive autofix commits: ${autofix_count} (max: ${effective_max_iterations})"
+echo "Autofix commits since the last [judge-fix]: ${autofix_count} (max: ${effective_max_iterations})"
 echo "autofix_iteration=${autofix_count}" >> "$GITHUB_OUTPUT"
 
 # skip_judge is retained as a step output for backward compat with

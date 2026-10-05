@@ -890,6 +890,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_claude_fixer_mode.py tests/test_validate_target_ref_input.py
 
+      - name: Review autofix iteration count tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_iteration_count.py
+
       - name: Review consolidator reject-verifier contract test
         run: |
           set -euo pipefail
