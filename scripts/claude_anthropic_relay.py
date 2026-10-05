@@ -103,8 +103,8 @@ class Relay(http.server.BaseHTTPRequestHandler):
 	def _reject(self, status):
 		try:
 			self.send_error(status, "Request rejected")
-		except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-			pass  # The peer is gone; there is no error response left to deliver.
+		except OSError:
+			pass  # The rejection is terminal even when its response cannot be delivered.
 		self.close_connection = True
 
 	def do_POST(self):

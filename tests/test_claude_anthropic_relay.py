@@ -264,11 +264,17 @@ def test_broker_late_rejections_ignore_peer_disconnect(chain, monkeypatch: pytes
 	assert _Upstream.seen == []
 
 
-def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("peer_error_type", [None, TimeoutError, ConnectionRefusedError])
+def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, peer_error_type: type[OSError] | None) -> None:
 	def refused(host, timeout=None, context=None):
 		return http.client.HTTPConnection("127.0.0.1", 9, timeout=2)
 
 	monkeypatch.setattr(http.client, "HTTPSConnection", refused)
+	if peer_error_type is not None:
+		def fail_on_write(_handler, _status, _message):
+			raise peer_error_type("peer stopped reading")
+
+		monkeypatch.setattr(relay.Relay, "send_error", fail_on_write)
 	sock = str(tmp_path / "s.sock")
 	broker = relay.UnixHTTPServer(sock, relay.Relay)
 	broker.mode = "broker"
@@ -278,10 +284,16 @@ def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.Monk
 	try:
 		connection = relay.UnixHTTPConnection(sock)
 		connection.request("POST", "/v1/messages", json.dumps({"model": MODEL}).encode(), {"Content-Type": "application/json"})
-		response = connection.getresponse()
-		body = response.read()
-		assert response.status == 502
-		assert REAL_TOKEN.encode() not in body
+		if peer_error_type is not None:
+			with pytest.raises(http.client.RemoteDisconnected):
+				connection.getresponse()
+			assert "Traceback" not in capsys.readouterr().err
+		else:
+			response = connection.getresponse()
+			body = response.read()
+			assert response.status == 502
+			assert REAL_TOKEN.encode() not in body
+		connection.close()
 	finally:
 		broker.shutdown()
 		broker.server_close()
