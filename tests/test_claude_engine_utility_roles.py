@@ -126,6 +126,7 @@ claude_run_selected() {
   [ "${!resolved_var:-codex}" = "claude" ] || return 75
   case "${MODE}" in
     success) printf '%s\n' "${CLAUDE_ANSWER:-claude answer}" > "$3"; return 0 ;;
+    tamper) printf '%s\n' "${CLAUDE_ANSWER:-claude answer}" > "$3"; touch support-tampered; return 0 ;;
     unavailable) return 75 ;;
     *) return 1 ;;
   esac
@@ -192,6 +193,39 @@ def test_heal_claude_crash_files_the_fallback_reason(tmp_path: Path) -> None:
 	assert codex_calls == ""
 	assert "reason=failed (Claude exited non-zero)" in proc.stdout
 	assert (tmp_path / "diag.md").read_text(encoding="utf-8") == ""
+
+
+def test_heal_claude_tampered_support_is_rejected(tmp_path: Path) -> None:
+	proc, _calls, codex_calls = _run_heal_block(tmp_path, resolved="claude", mode="tamper")
+	assert proc.returncode == 86
+	assert "Workflow heal support checkout changed after the model run." in proc.stderr
+	assert codex_calls == ""
+
+
+@pytest.mark.parametrize("invalid_support", ["wrong_sha", "missing_sha", "dirty_checkout"])
+def test_heal_claude_rejects_invalid_support(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid_support: str) -> None:
+	original_run = subprocess.run
+
+	def run_with_invalid_support(command, **kwargs):
+		if command[:2] == ["bash", "-c"]:
+			if invalid_support == "dirty_checkout":
+				(tmp_path / "scripts" / "untracked.sh").write_text("untrusted\n", encoding="utf-8")
+			else:
+				kwargs["env"] = dict(kwargs["env"])
+				if invalid_support == "wrong_sha":
+					kwargs["env"]["HEAL_SUPPORT_SHA"] = "0" * 40
+				else:
+					kwargs["env"].pop("HEAL_SUPPORT_SHA", None)
+					kwargs["env"].pop("GITHUB_SHA", None)
+		return original_run(command, **kwargs)
+
+	monkeypatch.setattr(subprocess, "run", run_with_invalid_support)
+	proc, calls, codex_calls = _run_heal_block(tmp_path, resolved="claude", mode="success")
+	assert proc.returncode == 86, proc.stderr
+	assert "Workflow heal support checkout changed after the model run" in proc.stderr
+	assert "reason=" not in proc.stdout
+	assert calls.startswith("WORKFLOW_HEAL|")
+	assert codex_calls == ""
 
 
 # ---- validation refresh discovery (Python) ----
