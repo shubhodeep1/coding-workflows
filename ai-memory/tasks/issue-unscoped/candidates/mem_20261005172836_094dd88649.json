@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_isolated_workspace.py:copy_regular() function | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A potential TOCTOU race exists between `lstat()` and `open(os.O_RDONLY | os.O_NOFOLLOW)`.\n  WHY: An attacker could replace a file with a symlink between the initial check and open, potentially bypassing the read-only snapshot filter; z-ai_glm-5_2 reports this concern is mitigated by `O_NOFOLLOW` plus an inode/dev re-check after open.\n- scripts/codex_isolated_exec.sh:sandbox_parent path derivation | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The sandbox parent is derived from `RUNNER_TEMP` or `TMPDIR`.\n  WHY: An attacker-controlled or poorly scoped `TMPDIR` could lead to directory traversal or collisions, potentially allowing sensitive host paths to be mounted or causing permission failures.\n- scripts/codex_isolated_exec.sh:docker_env rm -f | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Container cleanup failures are not explicitly logged to stderr beyond the default redirect.\n  WHY: Cleanup failures might lead to container name collisions on subsequent runs, blocking the pipeline.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/codex_isolated_workspace.py:copy_regular() function | confidence=3\n  PROBLEM: Potential TOCTOU race condition between lstat() and open(os.O_RDONLY | os.O_NOFOLLOW).\n  WHY: An attacker could replace a file with a symlink to a sensitive host path between the initial lstat check and the actual file open operation, potentially bypassing the read-only snapshot filter if the open is not atomic.\n- scripts/codex_isolated_exec.sh:sandbox_parent path derivation | confidence=3\n  PROBLEM: The sandbox parent is derived from RUNNER_TEMP or TMPDIR.\n  WHY: If the environment variable TMPDIR is attacker-controlled or poorly scoped, it could lead to directory traversal or collisions, potentially allowing the container to mount sensitive host paths or fail due to insufficient permissions.\n- scripts/codex_isolated_exec.sh:docker_env rm -f | confidence=2\n  PROBLEM: Container cleanup failures are not explicitly logged to stderr beyond the default redirect.\n  WHY: Container cleanup failures might lead to container name collisions on subsequent runs, blocking the pipeline.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "01308a4cbe62ed582fee1679bbcc06807c2fd5f137cb13829558601aaed8e4f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6187,
+    "run_id": "37335520917",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37335520917",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005172836_094dd88649",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6187,
+    "run_id": "37335520917"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T17:28:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
