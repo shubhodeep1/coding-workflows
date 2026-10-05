@@ -1027,6 +1027,7 @@ def test_private_index_reconciliation_rejects_unacknowledged_or_mismatched_resol
 	for action, expected_reason in (
 		(":", "still_unmerged_in_model_index"),
 		("printf 'different\\n' > conflict.txt && git add -- conflict.txt && printf 'modified\\n' > conflict.txt", "content_mismatch"),
+		("git rm -q --cached -f -- conflict.txt", "content_mismatch"),
 	):
 		with tempfile.TemporaryDirectory() as directory:
 			repo, env = _modify_delete_conflict_fixture(Path(directory))
@@ -1055,10 +1056,34 @@ def test_private_index_reconciliation_rejects_unacknowledged_or_mismatched_resol
 		assert _git_out(repo, env, "ls-files", "-u", "--", "conflict.txt")
 
 
+def test_private_index_hash_failure_fails_closed() -> None:
+	for action in (
+		"git add -- conflict.txt",
+		"rm conflict.txt && ln -s outside-target conflict.txt && git add -- conflict.txt",
+	):
+		with tempfile.TemporaryDirectory() as directory:
+			repo, env = _modify_delete_conflict_fixture(Path(directory))
+			attempt = _run_model_attempt(repo, env, action)
+			assert attempt.returncode == 0, attempt.stdout + attempt.stderr
+			program = (
+				"set -euo pipefail\n"
+				'git() { if [ "${1:-}" = "hash-object" ]; then return 1; fi; command git "$@"; }\n'
+				+ _named_function_source("_resolver_reconcile_private_index_resolutions")
+				+ "_resolver_reconcile_private_index_resolutions\n"
+			)
+			result = subprocess.run(["bash", "-c", program], cwd=repo, env=env,
+				capture_output=True, text=True, check=False)
+			assert result.returncode != 0, result.stdout + result.stderr
+			assert "reason=hash_failed" in result.stderr
+			assert "reconciled:" not in result.stdout
+			assert _git_out(repo, env, "ls-files", "-u", "--", "conflict.txt")
+
+
 def test_private_index_reconciliation_stages_deletion_and_matching_modes() -> None:
 	for action, result_type, expected_mode in (
 		("rm conflict.txt && git add -u -- conflict.txt", "deleted", None),
 		("chmod +x conflict.txt && git add -- conflict.txt", "kept", "100755"),
+		("chmod 4700 conflict.txt && git add -- conflict.txt", "kept", "100755"),
 		("rm conflict.txt && ln -s outside-target conflict.txt && git add -- conflict.txt", "kept", "120000"),
 	):
 		with tempfile.TemporaryDirectory() as directory:
@@ -1177,6 +1202,7 @@ def main() -> int:
 	test_model_index_is_fresh_per_attempt_and_fails_closed()
 	test_marker_free_conflict_staged_only_in_private_index_is_reconciled()
 	test_private_index_reconciliation_rejects_unacknowledged_or_mismatched_resolution()
+	test_private_index_hash_failure_fails_closed()
 	test_private_index_reconciliation_stages_deletion_and_matching_modes()
 	test_resolver_opencode_snapshot_opt_out()
 	test_private_model_index_wiring()

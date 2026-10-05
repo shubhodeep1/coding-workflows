@@ -603,7 +603,7 @@ _resolver_reconcile_private_index_resolutions()
 
     if [ -z "${_reconcile_model_entry}" ]; then
       if [ -e "${_reconcile_path}" ] || [ -L "${_reconcile_path}" ]; then
-        echo "Resolver private-index resolution not reconciled: ${_reconcile_path} reason=not_in_model_index"
+        echo "Resolver private-index resolution not reconciled: ${_reconcile_path} reason=content_mismatch"
         continue
       fi
       _reconcile_kind=deleted
@@ -616,11 +616,18 @@ _resolver_reconcile_private_index_resolutions()
       fi
       if [ -L "${_reconcile_path}" ]; then
         _reconcile_worktree_mode=120000
-        _reconcile_worktree_oid="$(readlink -n -- "${_reconcile_path}" | git hash-object --stdin)" || return 0
+        _reconcile_worktree_oid="$(readlink -n -- "${_reconcile_path}" | git hash-object --stdin)" \
+          || { echo "::error::Resolver private-index resolution not reconciled: ${_reconcile_path} reason=hash_failed" >&2; return 1; }
       elif [ -f "${_reconcile_path}" ]; then
-        _reconcile_worktree_mode=100644
-        [ ! -x "${_reconcile_path}" ] || _reconcile_worktree_mode=100755
-        _reconcile_worktree_oid="$(git hash-object -- "${_reconcile_path}")" || return 0
+        _reconcile_worktree_mode="$(stat -c '%a' -- "${_reconcile_path}")" \
+          || { echo "::error::Resolver private-index resolution not reconciled: ${_reconcile_path} reason=mode_failed" >&2; return 1; }
+        if (( (8#${_reconcile_worktree_mode} & 8#111) != 0 )); then
+          _reconcile_worktree_mode=100755
+        else
+          _reconcile_worktree_mode=100644
+        fi
+        _reconcile_worktree_oid="$(git hash-object -- "${_reconcile_path}")" \
+          || { echo "::error::Resolver private-index resolution not reconciled: ${_reconcile_path} reason=hash_failed" >&2; return 1; }
       else
         echo "Resolver private-index resolution not reconciled: ${_reconcile_path} reason=content_mismatch"
         continue

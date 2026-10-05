@@ -1757,7 +1757,7 @@ depend on it.
   config sets `snapshot: false`. A marker-free path the model staged only in
   its private index is staged on the real index after the attempt only when it
   was initially unmerged, allowlisted, and matches the validated worktree
-  (including deletion and file mode). An acknowledged resolution that keeps
+  (including deletion, symlinks, and file mode). An acknowledged resolution that keeps
   HEAD's bytes still creates a two-parent merge commit. These changes apply to
   the source repo only.
 
