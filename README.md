@@ -1234,6 +1234,9 @@ exact match in the PR file list; an incomplete list or out-of-scope path rejects
 the whole fix, warns operators, and consumes a review-blocked retry without a push.
 An empty staged set is rejected too. Listing failures report the staged paths in
 the rejection log and alert to make the attempted fix diagnosable.
+With `ALLOW_WORKFLOW_EDITS=false`, edits to `scripts/`, `prompts/`,
+`.github/ai/`, or `.github/workflows/` reject the entire fix through the same
+retry path, even when the PR previously changed that path.
 If the integration judge cannot publish a resolution, the poller warns and
 rechecks mergeability on the next tick instead of failing the project immediately.
 The merged-PR push guard checks `origin` as before. A push selecting a different

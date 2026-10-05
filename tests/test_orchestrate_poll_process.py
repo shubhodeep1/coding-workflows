@@ -9733,14 +9733,25 @@ def test_review_blocked_fix_scope_rejects_unrelated_file():
 
 def test_review_blocked_fix_scope_rejects_empty_staged_set():
 	result = _review_blocked_fix_scope_case(
-		touch="scripts/excluded.sh", files=["scripts/excluded.sh"],
-		env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
+		touch=".github/prompts/excluded.txt", files=[".github/prompts/excluded.txt"],
 	)
 	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=no_staged_changes" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/excluded.sh", files=["scripts/excluded.sh"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=workflow_edits_disabled rejected=1 paths=scripts/excluded.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_accepts_non_protected_judge_citation():

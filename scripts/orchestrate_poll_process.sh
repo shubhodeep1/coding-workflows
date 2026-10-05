@@ -21384,6 +21384,23 @@ ${FOLLOWUP_BLOCK_REASON}"
         [ "${RB_FIX_SCOPE_STAGED_COUNT}" -gt 0 ] || { RB_FIX_SCOPE_REASON=no_staged_changes; return 1; }
         RB_FIX_SCOPE_REJECTED_PATHS=("${staged_paths[@]}")
 
+        for path in "${staged_paths[@]}"; do
+          case "${path}" in
+            .github/prompts/*|.github/scripts/*)
+              RB_FIX_SCOPE_REASON=forbidden_artifact
+              RB_FIX_SCOPE_REJECTED_PATHS=("${path}")
+              return 1
+              ;;
+            scripts/*|prompts/*|.github/ai/*|.github/workflows/*)
+              if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ]; then
+                RB_FIX_SCOPE_REASON=workflow_edits_disabled
+                RB_FIX_SCOPE_REJECTED_PATHS=("${path}")
+                return 1
+              fi
+              ;;
+          esac
+        done
+
         # §14: _fetch_pr_json/PR_META have no file list; the superseded-check
         # listing covers other PRs and is not cached on this fix path.
         if ! pr_response="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${pr}/files?per_page=100" 2>/dev/null)" \
@@ -21863,34 +21880,13 @@ sys.exit(1)
               if [ -n "$(git -C "${RB_COMBINED_WORKDIR}" status --porcelain)" ]; then
                 git -C "${RB_COMBINED_WORKDIR}" config user.name "codex-bot"
                 git -C "${RB_COMBINED_WORKDIR}" config user.email "codex@users.noreply.github.com"
-                if [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ]; then
-                  # Use a single add call so empty/minimal repos do not fail on
-                  # exclude-only pathspecs.
-                  # NOTE: do not list .gitignored directories (node_modules)
-                  # as `:!` exclude pathspecs here. `git add -A -- . ':!<dir>'`
-                  # treats the exclude path as an explicit name and fails with
-                  # "The following paths are ignored by one of your .gitignore
-                  # files" + exit 1 when that dir exists on disk. .gitignore
-                  # already excludes them; the pathspec exclude is redundant
-                  # and turns into a hard failure once a step creates
-                  # node_modules/.
-                  git -C "${RB_COMBINED_WORKDIR}" add -A -- . ':!.github/prompts' ':!.github/scripts'
-                else
-                  # Keep workflow-edit guard exclusions while avoiding brittle
-                  # tracked/untracked split staging pathspec failures. Same
-                  # gitignore-dir exclusion caveat as above applies.
-                  git -C "${RB_COMBINED_WORKDIR}" add -A -- . ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.github/prompts' ':!.github/scripts'
-                fi
+                # Stage before enforcing ALLOW_WORKFLOW_EDITS so excluded edits
+                # cannot hide behind an otherwise allowed fix. Do not list
+                # .gitignored directories (node_modules) as exclude pathspecs:
+                # git add treats them as explicit names and fails if present.
+                git -C "${RB_COMBINED_WORKDIR}" add -A -- . ':!.github/prompts' ':!.github/scripts'
                 echo "Staged files before commit:"
                 git -C "${RB_COMBINED_WORKDIR}" diff --cached --name-only | sed 's/^/ - /' || true
-                if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && git -C "${RB_COMBINED_WORKDIR}" diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
-                  echo "Error: scripts/, prompts/, .github/ai/, or .github/workflows is staged while ALLOW_WORKFLOW_EDITS=false"
-                  exit 1
-                fi
-                if git -C "${RB_COMBINED_WORKDIR}" diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
-                  echo "Error: .github/prompts or .github/scripts is staged"
-                  exit 1
-                fi
                 if rb_fix_scope_check "${RB_COMBINED_WORKDIR}" "${RB_PR}" "${RB_JUDGE_JSON}"; then
                   echo "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=${rb_issue} pr=${RB_PR} staged=${RB_FIX_SCOPE_STAGED_COUNT} pr_files=${RB_FIX_SCOPE_PR_COUNT} judge_cited=${RB_FIX_SCOPE_CITED_COUNT}"
                 git -C "${RB_COMBINED_WORKDIR}" commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}

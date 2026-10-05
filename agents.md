@@ -583,6 +583,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   or incomplete PR file list and any out-of-scope edit reject the whole fix,
   warn via Telegram, and consume a review-blocked retry without a push. Empty
   staged sets also reject; listing failures report the unverified staged paths.
+  When `ALLOW_WORKFLOW_EDITS=false`, staged edits to `scripts/`, `prompts/`,
+  `.github/ai/`, or `.github/workflows/` reject through that same path even
+  if present in the PR's file list; `.github/prompts/` and `.github/scripts/`
+  remain excluded from staging and forbidden when pre-staged.
   The review-blocked judge's OpenCode fix writer runs in
   `scripts/review_untrusted_sandbox.sh`.
 - **Sites.** plan, implement (attempts, post-Codex repair, diagnose, PR issue
