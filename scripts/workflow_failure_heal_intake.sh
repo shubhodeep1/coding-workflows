@@ -684,8 +684,17 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 heal_claude_rc=75
 if [ -f scripts/ai_engine.sh ]; then
 	heal_claude_rc=0
+	# Only successful worktree checkouts are visible in the read-only Claude snapshot.
+	heal_read_extra_dirs=""
+	if [ -d "${HEAL_SOURCE_DIR:-}" ] && [ "${HEAL_SOURCE_NOTE:-unavailable (diagnose against the working directory)}" != "unavailable (diagnose against the working directory)" ]; then
+		heal_read_extra_dirs="${HEAL_SOURCE_DIR}"
+	fi
+	if [ -d "${HEAL_BRANCH_TIP_DIR:-}" ] && [ "${HEAL_BRANCH_TIP_NOTE:-unavailable}" != "unavailable" ]; then
+		heal_read_extra_dirs="${heal_read_extra_dirs:+${heal_read_extra_dirs}:}${HEAL_BRANCH_TIP_DIR}"
+	fi
 	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
 	env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \
+		AI_ENGINE_READ_EXTRA_DIRS="${heal_read_extra_dirs}" \
 		AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
 		bash -c 'source "$1" && claude_run_selected WORKFLOW_HEAL "$2" "$3" "$4"' _ \
 		scripts/ai_engine.sh "${PROMPT_FILE}" "${DIAG_FILE}" "${PWD}" \

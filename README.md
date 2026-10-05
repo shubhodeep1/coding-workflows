@@ -2028,14 +2028,34 @@ which only adds `engine=claude` to its log lines, and every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
 
+**Read-profile isolation.** Every `claude_run` with a `read` profile (also a
+write role narrowed by `AI_ENGINE_READ_ONLY=true`) runs in a network-less,
+read-only Docker container instead of running Claude on the host. A sanitized
+snapshot includes regular tracked files and git objects/refs with a new config
+that excludes credential headers; untracked files, symlinks and runner secrets
+are not mounted. Repositories using git object alternates retain working-tree
+files but omit git history (`git=omitted` in the isolation log). Non-git
+workdirs copy only regular files, excluding secret
+filenames and key suffixes. The host-side Anthropic relay keeps the OAuth token
+outside the container. A Docker, relay, image or snapshot preflight failure
+returns `75` for the caller's existing fallback, never unisolated Claude.
+`CLAUDE_READ_ISOLATION` logs only the role, outcome, reason and snapshot counts.
+
+| Read-profile setting | Default | Purpose |
+|---|---|---|
+| `AI_ENGINE_READ_EXTRA_DIRS` | empty | Colon-separated absolute directories to snapshot alongside the workdir (the workflow-heal worktrees). |
+| `CLAUDE_READ_SNAPSHOT_MAX_FILES` | `50000` | Maximum snapshot working-tree file count. |
+| `CLAUDE_READ_SNAPSHOT_MAX_BYTES` | `1073741824` | Maximum snapshot working-tree bytes. |
+| `CLAUDE_READ_ISOLATION_MAX_SECS` | `14400` | Maximum per-account relay and container call time. |
+
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
-`claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
-it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
-file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
-and reports that path instead of overwriting the new content.
+write-profile `claude_run` then moves `CLAUDE.md` out of the checkout for the
+call and puts it back afterwards. If the run creates a new `CLAUDE.md`, it
+keeps the new file and preserves the original alongside it. Read-profile
+calls instead omit root `CLAUDE.md` from their snapshot without moving it.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in

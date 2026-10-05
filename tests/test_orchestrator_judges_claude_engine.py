@@ -180,7 +180,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	steps = _poll_steps()
 	names = [step.get("name") for step in steps]
 	stage = steps[names.index("Stage workflow support files")]["run"]
-	assert "security_dependency.py ai_engine.sh claude_engine.py codex_stall_guard.sh; do" in stage
+	assert "security_dependency.py ai_engine.sh claude_engine.py claude_anthropic_relay.py codex_stall_guard.sh; do" in stage
 	resolve = steps[names.index("Resolve AI engine")]
 	assert resolve["id"] == "ai_engine"
 	assert resolve["env"]["AI_ENGINE_LABELS"] == ""

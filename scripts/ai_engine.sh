@@ -55,6 +55,8 @@
 #                           (read-profile Claude children receive no GitHub,
 #                           Telegram, OpenRouter or Actions OIDC credentials)
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
+#   AI_ENGINE_READ_EXTRA_DIRS  optional colon-separated absolute snapshot roots
+#   CLAUDE_READ_ISOLATION_MAX_SECS  per-account bound (default 14400)
 #
 # The OAuth token reaches the CLI only through CLAUDE_CODE_OAUTH_TOKEN in a
 # subshell, never argv, a log line or a file outside the pool directory.
@@ -181,6 +183,176 @@ _ai_engine_instructions_file()
 	return 1
 }
 
+_ai_engine_read_path_valid()
+{
+	[[ "${1:-}" == /* && "${1}" != *[$'\001'-$'\037',:\"\'\$\`\\]* && "${1}" != *","* && "${1}" != *"="* && "${1}" != *".."* ]] &&
+		[ -d "$1" ] && [ "$(realpath -e -- "$1" 2>/dev/null)" = "$1" ]
+}
+
+_ai_engine_read_path_sensitive()
+{
+	local candidate="$1" private_root
+	for private_root in "$2" "$3"; do
+		[ -n "${private_root}" ] || continue
+		case "${private_root}/" in "${candidate%/}/"*) return 0 ;; esac
+		case "${candidate}/" in "${private_root%/}/"*) return 0 ;; esac
+	done
+	# The workspace commonly lives below HOME; only a mount of HOME itself
+	# (or a parent) would expose the runner's whole credential directory.
+	if [ -n "${HOME:-}" ]; then
+		case "${HOME}/" in "${candidate%/}/"*) return 0 ;; esac
+	fi
+	return 1
+}
+
+# Run read-profile calls in a credential-free container; the token stays in
+# the host relay. This is a subshell so cleanup runs on every normal exit.
+_claude_run_read_isolated()
+(
+	set -o pipefail
+	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" session_id="$5" run_dir="$6" model="$7" effort="$8" instructions="$9"
+	shift 9
+	local -a accounts=("$@") mounts=() roots=("${workdir}") extras_list=()
+	local guard_hook image version probe_model extra root summary files=0 git_state=none snapshot_reason=none extras=0 name index=0
+	local broker_pid="" container_name="" max_secs="${CLAUDE_READ_ISOLATION_MAX_SECS:-14400}"
+	read_cleanup()
+	{
+		if [ -n "${broker_pid}" ]; then kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; fi
+		if [ -n "${container_name}" ]; then env -i PATH="${PATH}" docker rm -f "${container_name}" >/dev/null 2>&1 || true; fi
+		# This socket is created exclusively by this invocation's relay.
+		rm -f -- "${run_dir}/socket/provider.sock"
+	}
+	read_reject()
+	{
+		echo "CLAUDE_READ_ISOLATION role=${role} outcome=rejected reason=$1 files=0 git=none extra_dirs=${extras}" >&2
+		ai_engine_fallback "${role}" "$1"
+		return 75
+	}
+	trap read_cleanup EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+	if ! command -v docker >/dev/null 2>&1; then read_reject isolation_unavailable; return 75; fi
+	if [ ! -f "${_AI_ENGINE_DIR}/claude_anthropic_relay.py" ] || ! guard_hook="$(_ai_engine_py support-file --name guard-hook 2>/dev/null)"; then
+		read_reject isolation_support_missing; return 75
+	fi
+	if ! _ai_engine_read_path_valid "${workdir}" || _ai_engine_read_path_sensitive "${workdir}" "${run_dir}" "${pool_dir}"; then
+		read_reject snapshot_rejected; return 75
+	fi
+	if ! mkdir -p -- "${run_dir}/sandbox/root" "${run_dir}/socket" ||
+		! chmod 0755 "${run_dir}/sandbox" "${run_dir}/sandbox/root" "${run_dir}/socket"; then
+		read_reject snapshot_rejected; return 75
+	fi
+	IFS=: read -r -a extras_list <<< "${AI_ENGINE_READ_EXTRA_DIRS:-}"
+	for extra in "${extras_list[@]}"; do
+		[ -n "${extra}" ] || continue
+		if ! _ai_engine_read_path_valid "${extra}" || _ai_engine_read_path_sensitive "${extra}" "${run_dir}" "${pool_dir}" ||
+			[ "${extra}" = "${workdir}" ] || [[ "${extra}" == "${workdir}/"* || "${workdir}" == "${extra}/"* ]]; then
+			echo '::warning::Claude read isolation: invalid extra directory skipped' >&2
+			continue
+		fi
+		roots+=("${extra}"); extras=$((extras + 1))
+	done
+	for root in "${roots[@]}"; do
+		local -a omit=()
+		[ "${root}" != "${workdir}" ] || [ "${hide_claude_md}" != true ] || omit=(--omit-root-claude-md)
+		if ! summary="$(_ai_engine_py read-snapshot --workdir "${root}" --dest "${run_dir}/sandbox/root${root}" "${omit[@]}")"; then
+			read_reject snapshot_rejected; return 75
+		fi
+		mounts+=(--mount "type=bind,src=${run_dir}/sandbox/root${root},dst=${root},readonly")
+		files=$((files + $(_ai_engine_json_field "${summary}" files)))
+		if [ "${root}" = "${workdir}" ]; then
+			git_state="$(_ai_engine_json_field "${summary}" git)"
+			snapshot_reason="$(_ai_engine_json_field "${summary}" reason)"
+			[ -n "${snapshot_reason}" ] || snapshot_reason=none
+		fi
+	done
+	if ! _ai_engine_py settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile read \
+		--guard-hook /opt/ai-engine/gh_api_write_guard.py --read-guard-hook /opt/ai-engine/claude_engine.py >/dev/null 2>&1; then
+		read_reject isolation_support_missing; return 75
+	fi
+	chmod 0644 "${run_dir}/claude-settings.json" || { read_reject isolation_support_missing; return 75; }
+	version="$(ai_engine_cli_version)" || { read_reject image_build_failed; return 75; }
+	probe_model="$(_ai_engine_py config --key probe_model)" || { read_reject isolation_support_missing; return 75; }
+	if ! image="$(_ai_engine_py read-sandbox-dockerfile | env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "CLAUDE_CLI_VERSION=${version}" -)" || [ -z "${image}" ]; then
+		read_reject image_build_failed; return 75
+	fi
+	echo "CLAUDE_READ_ISOLATION role=${role} outcome=ready reason=${snapshot_reason} files=${files} git=${git_state} extra_dirs=${extras}" >&2
+	[[ "${max_secs}" =~ ^[1-9][0-9]{0,5}$ ]] || { echo '::warning::Invalid Claude read isolation timeout; using default' >&2; max_secs=14400; }
+	if [ -n "${session_id}" ] && compgen -G "${HOME}/.claude/projects/*/${session_id}.jsonl" >/dev/null; then
+		echo '::warning::Claude read isolation cannot resume a host session; starting a fresh session' >&2
+	fi
+	for name in "${accounts[@]}"; do
+		index=$((index + 1))
+		container_name="claude-read-${GITHUB_RUN_ID:-local}-$$-${index}"
+		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 timeout --signal=TERM "${max_secs}" \
+			python3 "${_AI_ENGINE_DIR}/claude_anthropic_relay.py" broker "${run_dir}/socket/provider.sock" "${pool_dir}/tokens/${name}" "${model},${probe_model}" &
+		broker_pid=$!
+		for _ in $(seq 1 50); do
+			[ -S "${run_dir}/socket/provider.sock" ] && break
+			kill -0 "${broker_pid}" 2>/dev/null || break
+			sleep 0.1
+		done
+		if [ ! -S "${run_dir}/socket/provider.sock" ]; then
+			echo "CLAUDE_POOL run role=${role} account=${name} outcome=crashed reason=relay_unavailable exit_code=1" >&2
+			read_cleanup; broker_pid=""; container_name=""; continue
+		fi
+		local transcript="${run_dir}/transcript-${name}.jsonl" stderr_file="${run_dir}/stderr-${name}.txt" attempt_rc=0 verdict outcome reason
+		local -a session_args=()
+		[ -z "${session_id}" ] || session_args=(--session-id "${session_id}")
+		local -a cmd=(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run -i --rm --name "${container_name}"
+			--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL --security-opt no-new-privileges
+			--pids-limit 256 --memory 4g --cpus 2
+			--tmpfs "/tmp:rw,nosuid,nodev,size=64m" --tmpfs "/home/agent:rw,nosuid,nodev,size=128m,mode=1777"
+			"${mounts[@]}"
+			--mount "type=bind,src=${run_dir}/socket,dst=/socket,readonly"
+			--mount "type=bind,src=${_AI_ENGINE_DIR}/claude_anthropic_relay.py,dst=/opt/ai-engine/relay.py,readonly"
+			--mount "type=bind,src=${_AI_ENGINE_DIR}/claude_engine.py,dst=/opt/ai-engine/claude_engine.py,readonly"
+			--mount "type=bind,src=${guard_hook},dst=/opt/ai-engine/gh_api_write_guard.py,readonly"
+			--mount "type=bind,src=${instructions},dst=/instructions.md,readonly"
+			--mount "type=bind,src=${run_dir}/claude-settings.json,dst=/settings.json,readonly"
+			--env HOME=/home/agent --env ANTHROPIC_BASE_URL=http://127.0.0.1:8765
+			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder --env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+			--env DISABLE_AUTOUPDATER=1 --workdir "${workdir}" "${image}" /bin/bash -c '
+				set -euo pipefail
+				python3 -c '\''import json,os,sys; open(os.path.join(os.environ["HOME"],".claude.json"),"w").write(json.dumps({"projects":{sys.argv[1]:{"hasTrustDialogAccepted":True}}}))'\'' "$1"
+				python3 /opt/ai-engine/relay.py bridge /socket/provider.sock &
+				bridge_pid=$!
+				trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
+				python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
+				echo CLAUDE_READ_CONTAINER_READY >&2
+				timeout --signal=TERM "$2" claude -p --model "$3" --effort "$4" \
+					--system-prompt-file /instructions.md --setting-sources "" --settings /settings.json \
+					--strict-mcp-config --disable-slash-commands --exclude-dynamic-system-prompt-sections \
+					--tools Read,Grep,Glob,Bash --permission-mode dontAsk --output-format stream-json --verbose "${@:5}"
+			' _ "${workdir}" "${max_secs}" "${model}" "${effort}" "${session_args[@]}")
+		if [ -f "${_AI_ENGINE_DIR}/codex_stall_guard.sh" ]; then
+			bash "${_AI_ENGINE_DIR}/codex_stall_guard.sh" --phase "${role,,}" --engine claude \
+				--stdout-file "${transcript}" --stderr-file "${stderr_file}" -- "${cmd[@]}" < "${prompt_file}" || attempt_rc=$?
+		else
+			"${cmd[@]}" < "${prompt_file}" > "${transcript}" 2> "${stderr_file}" || attempt_rc=$?
+		fi
+		read_cleanup; broker_pid=""; container_name=""
+		if [ "${attempt_rc}" -ne 0 ] && { [ "${attempt_rc}" -eq 125 ] || [ "${attempt_rc}" -eq 126 ] || [ "${attempt_rc}" -eq 127 ] || ! grep -qx 'CLAUDE_READ_CONTAINER_READY' "${stderr_file}"; }; then
+			read_reject isolation_unavailable; return 75
+		fi
+		verdict="$(_ai_engine_py classify --transcript "${transcript}" --exit-code "${attempt_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
+		outcome="$(_ai_engine_json_field "${verdict}" outcome)"
+		reason="$(_ai_engine_json_field "${verdict}" reason)"
+		echo "CLAUDE_POOL run role=${role} account=${name} outcome=${outcome} reason=${reason} exit_code=${attempt_rc}" >&2
+		case "${outcome}" in
+			success)
+				_ai_engine_py extract --transcript "${transcript}" --out "${out_file}" >&2 || return 1
+				ln -s -- "transcript-${name}.jsonl" "${run_dir}/successful-transcript.jsonl" || return 1
+				return 0 ;;
+			usage_limit|auth_failed) continue ;;
+			timeout) return 124 ;;
+			*) _ai_engine_py extract --transcript "${transcript}" --out "${out_file}" >&2 || true; return 1 ;;
+		esac
+	done
+	ai_engine_fallback "${role}" all_accounts_failed
+	return 75
+)
+
 claude_run()
 {
 	local role="${1:-}" prompt_file="${2:-}" out_file="${3:-}" workdir="${4:-}" session_id="${5:-}"
@@ -196,11 +368,6 @@ claude_run()
 		echo "::error::claude_run: session_id must be a lower-case UUID" >&2
 		return 2
 	fi
-	if ! command -v claude >/dev/null 2>&1; then
-		ai_engine_fallback "${role}" cli_missing
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
-	fi
-
 	local resolved model effort profile hide_claude_md instructions
 	if ! resolved="$(_ai_engine_py resolve --role "${role}" --model-hint "${AI_ENGINE_MODEL_HINT:-}" --effort-hint "${AI_ENGINE_EFFORT_HINT:-}")"; then
 		ai_engine_fallback "${role}" resolve_failed
@@ -213,6 +380,10 @@ claude_run()
 	# one call (the review-blocked judge's verdict pass); it never widens one.
 	if [ "${AI_ENGINE_READ_ONLY:-false}" = "true" ]; then
 		profile="read"
+	fi
+	if [ "${profile}" != read ] && ! command -v claude >/dev/null 2>&1; then
+		ai_engine_fallback "${role}" cli_missing
+		return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
 	hide_claude_md="$(_ai_engine_py config --key hide_claude_md 2>/dev/null || echo false)"
 	if ! instructions="$(_ai_engine_instructions_file)"; then
@@ -237,6 +408,10 @@ claude_run()
 	# The caller may read the transcripts (transcript-<NAME>.jsonl) after the run.
 	# shellcheck disable=SC2034  # read by callers after claude_run returns
 	AI_ENGINE_LAST_RUN_DIR="${run_dir}"
+	if [ "${profile}" = read ]; then
+		_claude_run_read_isolated "${role}" "${prompt_file}" "${out_file}" "${workdir}" "${session_id}" "${run_dir}" "${model}" "${effort}" "${instructions}" "${accounts[@]}"
+		return $?
+	fi
 	local -a settings_args=(settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile "${profile}")
 	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
 	if ! _ai_engine_py "${settings_args[@]}"; then

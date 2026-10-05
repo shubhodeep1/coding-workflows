@@ -314,6 +314,99 @@ def test_read_profile_settings_have_a_bash_guard_without_changing_write_settings
 			ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook=path)
 
 
+def test_settings_cli_accepts_container_read_guard_hook(tmp_path: Path) -> None:
+	result = _run("settings", "--checkout", str(tmp_path), "--out", str(tmp_path / "settings.json"),
+		"--profile", "read", "--guard-hook", "/opt/gh.py", "--read-guard-hook", "/opt/engine.py")
+	assert result.returncode == 0, result.stderr
+	settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/opt/engine.py" read-guard'
+	assert "FROM node:22.16.0-bookworm-slim" in _run("read-sandbox-dockerfile").stdout
+
+
+def test_read_snapshot_copies_tracked_files_and_sanitized_git_history(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	def git(*args: str, cwd: Path = repo) -> str:
+		return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+	git("init", "-q")
+	git("config", "user.email", "test@example.invalid")
+	git("config", "user.name", "Test")
+	git("config", "http.https://github.com/.extraheader", "AUTHORIZATION: secret")
+	(repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+	(repo / "CLAUDE.md").write_text("private marker\n", encoding="utf-8")
+	git("add", "tracked.txt", "CLAUDE.md")
+	git("commit", "-qm", "initial")
+	git("update-ref", "refs/remotes/origin/main", "HEAD")
+	(repo / "secret.txt").write_text("secret\n", encoding="utf-8")
+	(repo / "tracked-link").symlink_to(repo / "secret.txt")
+	git("add", "tracked-link")
+	(repo / ".codex-workflow-src" / ".git").mkdir(parents=True)
+	(repo / ".codex-workflow-src" / ".git" / "config").write_text("extraheader=secret", encoding="utf-8")
+	worktree = tmp_path / "linked"
+	git("worktree", "add", "-q", "--detach", str(worktree), "HEAD")
+	for source in (repo, worktree):
+		dest = tmp_path / f"snapshot-{source.name}"
+		result = _run("read-snapshot", "--workdir", str(source), "--dest", str(dest), "--omit-root-claude-md",
+			env={"GIT_DIR": str(tmp_path / "not-the-repo"), "GIT_WORK_TREE": str(tmp_path / "wrong-worktree"),
+				"GIT_INDEX_FILE": str(tmp_path / "host-index")})
+		assert result.returncode == 0, result.stderr
+		assert not (tmp_path / "host-index").exists()
+		assert json.loads(result.stdout)["git"] == "copied"
+		assert not (dest / "CLAUDE.md").exists()
+		assert (dest / "tracked.txt").read_text(encoding="utf-8") == "tracked\n"
+		assert not (dest / "secret.txt").exists()
+		assert not (dest / "tracked-link").exists()
+		assert not (dest / ".codex-workflow-src").exists()
+		assert "extraheader" not in (dest / ".git/config").read_text(encoding="utf-8")
+		assert git("log", "-1", "--oneline", cwd=dest).endswith("initial")
+		assert git("rev-parse", "origin/main", cwd=dest) == git("rev-parse", "HEAD", cwd=repo)
+
+
+def test_read_snapshot_limits_non_git_and_alternates(tmp_path: Path) -> None:
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	(plain / "safe.txt").write_text("data", encoding="utf-8")
+	(plain / "private.pem").write_text("private", encoding="utf-8")
+	result = _run("read-snapshot", "--workdir", str(plain), "--dest", str(tmp_path / "plain-copy"))
+	assert json.loads(result.stdout) == {"files": 1, "bytes": 4, "git": "none", "reason": ""}
+	assert not (tmp_path / "plain-copy/private.pem").exists()
+	result = _run("read-snapshot", "--workdir", str(plain), "--dest", str(tmp_path / "too-small"),
+		env={"CLAUDE_READ_SNAPSHOT_MAX_BYTES": "1"})
+	assert result.returncode != 0
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "file.txt").write_text("a", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "file.txt"], check=True)
+	(repo / ".git/objects/info/alternates").write_text("/tmp/nonexistent\n", encoding="utf-8")
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(tmp_path / "no-history"))
+	assert json.loads(result.stdout)["git"] == "omitted"
+	assert not (tmp_path / "no-history/.git").exists()
+
+
+def test_read_snapshot_rejects_symlinked_roots(tmp_path: Path) -> None:
+	real = tmp_path / "real"
+	real.mkdir()
+	(tmp_path / "alias").symlink_to(real, target_is_directory=True)
+	result = _run("read-snapshot", "--workdir", str(tmp_path / "alias"), "--dest", str(tmp_path / "copy"))
+	assert result.returncode == 2
+	assert not (tmp_path / "copy").exists()
+
+
+def test_read_snapshot_rejects_symlinked_tracked_parent(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "code").mkdir()
+	(repo / "code" / "tracked.txt").write_text("safe", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "code/tracked.txt"], check=True)
+	(repo / "code").rename(repo / "old-code")
+	(repo / "code").symlink_to(tmp_path, target_is_directory=True)
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(tmp_path / "copy"))
+	assert result.returncode == 2
+	assert "snapshot rejected" in result.stderr or "unsafe snapshot parent" in result.stderr
+
+
 @pytest.mark.parametrize("command", [
 	"git log --oneline -5", "git show HEAD:scripts/x.sh", "git diff --stat a..b -- 'p q'",
 	"git diff --text", "git diff --no-ext-diff", "git grep -n foo",

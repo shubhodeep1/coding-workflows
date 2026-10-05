@@ -52,6 +52,8 @@ import math
 import os
 import re
 import shlex
+import stat
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -200,6 +202,11 @@ CONFIG_RELATIVE = Path(".github") / "ai" / "claude_engine.json"
 CHECKOUT_PLACEHOLDER = "__CHECKOUT__"
 GUARD_HOOK_PLACEHOLDER = "__GUARD_HOOK__"
 WORKFLOW_DENY_MARKER = "/.github/workflows/"
+READ_SANDBOX_DOCKERFILE = """FROM node:22.16.0-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends python3 git ca-certificates && rm -rf /var/lib/apt/lists/*
+ARG CLAUDE_CLI_VERSION
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}
+"""
 
 
 class EngineError(ValueError):
@@ -957,12 +964,202 @@ def cmd_settings(args: argparse.Namespace) -> int:
 		guard_hook,
 		profile=args.profile,
 		allow_workflow_edits=args.allow_workflow_edits,
-		read_guard_hook=str(Path(__file__).resolve()),
+		read_guard_hook=args.read_guard_hook or str(Path(__file__).resolve()),
 	)
 	out = Path(args.out)
 	out.parent.mkdir(parents=True, exist_ok=True)
 	out.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
 	os.chmod(out, 0o600)
+	return 0
+
+
+_SNAPSHOT_BAD_PARTS = frozenset((".git", ".ai", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", ".env", "secrets", "credentials", "__pycache__"))
+_SNAPSHOT_BAD_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
+
+
+def _snapshot_limit(name: str, default: int) -> int:
+	value = os.environ.get(name, str(default))
+	if re.fullmatch(r"[1-9][0-9]{0,11}", value):
+		return int(value)
+	print(f"::warning::invalid {name}; using default", file=sys.stderr)
+	return default
+
+
+def _snapshot_git(workdir: Path, *args: str) -> bytes:
+	return subprocess.check_output(["git", "-C", str(workdir), *args], stderr=subprocess.DEVNULL, env=_snapshot_git_env())
+
+
+def _snapshot_git_env() -> dict[str, str]:
+	# The job may export GIT_DIR / GIT_INDEX_FILE for its live checkout. In
+	# particular, read-tree must never write through that inherited index.
+	return {**{key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
+		"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+
+def _snapshot_copy(source_root: Path, target_root: Path, relative: Path, limits: list[int]) -> None:
+	parts = relative.parts
+	if not parts or any(part in (".", "..", "") for part in parts) or relative.is_absolute():
+		raise EngineError("unsafe snapshot path")
+	if any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or part.lower().endswith(_SNAPSHOT_BAD_SUFFIXES) for part in parts):
+		return
+	node = source_root
+	for index, part in enumerate(parts):
+		node = node / part
+		try:
+			info = node.lstat()
+		except FileNotFoundError:
+			return  # Tracked deletion in the working tree.
+		if stat.S_ISLNK(info.st_mode):
+			if index == len(parts) - 1:
+				return
+			raise EngineError("unsafe snapshot parent")
+		if index < len(parts) - 1 and not stat.S_ISDIR(info.st_mode):
+			raise EngineError("unsafe snapshot parent")
+	if not stat.S_ISREG(info.st_mode):
+		return
+	limits[0] += 1
+	limits[1] += info.st_size
+	if limits[0] > limits[2] or limits[1] > limits[3]:
+		raise EngineError("snapshot limit exceeded")
+	target = target_root.joinpath(*parts)
+	target.parent.mkdir(parents=True, exist_ok=True)
+	# Resolve every component relative to an open directory descriptor. A
+	# parent swapped to a symlink between lstat and open cannot escape the root.
+	parent_fd = os.open(source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+	try:
+		for part in parts[:-1]:
+			next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+			os.close(parent_fd)
+			parent_fd = next_fd
+		with os.fdopen(os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd), "rb") as src, target.open("xb") as dst:
+			opened = os.fstat(src.fileno())
+			if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+				raise EngineError("source changed during snapshot")
+			remaining = info.st_size
+			while remaining:
+				chunk = src.read(min(1048576, remaining))
+				if not chunk:
+					raise EngineError("source changed during snapshot")
+				dst.write(chunk)
+				remaining -= len(chunk)
+			if src.read(1) or os.fstat(src.fileno()).st_size != info.st_size:
+				raise EngineError("source changed during snapshot")
+	finally:
+		os.close(parent_fd)
+	os.chmod(target, 0o644)
+
+
+def _snapshot_copy_git_file(path: Path, target: Path) -> None:
+	info = path.lstat()
+	if not stat.S_ISREG(info.st_mode):
+		raise EngineError("unsafe git metadata")
+	with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as src, target.open("xb") as dst:
+		opened = os.fstat(src.fileno())
+		if (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+			raise EngineError("git metadata changed during snapshot")
+		remaining = info.st_size
+		while remaining:
+			chunk = src.read(min(1048576, remaining))
+			if not chunk:
+				raise EngineError("git metadata changed during snapshot")
+			dst.write(chunk)
+			remaining -= len(chunk)
+		if src.read(1) or os.fstat(src.fileno()).st_size != info.st_size:
+			raise EngineError("git metadata changed during snapshot")
+	os.chmod(target, 0o644)
+
+
+def _snapshot_metadata(workdir: Path, dest: Path) -> tuple[str, str]:
+	common = Path(os.fsdecode(_snapshot_git(workdir, "rev-parse", "--path-format=absolute", "--git-common-dir")).strip())
+	gitdir = Path(os.fsdecode(_snapshot_git(workdir, "rev-parse", "--path-format=absolute", "--git-dir")).strip())
+	if (common / "objects/info/alternates").exists():
+		return "omitted", "alternates"
+	meta = dest / ".git"
+	meta.mkdir()
+	# Copy only object/refs trees and HEAD; never git's credentials, hooks,
+	# alternates, worktrees or local settings. Reject symlinks in metadata.
+	for folder in ("objects", "refs"):
+		root = common / folder
+		if not root.is_dir() or root.is_symlink():
+			raise EngineError("unsafe git metadata")
+		for base, dirs, files in os.walk(root, followlinks=False):
+			for directory in dirs:
+				if (Path(base) / directory).is_symlink():
+					raise EngineError("unsafe git metadata")
+			for filename in files:
+				path = Path(base) / filename
+				if path.is_symlink() or not path.is_file():
+					raise EngineError("unsafe git metadata")
+				if filename.endswith(".lock") or path.relative_to(root).parts[:1] == ("info",):
+					continue
+				target = meta / folder / path.relative_to(root)
+				target.parent.mkdir(parents=True, exist_ok=True)
+				try:
+					os.link(path, target, follow_symlinks=False)
+				except OSError:
+					_snapshot_copy_git_file(path, target)
+				if target.is_symlink() or not target.is_file():
+					raise EngineError("unsafe git metadata")
+	for filename, root in (("HEAD", gitdir), ("packed-refs", common), ("shallow", common)):
+		path = root / filename
+		if path.exists():
+			if path.is_symlink() or not path.is_file():
+				raise EngineError("unsafe git metadata")
+			_snapshot_copy_git_file(path, meta / filename)
+	version = _snapshot_git(workdir, "config", "--local", "--get", "core.repositoryformatversion").decode().strip()
+	if version not in ("0", "1"):
+		raise EngineError("unsupported git repository format")
+	format_result = subprocess.run(["git", "-C", str(workdir), "config", "--local", "--get", "extensions.objectformat"], capture_output=True, check=False, env=_snapshot_git_env())
+	if format_result.returncode not in (0, 1):
+		raise EngineError("invalid git object format")
+	object_format = format_result.stdout.decode().strip()
+	if object_format and object_format not in ("sha1", "sha256"):
+		raise EngineError("invalid git object format")
+	(meta / "config").write_text(f"[core]\n\trepositoryformatversion = {version}\n\tbare = false\n" + (f"[extensions]\n\tobjectformat = {object_format}\n" if object_format else ""), encoding="ascii")
+	_snapshot_git(dest, "read-tree", "HEAD")
+	return "copied", ""
+
+
+def read_snapshot(workdir: Path, dest: Path, omit_root_claude_md: bool = False) -> dict[str, Any]:
+	if not workdir.is_absolute() or not dest.is_absolute() or not workdir.is_dir() or dest.exists() or workdir == dest or workdir in dest.parents:
+		raise EngineError("invalid snapshot directory")
+	if any(parent.is_symlink() for parent in (workdir, *workdir.parents)):
+		raise EngineError("unsafe snapshot root")
+	limits = [0, 0, _snapshot_limit("CLAUDE_READ_SNAPSHOT_MAX_FILES", 50000), _snapshot_limit("CLAUDE_READ_SNAPSHOT_MAX_BYTES", 1073741824)]
+	git_workdir = False
+	try:
+		git_workdir = _snapshot_git(workdir, "rev-parse", "--is-inside-work-tree").strip() == b"true"
+	except (OSError, subprocess.CalledProcessError):
+		pass
+	if git_workdir and _snapshot_git(workdir, "rev-parse", "--show-toplevel").strip() != os.fsencode(workdir):
+		raise EngineError("snapshot must start at git worktree root")
+	dest.mkdir(parents=True)
+	try:
+		if git_workdir:
+			paths = [Path(os.fsdecode(path)) for path in _snapshot_git(workdir, "ls-files", "-z", "--cached").split(b"\0") if path]
+		else:
+			paths = []
+			for base, dirs, files in os.walk(workdir, followlinks=False):
+				dirs[:] = [item for item in dirs if item.lower() not in _SNAPSHOT_BAD_PARTS and not item.lower().startswith(".env") and not (Path(base) / item).is_symlink()]
+				paths.extend((Path(base) / item).relative_to(workdir) for item in files)
+		for path in paths:
+			if omit_root_claude_md and path == Path("CLAUDE.md"):
+				continue
+			_snapshot_copy(workdir, dest, path, limits)
+		git, reason = _snapshot_metadata(workdir, dest) if git_workdir else ("none", "")
+		return {"files": limits[0], "bytes": limits[1], "git": git, "reason": reason}
+	except (OSError, ValueError, subprocess.CalledProcessError):
+		# Partial snapshots must never be mounted.
+		raise EngineError("snapshot rejected") from None
+
+
+def cmd_read_snapshot(args: argparse.Namespace) -> int:
+	_print_json(read_snapshot(Path(args.workdir), Path(args.dest), args.omit_root_claude_md))
+	return 0
+
+
+def cmd_read_sandbox_dockerfile(args: argparse.Namespace) -> int:
+	print(READ_SANDBOX_DOCKERFILE, end="")
 	return 0
 
 
@@ -1083,7 +1280,17 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--allow-workflow-edits", action="store_true")
 	p.add_argument("--template", default="")
 	p.add_argument("--guard-hook", default="")
+	p.add_argument("--read-guard-hook", default="")
 	p.set_defaults(func=cmd_settings)
+
+	p = sub.add_parser("read-snapshot")
+	p.add_argument("--workdir", required=True)
+	p.add_argument("--dest", required=True)
+	p.add_argument("--omit-root-claude-md", action="store_true")
+	p.set_defaults(func=cmd_read_snapshot)
+
+	p = sub.add_parser("read-sandbox-dockerfile")
+	p.set_defaults(func=cmd_read_sandbox_dockerfile)
 
 	p = sub.add_parser("read-guard")
 	p.set_defaults(func=cmd_read_guard)
