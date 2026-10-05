@@ -615,14 +615,11 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 				["git", "config", "--get", f"remote.{positionals[0]}.url"],
 				invocation.cwd, _GIT_TIMEOUT_SECONDS,
 			)
-		if code not in (0, 1):
+		if code != 0:
 			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
 				"inline git config: push positional repository cannot be resolved" if invocation.config else
 				"could not resolve git push positional repository; destination branch is unknown",
 				config=invocation.config)]
-		if code == 1 and invocation.config and not extract_repo_slug(positionals[0]):
-			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
-				"inline git config: push positional repository is unknown", config=invocation.config)]
 		refspecs = positionals[1:]
 		selected_remote = positionals[0] if invocation.config else ""
 	else:

@@ -969,8 +969,6 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 	"git push origin HEAD",
 	"COUNT+=1 git push origin HEAD:feature/x",
 	"git push --repo=origin",
-	"git push --repo origin HEAD:feature/x",
-	"git push --repo=origin HEAD:feature/x",
 	"git push --repo=upstream origin",
 	"git push origin --repo=upstream",
 	"git push origin HEAD:feature/x --repo=upstream",
@@ -1327,6 +1325,11 @@ def test_quoted_numeric_push_refspec_cannot_match_later_redirect(merged_branch_r
 @pytest.mark.parametrize("command", [
 	"git push origin HEAD:$DEST",
 	"git push --repo=origin HEAD:$DEST",
+	"git push --repo origin HEAD:feature/x",
+	"git push --repo=origin HEAD:feature/x",
+	"git push --repo=upstream mirror HEAD:feature/x",
+	"git push --repo=upstream ../mirror HEAD:feature/x",
+	"git push --repo=upstream https://github.com/o/r.git HEAD:feature/x",
 	"git push --unknown origin 12",
 ])
 def test_unknown_explicit_push_target_requires_confirmation(merged_branch_repo, capsys, command: str) -> None:
@@ -1352,6 +1355,18 @@ def test_positional_remote_probe_failure_requires_confirmation(merged_branch_rep
 		"tool_input": {"command": "git push --repo=upstream origin"}})
 	assert (code, message) == (0, "")
 	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_unconfigured_positional_repository_does_not_become_a_branch(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "branch", "mirror", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("destination unknown"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push --repo=upstream mirror"}})
+	assert (code, message) == (0, "")
+	output = json.loads(capsys.readouterr().out)
+	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not resolve git push positional repository" in output["systemMessage"]
 
 
 @pytest.mark.parametrize("command", [
