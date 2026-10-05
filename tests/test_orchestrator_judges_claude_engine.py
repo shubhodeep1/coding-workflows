@@ -740,3 +740,17 @@ def test_orchestrate_job_resolves_the_engine_from_the_engine_input() -> None:
 		assert steps[name]["if"] == "steps.ai_engine.outputs.engine == 'claude'"
 		assert names.index("Resolve AI engine") < names.index(name) < names.index("Run Codex (decomposer)")
 	assert "write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl; do" in steps["Stage workflow support files"]["run"]
+
+
+def test_decomposer_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path: Path) -> None:
+	preflight = _orchestrate_steps()["Resolve AI engine"]["run"]
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "ai_engine.sh").write_text("return 42\n", encoding="utf-8")
+	output_file = tmp_path / "github_output"
+	env = {**os.environ, "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "claude"}
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(inherited, None)
+	result = subprocess.run(["bash", "-c", preflight], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert output_file.read_text(encoding="utf-8").strip() == "engine=codex"
+	assert "Failed to source scripts/ai_engine.sh; continuing with codex defaults." in result.stderr

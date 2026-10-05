@@ -1947,6 +1947,8 @@ cannot start (no CLI, no credential, clarify image build failure or every
 account gated: exit `75`, logged
 `AI_ENGINE_FALLBACK`), the same attempt runs its codex/OpenCode fallback.
 Poller judges retry OpenCode in a fresh isolated sandbox, never host Codex.
+If the decomposer cannot source `scripts/ai_engine.sh`, engine selection warns
+and continues on Codex instead of stopping the orchestration job.
 `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
 Review write roles read PR labels from the existing PR-state lookup, including
