@@ -260,14 +260,17 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
+	redirect_fd = False
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
+			redirect_fd = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			if segment and segment[-1].isdigit():
+			if redirect_fd and segment:
 				segment.pop()
 			redirect_target = True
+			redirect_fd = False
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
@@ -276,6 +279,11 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			operator = token
 		else:
 			segment.append(token)
+			# shlex has read one character ahead: only an adjacent, unquoted
+			# integer is an IO_NUMBER, not a numeric push refspec.
+			redirect_fd = bool(token.isdigit() and re.search(
+				r"(?:^|[\s;&|])\d+[<>]$", command[:lexer.instream.tell()]
+			))
 	if segment:
 		result.append((operator, segment))
 	return result
@@ -1294,6 +1302,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	unresolved_push_sources: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
@@ -1311,8 +1320,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						target.cwd, _GIT_TIMEOUT_SECONDS,
 					)
 				if code != 0:
-					_warn("could not resolve git push source; checking the session checkout instead")
-					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+					unresolved_push_sources.append(
+						f"could not resolve git push source for `{target.branch}`; "
+						"shell expansion may change the pushed commit."
+					)
+					continue
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
@@ -1369,6 +1381,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
+	if unresolved_push_sources:
+		_request_confirmation(" ".join(unresolved_push_sources))
 	if bulk_reasons:
 		_request_confirmation(
 			"Bulk git push may write more branches than the current branch: "

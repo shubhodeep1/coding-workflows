@@ -923,6 +923,39 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	assert lookups == ["feature/x"]
 
 
+@pytest.mark.parametrize("command", [
+	"git push origin 123 > /dev/null",
+	'git push origin "123">/dev/null',
+])
+def test_spaced_redirect_keeps_numeric_refspec(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "123")
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert lookups == ["123"]
+
+
+def test_unresolved_push_source_requests_confirmation(monkeypatch, merged_branch_repo, capsys) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("cannot validate unknown tip"))
+	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": 'git push origin "$SOURCE:feature/x"'}}) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "feature/x" in response["systemMessage"]
+
+
 def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	worktree = repo.parent / "other"
