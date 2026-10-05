@@ -110,7 +110,7 @@ jobs:
           fi
           cat "${RUNNER_TEMP}/context-stderr.log" >&2
           if [ "${SMOKE_PROFILE}" = "read" ]; then
-            grep -Eq '^CLAUDE_READ_ISOLATION role=SECURITY_AUDIT outcome=ready reason=(none|alternates) files=[0-9]+ git=(copied|omitted) extra_dirs=0$' "${RUNNER_TEMP}/context-stderr.log"
+            grep -Eq '^CLAUDE_READ_ISOLATION role=SECURITY_AUDIT outcome=ready reason=(none|alternates|filtered_history) files=[0-9]+ git=(copied|omitted) extra_dirs=0$' "${RUNNER_TEMP}/context-stderr.log"
           fi
           if grep -q "SMOKE-MARKER-" "${RUNNER_TEMP}/context.txt"; then
             echo "::error::Context gate failed: CLAUDE.md was loaded"

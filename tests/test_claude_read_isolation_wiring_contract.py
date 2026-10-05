@@ -16,6 +16,11 @@ def test_relay_staged_for_read_profiles() -> None:
 	assert "claude_engine.py claude_anthropic_relay.py" in stager
 
 
+def test_smoke_accepts_filtered_history_snapshot() -> None:
+	smoke = (ROOT / ".github/workflows/claude-engine-smoke.yml").read_text(encoding="utf-8")
+	assert "reason=(none|alternates|filtered_history) files=[0-9]+" in smoke
+
+
 def test_heal_passes_only_created_worktrees_to_read_snapshot() -> None:
 	heal = (ROOT / "scripts/workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
 	assert 'AI_ENGINE_READ_EXTRA_DIRS="${heal_read_extra_dirs}"' in heal

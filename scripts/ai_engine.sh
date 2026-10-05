@@ -462,7 +462,7 @@ _ai_engine_claude_run_isolated()
 		read_max_secs=14400
 	fi
 	mapfile -t accounts < <(ai_engine_accounts)
-	echo "CLAUDE_ISOLATION role=${role} profile=read mode=container extra_dirs=$((${#extra_roots[@]} + ${#AI_ENGINE_ISOLATION_PATHS[@]}))" >&2
+	echo "CLAUDE_ISOLATION role=${role} profile=read mode=container" >&2
 	echo "CLAUDE_READ_ISOLATION role=${role} outcome=ready reason=${snapshot_reason} files=${snapshot_files} git=${snapshot_git} extra_dirs=$((${#extra_roots[@]} + ${#AI_ENGINE_ISOLATION_PATHS[@]}))" >&2
 	for name in "${accounts[@]}"; do
 		attempt=$((attempt + 1))

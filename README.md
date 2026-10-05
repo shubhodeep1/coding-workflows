@@ -2063,11 +2063,13 @@ container starts.
 **Read-profile isolation.** Every `claude_run` with a `read` profile (also a
 write role narrowed by `AI_ENGINE_READ_ONLY=true`) runs in a network-less,
 read-only Docker container instead of running Claude on the host. A sanitized
-snapshot includes regular tracked files and, when all reachable history paths
-pass the snapshot filter, git objects/refs with a new config that excludes
+snapshot includes regular tracked files and, when history paths pass the
+snapshot filter and the repository has no unreachable objects or shared
+worktrees, git objects/refs with a new config that excludes
 credential headers; untracked files, symlinks and runner secrets are not
-mounted. Repositories using git object alternates or with filtered paths in
-reachable history retain working-tree files but omit git history (`git=omitted`,
+mounted. Repositories using git object alternates, sharing worktrees, retaining
+unreachable objects, or with filtered paths in reachable history retain
+working-tree files but omit git history (`git=omitted`,
 `reason=alternates|filtered_history` in the isolation log). Non-git
 workdirs copy only regular files, excluding secret
 filenames and key suffixes. The host-side Anthropic relay keeps the OAuth token

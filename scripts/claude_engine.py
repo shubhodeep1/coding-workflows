@@ -1313,16 +1313,38 @@ def _snapshot_metadata(workdir: Path, dest: Path, omit_root_claude_md: bool = Fa
 	gitdir = Path(os.fsdecode(_snapshot_git(workdir, "rev-parse", "--path-format=absolute", "--git-dir")).strip())
 	if (common / "objects/info/alternates").exists():
 		return "omitted", "alternates"
+	# A shared store can hold commits from detached sibling worktrees which
+	# are not covered by this checkout's refs or HEAD.
+	if (common / "worktrees").exists() and any((common / "worktrees").iterdir()):
+		return "omitted", "filtered_history"
 	# A filtered working tree is not safe if git show can recover the same
 	# path from an earlier commit. Retain history only when its paths pass
 	# the working-tree filter; never mount a partly filtered object store.
-	history_paths = _snapshot_git(workdir, "log", "--all", "--format=", "--name-only", "-z", "--no-renames")
-	for history_path in history_paths.split(b"\0"):
-		history_relative = Path(os.fsdecode(history_path.lstrip(b"\n")))
-		parts = history_relative.parts
-		if omit_root_claude_md and history_relative == Path("CLAUDE.md"):
+	with subprocess.Popen(["git", "-C", str(workdir), "log", "--all", "HEAD", "--format=", "--name-only", "-z", "--no-renames"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_snapshot_git_env()) as history_process:
+		assert history_process.stdout is not None
+		history_pending = b""
+		while history_chunk := history_process.stdout.read(65536):
+			history_paths = (history_pending + history_chunk).split(b"\0")
+			history_pending = history_paths.pop()
+			if len(history_pending) > 1048576:
+				history_process.terminate()
+				return "omitted", "filtered_history"
+			for history_path in history_paths:
+				history_relative = Path(os.fsdecode(history_path.lstrip(b"\n")))
+				parts = history_relative.parts
+				if omit_root_claude_md and history_relative == Path("CLAUDE.md") or any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or part.lower().endswith(_SNAPSHOT_BAD_SUFFIXES) for part in parts):
+					history_process.terminate()
+					return "omitted", "filtered_history"
+		if history_pending or history_process.wait() != 0:
 			return "omitted", "filtered_history"
-		if any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or part.lower().endswith(_SNAPSHOT_BAD_SUFFIXES) for part in parts):
+	# Even a clean ref history cannot authorize copying unreferenced objects
+	# (such as a SHA-only fetch or a recently deleted secret-bearing commit).
+	with subprocess.Popen(["git", "-C", str(workdir), "fsck", "--unreachable", "--no-reflogs"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_snapshot_git_env()) as fsck_probe:
+		assert fsck_probe.stdout is not None
+		if fsck_probe.stdout.read(1):
+			fsck_probe.terminate()
+			return "omitted", "filtered_history"
+		if fsck_probe.wait() != 0:
 			return "omitted", "filtered_history"
 	meta = dest / ".git"
 	meta.mkdir()

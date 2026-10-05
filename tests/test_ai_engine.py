@@ -434,6 +434,7 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	assert call["stdin"] == "do the thing\n"
 	assert (sandbox["tmp"] / "out.txt").read_text() == "done"
 	assert "CLAUDE_ISOLATION role=SECURITY_AUDIT profile=read mode=container" in result.stderr
+	assert "CLAUDE_ISOLATION role=SECURITY_AUDIT profile=read mode=container" in result.stderr.splitlines()
 	assert "CLAUDE_READ_ISOLATION role=SECURITY_AUDIT outcome=ready reason=none files=1 git=copied extra_dirs=0" in result.stderr
 	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=locked" in result.stderr
 	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=verified" in result.stderr

@@ -517,6 +517,48 @@ def test_read_snapshot_preserves_history_without_filtered_paths(tmp_path: Path) 
 	assert (dest / ".git/config").is_file()
 
 
+def test_read_snapshot_omits_shared_detached_history(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "safe.txt").write_text("safe\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "safe.txt"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "safe"], check=True)
+	linked = tmp_path / "linked"
+	subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(linked)], check=True)
+	(linked / ".env").write_text("token=hidden\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(linked), "add", ".env"], check=True)
+	subprocess.run(["git", "-C", str(linked), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "detached secret"], check=True)
+	for source in (repo, linked):
+		dest = tmp_path / f"snapshot-{source.name}"
+		result = _run("read-snapshot", "--workdir", str(source), "--dest", str(dest))
+		assert result.returncode == 0, result.stderr
+		assert json.loads(result.stdout)["git"] == "omitted"
+		assert not (dest / ".git").exists()
+		assert not (dest / ".env").exists()
+
+
+def test_read_snapshot_omits_unreachable_fetched_commit(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	source = tmp_path / "source"
+	for checkout in (repo, source):
+		checkout.mkdir()
+		subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+		(checkout / "safe.txt").write_text("safe\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(checkout), "add", "safe.txt"], check=True)
+		subprocess.run(["git", "-C", str(checkout), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "safe"], check=True)
+	(source / ".env").write_text("token=hidden\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(source), "add", ".env"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "secret"], check=True)
+	subprocess.run(["git", "-C", str(repo), "fetch", "-q", "--no-tags", str(source), "HEAD"], check=True)
+	dest = tmp_path / "snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["git"] == "omitted"
+	assert not (dest / ".git").exists()
+	assert (dest / "safe.txt").read_text(encoding="utf-8") == "safe\n"
+
+
 def test_read_snapshot_hides_claude_md_from_git_history(tmp_path: Path) -> None:
 	repo = tmp_path / "repo"
 	repo.mkdir()
