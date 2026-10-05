@@ -140,6 +140,7 @@ single_pass_markers()
 single_pass_extensions()
 {
 	local comments_file="$1" audited_head="$2" checkout="$3" branch_ref="$4" count=0 extension_line extension_sha extension_lines extension_ancestor_rc
+	local -A single_pass_extension_seen=()
 	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] || [ ! -s "${comments_file}" ] \
 		|| [ "$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" != "${audited_head}" ]; then
 		return 1
@@ -155,6 +156,10 @@ single_pass_extensions()
 	while IFS= read -r extension_line; do
 		if [[ "${extension_line}" =~ ${SECURITY_PASS_EXTENSION_MARKER_RE} ]]; then
 			extension_sha="${BASH_REMATCH[1]}"
+			if [ -n "${single_pass_extension_seen[${extension_sha}]:-}" ]; then
+				continue
+			fi
+			single_pass_extension_seen["${extension_sha}"]=1
 			if ! git -C "${checkout}" cat-file -e "${extension_sha}^{commit}" 2>/dev/null; then
 				if [ "$(git -C "${checkout}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
 					# An absent object in a shallow clone may be a real fix outside
@@ -170,6 +175,15 @@ single_pass_extensions()
 			fi
 			extension_ancestor_rc=0
 			git -C "${checkout}" merge-base --is-ancestor "${extension_sha}" "${audited_head}" 2>/dev/null || extension_ancestor_rc=$?
+			if [ "${extension_ancestor_rc}" -eq 1 ] && [ "$(git -C "${checkout}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+				# An existing commit can still have an incomplete path to HEAD.
+				if [ "${SINGLE_PASS_STATUS_ONLY}" = "true" ] || ! git check-ref-format --branch "${branch_ref}" >/dev/null 2>&1 \
+					|| ! git -C "${checkout}" fetch --no-tags --unshallow origin "+refs/heads/${branch_ref}:refs/remotes/origin/${branch_ref}" 2>/dev/null; then
+					return 1
+				fi
+				extension_ancestor_rc=0
+				git -C "${checkout}" merge-base --is-ancestor "${extension_sha}" "${audited_head}" 2>/dev/null || extension_ancestor_rc=$?
+			fi
 			case "${extension_ancestor_rc}" in
 				0) count=$((count + 1)) ;;
 				1) ;;
@@ -331,7 +345,7 @@ single_pass_gate()
 				if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ]; then
 					body="## Single-issue security pass exhausted
 
-The security audit of this PR has used ${cycles_used} of ${effective_max} cycles, so auto-merge stays off. The PR is labelled \`ai:security-pass-failed\`, and the review-blocked judge decides next: merge (open findings stay as issues and are fixed against the default branch), fix, or close."
+The security audit of this PR has used ${cycles_used} of ${effective_max} cycles, so auto-merge stays off. The PR is labelled \`ai:security-pass-failed\`. The review-blocked judge may merge with medium/low findings open, fix blocking high/critical/unrated findings while retries remain, or hold the PR for a clean audit or human decision."
 				else
 					body="## Single-issue security pass: unaudited head
 
