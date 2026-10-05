@@ -2650,6 +2650,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   closes the newly created fix-up instead of leaving an untracked open issue;
   a failed close is logged for recovery. A failed scope edit cannot be followed by `/approved`. A PR `reissue`
   creates a standalone replacement before closing the PR;
+  a standalone `ai:security` issue reissue copies its finding marker and label
+  to the replacement before closing the original. If the marker is invalid or
+  missing, or the issue belongs to a project, the original finding stays open.
   PR project fix-ups and verdict history use the GitHub-reported
   `orchestrator/project-<n>` base. Issue project fix-ups require the
   `ai:orchestrator-managed` label and membership in the project's state;
@@ -2671,6 +2674,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   hours after the last round, the judge closes it as not planned with a
   report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
   poller then sets the state to `abandoned` and closes the tracking issue.
+  An `ai:security` finding instead remains open with its block label and
+  `ai:unblock-closed`, receives an explanation and a CRITICAL alert; the scan
+  skips it until a linked fix is verified merged or a person triages it.
   For an issue or PR, a failed close leaves the terminal label unset so a
   later scan can retry. If the close succeeds but adding the label fails,
   the judge logs the failure and still sends the CRITICAL alert; the closed

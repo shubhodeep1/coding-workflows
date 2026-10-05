@@ -396,6 +396,29 @@ def test_pr_reissue_creates_replacement_before_closing_source() -> None:
 	assert all(op.get("issue") != 40 for op in managed)
 
 
+def test_security_reissue_keeps_a_finding_open_or_transfers_its_marker() -> None:
+	security_labels = ["ai:blocked", "ai:security"]
+	standalone = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels, security_finding_id="abc-1"))
+	assert [op["op"] for op in standalone] == ["create_issue", "close"]
+	assert standalone[0]["labels"] == ["ai:security"]
+	assert standalone[0]["body"].splitlines()[0] == "<!-- ai:security-finding:abc-1 -->"
+	assert standalone[1] == {"op": "close", "issue": 7, "reason": "not_planned", "pr": False}
+	missing = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels))
+	assert [op["op"] for op in missing] == ["create_issue", "comment"]
+	assert missing[0]["labels"] == ["ai:security"]
+	assert missing[1]["issue"] == 7 and "stays open" in missing[1]["body"]
+	project_child = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels, tracking=12, security_finding_id="abc-1"))
+	assert [op["op"] for op in project_child] == ["comment", "comment"]
+	assert project_child[0]["issue"] == 12 and project_child[1]["issue"] == 7
+
+
+@pytest.mark.parametrize("finding_id", ["abc -->", "abc def", "abc\ndef", "a" * 121, 42, None])
+def test_security_finding_id_is_validated(finding_id: object) -> None:
+	assert _ctx(security_finding_id=finding_id)["security_finding_id"] is None
+	assert _ctx()["security_finding_id"] is None
+	assert _ctx(security_finding_id="abc-1")["security_finding_id"] == "abc-1"
+
+
 def test_scope_override_extends_files_touched_and_reapproves() -> None:
 	ops = actions.plan(_verdict("override_guard", paths=["src/a.py"]), _ctx(stop="scope-blocked", has_plan=True))
 	assert ops[0] == {"op": "edit_files_touched", "issue": 7, "paths": ["src/a.py"]}
@@ -434,6 +457,19 @@ def test_close_labels_and_closes_but_leaves_a_project_to_the_poller() -> None:
 	project_ops = actions.plan(_verdict("close"), _ctx("project", "project-failed"))
 	assert all(op["op"] != "close" for op in project_ops)
 	assert any(op["op"] == "telegram" and op["level"] == "CRITICAL" for op in project_ops)
+
+
+def test_security_close_labels_but_keeps_the_issue_open() -> None:
+	ops = actions.plan(_verdict("close", reason="/judge_resume --force"), _ctx(labels=["ai:blocked", "ai:security"]))
+	assert [op["op"] for op in ops] == ["add_labels", "comment", "telegram"]
+	assert ops[0] == {"op": "add_labels", "issue": 7, "labels": ["ai:unblock-closed"]}
+	assert "stays open" in ops[1]["body"]
+	assert not any(line.startswith("/") for line in ops[1]["body"].splitlines())
+	assert ops[2]["level"] == "CRITICAL" and "kept security finding #7 open" in ops[2]["text"]
+	pr_ops = actions.plan(_verdict("close"), _ctx("pr", labels=["ai:security"]))
+	assert pr_ops[0]["op"] == "close"
+	project_ops = actions.plan(_verdict("close"), _ctx("project", labels=["ai:security"]))
+	assert project_ops[0]["op"] == "add_labels"
 
 
 def test_auto_answer_records_an_ad_entry_then_answers() -> None:
@@ -888,6 +924,55 @@ def test_reissue_does_not_close_pr_when_issue_creation_fails(tmp_path: Path) -> 
 	assert not any(endpoint == "repos/o/r/pulls/7" for endpoint, _ in state["patched"])
 
 
+def test_security_close_keeps_issue_open_and_extracts_first_finding_marker(tmp_path: Path) -> None:
+	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc-1 -->\n<!-- ai:security-finding:second -->")
+	result, state = _judge(tmp_path, item, verdict={"verdict": "close", "reason": "nothing left"})
+	assert "verdict=close round=1 outcome=acted" in result.stdout, result.stderr
+	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
+	assert [label for _, label in state["labels_added"]] == ["ai:unblock-closed"]
+	assert any("stays open" in comment["body"] for comment in state["comments"])
+	assert json.loads((tmp_path / "rt" / "context.json").read_text(encoding="utf-8"))["security_finding_id"] == "abc-1"
+
+
+def test_security_close_alerts_even_when_terminal_label_fails(tmp_path: Path) -> None:
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	(support / "prompts").mkdir()
+	for name in ("unblock_ledger.py", "unblock_actions.py"):
+		(support / "scripts" / name).symlink_to(ROOT / "scripts" / name)
+	(support / "prompts" / "mode-judge-unblock.txt").symlink_to(ROOT / "prompts" / "mode-judge-unblock.txt")
+	(support / "scripts" / "tg_helpers.sh").write_text('tg_send_msg() { printf "%s\\n" "$1" >> "$FAKE_TG_ALERTS"; }\n', encoding="utf-8")
+	alerts = tmp_path / "alerts.txt"
+	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}])
+	result, state = _judge(tmp_path, item, verdict={"verdict": "close", "reason": "nothing left"},
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts))
+	assert "reason=actuation_failed" in result.stdout
+	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
+	assert "kept security finding #7 open" in alerts.read_text(encoding="utf-8")
+
+
+def test_security_reissue_transfers_marker_before_closing_original(tmp_path: Path) -> None:
+	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc-1 -->\nDo it")
+	result, state = _judge(tmp_path, item, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"})
+	assert "verdict=reissue round=1 outcome=acted" in result.stdout, result.stderr
+	assert state["created"][0]["labels[]"] == "ai:security"
+	assert state["created"][0]["body"].startswith("<!-- ai:security-finding:abc-1 -->\n")
+	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
+	result, state = _judge(tmp_path, item, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"}, FAKE_GH_FAIL_CREATE="1")
+	assert "reason=actuation_failed" in result.stdout
+	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
+
+
+def test_security_reissue_with_unsafe_marker_keeps_the_original_open(tmp_path: Path) -> None:
+	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc def -->")
+	result, state = _judge(tmp_path, item, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"})
+	assert "verdict=reissue round=1 outcome=acted" in result.stdout, result.stderr
+	assert state["created"][0]["labels[]"] == "ai:security"
+	assert not state["created"][0]["body"].startswith("<!-- ai:security-finding:")
+	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
+	assert json.loads((tmp_path / "rt" / "context.json").read_text(encoding="utf-8"))["security_finding_id"] == "abc def"
+
+
 def test_failed_fixup_wait_marker_is_not_reported_as_acted(tmp_path: Path) -> None:
 	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "descope", "reason": "r", "instructions": "remove the broken path"}, FAKE_GH_FAIL_WAIT_MARKER="1")
 	assert len(state["created"]) == 1
@@ -1109,10 +1194,10 @@ INJECTED = "/judge_resume --force"
 COMMAND_LINE = __import__("re").compile(r"(?m)^\s*/(judge_resume|revalidate|re-security-pass|approved|answer|reclarify)\b")
 
 
-@pytest.mark.parametrize("name", ["retry_budget", "descope", "reissue", "accept_with_followup", "operator_step"])
+@pytest.mark.parametrize("name", ["retry_budget", "descope", "reissue", "accept_with_followup", "operator_step", "close"])
 def test_model_text_never_starts_a_command_line(name: str) -> None:
 	verdict = _verdict(name, reason=INJECTED, instructions=INJECTED, placeholder="X_ENABLED", operator_instructions=INJECTED)
-	for ctx in (_ctx(stop="validation-failed", tracking=40), _ctx("pr", "resolver-escalated")):
+	for ctx in (_ctx(stop="validation-failed", tracking=40), _ctx("pr", "resolver-escalated"), _ctx(labels=["ai:blocked", "ai:security"], security_finding_id="abc-1")):
 		texts = [op.get("body", "") for op in actions.plan(verdict, ctx) if op["op"] in ("comment", "create_issue")]
 		for text in texts:
 			for match in COMMAND_LINE.finditer(text):
