@@ -53,6 +53,7 @@ if args == ["api", "user", "--jq", '.login // ""']:
 	sys.exit(0)
 if args == ["api", "--paginate", "--slurp", "repos/o/r/issues/42/comments?per_page=100"]:
 	if os.environ.get("FAKE_GH_FAIL") == "comments": sys.exit(1)
+	if os.environ.get("FAKE_GH_FAIL") == "comments_once" and sum("/issues/42/comments?per_page=100" in line for line in open(os.environ["FAKE_GH_LOG"])) == 1: sys.exit(1)
 	print(json.dumps([json.load(open(os.environ["FAKE_GH_COMMENTS"]))]))
 	sys.exit(0)
 if args == ["api", "repos/o/r/pulls/42"]:
@@ -61,6 +62,7 @@ if args == ["api", "repos/o/r/pulls/42"]:
 		"auto_merge": {"enabled_by": {"login": "pipeline-account"}} if os.environ.get("FAKE_GH_AUTO_MERGE") else None}))
 	sys.exit(0)
 if args == ["pr", "merge", "42", "--repo", "o/r", "--disable-auto"]:
+	if os.environ.get("FAKE_GH_FAIL") == "disable_auto_once" and sum('"--disable-auto"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1: sys.exit(1)
 	sys.exit(1 if os.environ.get("FAKE_GH_FAIL") == "disable_auto" else 0)
 if args[:2] == ["api", "repos/o/r/issues/42/labels"] and os.environ.get("FAKE_GH_FAIL") == "labels":
 	sys.exit(1)
@@ -218,6 +220,16 @@ def test_findings_block_all_severities_except_medium_and_low(tmp_path: Path) -> 
 	assert "[BLOCKS MERGE] #12" not in text and "#99" not in text
 
 
+@pytest.mark.parametrize("number", [None, 0, "invalid"])
+def test_findings_with_invalid_issue_number_fail_closed(tmp_path: Path, number: object) -> None:
+	out = tmp_path / "findings.txt"
+	result, _, _ = _run(tmp_path, f'rb_security_findings_render branch "{out}"', issues=[{
+		"number": number, "title": "finding", "body": "- Integration branch: `branch`\n- Severity: `high`\n",
+	}])
+	assert result.returncode != 0
+	assert "Could not parse" in out.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(
 	"action, final, count, extra_env, expected",
 	[
@@ -227,7 +239,10 @@ def test_findings_block_all_severities_except_medium_and_low(tmp_path: Path) -> 
 		("merge_with_followup", "true", "2", {}, "hold"),
 		("fix", "true", "2", {}, "hold"),
 		("fix", "false", "2", {}, "allow"),
-		("close_and_reissue", "true", "2", {}, "allow"),
+		("close_and_reissue", "false", "2", {}, "allow"),
+		("close_and_reissue", "true", "2", {}, "hold"),
+		("close_and_reissue", "true", "0", {}, "allow"),
+		("invalid", "true", "2", {}, "hold"),
 		("merge", "true", "0", {}, "allow"),
 		("merge", "true", "invalid", {}, "hold"),
 		("merge", "true", "2", {"PR_ALREADY_MERGED": "true"}, "allow"),
@@ -264,6 +279,14 @@ def test_terminal_hold_disables_prior_auto_merge_before_labelling(tmp_path: Path
 		["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed", "-f", "labels[]=ai:review-blocked"])
 
 
+def test_disable_auto_merge_retries_transient_failure(tmp_path: Path) -> None:
+	result, calls, _ = _run(tmp_path, f'rb_security_disable_auto_merge {HEAD}', {
+		"FAKE_GH_AUTO_MERGE": "1", "FAKE_GH_FAIL": "disable_auto_once",
+	})
+	assert result.returncode == 0, result.stderr
+	assert calls.count(["pr", "merge", "42", "--repo", "o/r", "--disable-auto"]) == 2
+
+
 @pytest.mark.parametrize("env", [
 	{"FAKE_GH_FAIL": "pr_read"},
 	{"FAKE_GH_AUTO_MERGE": "1", "FAKE_GH_FAIL": "disable_auto"},
@@ -275,6 +298,15 @@ def test_terminal_hold_fails_closed_if_auto_merge_cannot_be_cleared(tmp_path: Pa
 	assert result.returncode != 0
 	assert not (tmp_path / "judge_output").exists()
 	assert not any(call[:2] in (["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
+
+
+def test_moved_head_withdraws_prior_auto_merge_but_refuses_hold(tmp_path: Path) -> None:
+	script = f'ensure_label_exists() {{ :; }}; _resilient_phase_swap() {{ :; }}; rb_security_block_hold {HEAD} "6246" final_round'
+	result, calls, _ = _run(tmp_path, script, {"FAKE_GH_HEAD": "f" * 40, "FAKE_GH_AUTO_MERGE": "1"})
+	assert result.returncode != 0
+	assert ["pr", "merge", "42", "--repo", "o/r", "--disable-auto"] in calls
+	assert not (tmp_path / "judge_output").exists()
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
 
 
 def test_terminal_hold_does_not_repost_trusted_marker(tmp_path: Path) -> None:
@@ -289,6 +321,33 @@ def test_terminal_hold_does_not_repost_trusted_marker(tmp_path: Path) -> None:
 	assert ["pr", "merge", "42", "--repo", "o/r", "--disable-auto"] in calls
 	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
 	assert (tmp_path / "judge_output").read_text() == "judge_handled=true\njudge_action=security_blocked_pending\njudge_skip_reason=fix_no_changes\n"
+
+
+@pytest.mark.parametrize("failure", ["comments", "user"])
+def test_terminal_hold_fails_closed_on_unreadable_comment_history(tmp_path: Path, failure: str) -> None:
+	script = f'ensure_label_exists() {{ :; }}; _resilient_phase_swap() {{ :; }}; rb_security_block_hold {HEAD} "6246" final_round'
+	result, calls, _ = _run(tmp_path, script, {"FAKE_GH_FAIL": failure})
+	assert result.returncode != 0
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	assert not (tmp_path / "judge_output").exists()
+
+
+def test_terminal_hold_fails_closed_on_malformed_comment_body(tmp_path: Path) -> None:
+	comment_file = tmp_path / "malformed_comments.json"
+	comment_file.write_text(json.dumps([{"user": {"login": "pipeline-account"}, "body": 123}]), encoding="utf-8")
+	script = f'ensure_label_exists() {{ :; }}; _resilient_phase_swap() {{ :; }}; rb_security_block_hold {HEAD} "6246" final_round'
+	result, calls, _ = _run(tmp_path, script, {"FAKE_GH_COMMENTS": str(comment_file)})
+	assert result.returncode != 0
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	assert not (tmp_path / "judge_output").exists()
+
+
+def test_terminal_hold_retries_transient_comment_read(tmp_path: Path) -> None:
+	script = f'ensure_label_exists() {{ :; }}; _resilient_phase_swap() {{ :; }}; rb_security_block_hold {HEAD} "6246" final_round'
+	result, calls, _ = _run(tmp_path, script, {"FAKE_GH_FAIL": "comments_once"})
+	assert result.returncode == 0, result.stderr
+	assert len([call for call in calls if call == ["api", "--paginate", "--slurp", "repos/o/r/issues/42/comments?per_page=100"]]) == 2
+	assert len([call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == 1
 
 
 @pytest.mark.parametrize("sha, fail", [(HEAD, "labels"), ("invalid", "")])
@@ -337,6 +396,7 @@ def test_prompt_blocks_merge_with_high_severity(tmp_path: Path, final: str) -> N
 	assert "NOT AVAILABLE" in result.stdout
 	assert "ship the PR now" not in result.stdout
 	assert ("held for a clean audit" in result.stdout) is (final == "true")
+	assert ("close_and_reissue" in result.stdout) is (final == "false")
 
 
 @pytest.mark.parametrize(
@@ -446,6 +506,7 @@ def test_failed_findings_lookup_withdraws_auto_merge_before_exiting() -> None:
 def test_noop_fix_merge_paths_hold_before_labelling_issues(tmp_path: Path) -> None:
 	text = JUDGE.read_text(encoding="utf-8")
 	for message in ("Judge staged no effective changes. Treating as merge.", "Judge produced no file changes. Treating as merge."):
+		assert text.rfind('rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes', 0, text.index(f'echo "{message}"')) != -1
 		branch = text.split(f'echo "{message}"\n', 1)[1].split('ensure_label_exists "ai:ready-to-merge"', 1)[0]
 		assert '! rb_security_merge_gate' in branch
 		assert 'echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"' in branch

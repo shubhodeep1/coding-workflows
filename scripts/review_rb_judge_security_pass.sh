@@ -12,7 +12,7 @@
 #      default branch once this PR merges), fix for blocking findings (within
 #      MAX_REVIEW_BLOCKED_RETRIES; each security-mode judge fix posts an
 #      extension marker that grants one more audit cycle, so the fix is
-#      audited), or close_and_reissue. A final-round or no-change fix holds
+#      audited), or close_and_reissue before the final round. A final-round or no-change fix holds
 #      high/critical/unrated findings and withdraws prior auto-merge.
 #   2. Merge gate. A merge the judge decides outside security-exhaustion mode
 #      goes through the same security gate as a clean review: a clean audit
@@ -102,6 +102,7 @@ rb_security_findings_render()
 		  | select(type == "object" and (has("pull_request") | not))
 		  | select(field("Integration branch") == $branch)
 		]
+		| if any(.[]; (.number | type != "number") or .number <= 0) then error("invalid issue number") else . end
 		| {count: ([.[] | select(blocking)] | length),
 		   issues: [.[] | select(blocking) | .number | select(type == "number" and . > 0) | "#\(.)"],
 		   text: (if length == 0 then "(No open security-audit finding issues target this branch.)"
@@ -155,7 +156,9 @@ rb_security_prompt_section()
 		echo "- fix: push one bounded fix for the open findings. It earns one more"
 		echo "  security audit cycle, so the fix is audited before the PR merges."
 	fi
-	echo "- close_and_reissue: only if the approach is fundamentally wrong."
+	if [ "${is_final}" != "true" ] || [ "${blocking_count}" = "0" ]; then
+		echo "- close_and_reissue: only if the approach is fundamentally wrong."
+	fi
 	echo "=== END SECURITY PASS EXHAUSTED ==="
 }
 
@@ -165,13 +168,15 @@ rb_security_severity_block()
 {
 	local action="$1" is_final="$2" count="${RB_SECURITY_BLOCKING_COUNT:-0}" outcome="allow"
 	if [ "${RB_SECURITY_MODE:-false}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
-		&& [ "${action}" != "close_and_reissue" ] \
 		&& { ! [[ "${count}" =~ ^[0-9]+$ ]] || [ "${count}" -gt 0 ]; }; then
 		case "${action}" in
-			merge|merge_with_followup|fix)
-				if [ "${action}" != "fix" ] || [ "${is_final}" = "true" ]; then
-					if [ "${is_final}" = "true" ]; then outcome="hold"; else outcome="convert_fix"; fi
+			merge|merge_with_followup|fix|close_and_reissue)
+				if [ "${is_final}" = "true" ]; then
+					outcome="hold"
+				elif [ "${action}" != "fix" ] && [ "${action}" != "close_and_reissue" ]; then
+					outcome="convert_fix"
 				fi ;;
+			*) if [ "${is_final}" = "true" ]; then outcome="hold"; fi ;;
 		esac
 	fi
 	rb_security_log "mode=severity_block pr=${PR_NUMBER:-} action=${action} outcome=${outcome} blocking=${count}" >&2
@@ -183,25 +188,27 @@ rb_security_severity_block()
 # security hold. Never trust a marker posted by an unrelated account.
 rb_security_block_already_reported()
 {
-	local head_sha="$1" author comments marker
-	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
+	local head_sha="$1" author comments marker marker_match
+	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 2
 	if [ "${RB_SECURITY_BLOCK_MARKER_CHECKED_HEAD:-}" = "${head_sha}" ]; then
 		[ "${RB_SECURITY_BLOCK_MARKER_FOUND:-false}" = "true" ]
 		return $?
 	fi
 	RB_SECURITY_BLOCK_MARKER_CHECKED_HEAD=""
-	author="$(gh api user --jq '.login // ""' 2>/dev/null)" || return 1
-	[ -n "${author}" ] || return 1
-	comments="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" 2>/dev/null)" || return 1
+	RB_SECURITY_BLOCK_MARKER_FOUND="false"
+	author="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" || return 2
+	[ -n "${author}" ] || return 2
+	comments="$(gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" 2>/dev/null)" || return 2
 	marker="<!-- ai:single-issue-security-pass-blocked:v1 head=${head_sha} -->"
 	if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "array") and all(.[][]; type == "object")' <<< "${comments}" >/dev/null 2>&1; then
-		return 1
+		return 2
 	fi
-	RB_SECURITY_BLOCK_MARKER_CHECKED_HEAD="${head_sha}"
-	RB_SECURITY_BLOCK_MARKER_FOUND="false"
-	if jq -e --arg author "${author}" --arg marker "${marker}" \
+	marker_match="$(jq -r --arg author "${author}" --arg marker "${marker}" \
 		'[.[][] | select(.user.login == $author and ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | gsub("^\\s+|\\s+$"; "")) == $marker)] | length > 0' \
-		<<< "${comments}" >/dev/null 2>&1; then
+		<<< "${comments}" 2>/dev/null)" || return 2
+	[ "${marker_match}" = "true" ] || [ "${marker_match}" = "false" ] || return 2
+	RB_SECURITY_BLOCK_MARKER_CHECKED_HEAD="${head_sha}"
+	if [ "${marker_match}" = "true" ]; then
 		RB_SECURITY_BLOCK_MARKER_FOUND="true"
 		return 0
 	fi
@@ -217,18 +224,19 @@ rb_security_disable_auto_merge()
 	# No existing read covers the live enrollment at this point; do not use
 	# the earlier PR payload, which can predate the judge's assessment.
 	live_pr_json="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null)" || return 1
-	if ! jq -e --arg sha "${head_sha}" '.state == "open" and .head.sha == $sha and has("auto_merge") and (.auto_merge == null or (.auto_merge | type == "object"))' <<< "${live_pr_json}" >/dev/null 2>&1; then
+	if ! jq -e '.state == "open" and (.head.sha | type == "string") and has("auto_merge") and (.auto_merge == null or (.auto_merge | type == "object"))' <<< "${live_pr_json}" >/dev/null 2>&1; then
 		return 1
 	fi
 	if jq -e '.auto_merge != null' <<< "${live_pr_json}" >/dev/null 2>&1; then
-		# The read above cannot disable an enrollment; this is the one required write.
-		gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto >/dev/null 2>&1 || return 1
+		# Withdraw even if the head moved: an enrollment on the new head is not audited by this judge.
+		gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto >/dev/null 2>&1 || return 1
 	fi
+	jq -e --arg sha "${head_sha}" '.head.sha == $sha' <<< "${live_pr_json}" >/dev/null 2>&1
 }
 
 rb_security_block_hold()
 {
-	local head_sha="$1" issue_numbers="$2" reason="$3" issue_number body
+	local head_sha="$1" issue_numbers="$2" reason="$3" issue_number body marker_rc
 	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
 	case "${reason}" in final_round|fix_no_changes) ;; *) return 1 ;; esac
 	if ! rb_security_disable_auto_merge "${head_sha}"; then
@@ -246,7 +254,13 @@ rb_security_block_hold()
 		[[ "${issue_number}" =~ ^[0-9]+$ ]] || continue
 		_resilient_phase_swap "${issue_number}" "ai:review-blocked" || true
 	done <<< "${issue_numbers}"
-	if ! rb_security_block_already_reported "${head_sha}"; then
+	marker_rc=0
+	rb_security_block_already_reported "${head_sha}" || marker_rc=$?
+	if [ "${marker_rc}" -ne 0 ] && [ "${marker_rc}" -ne 1 ]; then
+		echo "::error::Could not verify existing security hold comments on PR #${PR_NUMBER}."
+		return 1
+	fi
+	if [ "${marker_rc}" -eq 1 ]; then
 		body="## Review-Blocked Judge — security findings block merge
 
 Open high/critical/unrated security findings (${RB_SECURITY_BLOCKING_ISSUES:-unknown}) block this PR. It stays open until a clean audit of its current head or a human decision. A stale finding already addressed by a fix must be verified and closed before merging.
