@@ -322,7 +322,8 @@ def test_status_does_not_fetch_missing_shallow_extension(tmp_path: Path) -> None
 
 
 def test_shallow_existing_extension_unshallows_before_exhaustion(tmp_path: Path) -> None:
-	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	# Cycle 5 audited the pre-fix head; the extension fix is on the new HEAD.
+	comments = [_comment(_marker("findings", f"{5:040x}", 5)), _comment(_extension(OLD), comment_id=9)]
 	marker_file = tmp_path / "unshallowed"
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={
 		"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_ANCESTORS": OLD,
@@ -331,6 +332,13 @@ def test_shallow_existing_extension_unshallows_before_exhaustion(tmp_path: Path)
 	assert marker_file.exists() and output == "hold=true\n"
 	assert "outcome=dispatched cycle=6" in result.stdout
 	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+
+
+def test_extension_does_not_reaudit_head_with_findings(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_ANCESTORS": OLD})
+	assert output == "hold=true\n" and "reason=awaiting_followups" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
 @pytest.mark.parametrize("mode", ["gate", "status", "report"])
