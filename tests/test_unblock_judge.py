@@ -136,7 +136,7 @@ def _decision(stop: str = "scope-blocked") -> dict:
 	return ledger.decide(7, stop, FP, [], None, NOW)
 
 
-@pytest.mark.parametrize("path", [".github/workflows/ci.yml", ".claude/settings.json", "scripts/x.sh", "scripts", "./scripts/y.py"])
+@pytest.mark.parametrize("path", ["scripts/x.sh", "scripts", "./scripts/y.py"])
 def test_override_never_covers_protected_paths_in_coding_workflows(path: str) -> None:
 	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
 	with pytest.raises(ledger.UsageError):
@@ -223,13 +223,27 @@ def test_destructive_override_refuses_canonical_sources_everywhere() -> None:
 
 @pytest.mark.parametrize("path", [
 	".github/workflows/ci.yml", ".github/actions/x/action.yml", ".claude/settings.json",
-	"workflow-templates/ai-review.yml", ".GitHub/workflows/x.yml", ".github",
+	"workflow-templates/ai-review.yml", ".github/ai/claude_engine.json",
+	".GitHub/workflows/x.yml", ".Claude/settings.json", ".github", ".github/",
+	"workflow-templates", "./.github/workflows/x.yml",
 ])
-def test_destructive_override_refuses_protected_automation_in_consumer_repos(path: str) -> None:
+@pytest.mark.parametrize("stop", ["scope-blocked", "destructive-blocked"])
+@pytest.mark.parametrize("repo", ["acme/app", "shubhodeep1/coding-workflows"])
+def test_override_refuses_protected_automation_in_every_repo(path: str, stop: str, repo: str) -> None:
 	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
 	with pytest.raises(ledger.UsageError, match="protected automation path"):
-		ledger.validate(verdict, _decide("destructive-blocked"), "acme/app")
-	# A consumer may still need a scope override to edit its own automation.
+		ledger.validate(verdict, _decide(stop), repo)
+
+
+def test_scope_override_refuses_a_mixed_list_without_partial_approval() -> None:
+	verdict = {"verdict": "override_guard", "reason": "audited", "paths": ["src/a.py", ".github/actions/a/action.yml"]}
+	with pytest.raises(ledger.UsageError, match="protected automation path"):
+		ledger.validate(verdict, _decide("scope-blocked"), "o/consumer")
+
+
+@pytest.mark.parametrize("path", ["src/a.py", "docs/github.md", "my.github/x", "scripts/x.sh", "prompts/x.txt"])
+def test_consumer_scope_override_still_accepts_non_automation_paths(path: str) -> None:
+	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
 	assert ledger.validate(verdict, _decide("scope-blocked"), "o/consumer")["paths"] == [path]
 
 
