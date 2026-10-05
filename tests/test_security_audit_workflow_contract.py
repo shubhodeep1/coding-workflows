@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -397,7 +398,10 @@ def test_single_issue_report_refuses_modified_support() -> None:
 		subprocess.run(["git", "-C", str(workspace), "add", "scripts"], check=True)
 		subprocess.run(["git", "-C", str(workspace), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "support"], check=True)
 		sha = subprocess.check_output(["git", "-C", str(workspace), "rev-parse", "HEAD"], text=True).strip()
-		env = dict(os.environ, GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=td, AUDIT_DATA_SHA=sha, SECURITY_PASS_PR_NUMBER="9", SUPPORT_SHA=sha)
+		manifest = subprocess.check_output(["sha256sum", "scripts/review_single_issue_security_pass.sh"], cwd=workspace, text=True).strip()
+		(Path(td) / "audit_support_manifest.txt").write_text(manifest + "\n", encoding="utf-8")
+		support_scripts_sha256 = hashlib.sha256((manifest + "\n").encode("utf-8")).hexdigest()
+		env = dict(os.environ, GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=td, AUDIT_DATA_SHA=sha, SECURITY_PASS_PR_NUMBER="9", SUPPORT_SHA=sha, SUPPORT_SCRIPTS_SHA256=support_scripts_sha256)
 		env.pop("BASH_ENV", None)
 		def run_report() -> subprocess.CompletedProcess:
 			return subprocess.run(["bash", "--noprofile", "--norc", "-e"], input=step["run"], text=True, cwd=workspace, env=env, capture_output=True, check=False)

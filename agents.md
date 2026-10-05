@@ -235,7 +235,7 @@ loops with unquoted `gh api` arguments still prompt; the two hooks must stay
 byte-identical (`tests/test_gh_api_write_guard.py`). Shell-rewrite hazards
 inside a loop prompt even when the loop counter is not expanded.
 
-Claude's read-profile Bash tool uses `scripts/claude_engine.py read-guard` to
+Claude's read-profile Bash tool uses `scripts/claude_engine.py guard-read-bash` to
 reject shell control syntax and write-capable git options, including abbreviated
 `--output` and `git grep -O`. The security audit also strips credentials from
 its model call and fingerprints the trusted `scripts/` tree before running its

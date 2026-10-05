@@ -704,7 +704,8 @@ if [ "${heal_claude_rc}" -ne 75 ]; then
 		exit 86
 	fi
 	# The model read attacker-controlled job logs. Do not run any more
-	# support code from this checkout if its approved contents moved.
+	# support code from this checkout if its approved contents moved. The
+	# workflow captures HEAL_SUPPORT_SHA before invoking this internal helper.
 	if ! heal_support_status="$(git status --porcelain --untracked-files=all 2>/dev/null)" ||
 	   [ -z "${HEAL_SUPPORT_SHA:-${GITHUB_SHA:-}}" ] ||
 	   [ "$(git rev-parse HEAD 2>/dev/null)" != "${HEAL_SUPPORT_SHA:-${GITHUB_SHA:-}}" ] ||

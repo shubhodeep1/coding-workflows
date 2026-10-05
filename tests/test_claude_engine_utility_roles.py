@@ -149,6 +149,11 @@ def _run_heal_block(tmp_path: Path, *, resolved: str, mode: str) -> tuple[subpro
 	codex.write_text('#!/usr/bin/env bash\necho "codex $*" >> "${CALLS}.codex"\necho "codex answer"\n', encoding="utf-8")
 	codex.chmod(0o755)
 	(tmp_path / "prompt.txt").write_text("diagnose\n", encoding="utf-8")
+	(tmp_path / ".gitignore").write_text("calls*\ndiag.md\ncodex_log.txt\n", encoding="utf-8")
+	subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+	subprocess.run(["git", "-C", str(tmp_path), "add", "scripts", "bin", "prompt.txt", ".gitignore"], check=True)
+	subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "support"], check=True)
+	heal_support_sha = subprocess.check_output(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True).strip()
 	calls = tmp_path / "calls"
 	script = (
 		"set -euo pipefail\n"
@@ -157,7 +162,7 @@ def _run_heal_block(tmp_path: Path, *, resolved: str, mode: str) -> tuple[subpro
 		+ _heal_block()
 		+ 'echo "reason=${DIAGNOSIS_FALLBACK_REASON}"\n'
 	)
-	env = dict(os.environ, CALLS=str(calls), MODE=mode, GH_TOKEN="secret", AI_ENGINE_RESOLVED_WORKFLOW_HEAL=resolved,
+	env = dict(os.environ, CALLS=str(calls), MODE=mode, GH_TOKEN="secret", HEAL_SUPPORT_SHA=heal_support_sha, AI_ENGINE_RESOLVED_WORKFLOW_HEAL=resolved,
 		PATH=f"{bin_dir}:{os.environ['PATH']}")
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
 	return proc, (calls.read_text(encoding="utf-8") if calls.exists() else ""), (Path(f"{calls}.codex").read_text(encoding="utf-8") if Path(f"{calls}.codex").exists() else "")
