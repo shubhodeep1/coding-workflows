@@ -22,6 +22,10 @@ stdout, diagnostics to stderr):
   * ``settings --checkout DIR --out FILE [--profile P] [--allow-workflow-edits]``
     — render ``scripts/claude_settings.json.tmpl`` (the P5 permission policy)
     for one run.
+  * ``guard-read-bash`` — reject unsafe read-profile Bash calls from a
+    Claude Code PreToolUse JSON payload on stdin (deny JSON or no output).
+  * ``support-lock --manifest FILE --workdir DIR`` / ``support-verify`` /
+    ``support-unlock`` — lock and check trusted support during read runs.
   * ``read-guard`` — check a read-profile Bash PreToolUse payload from stdin.
   * ``trust --workdir DIR [--home H]`` — mark DIR trusted in ``~/.claude.json``
     (spike S10: until then the CLI ignores ``permissions.allow``).
@@ -47,11 +51,15 @@ no result); 2 invalid arguments or input.
 from __future__ import annotations
 
 import argparse
+import errno
+import hashlib
 import json
 import math
 import os
 import re
 import shlex
+import stat
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -153,9 +161,9 @@ USAGE_LIMIT_TEXT_RE = re.compile(
 # `timeout` sends SIGTERM (exit 124); its --kill-after sends SIGKILL (137).
 TIMEOUT_EXIT_CODES = (124, 137)
 
-# Read-only roles may run these commands and nothing else in Bash. Plain
-# `gh api` reads require explicit guard approval, and ai_engine.sh strips the
-# write-capable runner credentials before the Claude child starts.
+# These prefix permissions are only an upper bound: guard-read-bash checks
+# exact subcommands and options before Bash can run them. If `gh api` is
+# allowed in a future policy, gh_api_write_guard.py must also approve it.
 READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Read",
 	"Grep",
@@ -169,9 +177,22 @@ READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Bash(gh pr view*)",
 	"Bash(gh pr diff*)",
 )
+READ_GIT_SUBCOMMANDS = ("log", "show", "diff", "status", "ls-files", "grep")
+READ_GH_SUBCOMMANDS = (("issue", "view"), ("pr", "view"), ("pr", "diff"), ("api",))
+READ_GIT_DANGEROUS_LONG = ("output", "open-files-in-pager", "ext-diff", "textconv")
+READ_GUARD_SUBCOMMAND = "guard-read-bash"
 # Defence in depth for #6217: these wildcard rules are not a substitute for
 # the read-guard hook, which checks abbreviated and clustered git options.
 READ_PROFILE_DENY: tuple[str, ...] = (
+	# read-profile-can-access-credential-files: defence in depth behind the isolated filesystem.
+	"Read(//proc/**)", "Grep(//proc/**)", "Glob(//proc/**)",
+	"Read(**/.git/config)", "Grep(**/.git/config)", "Glob(**/.git/config)",
+	"Read(**/.git-credentials)", "Grep(**/.git-credentials)",
+	"Read(**/.netrc)", "Grep(**/.netrc)",
+	"Read(~/.config/gh/**)", "Grep(~/.config/gh/**)", "Glob(~/.config/gh/**)",
+	"Read(~/.claude/.credentials.json)", "Grep(~/.claude/.credentials.json)",
+	"Read(**/claude-pool/**)", "Grep(**/claude-pool/**)", "Glob(**/claude-pool/**)",
+	"Bash(git * --no-index*)",
 	# #6217: git --output can overwrite support and Actions command files.
 	"Bash(git * --ou*)",
 	# #6217: diff drivers can execute attacker-controlled commands.
@@ -184,7 +205,7 @@ READ_PROFILE_DENY: tuple[str, ...] = (
 	"Bash(git grep* --op*)",
 )
 READ_GUARD_SAFE_EXACT = frozenset(("--text",))
-_READ_GUARD_GIT_OPTIONS = ("--output", "--open-files-in-pager", "--ext-diff", "--textconv")
+_READ_GUARD_GIT_OPTIONS = ("--output", "--open-files-in-pager", "--ext-diff", "--textconv", "--no-index")
 PROFILE_TOOLS: dict[str, str] = {
 	"write": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
 	"read": "Read,Grep,Glob,Bash",
@@ -200,10 +221,89 @@ CONFIG_RELATIVE = Path(".github") / "ai" / "claude_engine.json"
 CHECKOUT_PLACEHOLDER = "__CHECKOUT__"
 GUARD_HOOK_PLACEHOLDER = "__GUARD_HOOK__"
 WORKFLOW_DENY_MARKER = "/.github/workflows/"
+READ_SANDBOX_DOCKERFILE = """FROM node:22.16.0-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends python3 git ca-certificates && rm -rf /var/lib/apt/lists/*
+ARG CLAUDE_CLI_VERSION
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}
+"""
 
 
 class EngineError(ValueError):
 	"""Invalid input to an engine subcommand."""
+
+
+def read_bash_denial(command: str) -> str | None:
+	"""Reject shell expansion and write-capable options before the Bash allow list.
+
+	This is deliberately narrower than Bash: no compound commands, expansion,
+	or global git options. Adjacent quoted fragments are joined like shell words.
+	"""
+	denial = "Read-only Bash permits only git log/show/diff/status/ls-files/grep or gh issue view/pr view/pr diff/api without shell expansion or output/pager options (use -a instead of --text)."
+	if not isinstance(command, str) or not command.strip() or any(c in command for c in "\x00\r\n"):
+		return denial
+	words: list[str] = []
+	word = ""
+	started = False
+	quote = ""
+	index = 0
+	while index < len(command):
+		char = command[index]
+		if quote == "'":
+			if char == "'":
+				quote = ""
+			else:
+				word += char
+		elif quote == '"':
+			if char == '"':
+				quote = ""
+			elif char in "$`":
+				return denial
+			elif char == "\\":
+				index += 1
+				if index >= len(command) or command[index] not in '$`"\\':
+					return denial
+				word += command[index]
+			else:
+				word += char
+		elif char in "'\"":
+			quote = char
+			started = True
+		elif char == "\\":
+			index += 1
+			if index >= len(command):
+				return denial
+			word += command[index]
+			started = True
+		elif char.isspace():
+			if started:
+				words.append(word)
+				word, started = "", False
+		elif char in ";&|<>()$`{*?[":
+			return denial
+		else:
+			word += char
+			started = True
+		index += 1
+	if quote:
+		return denial
+	if started:
+		words.append(word)
+	if len(words) < 2:
+		return denial
+	if words[0] == "git" and words[1] in READ_GIT_SUBCOMMANDS:
+		for option in words[2:]:
+			if option == "--":
+				break
+			if option.startswith("--"):
+				name = option[2:].split("=", 1)[0]
+				if not name or (not name.startswith("no-") and any(danger.startswith(name) for danger in READ_GIT_DANGEROUS_LONG)):
+					return denial
+			elif option.startswith("-") and not option.startswith("--") and "O" in option[1:]:
+				return denial
+		return None
+	if words[0] == "gh" and any(tuple(words[1:1 + len(form)]) == form for form in READ_GH_SUBCOMMANDS):
+		return None
+	return denial
 
 
 # --- support files ---------------------------------------------------------
@@ -464,7 +564,7 @@ def render_settings(
 	guard_hook: str,
 	profile: str = "write",
 	allow_workflow_edits: bool = False,
-	read_guard_hook: str = "",
+	read_guard_hook: str | None = None,
 ) -> dict[str, Any]:
 	"""Render the P5 permission policy for one run.
 
@@ -480,7 +580,7 @@ def render_settings(
 		raise EngineError(f"unknown profile: {profile!r}")
 	paths = [("checkout", checkout), ("guard hook", guard_hook)]
 	if profile == "read":
-		paths.append(("read guard hook", read_guard_hook))
+		paths.append(("read guard hook", read_guard_hook if read_guard_hook is not None else str((SCRIPT_DIR / "claude_engine.py").resolve())))
 	for name, value in paths:
 		if not value.startswith("/") or any(char in value for char in "\n\r\"'$`\\"):
 			raise EngineError(f"{name} must be an absolute path without quotes, '$', backticks or backslashes")
@@ -505,6 +605,9 @@ def render_settings(
 	settings = substitute(settings)
 	if profile == "read":
 		guard_command = f'python3 "{guard_hook}"'
+		read_guard_path = read_guard_hook if read_guard_hook is not None else str((SCRIPT_DIR / "claude_engine.py").resolve())
+		if not read_guard_path.startswith("/") or any(char in read_guard_path for char in "\n\r\"'$`\\"):
+			raise EngineError("read guard path is unsafe")
 		guard_found = False
 		for hook_group in settings.get("hooks", {}).get("PreToolUse", []):
 			for hook_entry in hook_group.get("hooks", []):
@@ -513,16 +616,16 @@ def render_settings(
 					guard_found = True
 		if not guard_found:
 			raise EngineError("read profile requires the gh api guard hook")
+		settings["hooks"]["PreToolUse"].append({
+			"matcher": "Bash",
+			"hooks": [{"type": "command", "command": f'python3 "{read_guard_path}" {READ_GUARD_SUBCOMMAND}', "timeout": 30}],
+		})
 	permissions = settings.setdefault("permissions", {})
 	deny = [rule for rule in permissions.get("deny", []) if isinstance(rule, str)]
 	if allow_workflow_edits:
 		deny = [rule for rule in deny if WORKFLOW_DENY_MARKER not in rule]
 	if profile == "read":
 		deny.extend(READ_PROFILE_DENY)
-		settings["hooks"]["PreToolUse"].append({
-			"matcher": "Bash",
-			"hooks": [{"type": "command", "command": f'python3 "{read_guard_hook}" read-guard', "timeout": 30}],
-		})
 	permissions["deny"] = deny
 	permissions["allow"] = list(READ_PROFILE_ALLOW) if profile == "read" else []
 	env = settings.get("env")
@@ -531,6 +634,149 @@ def render_settings(
 			if "TOKEN" in key.upper() or "KEY" in key.upper() or "SECRET" in key.upper():
 				raise EngineError(f"settings env must not carry credentials: {key}")
 	return settings
+
+
+def _support_lock_records(workdir: Path) -> dict[str, Any]:
+	"""Capture only trusted support trees, excluding a nested data checkout."""
+	def _abort_support_walk(exc: OSError) -> None:
+		raise exc
+
+	roots: list[str] = []
+	files: list[dict[str, Any]] = []
+	dirs: list[dict[str, Any]] = []
+	for candidate in support_roots():
+		root = candidate.resolve()
+		if not root.is_dir() or str(root) in roots:
+			continue
+		roots.append(str(root))
+		for subtree in ("scripts", "prompts", ".github", ".claude", "ai-memory"):
+			base = root / subtree
+			if not base.exists():
+				continue
+			if base.is_symlink() or not base.is_dir():
+				raise EngineError(f"unsafe support tree: {str(base)!r}")
+			for parent, child_dirs, child_files in os.walk(base, followlinks=False, onerror=_abort_support_walk):
+				parent_path = Path(parent)
+				if root in workdir.parents and (parent_path == workdir or workdir in parent_path.parents):
+					child_dirs[:] = []
+					continue
+				child_dirs[:] = sorted(name for name in child_dirs if name != ".git" and parent_path / name != workdir)
+				entries = sorted(child_dirs + [name for name in child_files if name != ".git"])
+				for name in entries:
+					if (parent_path / name).is_symlink():
+						raise EngineError(f"symlink in trusted support: {str(parent_path / name)!r}")
+				info = parent_path.lstat()
+				dirs.append({"root": str(root), "path": str(parent_path.relative_to(root)), "mode": stat.S_IMODE(info.st_mode), "entries": entries})
+				for name in sorted(name for name in child_files if name != ".git"):
+					path = parent_path / name
+					info = path.lstat()
+					if not stat.S_ISREG(info.st_mode):
+						raise EngineError(f"non-regular trusted support: {str(path)!r}")
+					files.append({"root": str(root), "path": str(path.relative_to(root)), "mode": stat.S_IMODE(info.st_mode), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+	return {"schema": "claude_support_lock.v1", "roots": roots, "workdir": str(workdir), "files": files, "dirs": dirs}
+
+
+def _load_support_manifest(path: Path) -> dict[str, Any]:
+	data = json.loads(path.read_text(encoding="utf-8"))
+	if not isinstance(data, dict) or data.get("schema") != "claude_support_lock.v1":
+		raise EngineError("invalid support lock manifest")
+	if not isinstance(data.get("roots"), list) or not isinstance(data.get("workdir"), str):
+		raise EngineError("incomplete support lock manifest")
+	for section in ("files", "dirs"):
+		if not isinstance(data.get(section), list):
+			raise EngineError("incomplete support lock manifest")
+	for entry in data["files"] + data["dirs"]:
+		if not isinstance(entry, dict) or entry.get("root") not in data.get("roots", []) or not isinstance(entry.get("path"), str):
+			raise EngineError("invalid support lock entry")
+		if Path(entry["path"]).is_absolute() or ".." in Path(entry["path"]).parts:
+			raise EngineError("unsafe support lock path")
+	return data
+
+
+def _locked_support_path(entry: dict[str, Any]) -> Path:
+	return Path(entry["root"]) / entry["path"]
+
+
+def _support_unlock_records(data: dict[str, Any]) -> None:
+	for entry in sorted(data["dirs"], key=lambda row: len(row["path"])) + data["files"]:
+		path = _locked_support_path(entry)
+		try:
+			if not path.is_symlink() and path.exists():
+				path.chmod(entry["mode"])
+		except FileNotFoundError:
+			continue
+		except OSError as exc:
+			if exc.errno != errno.EROFS or stat.S_IMODE(path.lstat().st_mode) != entry["mode"]:
+				raise
+
+
+def cmd_support_lock(args: argparse.Namespace) -> int:
+	manifest = Path(args.manifest)
+	data = _support_lock_records(Path(args.workdir).resolve())
+	# An exclusive, private manifest outside the support tree allows recovery if
+	# a chmod fails midway. Never follow a pre-existing symlink at this path.
+	with open(manifest, "x", encoding="utf-8", opener=lambda path, flags: os.open(path, flags, 0o400)) as handle:
+		json.dump(data, handle)
+		try:
+			for entry in data["files"] + sorted(data["dirs"], key=lambda row: -len(row["path"])):
+				path = _locked_support_path(entry)
+				try:
+					path.chmod(entry["mode"] & ~0o222)
+				except OSError as exc:
+					if exc.errno == errno.EROFS:
+						# A read-only mount is stronger than mode bits; it retains
+						# the original mode for the later verification.
+						entry["locked_mode"] = entry["mode"]
+					elif entry["mode"] & 0o222:
+						raise
+			handle.seek(0)
+			json.dump(data, handle)
+			handle.truncate()
+		except OSError:
+			_support_unlock_records(data)
+			raise
+	print(len(data["files"]))
+	return 0
+
+
+def cmd_support_verify(args: argparse.Namespace) -> int:
+	data = _load_support_manifest(Path(args.manifest))
+	bad = False
+	for entry in data["dirs"] + data["files"]:
+		path = _locked_support_path(entry)
+		try:
+			info = path.lstat()
+			if "entries" in entry:
+				valid = stat.S_ISDIR(info.st_mode) and sorted(
+					name for name in os.listdir(path) if name != ".git" and path / name != Path(data["workdir"])
+				) == entry["entries"]
+			else:
+				valid = stat.S_ISREG(info.st_mode) and hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"]
+			valid = valid and stat.S_IMODE(info.st_mode) == entry.get("locked_mode", entry["mode"] & ~0o222)
+		except OSError:
+			valid = False
+		if not valid:
+			print(f"::error::Trusted support changed: {str(path)!r}", file=sys.stderr)
+			bad = True
+	return int(bad)
+
+
+def cmd_support_unlock(args: argparse.Namespace) -> int:
+	_support_unlock_records(_load_support_manifest(Path(args.manifest)))
+	return 0
+
+
+def cmd_guard_read_bash(args: argparse.Namespace) -> int:
+	try:
+		payload = json.load(sys.stdin)
+		tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+		command = tool_input.get("command") if isinstance(tool_input, dict) else None
+		denial = read_bash_denial(command) if payload.get("tool_name") == "Bash" else "Read-only guard requires a Bash tool call."
+	except (ValueError, AttributeError):
+		denial = "Malformed read-only Bash hook input."
+	if denial:
+		_print_json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": denial}})
+	return 0
 
 
 def read_profile_bash_decision(command: str) -> tuple[str | None, str]:
@@ -966,6 +1212,365 @@ def cmd_settings(args: argparse.Namespace) -> int:
 	return 0
 
 
+_SNAPSHOT_BAD_PARTS = frozenset((".git", ".ai", ".codex", ".claude", ".ssh", ".codex-workflow-src", ".codex-workflow-src-main", ".env", ".git-credentials", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss", "secrets", "credentials", "__pycache__"))
+_SNAPSHOT_BAD_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
+
+
+def _snapshot_limit(name: str, default: int) -> int:
+	value = os.environ.get(name, str(default))
+	if re.fullmatch(r"[1-9][0-9]{0,11}", value):
+		return int(value)
+	print(f"::warning::invalid {name}; using default", file=sys.stderr)
+	return default
+
+
+def _snapshot_git(workdir: Path, *args: str) -> bytes:
+	return subprocess.check_output(["git", "-C", str(workdir), *args], stderr=subprocess.DEVNULL, env=_snapshot_git_env())
+
+
+def _snapshot_git_env() -> dict[str, str]:
+	# The job may export GIT_DIR / GIT_INDEX_FILE for its live checkout. In
+	# particular, read-tree must never write through that inherited index.
+	return {**{key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
+		"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+
+def _snapshot_copy(source_root: Path, target_root: Path, relative: Path, limits: list[int]) -> None:
+	parts = relative.parts
+	if not parts or any(part in (".", "..", "") for part in parts) or relative.is_absolute():
+		raise EngineError("unsafe snapshot path")
+	if any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or part.lower().endswith(_SNAPSHOT_BAD_SUFFIXES) for part in parts):
+		return
+	node = source_root
+	for index, part in enumerate(parts):
+		node = node / part
+		try:
+			info = node.lstat()
+		except FileNotFoundError:
+			return  # Tracked deletion in the working tree.
+		if stat.S_ISLNK(info.st_mode):
+			if index == len(parts) - 1:
+				return
+			raise EngineError("unsafe snapshot parent")
+		if index < len(parts) - 1 and not stat.S_ISDIR(info.st_mode):
+			raise EngineError("unsafe snapshot parent")
+	if not stat.S_ISREG(info.st_mode):
+		return
+	limits[0] += 1
+	limits[1] += info.st_size
+	if limits[0] > limits[2] or limits[1] > limits[3]:
+		raise EngineError("snapshot limit exceeded")
+	target = target_root.joinpath(*parts)
+	target.parent.mkdir(parents=True, exist_ok=True)
+	# Resolve every component relative to an open directory descriptor. A
+	# parent swapped to a symlink between lstat and open cannot escape the root.
+	parent_fd = os.open(source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+	try:
+		for part in parts[:-1]:
+			next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+			os.close(parent_fd)
+			parent_fd = next_fd
+		with os.fdopen(os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd), "rb") as src, target.open("xb") as dst:
+			opened = os.fstat(src.fileno())
+			if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+				raise EngineError("source changed during snapshot")
+			remaining = info.st_size
+			while remaining:
+				chunk = src.read(min(1048576, remaining))
+				if not chunk:
+					raise EngineError("source changed during snapshot")
+				dst.write(chunk)
+				remaining -= len(chunk)
+			if src.read(1) or os.fstat(src.fileno()).st_size != info.st_size:
+				raise EngineError("source changed during snapshot")
+	finally:
+		os.close(parent_fd)
+	os.chmod(target, 0o644)
+
+
+def _snapshot_copy_git_file(path: Path, target: Path) -> None:
+	info = path.lstat()
+	if not stat.S_ISREG(info.st_mode):
+		raise EngineError("unsafe git metadata")
+	with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as src, target.open("xb") as dst:
+		opened = os.fstat(src.fileno())
+		if (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+			raise EngineError("git metadata changed during snapshot")
+		remaining = info.st_size
+		while remaining:
+			chunk = src.read(min(1048576, remaining))
+			if not chunk:
+				raise EngineError("git metadata changed during snapshot")
+			dst.write(chunk)
+			remaining -= len(chunk)
+		if src.read(1) or os.fstat(src.fileno()).st_size != info.st_size:
+			raise EngineError("git metadata changed during snapshot")
+	os.chmod(target, 0o644)
+
+
+def _snapshot_metadata(workdir: Path, dest: Path, omit_root_claude_md: bool = False) -> tuple[str, str]:
+	common = Path(os.fsdecode(_snapshot_git(workdir, "rev-parse", "--path-format=absolute", "--git-common-dir")).strip())
+	gitdir = Path(os.fsdecode(_snapshot_git(workdir, "rev-parse", "--path-format=absolute", "--git-dir")).strip())
+	if (common / "objects/info/alternates").exists():
+		return "omitted", "alternates"
+	# A shared store can hold commits from detached sibling worktrees which
+	# are not covered by this checkout's refs or HEAD.
+	if (common / "worktrees").exists() and any((common / "worktrees").iterdir()):
+		return "omitted", "filtered_history"
+	# A filtered working tree is not safe if git show can recover the same
+	# path from an earlier commit. Retain history only when its paths pass
+	# the working-tree filter; never mount a partly filtered object store.
+	with subprocess.Popen(["git", "-C", str(workdir), "log", "--all", "HEAD", "--format=", "--name-only", "-z", "--no-renames"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_snapshot_git_env()) as history_process:
+		assert history_process.stdout is not None
+		history_pending = b""
+		while history_chunk := history_process.stdout.read(65536):
+			history_paths = (history_pending + history_chunk).split(b"\0")
+			history_pending = history_paths.pop()
+			if len(history_pending) > 1048576:
+				history_process.terminate()
+				return "omitted", "filtered_history"
+			for history_path in history_paths:
+				history_relative = Path(os.fsdecode(history_path.lstrip(b"\n")))
+				parts = history_relative.parts
+				if omit_root_claude_md and history_relative == Path("CLAUDE.md") or any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or part.lower().endswith(_SNAPSHOT_BAD_SUFFIXES) for part in parts):
+					history_process.terminate()
+					return "omitted", "filtered_history"
+		if history_pending or history_process.wait() != 0:
+			return "omitted", "filtered_history"
+	# Even a clean ref history cannot authorize copying unreferenced objects
+	# (such as a SHA-only fetch or a recently deleted secret-bearing commit).
+	with subprocess.Popen(["git", "-C", str(workdir), "fsck", "--unreachable", "--no-reflogs"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_snapshot_git_env()) as fsck_probe:
+		assert fsck_probe.stdout is not None
+		if fsck_probe.stdout.read(1):
+			fsck_probe.terminate()
+			return "omitted", "filtered_history"
+		if fsck_probe.wait() != 0:
+			return "omitted", "filtered_history"
+	meta = dest / ".git"
+	meta.mkdir()
+	# Copy only object/refs trees and HEAD; never git's credentials, hooks,
+	# alternates, worktrees or local settings. Reject symlinks in metadata.
+	for folder in ("objects", "refs"):
+		root = common / folder
+		if not root.is_dir() or root.is_symlink():
+			raise EngineError("unsafe git metadata")
+		for base, dirs, files in os.walk(root, followlinks=False):
+			for directory in dirs:
+				if (Path(base) / directory).is_symlink():
+					raise EngineError("unsafe git metadata")
+			for filename in files:
+				path = Path(base) / filename
+				if path.is_symlink() or not path.is_file():
+					raise EngineError("unsafe git metadata")
+				if filename.endswith(".lock") or path.relative_to(root).parts[:1] == ("info",):
+					continue
+				target = meta / folder / path.relative_to(root)
+				target.parent.mkdir(parents=True, exist_ok=True)
+				try:
+					os.link(path, target, follow_symlinks=False)
+				except OSError:
+					_snapshot_copy_git_file(path, target)
+				if target.is_symlink() or not target.is_file():
+					raise EngineError("unsafe git metadata")
+	for filename, root in (("HEAD", gitdir), ("packed-refs", common), ("shallow", common)):
+		path = root / filename
+		if path.exists():
+			if path.is_symlink() or not path.is_file():
+				raise EngineError("unsafe git metadata")
+			_snapshot_copy_git_file(path, meta / filename)
+	version = _snapshot_git(workdir, "config", "--local", "--get", "core.repositoryformatversion").decode().strip()
+	if version not in ("0", "1"):
+		raise EngineError("unsupported git repository format")
+	format_result = subprocess.run(["git", "-C", str(workdir), "config", "--local", "--get", "extensions.objectformat"], capture_output=True, check=False, env=_snapshot_git_env())
+	if format_result.returncode not in (0, 1):
+		raise EngineError("invalid git object format")
+	object_format = format_result.stdout.decode().strip()
+	if object_format and object_format not in ("sha1", "sha256"):
+		raise EngineError("invalid git object format")
+	(meta / "config").write_text(f"[core]\n\trepositoryformatversion = {version}\n\tbare = false\n" + (f"[extensions]\n\tobjectformat = {object_format}\n" if object_format else ""), encoding="ascii")
+	_snapshot_git(dest, "read-tree", "HEAD")
+	return "copied", ""
+
+
+def read_snapshot(workdir: Path, dest: Path, omit_root_claude_md: bool = False) -> dict[str, Any]:
+	if not workdir.is_absolute() or not dest.is_absolute() or not workdir.is_dir() or dest.exists() or workdir == dest or workdir in dest.parents:
+		raise EngineError("invalid snapshot directory")
+	if any(parent.is_symlink() for parent in (workdir, *workdir.parents)):
+		raise EngineError("unsafe snapshot root")
+	limits = [0, 0, _snapshot_limit("CLAUDE_READ_SNAPSHOT_MAX_FILES", 50000), _snapshot_limit("CLAUDE_READ_SNAPSHOT_MAX_BYTES", 1073741824)]
+	git_workdir = False
+	try:
+		git_workdir = _snapshot_git(workdir, "rev-parse", "--is-inside-work-tree").strip() == b"true"
+	except (OSError, subprocess.CalledProcessError):
+		pass
+	if not git_workdir and ((workdir / ".git").exists() or (workdir / ".git").is_symlink()):
+		raise EngineError("snapshot git metadata unavailable")
+	if git_workdir and _snapshot_git(workdir, "rev-parse", "--show-toplevel").strip() != os.fsencode(workdir):
+		raise EngineError("snapshot must start at git worktree root")
+	dest.mkdir(parents=True, mode=0o700)
+	try:
+		if git_workdir:
+			paths = list(dict.fromkeys(Path(os.fsdecode(path)) for path in _snapshot_git(workdir, "ls-files", "-z", "--cached").split(b"\0") if path))
+		else:
+			paths = []
+			for base, dirs, files in os.walk(workdir, followlinks=False):
+				dirs[:] = [item for item in dirs if item.lower() not in _SNAPSHOT_BAD_PARTS and not item.lower().startswith(".env") and not (Path(base) / item).is_symlink()]
+				paths.extend((Path(base) / item).relative_to(workdir) for item in files)
+		for path in paths:
+			if omit_root_claude_md and path == Path("CLAUDE.md"):
+				continue
+			_snapshot_copy(workdir, dest, path, limits)
+		git, reason = _snapshot_metadata(workdir, dest, omit_root_claude_md) if git_workdir else ("none", "")
+		return {"files": limits[0], "bytes": limits[1], "git": git, "reason": reason}
+	except (OSError, ValueError, subprocess.CalledProcessError):
+		# Partial snapshots must never be mounted.
+		raise EngineError("snapshot rejected") from None
+
+
+def cmd_read_sandbox_dockerfile(args: argparse.Namespace) -> int:
+	print(READ_SANDBOX_DOCKERFILE, end="")
+
+
+def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, git_objects_mount: str = "/git-objects") -> dict[str, Any]:
+	"""Copy safe source files into an empty, bounded snapshot, never following links.
+
+	The source's git configuration, hooks, index and object store are never
+	copied. A synthetic commit contains only the filtered snapshot files.
+	"""
+	if not git_objects_mount.startswith("/") or not re.fullmatch(r"/[A-Za-z0-9_/-]+", git_objects_mount):
+		raise EngineError("invalid git objects mount")
+	if not source.is_dir() or source.is_symlink() or not dest.is_dir() or dest.is_symlink() or any(dest.iterdir()):
+		raise EngineError("read snapshot requires a directory source and empty directory destination")
+	if source.resolve() == dest.resolve() or source.resolve() in dest.resolve().parents or dest.resolve() in source.resolve().parents:
+		raise EngineError("read snapshot source and destination must be separate")
+	def limit(name: str, default: int) -> int:
+		try:
+			value = int(os.environ.get(name, str(default)))
+		except ValueError as exc:
+			raise EngineError("invalid read snapshot limit") from exc
+		if value <= 0:
+			raise EngineError("invalid read snapshot limit")
+		return value
+
+	max_files = limit("CLAUDE_READ_SNAPSHOT_MAX_FILES", 50000)
+	max_bytes = limit("CLAUDE_READ_SNAPSHOT_MAX_BYTES", 1073741824)
+	git_env = {key: value for key, value in os.environ.items() if key not in (
+		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+		"GIT_TEMPLATE_DIR", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL",
+	) and not key.startswith("GIT_CONFIG_KEY_") and not key.startswith("GIT_CONFIG_VALUE_")}
+	git_env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TEMPLATE_DIR=os.devnull)
+
+	def git_run(repo: Path, *args: str, data: str | None = None, alternate: str = "") -> subprocess.CompletedProcess[str]:
+		env = dict(git_env)
+		if alternate:
+			env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = alternate
+		return subprocess.run(["git", "-C", str(repo), "-c", "core.fsmonitor=false",
+			"-c", "core.hooksPath=/dev/null", *args], input=data, text=True,
+			capture_output=True, env=env, check=True)
+
+	git_root = None
+	try:
+		root_result = git_run(source, "rev-parse", "--show-toplevel").stdout.strip()
+		if Path(root_result).resolve() == source.resolve():
+			git_root = source
+	except (subprocess.CalledProcessError, OSError):
+		pass
+	if git_root is None and (source / ".git").exists():
+		raise EngineError("read snapshot git metadata failed")
+	if git_root:
+		try:
+			entries = [os.fsdecode(item) for item in git_run(source, "ls-files", "-z", "--cached", "--others", "--exclude-standard").stdout.split("\0") if item]
+		except (subprocess.CalledProcessError, OSError) as exc:
+			raise EngineError("read snapshot file listing failed") from exc
+	else:
+		entries = []
+		for current, dirs, files in os.walk(source, followlinks=False):
+			dirs[:] = [name for name in dirs if not (Path(current) / name).is_symlink()]
+			entries.extend(str((Path(current) / name).relative_to(source)) for name in files)
+
+	files_copied = bytes_copied = 0
+	for entry in sorted(set(entries)):
+		parts = Path(entry).parts
+		if (not parts or Path(entry).is_absolute() or ".." in parts or
+			any(part.lower() in (".git", ".claude", ".ssh") or part.lower().startswith((".codex-workflow-src", ".env"))
+				or part.lower() in ("secrets", "credentials") for part in parts) or
+			parts[-1].lower() in (".git-credentials", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss") or
+			Path(entry).suffix.lower() in (".pem", ".key", ".p12", ".pfx", ".keystore") or
+			(omit_claude_md and parts[-1] == "CLAUDE.md")):
+			continue
+		current = source
+		missing = False
+		for part in parts[:-1]:
+			current /= part
+			try:
+				info = current.lstat()
+			except FileNotFoundError:
+				missing = True
+				break
+			if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+				raise EngineError("unsafe read snapshot parent")
+		if missing:
+			continue
+		path = current / parts[-1]
+		try:
+			info = path.lstat()
+		except FileNotFoundError:
+			continue
+		if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024 * 1024:
+			continue
+		files_copied += 1
+		bytes_copied += info.st_size
+		if files_copied > max_files or bytes_copied > max_bytes:
+			raise EngineError("read snapshot limit exceeded")
+		target = dest.joinpath(*parts)
+		target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+		# Use dirfds as well as O_NOFOLLOW on the leaf: a parent may be
+		# swapped for a symlink after lstat, before a path-based open.
+		parent_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+		try:
+			for part in parts[:-1]:
+				child_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+				os.close(parent_fd)
+				parent_fd = child_fd
+			fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+			with os.fdopen(fd, "rb") as reader, target.open("xb") as writer:
+				opened = os.fstat(reader.fileno())
+				if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+					raise EngineError("source changed during read snapshot")
+				content = reader.read(info.st_size + 1)
+				if len(content) != info.st_size:
+					raise EngineError("source changed during read snapshot")
+				writer.write(content)
+		finally:
+			os.close(parent_fd)
+		target.chmod(0o755 if info.st_mode & 0o111 else 0o644)
+
+	result: dict[str, Any] = {"files": files_copied, "bytes": bytes_copied, "git": "absent", "git_objects": ""}
+	if git_root:
+		try:
+			git_run(dest, "-c", "init.templateDir=/dev/null", "init", "-q")
+			git_run(dest, "add", "-A", "-f")
+			git_run(dest, "-c", "user.name=Isolated Snapshot", "-c", "user.email=snapshot@example.invalid",
+				"commit", "--allow-empty", "--no-gpg-sign", "-qm", "Isolated read snapshot")
+			result["git"] = "present"
+		except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+			raise EngineError("read snapshot git metadata failed") from exc
+	return result
+
+
+def cmd_read_snapshot(args: argparse.Namespace) -> int:
+	if args.source:
+		try:
+			result = build_read_snapshot(Path(args.source), Path(args.dest), args.omit_claude_md, args.git_objects_mount)
+		except OSError as exc:
+			raise EngineError("read snapshot source changed or could not be copied") from exc
+	else:
+		result = read_snapshot(Path(args.workdir), Path(args.dest), args.omit_root_claude_md)
+	_print_json(result)
+	return 0
+
+
 def trust_workdir(home: Path, workdir: str) -> None:
 	"""Set ``projects[<workdir>].hasTrustDialogAccepted`` in ``<home>/.claude.json``.
 
@@ -1086,6 +1691,29 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--read-guard-hook", default="")
 	p.set_defaults(func=cmd_settings)
 
+	p = sub.add_parser("read-snapshot")
+	snapshot_source = p.add_mutually_exclusive_group(required=True)
+	snapshot_source.add_argument("--workdir")
+	snapshot_source.add_argument("--source")
+	p.add_argument("--dest", required=True)
+	p.add_argument("--omit-root-claude-md", action="store_true")
+	p.add_argument("--git-objects-mount", default="/git-objects")
+	p.add_argument("--omit-claude-md", action="store_true")
+	p.set_defaults(func=cmd_read_snapshot)
+
+	p = sub.add_parser("read-sandbox-dockerfile")
+	p.set_defaults(func=cmd_read_sandbox_dockerfile)
+
+	p = sub.add_parser(READ_GUARD_SUBCOMMAND)
+	p.set_defaults(func=cmd_guard_read_bash)
+
+	for name, func in (("support-lock", cmd_support_lock), ("support-verify", cmd_support_verify), ("support-unlock", cmd_support_unlock)):
+		p = sub.add_parser(name)
+		p.add_argument("--manifest", required=True)
+		if name == "support-lock":
+			p.add_argument("--workdir", required=True)
+		p.set_defaults(func=func)
+
 	p = sub.add_parser("read-guard")
 	p.set_defaults(func=cmd_read_guard)
 
@@ -1128,7 +1756,7 @@ def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	try:
 		return args.func(args)
-	except EngineError as exc:
+	except (EngineError, OSError, ValueError) as exc:
 		print(f"claude_engine.py: {exc}", file=sys.stderr)
 		return 2
 

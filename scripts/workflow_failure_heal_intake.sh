@@ -684,8 +684,17 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 heal_claude_rc=75
 if [ -f scripts/ai_engine.sh ]; then
 	heal_claude_rc=0
+	# Only successful worktree checkouts are visible in the read-only Claude snapshot.
+	heal_read_extra_dirs=""
+	if [ -d "${HEAL_SOURCE_DIR:-}" ] && [ "${HEAL_SOURCE_NOTE:-unavailable (diagnose against the working directory)}" != "unavailable (diagnose against the working directory)" ]; then
+		heal_read_extra_dirs="${HEAL_SOURCE_DIR}"
+	fi
+	if [ -d "${HEAL_BRANCH_TIP_DIR:-}" ] && [ "${HEAL_BRANCH_TIP_NOTE:-unavailable}" != "unavailable" ]; then
+		heal_read_extra_dirs="${heal_read_extra_dirs:+${heal_read_extra_dirs}:}${HEAL_BRANCH_TIP_DIR}"
+	fi
 	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
 	env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \
+		AI_ENGINE_READ_EXTRA_DIRS="${heal_read_extra_dirs}" \
 		AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
 		bash -c 'source "$1" && claude_run_selected WORKFLOW_HEAL "$2" "$3" "$4"' _ \
 		scripts/ai_engine.sh "${PROMPT_FILE}" "${DIAG_FILE}" "${PWD}" \
@@ -693,6 +702,20 @@ if [ -f scripts/ai_engine.sh ]; then
 fi
 
 if [ "${heal_claude_rc}" -ne 75 ]; then
+	if [ "${heal_claude_rc}" -eq 86 ]; then
+		log "error support_tampered"
+		exit 86
+	fi
+	# The model read attacker-controlled job logs. Do not run any more
+	# support code from this checkout if its approved contents moved. The
+	# workflow captures HEAL_SUPPORT_SHA before invoking this internal helper.
+	if ! heal_support_status="$(git status --porcelain --untracked-files=all 2>/dev/null)" ||
+	   [ -z "${HEAL_SUPPORT_SHA:-${GITHUB_SHA:-}}" ] ||
+	   [ "$(git rev-parse HEAD 2>/dev/null)" != "${HEAL_SUPPORT_SHA:-${GITHUB_SHA:-}}" ] ||
+	   [ -n "${heal_support_status}" ]; then
+		echo "::error::Workflow heal support checkout changed after the model run." >&2
+		exit 86
+	fi
 	if [ "${heal_claude_rc}" -ne 0 ]; then
 		log "warn claude_run_nonzero rc=${heal_claude_rc}"
 		DIAGNOSIS_FALLBACK_REASON="failed (Claude exited non-zero)"

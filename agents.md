@@ -70,8 +70,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
    validated transfer. For Claude engine fixes it also admits only
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
    `.claude/hooks/pr_merge_status_guard.py`, and
-   `scripts/claude_settings.json.tmpl`; other `.github/ai/` and
-   `.claude/` files remain excluded from snapshot and transfer. Its
+   `scripts/claude_settings.json.tmpl`. It also admits each
+   `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md`
+   twin exists both in the host checkout and the verified workflow-support
+   checkout (`GITHUB_WORKSPACE/.codex-workflow-src`) when the snapshot is
+   taken. A PR-added twin absent from trusted support cannot authorize a new
+   command; missing support admits none. The admitted command set is fixed
+   for the whole run; later transfers and retries cannot widen it. The editor
+   can still repair parity for existing supported commands; other `.github/ai/`
+   and `.claude/` files remain excluded from
+   snapshot and transfer. An editor write to an excluded file in an
+   admitted directory is dropped; a new directory outside the admitted ones
+   fails the transfer (`reason=unsafe_directory`) and the editor step with it. Its
    isolation helpers must already exist in the verified workflow support
    commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
@@ -235,19 +245,25 @@ loops with unquoted `gh api` arguments still prompt; the two hooks must stay
 byte-identical (`tests/test_gh_api_write_guard.py`). Shell-rewrite hazards
 inside a loop prompt even when the loop counter is not expanded.
 
-Claude's read-profile Bash tool uses `scripts/claude_engine.py read-guard` to
+Claude's read-profile Bash tool uses `scripts/claude_engine.py guard-read-bash` to
 reject shell control syntax and write-capable git options, including abbreviated
 `--output` and `git grep -O`. The security audit also strips credentials from
 its model call and fingerprints the trusted `scripts/` tree before running its
 single-issue reporter; a mismatch fails closed without executing that script.
-All effective read-profile `claude_run` calls (including `AI_ENGINE_READ_ONLY`)
-use `scripts/claude_read_isolated_run.sh`: a filtered source snapshot and
-regenerated, credential-free Git metadata inside a no-network, read-only
-container. Only the host `claude_anthropic_relay.py` reads pool tokens; a
-missing sandbox or rejected snapshot returns 75 (`AI_ENGINE_FALLBACK
-reason=isolation_unavailable`), never a host Claude call. Write-profile roles
-remain on the host pending a separate fix. `CLAUDE_READ_ISOLATION` logs the
-read sandbox's started/unavailable outcome.
+Every `claude_run` read-profile call (including `AI_ENGINE_READ_ONLY=true`)
+uses a bounded source snapshot inside a network-isolated Docker container;
+the real OAuth token remains in the host relay. Missing Docker, relay support,
+or a failed snapshot falls back to codex/OpenCode, never an unisolated read
+profile. Container tool calls cannot reach GitHub; prompts carry the context.
+`AI_ENGINE_ISOLATED_READ_PATHS` accepts only the two workflow-heal diagnosis
+worktrees under `RUNTIME_DIR` for `WORKFLOW_HEAL`; each is filtered through the
+same read-snapshot builder and shares its file/byte budget. All other extra
+paths fall back instead of mounting arbitrary host directories.
+Git commands inside the read snapshot see filtered files (excluding standard
+extensionless SSH private-key names even outside `.ssh`). Source history is
+copied only when it contains no filtered paths or unreachable objects; otherwise
+Git metadata is omitted. Session reuse mounts only the selected session ID's
+transcript directory.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.
 
@@ -641,7 +657,7 @@ a new value, add it to the appropriate overrides file with a
 | implement-diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_DIAGNOSE` |
 | implement issue summary (PR comment) | `openai/gpt-6-sol` (`MODEL_EDITOR`) | default | `low` | Claude (Sonnet 5.5, read-only; codex fallback) · `SUMMARISER` |
 | review autofix editor | `openai/gpt-6-sol` | `high` (smoke: `medium`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_EDITOR` |
-| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode only (no engine switch) |
+| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode only (no engine switch) |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | OpenCode only (no engine switch) |
 | review consolidator | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_CONSOLIDATOR` |
 | conflict resolver | `openai/gpt-6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `CONFLICT_RESOLVER` |
@@ -656,6 +672,16 @@ a new value, add it to the appropriate overrides file with a
 
 The **Engine · Claude role** column names today's engine and the role name
 `scripts/ai_engine.sh` resolves for that row (README "Claude engine").
+Host read-profile Claude runs (including SECURITY_AUDIT, SECURITY_JUDGE and
+WORKFLOW_HEAL) use an exact-command PreToolUse Bash guard and temporarily
+remove write bits from trusted support while recording hashes and directory
+entries. Verification precedes unlock; lock failures and mismatches return 86
+without a codex fallback. The security-audit report, heal intake and poller
+also verify their support checkout or staged manifest before executing further
+support code.
+On self-hosted runners, a job killed before unlocking may leave support
+directories read-only; restore them with `claude_engine.py support-unlock`
+against the leftover per-run manifest before reusing that workspace.
 Every role's default in `.github/ai/claude_engine.json` is `codex`
 until its cutover (Phase 5a moved `CLARIFY`, `CLARIFY_RESPOND` and `PLAN`
 to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, Phase 5c `ORCHESTRATE`, the four orchestrator judges and the review write roles `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER` and `RB_JUDGE`, Phase 5d `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`, `SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `LOG_ANALYSIS`, `LOG_AUDIT`, `RETRO`, `SUMMARISER`, `BEHAVIOURAL_SMOKE`, `MATERIALITY` (Q42) and `LOG_SUMMARY` (Q41); a missing config file still means codex for every role);
@@ -669,6 +695,17 @@ engine switch. When Claude is unavailable (`claude_run` exit 75,
 `AI_ENGINE_FALLBACK`), the run uses the codex/OpenCode path unchanged. The
 pinned CLI is `@anthropic-ai/claude-code` `cli_version` from the same file,
 installed by `.github/actions/install-claude`.
+Read-profile `claude_run` calls use a `--network none` container with a placeholder token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token. Isolation failures fall back with `AI_ENGINE_FALLBACK reason=isolation_*`.
+Session reuse rejects a pool path overlapping the mounted session directory with `reason=isolation_pool_overlap` before starting the container.
+
+Read-profile calls through `scripts/ai_engine.sh::claude_run` (including
+`AI_ENGINE_READ_ONLY=true`) run in a network-less, read-only Docker container.
+The host-side Anthropic relay retains OAuth credentials; the container sees
+only tracked-file snapshots, sanitized git metadata when history contains no
+filtered paths, shared worktrees or unreachable objects (otherwise no git
+metadata), the prompt and trusted support,
+with an optional `AI_ENGINE_READ_EXTRA_DIRS` snapshot for the heal worktrees.
+Missing isolation returns exit 75, never host Claude.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production
@@ -695,7 +732,7 @@ the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
 `openai/gpt-6-sol` in `scripts/codex_model_catalog.json`. Third-party
 reviewer models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
-`deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`,
+`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
 `qwen/qwen3.7-plus`) carry `support_verbosity = false` in the catalog
 (the `openai/gpt-6-luna` reviewer slot supports it, with catalog default
 `low`) — codex CLI logs
@@ -723,7 +760,7 @@ the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
 
 The reviewer-only multi-model run (claude-branch-review) uses the same
 reviewer models (`minimax/minimax-m3`, `z-ai/glm-5.2`,
-`deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`,
+`deepseek/deepseek-v4-pro`, `google/gemini-3.1-flash-lite`,
 `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) plus
 `unattended_system_instructions.md` as system context.
 
@@ -1234,8 +1271,9 @@ and shipped:
 - `STANDALONE_AUTO_DECIDE` (`clarify.yml` "Standalone auto-decide": `issue= outcome=answered|skip|failed reason= decisions=`)
 - `AI_ENGINE_SELECTED` (`scripts/ai_engine.sh`: `role= engine= model= effort= source=`)
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
+- `AI_ENGINE_SUPPORT_LOCK` (`scripts/ai_engine.sh`: `role= outcome=locked|verified|tampered`; tampering exits 86 without codex fallback)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
-- `CLAUDE_READ_ISOLATION` (`role= outcome=started|unavailable reason=`)
+- `CLAUDE_READ_ISOLATION` (`scripts/ai_engine.sh`: `role= outcome=ready|rejected reason= files= git= extra_dirs=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
 - `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. If result publication fails, report skips review re-dispatch so it cannot run without the marker.)
@@ -1439,6 +1477,7 @@ LOG_PREFIX.name=RETARGET_MERGED_BASE
 LOG_PREFIX.name=STANDALONE_AUTO_DECIDE
 LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
+LOG_PREFIX.name=AI_ENGINE_SUPPORT_LOCK
 LOG_PREFIX.name=CLAUDE_POOL
 LOG_PREFIX.name=CLAUDE_READ_ISOLATION
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
@@ -1673,7 +1712,7 @@ depend on it.
 - The review-autofix reviewer pass remains model-diversity-first. The consolidator's seven lenses are this repo's equivalent of Cloudflare's seven specialised review sub-agents; the pipeline does not run one fixed model per lens.
 - Additive Phase M note: `prompts/review-consolidator.txt` now appends an eighth `DOCS COVERAGE (DIATAXIS)` lens after those original seven. The first seven lens names and order stay byte-for-byte stable; the new lens is advisory-only (`SEVERITY: low`, normally `CLASSIFICATION: nice-to-have`), is grounded in reviewer evidence plus touched files for user-visible changes, and names only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates (or `Docs coverage: complete` when already covered).
 - Reviewer prompts now carry explicit anti-rules in both `prompts/review-reviewer-checklist.txt` (`WHAT NOT TO FLAG` under each lens) and the shared `COMMON ANTI-RULES` block rendered by `scripts/review_run_reviewers.sh`.
-- `scripts/review_run_reviewers.sh` also carries the `lite | standard | full` review-tier resolver, on by default (`REVIEW_TIER_RESOLVER_ENABLED=true`). `lite` (1 reviewer) is any diff of at most `REVIEW_TIER_LITE_MAX_LOC` lines that touches no protected path; `standard` (4 reviewers) is any diff of at most `REVIEW_TIER_STANDARD_MAX_LOC` lines in any folder, including small protected diffs; `full` is everything larger plus the force-review and fail-open tier. Protected paths are the deterministic skip gate's list (`PROTECTED_SKIP_SUPPRESSED` in `review_autofix.yml`), checked on both sides of renames; `tests/test_review_autofix_review_pipeline_contract.py` keeps the two lists identical. `standard` runs the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list, by default the four cheapest panel models (`minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna`), so `google/gemini-3.8-flash` and `z-ai/glm-5.2` run only on the full panel. With `REVIEW_TIER_LITE_REVIEWER_SLUG` empty (the default), `lite` draws its reviewer from that standard list (from `REVIEWER_MODELS` when the list is empty or names a slug not on the panel) by the lowest `sha256("<PR number>:<model>")`, so a PR keeps the same reviewer across rounds and reruns; an empty standard list draws four reviewers from `REVIEWER_MODELS` the same way. Set either variable to pin reviewers. `AUTOFIX_SKIP_*` fast paths stay authoritative, `[force-review]` / `force-review` still force full review, a full panel forced by the risk-tier resolver below (`REVIEWER_RISK_TIER_FORCED_FULL`) is kept (`reason=risk_tier_forced_full`), a random pick that returns too few reviewers fails open to the full panel (`reason=random_reviewer_pick_failed`), and `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator.
+- `scripts/review_run_reviewers.sh` also carries the `lite | standard | full` review-tier resolver, on by default (`REVIEW_TIER_RESOLVER_ENABLED=true`). `lite` (1 reviewer) is any diff of at most `REVIEW_TIER_LITE_MAX_LOC` lines that touches no protected path; `standard` (4 reviewers) is any diff of at most `REVIEW_TIER_STANDARD_MAX_LOC` lines in any folder, including small protected diffs; `full` is everything larger plus the force-review and fail-open tier. Protected paths are the deterministic skip gate's list (`PROTECTED_SKIP_SUPPRESSED` in `review_autofix.yml`), checked on both sides of renames; `tests/test_review_autofix_review_pipeline_contract.py` keeps the two lists identical. `standard` runs the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list, by default four panel models (`minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna`), so `google/gemini-3.1-flash-lite` and `z-ai/glm-5.2` run only on the full panel. With `REVIEW_TIER_LITE_REVIEWER_SLUG` empty (the default), `lite` draws its reviewer from that standard list (from `REVIEWER_MODELS` when the list is empty or names a slug not on the panel) by the lowest `sha256("<PR number>:<model>")`, so a PR keeps the same reviewer across rounds and reruns; an empty standard list draws four reviewers from `REVIEWER_MODELS` the same way. Set either variable to pin reviewers. `AUTOFIX_SKIP_*` fast paths stay authoritative, `[force-review]` / `force-review` still force full review, a full panel forced by the risk-tier resolver below (`REVIEWER_RISK_TIER_FORCED_FULL`) is kept (`reason=risk_tier_forced_full`), a random pick that returns too few reviewers fails open to the full panel (`reason=random_reviewer_pick_failed`), and `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator.
 - `scripts/review_run_reviewers.sh` can classify a PR into `trivial | lite | full` reviewer tiers from reviewer-visible diff LOC/file counts, with `REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX` forcing `full` on sensitive paths. Default tier fan-out follows the live `REVIEWER_MODELS` order from `.github/workflows/review_autofix.yml`: trivial = first reviewer, lite = first two reviewers, full = the complete configured set.
 - `scripts/review_filter_uninteresting_files.sh` strips low-signal lock/generated/minified paths before reviewer fan-out and emits `REVIEWER_FILTER_SKIP: <path> <reason>` for each skipped file. Default exemptions remain `db/contracts/**`, `**/migrations/**`, and `**/migrate/**`.
 - `.github/workflows/review_autofix.yml` now runs a fail-open local slop-scan preflight (gated by `SLOP_SCAN_ENABLED`, default `true`) on PR-changed `scripts/*.py`, `scripts/*.sh`, and `validation/**/*.sh` Python heredocs. It writes `.ai/slop_scan/findings.json`, feeds that JSON to reviewer and consolidator prompts as advisory untrusted context, and removes the runtime artifact before commit-producing steps so it cannot leak into staged changes.
@@ -1731,7 +1770,7 @@ depend on it.
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the one-reviewer `lite` tier. Any file type qualifies unless the diff touches a protected path, which goes to `standard`. |
 | `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Empty draws one reviewer from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list (from `REVIEWER_MODELS` when that list is empty or names a slug not on the panel), seeded by the PR number; a set slug pins it. Unknown or unavailable slugs fail open to `full`. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the four-reviewer `standard` tier, in any folder. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | The `standard` tier's reviewers and the unpinned `lite` pool: the four cheapest panel models, leaving `google/gemini-3.8-flash` and `z-ai/glm-5.2` to the full panel. An empty value reaching the script (an empty repo variable falls back to this default) draws four reviewers from `REVIEWER_MODELS`, seeded by the PR number. Unknown or unavailable slugs fail open to `full`. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | The `standard` tier's reviewers and the unpinned `lite` pool: four panel models, leaving `google/gemini-3.1-flash-lite` and `z-ai/glm-5.2` to the full panel. An empty value reaching the script (an empty repo variable falls back to this default) draws four reviewers from `REVIEWER_MODELS`, seeded by the PR number. Unknown or unavailable slugs fail open to `full`. |
 | `REVIEWER_MAX_STEPS` | `120` | Hard turn cap per review-panel reviewer attempt, enforced by the `scripts/review_run_reviewers.sh` watchdog from OpenCode `step_start` events. An attempt that starts more turns is killed and the slot fails without a retry or failback. Invalid values fall back to `120` with a warning. |
 | `REVIEWER_TOOL_REPEAT_LIMIT` | `10` | Consecutive identical tool calls (same tool and same input) that end a review-panel reviewer attempt as a retryable `tool_repeat` failure (cheaper reasoning, then failback). Minimum `2`; invalid values fall back to `10` with a warning. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |

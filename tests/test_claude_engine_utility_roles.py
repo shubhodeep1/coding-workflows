@@ -123,9 +123,11 @@ FAKE_ENGINE = r"""
 claude_run_selected() {
   local resolved_var="AI_ENGINE_RESOLVED_$1"
   printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "$4" "${!resolved_var:-codex}" "${AI_ENGINE_READ_ONLY:-}" "${GH_TOKEN-unset}" >> "${CALLS}"
+  [ -z "${READ_PATHS_CALLS:-}" ] || printf '%s\n' "${AI_ENGINE_ISOLATED_READ_PATHS:-}" > "${READ_PATHS_CALLS}"
   [ "${!resolved_var:-codex}" = "claude" ] || return 75
   case "${MODE}" in
     success) printf '%s\n' "${CLAUDE_ANSWER:-claude answer}" > "$3"; return 0 ;;
+    tamper) printf '%s\n' "${CLAUDE_ANSWER:-claude answer}" > "$3"; touch support-tampered; return 0 ;;
     unavailable) return 75 ;;
     *) return 1 ;;
   esac
@@ -140,7 +142,7 @@ def _heal_block() -> str:
 	return text[start:end]
 
 
-def _run_heal_block(tmp_path: Path, *, resolved: str, mode: str) -> tuple[subprocess.CompletedProcess[str], str, str]:
+def _run_heal_block(tmp_path: Path, *, resolved: str, mode: str, with_worktrees: bool = False) -> tuple[subprocess.CompletedProcess[str], str, str]:
 	(tmp_path / "scripts").mkdir()
 	(tmp_path / "scripts" / "ai_engine.sh").write_text(FAKE_ENGINE, encoding="utf-8")
 	bin_dir = tmp_path / "bin"
@@ -149,7 +151,17 @@ def _run_heal_block(tmp_path: Path, *, resolved: str, mode: str) -> tuple[subpro
 	codex.write_text('#!/usr/bin/env bash\necho "codex $*" >> "${CALLS}.codex"\necho "codex answer"\n', encoding="utf-8")
 	codex.chmod(0o755)
 	(tmp_path / "prompt.txt").write_text("diagnose\n", encoding="utf-8")
+	(tmp_path / ".gitignore").write_text("calls*\ndiag.md\ncodex_log.txt\nread_paths\n", encoding="utf-8")
+	subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+	subprocess.run(["git", "-C", str(tmp_path), "add", "scripts", "bin", "prompt.txt", ".gitignore"], check=True)
+	subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "support"], check=True)
+	heal_support_sha = subprocess.check_output(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True).strip()
 	calls = tmp_path / "calls"
+	heal_paths = {}
+	if with_worktrees:
+		for name, key in (("heal_src", "HEAL_SOURCE_DIR"), ("heal_branch_tip", "HEAL_BRANCH_TIP_DIR")):
+			(tmp_path / name).mkdir()
+			heal_paths[key] = str(tmp_path / name)
 	script = (
 		"set -euo pipefail\n"
 		"log() { echo \"LOG $*\"; }\n"
@@ -157,18 +169,19 @@ def _run_heal_block(tmp_path: Path, *, resolved: str, mode: str) -> tuple[subpro
 		+ _heal_block()
 		+ 'echo "reason=${DIAGNOSIS_FALLBACK_REASON}"\n'
 	)
-	env = dict(os.environ, CALLS=str(calls), MODE=mode, GH_TOKEN="secret", AI_ENGINE_RESOLVED_WORKFLOW_HEAL=resolved,
-		PATH=f"{bin_dir}:{os.environ['PATH']}")
+	env = dict(os.environ, CALLS=str(calls), MODE=mode, GH_TOKEN="secret", HEAL_SUPPORT_SHA=heal_support_sha, AI_ENGINE_RESOLVED_WORKFLOW_HEAL=resolved,
+		READ_PATHS_CALLS=str(tmp_path / "read_paths"), PATH=f"{bin_dir}:{os.environ['PATH']}", **heal_paths)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
 	return proc, (calls.read_text(encoding="utf-8") if calls.exists() else ""), (Path(f"{calls}.codex").read_text(encoding="utf-8") if Path(f"{calls}.codex").exists() else "")
 
 
 def test_heal_on_claude_runs_claude_without_credentials(tmp_path: Path) -> None:
-	proc, calls, codex_calls = _run_heal_block(tmp_path, resolved="claude", mode="success")
+	proc, calls, codex_calls = _run_heal_block(tmp_path, resolved="claude", mode="success", with_worktrees=True)
 	assert proc.returncode == 0, proc.stderr
 	assert calls.splitlines() == [f"WORKFLOW_HEAL|prompt.txt|diag.md|{tmp_path}|claude||unset"]
 	assert codex_calls == ""
 	assert (tmp_path / "diag.md").read_text(encoding="utf-8") == "claude answer\n"
+	assert (tmp_path / "read_paths").read_text(encoding="utf-8").strip() == f"{tmp_path / 'heal_src'}:{tmp_path / 'heal_branch_tip'}"
 
 
 def test_heal_on_codex_or_unavailable_runs_the_codex_call(tmp_path: Path) -> None:
@@ -187,6 +200,39 @@ def test_heal_claude_crash_files_the_fallback_reason(tmp_path: Path) -> None:
 	assert codex_calls == ""
 	assert "reason=failed (Claude exited non-zero)" in proc.stdout
 	assert (tmp_path / "diag.md").read_text(encoding="utf-8") == ""
+
+
+def test_heal_claude_tampered_support_is_rejected(tmp_path: Path) -> None:
+	proc, _calls, codex_calls = _run_heal_block(tmp_path, resolved="claude", mode="tamper")
+	assert proc.returncode == 86
+	assert "Workflow heal support checkout changed after the model run." in proc.stderr
+	assert codex_calls == ""
+
+
+@pytest.mark.parametrize("invalid_support", ["wrong_sha", "missing_sha", "dirty_checkout"])
+def test_heal_claude_rejects_invalid_support(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid_support: str) -> None:
+	original_run = subprocess.run
+
+	def run_with_invalid_support(command, **kwargs):
+		if command[:2] == ["bash", "-c"]:
+			if invalid_support == "dirty_checkout":
+				(tmp_path / "scripts" / "untracked.sh").write_text("untrusted\n", encoding="utf-8")
+			else:
+				kwargs["env"] = dict(kwargs["env"])
+				if invalid_support == "wrong_sha":
+					kwargs["env"]["HEAL_SUPPORT_SHA"] = "0" * 40
+				else:
+					kwargs["env"].pop("HEAL_SUPPORT_SHA", None)
+					kwargs["env"].pop("GITHUB_SHA", None)
+		return original_run(command, **kwargs)
+
+	monkeypatch.setattr(subprocess, "run", run_with_invalid_support)
+	proc, calls, codex_calls = _run_heal_block(tmp_path, resolved="claude", mode="success")
+	assert proc.returncode == 86, proc.stderr
+	assert "Workflow heal support checkout changed after the model run" in proc.stderr
+	assert "reason=" not in proc.stdout
+	assert calls.startswith("WORKFLOW_HEAL|")
+	assert codex_calls == ""
 
 
 # ---- validation refresh discovery (Python) ----

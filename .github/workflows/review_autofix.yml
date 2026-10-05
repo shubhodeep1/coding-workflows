@@ -118,7 +118,7 @@ env:
     minimax/minimax-m3
     z-ai/glm-5.2
     deepseek/deepseek-v4-pro
-    google/gemini-3.8-flash
+    google/gemini-3.1-flash-lite
     qwen/qwen3.7-plus
     openai/gpt-6-luna
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
@@ -155,9 +155,9 @@ env:
   # Review tiers (scripts/review_run_reviewers.sh classify_review_tier): a diff
   # of <= REVIEW_TIER_LITE_MAX_LOC lines touching no protected path gets one
   # reviewer, any diff of <= REVIEW_TIER_STANDARD_MAX_LOC lines gets four, the
-  # rest the full panel. The standard tier defaults to the four cheapest panel
-  # models (google/gemini-3.8-flash and z-ai/glm-5.2, the two most expensive,
-  # run only on the full panel). An empty lite slug draws one reviewer from the
+  # rest the full panel. The standard tier defaults to four panel models
+  # (google/gemini-3.1-flash-lite and z-ai/glm-5.2 run only on the full
+  # panel). An empty lite slug draws one reviewer from the
   # standard list, seeded by the PR number; set either variable to pin reviewers.
   REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}
   REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
@@ -219,6 +219,7 @@ env:
   REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
   AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}
   AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '1' }}
+  AGENTS_MD_MATERIALITY_LLM_TIMEOUT_SECS: ${{ vars.AGENTS_MD_MATERIALITY_LLM_TIMEOUT_SECS || '300' }}
   AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}
   AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
   REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}
@@ -2461,6 +2462,7 @@ jobs:
       SLOP_SCAN_ENABLED: ${{ vars.SLOP_SCAN_ENABLED || 'true' }}
       AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}
       AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '1' }}
+      AGENTS_MD_MATERIALITY_LLM_TIMEOUT_SECS: ${{ vars.AGENTS_MD_MATERIALITY_LLM_TIMEOUT_SECS || '300' }}
       AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}
       AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
       REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}

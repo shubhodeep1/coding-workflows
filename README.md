@@ -1049,7 +1049,27 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`hooks/pr_watch_guard.py`, §25). The former post-push PR status check-in
 > reminder, the permission-prompt logger and their helper scripts were retired
 > (see the retired-files paragraph below). Nothing to configure in the
-> consumer.
+> consumer. For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
+> the merged-PR guard ignores the unresolved value and checks the session checkout.
+> If that check does not block, it asks for confirmation because the pushed
+> repository may differ. Other unresolved push directories follow the same rule.
+> When a `git push` source cannot be resolved locally (for example,
+> a shell-expanded source), the merged-PR guard asks for confirmation rather
+> than using the session checkout as a substitute for the pushed commit.
+> A push with a destination that cannot be resolved locally (such as
+> `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
+> If `--repo` and a positional remote are both supplied, the guard checks the
+> refspecs after that remote, not the remote name as a branch. If the local
+> remote-config lookup cannot identify the positional repository as a GitHub
+> remote or URL (including an unconfigured path or non-GitHub URL), the guard
+> blocks the push instead of treating it as a refspec. A GitHub URL is checked
+> against its destination repository; an unavailable PR lookup asks for confirmation.
+
+> The merged-PR guard checks numeric push refspecs before a separate output
+> redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
+> or option leaves the destination unknown, it requests confirmation rather
+> than checking an unrelated current branch. A push with no refspec keeps the
+> existing current-branch check.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
@@ -1668,7 +1688,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the `lite` (one-reviewer) tier. Any file type qualifies, but a diff touching a protected path (the same list as the deterministic skip gate: `agents.md` / `CLAUDE.md` / `unattended_system_instructions.md`, `.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`, and build, dependency, config and script files; both sides of a rename count) goes to `standard` instead. `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator. |
 | `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Reviewer slug for the `lite` tier. Empty (the default) draws one reviewer from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list (from `REVIEWER_MODELS` when that list is empty or names a slug not on the panel, with a warning for the latter), seeded by the PR number: the lowest `sha256("<PR number>:<model>")` wins, so a PR keeps the same reviewer on every round and rerun and PRs spread evenly across the pool (`models_source=random_lite`). A set value pins that reviewer (`models_source=configured_lite`); unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the `standard` (four-reviewer) tier, in any folder. Larger diffs run the full panel. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | Comma-separated reviewer subset for the `standard` tier, and the pool an unpinned `lite` tier draws from. The default is the four cheapest panel models by list price; `google/gemini-3.8-flash` and `z-ai/glm-5.2`, the two most expensive, run only on the `full` panel. A set value pins those reviewers (`models_source=configured_standard`). If the value reaches the script empty (an empty repo variable falls back to this default instead), four reviewers are drawn from `REVIEWER_MODELS` the same way as `REVIEW_TIER_LITE_REVIEWER_SLUG` (`models_source=random_standard`); unknown or unavailable slugs fail open to the full live reviewer roster. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | Comma-separated reviewer subset for the `standard` tier, and the pool an unpinned `lite` tier draws from. The default is four panel models; `google/gemini-3.1-flash-lite` and `z-ai/glm-5.2` run only on the `full` panel. A set value pins those reviewers (`models_source=configured_standard`). If the value reaches the script empty (an empty repo variable falls back to this default instead), four reviewers are drawn from `REVIEWER_MODELS` the same way as `REVIEW_TIER_LITE_REVIEWER_SLUG` (`models_source=random_standard`); unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEWER_MAX_STEPS` | `120` | Hard turn cap per review-panel reviewer attempt. The reviewer watchdog kills an attempt that starts more OpenCode turns, and the slot fails without a retry or failback. Real reviewer passes peaked at 101 turns. |
 | `REVIEWER_TOOL_REPEAT_LIMIT` | `10` | Consecutive identical tool calls (same tool and same input) that end a review-panel reviewer attempt as a retryable `tool_repeat` failure (cheaper reasoning, then the reviewer's failback model). Minimum `2`. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
@@ -1956,6 +1976,19 @@ attempts of that role in the same job.
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
+Read-profile calls reject arbitrary `AI_ENGINE_ISOLATED_READ_PATHS` with
+`reason=isolation_read_path_invalid`. `WORKFLOW_HEAL` alone may request the
+`heal_src` and `heal_branch_tip` worktrees beneath its `RUNTIME_DIR`; these
+are filtered into separate read-only snapshots under the same aggregate
+20,000-file/256-MiB budget as the main checkout, not mounted from the host.
+An invalid path or exceeded budget falls back to Codex. Git history in each
+snapshot is a synthetic commit of
+the filtered files (including exclusion of standard extensionless SSH keys,
+such as `id_ed25519`, `id_ed25519_sk`, and `id_ecdsa_sk`); historical revisions
+and the source Git object store are not available to read-profile tools.
+Session reuse mounts only the selected session ID's transcript directory,
+not other sessions.
+
 **Which engine a role uses**, first match wins: `CLAUDE_FIXER_ENABLED=false`
 for the four review write roles, the work item's labels (`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),
 `AI_ENGINE_<ROLE>`, `AI_ENGINE`, then the role's default in
@@ -2019,6 +2052,15 @@ in `claude-engine-smoke.yml`.
 writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
 `order` file, best account first, and one `0600` file per account under
 `tokens/`). A usage-limited or rejected account moves the run to the next one.
+Read-profile calls run in a `--network none` container with a placeholder
+token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token.
+The container masks credential-bearing Git configuration in the checkout and
+its nested `.codex-workflow-src` / `.codex-workflow-src-main` support checkouts.
+If isolation cannot start, `AI_ENGINE_FALLBACK reason=isolation_*` returns 75.
+For read-profile session reuse, an unavailable session directory reports
+`reason=isolation_session_dir_unavailable` before any container starts.
+If the pool directory disappears after isolation preflight, the fallback is
+`reason=isolation_pool_unavailable`, not a session-directory error.
 When no CLI, policy, instructions file or account is usable, it logs
 `AI_ENGINE_FALLBACK role= reason=`, sends at most one Telegram note per job,
 and returns `75`; the caller then runs its codex path unchanged. A crash
@@ -2027,6 +2069,33 @@ returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
 which only adds `engine=claude` to its log lines, and every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
+When session reuse is requested, a pool directory that overlaps the mounted
+session directory falls back with `reason=isolation_pool_overlap` before the
+container starts.
+**Read-profile isolation.** Every `claude_run` with a `read` profile (also a
+write role narrowed by `AI_ENGINE_READ_ONLY=true`) runs in a network-less,
+read-only Docker container instead of running Claude on the host. A sanitized
+snapshot includes regular tracked files and, when history paths pass the
+snapshot filter and the repository has no unreachable objects or shared
+worktrees, git objects/refs with a new config that excludes
+credential headers; untracked files, symlinks and runner secrets are not
+mounted. Repositories using git object alternates, sharing worktrees, retaining
+unreachable objects, or with filtered paths in reachable history retain
+working-tree files but omit git history (`git=omitted`,
+`reason=alternates|filtered_history` in the isolation log). Non-git
+workdirs copy only regular files, excluding secret
+filenames and key suffixes. The host-side Anthropic relay keeps the OAuth token
+outside the container. A Docker, relay, image or snapshot preflight failure
+returns `75` for the caller's existing fallback, never unisolated Claude.
+`CLAUDE_READ_ISOLATION` logs only the role, outcome, reason and snapshot counts.
+
+| Read-profile setting | Default | Purpose |
+|---|---|---|
+| `AI_ENGINE_READ_EXTRA_DIRS` | empty | Colon-separated absolute directories to snapshot alongside the workdir (the workflow-heal worktrees). |
+| `AI_ENGINE_ISOLATED_READ_PATHS` | empty | WORKFLOW_HEAL-only paths under `RUNTIME_DIR` for filtered auxiliary snapshots; other paths fall back. |
+| `CLAUDE_READ_SNAPSHOT_MAX_FILES` | `50000` | Maximum combined snapshot working-tree file count. |
+| `CLAUDE_READ_SNAPSHOT_MAX_BYTES` | `1073741824` | Maximum combined snapshot working-tree bytes. |
+| `CLAUDE_READ_ISOLATION_MAX_SECS` | `14400` | Maximum per-account container call time; relay startup has a separate 5-second check. Invalid values use the default. |
 
 Effective read-profile calls, including calls narrowed by
 `AI_ENGINE_READ_ONLY=true`, run in a no-network, read-only container with a
@@ -2042,7 +2111,7 @@ the host and require a separate credential-isolation follow-up.
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
-`claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
+For write profiles, `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
 it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
 file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
 and reports that path instead of overwriting the new content. For read-profile

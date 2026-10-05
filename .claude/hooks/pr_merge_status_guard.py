@@ -14,8 +14,11 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories or refspecs warn and
-fall back to the session checkout check. Repeated targets share a PR snapshot
+when the source is a detached HEAD. Push destinations resolve from git's
+repository argument or push-remote configuration; unmappable destinations
+block the push. Unknown directories fall back to the session checkout with a
+warning; unresolved push sources or destinations request confirmation.
+Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 
 Detection rule — all three conditions must hold before the command is blocked:
@@ -73,6 +76,8 @@ Exit codes (Claude Code hook protocol):
   0 — allow the command. A warning may be emitted via `systemMessage`, or a
       `permissionDecision: ask` may route the call through the harness prompt.
   2 — block the command; stderr is fed back to Claude as the reason.
+The hook prints at most one JSON object on stdout per call, merging warnings
+and confirmation reasons into that object.
 
 Escape hatch: set CLAUDE_PR_MERGE_GUARD=off to disable only the merged-PR check.
 The API-write confirmation safeguard remains active.
@@ -81,6 +86,7 @@ The API-write confirmation safeguard remains active.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -146,6 +152,7 @@ _API_WRITE_VALUE_OPTIONS = frozenset(
 _API_WRITE_INLINE_OPTION_PREFIXES = ("-H", "-d", "-F")
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$")
+_REMOTE_NAME_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._/-]*$")
 _REMOTE_HEAD_BRANCH_RE = re.compile(r"^ref:\s+refs/heads/([^\s]+)\s+HEAD$", re.MULTILINE)
 
 _CACHE_TTL_SECONDS = 300
@@ -161,6 +168,7 @@ _GIT_TIMEOUT_SECONDS = 5
 # Network-bound git calls (`ls-remote`, `fetch`) used by the history fallback.
 _GIT_REMOTE_TIMEOUT_SECONDS = 15
 _GIT_ENVIRONMENT: ContextVar[dict[str, str] | None] = ContextVar("guard_git_environment", default=None)
+_pending_output: dict[str, list[str]] = {"system_messages": [], "ask_reasons": []}
 
 # Options with an argument must not turn that argument into a refspec. Unknown
 # options are treated as uncertain rather than authorizing a different branch.
@@ -184,11 +192,19 @@ class _GitInvocation(NamedTuple):
 class _GuardTarget(NamedTuple):
 	cwd: str
 	environment: dict[str, str]
-	branch: str
+	branch: str | None
 	tip: str
 	reaches_remote: bool
 	warning: str = ""
 	bulk: str = ""
+	push_repository: str = ""
+
+
+class _PushDestination(NamedTuple):
+	label: str
+	slugs: tuple[str, ...]
+	history_remote: str
+	failure: str
 
 
 class LookupUnavailable(Exception):
@@ -246,13 +262,20 @@ def _shell_segments(command: str) -> list[list[str]]:
 	return segments
 
 
+def _is_unquoted_fd_prefix(command: str, digits: str, operator: str) -> bool:
+	"""Only recognize a literal descriptor immediately before a redirect."""
+	return re.search(
+		r"(?:^|[\s;&|()])" + re.escape(digits) + re.escape(operator[0]) + r"$", command
+	) is not None
+
+
 def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	"""Return simple commands and the operator preceding each one.
 
 	This is not a Bash interpreter. Unsupported control flow is marked unknown
 	by the caller, never executed to infer an authorization decision.
 	"""
-	lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer = shlex.shlex(io.StringIO(command), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
@@ -260,31 +283,40 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
-	for token in lexer:
+	last_word_span: tuple[int, int] | None = None
+	while True:
+		start = lexer.instream.tell()
+		token = lexer.get_token()
+		end = lexer.instream.tell()
+		if token == lexer.eof:
+			break
 		if redirect_target:
 			if token == "&":
 				continue  # The next token is the redirected file descriptor.
 			redirect_target = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			# Only a raw, unquoted numeric word attached to the redirect is an fd prefix.
-			redirect_start = lexer.instream.tell() - len(token)
-			if command[redirect_start:redirect_start + len(token)] != token:
-				redirect_start -= 1  # shlex read one character past the operator.
-			if segment and segment[-1].isdigit() and not token.startswith("&"):
-				numeric_start = redirect_start - len(segment[-1])
-				if (numeric_start >= 0 and command[numeric_start:redirect_start] == segment[-1]
-					and (numeric_start == 0 or command[numeric_start - 1] in " \t\r\n;&|()<>")):
-					segment.pop()
+			# Bash treats only adjacent, unquoted digits as an IO_NUMBER.
+			# Keep all other words as arguments so their push refspec is checked.
+			if (
+				segment and last_word_span is not None
+				and last_word_span[1] > last_word_span[0]
+				and command[last_word_span[1] - 1] in "<>"
+				and re.fullmatch(r"[0-9]+", command[last_word_span[0]:last_word_span[1] - 1].lstrip(" \t\r"))
+			):
+				segment.pop()
 			redirect_target = True
+			last_word_span = None
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
 				result.append((operator, segment))
 				segment = []
 			operator = token
+			last_word_span = None
 		else:
 			segment.append(token)
+			last_word_span = (start, end)
 	if segment:
 		result.append((operator, segment))
 	return result
@@ -364,7 +396,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
-			if name in ("GIT_DIR", "GIT_WORK_TREE"):
+			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 			index += 1
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
@@ -434,7 +466,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if invocation.warning:
 		return [_GuardTarget(invocation.cwd, {}, "", "HEAD", True, invocation.warning)]
 	positionals: list[str] = []
-	remote_provided = False
+	option_repository = ""
 	bulk = ""
 	delete = False
 	tags = False
@@ -457,8 +489,8 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		elif word in ("--all", "--mirror", "--branches"):
 			bulk = word
 		elif word in _PUSH_VALUE_OPTIONS or word in ("--pu", "--push-o", "--rep", "--rece", "--e") or re.fullmatch(r"-[ufnqv]*o", word):
-			if word in ("--repo", "--rep"):
-				remote_provided = True
+			if word in ("--repo", "--rep") and index + 1 < len(arguments):
+				option_repository = arguments[index + 1]
 			index += 1
 			if index >= len(arguments):
 				uncertain = True
@@ -466,7 +498,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			delete = True
 		elif word.startswith(("--push-option=", "--push-o=", "--pu=", "--repo=", "--rep=", "--receive-pack=", "--rece=", "--exec=", "--e=", "--force-with-lease=")) or (word.startswith("-o") and word != "-o"):
 			if word.startswith(("--repo=", "--rep=")):
-				remote_provided = True
+				option_repository = word.split("=", 1)[1]
 		elif word.startswith("-"):
 			if word not in _PUSH_BOOLEAN_OPTIONS and not re.fullmatch(r"-[ufnqv]+", word):
 				uncertain = True
@@ -477,12 +509,17 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		return []  # Deletes do not strand new commits on a branch.
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
-			"could not resolve git push options; checking the current branch instead")]
-	refspecs = positionals if remote_provided else positionals[1:]
+			"could not resolve git push options; destination branch is unknown")]
+	# Git treats the first positional as the repository even when --repo was set.
+	push_repository = positionals[0] if positionals else option_repository
+	refspecs = positionals[1:]
+	# Let destination resolution reject an unmappable positional repository,
+	# rather than skipping its empty-branch warning before that check runs.
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk)]
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+			bulk=bulk, push_repository=push_repository)]
 	targets: list[_GuardTarget] = []
 	for refspec in refspecs:
 		refspec = refspec.removeprefix("+")
@@ -503,12 +540,13 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		if branch == "":
 			continue
 		if branch is None:
-			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; checking the current branch instead"))
+			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True))
 			continue
-		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True,
+			push_repository=push_repository))
 	if bulk:
-		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk))
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
+			bulk=bulk, push_repository=push_repository))
 	return targets
 
 
@@ -726,19 +764,21 @@ def current_branch(cwd: str) -> str:
 	return "" if branch in ("", "HEAD") else branch
 
 
-def default_branch(cwd: str) -> str:
+def default_branch(cwd: str, remote: str = "origin") -> str:
 	"""Best-effort default branch name; returns "" when it cannot be determined."""
+	if not remote:
+		return ""
 	code, out, _ = _run(
-		["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd, _GIT_TIMEOUT_SECONDS
+		["git", "symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"], cwd, _GIT_TIMEOUT_SECONDS
 	)
 	if code == 0:
 		ref = out.strip()
-		if ref.startswith("origin/"):
-			ref = ref[len("origin/") :]
+		if ref.startswith(f"{remote}/"):
+			ref = ref[len(remote) + 1:]
 		if ref:
 			return ref
 	code, out, _ = _run(
-		["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--symref", "origin", "HEAD"],
+		["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--symref", remote, "HEAD"],
 		cwd,
 		_GIT_REMOTE_TIMEOUT_SECONDS,
 	)
@@ -754,6 +794,64 @@ def repo_slug(cwd: str) -> str:
 	if code != 0:
 		return ""
 	return extract_repo_slug(out)
+
+
+def _default_push_remote(cwd: str) -> str:
+	branch = current_branch(cwd)
+	keys = ([f"branch.{branch}.pushRemote"] if branch else []) + ["remote.pushDefault"]
+	if branch:
+		keys.append(f"branch.{branch}.remote")
+	for key in keys:
+		code, out, _ = _run(["git", "config", "--get", key], cwd, _GIT_TIMEOUT_SECONDS)
+		if code == 0 and out.strip():
+			return out.strip()
+	code, out, _ = _run(["git", "remote"], cwd, _GIT_TIMEOUT_SECONDS)
+	if code == 0 and len(out.splitlines()) == 1:
+		return out.strip()
+	return "origin"
+
+
+def _remote_push_urls(name: str, cwd: str) -> list[str]:
+	if not _REMOTE_NAME_RE.fullmatch(name) or ".." in name:
+		return []
+	code, out, _ = _run(["git", "config", "--get-all", f"remote.{name}.pushurl"], cwd, _GIT_TIMEOUT_SECONDS)
+	if code == 0:
+		return out.splitlines()
+	code, out, _ = _run(["git", "config", "--get-all", f"remote.{name}.url"], cwd, _GIT_TIMEOUT_SECONDS)
+	return out.splitlines() if code == 0 else []
+
+
+def _resolve_push_destination(cwd: str, push_repository: str) -> _PushDestination:
+	token = push_repository or _default_push_remote(cwd)
+	# A remote name is safe to show. Strip URL userinfo before printing a URL.
+	label = re.sub(r"[^/@]*@", "", token) if "@" in token else token
+	urls = _remote_push_urls(token, cwd)
+	if urls:
+		slugs = tuple(dict.fromkeys(extract_repo_slug(url) for url in urls))
+		if "" in slugs:
+			return _PushDestination(label, (), token, "one or more push URLs are not GitHub repositories")
+		# Fetching a remote with a different pushurl would inspect the *fetch*
+		# repository's history, not the destination's. Degrade to confirmation.
+		code, out, _ = _run(["git", "config", "--get", f"remote.{token}.url"], cwd, _GIT_TIMEOUT_SECONDS)
+		history_remote = token if code == 0 and slugs == (extract_repo_slug(out),) else ""
+		return _PushDestination(label, slugs, history_remote, "")
+	slug = extract_repo_slug(token)
+	if not slug:
+		return _PushDestination(label, (), "", "not a configured GitHub remote or URL")
+	# A literal URL can reuse a configured remote's history only when that
+	# remote's fetch URL names the same repository.
+	history_remote = ""
+	code, out, _ = _run(
+		["git", "config", "--get-regexp", r"^remote\..*\.url$"], cwd, _GIT_TIMEOUT_SECONDS
+	)
+	if code == 0:
+		for line in out.splitlines():
+			key, _, url = line.partition(" ")
+			name = key[len("remote."):-len(".url")]
+			if _REMOTE_NAME_RE.fullmatch(name) and ".." not in name and extract_repo_slug(url) == slug:
+				history_remote = name
+				break
+	return _PushDestination(label, (slug,), history_remote, "")
 
 
 def is_ancestor_of(sha: str, tip: str, cwd: str) -> bool:
@@ -806,12 +904,12 @@ def on_first_parent_chain(sha: str, tip: str, cwd: str) -> bool | None:
 	return sha in out.split()
 
 
-def remote_branch_tip(branch: str, cwd: str) -> str | None:
+def remote_branch_tip(branch: str, cwd: str, remote: str = "origin") -> str | None:
 	"""Sha origin currently holds for `branch`; "" when origin has no such
 	branch; None when origin could not be queried."""
 	ref = f"refs/heads/{branch}"
 	code, out, _ = _run(
-		["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--heads", "origin", ref],
+		["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--heads", remote, ref],
 		cwd,
 		_GIT_REMOTE_TIMEOUT_SECONDS,
 	)
@@ -824,24 +922,24 @@ def remote_branch_tip(branch: str, cwd: str) -> str | None:
 	return ""
 
 
-def fetch_from_origin(refs: list[str], cwd: str) -> bool:
+def fetch_from_origin(refs: list[str], cwd: str, remote: str = "origin") -> bool:
 	"""Fetch the named branches from origin so their objects and
 	`refs/remotes/origin/<name>` are current. False when the fetch failed."""
 	if not refs:
 		return True
 	code, _, _ = _run(
-		["env", "GIT_TERMINAL_PROMPT=0", "git", "fetch", "--quiet", "origin", "--", *refs],
+		["env", "GIT_TERMINAL_PROMPT=0", "git", "fetch", "--quiet", remote, "--", *refs],
 		cwd,
 		_GIT_REMOTE_TIMEOUT_SECONDS,
 	)
 	return code == 0
 
 
-def _base_ref(base: str) -> str:
-	return f"refs/remotes/origin/{base}"
+def _base_ref(base: str, remote: str = "origin") -> str:
+	return f"refs/remotes/{remote}/{base}" if remote else ""
 
 
-def stacks_on_merged_history(merged_sha: str, tip: str, cwd: str, base: str) -> bool:
+def stacks_on_merged_history(merged_sha: str, tip: str, cwd: str, base: str, remote: str = "origin") -> bool:
 	"""Condition 3: does `tip` stack on the merged PR head `merged_sha`?
 
 	Plain ancestry is the whole answer for squash- and rebase-merged PRs: the
@@ -860,7 +958,7 @@ def stacks_on_merged_history(merged_sha: str, tip: str, cwd: str, base: str) -> 
 		return False
 	if not base:
 		return True
-	base_ref = _base_ref(base)
+	base_ref = _base_ref(base, remote)
 	fork_point = merge_base(tip, base_ref, cwd)
 	if not fork_point:
 		return True
@@ -873,7 +971,7 @@ def stacks_on_merged_history(merged_sha: str, tip: str, cwd: str, base: str) -> 
 	return not on_chain
 
 
-def git_history_verdict(tip: str, branch: str, base: str, cwd: str) -> tuple[str, str]:
+def git_history_verdict(tip: str, branch: str, base: str, cwd: str, remote: str = "origin") -> tuple[str, str]:
 	"""API-free fallback: what git alone can say about `tip` on `branch`.
 
 	Issues two network-bound git calls (`ls-remote` for the branch, one
@@ -896,41 +994,43 @@ def git_history_verdict(tip: str, branch: str, base: str, cwd: str) -> tuple[str
 	branch that has since merged — is reported inconclusive when it keeps
 	unmerged commits on origin or has never been pushed there.
 	"""
+	if not remote:
+		return VERDICT_UNAVAILABLE, "push destination has no configured remote to inspect"
 	if not base:
 		return VERDICT_UNAVAILABLE, "default branch unknown"
-	remote_tip = remote_branch_tip(branch, cwd)
+	remote_tip = remote_branch_tip(branch, cwd, remote)
 	if remote_tip is None:
-		return VERDICT_UNAVAILABLE, "could not list origin's branches"
+		return VERDICT_UNAVAILABLE, f"could not list {remote}'s branches"
 	fetch_refs = [base] + ([branch] if remote_tip else [])
-	if not fetch_from_origin(fetch_refs, cwd):
-		return VERDICT_UNAVAILABLE, f"could not fetch origin/{base}"
-	base_ref = _base_ref(base)
+	if not fetch_from_origin(fetch_refs, cwd, remote):
+		return VERDICT_UNAVAILABLE, f"could not fetch {remote}/{base}"
+	base_ref = _base_ref(base, remote)
 	fork_point = merge_base(tip, base_ref, cwd)
 	if not fork_point:
-		return VERDICT_UNAVAILABLE, f"no merge base between the branch and origin/{base}"
+		return VERDICT_UNAVAILABLE, f"no merge base between the branch and {remote}/{base}"
 	on_chain = on_first_parent_chain(fork_point, base_ref, cwd)
 	if on_chain is None:
-		return VERDICT_UNAVAILABLE, f"could not walk origin/{base}'s first-parent history"
+		return VERDICT_UNAVAILABLE, f"could not walk {remote}/{base}'s first-parent history"
 	if on_chain:
 		return (
 			VERDICT_INCONCLUSIVE,
-			f"the branch forks off origin/{base}'s own history, which is what an "
+			f"the branch forks off {remote}/{base}'s own history, which is what an "
 			f"open branch and a squash- or rebase-merged one both look like",
 		)
 	if not remote_tip:
 		return (
 			VERDICT_INCONCLUSIVE,
-			f"origin has no branch named `{branch}`, so git cannot distinguish a "
+			f"{remote} has no branch named `{branch}`, so git cannot distinguish a "
 			f"deleted merged branch from a never-pushed branch",
 		)
 	if is_ancestor_of(remote_tip, base_ref, cwd):
 		return (
 			VERDICT_STRANDED,
 			f"the branch sits on side history that a merge commit already brought "
-			f"into origin/{base}, and origin/{branch} ({remote_tip[:12]}) is fully "
-			f"contained in origin/{base}",
+			f"into {remote}/{base}, and {remote}/{branch} ({remote_tip[:12]}) is fully "
+			f"contained in {remote}/{base}",
 		)
-	return VERDICT_INCONCLUSIVE, f"origin/{branch} carries commits not yet in origin/{base}"
+	return VERDICT_INCONCLUSIVE, f"{remote}/{branch} carries commits not yet in {remote}/{base}"
 
 
 def _cache_path(slug: str, branch: str) -> Path:
@@ -1081,7 +1181,7 @@ def query_pull_requests(slug: str, branch: str, cwd: str) -> list[dict]:
 
 
 def blocking_pull_request(
-	pull_requests: list[dict], cwd: str, base: str = "", tip: str = "HEAD"
+	pull_requests: list[dict], cwd: str, base: str = "", tip: str = "HEAD", remote: str = "origin"
 ) -> dict | None:
 	"""Apply the three-condition detection rule; return the offending PR or None.
 
@@ -1095,7 +1195,7 @@ def blocking_pull_request(
 	if any(str(pr.get("state", "")).upper() == "OPEN" for pr in pull_requests):
 		return None
 	for pr in merged:
-		if stacks_on_merged_history(str(pr.get("headRefOid") or ""), tip, cwd, base):
+		if stacks_on_merged_history(str(pr.get("headRefOid") or ""), tip, cwd, base, remote):
 			return pr
 	return None
 
@@ -1110,16 +1210,17 @@ def merged_without_open(pull_requests: list[dict]) -> dict | None:
 	return merged[0]
 
 
-def _remediation_text(branch: str, base: str) -> str:
+def _remediation_text(branch: str, base: str, remote: str = "origin") -> str:
+	remote = remote or "origin"
 	reset_commands = (
-		f"  git fetch origin {base}\n"
-		f"  git checkout -B {branch} origin/{base}\n"
+		f"  git fetch {remote} {base}\n"
+		f"  git checkout -B {branch} {remote}/{base}\n"
 	)
 	default_branch_note = ""
 	if not base:
 		reset_commands = (
-			f"  git fetch origin <default-branch>\n"
-			f"  git checkout -B {branch} origin/<default-branch>\n"
+			f"  git fetch {remote} <default-branch>\n"
+			f"  git checkout -B {branch} {remote}/<default-branch>\n"
 		)
 		default_branch_note = (
 			f"The guard could not determine the default branch automatically; "
@@ -1142,7 +1243,7 @@ def _remediation_text(branch: str, base: str) -> str:
 	)
 
 
-def _block_message(pr: dict, branch: str, base: str, tip_label: str = "HEAD") -> str:
+def _block_message(pr: dict, branch: str, base: str, tip_label: str = "HEAD", remote: str = "origin") -> str:
 	number = pr.get("number")
 	return (
 		f"BLOCKED by the merged-PR guard (CLAUDE.md §21).\n"
@@ -1155,11 +1256,11 @@ def _block_message(pr: dict, branch: str, base: str, tip_label: str = "HEAD") ->
 		f"  merged PR: {pr.get('url')}\n"
 		f"  title:     {pr.get('title')}\n"
 		f"\n"
-		f"{_remediation_text(branch, base)}"
+		f"{_remediation_text(branch, base, remote)}"
 	)
 
 
-def _history_block_message(branch: str, base: str, detail: str, api_failure: str) -> str:
+def _history_block_message(branch: str, base: str, detail: str, api_failure: str, remote: str = "origin") -> str:
 	return (
 		f"BLOCKED by the merged-PR guard (CLAUDE.md §21).\n"
 		f"\n"
@@ -1168,13 +1269,15 @@ def _history_block_message(branch: str, base: str, detail: str, api_failure: str
 		f"already-merged history: {detail}. Committing or pushing here would "
 		f"strand the work on a dead branch.\n"
 		f"\n"
-		f"{_remediation_text(branch, base)}"
+		f"{_remediation_text(branch, base, remote)}"
 	)
 
 
 def _warn(reason: str) -> None:
 	"""Emit a non-blocking warning to the user and allow the command."""
-	print(json.dumps({"systemMessage": f"merged-PR guard skipped: {reason}"}))
+	message = f"merged-PR guard skipped: {reason}"
+	if message not in _pending_output["system_messages"]:
+		_pending_output["system_messages"].append(message)
 
 
 def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None:
@@ -1188,41 +1291,47 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 	# The prompt is read by a human: `reason` carries the full transport
 	# error for the log, `prompt_reason` a one-paragraph version for the prompt.
 	short_reason = prompt_reason or reason
-	print(
-		json.dumps(
-			{
-				"systemMessage": f"merged-PR guard needs confirmation: {reason}",
-				"hookSpecificOutput": {
-					"hookEventName": "PreToolUse",
-					"permissionDecision": "ask",
-					"permissionDecisionReason": (
-						f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
-						f"pull request for this branch is still open. If it has merged, "
-						f"deny — the branch must be rebuilt from the default branch and "
-						f"a new PR opened."
-					),
-				},
-			}
-		)
+	message = f"merged-PR guard needs confirmation: {reason}"
+	if message not in _pending_output["system_messages"]:
+		_pending_output["system_messages"].append(message)
+	ask_reason = (
+		f"merged-PR guard (CLAUDE.md §21): {short_reason} Allow only if the "
+		f"pull request for this branch is still open. If it has merged, "
+		f"deny — the branch must be rebuilt from the default branch and "
+		f"a new PR opened."
 	)
+	if ask_reason not in _pending_output["ask_reasons"]:
+		_pending_output["ask_reasons"].append(ask_reason)
 
 
 def _request_api_write_confirmation() -> None:
 	"""Restore the harness prompt for a non-canonical allowlisted API write."""
-	print(
-		json.dumps(
-			{
-				"hookSpecificOutput": {
-					"hookEventName": "PreToolUse",
-					"permissionDecision": "ask",
-					"permissionDecisionReason": (
-						"Non-canonical API curl options can override the allowlisted "
-						"HTTP method or destination."
-					),
-				}
-			}
-		)
+	ask_reason = (
+		"Non-canonical API curl options can override the allowlisted "
+		"HTTP method or destination."
 	)
+	if ask_reason not in _pending_output["ask_reasons"]:
+		_pending_output["ask_reasons"].append(ask_reason)
+
+
+def _reset_pending_output() -> None:
+	_pending_output["system_messages"].clear()
+	_pending_output["ask_reasons"].clear()
+
+
+def _emit_pending_output(code: int) -> None:
+	response: dict = {}
+	if _pending_output["system_messages"]:
+		response["systemMessage"] = "\n".join(_pending_output["system_messages"])
+	if code == 0 and _pending_output["ask_reasons"]:
+		response["hookSpecificOutput"] = {
+			"hookEventName": "PreToolUse",
+			"permissionDecision": "ask",
+			"permissionDecisionReason": "\n\n".join(_pending_output["ask_reasons"]),
+		}
+	if response:
+		print(json.dumps(response))
+	_reset_pending_output()
 
 
 def _payload_cwd(payload: dict) -> str:
@@ -1244,6 +1353,7 @@ def _unreachable_outcome(
 	cwd: str,
 	reaches_remote: bool,
 	target_slug: str = "",
+	history_remote: str = "origin",
 ) -> tuple[int, str]:
 	"""Decide what to do when GitHub could not answer (CLAUDE.md §21.C).
 
@@ -1254,12 +1364,12 @@ def _unreachable_outcome(
 	allowed with a warning because the work only strands once pushed.
 	"""
 	verdict, detail = (
-		git_history_verdict(tip, branch, base, cwd)
+		git_history_verdict(tip, branch, base, cwd, history_remote)
 		if tip
 		else (VERDICT_UNAVAILABLE, f"no local checkout of {target_slug or 'the target repository'} to inspect")
 	)
 	if verdict == VERDICT_STRANDED:
-		return 2, _history_block_message(branch, base, detail, api_failure)
+		return 2, _history_block_message(branch, base, detail, api_failure, history_remote)
 	reason = (
 		f"could not reach GitHub to check PR status for `{branch}` ({api_failure}); "
 		f"git history is {verdict}: {detail}."
@@ -1303,14 +1413,30 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	unknown_destination_reasons: list[str] = []
+	unresolved_push_sources: list[str] = []
+	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "push" and invocation.warning:
+			_warn(invocation.warning)
+			unresolved_push_sources.append(
+				"could not resolve git push repository; the session checkout may not be the pushed repository."
+			)
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
 		)
 		for target in targets:
+			if target.branch is None:
+				unresolved_push_destinations.append(
+					"could not resolve git push destination; shell expansion may change the pushed branch."
+				)
+				continue
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
+			if target.warning.startswith("could not resolve git push"):
+				unknown_destination_reasons.append(target.warning)
+				continue
 			if target.warning:
 				_warn(target.warning)
 			if target.tip != "HEAD":
@@ -1320,69 +1446,102 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						target.cwd, _GIT_TIMEOUT_SECONDS,
 					)
 				if code != 0:
-					_warn("could not resolve git push source; checking the session checkout instead")
-					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+					unresolved_push_sources.append(
+						f"could not resolve git push source for `{target.branch}`; "
+						"shell expansion may change the pushed commit."
+					)
+					continue
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
 				branch = target.branch or current_branch(target.cwd)
+				if target.reaches_remote:
+					destination = _resolve_push_destination(target.cwd, target.push_repository)
+					if destination.failure:
+						blocks.append(
+							f"BLOCKED: could not verify the push destination `{destination.label}` "
+							f"as a GitHub <owner>/<repo> ({destination.failure}). The PR-merge guard "
+							f"(CLAUDE.md §21) must check that repository's PR status for `{branch}` "
+							"before the push. Push to a GitHub remote, or set "
+							"CLAUDE_PR_MERGE_GUARD=off for this session if this destination is intended."
+						)
+						continue
+					base = default_branch(
+						target.cwd, destination.history_remote or (
+							target.push_repository if not _remote_push_urls(target.push_repository, target.cwd)
+							else ""
+						),
+					)
+					slugs = destination.slugs
+					remote = destination.history_remote
+				else:
+					base = default_branch(target.cwd)
+					slugs = ()
+					remote = "origin"
 				if not branch:
 					# Detached HEAD without a literal branch destination.
 					continue
-				base = default_branch(target.cwd)
 				if base and branch == base:
 					continue
-				slug = repo_slug(target.cwd)
-				if not slug:
-					_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
-					continue
+				if not target.reaches_remote:
+					slug = repo_slug(target.cwd)
+					if not slug:
+						_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
+						continue
+					slugs = (slug,)
 				tip = target.tip
-				key = (slug, branch)
-				if key not in pr_snapshots:
-					cached = _read_cache(slug, branch)
-					try:
-						pull_requests = cached if cached is not None else query_pull_requests(slug, branch, target.cwd)
-					except LookupUnavailable as exc:
-						pr_snapshots[key] = (None, True, str(exc))
-					else:
-						if cached is None:
-							_write_cache(slug, branch, pull_requests)
-						pr_snapshots[key] = (pull_requests, cached is None, "")
-				pull_requests, fresh, failure = pr_snapshots[key]
-				if failure:
-					outcome, message = _unreachable_outcome(
-						failure, tip, branch, base, target.cwd, target.reaches_remote
-					)
-					if outcome == 2:
-						blocks.append(message)
-					continue
-				if pull_requests is None:
-					continue
-				offender = blocking_pull_request(pull_requests, target.cwd, base, tip)
-				if offender is not None and not fresh:
-					try:
-						pull_requests = query_pull_requests(slug, branch, target.cwd)
-					except LookupUnavailable as exc:
-						failure = f"could not re-verify: {exc}"
-						pr_snapshots[key] = (None, True, failure)
+				for slug in slugs:
+					key = (slug, branch)
+					if key not in pr_snapshots:
+						cached = _read_cache(slug, branch)
+						try:
+							pull_requests = cached if cached is not None else query_pull_requests(slug, branch, target.cwd)
+						except LookupUnavailable as exc:
+							pr_snapshots[key] = (None, True, str(exc))
+						else:
+							if cached is None:
+								_write_cache(slug, branch, pull_requests)
+							pr_snapshots[key] = (pull_requests, cached is None, "")
+					pull_requests, fresh, failure = pr_snapshots[key]
+					if failure:
 						outcome, message = _unreachable_outcome(
-							failure, tip, branch, base, target.cwd, target.reaches_remote
+							failure, tip, branch, base, target.cwd, target.reaches_remote,
+							history_remote=remote,
 						)
 						if outcome == 2:
 							blocks.append(message)
 						continue
-					_write_cache(slug, branch, pull_requests)
-					pr_snapshots[key] = (pull_requests, True, "")
-					offender = blocking_pull_request(pull_requests, target.cwd, base, tip)
-				if offender is not None:
-					blocks.append(_block_message(offender, branch, base, tip_label=tip))
+					if pull_requests is None:
+						continue
+					offender = blocking_pull_request(pull_requests, target.cwd, base, tip, remote)
+					if offender is not None and not fresh:
+						try:
+							pull_requests = query_pull_requests(slug, branch, target.cwd)
+						except LookupUnavailable as exc:
+							failure = f"could not re-verify: {exc}"
+							pr_snapshots[key] = (None, True, failure)
+							outcome, message = _unreachable_outcome(
+								failure, tip, branch, base, target.cwd, target.reaches_remote,
+								history_remote=remote,
+							)
+							if outcome == 2:
+								blocks.append(message)
+							continue
+						_write_cache(slug, branch, pull_requests)
+						pr_snapshots[key] = (pull_requests, True, "")
+						offender = blocking_pull_request(pull_requests, target.cwd, base, tip, remote)
+					if offender is not None:
+						blocks.append(_block_message(offender, branch, base, tip_label=tip, remote=remote))
 	if blocks:
 		return 2, "\n\n".join(blocks)
+	unresolved_push_sources.extend(unresolved_push_destinations)
 	if bulk_reasons:
-		_request_confirmation(
+		unknown_destination_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
+	if unknown_destination_reasons or unresolved_push_sources:
+		_request_confirmation("; ".join(sorted(set(unknown_destination_reasons + unresolved_push_sources))))
 	return 0, ""
 
 
@@ -1473,14 +1632,26 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 	return 2, _block_message(offender, branch, base, tip_label=f"origin/{branch}")
 
 
-def evaluate(payload: dict) -> tuple[int, str]:
-	"""Core decision. Returns (exit_code, message_for_stderr)."""
+def _evaluate_tool(payload: dict) -> tuple[int, str]:
+	"""Dispatch the hook's decision for the requested tool."""
 	tool_name = payload.get("tool_name")
 	if tool_name == "Bash":
 		return _evaluate_bash(payload)
 	if tool_name in MCP_PUSH_TOOLS:
 		return _evaluate_mcp_push(payload)
 	return 0, ""
+
+
+def evaluate(payload: dict) -> tuple[int, str]:
+	"""Core decision. Returns (exit_code, message_for_stderr)."""
+	_reset_pending_output()
+	try:
+		code, message = _evaluate_tool(payload)
+	except Exception as exc:  # noqa: BLE001 - the guard must never break the session
+		_warn(f"internal error ({exc})")
+		code, message = 0, ""
+	_emit_pending_output(code)
+	return code, message
 
 
 def main() -> int:
@@ -1497,8 +1668,7 @@ def main() -> int:
 
 	try:
 		code, message = evaluate(payload)
-	except Exception as exc:  # noqa: BLE001 - the guard must never break the session
-		_warn(f"internal error ({exc})")
+	except Exception:  # noqa: BLE001 - stdout may already contain a hook response
 		return 0
 
 	if message:

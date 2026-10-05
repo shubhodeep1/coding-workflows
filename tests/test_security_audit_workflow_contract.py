@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -381,6 +382,53 @@ def _audit_workflow_step(name: str) -> dict:
 
 	workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
 	return next(step for step in workflow["jobs"]["security-audit"]["steps"] if step.get("name") == name)
+
+
+def test_single_issue_report_refuses_modified_support() -> None:
+	step = _audit_workflow_step("Report single-issue security pass")
+	assert step["env"]["SUPPORT_SHA"] == "${{ steps.resolve_support.outputs.support_sha }}"
+	assert step["continue-on-error"] is True
+	assert step["run"].index("git -C") < step["run"].index('bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" report')
+	with tempfile.TemporaryDirectory(prefix="security-audit-report-integrity-") as td:
+		workspace = Path(td) / "support"
+		(workspace / "scripts").mkdir(parents=True)
+		marker = Path(td) / "report-ran"
+		(workspace / "scripts/review_single_issue_security_pass.sh").write_text(f'touch "{marker}"\n', encoding="utf-8")
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		subprocess.run(["git", "-C", str(workspace), "add", "scripts"], check=True)
+		subprocess.run(["git", "-C", str(workspace), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "support"], check=True)
+		sha = subprocess.check_output(["git", "-C", str(workspace), "rev-parse", "HEAD"], text=True).strip()
+		manifest = subprocess.check_output(["sha256sum", "scripts/review_single_issue_security_pass.sh"], cwd=workspace, text=True).strip()
+		(Path(td) / "audit_support_manifest.txt").write_text(manifest + "\n", encoding="utf-8")
+		support_scripts_sha256 = hashlib.sha256((manifest + "\n").encode("utf-8")).hexdigest()
+		env = dict(os.environ, GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=td, AUDIT_DATA_SHA=sha, SECURITY_PASS_PR_NUMBER="9", SUPPORT_SHA=sha, SUPPORT_SCRIPTS_SHA256=support_scripts_sha256)
+		env.pop("BASH_ENV", None)
+		def run_report() -> subprocess.CompletedProcess:
+			return subprocess.run(["bash", "--noprofile", "--norc", "-e"], input=step["run"], text=True, cwd=workspace, env=env, capture_output=True, check=False)
+		assert run_report().returncode == 0
+		assert marker.exists()
+		marker.unlink()
+		(workspace / "new.sh").write_text("untracked", encoding="utf-8")
+		assert run_report().returncode != 0
+		assert not marker.exists()
+		(workspace / "new.sh").unlink()
+		env["SUPPORT_SHA"] = "a" * 40
+		assert run_report().returncode != 0
+		assert not marker.exists()
+
+
+def test_security_audit_integrity_failure_never_falls_back_to_codex() -> None:
+	text = SCRIPT_PATH.read_text(encoding="utf-8")
+	start = text.index('if [ "${security_audit_claude_rc}" -eq 86 ]; then')
+	end = text.index('if [ "${security_audit_claude_rc}" -eq 75 ]', start)
+	block = text[start:end]
+	result = subprocess.run(
+		["bash", "--noprofile", "--norc", "-c", 'security_audit_claude_rc=86; security_audit_emit_failure() { echo "phase=$1"; }; ' + block + 'echo unexpected_fallback'],
+		capture_output=True, text=True, check=False, env={key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")},
+	)
+	assert result.returncode == 86
+	assert "phase=claude-support-integrity" in result.stdout
+	assert "unexpected_fallback" not in result.stdout
 
 
 def _run_audit_workflow_resolution(

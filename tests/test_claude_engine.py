@@ -10,8 +10,10 @@ probe parsing and the least-used account order, and the smoke-run inspector.
 from __future__ import annotations
 
 import importlib.util
+import errno
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +34,134 @@ def _load():
 
 
 ce = _load()
+
+
+@pytest.mark.parametrize("command", [
+	"git show HEAD:a", "git log --format='%H|%s'", "git grep 'a|b' -- '*.py'",
+	"git diff --no-textconv", "gh pr view 5", "gh api repos/a/b",
+])
+def test_read_bash_allows_only_literal_read_forms(command: str) -> None:
+	assert ce.read_bash_denial(command) is None
+
+
+@pytest.mark.parametrize("command", [
+	"git show --output=../scripts/x HEAD:a", "git show --outp=x HEAD:a",
+	"git show --output x HEAD:a", 'git show "--outp""ut=x" HEAD:a',
+	"git diff --ext-diff", "git diff --textconv", "git diff --text",
+	"git grep -O vim x", "git grep -nOcat x", "git grep --open=sh x",
+	"git difftool -x sh", "git diff-tree HEAD", "git show-branch HEAD",
+	"git -C .. show HEAD", "git show HEAD > x", "git show $(id)",
+	"git show `id`", "git log *", "git log --outp{ut=x,}",
+	"gh pr checkout 5", "git show HEAD\nrm x", "git show HEAD && id",
+])
+def test_read_bash_denies_write_capable_forms(command: str) -> None:
+	assert ce.read_bash_denial(command)
+
+
+def test_read_bash_hook_protocol() -> None:
+	for payload, denied in (
+		({"tool_name": "Bash", "tool_input": {"command": "git show HEAD:x"}}, False),
+		({"tool_name": "Bash", "tool_input": {"command": "git show --output=x HEAD:x"}}, True),
+		({"tool_name": "Write", "tool_input": {"command": "git show HEAD:x"}}, True),
+		({"tool_name": "Bash", "tool_input": {}}, True),
+	):
+		result = _run("guard-read-bash", stdin=json.dumps(payload))
+		assert result.returncode == 0
+		assert (json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny") if denied else not result.stdout
+	assert json.loads(_run("guard-read-bash", stdin="not json").stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_support_lock_detects_changes_and_restores_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = tmp_path / "support"
+	scripts = root / "scripts"
+	scripts.mkdir(parents=True)
+	file = scripts / "helper.sh"
+	file.write_text("trusted\n", encoding="utf-8")
+	file.chmod(0o755)
+	workdir = scripts / "audit-data"
+	(workdir / "scripts").mkdir(parents=True)
+	(workdir / "scripts" / "untrusted.sh").write_text("data", encoding="utf-8")
+	monkeypatch.setattr(ce, "support_roots", lambda: [root])
+	manifest = tmp_path / "manifest.json"
+	args = type("Args", (), {"manifest": str(manifest), "workdir": str(workdir)})()
+	assert ce.cmd_support_lock(args) == 0
+	assert stat.S_IMODE(file.stat().st_mode) == 0o555
+	assert stat.S_IMODE(manifest.stat().st_mode) == 0o400
+	if os.geteuid() != 0:
+		with pytest.raises(PermissionError):
+			file.write_text("blocked", encoding="utf-8")
+	assert "scripts/audit-data/scripts/untrusted.sh" not in manifest.read_text(encoding="utf-8")
+	assert "scripts/helper.sh" in manifest.read_text(encoding="utf-8")
+	verify_args = type("Args", (), {"manifest": str(manifest)})()
+	assert ce.cmd_support_verify(verify_args) == 0
+	# The owner can undo chmod, so the hash check is required as well.
+	file.chmod(0o755)
+	file.write_text("changed\n", encoding="utf-8")
+	assert ce.cmd_support_verify(verify_args) == 1
+	assert ce.cmd_support_unlock(verify_args) == 0
+	assert stat.S_IMODE(file.stat().st_mode) == 0o755
+	assert ce.cmd_support_unlock(verify_args) == 0
+
+
+def test_support_lock_covers_support_nested_in_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	workdir = tmp_path / "consumer"
+	root = workdir / ".codex-workflow-src"
+	(root / "scripts").mkdir(parents=True)
+	support_file = root / "scripts" / "helper.sh"
+	support_file.write_text("trusted\n", encoding="utf-8")
+	support_file.chmod(0o755)
+	monkeypatch.setattr(ce, "support_roots", lambda: [root])
+	manifest = tmp_path / "manifest.json"
+	args = type("Args", (), {"manifest": str(manifest), "workdir": str(workdir)})()
+	assert ce.cmd_support_lock(args) == 0
+	assert stat.S_IMODE(support_file.stat().st_mode) == 0o555
+	assert "scripts/helper.sh" in manifest.read_text(encoding="utf-8")
+	assert ce.cmd_support_verify(args) == 0
+	support_file.chmod(0o755)
+	support_file.write_text("tampered\n", encoding="utf-8")
+	assert ce.cmd_support_verify(args) == 1
+	assert ce.cmd_support_unlock(args) == 0
+	assert stat.S_IMODE(support_file.stat().st_mode) == 0o755
+
+
+@pytest.mark.parametrize("mutation", ["added", "removed"])
+def test_support_lock_checks_directory_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str) -> None:
+	root = tmp_path / "root"
+	(root / "scripts").mkdir(parents=True)
+	file = root / "scripts" / "x.sh"
+	file.write_text("original", encoding="utf-8")
+	monkeypatch.setattr(ce, "support_roots", lambda: [root])
+	manifest = tmp_path / "manifest.json"
+	args = type("Args", (), {"manifest": str(manifest), "workdir": str(root)})()
+	assert ce.cmd_support_lock(args) == 0
+	(root / "scripts").chmod(0o755)
+	if mutation == "added":
+		(root / "scripts" / "new.sh").write_text("new", encoding="utf-8")
+	else:
+		file.unlink()
+	assert ce.cmd_support_verify(args) == 1
+	assert ce.cmd_support_unlock(args) == 0
+
+
+def test_support_lock_accepts_read_only_mount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = tmp_path / "support"
+	(root / "scripts").mkdir(parents=True)
+	file = root / "scripts" / "read.sh"
+	file.write_text("original", encoding="utf-8")
+	monkeypatch.setattr(ce, "support_roots", lambda: [root])
+	original_chmod = Path.chmod
+
+	def simulate_read_only_mount(path: Path, mode: int, **kwargs) -> None:
+		if path == file:
+			raise OSError(errno.EROFS, "read-only filesystem")
+		original_chmod(path, mode, **kwargs)
+
+	monkeypatch.setattr(Path, "chmod", simulate_read_only_mount)
+	manifest = tmp_path / "manifest.json"
+	args = type("Args", (), {"manifest": str(manifest), "workdir": str(root)})()
+	assert ce.cmd_support_lock(args) == 0
+	assert ce.cmd_support_verify(args) == 0
+	assert ce.cmd_support_unlock(args) == 0
 
 
 def _run(*args: str, env: dict[str, str] | None = None, stdin: str = "") -> subprocess.CompletedProcess:
@@ -306,23 +436,230 @@ def test_read_profile_settings_have_a_bash_guard_without_changing_write_settings
 	assert len(write["hooks"]["PreToolUse"]) == 1
 	read = ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook="/trusted/claude_engine.py")
 	assert set(ce.READ_PROFILE_DENY) <= set(read["permissions"]["deny"])
+	assert {
+		"Read(//proc/**)", "Grep(**/claude-pool/**)", "Read(**/.git/config)", "Glob(**/.git/config)",
+		"Grep(**/.git-credentials)", "Grep(**/.netrc)", "Glob(~/.config/gh/**)",
+		"Grep(~/.claude/.credentials.json)", "Bash(git * --no-index*)",
+	} <= set(read["permissions"]["deny"])
 	assert read["hooks"]["PreToolUse"][1] == {
-		"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "/trusted/claude_engine.py" read-guard', "timeout": 30}],
+		"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "/trusted/claude_engine.py" guard-read-bash', "timeout": 30}],
 	}
 	for path in ("", "relative.py", '/bad"path', "/bad\npath"):
 		with pytest.raises(ce.EngineError):
 			ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook=path)
 
 
-def test_settings_cli_can_mount_read_guard_without_changing_the_default(tmp_path: Path) -> None:
-	isolated = tmp_path / "isolated.json"
-	default = tmp_path / "default.json"
-	assert _run("settings", "--checkout", "/source", "--out", str(isolated), "--profile", "read",
-		"--read-guard-hook", "/claude_engine.py").returncode == 0
-	assert _run("settings", "--checkout", "/source", "--out", str(default), "--profile", "read").returncode == 0
-	commands = lambda path: [hook["hooks"][0]["command"] for hook in json.loads(path.read_text())["hooks"]["PreToolUse"]]
-	assert 'python3 "/claude_engine.py" read-guard' in commands(isolated)
-	assert str(SCRIPT) in " ".join(commands(default))
+def test_settings_cli_accepts_container_read_guard_hook(tmp_path: Path) -> None:
+	result = _run("settings", "--checkout", str(tmp_path), "--out", str(tmp_path / "settings.json"),
+		"--profile", "read", "--guard-hook", "/opt/gh.py", "--read-guard-hook", "/opt/engine.py")
+	assert result.returncode == 0, result.stderr
+	settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/opt/engine.py" guard-read-bash'
+	assert "FROM node:22.16.0-bookworm-slim" in _run("read-sandbox-dockerfile").stdout
+
+
+def test_read_snapshot_copies_tracked_files_and_sanitized_git_history(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	def git(*args: str, cwd: Path = repo) -> str:
+		return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+	git("init", "-q")
+	git("config", "user.email", "test@example.invalid")
+	git("config", "user.name", "Test")
+	git("config", "http.https://github.com/.extraheader", "AUTHORIZATION: secret")
+	(repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+	(repo / "CLAUDE.md").write_text("private marker\n", encoding="utf-8")
+	(repo / ".git-credentials").write_text("https://user:secret@example.invalid\n", encoding="utf-8")
+	(repo / ".claude").mkdir()
+	(repo / ".claude" / "settings.json").write_text('{"key":"secret"}\n', encoding="utf-8")
+	git("add", "tracked.txt", "CLAUDE.md", ".git-credentials", ".claude/settings.json")
+	git("commit", "-qm", "initial")
+	git("update-ref", "refs/remotes/origin/main", "HEAD")
+	(repo / "secret.txt").write_text("secret\n", encoding="utf-8")
+	(repo / "tracked-link").symlink_to(repo / "secret.txt")
+	git("add", "tracked-link")
+	(repo / ".codex-workflow-src" / ".git").mkdir(parents=True)
+	(repo / ".codex-workflow-src" / ".git" / "config").write_text("extraheader=secret", encoding="utf-8")
+	worktree = tmp_path / "linked"
+	git("worktree", "add", "-q", "--detach", str(worktree), "HEAD")
+	for source in (repo, worktree):
+		dest = tmp_path / f"snapshot-{source.name}"
+		result = _run("read-snapshot", "--workdir", str(source), "--dest", str(dest), "--omit-root-claude-md",
+			env={"GIT_DIR": str(tmp_path / "not-the-repo"), "GIT_WORK_TREE": str(tmp_path / "wrong-worktree"),
+				"GIT_INDEX_FILE": str(tmp_path / "host-index")})
+		assert result.returncode == 0, result.stderr
+		assert not (tmp_path / "host-index").exists()
+		assert json.loads(result.stdout)["git"] == "omitted"
+		assert json.loads(result.stdout)["reason"] == "filtered_history"
+		assert not (dest / "CLAUDE.md").exists()
+		assert not (dest / ".git-credentials").exists()
+		assert not (dest / ".claude").exists()
+		assert not (dest / ".git").exists()
+		assert (dest / "tracked.txt").read_text(encoding="utf-8") == "tracked\n"
+		assert not (dest / "secret.txt").exists()
+		assert not (dest / "tracked-link").exists()
+		assert not (dest / ".codex-workflow-src").exists()
+		assert subprocess.run(["git", "-C", str(dest), "show", "HEAD:.git-credentials"], capture_output=True).returncode != 0
+
+
+def test_read_snapshot_preserves_history_without_filtered_paths(tmp_path: Path) -> None:
+	repo = tmp_path / "clean"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "safe.txt").write_text("safe\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "safe.txt"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "safe history"], check=True)
+	dest = tmp_path / "snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["git"] == "copied"
+	assert subprocess.check_output(["git", "-C", str(dest), "log", "-1", "--format=%s"], text=True).strip() == "safe history"
+	assert (dest / ".git/config").is_file()
+
+
+def test_read_snapshot_omits_shared_detached_history(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "safe.txt").write_text("safe\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "safe.txt"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "safe"], check=True)
+	linked = tmp_path / "linked"
+	subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(linked)], check=True)
+	(linked / ".env").write_text("token=hidden\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(linked), "add", ".env"], check=True)
+	subprocess.run(["git", "-C", str(linked), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "detached secret"], check=True)
+	for source in (repo, linked):
+		dest = tmp_path / f"snapshot-{source.name}"
+		result = _run("read-snapshot", "--workdir", str(source), "--dest", str(dest))
+		assert result.returncode == 0, result.stderr
+		assert json.loads(result.stdout)["git"] == "omitted"
+		assert not (dest / ".git").exists()
+		assert not (dest / ".env").exists()
+
+
+def test_read_snapshot_omits_unreachable_fetched_commit(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	source = tmp_path / "source"
+	for checkout in (repo, source):
+		checkout.mkdir()
+		subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+		(checkout / "safe.txt").write_text("safe\n", encoding="utf-8")
+		subprocess.run(["git", "-C", str(checkout), "add", "safe.txt"], check=True)
+		subprocess.run(["git", "-C", str(checkout), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "safe"], check=True)
+	(source / ".env").write_text("token=hidden\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(source), "add", ".env"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "secret"], check=True)
+	subprocess.run(["git", "-C", str(repo), "fetch", "-q", "--no-tags", str(source), "HEAD"], check=True)
+	dest = tmp_path / "snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["git"] == "omitted"
+	assert not (dest / ".git").exists()
+	assert (dest / "safe.txt").read_text(encoding="utf-8") == "safe\n"
+
+
+def test_read_snapshot_hides_claude_md_from_git_history(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "CLAUDE.md").write_text("private marker\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "CLAUDE.md"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "instructions"], check=True)
+	dest = tmp_path / "snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest), "--omit-root-claude-md")
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["reason"] == "filtered_history"
+	assert not (dest / ".git").exists()
+	assert not (dest / "CLAUDE.md").exists()
+
+
+def test_read_snapshot_omits_credentials_removed_from_current_tree(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "server.pem").write_text("old credential\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "server.pem"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "credential"], check=True)
+	subprocess.run(["git", "-C", str(repo), "rm", "-q", "server.pem"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "remove credential"], check=True)
+	dest = tmp_path / "snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["reason"] == "filtered_history"
+	assert not (dest / ".git").exists()
+
+
+def test_read_snapshot_deduplicates_unmerged_index_paths(tmp_path: Path) -> None:
+	repo = tmp_path / "conflicted"
+	repo.mkdir()
+	def git(*args: str) -> subprocess.CompletedProcess[str]:
+		return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True)
+	git("init", "-q")
+	git("config", "user.email", "test@example.invalid")
+	git("config", "user.name", "Test")
+	(repo / "shared.txt").write_text("base\n", encoding="utf-8")
+	git("add", "shared.txt")
+	git("commit", "-qm", "base")
+	git("checkout", "-qb", "other")
+	(repo / "shared.txt").write_text("other\n", encoding="utf-8")
+	git("commit", "-qam", "other")
+	git("checkout", "-q", "-")
+	(repo / "shared.txt").write_text("ours\n", encoding="utf-8")
+	git("commit", "-qam", "ours")
+	merge = subprocess.run(["git", "-C", str(repo), "merge", "other"], capture_output=True, text=True)
+	assert merge.returncode == 1
+	assert len(git("ls-files", "--cached").stdout.splitlines()) == 3
+	dest = tmp_path / "conflict-snapshot"
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(dest))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["files"] == 1
+	assert (dest / "shared.txt").read_text(encoding="utf-8") == (repo / "shared.txt").read_text(encoding="utf-8")
+
+
+def test_read_snapshot_limits_non_git_and_alternates(tmp_path: Path) -> None:
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	(plain / "safe.txt").write_text("data", encoding="utf-8")
+	(plain / "private.pem").write_text("private", encoding="utf-8")
+	result = _run("read-snapshot", "--workdir", str(plain), "--dest", str(tmp_path / "plain-copy"))
+	assert json.loads(result.stdout) == {"files": 1, "bytes": 4, "git": "none", "reason": ""}
+	assert not (tmp_path / "plain-copy/private.pem").exists()
+	result = _run("read-snapshot", "--workdir", str(plain), "--dest", str(tmp_path / "too-small"),
+		env={"CLAUDE_READ_SNAPSHOT_MAX_BYTES": "1"})
+	assert result.returncode != 0
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "file.txt").write_text("a", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "file.txt"], check=True)
+	(repo / ".git/objects/info/alternates").write_text("/tmp/nonexistent\n", encoding="utf-8")
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(tmp_path / "no-history"))
+	assert json.loads(result.stdout)["git"] == "omitted"
+	assert not (tmp_path / "no-history/.git").exists()
+
+
+def test_read_snapshot_rejects_symlinked_roots(tmp_path: Path) -> None:
+	real = tmp_path / "real"
+	real.mkdir()
+	(tmp_path / "alias").symlink_to(real, target_is_directory=True)
+	result = _run("read-snapshot", "--workdir", str(tmp_path / "alias"), "--dest", str(tmp_path / "copy"))
+	assert result.returncode == 2
+	assert not (tmp_path / "copy").exists()
+
+
+def test_read_snapshot_rejects_symlinked_tracked_parent(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "code").mkdir()
+	(repo / "code" / "tracked.txt").write_text("safe", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "code/tracked.txt"], check=True)
+	(repo / "code").rename(repo / "old-code")
+	(repo / "code").symlink_to(tmp_path, target_is_directory=True)
+	result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(tmp_path / "copy"))
+	assert result.returncode == 2
+	assert "snapshot rejected" in result.stderr or "unsafe snapshot parent" in result.stderr
 
 
 @pytest.mark.parametrize("command", [
@@ -342,6 +679,7 @@ def test_read_guard_allows_safe_reads(command: str) -> None:
 	"git log $(id)", 'git log "$(id)"', "git log `id`", "git -c core.pager=sh log",
 	"git push", "cat x", "git log 'unterminated", "git log\nid", "git log $GITHUB_ENV",
 	"git log *", "git log --format={x,y}",
+	"git diff --no-index /tmp/token /dev/null", "git diff --no-i /tmp/token /dev/null",
 ])
 def test_read_guard_denies_write_primitives_and_shell_control(command: str) -> None:
 	decision, reason = ce.read_profile_bash_decision(command)
@@ -357,6 +695,112 @@ def test_read_guard_cli_fails_closed_on_invalid_input() -> None:
 		assert response["permissionDecision"] == "deny"
 		assert response["permissionDecisionReason"].startswith("claude_engine read-guard:")
 	assert _run("read-guard", stdin=json.dumps({"tool_name": "Read", "tool_input": {}})).stdout == ""
+
+
+def test_read_guard_hook_override_in_cli(tmp_path: Path) -> None:
+	settings_file = tmp_path / "settings.json"
+	params = ("settings", "--checkout", str(tmp_path), "--out", str(settings_file),
+		"--profile", "read", "--guard-hook", "/guard.py")
+	assert _run(*params, "--read-guard-hook", "/claude_engine.py").returncode == 0
+	settings = json.loads(settings_file.read_text(encoding="utf-8"))
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/claude_engine.py" guard-read-bash'
+	assert _run(*params).returncode == 0
+	settings = json.loads(settings_file.read_text(encoding="utf-8"))
+	assert settings["hooks"]["PreToolUse"][1]["hooks"][0]["command"].endswith('/scripts/claude_engine.py" guard-read-bash')
+	assert _run(*params, "--read-guard-hook", "relative.py").returncode == 2
+
+
+def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	source, dest = tmp_path / "source", tmp_path / "snapshot"
+	source.mkdir()
+	dest.mkdir()
+	def git(*args: str) -> str:
+		return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
+	git("init", "-q")
+	git("config", "user.name", "test")
+	git("config", "user.email", "test@example.invalid")
+	git("config", "http.https://github.com/.extraheader", "AUTHORIZATION: hidden")
+	(source / "ok.txt").write_text("tracked", encoding="utf-8")
+	(source / "run.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(source / "run.sh").chmod(0o755)
+	(source / "removed.txt").write_text("deleted", encoding="utf-8")
+	(source / "CLAUDE.md").write_text("invisible", encoding="utf-8")
+	git("add", "ok.txt", "run.sh", "removed.txt", "CLAUDE.md")
+	git("commit", "-qm", "base")
+	(source / "removed.txt").unlink()
+	(source / "untracked.txt").write_text("untracked", encoding="utf-8")
+	(source / ".env").write_text("private", encoding="utf-8")
+	(source / "id.key").write_text("private", encoding="utf-8")
+	(source / "skip.pem").write_text("private", encoding="utf-8")
+	(source / "keys").mkdir()
+	for key_name in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss"):
+		(source / "keys" / key_name).write_text("private", encoding="utf-8")
+	(source / ".claude").mkdir()
+	(source / ".claude" / ".credentials.json").write_text("private", encoding="utf-8")
+	(source / ".ssh").mkdir()
+	(source / ".ssh" / "config").write_text("private", encoding="utf-8")
+	(source / "link.txt").symlink_to(source / "ok.txt")
+	(source / "big.bin").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+	(source / ".codex-workflow-src" / ".git").mkdir(parents=True)
+	(source / ".codex-workflow-src" / ".git" / "config").write_text("private", encoding="utf-8")
+	(source / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+	(source / "ignored.txt").write_text("ignored", encoding="utf-8")
+	monkeypatch.setenv("GIT_DIR", str(tmp_path / "bad-git-dir"))
+	monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path / "bad-work-tree"))
+	summary = ce.build_read_snapshot(source, dest, omit_claude_md=True)
+	assert summary["git"] == "present" and summary["git_objects"] == ""
+	assert (dest / "ok.txt").read_text(encoding="utf-8") == "tracked"
+	assert (dest / "untracked.txt").read_text(encoding="utf-8") == "untracked"
+	assert (dest / "run.sh").stat().st_mode & stat.S_IXUSR
+	assert not (dest / "removed.txt").exists()
+	monkeypatch.delenv("GIT_DIR")
+	monkeypatch.delenv("GIT_WORK_TREE")
+	status = subprocess.check_output(["git", "-C", str(dest), "status", "--short"], text=True).splitlines()
+	assert status == []
+	for path in ("CLAUDE.md", ".env", "id.key", "skip.pem", "link.txt", "big.bin", "ignored.txt", ".codex-workflow-src", ".claude", ".ssh"):
+		assert not (dest / path).exists(), path
+	assert not (dest / "keys").exists()
+	assert "hidden" not in (dest / ".git" / "config").read_text(encoding="utf-8")
+	assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
+	assert subprocess.check_output(["git", "-C", str(dest), "show", "HEAD:ok.txt"], text=True) == "tracked"
+	assert subprocess.check_output(["git", "-C", str(dest), "log", "--format=%s"], text=True).strip() == "Isolated read snapshot"
+	assert git("rev-parse", "HEAD") != subprocess.check_output(["git", "-C", str(dest), "rev-parse", "HEAD"], text=True).strip()
+
+
+def test_read_snapshot_caps_and_alternates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	source, dest = tmp_path / "source", tmp_path / "snapshot"
+	source.mkdir()
+	dest.mkdir()
+	(source / "one.txt").write_text("hello", encoding="utf-8")
+	monkeypatch.setenv("CLAUDE_READ_SNAPSHOT_MAX_BYTES", "4")
+	result = _run("read-snapshot", "--source", str(source), "--dest", str(dest))
+	assert result.returncode == 2 and "read snapshot limit exceeded" in result.stderr
+	monkeypatch.delenv("CLAUDE_READ_SNAPSHOT_MAX_BYTES")
+	assert not list(dest.iterdir())
+	subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+		"commit", "--allow-empty", "-qm", "base"], check=True)
+	(source / ".git" / "objects" / "info" / "alternates").write_text("/other/objects\n", encoding="utf-8")
+	assert ce.build_read_snapshot(source, dest)["git"] == "present"
+	assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
+
+
+def test_read_snapshot_does_not_expose_prior_committed_credentials(tmp_path: Path) -> None:
+	source, dest = tmp_path / "source", tmp_path / "snapshot"
+	source.mkdir()
+	dest.mkdir()
+	subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
+	(source / ".env").write_text("HISTORICAL_TOKEN=private\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(source), "add", ".env"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "secret"], check=True)
+	secret = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD:.env"], text=True).strip()
+	(source / ".env").unlink()
+	subprocess.run(["git", "-C", str(source), "add", "-u"], check=True)
+	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "delete secret"], check=True)
+	assert ce.build_read_snapshot(source, dest)["git_objects"] == ""
+	assert not (dest / ".env").exists()
+	for spec in ("HEAD~1:.env", secret):
+		assert subprocess.run(["git", "-C", str(dest), "show", spec], capture_output=True).returncode != 0
 
 
 # --- transcripts ---------------------------------------------------------------
