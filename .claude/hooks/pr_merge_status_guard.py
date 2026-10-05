@@ -125,6 +125,7 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
 _FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", ">|", "<>", ">&", "<&", "<<", "<<<"})
 _SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "(", "!"})
+_SHELL_WORD_DELIMITERS = frozenset(" \t\r" + _SHELL_PUNCTUATION_CHARS)
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -294,13 +295,13 @@ def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], b
 		if token == ">|" or (token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token)):
 			# Bash &> and &>> take no fd prefix (#6249); keep adjacent digits as
 			# arguments for these and unknown redirects so push refspecs are checked.
-			if token in _FD_PREFIX_REDIRECT_OPERATORS and segment and segment[-1].isdigit():
+			if token in _FD_PREFIX_REDIRECT_OPERATORS and segment and segment[-1].isascii() and segment[-1].isdigit():
 				# Only an unquoted digit immediately attached to a redirect is an fd.
 				redirect_start = token_end - len(token)
 				if command[redirect_start:redirect_start + len(token)] != token:
 					redirect_start -= 1  # shlex may read one character ahead.
 				fd_start = redirect_start - len(segment[-1])
-				if fd_start >= 0 and command[fd_start:redirect_start] == segment[-1] and (fd_start == 0 or command[fd_start - 1] not in "'\"\\"):
+				if fd_start >= 0 and command[fd_start:redirect_start] == segment[-1] and (fd_start == 0 or command[fd_start - 1] in _SHELL_WORD_DELIMITERS):
 					segment.pop()
 			redirect_target = token
 			continue
