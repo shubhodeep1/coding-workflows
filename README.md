@@ -1065,7 +1065,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > a file listed in `.github/ai/claude_template_divergence.json`, is not
 > overwritten. Copies preserve executable permissions; parity CI checks both
 > contents and execute bits. An unusable push `before` SHA skips syncing; the
-> parity CI test still reports missing or differing live files.
+> parity CI test still reports missing or differing live files. Template or
+> live-path symlinks fail the sync/parity check instead of being followed,
+> preventing copies from reading credentials or writing outside `.claude/`.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
@@ -1920,8 +1922,9 @@ attempts of that role in the same job.
 For a POST rejected during initial request validation, the relay waits at
 most one second to drain a declared body with a short decimal `Content-Length`
 of at most `MAX_BODY` before returning 400. A client that withholds the body
-still receives the rejection; malformed or oversized lengths are rejected
-without draining.
+still receives the rejection; the 400 response has its own one-second socket
+timeout even if the drain deadline expires. Malformed or oversized lengths are
+rejected without draining.
 
 **Which engine a role uses**, first match wins: the work item's labels
 (`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),

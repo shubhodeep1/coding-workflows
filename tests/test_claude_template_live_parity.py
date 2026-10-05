@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -97,6 +98,42 @@ def test_plan_fails_open_without_a_usable_before_commit(tmp_path: Path) -> None:
 	_before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
 	assert sync_mod.plan(root, "0" * 40, after) == []
 	assert sync_mod.plan(root, "f" * 40, after) == []
+
+
+def test_sync_refuses_template_symlink_into_git_credentials(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	before = _git(root, "rev-parse", "HEAD")
+	template = root / "workflow-templates/.claude/hooks/guard.py"
+	template.unlink()
+	template.symlink_to("../../../.git/config")
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "symlink")
+	with pytest.raises(ValueError, match="unsafe template symlink"):
+		sync_mod.sync(root, before, _git(root, "rev-parse", "HEAD"), dry_run=True)
+	assert (root / ".claude/hooks/guard.py").read_text(encoding="utf-8") == "v1\n"
+
+
+def test_sync_refuses_template_directory_symlink(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	before = _git(root, "rev-parse", "HEAD")
+	linked_directory = root / "workflow-templates/.claude/credentials"
+	linked_directory.symlink_to("../../.git", target_is_directory=True)
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "directory symlink")
+	with pytest.raises(ValueError, match="unsafe template symlink"):
+		sync_mod.sync(root, before, _git(root, "rev-parse", "HEAD"), dry_run=True)
+	assert not (root / ".claude/credentials").exists()
+
+
+def test_sync_refuses_live_symlink_destination(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	live = root / ".claude/hooks/guard.py"
+	live.unlink()
+	live.symlink_to("../../.git/config")
+	with pytest.raises(ValueError, match="unsafe live symlink"):
+		sync_mod.sync(root, before, after, dry_run=True)
+	assert "v2" not in (root / ".git/config").read_text(encoding="utf-8")
 
 
 def test_sync_creates_missing_live_copy(tmp_path: Path) -> None:

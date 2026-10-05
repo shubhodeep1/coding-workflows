@@ -139,6 +139,8 @@ class Relay(http.server.BaseHTTPRequestHandler):
 						drain_remaining -= len(drain_chunk)
 				except OSError:
 					pass
+				# Give the rejection write its own bounded timeout, not the last drain interval.
+				self.connection.settimeout(1)
 			return self._reject(400)
 		headers = forwarded_request_headers(self.headers)
 		if headers is None:

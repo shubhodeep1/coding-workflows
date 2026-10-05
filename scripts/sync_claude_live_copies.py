@@ -71,8 +71,12 @@ def load_divergent(root: Path) -> set[str]:
 def paired_paths(root: Path) -> list[str]:
 	"""Template paths (under `.claude/`) expected to have a live file."""
 	template_root = root / TEMPLATE_PREFIX
+	if template_root.is_symlink() or template_root.parent.is_symlink():
+		raise ValueError(f"unsafe template symlink: {template_root}")
 	pairs: list[str] = []
 	for template in sorted(template_root.rglob("*")):
+		if template.is_symlink():
+			raise ValueError(f"unsafe template symlink: {template}")
 		if not template.is_file():
 			continue
 		relative = template.relative_to(template_root).as_posix()
@@ -82,17 +86,20 @@ def paired_paths(root: Path) -> list[str]:
 
 def mismatched(root: Path) -> list[str]:
 	divergent = load_divergent(root)
-	return [
-		relative
-		for relative in paired_paths(root)
-		if relative not in divergent
-		and (
+	drift: list[str] = []
+	for relative in paired_paths(root):
+		if relative in divergent:
+			continue
+		if any((root / LIVE_PREFIX / part).is_symlink() for part in (Path(relative), *Path(relative).parents)):
+			raise ValueError(f"unsafe live symlink: {relative}")
+		if (
 			not (root / LIVE_PREFIX / relative).is_file()
 			or not filecmp.cmp(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative, shallow=False)
 			or ((root / TEMPLATE_PREFIX / relative).stat().st_mode & 0o111)
 			!= ((root / LIVE_PREFIX / relative).stat().st_mode & 0o111)
-		)
-	]
+		):
+			drift.append(relative)
+	return drift
 
 
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
