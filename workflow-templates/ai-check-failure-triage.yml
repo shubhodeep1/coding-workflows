@@ -12,7 +12,7 @@ on:
   check_run:
     types: [completed]
   # GitHub Actions CI (see the triage-workflow-run job). The wildcard listens
-  # to every workflow; the job skips the pipeline's own `AI …` workflows and
+  # to every workflow; the job skips the pipeline's own named workflows and
   # anything that is not a failed pull-request run.
   workflow_run:
     workflows: ["*"]
@@ -49,7 +49,7 @@ jobs:
   # GitHub never sends check_run events for checks created by GitHub Actions
   # ("to prevent recursive workflows"), so the job above never fires for
   # Actions CI. This job triages the failed workflow run instead (any
-  # workflow but the pipeline's own `AI …` ones): the check name is the
+  # workflow but the pipeline's own named ones): the check name is the
   # workflow name, so repeated failures share one open issue per PR and
   # workflow. The diagnosis reads every failing check on the PR head.
   triage-workflow-run:
@@ -60,7 +60,7 @@ jobs:
        github.event.workflow_run.conclusion == 'timed_out') &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.pull_requests[0] != null &&
-      !startsWith(github.event.workflow_run.name, 'AI ')
+      !contains(fromJson('["AI Cancel on PR Close","AI Check Failure Triage","AI Clarify","AI Implement","AI Issue PR Status","AI Memory Maintenance","AI Orchestrate Clarify Respond","AI Orchestrate Poller","AI Orchestrate","AI Plan","AI Review","AI Security Audit","AI Sync Labels","AI Update Workflows","AI Validate","AI Workflow Failure Heal","AI Review-Blocked Judge Dispatch"]'), github.event.workflow_run.name)
     uses: shubhodeep1/coding-workflows/.github/workflows/check_failure_triage.yml@stable
     with:
       pr_number: ${{ github.event.workflow_run.pull_requests[0].number }}

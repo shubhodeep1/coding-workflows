@@ -8,6 +8,7 @@ heal intake, and evaluate the job conditions against sample events.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -118,10 +119,16 @@ def test_consumer_wrapper_listens_to_every_workflow_but_its_own() -> None:
 	assert _on(data)["workflow_run"] == {"workflows": ["*"], "types": ["completed"]}
 	condition = data["jobs"]["triage-workflow-run"]["if"]
 	assert _evaluate(condition, "workflow_run", _run_event("Tests"))
-	for own in ("AI Review", "AI Check Failure Triage", "AI Implement"):
-		assert not _evaluate(condition, "workflow_run", _run_event(own)), own
+	assert _evaluate(condition, "workflow_run", _run_event("AI Integration Tests"))
 	names = {_load(path)["name"] for path in (REPO_ROOT / "workflow-templates").glob("*.yml")}
 	assert names and all(name.startswith("AI ") for name in names), sorted(names)
+	excluded_names_match = re.search(
+		r"!contains\(fromJson\('([^']+)'\), github\.event\.workflow_run\.name\)", condition,
+	)
+	assert excluded_names_match
+	assert set(json.loads(excluded_names_match.group(1))) == names
+	for own in names:
+		assert not _evaluate(condition, "workflow_run", _run_event(own)), own
 
 
 def test_heal_intake_takes_ci_only_for_pushes_to_the_default_branch() -> None:
