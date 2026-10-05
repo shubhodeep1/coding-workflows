@@ -132,7 +132,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     missing isolation falls back to a raw-context issue, never host Codex.
     PR-head `agents.md` / `AGENTS.md` enters the prompt through a bounded,
     credential-free regular-file read that never follows symlinks.
-    Untrusted logs and model diagnosis text are neutralised before issue posting
+    Untrusted check/workflow names are single-lined, length-capped, and have
+    backticks and markers escaped before display, including a direct Telegram
+    failure alert when trusted support staging fails (never sourcing PR-head
+    helpers; suppressed without credentials or at `ALERT_MSG_LEVEL=SILENT`);
+    logs and model diagnosis
+    text are neutralised before issue posting
     so they cannot spoof downstream routing metadata or triage markers.
     Check metadata is flattened for display while raw names remain in dedup keys;
     the complete redacted issue body is checked for routing keys and forged markers

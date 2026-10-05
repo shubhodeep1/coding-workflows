@@ -220,6 +220,7 @@ changelog.d/6323-check-triage-isolated-diagnosis.md
 changelog.d/6364-triage-routing-metadata-neutralize.md
 changelog.d/6365-check-triage-runs-security-pass.md
 changelog.d/6380-triage-agents-md-nofollow.md
+changelog.d/6381-check-triage-metadata-routing.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
