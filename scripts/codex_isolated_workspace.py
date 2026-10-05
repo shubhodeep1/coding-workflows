@@ -16,11 +16,12 @@ Subcommands:
       at MAX_READONLY_FILES / MAX_READONLY_TOTAL (exceeding fails closed).
       Falls back to walking HOST when it is not a git work tree.
 
-  export-oversized HOST SCOPE_FILE DEST MAX_FILE_BYTES MAX_TOTAL_BYTES
+  export-oversized HOST SCOPE_FILE DEST MAX_FILE_BYTES MAX_TOTAL_BYTES [SCOPE_MODE]
       Export scoped files omitted by snapshot-readonly as bounded chunks,
       using its same credential and hidden-path filters. Filtered files are
-      never exported; scoped filtered files reject the audit. Unscoped
-      oversized files are listed for coverage only.
+      never exported; scoped filtered files reject the audit. The default
+      explicit mode lists unscoped oversized files for coverage; all mode
+      exports every eligible oversized tracked file.
 
   snapshot-workspace HOST DEST MANIFEST
       Copy HOST except credential-looking paths and `.git` into DEST, keeping
@@ -82,6 +83,7 @@ MAX_TRANSFER_FILES = 50000
 MAX_TRANSFER_TOTAL = 2 * 1024 * 1024 * 1024
 MAX_INCLUDE_TOTAL = 256 * 1024 * 1024
 CHUNK = 1024 * 1024
+BINARY_SNIFF_BYTES = 8192
 
 # Read-only snapshots never include support checkouts, Codex state, env files
 # or anything that looks like a credential store (clarify's rules, Q11 A).
@@ -278,7 +280,19 @@ def snapshot_readonly(host, dest):
 	log(f"snapshot mode=read-only source={source} files={count} bytes={total} skipped_large={skipped_large} skipped_other={skipped_other}")
 
 
-def export_oversized(host, scope_file, dest, max_file, max_total):
+def _looks_binary(node):
+	"""True when a file's first bytes hold a NUL, git's binary heuristic."""
+	try:
+		fd = os.open(node, os.O_RDONLY | os.O_NOFOLLOW)
+	except OSError:
+		return True  # Unreadable: never chunk it as text.
+	with os.fdopen(fd, "rb") as handle:
+		return b"\0" in handle.read(BINARY_SNIFF_BYTES)
+
+
+def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="explicit"):
+	if scope_mode not in ("explicit", "all"):
+		raise Rejected("invalid oversized scope mode")
 	try:
 		file_cap, total_cap = int(str(max_file)), min(int(str(max_total)), MAX_INCLUDE_TOTAL)
 	except ValueError as exc:
@@ -296,6 +310,8 @@ def export_oversized(host, scope_file, dest, max_file, max_total):
 		names = list(walk_paths(host))
 	scoped = []
 	unscoped = []
+	explicit_candidates = []
+	extra_candidates = []
 	total = 0
 	for name in sorted(set(names)):
 		if not readonly_allowed(name):
@@ -323,9 +339,14 @@ def export_oversized(host, scope_file, dest, max_file, max_total):
 			continue
 		if info.st_size <= MAX_READONLY_FILE:
 			continue
-		if name not in scope:
-			unscoped.append({"path": name, "size": info.st_size})
-			continue
+		if name in scope:
+			explicit_candidates.append((name, node, info))
+		elif scope_mode == "all":
+			extra_candidates.append((name, node, info))
+		else:
+			unscoped.append({"path": name, "size": info.st_size, "reason": "outside_scope"})
+	# Explicitly scoped files fail closed and take the cap budget first.
+	for name, node, info in explicit_candidates:
 		if info.st_size > file_cap:
 			raise Rejected(f"scoped oversized file exceeds cap (path={name} size={info.st_size} cap={file_cap})")
 		total += info.st_size
@@ -335,6 +356,20 @@ def export_oversized(host, scope_file, dest, max_file, max_total):
 				f"(files={len(scoped) + 1} total={total} cap={total_cap} last_path={name})"
 			)
 		scoped.append((name, node, info))
+	# Full-audit extras never fail the audit: binaries and files past the caps
+	# are reported as not inspected instead.
+	for name, node, info in extra_candidates:
+		if info.st_size > file_cap:
+			unscoped.append({"path": name, "size": info.st_size, "reason": "over_file_cap"})
+		elif total + info.st_size > total_cap:
+			unscoped.append({"path": name, "size": info.st_size, "reason": "over_total_cap"})
+		elif _looks_binary(node):
+			unscoped.append({"path": name, "size": info.st_size, "reason": "binary"})
+		else:
+			total += info.st_size
+			scoped.append((name, node, info))
+	scoped.sort(key=lambda item: item[0])
+	unscoped.sort(key=lambda entry: entry["path"])
 
 	remove_node(dest)
 	dest.mkdir(parents=True)
@@ -375,10 +410,11 @@ def export_oversized(host, scope_file, dest, max_file, max_total):
 		exported.append({"path": name, "size": size, "sha256": digest.hexdigest(), "dir": folder, "chunks": chunks})
 	(dest / "manifest.json").write_text(json.dumps({
 		"schema_version": "oversized_readonly_export.v1", "threshold_bytes": MAX_READONLY_FILE,
+		"scope_mode": scope_mode,
 		"chunk_bytes": CHUNK, "scoped": exported, "unscoped_oversized": unscoped[:50],
 		"unscoped_oversized_count": len(unscoped),
 	}), encoding="utf-8")
-	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)}")
+	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)} mode={scope_mode}")
 
 
 def load_manifest(manifest):
@@ -799,10 +835,13 @@ def copy_include(source, target):
 def main():
 	command = sys.argv[1] if len(sys.argv) > 1 else ""
 	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "transfer": 3, "seed-git": 2, "copy-include": 2}
-	if command not in arity or len(sys.argv) != arity[command] + 2:
+	if command not in arity or (len(sys.argv) != arity[command] + 2
+		and not (command == "export-oversized" and len(sys.argv) == 8)):
 		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
 		raise SystemExit(2)
 	args = [Path(value) for value in sys.argv[2:]]
+	if command == "export-oversized" and len(args) == 6:
+		args[-1] = str(args[-1])
 	global HIDDEN_NAMES
 	try:
 		HIDDEN_NAMES = hidden_names()

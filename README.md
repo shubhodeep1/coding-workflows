@@ -1049,13 +1049,25 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`hooks/pr_watch_guard.py`, §25). The former post-push PR status check-in
 > reminder, the permission-prompt logger and their helper scripts were retired
 > (see the retired-files paragraph below). Nothing to configure in the
-> consumer. When a `git push` source cannot be resolved locally (for example,
+> consumer. For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
+> the merged-PR guard ignores the unresolved value and checks the session checkout.
+> If that check does not block, it asks for confirmation because the pushed
+> repository may differ. Other unresolved push directories follow the same rule.
+> When a `git push` source cannot be resolved locally (for example,
 > a shell-expanded source), the merged-PR guard asks for confirmation rather
 > than using the session checkout as a substitute for the pushed commit.
 > A push with a destination that cannot be resolved locally (such as
 > `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
 > If `--repo` and a positional remote are both supplied, the guard checks the
-> refspecs after that remote, not the remote name as a branch.
+> refspecs after that remote, not the remote name as a branch. If the local
+> remote-config lookup cannot identify the positional repository (including an
+> unconfigured path or URL), the guard asks instead of treating it as a refspec.
+
+> The merged-PR guard checks numeric push refspecs before a separate output
+> redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
+> or option leaves the destination unknown, it requests confirmation rather
+> than checking an unrelated current branch. A push with no refspec keeps the
+> existing current-branch check.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
@@ -1205,7 +1217,7 @@ forwards one fixed endpoint for one model.
 | Image | built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after) |
 | Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files (including `.ssh`, `.npmrc`, `.netrc`) skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap; synthetic Git contains only allowed HEAD blobs |
 | Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
-| Implement dependencies | installed once per job in a credential-free networked container; never copied back |
+| Implement dependencies | installed once per job in a credential-free container with `--network none`, using an allowlisted HTTPS registry proxy; never copied back; when the proxy is unavailable, dependency installation is skipped without restoring network access |
 | Claude engine (`claude_run`) | same container via `--engine claude`, pinned Claude Code CLI added to the image; the token stays in the host relay (`claude_anthropic_relay.py`); unavailable isolation returns `75` so the role runs codex (README "Claude engine") |
 
 Credential-store filenames such as `client_secret.json`, `credentials.conf`,
@@ -1228,6 +1240,15 @@ trusted-copy rule for scripts the job runs after an agent wrote files, are in
 `agents.md` under "Isolated Codex agents".
 Review-blocked follow-up and existing-PR pushes use one-shot Git credentials;
 the poller does not write `GH_TOKEN` into shared worktree Git configuration.
+Before publishing a review-blocked `fix`, the poller checks staged paths against
+the complete PR file list and valid judge citations. Protected paths require an
+exact match in the PR file list; an incomplete list or out-of-scope path rejects
+the whole fix, warns operators, and consumes a review-blocked retry without a push.
+An empty staged set is rejected too. Listing failures report the staged paths in
+the rejection log and alert to make the attempted fix diagnosable.
+With `ALLOW_WORKFLOW_EDITS=false`, edits to `scripts/`, `prompts/`,
+`.github/ai/`, or `.github/workflows/` reject the entire fix through the same
+retry path, even when the PR previously changed that path.
 If the integration judge cannot publish a resolution, the poller warns and
 rechecks mergeability on the next tick instead of failing the project immediately.
 The merged-PR push guard checks `origin` as before. A push selecting a different
@@ -1741,7 +1762,7 @@ through `clarify → plan → implement → review`.
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the `lite` (one-reviewer) tier. Any file type qualifies, but a diff touching a protected path (the same list as the deterministic skip gate: `agents.md` / `CLAUDE.md` / `unattended_system_instructions.md`, `.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`, and build, dependency, config and script files; both sides of a rename count) goes to `standard` instead. `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator. |
 | `REVIEW_TIER_LITE_REVIEWER_SLUG` | empty | Reviewer slug for the `lite` tier. Empty (the default) draws one reviewer from the `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` list (from `REVIEWER_MODELS` when that list is empty or names a slug not on the panel, with a warning for the latter), seeded by the PR number: the lowest `sha256("<PR number>:<model>")` wins, so a PR keeps the same reviewer on every round and rerun and PRs spread evenly across the pool (`models_source=random_lite`). A set value pins that reviewer (`models_source=configured_lite`); unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the `standard` (four-reviewer) tier, in any folder. Larger diffs run the full panel. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | Comma-separated reviewer subset for the `standard` tier, and the pool an unpinned `lite` tier draws from. The default is the four cheapest panel models by list price; `google/gemini-3.8-flash` and `z-ai/glm-5.2`, the two most expensive, run only on the `full` panel. A set value pins those reviewers (`models_source=configured_standard`). If the value reaches the script empty (an empty repo variable falls back to this default instead), four reviewers are drawn from `REVIEWER_MODELS` the same way as `REVIEW_TIER_LITE_REVIEWER_SLUG` (`models_source=random_standard`); unknown or unavailable slugs fail open to the full live reviewer roster. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna` | Comma-separated reviewer subset for the `standard` tier, and the pool an unpinned `lite` tier draws from. The default is four panel models; `google/gemini-3.1-flash-lite` and `z-ai/glm-5.2` run only on the `full` panel. A set value pins those reviewers (`models_source=configured_standard`). If the value reaches the script empty (an empty repo variable falls back to this default instead), four reviewers are drawn from `REVIEWER_MODELS` the same way as `REVIEW_TIER_LITE_REVIEWER_SLUG` (`models_source=random_standard`); unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEWER_MAX_STEPS` | `120` | Hard turn cap per review-panel reviewer attempt. The reviewer watchdog kills an attempt that starts more OpenCode turns, and the slot fails without a retry or failback. Real reviewer passes peaked at 101 turns. |
 | `REVIEWER_TOOL_REPEAT_LIMIT` | `10` | Consecutive identical tool calls (same tool and same input) that end a review-panel reviewer attempt as a retryable `tool_repeat` failure (cheaper reasoning, then the reviewer's failback model). Minimum `2`. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
@@ -1797,6 +1818,7 @@ through `clarify → plan → implement → review`.
 | `EVENTS_JSONL_ENABLED` | `false` | Opt-in append-only JSONL mirror for stable workflow-event prefixes. When `true`, supported emitters append `.events/run-<GITHUB_RUN_ID\|local>.jsonl` under `GITHUB_WORKSPACE` after writing the original text line/comment marker; write failures emit `EVENTS_EMIT_FAIL` and fail open, so existing stderr/comment behavior remains authoritative. |
 | `REVIEW_MAX_RESUME_ROUNDS` | `3` | Maximum same-head partial-resume rounds before `review_autofix.yml` terminalizes the cached partial state as `round_budget_exhausted`; same-head no-progress rounds terminalize earlier as `no_progress`. |
 | `CODEX_VERSION` | `v0.114.0` | Pinned Codex CLI version retained by production paths that still use Codex outside the fully migrated review/autofix model pipeline. |
+| `DEPENDENCY_PROXY_ALLOWED_HOSTS` | `pypi.org,files.pythonhosted.org,registry.npmjs.org,registry.yarnpkg.com` | Complete comma- or whitespace-separated allowlist of public DNS names for the isolated implement/review dependency installs. Replace the list to add a public mirror; unlisted hosts, non-global DNS addresses and plain HTTP are refused. Direct-only egress is required on the runner; corporate upstream proxies are not chained. |
 | `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used by the dispatchable `opencode-live-smoke.yml` rollout gate and the complete production review/autofix model pipeline. |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-head project security pass before validation or finalization. Set to `false` for the immediate operator kill switch. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before terminal `ai:security-pass-failed`. |
@@ -2209,8 +2231,8 @@ Two optional inputs support the orchestrator's delta re-audits. `SECURITY_AUDIT_
 | `SECURITY_AUDIT_FIX_CYCLE_DIFFS` | _(empty)_ | Optional, findings-JSON-only path to a JSON array of fix-cycle diff entries (`cycle`, `since_sha`, `head_sha`, `files`). Files join the incremental scope; added/modified hunks are rendered into the prompt as newly introduced code. Fails open on any defect (warning, audit continues). Rejected in `issues` mode. |
 | `SECURITY_AUDIT_FIX_DIFF_MAX_LINES` | `1200` | Non-negative integer cap on the total hunk lines rendered from fix-cycle diffs; files past the cap are listed by name only. An invalid value warns and falls back to the default. |
 | `SECURITY_AUDIT_FIX_DIFF_MAX_BYTES` | `96000` | Non-negative integer cap on the total hunk bytes rendered from fix-cycle diffs; same fallback behaviour as the line cap. |
-| `SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES` | `16777216` | Positive per-file cap for explicitly scoped files larger than the 2 MiB read-only snapshot limit; exceeding it stops the audit before the model runs. Scoped tracked files excluded by the read-only credential/hidden-path filter also stop the audit without exposing their contents. Invalid values warn and use the default. |
-| `SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES` | `67108864` | Positive total cap for scoped oversized files, also limited by the 256 MiB include cap; exceeding it stops the audit. Invalid values warn and use the default. Full scans chunk explicit prior-finding and fix-cycle files; other oversized files are reported as a coverage note. |
+| `SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES` | `16777216` | Positive per-file cap for oversized tracked files larger than the 2 MiB read-only snapshot limit. An explicitly scoped file (changed, prior-finding or fix-cycle) above it stops the audit before the model runs; in a full scan, another file above it is listed in the coverage note as not inspected. Explicitly scoped tracked files excluded by the read-only credential/hidden-path filter also stop the audit without exposing their contents. Invalid values warn and use the default. |
+| `SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES` | `67108864` | Positive total cap for exported oversized files, also limited by the 256 MiB include cap. Explicitly scoped files take the budget first and exceeding it with them stops the audit. Invalid values warn and use the default. Full scans also chunk every other eligible oversized text file while the caps allow; binaries (a NUL byte in the first 8 KiB) and files past either cap are listed in the coverage note instead of failing the audit. Incremental scans report oversized files outside their explicit scope as a coverage note. |
 
 When an explicit diff pair is present, the prompt lists files changed in `base..head` and the deterministic post-filter suppresses findings outside that list. Without the pair, the `issues` mode retains marker-derived incremental behavior, while `findings-json` audits the full checkout because it deliberately performs no tracker reads. Both modes apply strict model-output validation, `SECURITY_AUDIT_CONFIDENCE_GATE`, and `SECURITY_AUDIT_FP_EXCLUSIONS` before results leave the engine.
 

@@ -15,7 +15,17 @@ command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error
 if [ "${action}" = prepare ]; then
 	root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/review-isolated-XXXXXXXX")"
 	dep_container="review-deps-$$"
-	trap 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${dep_container}" >/dev/null 2>&1 || true; rm -rf -- "${root}"' EXIT
+	deps_broker_pid=""
+	stop_deps_broker()
+	{
+		if [ -n "${deps_broker_pid}" ]; then
+			kill "${deps_broker_pid}" 2>/dev/null || true
+			wait "${deps_broker_pid}" 2>/dev/null || true
+			deps_broker_pid=""
+		fi
+		rm -f -- "${root}/socket/registry.sock"
+	}
+	trap 'stop_deps_broker; env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${dep_container}" >/dev/null 2>&1 || true; rm -rf -- "${root}"' EXIT
 	mkdir -m 0700 "${root}/socket" "${root}/home"
 	mkdir -m 0755 "${root}/source"
 	# The editor step works in the per-PR workspace: review_autofix.yml's
@@ -51,13 +61,38 @@ if [ "${action}" = prepare ]; then
 	fi
 	[ -n "${image}" ] || exit 1
 	printf '%s\n' "${image}" > "${root}/image"
-	# Network access is confined to the credential-free dependency phase.
+	# Only the credential-free host proxy reaches vetted public registries.
 	# The user cannot specify the image, executable, mounts or Docker flags.
+	python_bin="$(python3 -c 'import sys; print(sys.executable)')"
+	if [ ! -f "${support}/dependency_registry_proxy.py" ] || [ -L "${support}/dependency_registry_proxy.py" ]; then
+		echo '::warning::Review dependencies skipped: registry proxy support missing' >&2
+	else
+	install -m 0644 "${support}/dependency_registry_proxy.py" "${root}/dependency_registry_proxy.py"
+	env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 "${python_bin}" "${root}/dependency_registry_proxy.py" broker "${root}/socket/registry.sock" "${DEPENDENCY_PROXY_ALLOWED_HOSTS:-}" &
+	deps_broker_pid=$!
+	for _ in $(seq 1 50); do
+		[ -S "${root}/socket/registry.sock" ] && break
+		kill -0 "${deps_broker_pid}" 2>/dev/null || break
+		sleep 0.1
+	done
+	if [ -S "${root}/socket/registry.sock" ]; then
 	timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${dep_container}" --user "$(id -u):$(id -g)" \
-		--cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 3g --cpus 2 \
+		--network none --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 3g --cpus 2 \
 		--mount "type=bind,src=${root}/source,dst=/source" \
+		--mount "type=bind,src=${root}/socket,dst=/socket" \
+		--mount "type=bind,src=${root}/dependency_registry_proxy.py,dst=/support/dependency_registry_proxy.py,readonly" \
+		--env HTTPS_PROXY=http://127.0.0.1:3128 --env https_proxy=http://127.0.0.1:3128 \
+		--env HTTP_PROXY=http://127.0.0.1:3128 --env http_proxy=http://127.0.0.1:3128 \
+		--env npm_config_https_proxy=http://127.0.0.1:3128 --env npm_config_proxy=http://127.0.0.1:3128 \
+		--env YARN_HTTPS_PROXY=http://127.0.0.1:3128 --env YARN_HTTP_PROXY=http://127.0.0.1:3128 \
+		--env PIP_PROXY=http://127.0.0.1:3128 --env NO_PROXY= --env no_proxy= \
 		--workdir /source "${image}" /bin/bash -c '
 			set -u
+			python3 /support/dependency_registry_proxy.py bridge /socket/registry.sock 3128 &
+			bridge_pid=$!
+			trap "kill ${bridge_pid} 2>/dev/null || true" EXIT
+			python3 -c "import socket,time; [(time.sleep(.1) if s.connect_ex((\"127.0.0.1\",3128)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)" \
+				|| { echo "::warning::Review dependencies skipped: registry proxy bridge unavailable" >&2; exit 0; }
 			install_failed=false
 			python3 -m venv --system-site-packages /source/.review-venv || exit 1
 			export PATH=/source/.review-venv/bin:$PATH
@@ -106,6 +141,11 @@ if [ "${action}" = prepare ]; then
 				fi
 			fi
 		' || { echo '::error::Review dependency isolation failed' >&2; exit 1; }
+	else
+		echo '::warning::Review dependencies skipped: registry proxy unavailable' >&2
+	fi
+	stop_deps_broker
+	fi
 	# PR build backends may write source files. Never publish their writes as
 	# editor output: restore the exact host snapshot before launching the model.
 	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" refresh "${workspace}" "${root}/source" "${root}/baseline.json"

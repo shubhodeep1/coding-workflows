@@ -118,7 +118,7 @@ env:
     minimax/minimax-m3
     z-ai/glm-5.2
     deepseek/deepseek-v4-pro
-    google/gemini-3.8-flash
+    google/gemini-3.1-flash-lite
     qwen/qwen3.7-plus
     openai/gpt-6-luna
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
@@ -155,9 +155,9 @@ env:
   # Review tiers (scripts/review_run_reviewers.sh classify_review_tier): a diff
   # of <= REVIEW_TIER_LITE_MAX_LOC lines touching no protected path gets one
   # reviewer, any diff of <= REVIEW_TIER_STANDARD_MAX_LOC lines gets four, the
-  # rest the full panel. The standard tier defaults to the four cheapest panel
-  # models (google/gemini-3.8-flash and z-ai/glm-5.2, the two most expensive,
-  # run only on the full panel). An empty lite slug draws one reviewer from the
+  # rest the full panel. The standard tier defaults to four panel models
+  # (google/gemini-3.1-flash-lite and z-ai/glm-5.2 run only on the full
+  # panel). An empty lite slug draws one reviewer from the
   # standard list, seeded by the PR number; set either variable to pin reviewers.
   REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}
   REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
@@ -4700,6 +4700,8 @@ jobs:
 
       - name: Install project dependencies (best-effort)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
+        env:
+          DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.
@@ -5918,6 +5920,7 @@ jobs:
         id: rb_judge
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
+          DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
           ENABLE_REVIEW_BLOCKED_JUDGE: ${{ vars.ENABLE_REVIEW_BLOCKED_JUDGE || 'true' }}
