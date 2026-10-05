@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:254-258 and workflow-templates/.claude/hooks/pr_merge_status_guard.py:254-258 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_is_unquoted_fd_prefix` is defined but never called; the fd-detection logic uses the `last_word_span` approach instead.\n  WHY: There is no runtime failure, but this dead code increases maintenance across both guard copies and may mislead readers.\n- tests/test_claude_anthropic_relay.py:182; scripts/claude_anthropic_relay.py:111\u2013133 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: The relay test can raise `BrokenPipeError` while sending its request body after the broker rejects the headers and closes the connection, before the test can assert the expected HTTP 400 response.\n  WHY: This failure blocks the required tests-hooks-and-orchestrator CI check-run; severity differed between BLOCKER and MAJOR, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py (and workflow-templates/.claude/hooks/pr_merge_status_guard.py), lines 254-258, function `_is_unquoted_fd_prefix` | severity=low | confidence=5\n  PROBLEM: `_is_unquoted_fd_prefix` is defined in both guard copies but never called anywhere; the actual file-descriptor detection in `_shell_segments_with_operators` uses the `last_word_span` span-tracking approach instead.\n  WHY: No runtime failure; it is dead code that doubles the maintenance surface and may mislead future readers.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_claude_anthropic_relay.py, Line 182, in test_broker_rejects_client_authorization (scripts/claude_anthropic_relay.py lines 115-133) | severity=critical | confidence=5\n  PROBLEM: The test can raise `BrokenPipeError` when the client sends the request body after the broker prematurely closes the connection on early HTTP 400 rejection.\n  WHY: The client write can fail before receiving the response status, blocking the tests-hooks-and-orchestrator CI check-run.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_claude_anthropic_relay.py, Line 182 sends the request body; scripts/claude_anthropic_relay.py lines 111\u2013127 reject client-supplied Authorization and close the connection before reading the body. | severity=high | confidence=5\n  PROBLEM: The test fails with `BrokenPipeError` while sending its request, before it can assert the expected 400 response.\n  WHY: The broker can reject the headers and close the socket while the client is still sending the body, causing the required tests-hooks-and-orchestrator job to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py (and workflow-templates/.claude/hooks/pr_merge_status_guard.py), lines 254-258, function `_is_unquoted_fd_prefix` | severity=low | confidence=5\n  PROBLEM: `_is_unquoted_fd_prefix` is defined but never called; the redirect-detection logic in `_shell_segments_with_operators` uses the `last_word_span` approach with inline regex instead.\n  WHY: There is no runtime failure, but this dead code increases maintenance across both byte-identical guard copies and may mislead future readers.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/pr_merge_status_guard.py:254-258 and workflow-templates/.claude/hooks/pr_merge_status_guard.py:254-258 | severity=low | confidence=5\n  PROBLEM: `_is_unquoted_fd_prefix` is defined but never called anywhere; the actual fd-detection logic uses the `last_word_span` approach in `_shell_segments_with_operators` instead.\n  WHY: It is unreachable dead code that increases maintenance across both byte-identical guard copies and may mislead future readers.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f9327eaa9756d34c67413940534df1a430968a96d23cd9633f6776291930b4e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6286,
+    "run_id": "37292534932",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37292534932",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005103632_4ff0811a09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6286,
+    "run_id": "37292534932"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T10:36:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
