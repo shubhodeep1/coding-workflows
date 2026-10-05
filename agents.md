@@ -240,6 +240,11 @@ reject shell control syntax and write-capable git options, including abbreviated
 `--output` and `git grep -O`. The security audit also strips credentials from
 its model call and fingerprints the trusted `scripts/` tree before running its
 single-issue reporter; a mismatch fails closed without executing that script.
+Every `claude_run` read-profile call (including `AI_ENGINE_READ_ONLY=true`)
+uses a bounded source snapshot inside a network-isolated Docker container;
+the real OAuth token remains in the host relay. Missing Docker, relay support,
+or a failed snapshot falls back to codex/OpenCode, never an unisolated read
+profile. Container tool calls cannot reach GitHub; prompts carry the context.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.
 

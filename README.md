@@ -1945,6 +1945,8 @@ attempts of that role in the same job.
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
 | `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. |
+| `CLAUDE_READ_SNAPSHOT_MAX_FILES` | Read-profile `claude_run` snapshot file limit (default `20000`); exceeding it falls back to codex/OpenCode instead of reading the host filesystem. |
+| `CLAUDE_READ_SNAPSHOT_MAX_BYTES` | Read-profile `claude_run` snapshot total byte limit (default `268435456`, 256 MiB); exceeding it falls back to codex/OpenCode. Docker is required for read-profile Claude calls; tools have no GitHub network access in the isolated container. |
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
@@ -2024,10 +2026,12 @@ stream-json `result` usage line that `scripts/cost_audit.py` totals under
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
-`claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
-it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
-file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
-and reports that path instead of overwriting the new content.
+write-profile `claude_run` then moves `CLAUDE.md` out of the checkout for the
+call and puts it back afterwards. If the run creates a new `CLAUDE.md`, it
+keeps the new file, saves the original as `CLAUDE.md.original.<unique suffix>`
+beside it, and reports that path instead of overwriting the new content.
+Read-profile calls instead omit `CLAUDE.md` from the isolated snapshot and
+never move the checkout's file.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in

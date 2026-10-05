@@ -52,6 +52,8 @@ import math
 import os
 import re
 import shlex
+import stat
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -172,6 +174,14 @@ READ_PROFILE_ALLOW: tuple[str, ...] = (
 # Defence in depth for #6217: these wildcard rules are not a substitute for
 # the read-guard hook, which checks abbreviated and clustered git options.
 READ_PROFILE_DENY: tuple[str, ...] = (
+	# read-profile-can-access-credential-files: defence in depth behind the isolated filesystem.
+	"Read(//proc/**)", "Grep(//proc/**)", "Glob(//proc/**)",
+	"Read(**/.git/config)", "Grep(**/.git/config)",
+	"Read(**/.git-credentials)", "Read(**/.netrc)",
+	"Read(~/.config/gh/**)", "Grep(~/.config/gh/**)",
+	"Read(~/.claude/.credentials.json)",
+	"Read(**/claude-pool/**)", "Grep(**/claude-pool/**)", "Glob(**/claude-pool/**)",
+	"Bash(git * --no-index*)",
 	# #6217: git --output can overwrite support and Actions command files.
 	"Bash(git * --ou*)",
 	# #6217: diff drivers can execute attacker-controlled commands.
@@ -184,7 +194,7 @@ READ_PROFILE_DENY: tuple[str, ...] = (
 	"Bash(git grep* --op*)",
 )
 READ_GUARD_SAFE_EXACT = frozenset(("--text",))
-_READ_GUARD_GIT_OPTIONS = ("--output", "--open-files-in-pager", "--ext-diff", "--textconv")
+_READ_GUARD_GIT_OPTIONS = ("--output", "--open-files-in-pager", "--ext-diff", "--textconv", "--no-index")
 PROFILE_TOOLS: dict[str, str] = {
 	"write": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
 	"read": "Read,Grep,Glob,Bash",
@@ -957,12 +967,152 @@ def cmd_settings(args: argparse.Namespace) -> int:
 		guard_hook,
 		profile=args.profile,
 		allow_workflow_edits=args.allow_workflow_edits,
-		read_guard_hook=str(Path(__file__).resolve()),
+		read_guard_hook=args.read_guard_hook or str(Path(__file__).resolve()),
 	)
 	out = Path(args.out)
 	out.parent.mkdir(parents=True, exist_ok=True)
 	out.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
 	os.chmod(out, 0o600)
+	return 0
+
+
+def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, git_objects_mount: str = "/git-objects") -> dict[str, Any]:
+	"""Copy safe source files into an empty, bounded snapshot, never following links.
+
+	The source's git configuration, hooks, index and alternate object stores are
+	never copied. Git history is reconstructed only from an independent object
+	store and freshly initialized metadata.
+	"""
+	if not git_objects_mount.startswith("/") or not re.fullmatch(r"/[A-Za-z0-9_/-]+", git_objects_mount):
+		raise EngineError("invalid git objects mount")
+	if not source.is_dir() or source.is_symlink() or not dest.is_dir() or dest.is_symlink() or any(dest.iterdir()):
+		raise EngineError("read snapshot requires a directory source and empty directory destination")
+	if source.resolve() == dest.resolve() or source.resolve() in dest.resolve().parents or dest.resolve() in source.resolve().parents:
+		raise EngineError("read snapshot source and destination must be separate")
+	def limit(name: str, default: int) -> int:
+		try:
+			value = int(os.environ.get(name, str(default)))
+		except ValueError as exc:
+			raise EngineError("invalid read snapshot limit") from exc
+		if value <= 0:
+			raise EngineError("invalid read snapshot limit")
+		return value
+
+	max_files = limit("CLAUDE_READ_SNAPSHOT_MAX_FILES", 20000)
+	max_bytes = limit("CLAUDE_READ_SNAPSHOT_MAX_BYTES", 268435456)
+	git_env = {key: value for key, value in os.environ.items() if key not in (
+		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+		"GIT_TEMPLATE_DIR", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL",
+	) and not key.startswith("GIT_CONFIG_KEY_") and not key.startswith("GIT_CONFIG_VALUE_")}
+	git_env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TEMPLATE_DIR=os.devnull)
+
+	def git_run(repo: Path, *args: str, data: str | None = None, alternate: str = "") -> subprocess.CompletedProcess[str]:
+		env = dict(git_env)
+		if alternate:
+			env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = alternate
+		return subprocess.run(["git", "-C", str(repo), "-c", "core.fsmonitor=false",
+			"-c", "core.hooksPath=/dev/null", *args], input=data, text=True,
+			capture_output=True, env=env, check=True)
+
+	git_root = None
+	try:
+		root_result = git_run(source, "rev-parse", "--show-toplevel").stdout.strip()
+		if Path(root_result).resolve() == source.resolve():
+			git_root = source
+	except (subprocess.CalledProcessError, OSError):
+		pass
+	if git_root:
+		try:
+			entries = [os.fsdecode(item) for item in git_run(source, "ls-files", "-z", "--cached", "--others", "--exclude-standard").stdout.split("\0") if item]
+		except (subprocess.CalledProcessError, OSError) as exc:
+			raise EngineError("read snapshot file listing failed") from exc
+	else:
+		entries = []
+		for current, dirs, files in os.walk(source, followlinks=False):
+			dirs[:] = [name for name in dirs if not (Path(current) / name).is_symlink()]
+			entries.extend(str((Path(current) / name).relative_to(source)) for name in files)
+
+	files_copied = bytes_copied = 0
+	for entry in sorted(set(entries)):
+		parts = Path(entry).parts
+		if (not parts or Path(entry).is_absolute() or ".." in parts or
+			any(part.lower() == ".git" or part.lower().startswith((".codex-workflow-src", ".env"))
+				or part.lower() in ("secrets", "credentials") for part in parts) or
+			parts[-1].lower() in (".git-credentials", ".netrc") or
+			Path(entry).suffix.lower() in (".pem", ".key", ".p12", ".pfx", ".keystore") or
+			(omit_claude_md and parts[-1] == "CLAUDE.md")):
+			continue
+		current = source
+		for part in parts[:-1]:
+			current /= part
+			info = current.lstat()
+			if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+				raise EngineError("unsafe read snapshot parent")
+		path = current / parts[-1]
+		info = path.lstat()
+		if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 2 * 1024 * 1024:
+			continue
+		files_copied += 1
+		bytes_copied += info.st_size
+		if files_copied > max_files or bytes_copied > max_bytes:
+			raise EngineError("read snapshot limit exceeded")
+		target = dest.joinpath(*parts)
+		target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+		# Use dirfds as well as O_NOFOLLOW on the leaf: a parent may be
+		# swapped for a symlink after lstat, before a path-based open.
+		parent_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+		try:
+			for part in parts[:-1]:
+				child_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+				os.close(parent_fd)
+				parent_fd = child_fd
+			fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+			with os.fdopen(fd, "rb") as reader, target.open("xb") as writer:
+				opened = os.fstat(reader.fileno())
+				if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+					raise EngineError("source changed during read snapshot")
+				content = reader.read(info.st_size + 1)
+				if len(content) != info.st_size:
+					raise EngineError("source changed during read snapshot")
+				writer.write(content)
+		finally:
+			os.close(parent_fd)
+		target.chmod(0o644)
+
+	result: dict[str, Any] = {"files": files_copied, "bytes": bytes_copied, "git": "absent"}
+	if git_root:
+		try:
+			common = Path(git_run(source, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip())
+			objects = common / "objects"
+			if (objects / "info" / "alternates").exists() or not objects.is_dir() or objects.is_symlink():
+				return result
+			head = git_run(source, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
+			if not re.fullmatch(r"[0-9a-f]{40,64}", head):
+				return result
+			git_run(dest, "-c", "init.templateDir=/dev/null", "init", "-q")
+			refs = git_run(source, "for-each-ref", "--format=%(objectname) %(refname)",
+				"refs/heads", "refs/remotes", "refs/tags").stdout
+			commands = "".join(f"update {ref} {sha}\n" for sha, ref in
+				(line.split(" ", 1) for line in refs.splitlines()))
+			if commands:
+				git_run(dest, "update-ref", "--stdin", data=commands, alternate=str(objects))
+			(dest / ".git" / "HEAD").write_text(head + "\n", encoding="ascii")
+			git_run(dest, "read-tree", "HEAD", alternate=str(objects))
+			(dest / ".git" / "objects" / "info" / "alternates").write_text(git_objects_mount + "\n", encoding="ascii")
+			result["git"] = "present"
+			result["git_objects"] = str(objects.resolve())
+		except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+			raise EngineError("read snapshot git metadata failed") from exc
+	return result
+
+
+def cmd_read_snapshot(args: argparse.Namespace) -> int:
+	try:
+		result = build_read_snapshot(Path(args.source), Path(args.dest), args.omit_claude_md, args.git_objects_mount)
+	except OSError as exc:
+		raise EngineError("read snapshot source changed or could not be copied") from exc
+	_print_json(result)
 	return 0
 
 
@@ -1083,7 +1233,15 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--allow-workflow-edits", action="store_true")
 	p.add_argument("--template", default="")
 	p.add_argument("--guard-hook", default="")
+	p.add_argument("--read-guard-hook", default="")
 	p.set_defaults(func=cmd_settings)
+
+	p = sub.add_parser("read-snapshot")
+	p.add_argument("--source", required=True)
+	p.add_argument("--dest", required=True)
+	p.add_argument("--git-objects-mount", default="/git-objects")
+	p.add_argument("--omit-claude-md", action="store_true")
+	p.set_defaults(func=cmd_read_snapshot)
 
 	p = sub.add_parser("read-guard")
 	p.set_defaults(func=cmd_read_guard)

@@ -63,6 +63,19 @@ if token.startswith("TOK_WRITE_MD"):
 emit({"type": "result", "subtype": "success", "is_error": False, "result": "done", "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 2}})
 '''
 
+FAKE_DOCKER = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_DOCKER_LOG"], "a", encoding="utf-8") as handle:
+	handle.write(json.dumps({"args": args, "env": dict(os.environ)}) + "\n")
+if args[0] == "build":
+	print("fake-image-id")
+elif args[0] == "run":
+	print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "isolated done"}))
+elif args[0] != "rm":
+	sys.exit(1)
+'''
+
 
 @pytest.fixture()
 def sandbox(tmp_path: Path):
@@ -71,6 +84,9 @@ def sandbox(tmp_path: Path):
 	fake = fake_bin / "claude"
 	fake.write_text(FAKE_CLAUDE, encoding="utf-8")
 	fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+	docker = fake_bin / "docker"
+	docker.write_text(FAKE_DOCKER.replace('os.environ["FAKE_DOCKER_LOG"]', repr(str(tmp_path / "docker.jsonl"))), encoding="utf-8")
+	docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
 	home = tmp_path / "home"
 	home.mkdir()
 	runner_temp = tmp_path / "rt"
@@ -95,6 +111,7 @@ def sandbox(tmp_path: Path):
 			"CLAUDE_ENGINE_POOL_DIR": str(pool),
 			"SUPPORT_INSTRUCTIONS_FILE": str(INSTRUCTIONS),
 			"FAKE_CLAUDE_LOG": str(tmp_path / "calls.jsonl"),
+			"FAKE_DOCKER_LOG": str(tmp_path / "docker.jsonl"),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"CODEX_HEARTBEAT_INTERVAL_SECS": "30",
 			"ANTHROPIC_API_KEY": "must-not-reach-the-cli",
@@ -135,6 +152,11 @@ def _calls(sandbox: dict) -> list[dict]:
 	if not path.exists():
 		return []
 	return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _docker_calls(sandbox: dict) -> list[dict]:
+	path = sandbox["tmp"] / "docker.jsonl"
+	return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
 
 
 def _rc(result: subprocess.CompletedProcess) -> int:
@@ -299,10 +321,10 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	result = _claude_run(sandbox, "SECURITY_AUDIT", AI_ENGINE_MODEL_HINT="claude-sonnet-5-5")
 	assert _rc(result) == 0, result.stderr
-	argv = _calls(sandbox)[0]["argv"]
-	assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob,Bash"
-	assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
-	assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+	assert _calls(sandbox) == []
+	run = next(call for call in _docker_calls(sandbox) if call["args"][0] == "run")
+	assert 'CLAUDE_MODEL=claude-sonnet-5-5' in run["args"]
+	assert '--tools Read,Grep,Glob,Bash --permission-mode dontAsk' in run["args"][-1]
 
 
 @pytest.mark.parametrize("role, read_only", [
@@ -321,16 +343,17 @@ def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: s
 	result = _claude_run(sandbox, role, **dict.fromkeys(credential_names, "not-a-real-credential"),
 		AI_ENGINE_READ_ONLY="true" if read_only else "false", GH_CONFIG_DIR=str(inherited_gh_config))
 	assert _rc(result) == 0, result.stderr
-	call = _calls(sandbox)[0]
-	assert call["credentials"] == dict.fromkeys(credential_names, role == "IMPLEMENT")
-	assert call["token"] == "TOK_OK"
 	if role == "IMPLEMENT":
+		call = _calls(sandbox)[0]
+		assert call["credentials"] == dict.fromkeys(credential_names, True)
+		assert call["token"] == "TOK_OK"
 		assert call["gh_config_dir"] == str(inherited_gh_config)
 	else:
-		assert Path(call["gh_config_dir"]).parent == Path(next(
-			line[8:] for line in result.stdout.splitlines() if line.startswith("RUN_DIR=")))
-		assert Path(call["gh_config_dir"]) != inherited_gh_config
-		assert list(Path(call["gh_config_dir"]).iterdir()) == []
+		assert _calls(sandbox) == []
+		run = next(item for item in _docker_calls(sandbox) if item["args"][0] == "run")
+		assert not any(name in run["env"] for name in credential_names)
+		assert "TOK_OK" not in json.dumps(run)
+		assert "CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder" in run["args"]
 
 
 @pytest.mark.parametrize("value, tools, mode", [
@@ -342,8 +365,73 @@ def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools:
 	_accounts(sandbox, A="TOK_OK")
 	result = _claude_run(sandbox, "RB_JUDGE", AI_ENGINE_READ_ONLY=value)
 	assert _rc(result) == 0, result.stderr
-	argv = _calls(sandbox)[0]["argv"]
-	assert (argv[argv.index("--tools") + 1], argv[argv.index("--permission-mode") + 1]) == (tools, mode)
+	if value == "true":
+		assert _calls(sandbox) == []
+		argv = next(call["args"] for call in _docker_calls(sandbox) if call["args"][0] == "run")
+		assert f"--tools {tools} --permission-mode {mode}" in argv[-1]
+	else:
+		argv = _calls(sandbox)[0]["argv"]
+		assert (argv[argv.index("--tools") + 1], argv[argv.index("--permission-mode") + 1]) == (tools, mode)
+
+
+def test_read_isolation_mounts_snapshot_without_host_secrets(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, "RB_JUDGE", AI_ENGINE_READ_ONLY="true")
+	assert _rc(result) == 0, result.stderr
+	run_dir = Path(next(line[8:] for line in result.stdout.splitlines() if line.startswith("RUN_DIR=")))
+	assert (sandbox["tmp"] / "out.txt").read_text(encoding="utf-8") == "isolated done"
+	assert not (run_dir / "source").exists()
+	assert (run_dir / "transcript-A.jsonl").exists()
+	assert (run_dir / "stderr-A.txt").exists()
+	assert (run_dir / "successful-transcript.jsonl").exists()
+	assert (sandbox["work"] / "CLAUDE.md").read_text(encoding="utf-8") == "checkout CLAUDE.md\n"
+	assert _calls(sandbox) == []
+	calls = _docker_calls(sandbox)
+	assert any(call["args"][0] == "build" for call in calls)
+	run = next(call for call in calls if call["args"][0] == "run")
+	argv = run["args"]
+	assert all(flag in argv for flag in ("--network", "--read-only", "--cap-drop"))
+	assert argv[argv.index("--network") + 1] == "none" and argv[argv.index("--cap-drop") + 1] == "ALL"
+	assert any("dst=/source,readonly" in arg for arg in argv)
+	assert not any(str(sandbox["work"]) in arg or str(sandbox["pool"]) in arg or str(sandbox["home"]) in arg for arg in argv)
+	assert "CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder" in argv
+	assert "TOK_OK" not in json.dumps(calls)
+
+
+def test_read_isolation_missing_docker_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	# Mask the lookup without relying on whether the runner has Docker installed.
+	script = ("command() { if [ \"$1\" = -v ] && [ \"$2\" = docker ]; then return 1; fi; builtin command \"$@\"; }; "
+		f"rc=0; claude_run SECURITY_AUDIT {shlex.quote(str(sandbox['prompt']))} "
+		f"{shlex.quote(str(sandbox['tmp'] / 'out.txt'))} {shlex.quote(str(sandbox['work']))} || rc=$?; echo \"RC=${{rc}}\"")
+	result = _bash(sandbox, script)
+	assert _rc(result) == 75
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_unavailable" in result.stderr
+	assert _calls(sandbox) == []
+
+
+def test_read_isolation_snapshot_limit_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, "SECURITY_AUDIT", CLAUDE_READ_SNAPSHOT_MAX_BYTES="4")
+	assert _rc(result) == 75
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=snapshot_failed" in result.stderr
+	assert _docker_calls(sandbox) == [] and _calls(sandbox) == []
+
+
+def test_read_isolation_image_failure_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	docker = sandbox["bin"] / "docker"
+	docker.write_text(docker.read_text(encoding="utf-8").replace('print("fake-image-id")', 'sys.exit(1)'), encoding="utf-8")
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 75
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=image_unavailable" in result.stderr
+	assert not any(call["args"][0] == "run" for call in _docker_calls(sandbox))
+	assert _calls(sandbox) == []
+
+
+def test_poller_stages_read_isolation_relay() -> None:
+	text = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "ai_engine.sh claude_engine.py claude_anthropic_relay.py codex_stall_guard.sh; do" in text
 
 
 def _claude_run_selected(sandbox: dict, role: str, **extra_env: str) -> subprocess.CompletedProcess:
