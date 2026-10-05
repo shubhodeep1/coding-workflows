@@ -221,6 +221,7 @@ esac
 			"CODEX_OUTPUT_FILE": str(runtime_dir / "codex_output.txt"),
 			"CODEX_PROMPT_FILE": str(runtime_dir / "codex_prompt.txt"),
 			"GITHUB_REPOSITORY": "example/repository",
+			"GITHUB_WORKSPACE": str(root),
 			"MOCK_CODEX_SCENARIO": scenario,
 			"MOCK_LOG_DIR": str(runtime_dir),
 			"MODEL_EDITOR": "primary/model",
