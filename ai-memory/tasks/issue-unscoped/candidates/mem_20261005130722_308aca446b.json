@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:9793-9799 | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `test_review_blocked_fix_scope_rejects_protected_judge_citation` fails in the PR-head CI run.\n  WHY: The failure blocks the orchestrate-poll shard and aggregate `lint` check; reviewers disagree only in their possible explanations for why the test fails, and the latest two test additions do not address it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:test_review_blocked_fix_scope_rejects_protected_judge_citation (per cross-pollination, around lines 9793-9799) | severity=critical | confidence=4\n  PROBLEM: The PR-head CI run reports this test as failed, blocking the orchestrate-poll shard and the aggregate `lint` check.\n  WHY: If the combined-mode worktree setup does not complete, the scope check may not be reached; alternatively, fake Docker isolation may not deliver the staged `scripts/evil.sh` to the worktree, leaving the staged-paths list empty and causing the no-staged-changes check to fire first.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:9793-9799; the rejection branch is at scripts/orchestrate_poll_process.sh:21450-21455. | severity=critical | confidence=5\n  PROBLEM: The PR\u2019s CI run fails `test_review_blocked_fix_scope_rejects_protected_judge_citation`; its fixture stages `scripts/evil.sh`, lists only `other.txt` in the PR files, and cites `scripts/evil.sh`, while the test expects `protected_not_in_pr` and no push.\n  WHY: The orchestrate-poll shard reports this test as failed, causing the `orchestrate-poll` job and aggregate `lint` check to fail; the latest two test additions to `tests/test_pr_merge_status_guard.py` do not address this failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d6210fd5ebfc70a67cda41909b1883fe538997d801544290677e623924b00e9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6187,
+    "run_id": "37302442980",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37302442980",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005130722_308aca446b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6187,
+    "run_id": "37302442980"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T13:07:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
