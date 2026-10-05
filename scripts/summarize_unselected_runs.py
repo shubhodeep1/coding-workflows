@@ -496,7 +496,7 @@ class ClaudeSummarizer:
 				except ProcessLookupError:
 					pass
 				proc.wait()
-				raise RuntimeError(f"claude timed out after {int(timeout_seconds)}s") from None
+				raise TimeoutError(f"claude timed out after {int(timeout_seconds)}s") from None
 			if rc == 75:
 				raise ClaudeUnavailable("claude_run_selected exit 75")
 			if rc != 0:
@@ -758,7 +758,7 @@ def main(argv: list[str] | None = None) -> int:
 		summary_model = model
 		summary = ""
 		tokens_used = 0
-		if claude_summarizer is not None and time.monotonic() >= claude_deadline:
+		if claude_summarizer is not None and time.monotonic() + 10 >= claude_deadline:
 			_warn("Claude time budget spent during log fetch; remaining runs go over OpenRouter" if summarizer is not None else "Claude time budget spent during log fetch; remaining runs stay unsummarized")
 			stats["claude_fallback_reason"] = "time_budget"
 			claude_summarizer = None
@@ -770,6 +770,14 @@ def main(argv: list[str] | None = None) -> int:
 			except ClaudeUnavailable:
 				_warn("Claude unavailable for LOG_SUMMARY; remaining runs go over OpenRouter" if summarizer is not None else "Claude unavailable for LOG_SUMMARY and OPENROUTER_API_KEY not set; remaining runs stay unsummarized")
 				stats["claude_fallback_reason"] = "unavailable"
+				claude_summarizer = None
+			except TimeoutError as exc:
+				if time.monotonic() < claude_deadline:
+					_warn(f"Claude summary failed for {repository}#{run_id}: {exc}")
+					stats["skipped_summary_error"] += 1
+					continue
+				_warn("Claude time budget spent during summary call; remaining runs go over OpenRouter" if summarizer is not None else "Claude time budget spent during summary call; remaining runs stay unsummarized")
+				stats["claude_fallback_reason"] = "time_budget"
 				claude_summarizer = None
 			except Exception as exc:  # noqa: BLE001 — fail-open per run
 				_warn(f"Claude summary failed for {repository}#{run_id}: {exc}")
