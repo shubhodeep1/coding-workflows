@@ -68,6 +68,11 @@ _WEAKENS_CONTROL_PATTERNS = [
 		re.IGNORECASE,
 	),
 	re.compile(
+		r"\b(?:security\s+)?(?:verification|validation|checks?|signatures?|authorization|authentication|reviews?|approvals?|audits?|scans?|tests?|gates?|guards?|controls?)\s+"
+		r"(?:will|shall|is|are|was|were)\s+not\s+(?:be\s+)?(?:performed|run|executed|done|carried\s+out)\b",
+		re.IGNORECASE,
+	),
+	re.compile(
 		r"\b(?:do\s+not|don't|never|no|refuse\s+to|stop)\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|auth(?:oriz\w*|entic\w*|[nz])?\b|review\w*|approv\w*|audit\w*|scan\w*|test\w*|guard\w*)\b",
 		re.IGNORECASE,
 	),

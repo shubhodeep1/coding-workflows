@@ -104,6 +104,8 @@ def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) 
 	"Leave the PR head unverified", "Proceed with the unchecked PR", "Do not enforce the security check",
 	"Security test skipped", "Security tests skipped", "Verification scan omitted", "Audit check disabled",
 	"Test skipped", "Tests were omitted", "Unit test disabled", "Omit authn", "Proceed without authz",
+	"Verification will not be performed", "Test will not be performed", "Scan shall not be performed",
+	"Audit is not performed", "Security checks will not be run",
 ])
 def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL for verification\n- B — {fallback}\n"
