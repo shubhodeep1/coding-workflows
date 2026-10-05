@@ -14,8 +14,9 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories or refspecs warn and
-fall back to the session checkout check. Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unknown directories warn and fall back to
+the session checkout check; unresolvable explicit push targets require
+confirmation. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 
 Detection rule — all three conditions must hold before the command is blocked:
@@ -89,7 +90,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections import deque
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -250,7 +250,7 @@ def _shell_segments(command: str) -> list[list[str]]:
 def _is_unquoted_fd_prefix(command: str, digits: str, operator: str) -> bool:
 	"""Only recognize a literal descriptor immediately before a redirect."""
 	return re.search(
-		r"(?:^|[\s;&|()])" + re.escape(digits) + re.escape(operator[0]), command
+		r"(?:^|[\s;&|()])" + re.escape(digits) + re.escape(operator[0]) + r"$", command
 	) is not None
 
 
@@ -277,11 +277,6 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
 			if (
 				segment and token[0] in "<>" and last_token_attached_redirect
-				and re.fullmatch(r"[0-9]+", segment[-1])
-				# The raw-text check excludes quoted digits ("12">x). A repeated
-				# unquoted descriptor elsewhere can still match; keep this parser
-				# conservative without changing its shell-tokenization contract.
-				and _is_unquoted_fd_prefix(command, segment[-1], token)
 			):
 				segment.pop()
 			redirect_target = True
@@ -295,13 +290,14 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			last_token_attached_redirect = False
 		else:
 			segment.append(token)
-			# shlex buffers immediately adjacent punctuation; whitespace leaves
-			# this deque empty. If the private buffer changes, retain the word.
-			pushback_chars = getattr(lexer, "_pushback_chars", None)
+			# shlex has read the next punctuation character by the time it
+			# returns a word; anchor to that position, not another redirect.
 			last_token_attached_redirect = (
-				isinstance(pushback_chars, deque)
-				and bool(pushback_chars)
-				and pushback_chars[0] in "<>"
+				bool(re.fullmatch(r"[0-9]+", token))
+				and (
+					_is_unquoted_fd_prefix(command[:lexer.instream.tell()], token, ">")
+					or _is_unquoted_fd_prefix(command[:lexer.instream.tell()], token, "<")
+				)
 			)
 	if segment:
 		result.append((operator, segment))
@@ -495,7 +491,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		return []  # Deletes do not strand new commits on a branch.
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
-			"could not resolve git push options; checking the current branch instead")]
+			"could not resolve git push options; destination branch is unknown")]
 	refspecs = positionals if remote_provided else positionals[1:]
 	if not refspecs and tags and not bulk:
 		return []
@@ -522,7 +518,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			continue
 		if branch is None:
 			targets.append(_GuardTarget(checkout, {}, "", "HEAD", True,
-				"could not resolve git push refspec; checking the current branch instead"))
+				"could not resolve git push refspec; destination branch is unknown"))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
 	if bulk:
@@ -1329,6 +1325,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		for target in targets:
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
+			if target.warning.startswith("could not resolve git push"):
+				_request_confirmation(target.warning)
+				continue
 			if target.warning:
 				_warn(target.warning)
 			if target.tip != "HEAD":

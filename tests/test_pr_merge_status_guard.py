@@ -12,7 +12,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -98,22 +97,15 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 	("git push origin 123 2>&1", ["git", "push", "origin", "123"]),
 	("git push origin 7 &>/dev/null", ["git", "push", "origin", "7"]),
 	('git push origin "12">x', ["git", "push", "origin", "12"]),
+	('git push origin "12">x; echo 12>out', ["git", "push", "origin", "12"]),
+	('git push origin "12">x 12>out', ["git", "push", "origin", "12"]),
+	("git push origin 12 >x; echo 12>out", ["git", "push", "origin", "12"]),
 	("git push origin 2>/dev/null", ["git", "push", "origin"]),
 	("git push origin 123>x", ["git", "push", "origin"]),
 	("git push origin ² > x", ["git", "push", "origin", "²"]),
 ])
 def test_numeric_push_target_before_redirect(command: str, expected: list[str]) -> None:
-	assert guard._shell_segments_with_operators(command) == [("", expected)]
-
-
-def test_shlex_pushback_distinguishes_attached_redirect() -> None:
-	for command, expected in (("2>/dev/null", ">"), ("123 > x", "")):
-		lexer = shlex.shlex(command, posix=True, punctuation_chars=guard._SHELL_PUNCTUATION_CHARS)
-		lexer.commenters = ""
-		lexer.whitespace = " \t\r"
-		lexer.whitespace_split = True
-		assert next(lexer) == command.split(">", 1)[0].strip()
-		assert "".join(lexer._pushback_chars) == expected
+	assert guard._shell_segments_with_operators(command)[0] == ("", expected)
 
 
 @pytest.mark.parametrize(
@@ -967,6 +959,34 @@ def test_numeric_push_refspec_guards_merged_branch(merged_branch_repo, monkeypat
 		"tool_input": {"command": command}})
 	assert code == 2, message
 	assert lookups == ["123"]
+
+
+def test_quoted_numeric_push_refspec_cannot_match_later_redirect(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "12", merged_sha)
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "12" else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": 'git push origin "12">/dev/null; echo 12>x'}})
+	assert code == 2, message
+	assert lookups == ["12"]
+
+
+@pytest.mark.parametrize("command", ["git push origin HEAD:$DEST", "git push --unknown origin 12"])
+def test_unknown_explicit_push_target_requires_confirmation(merged_branch_repo, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert (code, message) == (0, "")
+	output = json.loads(capsys.readouterr().out)
+	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
 def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:

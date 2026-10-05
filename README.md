@@ -1051,6 +1051,12 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (see the retired-files paragraph below). Nothing to configure in the
 > consumer.
 
+> The merged-PR guard checks numeric push refspecs before a separate output
+> redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
+> or option leaves the destination unknown, it requests confirmation rather
+> than checking an unrelated current branch. A push with no refspec keeps the
+> existing current-branch check.
+
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
 > `workflow-templates/retired_files.txt`, which lists `.claude/` files that
