@@ -621,9 +621,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   destination requests human confirmation instead of silently checking the
   checkout's origin. Remote URLs are never printed in the prompt (they may
   contain credentials). Pushes with `git -c`, `--config-env`, or inline
-  `GIT_CONFIG_*` assignments ask too: those per-command settings can redirect
-  `origin`, so the guard does not trust its stored URL or PR history for that
-  push. Commits with configuration overrides retain the merged-PR check.
+  `GIT_CONFIG_*` or `GIT_CONFIG` assignments, or an `env` wrapper, ask too:
+  those per-command settings can affect the push destination, so the guard
+  does not trust its stored URL or PR history for that push. Wrapped commits
+  retain the merged-PR check.
 - **No MCP tools inside.** Serena (and any other MCP server) is not configured
   in the container, so isolated prompts carry no Serena hints. Semble results
   are rendered into prompts on the host and are unaffected.

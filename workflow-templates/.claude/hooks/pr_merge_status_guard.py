@@ -318,6 +318,24 @@ def _literal_guard_path(
 	return None
 
 
+def _env_wrapped_git_index(tokens: list[str], index: int) -> int:
+	"""Skip a simple `env` prefix; callers must not trust its Git configuration."""
+	if index >= len(tokens) or (tokens[index] != "env" and not tokens[index].endswith("/env")):
+		return index
+	index += 1
+	while index < len(tokens):
+		word = tokens[index]
+		if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word) or word in ("-i", "--ignore-environment", "--"):
+			index += 1
+		elif word in ("-u", "--unset", "-C", "--chdir") and index + 1 < len(tokens):
+			index += 2
+		elif word.startswith(("--unset=", "--chdir=")) or (word.startswith(("-u", "-C")) and len(word) > 2):
+			index += 1
+		else:
+			break
+	return index
+
+
 def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation]:
 	try:
 		segments = _shell_segments_with_operators(command)
@@ -359,11 +377,17 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
-			if name.startswith("GIT_CONFIG_"):
+			if name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_"):
 				config_override = True
 			if name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 			index += 1
+		env_index = index
+		index = _env_wrapped_git_index(tokens, index)
+		if index != env_index:
+			config_override = True
+			if any(word in ("-C", "--chdir") or word.startswith(("-C", "--chdir=")) for word in tokens[env_index:index]):
+				working_directory = None
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
 			continue
 		index += 1
@@ -652,8 +676,8 @@ def _api_write_requires_confirmation(command: str) -> bool:
 def git_subcommands(command: str) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
-	Only counts `git` when it is the first real token of a shell segment, after
-	any leading `VAR=value` assignments. That keeps `man git commit` and
+	Only counts `git` after leading `VAR=value` assignments or a simple `env`
+	wrapper. That keeps `man git commit` and
 	`echo "git commit"` from tripping the guard, at the cost of missing
 	wrapper-prefixed invocations like `sudo git commit` — an acceptable trade,
 	since a false block is more disruptive than a missed check on a rare form.
@@ -670,6 +694,7 @@ def git_subcommands(command: str) -> set[str]:
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1
+		index = _env_wrapped_git_index(tokens, index)
 		if index >= len(tokens):
 			continue
 

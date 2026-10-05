@@ -1229,7 +1229,10 @@ repository with `--repo` or a positional remote asks for confirmation rather
 than treating the checkout's origin PR history as proof that the push is safe.
 Pushes with per-command Git configuration (`git -c` or `--config-env`) also ask:
 an override can redirect `origin`, so the guard does not use its stored PR history.
-The same confirmation applies to inline `GIT_CONFIG_*` assignments before `git push`.
+The same confirmation applies to inline `GIT_CONFIG_*` or `GIT_CONFIG`
+assignments and to `env`-wrapped pushes; the guard does not use origin PR
+history to authorize those pushes. Wrapped commits still receive the normal
+merged-PR check.
 
 ### Workflow file size limit
 
