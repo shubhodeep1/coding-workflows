@@ -214,9 +214,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     reads require the source repo in the intake's consumer registry; missing
     registry data skips them. Run references also require intake-account-only
     authorship and edit history for the heal issue and occurrence comments;
-    cross-repo runs additionally require matching run metadata (repo, reported
-    head SHA, and PR or head branch). Unverifiable runs are skipped before
-    log/artifact reads, including when a cached run is restored; rejected intake-origin
+    every run, same-repo included, requires matching run metadata (repo,
+    reported head SHA, and PR or head branch) and a failed conclusion (a
+    successful or unfinished run only counts as its review job). Unverifiable
+    runs are skipped before log/artifact reads, including when a cached run is
+    restored; rejected intake-origin
     references are listed with reasons under `Skipped` in `INDEX.md`. The
     folder is mounted read-only at `/evidence` in the clarify sandbox, and
     the prompt points to its index

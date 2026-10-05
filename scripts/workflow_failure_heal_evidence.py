@@ -138,6 +138,7 @@ _SECRET_RES = (
 	re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 	re.compile(r"(?i)\b(authorization:\s*(?:bearer|token)\s+)[^\s\"']{8,}"),
 )
+# Retained for compatibility; free-text run lines are not an authority for fetching logs.
 _HEAL_RUN_LINE_RE = re.compile(r"\*\*(?:Failed run|Failed runs?)\:\*\*\s*(?P<url>\S+)")
 _OCCURRENCE_MARKER = "<!-- " + heal.MARKER_PREFIX + "occurrence -->"
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -570,8 +571,17 @@ def heal_context(issue: dict[str, Any]) -> dict[str, Any]:
 		"base_branch": _body_field(body, "Pull request base branch"),
 		"target_branch": _body_field(body, "Target branch"),
 		"failure_reason": _body_field(body, "Failure reason"),
-		"runs_marker": markers.get("runs", ""),
+		"runs_marker": heal.parse_leading_heal_markers(body).get("runs", ""),
 	}
+
+
+def _runs_marker_urls(value: str) -> list[str]:
+	urls = []
+	for token in value.split(","):
+		repo, sep, run_id = token.partition(":")
+		if sep and heal.is_valid_repo_slug(repo) and run_id.isdigit():
+			urls.append(f"https://github.com/{repo}/actions/runs/{run_id}")
+	return urls
 
 
 def trusted_run_refs(
@@ -580,23 +590,17 @@ def trusted_run_refs(
 ) -> list[dict[str, str]]:
 	"""Run links from the issue body and its occurrence comments, newest last.
 
-	Only the heal issue's own author may add runs through an occurrence
-	comment (the intake posts both with the same account), and a run must
-	live in an allowed repository (the issue's repository or the source
-	repository named by the body marker).
+	Only leading structured runs markers in the issue and intake-authored
+	occurrence comments supply run IDs; free-text log excerpts never do.
+	Runs must live in an allowed repository.
 	"""
 	allowed = {repo for repo in allowed_repos if heal.is_valid_repo_slug(repo)}
 	author = ((issue.get("user") or {}) if isinstance(issue.get("user"), dict) else {}).get("login")
 	texts: list[tuple[str, str, dict[str, str]]] = []
-	body = issue.get("body") or ""
 	ctx = heal_context(issue)
 	if include_body:
 		body_ctx = {key: ctx.get(key, "") for key in ("source_repo", "source_number", "head_sha", "head_branch")}
-		for token in (ctx.get("runs_marker") or "").split(","):
-			repo, _, run_id = token.partition(":")
-			if heal.is_valid_repo_slug(repo) and run_id.isdigit():
-				texts.append((f"https://github.com/{repo}/actions/runs/{run_id}", "body", body_ctx))
-		texts.extend((match.group("url"), "body", body_ctx) for match in _HEAL_RUN_LINE_RE.finditer(body))
+		texts.extend((url, "body", body_ctx) for url in _runs_marker_urls(ctx.get("runs_marker") or ""))
 	for comment in comments or []:
 		if not isinstance(comment, dict):
 			continue
@@ -607,9 +611,9 @@ def trusted_run_refs(
 		text = comment.get("body") or ""
 		if not isinstance(text, str):
 			continue
-		if not author or comment_author != author or _OCCURRENCE_MARKER not in text:
+		if not author or comment_author != author or not text.startswith((_OCCURRENCE_MARKER + "\n", _OCCURRENCE_MARKER + "\r\n")):
 			continue
-		texts.extend((match.group("url"), f"comment:{comment_id}", _occurrence_context(text)) for match in _HEAL_RUN_LINE_RE.finditer(text))
+		texts.extend((url, f"comment:{comment_id}", _occurrence_context(text)) for url in _runs_marker_urls(heal.parse_leading_heal_markers(text).get("runs", "")))
 	seen: dict[tuple[str, str], dict[str, str]] = {}
 	for text, origin, facts in texts:
 		for match in heal._RUN_URL_RE.finditer(text):
@@ -839,8 +843,6 @@ class Collector:
 		return result
 
 	def _verify_run(self, ref: dict[str, str], issue_repo: str) -> tuple[bool, str]:
-		if ref["repo"] == issue_repo:
-			return True, "verified"
 		if ref["source_repo"] != ref["repo"]:
 			return False, "run_no_verified_context"
 		sha = ref["head_sha"] if heal.is_valid_sha(ref["head_sha"]) else ""
@@ -864,15 +866,31 @@ class Collector:
 		head_matches = sha and isinstance(run.get("head_sha"), str) and run["head_sha"].lower() == sha
 		branch_matches = branch and run.get("head_branch") == branch
 		if head_matches and (branch_matches or pr_linked or pr_named):
-			return True, "verified"
+			if run.get("conclusion") in FAILED_CONCLUSIONS:
+				return True, "verified"
+			if (run.get("status") == "completed" and run.get("conclusion") == "success") or (isinstance(run.get("status"), str) and run["status"] and run["status"] != "completed" and run.get("conclusion") is None):
+				return True, "verified_review_only"
+			return False, "run_not_failed"
 		return False, "run_head_mismatch"
 
 	# -- runs -----------------------------------------------------------------
 
-	def collect_run(self, ref: dict[str, str]) -> dict[str, Any]:
+	def collect_run(self, ref: dict[str, str], *, review_only: bool = False) -> dict[str, Any]:
 		run_dir = f"runs/{_safe_name(ref['repo'].replace('/', '__'))}__{ref['run_id']}"
 		cached = self._read_json(f"{run_dir}/meta.json")
 		if isinstance(cached, dict) and cached.get("complete"):
+			cached_jobs = cached.get("job_table")
+			cached_review_jobs = cached.get("jobs")
+			if review_only and (not isinstance(cached_jobs, list) or not all(isinstance(job, dict) for job in cached_jobs)
+				or not any(FOCUS_JOB_RE.search(job.get("name") or "") for job in cached_jobs)
+				or not isinstance(cached_review_jobs, list) or not cached_review_jobs or not all(
+					isinstance(job, dict) and FOCUS_JOB_RE.search(job.get("name") or "")
+					and isinstance(job.get("id"), int) and job.get("file") == f"{run_dir}/job-{job['id']}.txt"
+					for job in cached_review_jobs
+				) or any(old_log.name not in {f"job-{job['id']}.txt" for job in cached_review_jobs}
+					for old_log in (self.out / run_dir).glob("job-*.txt"))):
+				self._skip(f"run:{ref['repo']}:{ref['run_id']}", "unverified_run_not_failed")
+				return {"skipped": True}
 			cached["reused"] = True
 			return cached
 		meta: dict[str, Any] = {"repo": ref["repo"], "run_id": ref["run_id"], "url": ref["url"], "dir": run_dir, "jobs": [], "artifacts": [], "complete": False}
@@ -882,6 +900,11 @@ class Collector:
 			self._skip(f"run:{ref['run_id']}", "jobs_unavailable")
 			return meta
 		jobs = [job for job in jobs if isinstance(job, dict)]
+		selected = ([job for job in jobs if FOCUS_JOB_RE.search(job.get("name") or "")][:self.max_jobs]
+			if review_only else select_jobs(jobs, self.max_jobs))
+		if review_only and not selected:
+			self._skip(f"run:{ref['repo']}:{ref['run_id']}", "unverified_run_not_failed")
+			return {"skipped": True}
 		all_complete = all((job.get("status") or "") == "completed" for job in jobs) if jobs else False
 		meta["job_table"] = [
 			{"id": job.get("id"), "name": heal.single_line(job.get("name"), 120), "conclusion": job.get("conclusion"), "failing_step": _failing_step(job)}
@@ -892,7 +915,11 @@ class Collector:
 			meta["head_branch"] = heal.single_line(jobs[0].get("head_branch"), 200)
 			meta["workflow_name"] = heal.single_line(jobs[0].get("workflow_name"), 200)
 		fetched_all = True
-		selected = select_jobs(jobs, self.max_jobs)
+		if review_only:
+			selected_names = {f"job-{job['id']}.txt" for job in selected if isinstance(job.get("id"), int)}
+			for previous_log in (self.out / run_dir).glob("job-*.txt"):
+				if previous_log.name not in selected_names:
+					previous_log.unlink()
 		if not selected:
 			self._skip(f"run:{ref['run_id']}", "no_failed_or_focus_job")
 		for job in selected:
@@ -1166,7 +1193,9 @@ class Collector:
 			if not verified:
 				self._skip(f"run:{ref['repo']}:{ref['run_id']}", f"unverified_{reason}")
 				continue
-			runs.append(self.collect_run(ref))
+			run = self.collect_run(ref, review_only=reason == "verified_review_only")
+			if not run.get("skipped"):
+				runs.append(run)
 		# Cached legacy runs contain sliced logs but not structured diagnostics.
 		for run in runs:
 			for job in run.get("jobs") or []:
