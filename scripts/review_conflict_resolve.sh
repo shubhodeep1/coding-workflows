@@ -588,7 +588,7 @@ _resolver_sandbox_attempt()
   if ! sandbox_attempt_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral)" || [ -z "${sandbox_attempt_root}" ]; then
     resolver_sandbox_failure_reason=sandbox_prepare_failed
     if [ -n "${sandbox_attempt_root}" ]; then
-      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || return 1
+      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
     fi
     return 77
   fi
@@ -598,7 +598,7 @@ _resolver_sandbox_attempt()
       --project-path "$(pwd)" --config-path "${sandbox_attempt_config}" --serena off ||
       ! _resolver_disable_opencode_snapshot "${sandbox_attempt_config}"; then
       resolver_sandbox_failure_reason=opencode_config_failed
-      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || return 1
+      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
       return 77
     fi
   fi
@@ -611,8 +611,14 @@ _resolver_sandbox_attempt()
     bash "${resolver_sandbox_sh}" run "${_effective_prompt_file}" "${tmp_output}" \
     "${MODEL_EDITOR}" "${_current_reasoning_effort}" "${sandbox_attempt_config}" "${sandbox_attempt_engine}" CONFLICT_RESOLVER write \
     || sandbox_attempt_rc=$?
-  REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || sandbox_attempt_rc=1
-  rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+  if ! REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup; then
+    resolver_sandbox_failure_reason=sandbox_cleanup_failed
+    return 77
+  fi
+  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+    resolver_sandbox_failure_reason=sandbox_transfer_failed
+    return 77
+  fi
   if [ "${sandbox_attempt_rc}" -eq 2 ]; then
     resolver_sandbox_failure_reason=sandbox_helper_outdated
     return 77

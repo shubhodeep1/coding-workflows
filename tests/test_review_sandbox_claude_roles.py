@@ -102,10 +102,13 @@ def test_check_paths(tmp_path, name, accepted):
 
 def test_resolver_path_check_precedes_sandbox_and_does_not_pass_host_git_index():
 	text = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
+	helper = SANDBOX.read_text(encoding="utf-8")
+	assert 'prepare|prepare-ephemeral|run|cleanup' in helper
+	assert '[ "$#" -ge 6 ] && [ "$#" -le 9 ]' in helper
 	attempt = text[text.index('_resolver_sandbox_attempt()'):text.index('# Source-repo only: the final touched-set gate')]
 	branch = text[text.index('resolver_claude_rc=75'):text.index('if [ "${resolver_claude_rc}" -ne 75 ]; then')]
 	assert branch.index('check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"') < branch.index('_resolver_sandbox_attempt claude')
-	assert attempt.index('prepare-ephemeral') < attempt.index('run "${_effective_prompt_file}"') < attempt.index('cleanup || sandbox_attempt_rc=1')
+	assert attempt.index('prepare-ephemeral') < attempt.index('run "${_effective_prompt_file}"') < attempt.index('if ! REVIEW_SANDBOX_ROOT=')
 	assert 'GIT_INDEX_FILE=' not in attempt + branch
 
 

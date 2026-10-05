@@ -518,6 +518,7 @@ FAKE_SANDBOX = r'''#!/usr/bin/env bash
 case "$1" in
   prepare-ephemeral)
     [ "${MODE}" != prepare_failed ] || exit 1
+    if [ "${MODE}" = prepare_partial_cleanup_failed ]; then echo "${FAKE_ROOT}"; exit 1; fi
     if [ "${RESOLVER_TEST:-false}" = true ]; then
       count=0
       [ ! -f "${CALLS}" ] || count=$(grep -c '^prepare-ephemeral' "${CALLS}" || true)
@@ -528,6 +529,7 @@ case "$1" in
     echo prepare-ephemeral >> "${CALLS}"
     ;;
   run)
+    [ "$#" -eq 9 ] || exit 2
     if [ "${RESOLVER_TEST:-false}" = true ]; then
       printf 'run|%s|%s|%s|%s\n' "$7" "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
     else
@@ -544,7 +546,7 @@ case "$1" in
       *) exit 1 ;;
     esac
     ;;
-  cleanup) echo cleanup >> "${CALLS}" ;;
+  cleanup) echo cleanup >> "${CALLS}"; case "${MODE}" in cleanup_failed|prepare_partial_cleanup_failed) exit 1 ;; esac ;;
 esac
 '''
 
@@ -596,9 +598,12 @@ def _run_resolver_claude_section(tmp: Path, *, mode: str, engine: str = "claude"
 def test_resolver_claude_isolation_failures_never_call_host(tmp_path):
 	for index, (mode, path, helpers, config_fail, reason) in enumerate((
 		("prepare_failed", "scripts/a.py", True, False, "sandbox_prepare_failed"),
+		("prepare_partial_cleanup_failed", "scripts/a.py", True, False, "sandbox_prepare_failed"),
 		("success", ".github/ai/WORKFLOW.md", True, False, "sandbox_path_unsupported"),
 		("success", "scripts/a.py", False, False, "sandbox_prepare_failed"),
 		("outdated", "scripts/a.py", True, False, "sandbox_helper_outdated"),
+		("cleanup_failed", "scripts/a.py", True, False, "sandbox_cleanup_failed"),
+		("transfer_failed", "scripts/a.py", True, False, "sandbox_transfer_failed"),
 		("claude_unavailable", "scripts/a.py", True, True, "opencode_config_failed"),
 		("unavailable", "scripts/a.py", True, False, "sandbox_opencode_unavailable"),
 	)):
@@ -612,6 +617,8 @@ def test_resolver_claude_isolation_failures_never_call_host(tmp_path):
 			assert calls == []
 		if reason == "opencode_config_failed":
 			assert calls[-1] == "cleanup"
+		if reason == "sandbox_transfer_failed":
+			assert (work / "review_sandbox_transfer_failed").exists()
 
 
 def test_resolver_claude_retry_uses_distinct_sandboxes_and_no_host(tmp_path):
@@ -628,8 +635,7 @@ def test_resolver_claude_retry_uses_distinct_sandboxes_and_no_host(tmp_path):
 
 
 def test_resolver_selected_engine_and_failed_transfer(tmp_path):
-	for mode, engine, expected_exit, host in (("success", "claude", 0, False),
-		("transfer_failed", "claude", 1, False), ("success", "codex", 0, True)):
+	for mode, engine, expected_exit, host in (("success", "claude", 0, False), ("success", "codex", 0, True)):
 		work = tmp_path / (mode + engine)
 		work.mkdir()
 		proc, calls = _run_resolver_claude_section(work, mode=mode, engine=engine)
