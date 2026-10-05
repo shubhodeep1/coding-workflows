@@ -18,6 +18,9 @@ when the source is a detached HEAD. Unknown directories warn and fall back to
 the session checkout check; unresolvable explicit push targets require
 confirmation. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
+Guarded writes whose git-directory/work-tree override depends on shell state
+(an appended prefix or an earlier export, declare, assignment or unset in the
+same command) are blocked rather than checked against the session checkout.
 
 Detection rule — all three conditions must hold before the command is blocked:
 
@@ -184,6 +187,7 @@ class _GitInvocation(NamedTuple):
 	subcommand: str
 	arguments: list[str]
 	warning: str = ""
+	override_unresolved: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -351,6 +355,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		return []
 	working_directory: str | None = checkout
 	conditional_cd = False
+	git_override_shell_state_unknown = False
 	invocations: list[_GitInvocation] = []
 	for operator, tokens in segments:
 		if operator == "||" and tokens[0] == "exit" and working_directory is not None:
@@ -374,8 +379,19 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			continue
 		if tokens[0] in ("pushd", "popd", "eval", "source", ".", "(", "{"):
 			working_directory = None
+		# Only top-level shell builtins are tracked. A subshell/brace group
+		# remains on the existing uncertain-directory path, not this block.
+		if tokens[0] in ("export", "declare", "typeset", "readonly", "local", "unset"):
+			if any(
+				word.split("=", 1)[0].removesuffix("+") in ("GIT_DIR", "GIT_WORK_TREE")
+				for word in tokens[1:] if not word.startswith("-")
+			):
+				git_override_shell_state_unknown = True
+			continue
 		index = 0
 		environment: dict[str, str] = {}
+		appended_override = False
+		assigned_git_override = False
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
 			if name.endswith("+"):
@@ -383,10 +399,17 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
+					appended_override = True
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
+			if name in ("GIT_DIR", "GIT_WORK_TREE"):
+				assigned_git_override = True
 			index += 1
-		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
+		if index >= len(tokens):
+			if assigned_git_override:
+				git_override_shell_state_unknown = True
+			continue
+		if tokens[index] != "git" and not tokens[index].endswith("/git"):
 			continue
 		index += 1
 		git_cwd = working_directory
@@ -414,6 +437,12 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					environment["GIT_WORK_TREE"] = value
 			index += 1
 		if index >= len(tokens) or tokens[index] not in GUARDED_SUBCOMMANDS:
+			continue
+		if appended_override or git_override_shell_state_unknown:
+			invocations.append(_GitInvocation(
+				checkout, {}, tokens[index], tokens[index + 1:],
+				"could not resolve the git directory/work-tree override", True,
+			))
 			continue
 		if not uncertain and git_cwd is not None:
 			for name, value in environment.items():
@@ -1188,6 +1217,18 @@ def _block_message(pr: dict, branch: str, base: str, tip_label: str = "HEAD") ->
 	)
 
 
+def _unresolved_override_block_message(subcommand: str) -> str:
+	return (
+		f"BLOCKED: merged-PR guard (CLAUDE.md §21) cannot tell which repository "
+		f"this `git {subcommand}` writes to: the command appends to, exports, "
+		f"declares, assigns or unsets GIT_DIR/GIT_WORK_TREE through shell state, "
+		f"which the guard does not evaluate. Re-run it with a literal override, "
+		f"for example `GIT_DIR=/abs/path/.git GIT_WORK_TREE=/abs/path git "
+		f"{subcommand} …` or `git -C /abs/path {subcommand} …`, so the guard "
+		f"can check that repository."
+	)
+
+
 def _history_block_message(branch: str, base: str, detail: str, api_failure: str) -> str:
 	return (
 		f"BLOCKED by the merged-PR guard (CLAUDE.md §21).\n"
@@ -1344,6 +1385,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.override_unresolved:
+			blocks.append(_unresolved_override_block_message(invocation.subcommand))
+			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			_warn(invocation.warning)
 			unresolved_push_sources.append(

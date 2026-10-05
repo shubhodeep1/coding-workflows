@@ -842,40 +842,89 @@ def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_rep
 
 
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
-def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, monkeypatch, override: str) -> None:
+@pytest.mark.parametrize("subcommand", ["commit -m x", "push origin HEAD"])
+def test_appended_git_override_blocks_without_checking_checkout(
+	merged_branch_repo, monkeypatch, override: str, subcommand: str
+) -> None:
 	repo, _ = merged_branch_repo
 	worktree = repo.parent / "open"
 	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "main")
 	value = worktree / ".git" if override == "GIT_DIR" else worktree
-	command = f"{override}+={value} git push origin HEAD"
+	command = f"{override}+={value} git {subcommand}"
 	invocations = guard._guarded_git_invocations(command, str(repo))
 	assert len(invocations) == 1
 	assert invocations[0].environment == {}
-	assert invocations[0].warning == "could not resolve git command directory; checking the session checkout instead"
-	merged_sha = _git(repo, "rev-parse", "HEAD")
-	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
-	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
-	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd:
-		[dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [])
+	assert invocations[0].override_unresolved is True
+	monkeypatch.setattr(guard, "_run", lambda *args: pytest.fail("must not inspect checkout"))
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not query PRs"))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": command}})
 	assert code == 2, message
-	assert "Branch `feature/x`" in message
+	assert "cannot tell which repository" in message
+	assert str(value) not in message
 
 
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
-def test_appended_git_override_asks_when_checkout_is_not_merged(merged_branch_repo, override: str) -> None:
+def test_appended_git_override_blocks_from_default_checkout(merged_branch_repo, override: str) -> None:
 	repo, stub_bin = merged_branch_repo
 	worktree = repo.parent / "merged"
 	_git(repo, "checkout", "main")
 	_git(repo, "worktree", "add", str(worktree), "feature/x")
 	value = worktree / ".git" if override == "GIT_DIR" else worktree
 	proc = _run_hook(repo, stub_bin, f"{override}+={value} git push origin HEAD")
-	assert proc.returncode == 0, proc.stdout + proc.stderr
-	response = json.loads(proc.stdout)
-	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
-	assert "could not resolve git command directory" in response["systemMessage"]
-	assert "could not resolve git push repository" in response["systemMessage"]
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "BLOCKED" in proc.stderr
+	assert str(value) not in proc.stderr
+	if proc.stdout.strip():
+		assert "hookSpecificOutput" not in json.loads(proc.stdout)
+
+
+@pytest.mark.parametrize("command", [
+	"export GIT_DIR={path}; git push origin HEAD",
+	"declare -x GIT_WORK_TREE={path} && git commit -m x",
+	"typeset -x GIT_DIR={path} || git push origin HEAD",
+	"readonly GIT_DIR={path}; git commit -m x",
+	"local GIT_WORK_TREE={path}; git push origin HEAD",
+	"GIT_DIR={path}; git commit -m x",
+	"GIT_WORK_TREE+={path}; git push origin HEAD",
+	"unset GIT_DIR && git push origin HEAD",
+	"export GIT_DIR; git push origin HEAD",
+	"export -n GIT_WORK_TREE; git commit -m x",
+	"X=1 GIT_DIR+={path} git push origin HEAD",
+])
+def test_shell_state_git_override_blocks(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "main")
+	proc = _run_hook(repo, stub_bin, command.format(path=repo.parent / "untrusted"))
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "cannot tell which repository" in proc.stderr
+	assert "hookSpecificOutput" not in proc.stdout
+
+
+def test_unrelated_shell_state_keeps_normal_pr_check(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	for command in ("export FOO=1; git push origin HEAD:feature/x",
+		"MY_GIT_DIR=ignored git commit -m x"):
+		code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+			"tool_input": {"command": command}})
+		assert code == 2, message
+		assert "Branch `feature/x`" in message
+	assert lookups == ["feature/x", "feature/x"]
+
+
+def test_appended_git_override_respects_kill_switch(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setenv("CLAUDE_PR_MERGE_GUARD", "off")
+	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "GIT_DIR+=/untrusted git push origin HEAD"}}) == (0, "")
 
 
 def test_explicit_source_tip_and_multiple_destinations(merged_branch_repo) -> None:
