@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 
@@ -250,3 +251,57 @@ def test_partial_finalize_timeout_probe_never_imports_checkout_yaml(tmp_path: Pa
 	assert result.returncode == 0, result.stderr
 	assert result.stdout.strip() == "240 170"
 	assert not marker.exists()
+
+
+def test_break_glass_scan_never_imports_checkout_json(tmp_path: Path) -> None:
+	checkout = tmp_path / "pr"
+	checkout.mkdir()
+	marker = tmp_path / "poisoned"
+	_poison_module(checkout / "json.py", marker)
+	comments = tmp_path / "comments.json"
+	comments.write_text('[{"user":{"type":"User","login":"owner"},"body":"@codex break-glass"}]', encoding="utf-8")
+	github_env = tmp_path / "github.env"
+	workflow = (ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	break_glass_step = workflow.split("      - name: Detect review-blocked break-glass override", 1)[1]
+	break_glass_command = break_glass_step.split("          PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> \"$GITHUB_ENV\"", 1)[1].split("\n          PY\n", 1)[0]
+	break_glass_command = "          PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> \"$GITHUB_ENV\"" + break_glass_command + "\n          PY\n"
+	child_env = os.environ.copy()
+	for inherited_name in ("PYTHONPATH", "PYTHONSAFEPATH", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		child_env.pop(inherited_name, None)
+	child_env.update({"GITHUB_ENV": str(github_env), "PR_ISSUE_COMMENTS_FILE": str(comments), "PYTHONDONTWRITEBYTECODE": "1"})
+	result = subprocess.run(["bash", "-c", textwrap.dedent(break_glass_command)], cwd=checkout,
+		env=child_env, capture_output=True, text=True, timeout=15, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "REVIEW_BREAK_GLASS=true" in github_env.read_text(encoding="utf-8")
+	assert not marker.exists()
+
+
+def test_conflict_retry_never_imports_checkout_re(tmp_path: Path) -> None:
+	checkout = tmp_path / "pr"
+	checkout.mkdir()
+	marker = tmp_path / "poisoned"
+	_poison_module(checkout / "re.py", marker)
+	prelude_dir = tmp_path / "preludes"
+	prelude_dir.mkdir()
+	(prelude_dir / "integration-sync-conflict-resolver-retry-prelude.txt").write_text("Previous: {{PREVIOUS_ATTEMPT_NUMBER}}\n", encoding="utf-8")
+	original_prompt = tmp_path / "original.txt"
+	original_prompt.write_text("Original prompt\n", encoding="utf-8")
+	retry_prompt = tmp_path / "retry.txt"
+	source = (SCRIPTS / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	function_start = source.index("_build_retry_prompt() {")
+	retry_function = source[function_start:source.index("\n}\n", function_start) + 2]
+	child_env = os.environ.copy()
+	for inherited_name in ("PYTHONPATH", "PYTHONSAFEPATH", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		child_env.pop(inherited_name, None)
+	child_env.update({"SUPPORT_PROMPTS_DIR": str(prelude_dir), "IS_INTEGRATION_SYNC": "true",
+		"CONFLICT_RESOLVER_PROMPT_FILE": str(original_prompt), "RESOLVER_RETRY_PROMPT_FILE": str(retry_prompt)})
+	result = subprocess.run(["bash", "-c", retry_function + "\n_build_retry_prompt 1 /dev/null /dev/null validation"],
+		cwd=checkout, env=child_env, capture_output=True, text=True, timeout=15, check=False)
+	assert result.returncode == 0, result.stderr
+	assert retry_prompt.read_text(encoding="utf-8") == "Previous: 1\nOriginal prompt\n"
+	assert not marker.exists()
+
+
+def test_conflict_prepare_uses_safe_path() -> None:
+	prepare = (SCRIPTS / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	assert 'PYTHONSAFEPATH=1 python3 -c "import os,sys; tpl=' in prepare

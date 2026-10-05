@@ -513,6 +513,11 @@ a new value, add it to the appropriate overrides file with a
   `README.md`, and the optional overflow-runbook pointer with warnings. Regular
   files retain their existing content and local agents-file precedence in the
   clarify-respond workflow. Checkout credential handling is unchanged.
+- Review's optional break-glass scan and conflict-resolution prompt rendering
+  also use safe-path Python in the credential-bearing checkout. The conflict
+  preparation path can run before reviewers when pre-review conflict resolution
+  is enabled; resolver retries remain host-side but no longer import checkout
+  modules through Python's implicit current-directory entry.
 - `internal-review.yml` itself must not forward a `with:` input that
   `review_autofix.yml` on `main` does not define yet: GitHub validates the
   call against `main`'s file, so every review run on the PR adding the input

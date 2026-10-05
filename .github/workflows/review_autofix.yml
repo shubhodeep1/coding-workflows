@@ -5954,7 +5954,7 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> "$GITHUB_ENV"
+          PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> "$GITHUB_ENV"
           import json
           import os
           import re
