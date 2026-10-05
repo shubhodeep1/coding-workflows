@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How much should the fix cover when resolving the push destination?\nChoices:\nA) Only `--repo`/`--repo=` (and its abbreviations), the case the finding names.\nB) Every way the destination can differ from origin: `--repo`, a positional remote name or URL other than `origin`, and git's push-remote config (`branch.<name>.pushRemote`, `remote.pushDefault`) when no remote is given. Both the PR lookup and the git-history fallback (`ls-remote`/`fetch`) use the resolved remote. (RECOMMENDED)\nC) Same as B, but leave out the push-remote config.\nQ2: What should the guard do when it can't map the push destination to a GitHub `<owner>/<repo>`? Examples: a local path, a non-GitHub host, or an unknown remote name.\nChoices:\nA) Block the push with a clear message, as the finding recommends (fail closed). (RECOMMENDED)\nB) Ask the human to confirm, the same way the guard already handles bulk pushes and unverified remote-only pushes.\nC) Warn and allow (today's fail-open behaviour for a missing slug, line 1337).\n**Note:** C goes against the finding's \"deny when the destination cannot be verified\" recommendation and would likely be rejected at review.",
+  "fingerprint": "9d713db2e3a7c7a3ed1fe4be1276e0c83a30553b495bd4921245e52c8f19d64f",
+  "lineage": {
+    "issue_number": 6263,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37251622466",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37251622466",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005013726_4ef91ff0e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6263,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37251622466"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6263 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T01:37:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
