@@ -252,8 +252,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `BULK_DELETE_THRESHOLD` | No | `3` | implement | Maximum number of file deletions allowed in a single AI implementation commit when **any** staged deletion is a non-`.md` file. This is the strict cap that catches accidental source-tree wipes. Set higher for legitimate large refactors, or bypass via the repository variable `ALLOW_BULK_DELETE=true`. See "Destructive-commit guard" below. |
 | `BULK_DELETE_THRESHOLD_MD` | No | `100` | implement | Maximum number of file deletions allowed in a single AI implementation commit when **every** staged deletion is a `.md` file. Lets docs/scratchpad cleanups (e.g. `analysis/*.md` backlog purges) commit without operator intervention while keeping the strict `BULK_DELETE_THRESHOLD` cap whenever any source file is staged for deletion. Canonical `.md` files (`agents.md`, `ai_pipeline.md`, `CLAUDE.md`, `unattended_system_instructions.md`) remain covered by the canonical-source check regardless of this threshold. |
 | `ALLOW_BULK_DELETE` | No | `false` | implement | When `true`, the destructive-commit guard ignores both bulk-delete rejection paths (`BULK_DELETE_THRESHOLD` and `BULK_DELETE_THRESHOLD_MD`). Canonical workflow-source file deletions are still blocked unless `ALLOW_WORKFLOW_EDITS=true`. Use for legitimate large refactors approved by a human. |
-| `ENFORCE_FILES_TOUCHED` | No | `true` | implement | Master toggle for the `files_touched` scope-enforcement guard. When `true`, the AI implementation commit is refused if any staged path falls outside the issue's declared `files_touched` allowlist. Set to `false` to globally downgrade the guard to a logged skip (no blocking). Issues that declare no `files_touched` allowlist are never blocked regardless of this value. See "files_touched scope guard" below. |
-| `ALLOW_OUT_OF_SCOPE_FILES` | No | `false` | implement | Per-run escape hatch for the `files_touched` scope guard, mirroring `ALLOW_BULK_DELETE`. When `true`, out-of-scope staged paths are logged as a warning but allowed to commit instead of blocking. Use when a human has confirmed the drift is legitimate. Dependency lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `poetry.lock`, `uv.lock`, `go.sum`, `composer.lock`) are auto-allowed and never need this override; compiled build outputs are not. |
+| `ENFORCE_FILES_TOUCHED` | No | `true` | implement | Master toggle for the `files_touched` scope-enforcement guard. When `true`, the AI implementation commit is refused if any staged path falls outside the issue's declared `files_touched` allowlist. Set to `false` to globally downgrade the guard to a logged skip (no blocking). Issues that declare no `files_touched` allowlist are never blocked regardless of this value, except heal-evidence runs: those require an issue or plan allowlist even when this toggle is false. See "files_touched scope guard" below. |
+| `ALLOW_OUT_OF_SCOPE_FILES` | No | `false` | implement | Per-run escape hatch for the `files_touched` scope guard, mirroring `ALLOW_BULK_DELETE`. When `true`, out-of-scope staged paths are logged as a warning but allowed to commit instead of blocking. Ignored for heal-evidence runs with the scope lock. Use when a human has confirmed the drift is legitimate. Dependency lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `poetry.lock`, `uv.lock`, `go.sum`, `composer.lock`) are auto-allowed and never need this override; compiled build outputs are not. |
 | `SCOPE_LOCK_LABEL_ENABLED` | No | `false` | implement | Master toggle for per-issue `ai:scope:<glob>` scope locks. When `true`, `implement.yml` reads at most one active issue label of that form, passes the glob into the implementation context, and rolls back any local AI commit whose changed paths fall outside the glob before push. Glob syntax follows Bash with `globstar` semantics (for example `scripts/**/*.py` or `prompts/mode-*.txt`). Multiple `ai:scope:` labels are not merged; the workflow enforces only the first matching label from the issue metadata and logs a warning. |
 | `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` | No | `30` | workflow-log-analysis | Age (in days) above which dated `analysis/workflow-optimization-<date>.md` reports are git-removed in the same commit as a new report. Filename date stamps are authoritative; the just-written report is always preserved. Invalid values fail open to `30` with a warning. |
 | `BATCH_API_DISABLED` | No | `false` | memory_maintenance | Deprecated compatibility variable. The active workflow-log-analysis batch path was removed (the workflow is now Codex-only). `memory_maintenance.yml` still reads this var and echoes it in a single `batch_noop` log line so external log scrapers that grep for `batch_*` events keep working; the value does not change any current behaviour. |
@@ -1399,10 +1399,25 @@ through `clarify → plan → implement → review`.
   merged and **whether that reached `main`**; the other runs on the failing
   head; and the GitHub rate limit and OpenRouter key balance (numbers only).
   `INDEX.md` summarises it and `manifest.json` lists every file and every
-  skipped part. The prompt gets `=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`
+  skipped part. Clarify's prompt gets `=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===`
   with the index; clarify's sandbox gets a read-only copy at `/evidence`
   (`CLARIFY_EVIDENCE_DIR`, accepted only under `RUNNER_TEMP`, regular files
-  only), plan and implement read it from `${RUNNER_TEMP}/heal-evidence`.
+  only). Plan and implement receive only a bounded, revalidated structured
+  diagnostics section (from `diagnostics.json`), without raw log paths.
+  Free-form step names and error signatures are represented only by SHA-256
+  fingerprints. Their editor processes drop GitHub/Telegram credentials and the
+  raw-evidence directory pointer, and temporarily hide git
+  checkout credentials; network access for the model remains available. The
+  credential helper rejects failed hides/restores and restores auth only when
+  the origin still names the workflow's original repository (or its trusted
+  support checkout) and its push URL agrees, not an editor-changed GitHub destination;
+  generic GitHub extraheaders are restored scoped to the verified origin only.
+  Implement runs with heal evidence also pin the issue/plan file allowlist
+  before the editor and block out-of-scope commits even when the normal guard
+  or per-run override is disabled. This is not a process isolation boundary:
+  the parent step environment remains readable to same-uid children. The editor
+  also loses the runner's environment/path-file pointers; later implementation
+  commits and pushes disable repository Git hooks, including during push retries.
   Budget: 400 KB in total and 60 KB per file (reviewer outputs, then other
   artifact files, then job logs of the oldest run are dropped first); about
   20 REST calls for the first stage and about 5 for a later one, since

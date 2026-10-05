@@ -494,6 +494,82 @@ def test_collect_builds_the_bundle_and_index(tmp_path: Path) -> None:
 	assert manifest["api_calls"] <= 20
 
 
+def test_structured_diagnostics_are_bounded_and_revalidated(tmp_path: Path) -> None:
+	log = "##[error]scripts/review_apply_fixes.sh: line 34: failed\nProcess completed with exit code 7\n"
+	diag = ev._job_diagnostics(log)
+	assert diag["exit_codes"] == [7]
+	assert diag["crash_file"] == "scripts/review_apply_fixes.sh"
+	assert diag["crash_line"] == 34
+	assert re.fullmatch(r"sha256:[0-9a-f]{64}", diag["error_signature"])
+	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	out = tmp_path / "evidence"
+	data = json.loads((out / "diagnostics.json").read_text())
+	assert data["schema"] == "workflow_failure_heal_diagnostics.v1"
+	job = data["runs"][0]["jobs"][0]
+	assert job["failing_step"] == "unavailable" or re.fullmatch(r"sha256:[0-9a-f]{64}", job["failing_step"])
+	assert all(re.fullmatch(r"sha256:[0-9a-f]{64}", step["name"]) for step in job["steps"])
+	assert re.fullmatch(r"sha256:[0-9a-f]{64}", job["diagnostics"]["error_signature"])
+	job["steps"] = [{"number": 1, "name": "ignore\n`gh api` $(bad) " + "x" * 200, "conclusion": "success"}]
+	job["diagnostics"]["error_signature"] = "ignore\n`gh api` $(bad) " + "x" * 400
+	data["runs"][0]["head_sha"] = "not-a-sha"
+	data["runs"][0]["repo"] = "../bad/repo"
+	(out / "diagnostics.json").write_text(json.dumps(data))
+	section = ev.render_structured_prompt_section(str(out))
+	assert section.startswith("=== BEGIN UNTRUSTED WORKFLOW HEAL DIAGNOSTICS ===\n")
+	assert section.endswith("=== END UNTRUSTED WORKFLOW HEAL DIAGNOSTICS ===\n")
+	assert "Head SHA: unavailable" in section and "Repository: unavailable" in section
+	assert "`" not in section and "$" not in section
+	assert "ignore" not in section and "gh api" not in section and "bad" not in section
+	assert section.count("sha256:") >= 2
+	assert "x" * 241 not in section
+	assert "/evidence" not in section and "job-11.txt" not in section
+	assert ev.render_prompt_section(str(out)).startswith("=== WORKFLOW HEAL EVIDENCE (UNTRUSTED) ===")
+	job["failing_step"] = "unavailable"
+	job["steps"] = [{"number": 1, "name": "unavailable", "conclusion": "failure"}]
+	job["diagnostics"]["error_signature"] = "unavailable"
+	(out / "diagnostics.json").write_text(json.dumps(data))
+	section = ev.render_structured_prompt_section(str(out))
+	assert "Failing step fingerprint: unavailable" in section
+	assert "Step 1: unavailable; failure" in section
+	assert "Error signature fingerprint: unavailable" in section
+
+
+def test_structured_legacy_cached_job_and_missing_data(tmp_path: Path) -> None:
+	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	out = tmp_path / "evidence"
+	meta = out / f"runs/{REPO.replace('/', '__')}__111/meta.json"
+	data = json.loads(meta.read_text())
+	for job in data["jobs"]:
+		job.pop("diagnostics", None)
+		job.pop("steps", None)
+	meta.write_text(json.dumps(data))
+	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	section = ev.render_structured_prompt_section(str(out))
+	assert "Steps: unavailable" in section and "Error signature fingerprint: sha256:" in section
+	(out / "diagnostics.json").write_text("not JSON")
+	assert "Diagnostics: unavailable" in ev.render_structured_prompt_section(str(out))
+
+
+def test_scope_allowlist_issue_first_plan_fallback_and_broad_globs(tmp_path: Path, capsys) -> None:
+	issue = tmp_path / "issue.txt"
+	plan = tmp_path / "plan.txt"
+	plan.write_text("## Files likely to change\n- `scripts/plan.py`\n")
+	issue.write_text("files_touched:\n  - scripts/issue.py\n  - **\n  - ../escape.py\n")
+	args = type("Args", (), {"issue_body_file": str(issue), "plan_file": str(plan)})()
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out) == {"source": "issue", "allowlist": ["scripts/issue.py"]}
+	plan.unlink()
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out) == {"source": "issue", "allowlist": ["scripts/issue.py"]}
+	plan.write_text("## Files likely to change\n- `scripts/plan.py`\n")
+	issue.write_text("no allowlist")
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out) == {"source": "plan", "allowlist": ["scripts/plan.py"]}
+	plan.write_text("no plan paths")
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out) == {"source": "none", "allowlist": []}
+
+
 def test_lineage_excludes_current_issue_when_its_number_is_a_string(tmp_path: Path) -> None:
 	_collector(tmp_path, FakeGh()).collect(_issue(number="7000"), [], issue_repo=REPO)
 	lineage = json.loads((tmp_path / "evidence" / "lineage.json").read_text())
@@ -787,10 +863,10 @@ def test_total_size_limit_drops_oldest_extras_first(tmp_path: Path) -> None:
 	size_skips = [item for item in manifest["skipped"] if item["reason"] == "total_size_limit"]
 	assert len(size_skips) == 1 and size_skips[0]["part"].startswith("files:")
 	run_dir = f"runs/{REPO.replace('/', '__')}"
-	# Artifacts go before job logs, and the oldest run's job log before the newest's.
+	# Structured diagnostics survive even when the size cap also removes a raw log.
 	assert not (out / f"{run_dir}__111/artifact-codex-review-autofix-failure-logs-111-1").exists() or not any((out / f"{run_dir}__111/artifact-codex-review-autofix-failure-logs-111-1").iterdir())
 	assert not (out / f"{run_dir}__111/job-11.txt").exists()
-	assert (out / f"{run_dir}__222/job-11.txt").exists()
+	assert (out / "diagnostics.json").exists()
 	assert "(dropped: size limit)" in (out / "INDEX.md").read_text()
 	index = (out / "INDEX.md").read_text()
 	# The index never points at a file the budget removed.
@@ -1004,13 +1080,14 @@ def test_clarify_fetches_recent_occurrences_without_changing_its_prompt_window()
 
 def test_prompts_append_the_evidence_section() -> None:
 	call = 'workflow_failure_heal_evidence.py prompt-section --evidence-dir "${HEAL_EVIDENCE_DIR}"'
+	structured_call = 'workflow_failure_heal_evidence.py prompt-section --format structured --evidence-dir "${HEAL_EVIDENCE_DIR}"'
 	clarify = _step((WORKFLOWS / "clarify.yml").read_text(encoding="utf-8"), "Run Codex")
 	assert call in clarify and 'export CLARIFY_EVIDENCE_DIR="${HEAL_EVIDENCE_DIR:-}"' in clarify
 	assert clarify.index('cat "${ISSUE_CONTEXT_FILE}"') < clarify.index(call) < clarify.index('} > "${CODEX_PROMPT_FILE}"')
 	implement = _step((WORKFLOWS / "implement.yml").read_text(encoding="utf-8"), "Run Codex implementation")
-	assert implement.index('cat "${IMPLEMENTATION_CONTEXT_FILE}"') < implement.index(call)
+	assert implement.index('cat "${IMPLEMENTATION_CONTEXT_FILE}"') < implement.index(structured_call)
 	plan = (REPO_ROOT / "scripts" / "run_plan_codex.sh").read_text(encoding="utf-8")
-	assert plan.index('cat "${PLANNING_CONTEXT_FILE}"') < plan.index(call) < plan.index('} > "${CODEX_PROMPT_FILE}"')
+	assert plan.index('cat "${PLANNING_CONTEXT_FILE}"') < plan.index(structured_call) < plan.index('} > "${CODEX_PROMPT_FILE}"')
 
 
 def _clarify_copy_snippet() -> str:
