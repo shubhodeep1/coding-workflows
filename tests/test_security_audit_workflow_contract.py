@@ -1165,8 +1165,33 @@ def test_security_audit_codex_preflight_only_on_fallback() -> None:
 
 
 def test_security_audit_claude_failure_only_reports_sanitized_stderr() -> None:
-	branch = SCRIPT_PATH.read_text(encoding="utf-8").split('if [ "${security_audit_claude_rc}" -ne 75 ]; then', 1)[1].split('elif codex --ask-for-approval never', 1)[0]
-	assert 'security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}"' in branch and '"sanitized-tail"' in branch
+	text = SCRIPT_PATH.read_text(encoding="utf-8")
+	functions = text.split('security_audit_append_prompt_context() {', 1)[0]
+	start = text.index('security_audit_require_file "codex-preflight" "${RENDERED_PROMPT_FILE}"\n')
+	end = text.index('python3 - \\\n\t"${REPO_ROOT}" \\\n\t"${CODEX_OUTPUT_FILE}"', start)
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-error-") as temporary_dir:
+		work_dir = Path(temporary_dir)
+		engine_dir = work_dir / "scripts"
+		engine_dir.mkdir()
+		(engine_dir / "ai_engine.sh").write_text(
+			'claude_run_selected() { AI_ENGINE_LAST_RUN_DIR="$(mktemp -d "${PWD}/claude-run.XXXXXXXX")"; '
+			'printf "%s\\n" "$MOCK_CLAUDE_STDERR" > "${AI_ENGINE_LAST_RUN_DIR}/stderr-A.txt"; return 9; }\n',
+			encoding="utf-8",
+		)
+		(work_dir / "prompt.txt").write_text("audit\n", encoding="utf-8")
+		script = (functions + 'SECURITY_AUDIT_SUPPORT_DIR=.\nSECURITY_AUDIT_RUNTIME_DIR=.\n'
+			'RENDERED_PROMPT_FILE=prompt.txt\nCODEX_OUTPUT_FILE=out.txt\nCODEX_ERROR_FILE=err.txt\n'
+			+ text[start:end])
+		secret = "private-claude-provider-token"
+		proc = subprocess.run(["bash", "-c", script], cwd=work_dir,
+			env={**os.environ, "AI_ENGINE_RESOLVED_SECURITY_AUDIT": "claude", "AUDIT_TEST_SECRET": secret,
+				"MOCK_CLAUDE_STDERR": f"HTTP Error 429: rate limited {secret}"},
+			capture_output=True, text=True, check=False)
+		assert proc.returncode == 9, proc.stderr
+		assert secret in (work_dir / "err.txt").read_text(encoding="utf-8")
+		assert "provider=429" in proc.stderr
+		assert "codex-stderr-tail begin" in proc.stderr and "HTTP\\ Error\\ 429" in proc.stderr
+		assert secret not in proc.stderr
 
 
 def test_security_audit_redacts_credential_shaped_path_context() -> None:

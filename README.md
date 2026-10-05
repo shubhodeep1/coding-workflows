@@ -1929,6 +1929,8 @@ account gated: exit `75`, logged
 `AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call.
 For `SECURITY_AUDIT`, the Codex config and binary are checked only when that
 fallback is needed; missing prerequisites still fail with `codex-preflight`.
+On a non-fallback Claude failure, the audit classifies provider errors from
+private CLI stderr and publishes only a bounded, sanitized diagnostic tail.
 `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
 Implementation attempts on Claude honor the same `CODEX_THREAD_REUSE_TIMEOUT_SECS`

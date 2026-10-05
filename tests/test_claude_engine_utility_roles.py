@@ -45,7 +45,7 @@ SITES = {
 	),
 	"security_audit.sh": (
 		"SECURITY_AUDIT",
-		"bash -c 'source \"$1\" && claude_run_selected SECURITY_AUDIT \"$2\" \"$3\" \"$4\"'",
+		'claude_run_selected SECURITY_AUDIT "$2" "$3" "$4" || audit_claude_call_rc=$?',
 		'elif codex --ask-for-approval never \\',
 		'\t\t--sandbox read-only < "${RENDERED_PROMPT_FILE}" \\\n\t\t> "${CODEX_OUTPUT_FILE}" 2> "${CODEX_ERROR_FILE}"; then',
 	),
@@ -100,9 +100,9 @@ def test_read_only_utility_roles_narrow_the_tool_profile() -> None:
 def test_credential_stripping_covers_the_claude_call() -> None:
 	for script in ("workflow_failure_heal_intake.sh", "check_failure_triage.sh", "security_audit.sh"):
 		text = _read(SCRIPTS / script)
-		claude_at = text.index("bash -c 'source \"$1\" && claude_run_selected")
+		claude_at = text.index('claude_run_selected SECURITY_AUDIT') if script == "security_audit.sh" else text.index("bash -c 'source \"$1\" && claude_run_selected")
 		env_line = text.rindex("env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET", 0, claude_at)
-		assert claude_at - env_line < 400, script
+		assert claude_at - env_line < 700, script
 		assert "-u OPENROUTER_API_KEY" in text[env_line:claude_at], script
 		if script == "security_audit.sh":
 			assert "-u GH_PAT" in text[env_line:claude_at]
