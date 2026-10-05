@@ -221,6 +221,8 @@ changelog.d/6324-review-blocked-fix-scope-guard.md
 changelog.d/6347-security-audit-full-scan-oversized-chunks.md
 changelog.d/6348-dependency-registry-proxy.md
 changelog.d/6360-integration-judge-protected-provenance.md
+changelog.d/6362-deps-network-without-source.md
+changelog.d/6388-review-blocked-pr-head-identity.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
