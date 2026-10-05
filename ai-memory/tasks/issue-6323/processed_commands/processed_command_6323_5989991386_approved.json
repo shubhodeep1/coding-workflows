@@ -5,13 +5,30 @@
   "entry_id": "processed_command_6323_5989991386_approved",
   "issue_number": 6323,
   "metadata": {
+    "branch": "ai/issue-6323",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/check_failure_triage.yml",
+      ".github/workflows/internal-check-failure-triage.yml",
+      "agents.md",
+      "changelog.d/6323-check-triage-isolated-diagnosis.md",
+      "scripts/check_failure_triage.sh",
+      "tests/test_check_failure_triage_workflow_security.py",
+      "tests/test_ci_failure_workflow_run_triggers.py",
+      "workflow-templates/ai-check-failure-triage.yml"
+    ],
+    "issue_number": 6323,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6323",
+    "pr_number": 6330,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6330",
+    "run_attempt": "1",
+    "run_id": "37277611888",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37277611888"
   },
   "run_attempt": 1,
   "run_id": "37277611888",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-05T07:27:56Z",
+  "status": "completed",
+  "timestamp": "2026-10-05T07:44:19Z",
   "workflow": "implement"
 }
