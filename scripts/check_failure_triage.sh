@@ -412,10 +412,52 @@ if [ ! -s "${DIAG_FILE}" ]; then
 		echo
 		echo "## Evidence"
 		echo
-		echo '```'
-		head -200 "${PR_CHECK_RUNS_CONTEXT_FILE}" 2>/dev/null || echo "(context unavailable)"
-		echo '```'
+		PYTHONDONTWRITEBYTECODE=1 python3 - "${PR_CHECK_RUNS_CONTEXT_FILE}" <<'PY'
+import itertools
+import pathlib
+import re
+import sys
+
+try:
+	with pathlib.Path(sys.argv[1]).open(encoding="utf-8", errors="replace") as context_file:
+		evidence = "".join(itertools.islice(context_file, 200))
+except OSError:
+	evidence = "(context unavailable)\n"
+fence = "`" * max(3, max((len(run) for run in re.findall(r"`+", evidence)), default=0) + 1)
+print(fence)
+print(evidence, end="" if evidence.endswith("\n") else "\n")
+print(fence)
+PY
 	} > "${DIAG_FILE}"
+fi
+
+# CI-log text and model quotations are untrusted even inside a code fence.
+# Do not let them supply routing keys or markers to resolve_integration_ref.sh,
+# security_dependency.py, or orchestrate_lib.py (TARGET_BRANCH_LINE_RE).
+# Only the header assembled below may carry trusted triage markers.
+if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${DIAG_FILE}" <<'PY'
+import pathlib
+import re
+import sys
+
+diagnosis_path = pathlib.Path(sys.argv[1])
+diagnosis = diagnosis_path.read_text(encoding="utf-8")
+keys = ("integration branch", "target branch", "tracking issue", "depends on",
+	"local id", "managed by", "prior_pr_baseline_branch", "files_touched")
+key_pattern = re.compile(r"\b(" + "|".join(re.escape(key).replace(r"\ ", r"\s+") for key in keys) + r")(\s*\**\s*):", re.IGNORECASE)
+diagnosis, key_count = key_pattern.subn(r"\1 (untrusted)\2:", diagnosis)
+diagnosis, reissue_count = re.subn(r"Re-issued from\s*#", "Re-issued from (untrusted) #", diagnosis, flags=re.IGNORECASE)
+diagnosis, footer_count = re.subn(r"review-blocked-reissue", "review-blocked (untrusted) reissue", diagnosis, flags=re.IGNORECASE)
+diagnosis, marker_count = re.subn(r"<!--", "&lt;!--", diagnosis)
+diagnosis_path.write_text(diagnosis, encoding="utf-8")
+neutralized_count = key_count + reissue_count + footer_count + marker_count
+if neutralized_count:
+	print(f"CHECK_TRIAGE neutralized count={neutralized_count}")
+PY
+then
+	log "error neutralize_failed"
+	tg_send_msg "Check-failure auto-triage could not safely neutralize its issue body for ${REPO} PR #${PR_NUMBER}."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+	exit 1
 fi
 
 # --- Compose and open the issue --------------------------------------------

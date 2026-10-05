@@ -130,6 +130,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Both wrappers pass only the four declared secrets, and diagnosis runs in
     the credential-free, read-only clarify container with a host-side broker;
     missing isolation falls back to a raw-context issue, never host Codex.
+    Untrusted logs and model diagnosis text are neutralised before issue posting
+    so they cannot spoof downstream routing metadata or triage markers.
     Issue posting is separate and requires the `CHECK_TRIAGE_ISSUES_TOKEN`
     fine-grained PAT so `issues: opened` still fires without exposing `GH_PAT`.
 14. **workflow failure heal** (`workflow_failure_heal.yml`,
