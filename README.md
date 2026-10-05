@@ -1058,10 +1058,11 @@ not delete wrappers that are already present in `.github/workflows/`.
 > the merged-PR guard ignores the unresolved value and checks the session checkout.
 > If that check does not block, it asks for confirmation because the pushed
 > repository may differ. Other unresolved push directories follow the same rule.
-> Shell control words such as `if`, `then`, and `do` no longer hide a nested
-> `git push`: the guard checks the session checkout and, if it does not block,
-> asks for confirmation because the effective directory is uncertain. A
-> `git commit` in the same uncertain context remains warning-only.
+> Shell control words such as `if`, `then`, `do`, and `!` (including repeated
+> prefixes) no longer hide a nested `git push`: the guard checks the session
+> checkout and, if it does not block, asks for confirmation because the
+> effective directory is uncertain. A `git commit` in the same uncertain
+> context remains warning-only.
 > When a `git push` source cannot be resolved locally (for example,
 > a shell-expanded source), the merged-PR guard asks for confirmation rather
 > than using the session checkout as a substitute for the pushed commit.

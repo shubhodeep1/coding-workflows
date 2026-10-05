@@ -124,7 +124,7 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
 _FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", ">|", "<>", ">&", "<&", "<<", "<<<"})
-_SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "("})
+_SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "(", "!"})
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -326,15 +326,21 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 
 def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
 	"""Expose a command behind shell control words without trusting its cwd."""
-	if tokens and tokens[0] in _SHELL_CONTROL_PREFIXES:
-		return tokens[1:], True
-	if tokens and tokens[0] == "case":
-		for position, word in enumerate(tokens[3:], start=3):
-			if word.endswith(")"):
-				return tokens[position + 1:], True
-	if tokens and tokens[0].endswith(")"):
-		return tokens[1:], True
-	return tokens, False
+	control_prefix_seen = False
+	while tokens:
+		if tokens[0] in _SHELL_CONTROL_PREFIXES or tokens[0].endswith(")"):
+			tokens = tokens[1:]
+		elif tokens[0] == "case":
+			for position, word in enumerate(tokens[3:], start=3):
+				if word.endswith(")"):
+					tokens = tokens[position + 1:]
+					break
+			else:
+				break
+		else:
+			break
+		control_prefix_seen = True
+	return tokens, control_prefix_seen
 
 
 @contextmanager

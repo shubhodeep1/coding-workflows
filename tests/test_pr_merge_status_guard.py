@@ -95,9 +95,15 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 @pytest.mark.parametrize("command", [
 	"if true; then git push origin; fi",
 	"if git push origin; then :; fi",
+	"if ! git push origin; then :; fi",
+	"if ! ! git push origin; then :; fi",
+	"! git push origin",
+	"if true; then if git push origin; then :; fi; fi",
 	"for item in a b; do git push origin; done",
 	"case x in x) git push origin;; esac",
 	"case x in\nx) git push origin;; esac",
+	"case y in x) :;; y) git push origin;; esac",
+	"case x in x) if ! git push origin; then :; fi;; esac",
 ])
 def test_shell_control_words_do_not_hide_push(command: str) -> None:
 	assert "push" in guard.git_subcommands(command)
@@ -1430,9 +1436,15 @@ def test_unknown_directory_push_asks_but_commit_warns(
 @pytest.mark.parametrize("command", [
 	"if true; then git push origin; fi",
 	"if git push origin; then :; fi",
+	"if ! git push origin; then :; fi",
+	"if ! ! git push origin; then :; fi",
+	"! git push origin",
+	"if true; then if git push origin; then :; fi; fi",
 	"for item in a b; do git push origin; done",
 	"case x in x) git push origin;; esac",
 	"case x in\nx) git push origin;; esac",
+	"case y in x) :;; y) git push origin;; esac",
+	"case x in x) if ! git push origin; then :; fi;; esac",
 ])
 def test_shell_control_push_checks_merged_checkout(merged_branch_repo, command: str) -> None:
 	repo, stub_bin = merged_branch_repo
@@ -1441,10 +1453,16 @@ def test_shell_control_push_checks_merged_checkout(merged_branch_repo, command: 
 	assert "Branch `feature/x`" in proc.stderr
 
 
-def test_shell_control_push_on_open_checkout_asks(merged_branch_repo) -> None:
+@pytest.mark.parametrize("command", [
+	"if true; then git push origin; fi",
+	"if ! git push origin; then :; fi",
+	"if true; then if git push origin; then :; fi; fi",
+	"case x in x) if ! git push origin; then :; fi;; esac",
+])
+def test_shell_control_push_on_open_checkout_asks(merged_branch_repo, command: str) -> None:
 	repo, stub_bin = merged_branch_repo
 	_git(repo, "checkout", "main")
-	proc = _run_hook(repo, stub_bin, "if true; then git push origin; fi")
+	proc = _run_hook(repo, stub_bin, command)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert _ask_decision(proc) is not None
 
