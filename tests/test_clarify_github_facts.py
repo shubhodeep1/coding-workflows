@@ -38,13 +38,44 @@ def test_extracts_only_allowed_references_and_skips_the_issue_itself() -> None:
 	assert refs["runs"] == [(REPO, 37251621451)]
 	# Paths in the checkout, main/stable and the repository slug itself are
 	# not branches; the integration branch always is.
-	assert refs["branches"] == ["claude/phase-5d", "orchestrator/project-3965"]
+	assert refs["branches"] == [(REPO, "claude/phase-5d"), (REPO, "orchestrator/project-3965")]
 
 
 def test_consumer_repositories_are_read_when_listed() -> None:
 	refs = _refs("see other/repo#5 and https://github.com/other/repo/actions/runs/9", {REPO, "other/repo"})
 	assert refs["issues"] == [("other/repo", 5)]
 	assert refs["runs"] == [("other/repo", 9)]
+
+
+def test_explicit_consumer_branch_is_read_from_its_own_repo() -> None:
+	refs = _refs("Check if `feature/x` exists in other/repo; `feature/x` in owner/repo. "
+		"Integration branch: `ai/issue-9` in other/repo. Skip `secret/x` in private/repo.",
+		{REPO, "other/repo"})
+	assert refs["branches"] == [
+		("other/repo", "ai/issue-9"), ("other/repo", "feature/x"), (REPO, "feature/x"),
+	]
+	query, aliases = facts.build_query(REPO, refs["issues"], refs["branches"])
+	assert query.count("repository(") == 2
+	assert 'r0: repository(owner: "other", name: "repo")' in query
+	assert 'r1: repository(owner: "owner", name: "repo")' in query
+	assert aliases[("r0", "b0")] == ("branch", "other/repo", "ai/issue-9")
+	assert aliases[("r0", "b1")] == ("branch", "other/repo", "feature/x")
+	assert aliases[("r1", "b2")] == ("branch", REPO, "feature/x")
+	runner = _Runner((0, json.dumps({"data": {
+		"r0": {"b0": {"target": {"oid": "1234567890123456"}}, "b1": {"target": {"oid": "abcdefabcdef1234"}}},
+		"r1": {"b2": None},
+	}})))
+	lines, stats = facts.collect(refs, REPO, runner)
+	assert "- Branch `feature/x` in other/repo: exists at abcdefabcdef" in lines
+	assert "- Branch `feature/x` in owner/repo: does not exist" in lines
+	assert not any("private/repo" in line for line in lines)
+	assert stats == {"graphql_calls": 1, "rest_calls": 0, "errors": 0}
+
+
+def test_unreadable_consumer_repo_does_not_report_branch_as_missing() -> None:
+	refs = _refs("`feature/x` in other/repo", {REPO, "other/repo"})
+	lines, _ = facts.collect(refs, REPO, _Runner((1, json.dumps({"data": {"r0": None}}))))
+	assert lines == ["- Branch `feature/x` in other/repo: not readable"]
 
 
 def test_extracts_singular_and_plural_pr_urls() -> None:
