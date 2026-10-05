@@ -1,0 +1,6 @@
+<!-- changelog: security -->
+- **Review prompt assembly no longer follows symlinked pull-request READMEs.** Non-regular README files are omitted from static review context instead of being read with job credentials in the environment.
+
+The review workflow reads only a regular, size-bounded `README.md` through a no-follow reader. A rejected README emits a path-free warning and review continues without that section; a reader failure stops the step. The same step refuses to write `pre_assembled_static.txt` if the checkout contains a symlink or non-regular file at that path.
+
+What this means for operators: symlinked READMEs no longer expose runner environment data to reviewer prompts; replace the link with a regular file to restore the README section.

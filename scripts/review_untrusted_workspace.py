@@ -70,6 +70,24 @@ def read_regular(path):
 	return data, 0o755 if info.st_mode & 0o111 else 0o644
 
 
+def readme_trimmed(host: Path) -> bytes:
+	# README is PR-controlled; only read the fixed name through the no-follow reader.
+	try:
+		os.lstat(host / "README.md")
+	except FileNotFoundError:
+		return b""
+	data, _ = read_regular(checked_path(host, "README.md"))
+	if not data:
+		return b""
+	lines = []
+	# awk prints each input record with a newline, including an unterminated last line.
+	for line in data.split(b"\n")[: -1 if data.endswith(b"\n") else None]:
+		if line.startswith(b"### 2. Create wrapper workflows"):
+			break
+		lines.append(line + b"\n")
+	return b"".join(lines)
+
+
 def fingerprint(path):
 	data, mode = read_regular(path)
 	return [hashlib.sha256(data).hexdigest(), mode]
@@ -214,6 +232,28 @@ def refresh(host, workspace, manifest):
 
 
 def main():
+	if sys.argv[1:2] == ["readme-trimmed"]:
+		if len(sys.argv) != 3:
+			raise SystemExit(2)
+		try:
+			readme_data = readme_trimmed(Path(sys.argv[2]))
+		except ValueError as exc:
+			reason = {
+				"symlink in workspace path": "symlink_path",
+				"unsafe file type or size": "unsafe_file",
+				"file changed during read": "file_changed",
+			}.get(str(exc), "unknown")
+			print(f"REVIEW_STATIC_CONTEXT_README outcome=rejected reason={reason}", file=sys.stderr)
+			raise SystemExit(3) from None
+		except Exception:
+			print("::error::Review static README read failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		try:
+			sys.stdout.buffer.write(readme_data)
+		except Exception:
+			print("::error::Review static README output failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
 	# snapshot alone takes an optional fifth argument: the host Git dir.
 	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
 		raise SystemExit(2)

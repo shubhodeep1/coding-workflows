@@ -1647,6 +1647,7 @@ depend on it.
 
 ## Review pipeline consolidator + ledger contract
 
+- The review workflow's "Pre-assemble static context" step reads PR-head `README.md` only through `review_untrusted_workspace.py readme-trimmed`: its no-follow, regular-file, size-bounded reader omits rejected READMEs with `REVIEW_STATIC_CONTEXT_README` diagnostics (a reader failure stops review). The step also refuses symlink/non-regular `pre_assembled_static.txt` output paths before assembling the prompt.
 - Review-pipeline helper stages are fail-open by contract. Floor rules, consolidator, parser, and ledger failures degrade to empty/advisory local artifacts and do not block the editor or reviewer loop.
 - `reviewer_bundle.txt` is the authoritative findings source. `review_issues.txt` and `ledger_status.txt` are advisory only and may not suppress valid raw-bundle findings.
 - `floor_tags.txt` is the only non-skippable advisory channel: findings promoted there must be fixed or explicitly rejected with reason.
