@@ -651,9 +651,10 @@ The **Engine · Claude role** column names today's engine and the role name
 Host read-profile Claude runs (including SECURITY_AUDIT, SECURITY_JUDGE and
 WORKFLOW_HEAL) use an exact-command PreToolUse Bash guard and temporarily
 remove write bits from trusted support while recording hashes and directory
-entries. Verification precedes unlock; a mismatch returns 86 without a codex
-fallback. The security-audit report, heal intake and poller also verify their
-support checkout or staged manifest before executing further support code.
+entries. Verification precedes unlock; lock failures and mismatches return 86
+without a codex fallback. The security-audit report, heal intake and poller
+also verify their support checkout or staged manifest before executing further
+support code.
 On self-hosted runners, a job killed before unlocking may leave support
 directories read-only; restore them with `claude_engine.py support-unlock`
 against the leftover per-run manifest before reusing that workspace.

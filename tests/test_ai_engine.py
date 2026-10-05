@@ -428,6 +428,18 @@ def test_read_isolation_tamper_stops_before_checkout_classifier(sandbox: dict) -
 	assert stat.S_IMODE((sandbox["support"] / "scripts" / "ai_engine.sh").stat().st_mode) == 0o644
 
 
+def test_read_isolation_unsafe_support_lock_is_terminal(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["support"] / "scripts" / "unsafe.sh").symlink_to(sandbox["work"] / "CLAUDE.md")
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 86, result.stderr
+	assert "symlink in trusted support" in result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=tampered" in result.stderr
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
+	assert not _docker_calls(sandbox)
+	assert not (sandbox["tmp"] / "out.txt").exists()
+
+
 def test_read_isolation_image_cache_skips_build(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	(sandbox["tmp"] / "docker-cache-hit").touch()

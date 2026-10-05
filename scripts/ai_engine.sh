@@ -503,8 +503,9 @@ claude_run()
 		local locked_files old_int_trap old_term_trap
 		if ! cp -- "${_AI_ENGINE_DIR}/claude_engine.py" "${run_dir}/claude_engine.py" ||
 		   ! locked_files="$(_ai_engine_py support-lock --manifest "${run_dir}/support-lock.json" --workdir "${workdir}")"; then
-			ai_engine_fallback "${role}" support_lock_failed
-			return "${_AI_ENGINE_EXIT_FALLBACK}"
+			echo "::error::Claude read profile could not lock trusted support." >&2
+			echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=tampered" >&2
+			return "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
 		fi
 		echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=locked files=${locked_files}" >&2
 		old_int_trap="$(trap -p INT)"
