@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue deliver?\nChoices:\nA: No code change. The security-pass hold did its job: it stopped auto-merge after 5 of 5 cycles. The three findings already have their own follow-up issues against PR #6187's branch, so close this one with a note linking them. (RECOMMENDED)\nB: Fix the three findings from the fifth audit (head `ef53da7fd976d2b6f91525601f3e8d3b36bf9144`), each with a regression test. Please paste the follow-up issue numbers or finding IDs in your `/answer`, because the supplied evidence does not identify them.\nC: Look into the earlier `reason=unsafe_directory` sandbox-transfer rejection only, from the archived editor output of run 37233468173. Do not relax the transfer validation.\nD: B+C\nQ2: If code changes are needed (Q1 = B, C or D), which branch should the fix target? The cited hold script and the `unsafe_directory` reason are not in this checkout, which suggests the code exists only on PR #6187's branch or on `main`.\nChoices:\nA: PR #6187's head branch, because the defects are in that PR's own unmerged code. (RECOMMENDED)\nB: `main`\nC: `stable`, as the issue states\n**Note:** skip this question if you choose Q1:A, since no branch is needed.",
+  "fingerprint": "c217bd12393b9dedf2a0c44400635a506ed951f6081527daf4fce70063a4fb1e",
+  "lineage": {
+    "issue_number": 6392,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37342302364",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37342302364",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005164641_866569e76f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6392,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37342302364"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6392 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T16:46:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
