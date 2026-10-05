@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should review/autofix load `WORKFLOW.md` and its `append_path`/`replace_path` fragments from, instead of the PR checkout?\nChoices:\nA. From the repository's default branch at a SHA the run fetches itself (for example, extracted with `git show origin/<default>:<path>` into a runner-private directory). Consumer overlays keep working, and PR edits to the overlay only take effect after merge. (RECOMMENDED)\nB. From the PR's base branch, whatever it is. For orchestrator wave PRs that is the `orchestrator/project-*` integration branch, which is not protected.\nC. From the verified workflow-support checkout (`.codex-workflow-src`). Consumer repos' own overlays stop applying during review.\nD. Disable the overlay entirely in review/autofix. Every review prompt uses the stock templates.\n**Note:** D makes Q2 moot.\nQ2: As defense in depth, should prompts that decide merges refuse `replace_path` overrides even when the overlay comes from the trusted source?\nChoices:\nA. Yes. Reject `replace_path` for merge-deciding modes (`judge-review-blocked` and the other `mode-judge-*` prompts) with a logged warning, and still allow `append_path`. (RECOMMENDED)\nB. Yes, and also reject `append_path` for those modes, so judge prompts ignore the overlay completely.\nC. No. A trusted source is enough, so apply no extra per-mode restriction.\nQ3: How far should the fix reach?\nChoices:\nA. Only the `review_autofix.yml` path, with the rest unchanged.\nB. The shared `scripts/stage_workflow_support.sh` overlay load, which covers both `review_autofix.yml` and `validate.yml`. Both run on checkouts that are not trusted (PR or integration heads). Contract tests should be added or updated for both. (RECOMMENDED)\nC. B, plus auditing and hardening every other workflow that calls `load_workflow_overlay.py` (clarify, plan, implement, orchestrate*, orchestrate_poll).",
+  "fingerprint": "8fc81d164dd433f7bc35df915c9321502ee95804a15521fe3552422eeb3a3e4b",
+  "lineage": {
+    "issue_number": 6290,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37258873171",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37258873171",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005032837_b86fad9915",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6290,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37258873171"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6290 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T03:28:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
