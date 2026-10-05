@@ -8785,6 +8785,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 
 wt, baseline_dir, final_pr = sys.argv[1:]
 git_env = os.environ.copy()
@@ -8840,6 +8841,7 @@ try:
         stages.setdefault(path, {})[stage] = (mode, blob)
     if set(stages) != set(conflicts) or len(conflicts) != len(set(conflicts)):
         raise ValueError("conflict metadata mismatch")
+    work = 0
     for path in conflicts:
         if not path.startswith((b".github/workflows/", b".github/actions/")):
             continue
@@ -8860,13 +8862,21 @@ try:
             raise ValueError("changed protected mode")
         allowed = set()
         side_lines = []
+        side_counts = []
         for side_stage in (b"2", b"3"):
             if side_stage in sides:
                 side_lines.append(git("cat-file", "blob", sides[side_stage][1].decode()).splitlines(keepends=True))
                 allowed.update(side_lines[-1])
+                side_counts.append(Counter(side_lines[-1]))
         resolved_lines = git("cat-file", "blob", blob.decode()).splitlines(keepends=True)
         if not set(resolved_lines) <= allowed:
             raise ValueError("invented protected line")
+        base_counts = (Counter(git("cat-file", "blob", sides[b"1"][1].decode()).splitlines(keepends=True))
+                       if b"1" in sides else Counter())
+        for resolved_line, resolved_count in Counter(resolved_lines).items():
+            base_count = base_counts[resolved_line]
+            if resolved_count > base_count + sum(max(0, counts[resolved_line] - base_count) for counts in side_counts):
+                raise ValueError("duplicated unchanged protected line")
         if resolved_lines not in side_lines:
             # Assign each occurrence to one side, preserving order on that side.
             side_indexes = []
@@ -8879,6 +8889,9 @@ try:
                 side_indexes.append({})
             frontier = {(0, 0)}
             for resolved_line in resolved_lines:
+                work += len(frontier)
+                if work > 100000:
+                    raise ValueError("protected line provenance work limit exceeded")
                 next_frontier = set()
                 for first_pos, second_pos in frontier:
                     for side_num, source_pos in enumerate((first_pos, second_pos)):

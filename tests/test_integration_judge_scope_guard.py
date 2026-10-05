@@ -39,19 +39,23 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 		conflict_path = ".github/workflows/ci.yml" if request.param else "conflict.txt"
 	conflicted = root / conflict_path
 	conflicted.parent.mkdir(parents=True, exist_ok=True)
-	conflicted.write_text("first\nbase\nlast\n")
+	conflicted.write_text("first\nshared\nbase\nlast\n" if request.param == "base-shared" else "first\nbase\nlast\n")
 	(root / "untouched.txt").write_text("untouched\n")
 	git(root, "add", ".")
 	git(root, "commit", "-m", "base")
 	git(root, "remote", "add", "origin", str(remote))
 	git(root, "push", "origin", "main")
 	git(root, "checkout", "-b", "integration")
-	conflicted.write_text("first\n\nours\nlast\n" if request.param == "shared" else "first\nours\nlast\n")
+	conflicted.write_text("first\n" + "\n" * 2000 + "ours\nlast\n" if request.param == "repeated" else
+	                      "first\nshared\nours\nlast\n" if request.param == "base-shared" else
+	                      "first\n\nours\nlast\n" if request.param == "shared" else "first\nours\nlast\n")
 	git(root, "commit", "-am", "ours")
 	git(root, "push", "origin", "integration")
 	before = git(remote, "rev-parse", "refs/heads/integration").stdout.strip()
 	git(root, "checkout", "main")
-	conflicted.write_text("first\n\ntheirs\nlast\n" if request.param == "shared" else "first\ntheirs\nlast\n")
+	conflicted.write_text("first\n" + "\n" * 2000 + "theirs\nlast\n" if request.param == "repeated" else
+	                      "first\nshared\ntheirs\nlast\n" if request.param == "base-shared" else
+	                      "first\n\ntheirs\nlast\n" if request.param == "shared" else "first\ntheirs\nlast\n")
 	git(root, "commit", "-am", "theirs")
 	git(root, "push", "origin", "main")
 	wt = tmp_path / "judge"
@@ -150,6 +154,31 @@ def test_protected_conflict_combines_shared_lines_from_both_sides(judge_repo, co
 		assert result.stdout.strip() == git(wt, "write-tree").stdout.strip()
 	else:
 		assert "reason=protected_path_provenance" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", ["base-shared"], indirect=True)
+@pytest.mark.parametrize("content,accepted", [
+	("first\nshared\nours\ntheirs\nlast\n", True),
+	("first\nshared\nours\ntheirs\nshared\nlast\n", False),
+])
+def test_protected_conflict_does_not_duplicate_unchanged_base_lines(judge_repo, content, accepted):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text(content)
+	git(wt, "add", conflict_path)
+	result = run(f'_integration_judge_verify_scope "{wt}" "{baseline}" 42')
+	assert (result.returncode == 0) == accepted, result.stderr + result.stdout
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", ["repeated"], indirect=True)
+def test_protected_conflict_rejects_excessive_provenance_work(judge_repo):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text("first\n" + "\n" * 3000 + "ours\ntheirs\nlast\n")
+	git(wt, "add", conflict_path)
+	result = run(f'_integration_judge_verify_scope "{wt}" "{baseline}" 42')
+	assert result.returncode != 0
+	assert "reason=protected_path_provenance" in result.stderr
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
 
 
