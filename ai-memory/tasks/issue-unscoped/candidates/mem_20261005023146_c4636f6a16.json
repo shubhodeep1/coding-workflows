@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_engine.sh:307-309 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: Session directory creation failure is reported with the misleading reason `isolation_mask_failed`.\n  WHY: When creating the session directory fails, operators are directed toward git config masking instead of the actual filesystem failure; this is a diagnostic labelling issue, and reviewers describe it as low severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cRestrict model reads to non-secret audit inputs.\u201d\n  expected_change_site: `scripts/ai_engine.sh` read-profile container mounts and `scripts/claude_engine.py` read-profile permissions\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR mounts the entire working directory read-only, while `READ_PROFILE_ALLOW` grants `Read` without path restrictions; the diff adds Git-configuration masking and pool-token isolation, but no restriction preventing the model from reading other secret-bearing files in the checkout.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/ai_engine.sh, `_ai_engine_claude_run_isolated` body | severity=low | confidence=4\n  PROBLEM: Session directory creation failures are misleadingly labelled `isolation_mask_failed`.\n  WHY: The fallback still works correctly, but the imprecise log reason can lead operators to investigate git config masking instead of the actual session directory creation failure; this finding exists in the ORIGINAL PR DIFF and was not introduced or affected by the LAST RUN DIFF.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cRestrict model reads to non-secret audit inputs.\u201d\n  Expected change site: `scripts/ai_engine.sh` read-profile container mounts and `scripts/claude_engine.py` read-profile permissions.\n  Evidence of absence: The PR mounts the entire working directory read-only, while `READ_PROFILE_ALLOW` grants `Read` without path restrictions. The diff adds Git-configuration masking and pool-token isolation, but no restriction preventing the model from reading other secret-bearing files in the checkout.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/ai_engine.sh:307-309 in `_ai_engine_claude_run_isolated` | severity=low | confidence=4\n  PROBLEM: Session directory creation failure reports misleading reason `isolation_mask_failed`.\n  WHY: When `mkdir -p \"${RUNNER_TEMP:-/tmp}/claude-read-sessions\"` fails (permission denied, disk full, etc.), the fallback log emits `reason=isolation_mask_failed` instead of a reason that describes the actual failure. This makes debugging harder because operators will investigate git config masking instead of the real issue (filesystem permissions or disk space).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c2eaf25979d662acc506ac5f614121f04dbdb78d1f51332978bba2a7a53019fc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6245,
+    "run_id": "37252192160",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37252192160",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005023146_c4636f6a16",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6245,
+    "run_id": "37252192160"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T02:31:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
