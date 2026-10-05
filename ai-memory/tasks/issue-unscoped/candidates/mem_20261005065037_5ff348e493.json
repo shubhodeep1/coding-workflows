@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:148-150, 274-275, 300-301 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The untrusted-PR rejection sequence is identified by duplicated, position-dependent jq checks, so a change to `_untrusted_pr_ops` ordering or contents can stop the shell gates from matching.\n  WHY: The reviewers report that when these gates stop matching, failed-operation handling can skip the PR close, terminal label, or warning; minimax notes the current sequence is covered by tests, while qwen classifies the concern as NIT.\n- tests/test_unblock_judge.py:~984, 558-566 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The review claims the fake-GitHub handler does not implement `FAKE_GH_FAIL_CLOSE`, so the parametrized test expecting the PR close to fail instead observes a successful close.\n  WHY: The finding is disputed: deepseek reports a handler at `tests/test_unblock_judge.py:588-593`, minimax at `tests/test_unblock_judge.py:588-591`, and z-ai at `tests/test_unblock_judge.py:589`, each stating that the handler covers this case.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_judge.sh:148-150, 274-275, 300-301 | confidence not stated\n  PROBLEM: The jq pattern is duplicated and depends on the exact operation positions, so changes to `_untrusted_pr_ops` can make the gates default to skip/continue behavior.\n  WHY: The review suggests extracting the match into a function or documenting the coupling at each site.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:148-150, 274-275, and 300-301 | confidence not stated\n  PROBLEM: The position-dependent jq gates identify the untrusted-PR rejection operation sequence by its exact shape.\n  WHY: The review describes this as a maintenance concern, not a runtime defect; it says the current sequence is covered by tests and that changes to `_untrusted_pr_ops` would surface as test failures.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:148-150, 274-275, 300-301 | confidence not stated\n  PROBLEM: The failed-comment exception uses exact operation positions to identify an untrusted-PR rejection, so reordering the sequence could disable close-after-comment-failure handling.\n  WHY: The review suggests marking the generated close operation as an untrusted-PR rejection and checking that marker instead.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_unblock_judge.py:~984, 558-566 | severity=BLOCKER | confidence=5\n  PROBLEM: The test parametrizes over `FAKE_GH_FAIL_CLOSE` expecting the PR close to fail, but the fake GitHub handler reportedly does not implement that environment variable.\n  WHY: The review claims the fake GitHub therefore closes the PR successfully, making the assertion expecting `closed=False` fail and breaking CI.\n- scripts/unblock_judge.sh:lines 148-150, 274-275, 300-301 | severity=NIT | confidence=4\n  PROBLEM: The duplicated jq pattern identifies the untrusted-PR rejection sequence by its exact operation shape and position.\n  WHY: The review says changes to `_untrusted_pr_ops` can make the gates stop matching, skipping close or terminal-label operations when `ops_failed=true`.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/unblock_judge.sh:lines 148-150, 274-275, 300-301 | confidence not stated\n  PROBLEM: The three jq checks identify the untrusted-PR rejection sequence by its exact position-dependent shape.\n  WHY: The review says that changes to `_untrusted_pr_ops` ordering or contents can make the checks stop matching, causing close, terminal-label, and warning-telegram operations to be skipped.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a75a15ab03994310b34c49b1fc32ed6dfd358a0cfce0c6f088788f7b45734492",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6279,
+    "run_id": "37271840544",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37271840544",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005065037_5ff348e493",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6279,
+    "run_id": "37271840544"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T06:50:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
