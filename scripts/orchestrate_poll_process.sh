@@ -77,7 +77,8 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 # the file the codex call writes; stderr is appended to <log_file> and the
 # job log. Returns 75 when the role is on codex, ai_engine.sh is not staged
 # or Claude is unavailable, so the caller runs its unchanged codex command;
-# otherwise the runner's status (0 success, 76 rejected transfer, 124 timeout,
+# otherwise the runner's status (0 success, 76 rejected transfer, 77 isolation
+# required but sandbox preparation failed (no host fallback), 124 timeout,
 # other = crash).
 # RB_JUDGE never returns 75: it runs in the credential-free review sandbox
 # (Claude or OpenCode), or defers with 77 when isolation is unavailable.
@@ -133,6 +134,14 @@ _poller_rb_judge_sandbox_attempt()
     if ! rb_sandbox_root="$(SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
       [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}"
       [ -z "${rb_untracked_hash_file}" ] || rm -f -- "${rb_untracked_hash_file}"
+      : > "${output_file}"
+      # PR content can cause preparation to fail (#3576); never let it select
+      # the credentialed host Codex fallback.
+      if [ "${log_file}" = /dev/null ]; then
+        echo '::warning::RB_JUDGE sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick.' >&2
+      else
+        echo '::warning::RB_JUDGE sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick.' | tee -a "${log_file}" >&2
+      fi
       printf '%s\n' sandbox_prepare_failed > "${RUNTIME_DIR}/rb_judge_isolation_reason"
       return 77
     fi
@@ -21379,9 +21388,10 @@ ${FOLLOWUP_BLOCK_REASON}"
             break
           fi
           # A rejected write transfer may have touched the combined-mode
-          # checkout before failing. Do not snapshot that state into another
-          # sandbox attempt; the failure path below resets the checkout.
-          [ "${RB_JUDGE_ENGINE_RC}" -ne 76 ] || break
+          # checkout before failing. Do not retry it in the same tick.
+          if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ]; then
+            break
+          fi
           if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break

@@ -204,10 +204,16 @@ def test_poller_rb_judge_runs_only_in_isolated_sandbox(tmp_path: Path) -> None:
 def test_poller_rb_judge_never_falls_back_to_host(tmp_path: Path) -> None:
 	support = _stage_rb_support(tmp_path)
 	for mode, expected in (("prepare_failed", 77), ("unavailable", 0), ("crash", 1), ("outdated", 77), ("transfer_failed", 76)):
+		if mode == "prepare_failed":
+			(tmp_path / "out.txt").write_text("stale verdict\n", encoding="utf-8")
 		proc, calls = _run_helper(tmp_path, engine="claude", claude_mode=mode, role="RB_JUDGE", combined_mode="true")
 		assert f"rc={expected}" in proc.stdout, proc.stderr
 		if mode == "prepare_failed":
 			assert _read(tmp_path / "rb_judge_isolation_reason").strip() == "sandbox_prepare_failed"
+			assert "AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_prepare_failed" not in proc.stderr
+			assert "reason=sandbox_prepare_failed" in proc.stderr
+			assert "reason=sandbox_prepare_failed" in _read(tmp_path / "judge_log.txt")
+			assert _read(tmp_path / "out.txt") == ""
 		elif mode == "unavailable":
 			assert _read(Path(f"{calls}.sandbox")).splitlines() == [
 				"prepare", "claude|RB_JUDGE|write|/dev/null", "cleanup", "prepare",
@@ -495,10 +501,10 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 		assert text.index(codex_call, start) > text.index(gate, start), role
 		assert text.count(codex_call) == 1, role
 	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.MULTILINE)) == len(SITES) + 1
-	assert '[ "${RB_JUDGE_ENGINE_RC}" -ne 76 ] || break' in text
 	rb_block = text[text.index('      # Run the judge\n      RB_JUDGE_SUCCESS=false'):text.index('      # Parse judge output')]
 	assert 'poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log"' in rb_block
-	assert 'RB_JUDGE_ENGINE_RC}" -eq 77' in rb_block
+	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then\n            RB_JUDGE_ISOLATION_FAILED=true\n            break\n          fi' in rb_block
+	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ]; then\n            break\n          fi' in rb_block
 	assert 'danger-full-access' not in rb_block and not re.search(r'\bcodex\s+.*\bexec\b', rb_block)
 	assert '.review_blocked_isolation_state' in rb_block
 	assert 'ai:rb-judge-isolation-escalated' in text
