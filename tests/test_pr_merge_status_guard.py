@@ -946,6 +946,39 @@ def test_repo_option_guards_single_bare_branch_refspec(merged_branch_repo, monke
 	assert lookups == ["feature/x"]
 
 
+def test_repo_option_guards_every_bare_refspec(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "feature/other", "main")
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push --repo=origin feature/x feature/other"}})
+	assert code == 2, message
+	assert lookups == ["feature/x", "feature/other"]
+
+
+def test_repo_option_guards_branch_named_after_remote(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "origin", "feature/x")
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: (lookups.append(branch) or [dict(MERGED_PR, headRefOid=merged_sha)]))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push --repo=upstream origin"}})
+	assert code == 2, message
+	assert lookups == ["origin"]
+
+
 @pytest.mark.parametrize("command", [
 	'git push origin "$TARGET"',
 	'git push origin HEAD:"$TARGET"',

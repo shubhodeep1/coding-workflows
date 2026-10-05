@@ -266,9 +266,10 @@ or quoted number is a push refspec (`git push origin 2 > /dev/null` checks
 branch `2`). An unresolved push destination or source prompts for confirmation
 without substituting the checked-out branch for the unknown target; independently
 resolved refspecs are still checked and blocked when they stack on merged history.
-A single bare branch after `git push --repo=origin` is checked as a refspec;
-a configured remote name in that slot retains the existing positional-repository
-behavior.
+A bare branch after `git push --repo=origin` is checked as a refspec, including
+when followed by other bare refspecs or when its name matches a configured
+remote; a remote name without a matching local branch retains positional-
+repository behavior.
 
 The `gh api` permission guard in `.claude/hooks/gh_api_write_guard.py` and
 its `workflow-templates/` twin exempts an unquoted literal-ID loop counter

@@ -3,4 +3,4 @@
 
 The prior heal-evidence prompt linked the raw failing logs and artifacts to a network-capable editor running with the workflow's GitHub token. An injected log could therefore redirect edits or API calls. Plan and implement now receive only bounded diagnostic fields, with free-form step names and error signatures reduced to SHA-256 fingerprints; the editor process drops GitHub, Telegram and Actions runtime credentials and temporarily loses checkout origin and extraheader auth. A pre-editor scope list from the issue or approved plan is pinned into both commit guards. Clarify retains its existing isolated evidence path. Network access and the parent step environment remain unchanged.
 
-The consumer merged-PR guard now checks a lone bare branch supplied after `git push --repo=origin` instead of checking the current branch.
+The consumer merged-PR guard now checks all bare branches supplied after `git push --repo=origin`, including names shared with a remote, instead of overlooking pushed branches.
