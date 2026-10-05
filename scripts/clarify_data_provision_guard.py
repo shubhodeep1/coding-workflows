@@ -9,7 +9,7 @@ question or escalates when none is available.
 
 Exit codes:
   0 — answers are OK or were patched (patched answers on stdout)
-  1 — plumbing error (fail-open: caller should use original answers)
+  1 — plumbing error (caller must not post original answers)
 
 Usage:
   python3 scripts/clarify_data_provision_guard.py \
@@ -29,7 +29,7 @@ _DATA_PROVISION_PATTERNS = [
 	re.compile(
 		r"(?:provide|supply|share|paste|submit|attach|include|link|require(?:s|d)?|need(?:s|ed)?|must\s+(?:provide|supply|share|paste|submit|attach|include|link))\b"
 		r".{0,60}"
-		r"(?:URL|PR\b|pull\s+request|SHA|commit|branch|http|deployment|build\s+output|test\s+result|log\b|screenshot)",
+		r"\b(?:URLs?|PRs?|pull\s+requests?|SHA|commits?|branch(?:es)?|https?|deployments?|build\s+output|test\s+result|logs?|screenshots?)\b",
 		re.IGNORECASE,
 	),
 	re.compile(
@@ -62,6 +62,8 @@ _WEAKENS_CONTROL_PATTERNS = [
 		r"\b(?:do\s+not|don't|never|no|refuse\s+to|stop)\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|auth\w*|review\w*|approv\w*|audit\w*|scan\w*|test\w*|guard\w*)\b",
 		re.IGNORECASE,
 	),
+	re.compile(r"\b(?:unverified|unvalidated|unchecked|unauthenticated|unreviewed|untested)\b", re.IGNORECASE),
+	re.compile(r"\b(?:do\s+not|don't|never)\s+enforce\b.{0,40}\b(?:security|verif\w*|validat\w*|check\w*|auth\w*|gate\w*|guard\w*)\b", re.IGNORECASE),
 ]
 _DATA_EVIDENCE_PATTERNS = {
 	"url": (re.compile(r"\b(?:URL|link|http|deployment)\b", re.IGNORECASE), re.compile(r"https?://\S+", re.IGNORECASE)),
@@ -145,6 +147,9 @@ def _option_weakens_control(text: str) -> bool:
 def _required_data_present(option_text: str, evidence_text: str) -> bool:
 	"""Unknown data kinds cannot be proven present by a textual match."""
 	requested = [detector for keyword, detector in _DATA_EVIDENCE_PATTERNS.values() if keyword.search(option_text)]
+	if _DATA_EVIDENCE_PATTERNS["url"][0].search(option_text) and _DATA_EVIDENCE_PATTERNS["pr"][0].search(option_text):
+		if not re.search(r"https?://\S+/pull/\d+\b", evidence_text, re.IGNORECASE):
+			return False
 	return bool(requested) and all(detector is not None and detector.search(evidence_text) for detector in requested)
 
 
@@ -186,6 +191,8 @@ def run_guard(clarification_file: Path, answers_file: Path, evidence_files: tupl
 	questions = _parse_questions(clarification_text)
 	answers = _parse_answers(answers_text)
 
+	if answers and not questions:
+		raise ValueError("cannot parse clarification questions for lettered answers")
 	if not questions or not answers:
 		return answers_text
 
@@ -201,8 +208,8 @@ def run_guard(clarification_file: Path, answers_file: Path, evidence_files: tupl
 	escalations: list[str] = []
 
 	for qid, selected_letters in answers.items():
-		if qid not in questions:
-			continue
+		if qid not in questions or any(letter not in questions[qid] for letter in selected_letters):
+			raise ValueError(f"cannot match selected options for {qid}")
 		q_options = questions[qid]
 		data_requiring_letters: set[str] = set()
 
@@ -280,19 +287,16 @@ def main() -> int:
 	args = parser.parse_args()
 
 	if not args.clarification_file.exists() or not args.answers_file.exists():
-		print("::warning::Data-provision guard: input files missing; skipping guard.", file=sys.stderr)
-		if args.answers_file.exists():
-			print(args.answers_file.read_text(encoding="utf-8", errors="replace"))
-		return 0
+		print("::error::Data-provision guard: input files missing; refusing to post unchecked answers.", file=sys.stderr)
+		return 1
 
 	try:
 		result = run_guard(args.clarification_file, args.answers_file, args.evidence_file)
 		print(result)
 		return 0
 	except Exception as exc:
-		print(f"::warning::Data-provision guard failed (fail-open): {exc}", file=sys.stderr)
-		print(args.answers_file.read_text(encoding="utf-8", errors="replace"))
-		return 0
+		print(f"::error::Data-provision guard failed; refusing to post unchecked answers: {exc}", file=sys.stderr)
+		return 1
 
 
 if __name__ == "__main__":

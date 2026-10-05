@@ -60,6 +60,8 @@ def test_evidence_file_requires_a_matching_datum(tmp_path: Path) -> None:
 	# URL alone is not evidence of a PR when both kinds are requested.
 	evidence.write_text("https://example.com/other", encoding="utf-8")
 	assert "Q1: ESCALATE" in _run_guard(tmp_path, evidence_files=(evidence,))
+	evidence.write_text("PR #12 https://example.com/other", encoding="utf-8")
+	assert "Q1: ESCALATE" in _run_guard(tmp_path, evidence_files=(evidence,))
 
 
 @pytest.mark.parametrize("fallback", ["Proceed without the URL using available information", "Use default scope"])
@@ -77,6 +79,7 @@ def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) 
 	"Best effort verification", "Relax the security gate", "Do not verify the PR head",
 	"Don't verify the PR head", "Never check the PR head", "No verification needed",
 	"Refuse to validate the PR head", "Skip this verification, but provide the deployment URL",
+	"Leave the PR head unverified", "Proceed with the unchecked PR", "Do not enforce the security check",
 ])
 def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL for verification\n- B — {fallback}\n"
@@ -86,6 +89,12 @@ def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None
 def test_second_pass_does_not_select_weakening_option(tmp_path: Path) -> None:
 	questions = "Q1: Which path?\n- A — Provide the PR URL\n- B — Turn off the security scan\n"
 	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions)
+
+
+@pytest.mark.parametrize("text", ["Require a shared lock", "Supply the crash details", "Require committee review"])
+def test_data_keywords_do_not_match_inside_other_words(tmp_path: Path, text: str) -> None:
+	questions = f"Q1: Which path?\n- A — {text}\n- B — Use default scope\n"
+	assert _run_guard(tmp_path, questions=questions) == ANSWER
 
 
 def test_branch_without_reliable_detector_is_not_accepted(tmp_path: Path) -> None:
@@ -112,7 +121,7 @@ def test_fallback_requiring_other_unavailable_data_escalates(tmp_path: Path) -> 
 	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions)
 
 
-def test_cli_ignores_missing_evidence_and_fails_open_on_error(tmp_path: Path) -> None:
+def test_cli_ignores_missing_evidence_and_fails_closed_on_error(tmp_path: Path) -> None:
 	questions = tmp_path / "questions.txt"
 	questions.write_text(QUESTIONS, encoding="utf-8")
 	answers = tmp_path / "answers.txt"
@@ -128,6 +137,22 @@ def test_cli_ignores_missing_evidence_and_fails_open_on_error(tmp_path: Path) ->
 	assert "Q1: ESCALATE" in broken.stdout
 	fault = subprocess.run(
 		[sys.executable, str(GUARD_PATH), "--clarification-file", str(tmp_path), "--answers-file", str(answers)],
-		capture_output=True, text=True, check=True,
+		capture_output=True, text=True, check=False,
 	)
-	assert fault.stdout.rstrip("\n") == ANSWER.rstrip("\n") and "fail-open" in fault.stderr
+	assert fault.returncode == 1 and not fault.stdout and "refusing to post unchecked answers" in fault.stderr
+	questions.unlink()
+	missing_input = subprocess.run(command + [str(evidence)], capture_output=True, text=True, check=False)
+	assert missing_input.returncode == 1 and not missing_input.stdout and "input files missing" in missing_input.stderr
+
+
+@pytest.mark.parametrize("questions_text", ["No parsable questions", "Q1: Which path?\n- B — Skip this verification\n"])
+def test_unparsed_selected_option_fails_closed(tmp_path: Path, questions_text: str) -> None:
+	questions = tmp_path / "questions.txt"
+	questions.write_text(questions_text, encoding="utf-8")
+	answers = tmp_path / "answers.txt"
+	answers.write_text(ANSWER, encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(GUARD_PATH), "--clarification-file", str(questions), "--answers-file", str(answers)],
+		capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 1 and not result.stdout and "refusing to post unchecked answers" in result.stderr

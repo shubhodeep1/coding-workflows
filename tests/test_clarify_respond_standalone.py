@@ -224,6 +224,25 @@ def test_standalone_worker_failure_does_not_end_the_job() -> None:
 	assert names.index("Standalone RECOMMENDED fallback") < names.index("Data-provision guard") < names.index("Parse and post answer") < names.index("Record standalone auto-decisions")
 
 
+def test_data_guard_step_fails_closed_without_guard_or_inputs(tmp_path: Path) -> None:
+	env = _env(tmp_path)
+	script = _steps()["Data-provision guard"]["run"]
+	for setup in ("missing_guard", "missing_questions", "guard_error"):
+		guard_path = tmp_path / "scripts" / "clarify_data_provision_guard.py"
+		questions_path = tmp_path / "runtime" / "clarification_comment.txt"
+		if setup != "missing_guard":
+			guard_path.parent.mkdir(exist_ok=True)
+			guard_path.write_text("raise RuntimeError('guard unavailable')\n", encoding="utf-8")
+		if setup != "missing_questions":
+			questions_path.write_text(QUESTIONS, encoding="utf-8")
+		Path(env["CODEX_OUTPUT_FILE"]).write_text(WORKER_ANSWER, encoding="utf-8")
+		result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+		assert result.returncode != 0, (setup, result.stdout, result.stderr)
+		assert Path(env["CODEX_OUTPUT_FILE"]).read_text(encoding="utf-8") == WORKER_ANSWER
+		guard_path.unlink(missing_ok=True)
+		questions_path.unlink(missing_ok=True)
+
+
 def _install_scripts(tmp_path: Path, sent: Path) -> None:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(exist_ok=True)

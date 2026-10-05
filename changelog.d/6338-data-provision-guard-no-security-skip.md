@@ -1,2 +1,2 @@
 <!-- changelog: security -->
-- **Clarification answers no longer replace required verification with a skip.** The data-provision guard checks supplied PR/URL/SHA evidence before overriding an answer and escalates rather than selecting a fallback that disables a check or security control. Safe fallbacks continue to prevent circular clarification loops.
+- **Clarification answers no longer replace required verification with a skip.** The data-provision guard checks supplied PR/URL/SHA evidence before overriding an answer and escalates rather than selecting a fallback that disables a check or security control. Guard errors or missing inputs stop the answer workflow instead of posting unchecked answers; safe fallbacks continue to prevent circular clarification loops.
