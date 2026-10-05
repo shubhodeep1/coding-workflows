@@ -85,7 +85,14 @@ rb_security_findings_render()
 	# The judge's existing PR/linked-issue reads do not include the open
 	# ai:security issue set; reuse the audit's paginated listing shape.
 	if ! issues_json="$(gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100" 2>/dev/null)" \
-		|| ! printf '%s' "${issues_json}" | jq -e 'type == "array" and length > 0 and all(.[]; type == "array")' >/dev/null 2>&1; then
+		|| ! printf '%s' "${issues_json}" | jq -e '
+			type == "array" and length > 0 and all(.[];
+				type == "array" and all(.[];
+					type == "object" and (.number | type == "number")
+					and (.title | type == "string") and (has("body") and (.body == null or (.body | type == "string")))
+				)
+			)
+		' >/dev/null 2>&1; then
 		echo "(Could not list the open security-audit findings for this branch; check the PR's \`ai:security\` follow-up issues.)" > "${out_file}"
 		rb_security_log "mode=findings pr=${PR_NUMBER:-} outcome=lookup_failed"
 		return 1

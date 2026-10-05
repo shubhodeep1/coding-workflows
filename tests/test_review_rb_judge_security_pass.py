@@ -163,10 +163,17 @@ def test_findings_lookup_retries_transient_failure(tmp_path: Path) -> None:
 
 def test_findings_on_later_pages_are_included(tmp_path: Path) -> None:
 	out = tmp_path / "findings.txt"
-	result, gh_calls, _ = _run(tmp_path, f'rb_security_findings_render claude/heal-evidence-bundle "{out}"', {"FAKE_GH_PAGES": "1"}, issues=[[{"number": n, "body": ""} for n in range(100)], ISSUES])
+	result, gh_calls, _ = _run(tmp_path, f'rb_security_findings_render claude/heal-evidence-bundle "{out}"', {"FAKE_GH_PAGES": "1"}, issues=[[{"number": n, "title": "other", "body": ""} for n in range(100)], ISSUES])
 	assert result.returncode == 0, result.stderr
 	assert "#6246" in out.read_text(encoding="utf-8")
 	assert gh_calls[0][:3] == ["api", "--paginate", "--slurp"]
+
+
+def test_findings_missing_body_fail_closed(tmp_path: Path) -> None:
+	out = tmp_path / "findings.txt"
+	result, _, _ = _run(tmp_path, f'rb_security_findings_render claude/heal-evidence-bundle "{out}"', issues=[{"number": 6246, "title": "unreadable security finding"}])
+	assert result.returncode != 0
+	assert "Could not list" in out.read_text(encoding="utf-8")
 
 
 def test_finding_title_cannot_add_prompt_lines(tmp_path: Path) -> None:
