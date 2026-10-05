@@ -16,6 +16,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +70,9 @@ def _run_helper(
 	scripts.mkdir(parents=True, exist_ok=True)
 	if with_engine:
 		(scripts / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
+	if role == "RB_JUDGE" and combined_mode == "true":
+		subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+		(tmp_path / ".gitignore").write_text("rb-claude-untracked-*\nreview_sandbox_transfer_failed\nout.txt\ncalls.*\njudge_log.txt\n", encoding="utf-8")
 	prompt = tmp_path / "prompt.txt"
 	prompt.write_text("judge this\n", encoding="utf-8")
 	calls = tmp_path / "calls"
@@ -154,9 +158,13 @@ case "$1" in
       success) printf 'claude verdict\n' > "$3" ;;
       unavailable) exit 75 ;;
       transfer_failed) printf 'unusable verdict\n' > "$3"; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      transfer_failed_dirty) printf 'unusable verdict\n' > "$3"; mkdir -p leaked; printf 'partial\n' > 'leaked/partial.py'; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      transfer_failed_modified) printf 'unusable verdict\n' > "$3"; printf 'partial\n' > 'preexisting.py'; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      transfer_failed_chmod) printf 'unusable verdict\n' > "$3"; chmod 755 preexisting.py; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      cleanup_failed) printf 'claude verdict\n' > "$3"; printf 'partial\n' > 'new-file.py' ;;
       *) printf 'unusable verdict\n' > "$3"; exit 1 ;;
     esac ;;
-  cleanup) printf 'cleanup\n' >> "${CALLS}.sandbox" ;;
+  cleanup) printf 'cleanup\n' >> "${CALLS}.sandbox"; [ "$FAKE_CLAUDE_MODE" != cleanup_failed ] ;;
 esac
 """
 
@@ -193,6 +201,45 @@ def test_poller_rb_judge_falls_back_only_when_sandbox_unavailable(tmp_path: Path
 	assert "rc=75" in proc.stdout, proc.stderr
 	assert "AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_unavailable" in proc.stderr
 	assert _read(Path(f"{calls}.claude")) == ""
+
+
+def test_rejected_poller_transfer_removes_only_new_untracked_files(tmp_path: Path) -> None:
+	support = tmp_path / ".codex-workflow-src" / "scripts"
+	support.mkdir(parents=True)
+	(support / "review_untrusted_sandbox.sh").write_text(FAKE_RB_SANDBOX, encoding="utf-8")
+	preexisting = tmp_path / "preexisting.py"
+	preexisting.write_text("keep\n", encoding="utf-8")
+	for mode in ("transfer_failed_dirty", "cleanup_failed"):
+		proc, calls = _run_helper(tmp_path, engine="claude", claude_mode=mode, role="RB_JUDGE", combined_mode="true")
+		if mode == "cleanup_failed":
+			assert proc.returncode == 1 and "stopping the poller" in proc.stderr
+			assert "rc=" not in proc.stdout
+		else:
+			assert "rc=76" in proc.stdout, proc.stderr
+			assert _read(tmp_path / "out.txt") == ""
+		assert not (tmp_path / "leaked" / "partial.py").exists()
+		assert not (tmp_path / "new-file.py").exists()
+		assert preexisting.read_text(encoding="utf-8") == "keep\n"
+		assert _read(Path(f"{calls}.sandbox")).splitlines()[-1] == "cleanup"
+		assert not (tmp_path / "review_sandbox_transfer_failed").exists()
+
+
+@pytest.mark.parametrize("mode", ("transfer_failed_modified", "transfer_failed_chmod"))
+def test_rejected_poller_transfer_stops_if_existing_untracked_file_was_modified(tmp_path: Path, mode: str) -> None:
+	support = tmp_path / ".codex-workflow-src" / "scripts"
+	support.mkdir(parents=True)
+	(support / "review_untrusted_sandbox.sh").write_text(FAKE_RB_SANDBOX, encoding="utf-8")
+	preexisting = tmp_path / "preexisting.py"
+	preexisting.write_text("keep\n", encoding="utf-8")
+	proc, calls = _run_helper(tmp_path, engine="claude", claude_mode=mode, role="RB_JUDGE", combined_mode="true")
+	assert proc.returncode == 1
+	assert "stopping this poll tick" in proc.stderr
+	assert "rc=" not in proc.stdout
+	if mode == "transfer_failed_modified":
+		assert preexisting.read_text(encoding="utf-8") == "partial\n"
+	else:
+		assert preexisting.stat().st_mode & 0o111
+	assert _read(Path(f"{calls}.sandbox")).splitlines()[-1] == "cleanup"
 
 
 # Each judge call site: the role, then the unchanged codex command that runs

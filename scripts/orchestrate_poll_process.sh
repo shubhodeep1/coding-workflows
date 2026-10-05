@@ -100,13 +100,30 @@ poller_claude_judge()
     # credentials; use the verified support checkout's isolated review runner.
     local rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts"
     local rb_sandbox_root="" rb_access=read
+    local rb_untracked_before_file="" rb_untracked_after_file="" rb_untracked_hash_file="" rb_untracked_path="" rb_cleanup_rc=0
     [ -f "${rb_support_dir}/review_untrusted_sandbox.sh" ] || rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main/scripts"
     if [ ! -f "${rb_support_dir}/review_untrusted_sandbox.sh" ]; then
       ai_engine_fallback RB_JUDGE sandbox_unavailable
       return 75
     fi
     [ "${RB_COMBINED_MODE:-false}" != true ] || rb_access=write
+    if [ "${rb_access}" = write ]; then
+      rb_untracked_before_file="$(mktemp "${RUNTIME_DIR:?}/rb-claude-untracked-before-XXXXXXXX")" || { echo '::error::Cannot inventory review-blocked workspace before Claude transfer.' >&2; exit 1; }
+      if ! git ls-files --others --exclude-standard -z > "${rb_untracked_before_file}"; then
+        rm -f -- "${rb_untracked_before_file}"
+        echo '::error::Cannot inventory review-blocked workspace before Claude transfer.' >&2
+        exit 1
+      fi
+      rb_untracked_hash_file="$(mktemp "${RUNTIME_DIR}/rb-claude-untracked-hash-XXXXXXXX")" || { echo '::error::Cannot fingerprint review-blocked workspace.' >&2; exit 1; }
+      if ! xargs -0 -r sha256sum -z -- < "${rb_untracked_before_file}" > "${rb_untracked_hash_file}" ||
+         ! xargs -0 -r stat -c '%a %n' -- < "${rb_untracked_before_file}" >> "${rb_untracked_hash_file}"; then
+        echo '::error::Cannot fingerprint review-blocked workspace before Claude transfer.' >&2
+        exit 1
+      fi
+    fi
     if ! rb_sandbox_root="$(SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral 2>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
+      [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}"
+      [ -z "${rb_untracked_hash_file}" ] || rm -f -- "${rb_untracked_hash_file}"
       ai_engine_fallback RB_JUDGE sandbox_prepare_failed
       return 75
     fi
@@ -114,13 +131,44 @@ poller_claude_judge()
     SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
       AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" run "${prompt_file}" "${output_file}" \
-        "${model_hint}" "${MODEL_REASONING_EFFORT_JUDGE:-high}" /dev/null claude RB_JUDGE "${rb_access}" 2>"${log_file}" || judge_rc=$?
+        "${model_hint}" "${MODEL_REASONING_EFFORT_JUDGE:-high}" /dev/null claude RB_JUDGE "${rb_access}" 2>>"${log_file}" || judge_rc=$?
     SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
-      bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>"${log_file}" || judge_rc=1
-    if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
-      echo '::error::Review-blocked judge sandbox transfer failed; refusing its verdict.' >&2
+      bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>>"${log_file}" || rb_cleanup_rc=$?
+    if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ] || [ "${rb_cleanup_rc}" -ne 0 ]; then
+      echo '::error::Review-blocked judge sandbox transfer or cleanup failed; refusing its verdict.' >&2
       rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+      if [ -n "${rb_untracked_before_file}" ]; then
+        rb_untracked_after_file="$(mktemp "${RUNTIME_DIR}/rb-claude-untracked-after-XXXXXXXX")" || { echo '::error::Cannot inventory rejected review-blocked transfer.' >&2; exit 1; }
+        if ! git ls-files --others --exclude-standard -z > "${rb_untracked_after_file}"; then
+          echo '::error::Cannot inventory review-blocked workspace after rejected transfer.' >&2
+          exit 1
+        fi
+        while IFS= read -r -d '' rb_untracked_path; do
+          if ! git clean -f -- ":(literal)${rb_untracked_path}" >/dev/null; then
+            echo '::error::Cannot remove file added by rejected review-blocked transfer.' >&2
+            exit 1
+          fi
+        done < <(comm -z -13 <(LC_ALL=C sort -z "${rb_untracked_before_file}") <(LC_ALL=C sort -z "${rb_untracked_after_file}"))
+        if ! git ls-files --others --exclude-standard -z > "${rb_untracked_after_file}" || ! cmp -s "${rb_untracked_before_file}" "${rb_untracked_after_file}"; then
+          echo '::error::Review-blocked workspace still has untracked changes after rejected transfer.' >&2
+          exit 1
+        fi
+        if ! { xargs -0 -r sha256sum -z -- < "${rb_untracked_before_file}" &&
+               xargs -0 -r stat -c '%a %n' -- < "${rb_untracked_before_file}"; } | cmp -s "${rb_untracked_hash_file}" -; then
+          echo '::error::Rejected review-blocked transfer modified a pre-existing untracked file; stopping this poll tick.' >&2
+          exit 1
+        fi
+      fi
       judge_rc=76
+    fi
+    if [ "${rb_cleanup_rc}" -ne 0 ]; then
+      echo '::error::Review-blocked sandbox cleanup failed; stopping the poller before another issue uses this workspace.' >&2
+      exit 1
+    fi
+    if [ -n "${rb_untracked_before_file}" ]; then
+      rm -f -- "${rb_untracked_before_file}"
+      rm -f -- "${rb_untracked_hash_file}"
+      [ -z "${rb_untracked_after_file}" ] || rm -f -- "${rb_untracked_after_file}"
     fi
     [ "${judge_rc}" -eq 0 ] || : > "${output_file}"
     return "${judge_rc}"

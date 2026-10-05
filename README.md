@@ -1907,7 +1907,10 @@ working run and still stops a stuck one.
 The poller's review-blocked judge also uses the isolated sandbox: read-only
 for final verdicts and write with validated transfer when its combined
 decide-and-fix branch is checked out. Missing sandbox support falls back to
-its existing Codex path; a failed transfer discards the sandbox verdict.
+its existing Codex path; a failed transfer discards the sandbox verdict and
+removes only untracked files created since the judge started, preserving
+pre-existing files. If cleanup or verification of that removal fails, the
+poller stops rather than letting a later issue stage partial transfer output.
 
 **How a cut-over role runs.** The job's "Resolve AI engine" step picks the
 engine for the role. Only when it is `claude` do "Install Claude Code CLI" and
