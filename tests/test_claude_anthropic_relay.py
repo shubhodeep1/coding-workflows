@@ -14,6 +14,7 @@ import http.server
 import importlib.util
 import json
 import os
+import socket
 import threading
 from pathlib import Path
 
@@ -182,6 +183,16 @@ def test_broker_rejects_client_authorization(chain) -> None:
 	connection.request("POST", "/v1/messages", body, {"Content-Type": "application/json", "Authorization": "Bearer mine"})
 	assert connection.getresponse().status == 400
 	connection.close()
+	assert _Upstream.seen == []
+
+
+def test_broker_rejects_without_waiting_forever_for_body(chain) -> None:
+	with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+		client.settimeout(3)
+		client.connect(chain["socket"])
+		client.sendall(b"POST /v1/messages HTTP/1.0\r\nHost: localhost\r\nAuthorization: Bearer mine\r\nContent-Length: 4\r\n\r\n")
+		with client.makefile("rb") as response:
+			assert response.readline().startswith(b"HTTP/1.0 400")
 	assert _Upstream.seen == []
 
 

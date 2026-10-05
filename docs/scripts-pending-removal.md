@@ -55,7 +55,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/sync_claude_live_copies.py` + `.github/workflows/sync-claude-live-copies.yml`
 
-- **Introduced in:** PR for #6118 (`claude/fix-main-ci-green`, 2026-10-05; PR number unavailable in this checkout)
+- **Introduced in:** #6118 (2026-10-05)
 - **Type:** long-running
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**

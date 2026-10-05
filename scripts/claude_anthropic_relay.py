@@ -124,6 +124,14 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or not length.isdecimal()
 			or not 0 < int(length) <= MAX_BODY
 		):
+			# Consume a bounded, declared body before closing so a rejected
+			# client still sending it can receive the 400 instead of EPIPE.
+			if len(length) <= 8 and length.isascii() and length.isdecimal() and 0 < int(length) <= MAX_BODY:
+				self.connection.settimeout(1)
+				try:
+					self.rfile.read(int(length))
+				except OSError:
+					pass
 			return self._reject(400)
 		headers = forwarded_request_headers(self.headers)
 		if headers is None:
