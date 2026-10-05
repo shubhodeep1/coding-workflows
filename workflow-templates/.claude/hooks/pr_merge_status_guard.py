@@ -280,6 +280,7 @@ def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], b
 			tokens.append((raw_token, lexer.instream.tell()))
 	result: list[tuple[str, list[str], bool]] = []
 	segment: list[str] = []
+	segment_word_end = -1
 	operator = ""
 	redirect_target: str | None = None
 	redirect_may_fail = False
@@ -301,18 +302,22 @@ def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], b
 				if command[redirect_start:redirect_start + len(token)] != token:
 					redirect_start -= 1  # shlex may read one character ahead.
 				fd_start = redirect_start - len(segment[-1])
-				if fd_start >= 0 and command[fd_start:redirect_start] == segment[-1] and (fd_start == 0 or command[fd_start - 1] in _SHELL_WORD_DELIMITERS):
+				if fd_start >= 0 and segment_word_end == redirect_start and command[fd_start:redirect_start] == segment[-1] and (fd_start == 0 or command[fd_start - 1] in _SHELL_WORD_DELIMITERS):
 					segment.pop()
+					segment_word_end = -1
 			redirect_target = token
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
 				result.append((operator, segment, redirect_may_fail))
 				segment = []
+				segment_word_end = -1
 				redirect_may_fail = False
 			operator = token
 		else:
 			segment.append(token)
+			# shlex reads one delimiter ahead of a word, so use its raw end.
+			segment_word_end = token_end - (token_end > 0 and command[token_end - 1] in _SHELL_WORD_DELIMITERS)
 	if redirect_target is not None:
 		redirect_may_fail = True
 	if segment:
