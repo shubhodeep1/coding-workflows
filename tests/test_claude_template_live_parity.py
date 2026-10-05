@@ -110,6 +110,48 @@ def test_pr_dry_run_prepares_parity_without_changing_the_pr_commit(tmp_path: Pat
 	assert _git(root, "show", "HEAD:.claude/hooks/guard.py") == "v1"
 
 
+def test_pr_dry_run_keeps_committed_security_hook(tmp_path: Path, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=True, keep_committed_security_paths=True) == 0
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+	assert (root / ".claude/hooks/guard.py").read_text(encoding="utf-8") == "v1\n"
+	assert _git(root, "rev-parse", "HEAD") == after
+	assert "dry_run_kept_committed path=.claude/hooks/guard.py reason=security_path" in capsys.readouterr().err
+
+
+def test_pr_dry_run_prepares_commands_but_not_hooks(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	(root / "workflow-templates/.claude/commands").mkdir()
+	before, _after = _commit(root, "workflow-templates/.claude/commands/new.md", "new command\n")
+	_before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	assert sync_mod.sync(root, before, after, dry_run=True, keep_committed_security_paths=True) == 0
+	assert (root / ".claude/commands/new.md").read_text(encoding="utf-8") == "new command\n"
+	assert (root / ".claude/hooks/guard.py").read_text(encoding="utf-8") == "v1\n"
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+
+
+def test_pr_dry_run_keeps_committed_settings_json(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	for prefix in ("workflow-templates/.claude", ".claude"):
+		(root / prefix / "settings.json").write_text('{"hooks": []}\n', encoding="utf-8")
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "settings pair")
+	before, after = _commit(root, "workflow-templates/.claude/settings.json", '{"hooks": ["guard"]}\n')
+	assert sync_mod.sync(root, before, after, dry_run=True, keep_committed_security_paths=True) == 0
+	assert sync_mod.mismatched(root) == ["settings.json"]
+	assert (root / ".claude/settings.json").read_text(encoding="utf-8") == '{"hooks": []}\n'
+
+
+def test_keep_committed_flag_requires_dry_run(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	with pytest.raises(SystemExit) as error:
+		sync_mod.main(["--root", str(root), "sync", "--before", before, "--after", after, "--keep-committed-security-paths"])
+	assert error.value.code == 2
+	assert (root / ".claude/hooks/guard.py").read_text(encoding="utf-8") == "v1\n"
+
+
 def test_pr_dry_run_does_not_mask_live_edits(tmp_path: Path) -> None:
 	root = _scratch_repo(tmp_path)
 	before, _after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
@@ -338,3 +380,4 @@ def test_sync_workflow_runs_on_template_pushes_to_main() -> None:
 	assert prepare["if"] == "github.event_name == 'pull_request' && github.base_ref == 'main'"
 	assert prepare["env"]["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
 	assert 'sync --dry-run --before "${PR_BASE_SHA}" --after HEAD' in prepare["run"]
+	assert "--keep-committed-security-paths" in prepare["run"]
