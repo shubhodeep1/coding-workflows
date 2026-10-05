@@ -211,7 +211,8 @@ def test_project_hooks_run_before_the_command_handlers() -> None:
 
 
 def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | None = None, state: dict | None = None,
-	trusted_members: list[int] | None = None, include_trusted_state_comment: bool = True) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
+	trusted_members: list[int] | None = None, include_trusted_state_comment: bool = True,
+	trusted_integration_branch: str | None = None) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
 	text = POLLER.read_text(encoding="utf-8")
 	start = text.index("handle_unblock_judge_project_hooks() {")
 	hook = text[start:text.index("\n}\n", start) + 3]
@@ -221,7 +222,8 @@ def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | No
 	state_file.write_text(json.dumps(current), encoding="utf-8")
 	pr_calls = tmp_path / "pr_calls"
 	creates = tmp_path / "creates"
-	trusted_state = dict(current, issue_number_map={f"issue-{n}": n for n in (members if trusted_members is None else trusted_members)})
+	trusted_state = dict(current, issue_number_map={f"issue-{n}": n for n in (members if trusted_members is None else trusted_members)},
+		integration_branch=trusted_integration_branch or current["integration_branch"])
 	payload = json.dumps(trusted_state).encode("utf-8")
 	manifest = hashlib.sha256(payload).hexdigest()
 	comments = [{"user": {"login": BOT}, "body": f"<!-- ai:unblock-fixup-request:v1 item={item} id=unblock-{item}-r1 -->\n### Narrow the fix\nOnly this part."}]
@@ -360,6 +362,24 @@ def test_fixup_hook_rejects_integration_branch_drift(tmp_path: Path) -> None:
 	assert "outcome=binding_unverified reason=base" in result.stdout
 	assert state["unblock_fixup_rejected_ids"] == ["unblock-7-r1"]
 	assert calls == ["7"] and creates == []
+
+
+def test_fixup_hook_defers_working_state_drift_without_permanent_rejection(tmp_path: Path) -> None:
+	state = {"integration_branch": "orchestrator/project-99", "current_wave": 1, "status": "failed",
+		"issue_number_map": {"issue-5": 5}, "waves": [{"issues": []}]}
+	pr = {"number": 7, "base": {"ref": "orchestrator/project-40"},
+		"head": {"ref": "ai/issue-5", "repo": {"full_name": "o/r"}}}
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, state,
+		trusted_integration_branch="orchestrator/project-40")
+	assert result.returncode == 0, result.stderr
+	assert "outcome=binding_unavailable reason=state_drift" in result.stdout
+	assert "unblock_fixup_rejected_ids" not in state
+	assert calls == ["7"] and creates == []
+	state["integration_branch"] = "orchestrator/project-40"
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 7, [5], pr, state)
+	assert result.returncode == 0, result.stderr
+	assert calls == ["7", "7"] and creates == ["create"]
+	assert state["issue_number_map"]["unblock-7-r1"] == 901
 
 
 def test_fixup_hook_retries_unavailable_pr_read(tmp_path: Path) -> None:

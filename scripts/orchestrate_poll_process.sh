@@ -15826,9 +15826,12 @@ handle_unblock_judge_project_hooks() {
       fi
       binding_reason=""
       if ! jq -e --argjson issue "${req_item}" --arg base "orchestrator/project-${TRACKING_NUM}" \
-        --slurpfile state "${STATE_FILE}" \
-        '.number == $issue and .base.ref == $base and .base.ref == $state[0].integration_branch' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        --argjson trusted_state "${binding_trusted_state_json}" \
+        '.number == $issue and .base.ref == $base and .base.ref == ($trusted_state.integration_branch // "")' <<< "${binding_pr_json}" >/dev/null 2>&1; then
         binding_reason="base"
+      elif ! jq -e --arg base "orchestrator/project-${TRACKING_NUM}" '.integration_branch == $base' "${STATE_FILE}" >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=state_drift"
+        continue
       elif ! jq -e --arg repo "${GITHUB_REPOSITORY}" '(.head.repo.full_name // "" | ascii_downcase) == ($repo | ascii_downcase)' <<< "${binding_pr_json}" >/dev/null 2>&1; then
         binding_reason="head_repo"
       else
