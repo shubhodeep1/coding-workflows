@@ -49,7 +49,7 @@ _FALLBACK_PATTERNS = re.compile(
 )
 _WEAKENS_CONTROL_PATTERNS = [
 	re.compile(
-		r"\b(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|turn\s+off|not\s+requir\w*|drop\w*|remov\w*|relax\w*|best\s+effort)\b"
+		r"\b(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|defer\w*|postpon\w*|turn\s+off|not\s+requir\w*|drop\w*|remov\w*|relax\w*|best\s+effort)\b"
 		r".{0,40}?\b(?:verif\w*|validat\w*|check\w*|signature\w*|auth(?:oriz\w*|entic\w*|[nz])?\b|security|review\w*|approv\w*|audit\w*|scan\w*|test\w*|gate\w*|guard\w*|control\w*)",
 		re.IGNORECASE,
 	),
@@ -59,7 +59,7 @@ _WEAKENS_CONTROL_PATTERNS = [
 	),
 	re.compile(
 		r"\b(?:verification|validation|checks?|signatures?|authorization|authentication|security|reviews?|approvals?|audits?|scans?|test\s+is|tests\s+are|gates?|guards?|controls?)\b"
-		r"\s+(?:(?:is|are|was|were|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived|optional|not\s+required|no\s+longer\s+(?:required|needed)|advisory|best\s+effort|relax\w*)\b",
+		r"\s+(?:(?:is|are|was|were|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived|defer\w*|postpon\w*|optional|not\s+required|no\s+longer\s+(?:required|needed)|advisory|best\s+effort|relax\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(
@@ -172,7 +172,7 @@ def _option_weakens_control(text: str) -> bool:
 		text, flags=re.IGNORECASE,
 	)
 	text = re.sub(
-		r"\b(?:(?:do|does|did|will|would|should|must|could)\s+not|never)\s+(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|drop\w*|remov\w*|relax\w*)\b",
+		r"\b(?:(?:do|does|did|will|would|should|must|could)\s+not|never)\s+(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|defer\w*|postpon\w*|drop\w*|remov\w*|relax\w*)\b",
 		"", text, flags=re.IGNORECASE,
 	)
 	return any(pattern.search(text) for pattern in _WEAKENS_CONTROL_PATTERNS)

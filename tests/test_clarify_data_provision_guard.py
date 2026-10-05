@@ -86,6 +86,7 @@ def test_evidence_file_requires_a_matching_datum(tmp_path: Path) -> None:
 @pytest.mark.parametrize("fallback", [
 	"Proceed without the URL using available information", "Use default scope",
 	"Proceed without the PR URL, run local checks", "Proceed without external logs, test with unit tests",
+	"Defer documentation until after merge",
 ])
 def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL\n- B — {fallback}\n"
@@ -114,6 +115,9 @@ def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) 
 	"Verification doesn't require a check", "Doesn't require verification", "Verification doesn't verify the PR",
 	"Security checks don't require approval", "Checks didn't verify the PR head",
 	"Verification is no longer required", "Security check is no longer needed", "PR head verification is no longer required",
+	"Defer verification until after merge", "Postpone the security check until after merge",
+	"Defer signature validation until later", "Verification is deferred until after merge",
+	"Approval gate is postponed until after merge", "Security scan is deferred until after merge",
 ])
 def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL for verification\n- B — {fallback}\n"
@@ -179,6 +183,7 @@ def test_alternative_evidence_accepts_supplied_sha_or_pr_url(tmp_path: Path) -> 
 	"Don't skip verification", "Doesn't skip verification", "Won't skip checks", "Security checks shouldn't be skipped",
 	"Security checks mustn't be omitted", "Verification isn't optional",
 	"Check whether the feature flag isn't disabled",
+	"Do not defer verification", "Never postpone the security scan",
 ])
 def test_control_preserving_and_diagnostic_options_remain_available(tmp_path: Path, option: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL\n- B — {option}\n"
@@ -189,6 +194,8 @@ def test_control_preserving_and_diagnostic_options_remain_available(tmp_path: Pa
 
 def test_negation_does_not_mask_a_later_bypass(tmp_path: Path) -> None:
 	questions = "Q1: Which path?\n- A — Do not skip verification, but disable the security scan\n"
+	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions)
+	questions = "Q1: Which path?\n- A — Do not defer verification, but skip the security scan\n"
 	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions)
 
 
