@@ -260,12 +260,16 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
+	previous_token_end = -1
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			if segment and segment[-1].isdigit():
+			if (segment and re.fullmatch(r"[0-9]+", segment[-1])
+				and command[previous_token_end - 1:previous_token_end] in ("<", ">")
+				and command[previous_token_end - len(segment[-1]) - 1:previous_token_end - 1] == segment[-1]
+				and command[previous_token_end - len(segment[-1]) - 2:previous_token_end - len(segment[-1]) - 1] != "\\"):
 				segment.pop()
 			redirect_target = True
 			continue
@@ -275,6 +279,7 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 				segment = []
 			operator = token
 		else:
+			previous_token_end = lexer.instream.tell()
 			segment.append(token)
 	if segment:
 		result.append((operator, segment))
@@ -1303,6 +1308,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
 			if target.warning:
+				if target.warning.startswith("could not resolve git push refspec"):
+					_request_confirmation("could not resolve git push refspec; verify the actual push destination and source tip")
+					continue
 				_warn(target.warning)
 			if target.tip != "HEAD":
 				with _git_environment(target.environment):
@@ -1311,8 +1319,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						target.cwd, _GIT_TIMEOUT_SECONDS,
 					)
 				if code != 0:
-					_warn("could not resolve git push source; checking the session checkout instead")
-					target = _GuardTarget(checkout, {}, "", "HEAD", True)
+					_request_confirmation("could not resolve git push source; verify the actual push destination and source tip")
+					continue
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
