@@ -10,5 +10,7 @@ RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
 # branch passes a version; the codex image is unchanged without it.
 ARG CLAUDE_CLI_VERSION=
 RUN if [ -n "${CLAUDE_CLI_VERSION}" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends git \
+      && rm -rf /var/lib/apt/lists/*; \
       npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" --no-audit --no-fund; \
     fi

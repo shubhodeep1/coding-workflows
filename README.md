@@ -2019,6 +2019,15 @@ in `claude-engine-smoke.yml`.
 writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
 `order` file, best account first, and one `0600` file per account under
 `tokens/`). A usage-limited or rejected account moves the run to the next one.
+Read-profile calls run in a `--network none` container with a placeholder
+token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token.
+The container masks credential-bearing Git configuration in the checkout and
+its nested `.codex-workflow-src` / `.codex-workflow-src-main` support checkouts.
+If isolation cannot start, `AI_ENGINE_FALLBACK reason=isolation_*` returns 75.
+For read-profile session reuse, an unavailable session directory reports
+`reason=isolation_session_dir_unavailable` before any container starts.
+If the pool directory disappears after isolation preflight, the fallback is
+`reason=isolation_pool_unavailable`, not a session-directory error.
 When no CLI, policy, instructions file or account is usable, it logs
 `AI_ENGINE_FALLBACK role= reason=`, sends at most one Telegram note per job,
 and returns `75`; the caller then runs its codex path unchanged. A crash
@@ -2027,15 +2036,23 @@ returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
 which only adds `engine=claude` to its log lines, and every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
+When session reuse is requested, a pool directory that overlaps the mounted
+session directory falls back with `reason=isolation_pool_overlap` before the
+container starts.
+The read-profile container still mounts the full checkout and any configured
+extra read directories; do not place credentials or other secrets in those
+paths. There is no per-file read allowlist yet.
 
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
-`claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
+For write profiles, `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
 it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
 file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
 and reports that path instead of overwriting the new content.
+For read profiles it overlays an empty file only inside the container, leaving
+the host checkout untouched.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in
