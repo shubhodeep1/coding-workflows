@@ -242,7 +242,7 @@ def refresh(host, workspace, manifest):
 	command_dir = checked_path(workspace, ".claude/commands")
 	if command_dir.is_dir():
 		for target in command_dir.iterdir():
-			if target.is_file() and not target.name.startswith(".") and ".claude/commands/" + target.name not in commands:
+			if (target.is_file() or target.is_symlink()) and not target.name.startswith(".") and ".claude/commands/" + target.name not in commands:
 				target.unlink()
 	for name in sorted(set(baseline) | set(results)):
 		target = checked_path(workspace, name)

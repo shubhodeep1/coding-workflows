@@ -8270,13 +8270,16 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		# A retry cannot widen admission after the first transfer adds the twin.
 		(source / ".claude/commands/new.md").write_text("untrusted retry\n")
 		(source / ".claude/commands/scratch.txt").write_text("untrusted retry scratch\n")
+		(source / ".claude/commands/broken.md").symlink_to("missing.md")
 		assert run("transfer").returncode == 0
 		assert (source / ".claude/commands/scratch.txt").exists()
+		assert (source / ".claude/commands/broken.md").is_symlink()
 		assert not (host / ".claude/commands/new.md").exists()
 		assert not (host / ".claude/commands/scratch.txt").exists()
 		assert run("refresh").returncode == 0
 		assert not (source / ".claude/commands/new.md").exists()
 		assert not (source / ".claude/commands/scratch.txt").exists()
+		assert not (source / ".claude/commands/broken.md").is_symlink()
 		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/ai/WORKFLOW.md").read_text() == "operator config\n"
