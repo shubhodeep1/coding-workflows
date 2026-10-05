@@ -73,7 +73,7 @@ print(" ".join(value.split())[:200])
 
 sanitize_check_name_display()
 {
-	PYTHONDONTWRITEBYTECODE=1 python3 -c '
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
 import re
 import sys
 import unicodedata

@@ -210,7 +210,7 @@ jobs:
           HEAD_SHA: ${{ inputs.head_sha }}
         run: |
           set -euo pipefail
-          safe_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -c '
+          safe_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
           import sys, unicodedata
           check_name_text = "".join(" " if unicodedata.category(char).startswith("C") or unicodedata.category(char) in ("Zl", "Zp") else char for char in sys.argv[1])
           print(" ".join(check_name_text.split()).replace("`", "\u0027").replace("<", "&lt;")[:200] or "(unnamed check)")
@@ -457,7 +457,7 @@ jobs:
           triage_post_root="$(jq -er '.root' "${RUNTIME_DIR}/triage_metadata.json")"
           # The script's existing issue-create call serves direct callers; this
           # workflow must post from its own token-scoped step instead.
-          triage_post_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -c '
+          triage_post_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
           import sys
           import re
           import unicodedata
