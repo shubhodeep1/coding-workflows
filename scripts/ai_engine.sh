@@ -61,7 +61,7 @@ _AI_ENGINE_EXIT_FALLBACK=75
 
 _ai_engine_py()
 {
-	PYTHONDONTWRITEBYTECODE=1 python3 "${_AI_ENGINE_DIR}/claude_engine.py" "$@"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${_AI_ENGINE_DIR}/claude_engine.py" "$@"
 }
 
 _ai_engine_valid_role()

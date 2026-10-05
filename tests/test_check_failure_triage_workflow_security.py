@@ -138,6 +138,7 @@ class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
 		self.assertIn('python3 -I -B - "${source_root}" "${run_root}/source"', helper)
 		self.assertIn('python3 -I -B scripts/clarify_openrouter_broker.py broker', helper)
 		self.assertIn('python3 -I -B "${engine_dir}/claude_anthropic_relay.py" broker', helper)
+		self.assertIn('python3 -I -B "${_AI_ENGINE_DIR}/claude_engine.py"', engine)
 		for script in (triage, engine):
 			self.assertNotRegex(script, r"\bpython3\s+-(?:c\b|\s)")
 		self.assertIn('python3 -I -B scripts/collect_pr_check_runs_context.py', triage)
