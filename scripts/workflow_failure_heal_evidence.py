@@ -547,12 +547,13 @@ def _body_field(body: str, label: str) -> str:
 
 
 def _occurrence_context(text: str) -> dict[str, str]:
-	match = re.search(r"- \*\*Source (?:pull request|issue):\*\* [^\n]*\(([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)\)", text)
-	repo, number = match.group(1, 2) if match else (_body_field(text, "Source repository"), "")
+	match = re.search(r"- \*\*Source (pull request|issue):\*\* [^\n]*\(([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)\)", text)
+	repo, number = match.group(2, 3) if match else (_body_field(text, "Source repository"), "")
 	sha = _body_field(text, "Head SHA").lower()
 	return {
 		"source_repo": repo if heal.is_valid_repo_slug(repo) else "",
 		"source_number": number,
+		"source_kind": match.group(1) if match else "",
 		"head_sha": sha if heal.is_valid_sha(sha) else "",
 		"head_branch": _body_field(text, "Failed on branch"),
 		"workflow_name": _body_field(text, "Failed workflow"),
@@ -566,12 +567,14 @@ def heal_context(issue: dict[str, Any]) -> dict[str, Any]:
 	source = markers.get("source", "")
 	source_repo, _, source_number = source.partition("#")
 	head_sha = _body_field(body, "Head SHA").lower()
+	source_context = _occurrence_context(body)
 	return {
 		"fp": markers.get("fp", ""),
 		"root": markers.get("root", ""),
 		"gen": markers.get("gen", ""),
 		"source_repo": source_repo if heal.is_valid_repo_slug(source_repo) else "",
 		"source_number": source_number if source_number.isdigit() else "",
+		"source_kind": source_context["source_kind"] if source_context["source_repo"] == source_repo and source_context["source_number"] == source_number else "",
 		"head_sha": head_sha if heal.is_valid_sha(head_sha) else "",
 		"head_branch": _body_field(body, "Failed on branch"),
 		"workflow_name": _body_field(body, "Failed workflow"),
@@ -606,7 +609,7 @@ def trusted_run_refs(
 	texts: list[tuple[str, str, dict[str, str]]] = []
 	ctx = heal_context(issue)
 	if include_body:
-		body_ctx = {key: ctx.get(key, "") for key in ("source_repo", "source_number", "head_sha", "head_branch", "workflow_name")}
+		body_ctx = {key: ctx.get(key, "") for key in ("source_repo", "source_number", "source_kind", "head_sha", "head_branch", "workflow_name")}
 		texts.extend((url, "body", body_ctx) for url in _runs_marker_urls(ctx.get("runs_marker") or ""))
 	for comment in comments or []:
 		if not isinstance(comment, dict):
@@ -859,7 +862,7 @@ class Collector:
 		branch = ref["head_branch"] if heal.is_valid_branch(ref["head_branch"]) else ""
 		pr_number = int(ref["source_number"]) if ref["source_number"].isdigit() and len(ref["source_number"]) <= 12 and int(ref["source_number"]) > 0 else None
 		workflow_name = ref.get("workflow_name", "")
-		if not sha or not workflow_name or (not branch and pr_number is None):
+		if not sha or not workflow_name or (not branch and (pr_number is None or ref.get("source_kind") == "issue")):
 			return False, "run_no_verified_context"
 		run = self._timeline_index.get(ref["run_id"])
 		if run is None:
@@ -876,9 +879,14 @@ class Collector:
 		pr_named = pr_number is not None and any(f"[pr:{pr_number}]" in (run.get(key) or "") for key in ("display_title", "name") if isinstance(run.get(key), str))
 		head_matches = sha and isinstance(run.get("head_sha"), str) and run["head_sha"].lower() == sha
 		branch_matches = branch and run.get("head_branch") == branch
-		if head_matches and (branch_matches or pr_linked or pr_named):
+		if ref.get("source_kind") != "issue" and pr_number is not None and isinstance(pulls, list) and pulls and not pr_linked:
+			return False, "run_pr_mismatch"
+		if head_matches and (branch_matches or (ref.get("source_kind") != "issue" and (pr_linked or pr_named))):
 			# A dispatch run-name can append the PR token to the workflow name.
-			if run.get("name") not in (workflow_name, f"{workflow_name} [pr:{pr_number}]" if pr_number is not None else workflow_name):
+			if run.get("name") not in (workflow_name, f"{workflow_name} [pr:{pr_number}]" if pr_number is not None else workflow_name) and not (
+				ref.get("source_kind") == "issue" and branch_matches and isinstance(run.get("name"), str)
+				and re.fullmatch(rf"{re.escape(workflow_name)} \[pr:[0-9]+\]", run["name"])
+			):
 				return False, "run_workflow_mismatch"
 			if run.get("conclusion") in FAILED_CONCLUSIONS:
 				return True, "verified"
