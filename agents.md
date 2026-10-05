@@ -576,6 +576,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   A failed publication logs a warning but counts as a completed judge
   invocation; the next poll tick rechecks mergeability rather than terminalizing
   the project. An already-up-to-date merge creates no empty commit.
+  The poller's review-blocked `fix` path checks every staged path before commit:
+  protected paths (`.github/workflows/`, `.github/actions/`, `.github/ai/`,
+  `scripts/`, `prompts/`, `.claude/`) must occur in the PR's paginated changed-file
+  list; other paths may also come from validated judge citations. An unavailable
+  or incomplete PR file list and any out-of-scope edit reject the whole fix,
+  warn via Telegram, and consume a review-blocked retry without a push.
   The review-blocked judge's OpenCode fix writer runs in
   `scripts/review_untrusted_sandbox.sh`.
 - **Sites.** plan, implement (attempts, post-Codex repair, diagnose, PR issue
@@ -1375,6 +1381,8 @@ and shipped:
 - `REISSUE_MODE`
 - `REISSUE_FILES_TOUCHED_UNION`
 - `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
+- `REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED`
+- `REVIEW_BLOCKED_FIX_SCOPE_REJECTED`
 - `REISSUE_ORCHESTRATOR_METADATA_CARRIED`
 - `REISSUE_ORCHESTRATOR_METADATA_ABSENT`
 - `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
@@ -1580,6 +1588,8 @@ LOG_PREFIX.name=REISSUE_BASELINE_DISCARDED
 LOG_PREFIX.name=REISSUE_MODE
 LOG_PREFIX.name=REISSUE_FILES_TOUCHED_UNION
 LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_REJECTED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_CARRIED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_ABSENT
 LOG_PREFIX.name=FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1

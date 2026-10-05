@@ -21342,6 +21342,110 @@ ${FOLLOWUP_BLOCK_REASON}"
         _integration_judge_remove_worktree "${RB_COMBINED_WORKDIR}"
       }
 
+      _rb_fix_scope_valid_path() {
+        local path="$1" LC_ALL=C
+        [ -n "${path}" ] && [ "${#path}" -le 512 ] || return 1
+        case "${path}" in
+          /*|./*|../*|*/./*|*/../*|*/..|.|..|*/|*'*'*|*'?'*|*'['*|*']'*|*'{'*|*'}'*) return 1 ;;
+        esac
+        [[ "${path}" =~ ^[[:print:]]+$ ]] || return 1
+        case "/${path,,}/" in
+          */.git/*) return 1 ;;
+        esac
+      }
+
+      _rb_fix_scope_is_protected() {
+        case "$1" in
+          .github/workflows/*|.github/actions/*|.github/ai/*|scripts/*|prompts/*|.claude/*) return 0 ;;
+        esac
+        return 1
+      }
+
+      rb_fix_scope_check() {
+        local workdir="$1" pr="$2" judge_json="$3"
+        local staged_file pr_response pr_listing path candidate description candidate_count
+        local -a staged_paths=() pr_paths=() cited_paths=()
+        local -A pr_set=() cited_set=()
+        RB_FIX_SCOPE_REASON=accepted
+        RB_FIX_SCOPE_REJECTED_PATHS=()
+        RB_FIX_SCOPE_PR_COUNT=0
+        RB_FIX_SCOPE_CITED_COUNT=0
+        RB_FIX_SCOPE_STAGED_COUNT=0
+
+        staged_file="$(mktemp "${RUNTIME_DIR}/rb_fix_scope_${pr}.XXXXXX")" || { RB_FIX_SCOPE_REASON=pr_files_unavailable; return 1; }
+        if ! git -C "${workdir}" diff --cached --name-only --no-renames -z > "${staged_file}"; then
+          rm -f -- "${staged_file}"
+          RB_FIX_SCOPE_REASON=pr_files_unavailable
+          return 1
+        fi
+        mapfile -d '' -t staged_paths < "${staged_file}"
+        rm -f -- "${staged_file}"
+        RB_FIX_SCOPE_STAGED_COUNT=${#staged_paths[@]}
+        [ "${RB_FIX_SCOPE_STAGED_COUNT}" -gt 0 ] || return 0
+
+        # §14: _fetch_pr_json/PR_META have no file list; the superseded-check
+        # listing covers other PRs and is not cached on this fix path.
+        if ! pr_response="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${pr}/files?per_page=100" 2>/dev/null)" \
+          || ! pr_listing="$(printf '%s\n' "${pr_response}" | jq -sc '
+            if length > 0 and all(.[]; type == "array") and
+               all(.[][]; type == "object" and (.filename | type == "string" and length > 0))
+            then [ .[][] ] | {count: length, files: [.[] | .filename, (.previous_filename | select(type == "string" and length > 0))] | unique}
+            else error("incomplete PR file listing") end
+          ' 2>/dev/null)"; then
+          RB_FIX_SCOPE_REASON=pr_files_unavailable
+          return 1
+        fi
+        RB_FIX_SCOPE_PR_COUNT="$(printf '%s' "${pr_listing}" | jq -r '.count')"
+        if [ "${RB_FIX_SCOPE_PR_COUNT}" -eq 0 ] || [ "${RB_FIX_SCOPE_PR_COUNT}" -ge 3000 ]; then
+          RB_FIX_SCOPE_REASON=pr_files_unavailable
+          return 1
+        fi
+        mapfile -d '' -t pr_paths < <(printf '%s' "${pr_listing}" | jq -j '.files[] | ., "\u0000"')
+        for path in "${pr_paths[@]}"; do pr_set["${path}"]=1; done
+
+        # Model citations may expand the allowlist only for safe, non-protected files.
+        mapfile -d '' -t raw_candidates < <(printf '%s\n' "${judge_json}" | jq -j '
+          .remaining_issues | if type == "array" then .[:20][] | .file? | select(type == "string") | ., "\u0000" else empty end
+        ' 2>/dev/null)
+        description="$(printf '%s\n' "${judge_json}" | jq -r '.fix_description | if type == "string" then . else "" end' 2>/dev/null)"
+        candidate_count=0
+        for candidate in "${raw_candidates[@]}"; do
+          candidate_count=$((candidate_count + 1))
+          if _rb_fix_scope_valid_path "${candidate}" && ! _rb_fix_scope_is_protected "${candidate}"; then
+            cited_paths+=("${candidate}")
+          fi
+        done
+        while [ "${candidate_count}" -lt 20 ] && [[ "${description}" == *'`'* ]]; do
+          description="${description#*\`}"
+          [[ "${description}" == *'`'* ]] || break
+          candidate="${description%%\`*}"
+          description="${description#*\`}"
+          candidate_count=$((candidate_count + 1))
+          case "${candidate}" in
+            */*|*.*)
+              if _rb_fix_scope_valid_path "${candidate}" && ! _rb_fix_scope_is_protected "${candidate}"; then
+                cited_paths+=("${candidate}")
+              fi
+              ;;
+          esac
+        done
+        for path in "${cited_paths[@]}"; do cited_set["${path}"]=1; done
+        RB_FIX_SCOPE_CITED_COUNT=${#cited_set[@]}
+
+        for path in "${staged_paths[@]}"; do
+          if _rb_fix_scope_is_protected "${path}"; then
+            if [ -z "${pr_set["${path}"]:-}" ]; then
+              RB_FIX_SCOPE_REASON=protected_not_in_pr
+              RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
+            fi
+          elif [ -z "${pr_set["${path}"]:-}" ] && [ -z "${cited_set["${path}"]:-}" ]; then
+            [ "${RB_FIX_SCOPE_REASON}" = protected_not_in_pr ] || RB_FIX_SCOPE_REASON=out_of_scope
+            RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
+          fi
+        done
+        [ "${#RB_FIX_SCOPE_REJECTED_PATHS[@]}" -eq 0 ]
+      }
+
       # Build the judge prompt for review-blocked evaluation
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
@@ -21787,6 +21891,8 @@ sys.exit(1)
                   echo "Error: .github/prompts or .github/scripts is staged"
                   exit 1
                 fi
+                if rb_fix_scope_check "${RB_COMBINED_WORKDIR}" "${RB_PR}" "${RB_JUDGE_JSON}"; then
+                  echo "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=${rb_issue} pr=${RB_PR} staged=${RB_FIX_SCOPE_STAGED_COUNT} pr_files=${RB_FIX_SCOPE_PR_COUNT} judge_cited=${RB_FIX_SCOPE_CITED_COUNT}"
                 git -C "${RB_COMBINED_WORKDIR}" commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
 
 Orchestrator judge applied fixes to unblock the review pipeline.
@@ -21878,6 +21984,25 @@ ${RB_FIX_DESC}
                   else
                     echo "::warning::Failed to push orchestrator fix for PR #${RB_PR}."
                   fi
+                fi
+                else
+                  # Filenames are untrusted: render only printable ASCII after
+                  # a fixed prefix so neither logs nor alerts can be injected.
+                  _rb_scope_log_paths=()
+                  _rb_scope_alert_paths=()
+                  for _rb_scope_path in "${RB_FIX_SCOPE_REJECTED_PATHS[@]:0:20}"; do
+                    _rb_scope_safe_path="$(printf '%s' "${_rb_scope_path}" | LC_ALL=C tr -c '\040-\176' '?')"
+                    _rb_scope_log_paths+=("${_rb_scope_safe_path}")
+                    if [ "${#_rb_scope_alert_paths[@]}" -lt 10 ]; then
+                      _rb_scope_alert_paths+=("${_rb_scope_safe_path}")
+                    fi
+                  done
+                  _rb_scope_log_join="$(IFS=,; echo "${_rb_scope_log_paths[*]}")"
+                  _rb_scope_alert_join="$(IFS=,; echo "${_rb_scope_alert_paths[*]}")"
+                  echo "::warning::Review-blocked fix scope rejected for issue #${rb_issue}: ${RB_FIX_SCOPE_REASON}"
+                  echo "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${RB_FIX_SCOPE_REASON} rejected=${#RB_FIX_SCOPE_REJECTED_PATHS[@]} paths=${_rb_scope_log_join}"
+                  tg_notify "Review-blocked fix scope rejected for issue #${rb_issue} (PR #${RB_PR}): ${RB_FIX_SCOPE_REASON}; paths: ${_rb_scope_alert_join}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                  REVIEW_BLOCKED_STATE_CHANGED=true
                 fi
               else
                 echo "  Judge produced no file changes."

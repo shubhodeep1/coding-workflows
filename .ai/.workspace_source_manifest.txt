@@ -204,11 +204,13 @@ changelog.d/6118-phase-8a-single-issue-security-pass.md
 changelog.d/6118-phase-8b-standalone-auto-decide.md
 changelog.d/6118-phase-8c-activation-verification.md
 changelog.d/6118-phase-8d-retarget-merged-base.md
+changelog.d/6133-pr-merge-guard-live-copy-sync.md
 changelog.d/6181-review-transfer-failure-evidence.md
 changelog.d/6187-isolated-codex-agents.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
 changelog.d/6230-security-audit-oversized-scoped-files.md
+changelog.d/6231-integration-judge-scope-guard.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
@@ -794,6 +796,7 @@ tests/test_implement_blocked_verdict_terminalizes.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
+tests/test_integration_judge_scope_guard.py
 tests/test_internal_review_push_pr_grace.py
 tests/test_issue_pr_status_payload_fallback_contract.py
 tests/test_judge_semble_prefetch_contract.py
