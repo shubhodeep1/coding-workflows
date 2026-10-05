@@ -5,4 +5,6 @@ Review now omits a symlinked `README.md` from its static prompt, and clarificati
 
 The optional overflow-runbook reference is also omitted, with a warning, when `probably_unnecessary_but_read_if_stuck.md` is a symlink. A regular runbook still receives the reference.
 
+The orchestrator's decomposition and clarification-response static prompts apply the same rules: required instruction symlinks stop assembly, and symlinked local agents files, README files, and overflow-runbook pointers are omitted with warnings. Regular files and checkout authentication continue to work as before.
+
 What this means for operators: unsafe links cannot supply prompt text, while a required symlink causes an explicit failure that must be corrected before the phase runs.

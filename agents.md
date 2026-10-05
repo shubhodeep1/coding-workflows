@@ -493,6 +493,12 @@ a new value, add it to the appropriate overrides file with a
   source/workspace/PR-metadata SHA mismatch, or a branch that advances during
   fetch, sets `AUTOFIX_STALE_BASE_SKIP` so no reviewer, editor or merge acts
   on stale files.
+- `orchestrate.yml` and `orchestrate_clarify_respond.yml` also assemble static
+  context on the host. They reject symlinked required instructions and pipeline
+  files before writing prompt output, and omit symlinked local agents files,
+  `README.md`, and the optional overflow-runbook pointer with warnings. Regular
+  files retain their existing content and `AGENTS.md` precedence in the
+  clarify-respond workflow. Checkout credential handling is unchanged.
 - `internal-review.yml` itself must not forward a `with:` input that
   `review_autofix.yml` on `main` does not define yet: GitHub validates the
   call against `main`'s file, so every review run on the PR adding the input

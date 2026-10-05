@@ -165,10 +165,90 @@ def test_phase_static_context_skips_symlinks_but_keeps_canonical_agents() -> Non
 			required_path.write_text(original_content, encoding="utf-8")
 
 
+def test_orchestrator_static_context_guards_symlinks() -> None:
+	for workflow_name, step_name, agent_name in (
+		("orchestrate.yml", "Pre-assemble static context", "agents.md"),
+		("orchestrate_clarify_respond.yml", "Pre-assemble static context (cacheable across runs)", "AGENTS.md"),
+	):
+		workflow = yaml.safe_load((REPO_ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8"))
+		step_run = next(
+			step["run"]
+			for job in workflow["jobs"].values()
+			for step in job.get("steps", [])
+			if step.get("name") == step_name
+		)
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			(root / "unattended_system_instructions.md").write_text("trusted instructions\n", encoding="utf-8")
+			(root / "ai_pipeline.md").write_text("trusted pipeline\n", encoding="utf-8")
+			(root / ".git").mkdir()
+			secret = root / ".git/config"
+			secret.write_text("x-access-token:SENTINEL\n", encoding="utf-8")
+			for name in ("agents.md", "AGENTS.md", "README.md", "probably_unnecessary_but_read_if_stuck.md"):
+				(root / name).symlink_to(secret)
+			result = subprocess.run(
+				["bash", "-c", step_run], cwd=root, env=_safe_env(),
+				capture_output=True, text=True, check=False,
+			)
+			assert result.returncode == 0, result.stderr
+			context = (root / "pre_assembled_static.txt").read_text(encoding="utf-8")
+			assert "trusted instructions" in context
+			assert "SENTINEL" not in context
+			assert "=== AGENTS.MD ===" not in context
+			assert "=== README.MD ===" not in context
+			assert "read ./probably_unnecessary_but_read_if_stuck.md" not in context
+			assert f"::warning::{agent_name} is a symbolic link" in result.stderr
+			assert "::warning::README.md is a symbolic link" in result.stderr
+			assert "::warning::probably_unnecessary_but_read_if_stuck.md is a symbolic link" in result.stderr
+
+			if agent_name == "AGENTS.md":
+				(root / "agents.md").unlink()
+				(root / "agents.md").write_text("safe fallback agents\n", encoding="utf-8")
+				result = subprocess.run(
+					["bash", "-c", step_run], cwd=root, env=_safe_env(),
+					capture_output=True, text=True, check=False,
+				)
+				assert result.returncode == 0, result.stderr
+				assert "safe fallback agents" in (root / "pre_assembled_static.txt").read_text(encoding="utf-8")
+				assert "SENTINEL" not in (root / "pre_assembled_static.txt").read_text(encoding="utf-8")
+
+			for name in ("agents.md", "AGENTS.md", "README.md", "probably_unnecessary_but_read_if_stuck.md"):
+				(root / name).unlink()
+				(root / name).write_text(f"regular {name}\n", encoding="utf-8")
+			result = subprocess.run(
+				["bash", "-c", step_run], cwd=root, env=_safe_env(),
+				capture_output=True, text=True, check=False,
+			)
+			assert result.returncode == 0, result.stderr
+			context = (root / "pre_assembled_static.txt").read_text(encoding="utf-8")
+			assert f"regular {agent_name}" in context
+			assert "regular README.md" in context
+			assert "=== OVERFLOW REFERENCE ===" in context
+			assert "SENTINEL" not in context
+			assert "::warning::" not in result.stderr
+
+			for required_name in ("unattended_system_instructions.md", "ai_pipeline.md"):
+				required_path = root / required_name
+				required_path.unlink()
+				required_path.symlink_to(secret)
+				(root / "pre_assembled_static.txt").unlink(missing_ok=True)
+				result = subprocess.run(
+					["bash", "-c", step_run], cwd=root, env=_safe_env(),
+					capture_output=True, text=True, check=False,
+				)
+				assert result.returncode != 0
+				assert "Required static context input is a symbolic link" in result.stderr
+				assert "SENTINEL" not in result.stdout + result.stderr
+				assert not (root / "pre_assembled_static.txt").exists()
+				required_path.unlink()
+				required_path.write_text("trusted input\n", encoding="utf-8")
+
+
 def main() -> int:
 	for test in (
 		test_review_static_context_skips_symlink_and_preserves_regular_readme,
 		test_phase_static_context_skips_symlinks_but_keeps_canonical_agents,
+		test_orchestrator_static_context_guards_symlinks,
 	):
 		test()
 	print("OK: static-context symlink guard checks passed")
